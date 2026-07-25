@@ -2,34 +2,33 @@ import SwiftUI
 
 struct PeekPanelView: View {
     @ObservedObject var store: TaskStore
+    @ObservedObject var noteStore: NoteStore
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let snapshot = store.snapshot(for: uiState.selectedScope)
-
         VStack(spacing: 0) {
-            header(activeCount: snapshot.activeCount)
-            scopePicker
+            header(activeCount: headerActiveCount)
+            sectionPicker
 
             if uiState.isComposerPresented {
-                TaskComposerView(store: store, uiState: uiState)
+                composerView
                     .padding(.horizontal, PeekabooStyle.horizontalPadding)
                     .padding(.bottom, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            if snapshot.visibleCount == 0 {
-                emptyState
-                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            if uiState.selectedSection.isNotes {
+                NotesPanelContent(noteStore: noteStore, uiState: uiState)
+                    .transition(.opacity)
             } else {
-                taskList(sections: snapshot.sections)
+                taskSurface
                     .transition(.opacity)
             }
 
-            if let error = store.lastErrorMessage {
+            if let error = currentErrorMessage {
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.red)
@@ -42,8 +41,40 @@ struct PeekPanelView: View {
         .peekPanelSurface(translucent: settings.isTranslucent)
         .animation(reduceMotion ? nil : PeekabooMotion.spring, value: uiState.isComposerPresented)
         .animation(reduceMotion ? nil : PeekabooMotion.spring, value: store.tasks.map(\.id))
-        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: uiState.selectedScope)
+        .animation(reduceMotion ? nil : PeekabooMotion.spring, value: noteStore.notes.map(\.id))
+        .animation(reduceMotion ? nil : PeekabooMotion.quick, value: uiState.selectedSection)
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: uiState.isDraggingTask)
+    }
+
+    private var taskSurface: some View {
+        let snapshot = store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks)
+        return Group {
+            if snapshot.visibleCount == 0 {
+                emptyState
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            } else {
+                taskList(sections: snapshot.sections)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var composerView: some View {
+        if uiState.selectedSection.isNotes {
+            NoteComposerView(noteStore: noteStore, uiState: uiState)
+        } else {
+            TaskComposerView(store: store, uiState: uiState)
+        }
+    }
+
+    private var headerActiveCount: Int {
+        uiState.selectedSection.isNotes
+            ? noteStore.notes.count
+            : store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks).activeCount
+    }
+
+    private var currentErrorMessage: String? {
+        uiState.selectedSection.isNotes ? noteStore.lastErrorMessage : store.lastErrorMessage
     }
 
     private func header(activeCount: Int) -> some View {
@@ -90,32 +121,32 @@ struct PeekPanelView: View {
             .buttonStyle(.plain)
             .help(uiState.isComposerPresented ? "Cancel" : newItemTitle)
             .accessibilityLabel(uiState.isComposerPresented ? "Cancel" : newItemTitle)
-            .accessibilityIdentifier("add-task-button")
+            .accessibilityIdentifier(uiState.selectedSection.isNotes ? "add-note-button" : "add-task-button")
         }
         .padding(.horizontal, PeekabooStyle.horizontalPadding)
         .frame(height: 44)
     }
 
-    private var scopePicker: some View {
+    private var sectionPicker: some View {
         HStack(spacing: 6) {
-            ForEach(TaskScope.allCases) { scope in
-                scopeCapsule(scope)
+            ForEach(PanelSection.allCases) { section in
+                sectionCapsule(section)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, PeekabooStyle.horizontalPadding)
         .padding(.bottom, 8)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("task-scope-picker")
+        .accessibilityIdentifier("panel-section-picker")
     }
 
-    private func scopeCapsule(_ scope: TaskScope) -> some View {
-        let isSelected = uiState.selectedScope == scope
+    private func sectionCapsule(_ section: PanelSection) -> some View {
+        let isSelected = uiState.selectedSection == section
 
         return Button {
-            selectScope(scope)
+            selectSection(section)
         } label: {
-            Text(scope.title)
+            Text(section.title)
                 .font(.system(
                     size: 10,
                     weight: isSelected ? .semibold : .medium,
@@ -135,18 +166,18 @@ struct PeekPanelView: View {
                 .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(scope.title)
+        .accessibilityLabel(section.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier("task-scope-\(scope.rawValue)")
+        .accessibilityIdentifier("panel-section-\(section.rawValue)")
     }
 
-    private func selectScope(_ scope: TaskScope) {
-        guard uiState.selectedScope != scope else { return }
+    private func selectSection(_ section: PanelSection) {
+        guard uiState.selectedSection != section else { return }
         if reduceMotion {
-            uiState.selectScope(scope)
+            uiState.selectSection(section)
         } else {
             withAnimation(PeekabooMotion.quick) {
-                uiState.selectScope(scope)
+                uiState.selectSection(section)
             }
         }
     }
@@ -194,10 +225,10 @@ struct PeekPanelView: View {
     }
 
     private func activeSubtitle(count: Int) -> String {
-        uiState.selectedScope.activeSubtitle(count: count)
+        uiState.selectedSection.activeSubtitle(count: count)
     }
 
     private var newItemTitle: String {
-        uiState.selectedScope.newItemTitle
+        uiState.selectedSection.newItemTitle
     }
 }

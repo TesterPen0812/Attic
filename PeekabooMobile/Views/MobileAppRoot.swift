@@ -3,15 +3,28 @@ import SwiftUI
 struct MobileAppRoot: View {
     @ObservedObject var appModel: MobileAppModel
     @Environment(\.scenePhase) private var scenePhase
+    @State private var section: MobileSection = .tasks
 
     var body: some View {
         Group {
             if let store = appModel.store {
-                MobileTaskListScreen(
-                    store: store,
-                    iCloudAvailability: appModel.iCloudAvailability,
-                    refresh: appModel.refresh
-                )
+                VStack(spacing: 0) {
+                    sectionPicker
+
+                    if section == .tasks {
+                        MobileTaskListScreen(
+                            store: store,
+                            iCloudAvailability: appModel.iCloudAvailability,
+                            refresh: appModel.refresh
+                        )
+                    } else if let noteStore = appModel.noteStore {
+                        MobileNotesScreen(
+                            noteStore: noteStore,
+                            iCloudAvailability: appModel.iCloudAvailability,
+                            refresh: appModel.refresh
+                        )
+                    }
+                }
             } else {
                 startupFailure
             }
@@ -37,4 +50,20 @@ struct MobileAppRoot: View {
         }
         .padding()
     }
+
+    private var sectionPicker: some View {
+        Picker("Section", selection: $section) {
+            Text("Tasks").tag(MobileSection.tasks)
+            Text("Notes").tag(MobileSection.notes)
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .accessibilityIdentifier("mobile-section-picker")
+    }
+}
+
+private enum MobileSection: Hashable {
+    case tasks
+    case notes
 }

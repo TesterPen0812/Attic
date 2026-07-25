@@ -8,6 +8,8 @@ final class CornerHoverMonitor {
     private let uiState: PanelUIState
     private let store: TaskStore
 
+    private let noteStore: NoteStore
+
     private var stateMachine = CornerHoverStateMachine()
     private var pollingTimer: DispatchSourceTimer?
     private var screenChangeToken: NSObjectProtocol?
@@ -18,12 +20,14 @@ final class CornerHoverMonitor {
         settings: AppSettings,
         panelController: PeekPanelController,
         uiState: PanelUIState,
-        store: TaskStore
+        store: TaskStore,
+        noteStore: NoteStore
     ) {
         self.settings = settings
         self.panelController = panelController
         self.uiState = uiState
         self.store = store
+        self.noteStore = noteStore
     }
 
     func start() {
@@ -71,10 +75,10 @@ final class CornerHoverMonitor {
         panelController.hide()
     }
 
-    func revealProgrammatically(openComposer: Bool = false, scope: TaskScope? = nil) {
+    func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
         refreshStoreForReveal()
-        if let scope { uiState.selectScope(scope) }
+        if let section { uiState.selectSection(section) }
         if openComposer {
             var transaction = Transaction()
             transaction.disablesAnimations = true
@@ -143,11 +147,13 @@ final class CornerHoverMonitor {
 
     private func refreshStoreForReveal() {
         store.refresh()
+        noteStore.refresh()
         revealRefreshTask?.cancel()
         revealRefreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(900))
             guard !Task.isCancelled else { return }
             self?.store.refresh()
+            self?.noteStore.refresh()
         }
     }
 }

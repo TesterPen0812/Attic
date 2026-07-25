@@ -11,6 +11,15 @@ func makeTestStore(
     return TaskStore(container: container, now: now, persist: persist)
 }
 
+@MainActor
+func makeTestNoteStore(
+    now: @escaping () -> Date = Date.init,
+    persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+) throws -> NoteStore {
+    let container = try PersistenceController.makeContainer(inMemory: true)
+    return NoteStore(container: container, now: now, persist: persist)
+}
+
 final class MutableNow {
     var value: Date
 

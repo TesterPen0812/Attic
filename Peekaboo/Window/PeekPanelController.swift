@@ -8,6 +8,7 @@ final class PeekPanelController {
     private let panel: PeekPanel
     private let hostingView: NSHostingView<PeekPanelView>
     private let store: TaskStore
+    private let noteStore: NoteStore
     private let settings: AppSettings
     private let uiState: PanelUIState
     private var cancellables: Set<AnyCancellable> = []
@@ -17,8 +18,9 @@ final class PeekPanelController {
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
 
-    init(store: TaskStore, settings: AppSettings, uiState: PanelUIState) {
+    init(store: TaskStore, noteStore: NoteStore, settings: AppSettings, uiState: PanelUIState) {
         self.store = store
+        self.noteStore = noteStore
         self.settings = settings
         self.uiState = uiState
 
@@ -28,7 +30,7 @@ final class PeekPanelController {
             backing: .buffered,
             defer: true
         )
-        hostingView = NSHostingView(rootView: PeekPanelView(store: store, uiState: uiState, settings: settings))
+        hostingView = NSHostingView(rootView: PeekPanelView(store: store, noteStore: noteStore, uiState: uiState, settings: settings))
 
         configurePanel()
         bindContentSize()
@@ -129,11 +131,19 @@ final class PeekPanelController {
         Publishers.CombineLatest4(
             store.$revision,
             uiState.$isComposerPresented,
-            settings.$corner,
-            uiState.$selectedScope
+            uiState.$selectedSection,
+            noteStore.$revision
         )
             .receive(on: RunLoop.main)
-            .sink { [weak self] _, _, corner, _ in
+            .sink { [weak self] _, _, _, _ in
+                guard let self else { return }
+                self.resizeAndReanchor()
+            }
+            .store(in: &cancellables)
+
+        settings.$corner
+            .receive(on: RunLoop.main)
+            .sink { [weak self] corner in
                 guard let self else { return }
                 self.currentCorner = corner
                 self.resizeAndReanchor()
@@ -164,12 +174,20 @@ final class PeekPanelController {
     }
 
     private func frame(on screen: NSScreen, corner: ScreenCorner) -> CGRect {
-        let snapshot = store.snapshot(for: uiState.selectedScope)
-        let height = PanelGeometry.preferredHeight(
-            taskCount: snapshot.visibleCount,
-            sectionCount: snapshot.sections.count,
-            isComposing: uiState.isComposerPresented
-        )
+        let height: CGFloat
+        if uiState.selectedSection.isNotes {
+            height = PanelGeometry.preferredHeight(
+                noteCount: noteStore.notes.count,
+                isComposing: uiState.isComposerPresented
+            )
+        } else {
+            let snapshot = store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks)
+            height = PanelGeometry.preferredHeight(
+                taskCount: snapshot.visibleCount,
+                sectionCount: snapshot.sections.count,
+                isComposing: uiState.isComposerPresented
+            )
+        }
         return PanelGeometry.panelFrame(
             in: screen.visibleFrame,
             size: CGSize(width: PanelGeometry.panelWidth, height: height),

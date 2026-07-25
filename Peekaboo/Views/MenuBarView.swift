@@ -15,12 +15,23 @@ struct MenuBarView: View {
         }
         .keyboardShortcut(.space, modifiers: [.control, .option])
 
+        Button("New note", systemImage: "note.text") {
+            coordinator.showNewNote()
+        }
+
         Divider()
 
         HStack {
             Text("Active Tasks")
             Spacer()
             Text("\(activeTaskCount)")
+                .foregroundStyle(.secondary)
+        }
+
+        HStack {
+            Text("Notes")
+            Spacer()
+            Text("\(coordinator.noteStore.notes.count)")
                 .foregroundStyle(.secondary)
         }
 

@@ -74,7 +74,7 @@ final class MCPRequestHandler {
         case "ping":
             return resultResponse(id: id, result: [:])
         case "tools/list":
-            return resultResponse(id: id, result: ["tools": AgentTaskTools.definitions])
+            return resultResponse(id: id, result: ["tools": tools.definitions])
         case "tools/call":
             return callTool(id: id, params: params)
         default:

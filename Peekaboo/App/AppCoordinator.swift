@@ -8,6 +8,7 @@ final class AppCoordinator {
 
     let settings: AppSettings
     let store: TaskStore
+    let noteStore: NoteStore
     let loginItemService: LoginItemService
     let uiState: PanelUIState
 
@@ -66,13 +67,14 @@ final class AppCoordinator {
         }
 
         let store = TaskStore(container: container)
+        let noteStore = NoteStore(container: container)
         let uiState = PanelUIState()
         let loginItemService = LoginItemService()
         let agentAccessToken = AgentAccessTokenStore().loadOrCreate()
         let agentServer = AgentServer(
             port: settings.agentServerPort,
             bearerToken: agentAccessToken,
-            handler: MCPRequestHandler(tools: AgentTaskTools(store: store))
+            handler: MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore))
         )
         let settingsWindowController = SettingsWindowController(
             settings: settings,
@@ -81,10 +83,11 @@ final class AppCoordinator {
             store: store,
             agentAccessToken: agentAccessToken
         )
-        let panelController = PeekPanelController(store: store, settings: settings, uiState: uiState)
+        let panelController = PeekPanelController(store: store, noteStore: noteStore, settings: settings, uiState: uiState)
 
         self.settings = settings
         self.store = store
+        self.noteStore = noteStore
         self.uiState = uiState
         self.panelController = panelController
         self.loginItemService = loginItemService
@@ -95,7 +98,8 @@ final class AppCoordinator {
             settings: settings,
             panelController: panelController,
             uiState: uiState,
-            store: store
+            store: store,
+            noteStore: noteStore
         )
     }
 
@@ -142,7 +146,11 @@ final class AppCoordinator {
     }
 
     func showNewTask() {
-        hoverMonitor.revealProgrammatically(openComposer: true, scope: .tasks)
+        hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
+    }
+
+    func showNewNote() {
+        hoverMonitor.revealProgrammatically(openComposer: true, section: .notes)
     }
 
     func openSettings() {

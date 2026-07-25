@@ -78,7 +78,9 @@ shared_mobile_sources = [
   'Design/TaskActionsMenu.swift',
   'Models/TaskItem.swift',
   'Models/TaskTypes.swift',
+  'Models/NoteItem.swift',
   'Services/PersistenceController.swift',
+  'Services/NoteStore.swift',
   'Services/TaskStore.swift'
 ]
 shared_mobile_sources.each do |path|

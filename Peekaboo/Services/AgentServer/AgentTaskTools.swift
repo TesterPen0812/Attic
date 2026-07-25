@@ -22,11 +22,14 @@ enum AgentToolError: Error {
 final class AgentTaskTools {
     private let store: TaskStore
 
-    init(store: TaskStore) {
+    private let noteStore: NoteStore?
+
+    init(store: TaskStore, noteStore: NoteStore? = nil) {
         self.store = store
+        self.noteStore = noteStore
     }
 
-    static let definitions: [[String: Any]] = [
+    static let taskDefinitions: [[String: Any]] = [
         [
             "name": "list_tasks",
             "title": "List Peekaboo Tasks",
@@ -136,12 +139,110 @@ final class AgentTaskTools {
         ]
     ]
 
+    static let noteDefinitions: [[String: Any]] = [
+        [
+            "name": "list_notes",
+            "title": "List Peekaboo Notes",
+            "description": "Read notes directly from Peekaboo. Use this instead of opening the Peekaboo app with Computer Use. Notes are returned newest first.",
+            "annotations": [
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [:] as [String: Any],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "create_note",
+            "title": "Create Peekaboo Note",
+            "description": "Create a note directly in Peekaboo without using its graphical interface. Provide a body and an optional title; either a non-empty title or body is required.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "title": [
+                        "type": "string",
+                        "description": "Optional short title. Whitespace is collapsed."
+                    ],
+                    "body": [
+                        "type": "string",
+                        "description": "Note body. Leading and trailing whitespace is trimmed."
+                    ]
+                ],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "update_note",
+            "title": "Update Peekaboo Note",
+            "description": "Update a Peekaboo note directly without using its graphical interface. Change its title, body, or both; a title or body must remain non-empty.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": [
+                        "type": "string",
+                        "description": "Note id returned by list_notes or create_note."
+                    ],
+                    "title": ["type": "string"],
+                    "body": ["type": "string"]
+                ],
+                "required": ["id"],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "delete_note",
+            "title": "Delete Peekaboo Note",
+            "description": "Permanently delete a note directly from Peekaboo.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": [
+                        "type": "string",
+                        "description": "Note id returned by list_notes or create_note."
+                    ]
+                ],
+                "required": ["id"],
+                "additionalProperties": false
+            ]
+        ]
+    ]
+
+    var definitions: [[String: Any]] {
+        Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : [])
+    }
+
     func call(name: String, arguments: [String: Any]) throws -> String {
         switch name {
         case "list_tasks": try listTasks(arguments)
         case "create_task": try createTask(arguments)
         case "update_task": try updateTask(arguments)
         case "delete_task": try deleteTask(arguments)
+        case "list_notes": try listNotes(arguments)
+        case "create_note": try createNote(arguments)
+        case "update_note": try updateNote(arguments)
+        case "delete_note": try deleteNote(arguments)
         default: throw AgentToolError.unknownTool(name)
         }
     }
@@ -240,6 +341,89 @@ final class AgentTaskTools {
         guard try change() else {
             throw AgentToolError.storeFailure(store.lastErrorMessage ?? "Unknown error.")
         }
+    }
+
+    // MARK: - Notes
+
+    private func listNotes(_ arguments: [String: Any]) throws -> String {
+        guard let noteStore else { throw AgentToolError.unknownTool("list_notes") }
+        let notes = noteStore.orderedNotes()
+        return try encode(["count": notes.count, "notes": notes.map(serializeNote)])
+    }
+
+    private func createNote(_ arguments: [String: Any]) throws -> String {
+        guard let noteStore else { throw AgentToolError.unknownTool("create_note") }
+        let title = (arguments["title"] as? String) ?? ""
+        let body = (arguments["body"] as? String) ?? ""
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty || !trimmedBody.isEmpty else {
+            throw AgentToolError.invalidArguments("A non-empty title or body is required.")
+        }
+        guard let note = noteStore.create(title: title, body: body) else {
+            throw AgentToolError.storeFailure(noteStore.lastErrorMessage ?? "Unknown error.")
+        }
+        return try encode(["note": serializeNote(note)])
+    }
+
+    private func updateNote(_ arguments: [String: Any]) throws -> String {
+        guard let noteStore else { throw AgentToolError.unknownTool("update_note") }
+        let note = try findNote(arguments)
+        var newTitle: String?
+        var newBody: String?
+        if let rawTitle = arguments["title"] {
+            guard let title = rawTitle as? String else {
+                throw AgentToolError.invalidArguments("The title must be a string.")
+            }
+            newTitle = title
+        }
+        if let rawBody = arguments["body"] {
+            guard let body = rawBody as? String else {
+                throw AgentToolError.invalidArguments("The body must be a string.")
+            }
+            newBody = body
+        }
+        guard newTitle != nil || newBody != nil else {
+            throw AgentToolError.invalidArguments("Provide a title or body to update.")
+        }
+        try performNote {
+            noteStore.update(note, title: newTitle, body: newBody)
+        }
+        return try encode(["note": serializeNote(note)])
+    }
+
+    private func deleteNote(_ arguments: [String: Any]) throws -> String {
+        guard let noteStore else { throw AgentToolError.unknownTool("delete_note") }
+        let note = try findNote(arguments)
+        let id = note.id.uuidString
+        try performNote { noteStore.delete(note) }
+        return try encode(["deleted": id])
+    }
+
+    private func findNote(_ arguments: [String: Any]) throws -> NoteItem {
+        guard let rawID = arguments["id"] as? String, let id = UUID(uuidString: rawID) else {
+            throw AgentToolError.invalidArguments("A note id (UUID) is required.")
+        }
+        guard let noteStore, let note = noteStore.notes.first(where: { $0.id == id }) else {
+            throw AgentToolError.invalidArguments("No note exists with id \(rawID).")
+        }
+        return note
+    }
+
+    private func performNote(_ change: () throws -> Bool) throws {
+        guard try change() else {
+            throw AgentToolError.storeFailure(noteStore?.lastErrorMessage ?? "Unknown error.")
+        }
+    }
+
+    private func serializeNote(_ note: NoteItem) -> [String: Any] {
+        [
+            "id": note.id.uuidString,
+            "title": note.title,
+            "body": note.body,
+            "createdAt": Self.dateFormatter.string(from: note.createdAt),
+            "updatedAt": Self.dateFormatter.string(from: note.updatedAt)
+        ]
     }
 
     private func serialize(_ task: TaskItem) -> [String: Any] {

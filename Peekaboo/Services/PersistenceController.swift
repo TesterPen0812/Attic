@@ -62,7 +62,7 @@ enum PersistenceController {
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
-        return try ModelContainer(for: TaskItem.self, configurations: configuration)
+        return try ModelContainer(for: TaskItem.self, NoteItem.self, configurations: configuration)
     }
 
     #if DEBUG
@@ -97,7 +97,7 @@ enum PersistenceController {
             description.shouldAddStoreAsynchronously = false
 
             guard let managedObjectModel = NSManagedObjectModel.makeManagedObjectModel(
-                for: [TaskItem.self]
+                for: [TaskItem.self, NoteItem.self]
             ) else {
                 throw CloudKitSchemaInitializationError.unableToCreateManagedObjectModel
             }

@@ -39,6 +39,7 @@ enum ICloudAvailability: Equatable {
 @MainActor
 final class MobileAppModel: ObservableObject {
     @Published private(set) var store: TaskStore?
+    @Published private(set) var noteStore: NoteStore?
     @Published private(set) var startupError: String?
     @Published private(set) var iCloudAvailability: ICloudAvailability = .checking
 
@@ -82,17 +83,20 @@ final class MobileAppModel: ObservableObject {
             )
             self.container = container
             store = TaskStore(container: container)
+            noteStore = NoteStore(container: container)
             startupError = nil
             Task { await refresh() }
         } catch {
             container = nil
             store = nil
+            noteStore = nil
             startupError = error.localizedDescription
         }
     }
 
     func refresh() async {
         store?.refresh()
+        noteStore?.refresh()
         purgeCompletedBeforeToday()
         await refreshICloudAvailability()
     }

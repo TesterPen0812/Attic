@@ -243,6 +243,115 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(error["code"] as? Int, -32602)
     }
 
+    // MARK: - Notes
+
+    func testToolsListIncludesNoteToolsWhenNoteStoreProvided() throws {
+        let (_, handler) = try makeNoteHandler()
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list"
+        ])
+        let response = try JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body)) as? [String: Any]
+        let tools = try XCTUnwrap(try XCTUnwrap(response)["result"] as? [String: Any])["tools"] as? [[String: Any]]
+        let names = try XCTUnwrap(tools).compactMap { $0["name"] as? String }
+        XCTAssertEqual(
+            names.sorted(),
+            ["create_note", "create_task", "delete_note", "delete_task", "list_notes", "list_tasks", "update_note", "update_task"]
+        )
+    }
+
+    func testCreateNoteInsertsTitleAndBody() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let payload = try callNoteTool(handler, "create_note", [
+            "title": "  Ship   notes ",
+            "body": "Body\nhere"
+        ])
+        let note = try XCTUnwrap(payload["note"] as? [String: Any])
+        XCTAssertEqual(note["title"] as? String, "Ship notes")
+        XCTAssertEqual(note["body"] as? String, "Body\nhere")
+        XCTAssertEqual(noteStore.notes.count, 1)
+    }
+
+    func testCreateNoteWithoutBodyOrTitleReturnsToolError() throws {
+        let (_, handler) = try makeNoteHandler()
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": ["name": "create_note", "arguments": ["title": "   "]]
+        ])
+        let response = try JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body)) as? [String: Any]
+        let result = try XCTUnwrap(try XCTUnwrap(response)["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+    }
+
+    func testListNotesReturnsStoredNotes() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        _ = noteStore.create(title: "One", body: "a")
+        _ = noteStore.create(title: "Two", body: "b")
+
+        let payload = try callNoteTool(handler, "list_notes", [:])
+        XCTAssertEqual(payload["count"] as? Int, 2)
+    }
+
+    func testUpdateNoteChangesBody() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(noteStore.create(title: "Title", body: "old"))
+
+        let payload = try callNoteTool(handler, "update_note", [
+            "id": note.id.uuidString,
+            "body": "new body"
+        ])
+        let updated = try XCTUnwrap(payload["note"] as? [String: Any])
+        XCTAssertEqual(updated["body"] as? String, "new body")
+        XCTAssertEqual(note.body, "new body")
+    }
+
+    func testDeleteNoteRemovesNote() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(noteStore.create(body: "Remove me"))
+
+        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString])
+        XCTAssertEqual(payload["deleted"] as? String, note.id.uuidString)
+        XCTAssertTrue(noteStore.notes.isEmpty)
+    }
+
+    func testNoteToolsAreUnknownWhenNoNoteStoreProvided() throws {
+        let response = try send(method: "tools/call", params: ["name": "list_notes"])
+        let error = try XCTUnwrap(response["error"] as? [String: Any])
+        XCTAssertEqual(error["code"] as? Int, -32602)
+    }
+
+    private func makeNoteHandler() throws -> (NoteStore, MCPRequestHandler) {
+        let noteStore = try makeTestNoteStore()
+        let handler = MCPRequestHandler(
+            tools: AgentTaskTools(store: store, noteStore: noteStore),
+            serverVersion: "test"
+        )
+        return (noteStore, handler)
+    }
+
+    private func callNoteTool(
+        _ handler: MCPRequestHandler,
+        _ name: String,
+        _ arguments: [String: Any]
+    ) throws -> [String: Any] {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": ["name": name, "arguments": arguments]
+        ])
+        let response = try JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body)) as? [String: Any]
+        let responseDict = try XCTUnwrap(response)
+        let result = try XCTUnwrap(responseDict["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, false)
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = try XCTUnwrap(content.first?["text"] as? String)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+    }
+
     private func send(method: String, params: [String: Any] = [:], id: Int = 1) throws -> [String: Any] {
         let body = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0",
