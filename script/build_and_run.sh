@@ -32,16 +32,20 @@ xcrun xcodebuild \
 
 test -d "$BUILT_APP"
 security find-identity -v -p codesigning | grep -F "$SIGNING_IDENTITY" >/dev/null
-xattr -cr "$BUILT_APP"
+RUN_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/peekaboo-notes-local.XXXXXX")"
+trap 'rm -rf "$RUN_TEMP_DIR"' EXIT
+STAGED_APP="$RUN_TEMP_DIR/$PROCESS_NAME.app"
+/usr/bin/ditto --norsrc "$BUILT_APP" "$STAGED_APP"
+xattr -cr "$STAGED_APP"
 codesign \
   --force \
   --options runtime \
   --timestamp=none \
   --entitlements "$ROOT_DIR/Peekaboo/PeekabooNotesLocal.entitlements" \
   --sign "$SIGNING_IDENTITY" \
-  "$BUILT_APP"
-codesign --verify --deep --strict --verbose=2 "$BUILT_APP"
-/usr/bin/ditto "$BUILT_APP" "$INSTALL_APP"
+  "$STAGED_APP"
+codesign --verify --deep --strict --verbose=2 "$STAGED_APP"
+/usr/bin/ditto --norsrc "$STAGED_APP" "$INSTALL_APP"
 
 open_app() {
   /usr/bin/open -n "$INSTALL_APP"

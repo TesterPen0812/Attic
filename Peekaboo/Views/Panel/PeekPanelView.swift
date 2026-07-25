@@ -44,6 +44,12 @@ struct PeekPanelView: View {
         .animation(reduceMotion ? nil : PeekabooMotion.spring, value: noteStore.notes.map(\.id))
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: uiState.selectedSection)
         .animation(reduceMotion ? nil : PeekabooMotion.quick, value: uiState.isDraggingTask)
+        .onChange(of: uiState.selectedSection) { _, _ in
+            openMostRecentNoteIfNeeded()
+        }
+        .onChange(of: noteStore.notes.map(\.id)) { _, _ in
+            openMostRecentNoteIfNeeded()
+        }
     }
 
     private var taskSurface: some View {
@@ -75,6 +81,19 @@ struct PeekPanelView: View {
 
     private var currentErrorMessage: String? {
         uiState.selectedSection.isNotes ? noteStore.lastErrorMessage : store.lastErrorMessage
+    }
+
+    private func openMostRecentNoteIfNeeded() {
+        guard uiState.selectedSection.isNotes,
+              !uiState.isComposerPresented,
+              uiState.editingNoteID == nil,
+              let mostRecentNote = noteStore.orderedNotes().first else {
+            return
+        }
+
+        withAnimation(reduceMotion ? nil : PeekabooMotion.spring) {
+            uiState.beginEditingNote(mostRecentNote)
+        }
     }
 
     private func header(activeCount: Int) -> some View {
@@ -173,11 +192,19 @@ struct PeekPanelView: View {
 
     private func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
-        if reduceMotion {
+
+        let select = {
             uiState.selectSection(section)
+            if section.isNotes {
+                openMostRecentNoteIfNeeded()
+            }
+        }
+
+        if reduceMotion {
+            select()
         } else {
             withAnimation(PeekabooMotion.quick) {
-                uiState.selectSection(section)
+                select()
             }
         }
     }

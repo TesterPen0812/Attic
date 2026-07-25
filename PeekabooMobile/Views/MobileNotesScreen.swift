@@ -43,6 +43,21 @@ struct MobileNotesScreen: View {
         .sheet(item: $editor) { configuration in
             MobileNoteEditor(noteStore: noteStore, configuration: configuration)
         }
+        .onAppear {
+            openMostRecentNoteIfNeeded()
+        }
+        .onChange(of: noteStore.notes.map(\.id)) { _, _ in
+            openMostRecentNoteIfNeeded()
+        }
+    }
+
+    private func openMostRecentNoteIfNeeded() {
+        guard editor == nil,
+              let mostRecentNote = noteStore.orderedNotes().first else {
+            return
+        }
+
+        editor = .edit(mostRecentNote)
     }
 
     // MARK: Header
