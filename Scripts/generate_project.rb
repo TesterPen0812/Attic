@@ -99,6 +99,7 @@ mobile_app.resources_build_phase.add_file_reference(privacy_manifest)
 app_group.new_file('Peekaboo.entitlements')
 app_group.new_file('PeekabooDebug.entitlements')
 app_group.new_file('PeekabooLocal.entitlements')
+app_group.new_file('PeekabooNotesLocal.entitlements')
 app_group.new_file('Info.plist')
 mobile_group.new_file('PeekabooMobile.entitlements')
 mobile_group.new_file('Info.plist')
@@ -112,6 +113,7 @@ app.build_configurations.each do |config|
   settings = config.build_settings
   settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Peekaboo'
   settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
+  settings['PEEKABOO_DISPLAY_NAME'] = 'Peekaboo'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
   settings['INFOPLIST_FILE'] = 'Peekaboo/Info.plist'
   settings['CODE_SIGN_ENTITLEMENTS'] = case config.name

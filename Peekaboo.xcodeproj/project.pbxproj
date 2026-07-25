@@ -7,82 +7,82 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		00B556ED9417A9CFBBEB58F59E7D6FA8 /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E385E29660E3268FEEBFABBFFFAA538C /* TaskStore.swift */; };
-		010F37E92404633C1104EFF7E93CB5D0 /* NotesPanelContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3E0724C1F27C700E615EA05B504636A /* NotesPanelContent.swift */; };
+		00B556ED9417A9CFBBEB58F59E7D6FA8 /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4005F7C1102539F0289ACEE2F18854 /* TaskStore.swift */; };
+		010F37E92404633C1104EFF7E93CB5D0 /* NotesPanelContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B378E29C0F1F23B7C6A77BF158E206 /* NotesPanelContent.swift */; };
 		04D5FB6F5B2D039147D00F76FA914B4A /* MobileTaskRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C701A0DCB7698563A73F888300A9EA /* MobileTaskRow.swift */; };
 		09E6AF2677B6790F053676DA4AAB3607 /* MobileTaskListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30DC931B979FB2A5EB45664DDB6DB710 /* MobileTaskListScreen.swift */; };
-		12C1DC7DCB665A403B38E1DBB3F207FB /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 132B1ED2E3D53D261D5093AD3FC1E216 /* AppSettings.swift */; };
+		12C1DC7DCB665A403B38E1DBB3F207FB /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20652B96DDD288AA599D40D768DD9578 /* AppSettings.swift */; };
 		14AEF7C8A6633F948075D3D7A5D08E07 /* MCPRequestHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E16EC8BD2CB6B5A0DFCE706F7289B53 /* MCPRequestHandlerTests.swift */; };
 		15EDAC8E045CBA1447B2B68DE966F5EF /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F80D3D03B02B3F42C8462EFDEA38ED9 /* Cocoa.framework */; };
 		19D755827EE70498626D7E9E22E464F5 /* PanelGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F176C1A51A1C94C89993F73DDA34B016 /* PanelGeometryTests.swift */; };
-		1C6CA0A0EEDC43D5913A2058DF41756B /* CornerHoverStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8CD45C9CFC555F743605F2453BDF7B6 /* CornerHoverStateMachine.swift */; };
-		21E2B4AE96E28A87641FDD7671C0F750 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC554E0728C3EEDE2EA5DBD73256533C /* SettingsWindowController.swift */; };
+		1C6CA0A0EEDC43D5913A2058DF41756B /* CornerHoverStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57C6E6BD5702BC1A6D9A161B24560CE1 /* CornerHoverStateMachine.swift */; };
+		21E2B4AE96E28A87641FDD7671C0F750 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A191833131F53801297C333A6591308E /* SettingsWindowController.swift */; };
 		29603DAF6A98EE3F5DA6E4B5530EB491 /* PeekabooMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86DFD09042D92628E7DA3D7B99013550 /* PeekabooMobileApp.swift */; };
-		2A7631AABF4C2424E79084EBC510060E /* PeekPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41771D75BDB8CFADC7DA9761FA86F55E /* PeekPanelView.swift */; };
-		2D8617ACE136D1B43A4CB8C045429BE5 /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF7E2A45C980BF22C38BA3E63417A21 /* TaskTypes.swift */; };
-		2F3A17C88B94932C2CE694C5D78A40A5 /* AgentAccessTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25C916F574308D626B4DE7A32AA5FF6B /* AgentAccessTokenStore.swift */; };
-		31F2B503E4388327542EE97DFC8F737A /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D0C8EB5555C9C36FD1E6BFABC8FDD59 /* AgentServer.swift */; };
-		32996F71232C18E59B6E1F5F338D6307 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D4636A8EDA7FEA7DACA9C8129CB9BAB /* Assets.xcassets */; };
-		34AE8CFB1300962FE8A5C0F32958317A /* PeekabooTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70F9F7E16A0C64D53AECE9A02E3AB9D /* PeekabooTheme.swift */; };
-		39A959A989598920315132B30F1510F1 /* TaskRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 234FC021A070A2DAA1B305E1C40E9176 /* TaskRowView.swift */; };
+		2A7631AABF4C2424E79084EBC510060E /* PeekPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEEB87F385F80E416AE504BD7648E67E /* PeekPanelView.swift */; };
+		2D8617ACE136D1B43A4CB8C045429BE5 /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7288D8D22C1BAF3A782A14E8FB1F3F25 /* TaskTypes.swift */; };
+		2F3A17C88B94932C2CE694C5D78A40A5 /* AgentAccessTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BC547919F50C59E8C81ED47720D2C3 /* AgentAccessTokenStore.swift */; };
+		31F2B503E4388327542EE97DFC8F737A /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD4D6376E327B87E1B1A5CDA1045698 /* AgentServer.swift */; };
+		32996F71232C18E59B6E1F5F338D6307 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 95CB71AAFE663821B3F1274549595E96 /* Assets.xcassets */; };
+		34AE8CFB1300962FE8A5C0F32958317A /* PeekabooTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322317C3A518EF680E9C547E64AABD71 /* PeekabooTheme.swift */; };
+		39A959A989598920315132B30F1510F1 /* TaskRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C183922296C1DA3D1D609A1ED0BF7038 /* TaskRowView.swift */; };
 		39C5A3C7AB12ACAAE87CC698EEDF9374 /* PeekabooUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C89E71F8DFCAAC0F0C0FD46E0FDDD5 /* PeekabooUITests.swift */; };
 		3B3C40097D831883364E735274E970BE /* PeekabooMobileUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4F44BF4B6FF1F9E9A77BF2817F8E492 /* PeekabooMobileUITests.swift */; };
-		4211F0EB318F078B563420286F502648 /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C031AD033CCFD915D9D7406C0F5D571F /* TaskItem.swift */; };
-		492CBE092F01CD3D60A3FF1C5F0091D9 /* PanelUIState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E04464D8EBBC36709ACE413E795C8A8 /* PanelUIState.swift */; };
-		49D72CB4A777AA0771E0862A9181EB0A /* CornerPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F83B72CC4803210B07C6D799D496FB5 /* CornerPicker.swift */; };
-		4CF7CC291DB565DCC122B58F46B2E1D7 /* PeekabooTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70F9F7E16A0C64D53AECE9A02E3AB9D /* PeekabooTheme.swift */; };
+		4211F0EB318F078B563420286F502648 /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7509CB3D26EFE38B329927613457F6 /* TaskItem.swift */; };
+		492CBE092F01CD3D60A3FF1C5F0091D9 /* PanelUIState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D291638F60BFDAEEE23735D3B2DF9D /* PanelUIState.swift */; };
+		49D72CB4A777AA0771E0862A9181EB0A /* CornerPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3DF588ADBE86907115847055B3E912E /* CornerPicker.swift */; };
+		4CF7CC291DB565DCC122B58F46B2E1D7 /* PeekabooTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322317C3A518EF680E9C547E64AABD71 /* PeekabooTheme.swift */; };
 		4D8AD3EB4DADF356997077F4EB36B189 /* DailyCleanupServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20DFAFBBEEE3F340027C00E970A45F75 /* DailyCleanupServiceTests.swift */; };
 		57B382944E76A4AC83D4FD3BEB313D90 /* NoteStoreMobileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07370E81D6D91BE415D5D89D3DB3C071 /* NoteStoreMobileTests.swift */; };
-		57CE04BD1A14FA273A2B613C73EF4D84 /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AB562398A223BFAD47FF8E2E2FDC5F5 /* NoteItem.swift */; };
+		57CE04BD1A14FA273A2B613C73EF4D84 /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A90FB9726869AF5FDD9E224DD6FE2F5 /* NoteItem.swift */; };
 		59097BA6B131CCD5AE1476F97F1609D9 /* TaskStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F6DC5B457E9E0C860D9CAE380BD0891 /* TaskStoreTests.swift */; };
 		5A5096D73EE6DF8F5DE0AAF6C3488873 /* CornerHoverStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4D050D843D237F2A676B77853334E85 /* CornerHoverStateMachineTests.swift */; };
-		61384BB792101A51FBC2A3BB38ADDFCA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F41DB169969C9F6DCACA15DE7D803518 /* SettingsView.swift */; };
-		68F637BF1BF4D9B004F1EDB993BEB662 /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF7E2A45C980BF22C38BA3E63417A21 /* TaskTypes.swift */; };
-		69EE0BA1940A76877D861C970302A46F /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E749C8B436E5F35710511E81657A6F /* PersistenceController.swift */; };
+		61384BB792101A51FBC2A3BB38ADDFCA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66E21C0868346E66EA2A3EAB932A73F /* SettingsView.swift */; };
+		68F637BF1BF4D9B004F1EDB993BEB662 /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7288D8D22C1BAF3A782A14E8FB1F3F25 /* TaskTypes.swift */; };
+		69EE0BA1940A76877D861C970302A46F /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C48EA036A6C4F1AD833458E1D483A4 /* PersistenceController.swift */; };
 		6C822E92E73422A208243667450906FA /* NoteStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9239202CA8F2D5A9B75E131966D2CD60 /* NoteStoreTests.swift */; };
-		6D3EB0A5D5E67B784044C0C18607D082 /* PanelGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FF95AE5FC66DEB940B33827D21816B /* PanelGeometry.swift */; };
+		6D3EB0A5D5E67B784044C0C18607D082 /* PanelGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA8CEBB6F40D544626E7FFA19D49D9F /* PanelGeometry.swift */; };
 		6F7E97AE48B4EAA7B71AED8CCAD7ABB9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DCF8346F1470C4DBF5B44CAD89452E37 /* Foundation.framework */; };
-		70AD58289F8A66795EAD0742D1A70622 /* PeekPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB69735DBF4EBF2D24B8F674401BF74B /* PeekPanel.swift */; };
-		7106D1291F669D1187ADEC6296114E64 /* AgentTaskTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66BD239848C1B91BC7DDC98807B2112E /* AgentTaskTools.swift */; };
-		72769CBB30FD2AA1E20A45D6286BADC5 /* TaskStatusButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8437E3DE292613B511EC5478D16BA4F0 /* TaskStatusButton.swift */; };
-		753716E067CA303A5654FF84D4D5076C /* PanelSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5360550F3F311091631076CEF3AA9896 /* PanelSection.swift */; };
-		7A29CD5ED562B9355FFD2B219F639937 /* PeekPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E862D1B5CC30732B264423F00662F1 /* PeekPanelController.swift */; };
+		70AD58289F8A66795EAD0742D1A70622 /* PeekPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4033E3FCD4FC6DE24D08A8731361909A /* PeekPanel.swift */; };
+		7106D1291F669D1187ADEC6296114E64 /* AgentTaskTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65DC5D0D5B142386F0290E91D6858686 /* AgentTaskTools.swift */; };
+		72769CBB30FD2AA1E20A45D6286BADC5 /* TaskStatusButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9837BCE0D08FEEB4F02DE771C5868C25 /* TaskStatusButton.swift */; };
+		753716E067CA303A5654FF84D4D5076C /* PanelSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0896853202EA4429710C2AD3DD49FF41 /* PanelSection.swift */; };
+		7A29CD5ED562B9355FFD2B219F639937 /* PeekPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE077AEDBFDCF9D4367B0D6AF32B7C7 /* PeekPanelController.swift */; };
 		7A8A3890985C5C722210BDB0C2840753 /* MobileTaskEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DA705BE02AF3F2ADC47FCF94D665BA0 /* MobileTaskEditor.swift */; };
-		81DEA34A38154F5BC776A1B66923DD0C /* PeekabooApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D60754B37F5C8734982A0CC7EA0A98 /* PeekabooApp.swift */; };
-		82ED6269D40A39A3B50DAF90E40E4133 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF774A28B2F3EE572F3F0B4A3A4A12B0 /* MenuBarView.swift */; };
-		877172E19BA9A09677FACB9D99223D6A /* CornerHoverMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22B44EECBB5046E68CFC65CDC49B3EF2 /* CornerHoverMonitor.swift */; };
-		89858D4962BB94C805290DCAE41463D5 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 3CF27FE058B38B16BD44290777EEA00A /* PrivacyInfo.xcprivacy */; };
-		8AD3B1191B2D521E336C27643CA4D7E6 /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DFA17C24663458044468E215C4ED7D4 /* NoteStore.swift */; };
-		8EE361901847B22203278BDCB5C45855 /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B05BCAEEDB8301C10A02DF3AF08BE7 /* TaskActionsMenu.swift */; };
-		991D7181D86880E08C4C87617A5CCFF7 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCAFB8993F2DE7DD503C41913036FF82 /* GlobalHotKey.swift */; };
-		9A20D85B79D8038A0599D7EEAF50F10C /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F6538841C4341F078C3703A8E163AD /* AppCoordinator.swift */; };
-		9DE5F905D83F8DD7300F575CFD42462D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D4636A8EDA7FEA7DACA9C8129CB9BAB /* Assets.xcassets */; };
-		9F248B667753950C16A6361E91BB5BC5 /* TaskComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32082FB83F99346043D4D9A9868A322B /* TaskComposerView.swift */; };
-		9FAF4AF6CC2AA795625FF1D4543305F3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 3CF27FE058B38B16BD44290777EEA00A /* PrivacyInfo.xcprivacy */; };
+		81DEA34A38154F5BC776A1B66923DD0C /* PeekabooApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D23F2BD24ECAC80407DF9C10EF6B6508 /* PeekabooApp.swift */; };
+		82ED6269D40A39A3B50DAF90E40E4133 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAE1C5E3180DFFD1F9864BD122EF9CC /* MenuBarView.swift */; };
+		877172E19BA9A09677FACB9D99223D6A /* CornerHoverMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6889F4AB74C15394AEE5283B6BB02147 /* CornerHoverMonitor.swift */; };
+		89858D4962BB94C805290DCAE41463D5 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 3F61A7A026928A0F9670A31EEFAB35A6 /* PrivacyInfo.xcprivacy */; };
+		8AD3B1191B2D521E336C27643CA4D7E6 /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1474804058257CD0C88F1967F91889D /* NoteStore.swift */; };
+		8EE361901847B22203278BDCB5C45855 /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60EBC931A17AF6E851E33714676BDE5 /* TaskActionsMenu.swift */; };
+		991D7181D86880E08C4C87617A5CCFF7 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF6B4ADFFC355C7E26CD49C0A29394CC /* GlobalHotKey.swift */; };
+		9A20D85B79D8038A0599D7EEAF50F10C /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FAAF370174E3FD48E777618AB85CE7 /* AppCoordinator.swift */; };
+		9DE5F905D83F8DD7300F575CFD42462D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 95CB71AAFE663821B3F1274549595E96 /* Assets.xcassets */; };
+		9F248B667753950C16A6361E91BB5BC5 /* TaskComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD84D36263B845D31F801C5A3BF105EA /* TaskComposerView.swift */; };
+		9FAF4AF6CC2AA795625FF1D4543305F3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 3F61A7A026928A0F9670A31EEFAB35A6 /* PrivacyInfo.xcprivacy */; };
 		A17D98A3973D2203FFD3317671EE798E /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F80D3D03B02B3F42C8462EFDEA38ED9 /* Cocoa.framework */; };
 		AC93A9260D86313638A8270CCF34758F /* TaskStoreMobileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297F8CD1A08CF8520757B51243E5E19B /* TaskStoreMobileTests.swift */; };
-		AD247CAA5BD7A0998529567FA4DBA746 /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AB562398A223BFAD47FF8E2E2FDC5F5 /* NoteItem.swift */; };
-		B56917EE474CDB43468F54DFD412D041 /* TaskSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7C5BC8CAF60595FAE9C839DAF21FB5 /* TaskSectionView.swift */; };
+		AD247CAA5BD7A0998529567FA4DBA746 /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A90FB9726869AF5FDD9E224DD6FE2F5 /* NoteItem.swift */; };
+		B56917EE474CDB43468F54DFD412D041 /* TaskSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E47E1A0CD1BFC83423E3C59672EDDFC7 /* TaskSectionView.swift */; };
 		B578C89926643D645EED9C19ED6D6A9F /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DCF8346F1470C4DBF5B44CAD89452E37 /* Foundation.framework */; };
 		B73B0A77C8C2A79DCF8DC15D5297DD83 /* MobileNotesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADFDB9BC3620806A24127877636653E /* MobileNotesScreen.swift */; };
-		B9BA0F4337EFD83D9E56F544688EDF55 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4913FBAF09C407B7013973532E0D727 /* AppDelegate.swift */; };
-		BA156017AA7CD8BA2D686EF399D9E2B1 /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DFA17C24663458044468E215C4ED7D4 /* NoteStore.swift */; };
-		BF123A87DD97C13EB56FA9CE071A7F7C /* LoginItemService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0D928A3D5B899EE196E0ACE0353D6E7 /* LoginItemService.swift */; };
+		B9BA0F4337EFD83D9E56F544688EDF55 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D40D619242571B845DED4090718E6CA /* AppDelegate.swift */; };
+		BA156017AA7CD8BA2D686EF399D9E2B1 /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1474804058257CD0C88F1967F91889D /* NoteStore.swift */; };
+		BF123A87DD97C13EB56FA9CE071A7F7C /* LoginItemService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD0D900059D43B6614722CAC1820D8F /* LoginItemService.swift */; };
 		C3D351FB9F50DE07589FE9C94B232DD1 /* MobileAppRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E8BBD58C977A40225113799437606F /* MobileAppRoot.swift */; };
 		C46C75D826DB9E6326C77D622BD01618 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F80D3D03B02B3F42C8462EFDEA38ED9 /* Cocoa.framework */; };
-		C67B2DF5542776143A26856D299133E5 /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E385E29660E3268FEEBFABBFFFAA538C /* TaskStore.swift */; };
+		C67B2DF5542776143A26856D299133E5 /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4005F7C1102539F0289ACEE2F18854 /* TaskStore.swift */; };
 		C95C46CE81ACE5B4B2FDDBB40D7C7960 /* MobileAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CFD24D8AB585D5FC0A12440EB21684D /* MobileAppModel.swift */; };
 		CA6827C445F6B77F676822203B42661C /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46CF0B77C29317C27E4FD107516C250A /* TestSupport.swift */; };
-		CF12E593667634AA39982279928752CE /* PeekabooStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48E0911162DE308E697183CB3E0AAC5E /* PeekabooStyle.swift */; };
-		D4690C1B692BA7CDDD473D1A387D4FE2 /* AgentHTTPRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7F7A6862D41152E3EFE2D53F9EC3CF /* AgentHTTPRequest.swift */; };
+		CF12E593667634AA39982279928752CE /* PeekabooStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FB52CB8D79FDA7EFB984AE223AFB46C /* PeekabooStyle.swift */; };
+		D4690C1B692BA7CDDD473D1A387D4FE2 /* AgentHTTPRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6EBED4143A9824BB49CD0ACFFB7E1E5 /* AgentHTTPRequest.swift */; };
 		D651D674E4077F24D38E55FCA237AC5C /* AgentHTTPRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58DB39CE1A391839EDDAABFBA03730D4 /* AgentHTTPRequestTests.swift */; };
-		D978D51CEFBD1E17A77430B693DF139B /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E749C8B436E5F35710511E81657A6F /* PersistenceController.swift */; };
-		D986B3C2A9978253EACA8B407C0854D0 /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B05BCAEEDB8301C10A02DF3AF08BE7 /* TaskActionsMenu.swift */; };
-		D996563496FE3978B132541615FB05C1 /* DailyCleanupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C27C3EC037499793DB052C6700FD6D89 /* DailyCleanupService.swift */; };
-		DAF31D20EC0E67D0803A6DD05E5F6907 /* TaskDragPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0760BFE71F7159DB07001C1240D75A /* TaskDragPayload.swift */; };
-		E15B0F7FF9F51E51B5B7D4C7E85A7008 /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C031AD033CCFD915D9D7406C0F5D571F /* TaskItem.swift */; };
+		D978D51CEFBD1E17A77430B693DF139B /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C48EA036A6C4F1AD833458E1D483A4 /* PersistenceController.swift */; };
+		D986B3C2A9978253EACA8B407C0854D0 /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A60EBC931A17AF6E851E33714676BDE5 /* TaskActionsMenu.swift */; };
+		D996563496FE3978B132541615FB05C1 /* DailyCleanupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705A8B941801479940C78110A474D4C1 /* DailyCleanupService.swift */; };
+		DAF31D20EC0E67D0803A6DD05E5F6907 /* TaskDragPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A505A31C68DEDD8CDD87533132C195 /* TaskDragPayload.swift */; };
+		E15B0F7FF9F51E51B5B7D4C7E85A7008 /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7509CB3D26EFE38B329927613457F6 /* TaskItem.swift */; };
 		EE4A80A1AC62EE226D725947A2E2254A /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DCF8346F1470C4DBF5B44CAD89452E37 /* Foundation.framework */; };
-		F394414E6A4ABDB9F6CBC29736FFD9B7 /* MCPRequestHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A1BE15655E1BB934771810EAFF25622 /* MCPRequestHandler.swift */; };
+		F394414E6A4ABDB9F6CBC29736FFD9B7 /* MCPRequestHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2304E96637B959BFD775A521EFD90330 /* MCPRequestHandler.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -118,79 +118,80 @@
 
 /* Begin PBXFileReference section */
 		07370E81D6D91BE415D5D89D3DB3C071 /* NoteStoreMobileTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NoteStoreMobileTests.swift; sourceTree = "<group>"; };
-		0D4636A8EDA7FEA7DACA9C8129CB9BAB /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
-		0DFA17C24663458044468E215C4ED7D4 /* NoteStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteStore.swift; path = Services/NoteStore.swift; sourceTree = "<group>"; };
-		0E04464D8EBBC36709ACE413E795C8A8 /* PanelUIState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelUIState.swift; path = Window/PanelUIState.swift; sourceTree = "<group>"; };
-		0E0F00F94A42BEA5A015E34497929BC3 /* PeekabooDebug.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PeekabooDebug.entitlements; sourceTree = "<group>"; };
-		132B1ED2E3D53D261D5093AD3FC1E216 /* AppSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppSettings.swift; path = Services/AppSettings.swift; sourceTree = "<group>"; };
+		0896853202EA4429710C2AD3DD49FF41 /* PanelSection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelSection.swift; path = Window/PanelSection.swift; sourceTree = "<group>"; };
+		0A4005F7C1102539F0289ACEE2F18854 /* TaskStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStore.swift; path = Services/TaskStore.swift; sourceTree = "<group>"; };
+		0FB52CB8D79FDA7EFB984AE223AFB46C /* PeekabooStyle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekabooStyle.swift; path = Design/PeekabooStyle.swift; sourceTree = "<group>"; };
 		1CFD24D8AB585D5FC0A12440EB21684D /* MobileAppModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileAppModel.swift; path = App/MobileAppModel.swift; sourceTree = "<group>"; };
+		20652B96DDD288AA599D40D768DD9578 /* AppSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppSettings.swift; path = Services/AppSettings.swift; sourceTree = "<group>"; };
 		20DFAFBBEEE3F340027C00E970A45F75 /* DailyCleanupServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DailyCleanupServiceTests.swift; sourceTree = "<group>"; };
-		22B44EECBB5046E68CFC65CDC49B3EF2 /* CornerHoverMonitor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverMonitor.swift; path = Services/CornerHoverMonitor.swift; sourceTree = "<group>"; };
-		234FC021A070A2DAA1B305E1C40E9176 /* TaskRowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskRowView.swift; path = Views/Panel/TaskRowView.swift; sourceTree = "<group>"; };
-		25C916F574308D626B4DE7A32AA5FF6B /* AgentAccessTokenStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentAccessTokenStore.swift; path = Services/AgentServer/AgentAccessTokenStore.swift; sourceTree = "<group>"; };
-		26F6538841C4341F078C3703A8E163AD /* AppCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppCoordinator.swift; path = App/AppCoordinator.swift; sourceTree = "<group>"; };
+		2304E96637B959BFD775A521EFD90330 /* MCPRequestHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MCPRequestHandler.swift; path = Services/AgentServer/MCPRequestHandler.swift; sourceTree = "<group>"; };
+		26DAD3DFFB87C4C11B590FBC33C6744A /* Peekaboo.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Peekaboo.entitlements; sourceTree = "<group>"; };
 		297F8CD1A08CF8520757B51243E5E19B /* TaskStoreMobileTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskStoreMobileTests.swift; sourceTree = "<group>"; };
 		2BF8BF26A6AFE62C407A4399D1DB3872 /* Peekaboo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Peekaboo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2CE40469795134903EF1698F92E0FE42 /* PeekabooMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PeekabooMobile.entitlements; sourceTree = "<group>"; };
 		2DA705BE02AF3F2ADC47FCF94D665BA0 /* MobileTaskEditor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileTaskEditor.swift; path = Views/MobileTaskEditor.swift; sourceTree = "<group>"; };
 		2F6DC5B457E9E0C860D9CAE380BD0891 /* TaskStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskStoreTests.swift; sourceTree = "<group>"; };
 		30DC931B979FB2A5EB45664DDB6DB710 /* MobileTaskListScreen.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileTaskListScreen.swift; path = Views/MobileTaskListScreen.swift; sourceTree = "<group>"; };
-		32082FB83F99346043D4D9A9868A322B /* TaskComposerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskComposerView.swift; path = Views/Panel/TaskComposerView.swift; sourceTree = "<group>"; };
+		322317C3A518EF680E9C547E64AABD71 /* PeekabooTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekabooTheme.swift; path = Design/PeekabooTheme.swift; sourceTree = "<group>"; };
 		37C89E71F8DFCAAC0F0C0FD46E0FDDD5 /* PeekabooUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PeekabooUITests.swift; sourceTree = "<group>"; };
-		3A1BE15655E1BB934771810EAFF25622 /* MCPRequestHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MCPRequestHandler.swift; path = Services/AgentServer/MCPRequestHandler.swift; sourceTree = "<group>"; };
-		3CF27FE058B38B16BD44290777EEA00A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		3F83B72CC4803210B07C6D799D496FB5 /* CornerPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerPicker.swift; path = Views/Settings/CornerPicker.swift; sourceTree = "<group>"; };
-		41771D75BDB8CFADC7DA9761FA86F55E /* PeekPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekPanelView.swift; path = Views/Panel/PeekPanelView.swift; sourceTree = "<group>"; };
-		41E749C8B436E5F35710511E81657A6F /* PersistenceController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceController.swift; path = Services/PersistenceController.swift; sourceTree = "<group>"; };
+		3F61A7A026928A0F9670A31EEFAB35A6 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		4033E3FCD4FC6DE24D08A8731361909A /* PeekPanel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekPanel.swift; path = Window/PeekPanel.swift; sourceTree = "<group>"; };
 		42C701A0DCB7698563A73F888300A9EA /* MobileTaskRow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileTaskRow.swift; path = Views/MobileTaskRow.swift; sourceTree = "<group>"; };
+		465E3D0A37375FEB5B771203C5D60799 /* PeekabooDebug.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PeekabooDebug.entitlements; sourceTree = "<group>"; };
 		46CF0B77C29317C27E4FD107516C250A /* TestSupport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
-		48E0911162DE308E697183CB3E0AAC5E /* PeekabooStyle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekabooStyle.swift; path = Design/PeekabooStyle.swift; sourceTree = "<group>"; };
-		4AB562398A223BFAD47FF8E2E2FDC5F5 /* NoteItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteItem.swift; path = Models/NoteItem.swift; sourceTree = "<group>"; };
+		4AD0D900059D43B6614722CAC1820D8F /* LoginItemService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LoginItemService.swift; path = Services/LoginItemService.swift; sourceTree = "<group>"; };
+		4B7509CB3D26EFE38B329927613457F6 /* TaskItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskItem.swift; path = Models/TaskItem.swift; sourceTree = "<group>"; };
+		4D40D619242571B845DED4090718E6CA /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = App/AppDelegate.swift; sourceTree = "<group>"; };
 		4F80D3D03B02B3F42C8462EFDEA38ED9 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		50E8BBD58C977A40225113799437606F /* MobileAppRoot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileAppRoot.swift; path = Views/MobileAppRoot.swift; sourceTree = "<group>"; };
-		5360550F3F311091631076CEF3AA9896 /* PanelSection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelSection.swift; path = Window/PanelSection.swift; sourceTree = "<group>"; };
-		57E862D1B5CC30732B264423F00662F1 /* PeekPanelController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekPanelController.swift; path = Window/PeekPanelController.swift; sourceTree = "<group>"; };
+		54CBFA1CAD901C268E521ACD076F5468 /* PeekabooLocal.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PeekabooLocal.entitlements; sourceTree = "<group>"; };
+		57C6E6BD5702BC1A6D9A161B24560CE1 /* CornerHoverStateMachine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverStateMachine.swift; path = Services/CornerHoverStateMachine.swift; sourceTree = "<group>"; };
 		58DB39CE1A391839EDDAABFBA03730D4 /* AgentHTTPRequestTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentHTTPRequestTests.swift; sourceTree = "<group>"; };
-		5D0C8EB5555C9C36FD1E6BFABC8FDD59 /* AgentServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentServer.swift; path = Services/AgentServer/AgentServer.swift; sourceTree = "<group>"; };
 		64FEA74CF74E0245C62AD14B5F81B1B6 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		66BD239848C1B91BC7DDC98807B2112E /* AgentTaskTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentTaskTools.swift; path = Services/AgentServer/AgentTaskTools.swift; sourceTree = "<group>"; };
+		65DC5D0D5B142386F0290E91D6858686 /* AgentTaskTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentTaskTools.swift; path = Services/AgentServer/AgentTaskTools.swift; sourceTree = "<group>"; };
+		6889F4AB74C15394AEE5283B6BB02147 /* CornerHoverMonitor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverMonitor.swift; path = Services/CornerHoverMonitor.swift; sourceTree = "<group>"; };
 		6A6A282700784A03D063EB8C91D9834B /* PeekabooTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PeekabooTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		70B05BCAEEDB8301C10A02DF3AF08BE7 /* TaskActionsMenu.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskActionsMenu.swift; path = Design/TaskActionsMenu.swift; sourceTree = "<group>"; };
-		8437E3DE292613B511EC5478D16BA4F0 /* TaskStatusButton.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStatusButton.swift; path = Views/Panel/TaskStatusButton.swift; sourceTree = "<group>"; };
+		6AA8CEBB6F40D544626E7FFA19D49D9F /* PanelGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelGeometry.swift; path = Services/PanelGeometry.swift; sourceTree = "<group>"; };
+		6BAE1C5E3180DFFD1F9864BD122EF9CC /* MenuBarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MenuBarView.swift; path = Views/MenuBarView.swift; sourceTree = "<group>"; };
+		6EE077AEDBFDCF9D4367B0D6AF32B7C7 /* PeekPanelController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekPanelController.swift; path = Window/PeekPanelController.swift; sourceTree = "<group>"; };
+		705A8B941801479940C78110A474D4C1 /* DailyCleanupService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DailyCleanupService.swift; path = Services/DailyCleanupService.swift; sourceTree = "<group>"; };
+		7288D8D22C1BAF3A782A14E8FB1F3F25 /* TaskTypes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskTypes.swift; path = Models/TaskTypes.swift; sourceTree = "<group>"; };
 		86DFD09042D92628E7DA3D7B99013550 /* PeekabooMobileApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekabooMobileApp.swift; path = App/PeekabooMobileApp.swift; sourceTree = "<group>"; };
+		89FAAF370174E3FD48E777618AB85CE7 /* AppCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppCoordinator.swift; path = App/AppCoordinator.swift; sourceTree = "<group>"; };
 		8E16EC8BD2CB6B5A0DFCE706F7289B53 /* MCPRequestHandlerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MCPRequestHandlerTests.swift; sourceTree = "<group>"; };
 		9239202CA8F2D5A9B75E131966D2CD60 /* NoteStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NoteStoreTests.swift; sourceTree = "<group>"; };
+		95CB71AAFE663821B3F1274549595E96 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		975CC944B4D70462EB7312E5B80B9FF5 /* PeekabooUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PeekabooUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		9A7F7A6862D41152E3EFE2D53F9EC3CF /* AgentHTTPRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentHTTPRequest.swift; path = Services/AgentServer/AgentHTTPRequest.swift; sourceTree = "<group>"; };
-		AB69735DBF4EBF2D24B8F674401BF74B /* PeekPanel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekPanel.swift; path = Window/PeekPanel.swift; sourceTree = "<group>"; };
-		AC554E0728C3EEDE2EA5DBD73256533C /* SettingsWindowController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsWindowController.swift; path = Window/SettingsWindowController.swift; sourceTree = "<group>"; };
-		B4913FBAF09C407B7013973532E0D727 /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = App/AppDelegate.swift; sourceTree = "<group>"; };
-		C031AD033CCFD915D9D7406C0F5D571F /* TaskItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskItem.swift; path = Models/TaskItem.swift; sourceTree = "<group>"; };
+		9837BCE0D08FEEB4F02DE771C5868C25 /* TaskStatusButton.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStatusButton.swift; path = Views/Panel/TaskStatusButton.swift; sourceTree = "<group>"; };
+		9A90FB9726869AF5FDD9E224DD6FE2F5 /* NoteItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteItem.swift; path = Models/NoteItem.swift; sourceTree = "<group>"; };
+		A191833131F53801297C333A6591308E /* SettingsWindowController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsWindowController.swift; path = Window/SettingsWindowController.swift; sourceTree = "<group>"; };
+		A60EBC931A17AF6E851E33714676BDE5 /* TaskActionsMenu.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskActionsMenu.swift; path = Design/TaskActionsMenu.swift; sourceTree = "<group>"; };
+		AFE17A8300211D9A343CC3B0207BC83D /* PeekabooNotesLocal.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PeekabooNotesLocal.entitlements; sourceTree = "<group>"; };
+		B3B378E29C0F1F23B7C6A77BF158E206 /* NotesPanelContent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NotesPanelContent.swift; path = Views/Panel/NotesPanelContent.swift; sourceTree = "<group>"; };
+		B3DF588ADBE86907115847055B3E912E /* CornerPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerPicker.swift; path = Views/Settings/CornerPicker.swift; sourceTree = "<group>"; };
+		B4A505A31C68DEDD8CDD87533132C195 /* TaskDragPayload.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskDragPayload.swift; path = Models/TaskDragPayload.swift; sourceTree = "<group>"; };
+		B66E21C0868346E66EA2A3EAB932A73F /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		B6EBED4143A9824BB49CD0ACFFB7E1E5 /* AgentHTTPRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentHTTPRequest.swift; path = Services/AgentServer/AgentHTTPRequest.swift; sourceTree = "<group>"; };
+		B9C48EA036A6C4F1AD833458E1D483A4 /* PersistenceController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceController.swift; path = Services/PersistenceController.swift; sourceTree = "<group>"; };
 		C1709CC765ABAA7609171BF04EF76726 /* PeekabooMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PeekabooMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		C27C3EC037499793DB052C6700FD6D89 /* DailyCleanupService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DailyCleanupService.swift; path = Services/DailyCleanupService.swift; sourceTree = "<group>"; };
-		C2AB8137FE338F5AE7BC8E7347C9C3AD /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		C3D60754B37F5C8734982A0CC7EA0A98 /* PeekabooApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekabooApp.swift; path = App/PeekabooApp.swift; sourceTree = "<group>"; };
-		C70F9F7E16A0C64D53AECE9A02E3AB9D /* PeekabooTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekabooTheme.swift; path = Design/PeekabooTheme.swift; sourceTree = "<group>"; };
+		C183922296C1DA3D1D609A1ED0BF7038 /* TaskRowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskRowView.swift; path = Views/Panel/TaskRowView.swift; sourceTree = "<group>"; };
 		CDAFA8450C2AE46D2919C08360D98CB7 /* PeekabooMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PeekabooMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		CDF7E2A45C980BF22C38BA3E63417A21 /* TaskTypes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskTypes.swift; path = Models/TaskTypes.swift; sourceTree = "<group>"; };
-		D3FF95AE5FC66DEB940B33827D21816B /* PanelGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelGeometry.swift; path = Services/PanelGeometry.swift; sourceTree = "<group>"; };
-		D6B782961F2E26C028784E78B526EA13 /* PeekabooLocal.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = PeekabooLocal.entitlements; sourceTree = "<group>"; };
-		DB1591CBFCD53BE17839A1F11C900937 /* Peekaboo.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Peekaboo.entitlements; sourceTree = "<group>"; };
+		CEEB87F385F80E416AE504BD7648E67E /* PeekPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekPanelView.swift; path = Views/Panel/PeekPanelView.swift; sourceTree = "<group>"; };
+		D23F2BD24ECAC80407DF9C10EF6B6508 /* PeekabooApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PeekabooApp.swift; path = App/PeekabooApp.swift; sourceTree = "<group>"; };
+		D5BC547919F50C59E8C81ED47720D2C3 /* AgentAccessTokenStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentAccessTokenStore.swift; path = Services/AgentServer/AgentAccessTokenStore.swift; sourceTree = "<group>"; };
 		DCF8346F1470C4DBF5B44CAD89452E37 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
-		DE7C5BC8CAF60595FAE9C839DAF21FB5 /* TaskSectionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskSectionView.swift; path = Views/Panel/TaskSectionView.swift; sourceTree = "<group>"; };
-		E0D928A3D5B899EE196E0ACE0353D6E7 /* LoginItemService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LoginItemService.swift; path = Services/LoginItemService.swift; sourceTree = "<group>"; };
-		E385E29660E3268FEEBFABBFFFAA538C /* TaskStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStore.swift; path = Services/TaskStore.swift; sourceTree = "<group>"; };
-		E3E0724C1F27C700E615EA05B504636A /* NotesPanelContent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NotesPanelContent.swift; path = Views/Panel/NotesPanelContent.swift; sourceTree = "<group>"; };
+		E1474804058257CD0C88F1967F91889D /* NoteStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteStore.swift; path = Services/NoteStore.swift; sourceTree = "<group>"; };
+		E47E1A0CD1BFC83423E3C59672EDDFC7 /* TaskSectionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskSectionView.swift; path = Views/Panel/TaskSectionView.swift; sourceTree = "<group>"; };
 		E4F44BF4B6FF1F9E9A77BF2817F8E492 /* PeekabooMobileUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PeekabooMobileUITests.swift; sourceTree = "<group>"; };
-		E8CD45C9CFC555F743605F2453BDF7B6 /* CornerHoverStateMachine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverStateMachine.swift; path = Services/CornerHoverStateMachine.swift; sourceTree = "<group>"; };
 		E9E685B08D8107097C9FA5DDBB548015 /* PeekabooMobileUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PeekabooMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		EF774A28B2F3EE572F3F0B4A3A4A12B0 /* MenuBarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MenuBarView.swift; path = Views/MenuBarView.swift; sourceTree = "<group>"; };
+		ECD4D6376E327B87E1B1A5CDA1045698 /* AgentServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentServer.swift; path = Services/AgentServer/AgentServer.swift; sourceTree = "<group>"; };
+		EF6B4ADFFC355C7E26CD49C0A29394CC /* GlobalHotKey.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GlobalHotKey.swift; path = Services/GlobalHotKey.swift; sourceTree = "<group>"; };
 		F176C1A51A1C94C89993F73DDA34B016 /* PanelGeometryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PanelGeometryTests.swift; sourceTree = "<group>"; };
-		F41DB169969C9F6DCACA15DE7D803518 /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		F3D291638F60BFDAEEE23735D3B2DF9D /* PanelUIState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelUIState.swift; path = Window/PanelUIState.swift; sourceTree = "<group>"; };
 		F4D050D843D237F2A676B77853334E85 /* CornerHoverStateMachineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CornerHoverStateMachineTests.swift; sourceTree = "<group>"; };
-		FA0760BFE71F7159DB07001C1240D75A /* TaskDragPayload.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskDragPayload.swift; path = Models/TaskDragPayload.swift; sourceTree = "<group>"; };
+		F539838E34810B4FF1EF0E6C14CD2F3C /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		FADFDB9BC3620806A24127877636653E /* MobileNotesScreen.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileNotesScreen.swift; path = Views/MobileNotesScreen.swift; sourceTree = "<group>"; };
-		FCAFB8993F2DE7DD503C41913036FF82 /* GlobalHotKey.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GlobalHotKey.swift; path = Services/GlobalHotKey.swift; sourceTree = "<group>"; };
+		FD84D36263B845D31F801C5A3BF105EA /* TaskComposerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskComposerView.swift; path = Views/Panel/TaskComposerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -259,7 +260,7 @@
 			children = (
 				4038C8D5CB393F7EB55EB184DED1A955 /* Products */,
 				08EF0E3836C22C96D65A583AA1A0C101 /* Frameworks */,
-				8F40BB92F2D782BB69DD5EF7C611B84A /* Peekaboo */,
+				F0BA98EABF1CC24034F1B4C260512FE8 /* Peekaboo */,
 				4D479A43DD3027717261F6284CE69E3B /* PeekabooTests */,
 				6EEF6C52F364803D09C9471E8FA3E103 /* PeekabooUITests */,
 				CCCA358CB00B3991DE9CE11C7890B915 /* PeekabooMobile */,
@@ -323,59 +324,6 @@
 			path = PeekabooUITests;
 			sourceTree = "<group>";
 		};
-		8F40BB92F2D782BB69DD5EF7C611B84A /* Peekaboo */ = {
-			isa = PBXGroup;
-			children = (
-				26F6538841C4341F078C3703A8E163AD /* AppCoordinator.swift */,
-				B4913FBAF09C407B7013973532E0D727 /* AppDelegate.swift */,
-				C3D60754B37F5C8734982A0CC7EA0A98 /* PeekabooApp.swift */,
-				48E0911162DE308E697183CB3E0AAC5E /* PeekabooStyle.swift */,
-				C70F9F7E16A0C64D53AECE9A02E3AB9D /* PeekabooTheme.swift */,
-				70B05BCAEEDB8301C10A02DF3AF08BE7 /* TaskActionsMenu.swift */,
-				4AB562398A223BFAD47FF8E2E2FDC5F5 /* NoteItem.swift */,
-				FA0760BFE71F7159DB07001C1240D75A /* TaskDragPayload.swift */,
-				C031AD033CCFD915D9D7406C0F5D571F /* TaskItem.swift */,
-				CDF7E2A45C980BF22C38BA3E63417A21 /* TaskTypes.swift */,
-				25C916F574308D626B4DE7A32AA5FF6B /* AgentAccessTokenStore.swift */,
-				9A7F7A6862D41152E3EFE2D53F9EC3CF /* AgentHTTPRequest.swift */,
-				5D0C8EB5555C9C36FD1E6BFABC8FDD59 /* AgentServer.swift */,
-				66BD239848C1B91BC7DDC98807B2112E /* AgentTaskTools.swift */,
-				3A1BE15655E1BB934771810EAFF25622 /* MCPRequestHandler.swift */,
-				132B1ED2E3D53D261D5093AD3FC1E216 /* AppSettings.swift */,
-				22B44EECBB5046E68CFC65CDC49B3EF2 /* CornerHoverMonitor.swift */,
-				E8CD45C9CFC555F743605F2453BDF7B6 /* CornerHoverStateMachine.swift */,
-				C27C3EC037499793DB052C6700FD6D89 /* DailyCleanupService.swift */,
-				FCAFB8993F2DE7DD503C41913036FF82 /* GlobalHotKey.swift */,
-				E0D928A3D5B899EE196E0ACE0353D6E7 /* LoginItemService.swift */,
-				0DFA17C24663458044468E215C4ED7D4 /* NoteStore.swift */,
-				D3FF95AE5FC66DEB940B33827D21816B /* PanelGeometry.swift */,
-				41E749C8B436E5F35710511E81657A6F /* PersistenceController.swift */,
-				E385E29660E3268FEEBFABBFFFAA538C /* TaskStore.swift */,
-				EF774A28B2F3EE572F3F0B4A3A4A12B0 /* MenuBarView.swift */,
-				E3E0724C1F27C700E615EA05B504636A /* NotesPanelContent.swift */,
-				41771D75BDB8CFADC7DA9761FA86F55E /* PeekPanelView.swift */,
-				32082FB83F99346043D4D9A9868A322B /* TaskComposerView.swift */,
-				234FC021A070A2DAA1B305E1C40E9176 /* TaskRowView.swift */,
-				DE7C5BC8CAF60595FAE9C839DAF21FB5 /* TaskSectionView.swift */,
-				8437E3DE292613B511EC5478D16BA4F0 /* TaskStatusButton.swift */,
-				3F83B72CC4803210B07C6D799D496FB5 /* CornerPicker.swift */,
-				F41DB169969C9F6DCACA15DE7D803518 /* SettingsView.swift */,
-				5360550F3F311091631076CEF3AA9896 /* PanelSection.swift */,
-				0E04464D8EBBC36709ACE413E795C8A8 /* PanelUIState.swift */,
-				AB69735DBF4EBF2D24B8F674401BF74B /* PeekPanel.swift */,
-				57E862D1B5CC30732B264423F00662F1 /* PeekPanelController.swift */,
-				AC554E0728C3EEDE2EA5DBD73256533C /* SettingsWindowController.swift */,
-				0D4636A8EDA7FEA7DACA9C8129CB9BAB /* Assets.xcassets */,
-				3CF27FE058B38B16BD44290777EEA00A /* PrivacyInfo.xcprivacy */,
-				DB1591CBFCD53BE17839A1F11C900937 /* Peekaboo.entitlements */,
-				0E0F00F94A42BEA5A015E34497929BC3 /* PeekabooDebug.entitlements */,
-				D6B782961F2E26C028784E78B526EA13 /* PeekabooLocal.entitlements */,
-				C2AB8137FE338F5AE7BC8E7347C9C3AD /* Info.plist */,
-			);
-			name = Peekaboo;
-			path = Peekaboo;
-			sourceTree = "<group>";
-		};
 		9764F40C033EA08769368C4498FEF28A /* iOS */ = {
 			isa = PBXGroup;
 			children = (
@@ -409,6 +357,60 @@
 			);
 			name = PeekabooMobile;
 			path = PeekabooMobile;
+			sourceTree = "<group>";
+		};
+		F0BA98EABF1CC24034F1B4C260512FE8 /* Peekaboo */ = {
+			isa = PBXGroup;
+			children = (
+				89FAAF370174E3FD48E777618AB85CE7 /* AppCoordinator.swift */,
+				4D40D619242571B845DED4090718E6CA /* AppDelegate.swift */,
+				D23F2BD24ECAC80407DF9C10EF6B6508 /* PeekabooApp.swift */,
+				0FB52CB8D79FDA7EFB984AE223AFB46C /* PeekabooStyle.swift */,
+				322317C3A518EF680E9C547E64AABD71 /* PeekabooTheme.swift */,
+				A60EBC931A17AF6E851E33714676BDE5 /* TaskActionsMenu.swift */,
+				9A90FB9726869AF5FDD9E224DD6FE2F5 /* NoteItem.swift */,
+				B4A505A31C68DEDD8CDD87533132C195 /* TaskDragPayload.swift */,
+				4B7509CB3D26EFE38B329927613457F6 /* TaskItem.swift */,
+				7288D8D22C1BAF3A782A14E8FB1F3F25 /* TaskTypes.swift */,
+				D5BC547919F50C59E8C81ED47720D2C3 /* AgentAccessTokenStore.swift */,
+				B6EBED4143A9824BB49CD0ACFFB7E1E5 /* AgentHTTPRequest.swift */,
+				ECD4D6376E327B87E1B1A5CDA1045698 /* AgentServer.swift */,
+				65DC5D0D5B142386F0290E91D6858686 /* AgentTaskTools.swift */,
+				2304E96637B959BFD775A521EFD90330 /* MCPRequestHandler.swift */,
+				20652B96DDD288AA599D40D768DD9578 /* AppSettings.swift */,
+				6889F4AB74C15394AEE5283B6BB02147 /* CornerHoverMonitor.swift */,
+				57C6E6BD5702BC1A6D9A161B24560CE1 /* CornerHoverStateMachine.swift */,
+				705A8B941801479940C78110A474D4C1 /* DailyCleanupService.swift */,
+				EF6B4ADFFC355C7E26CD49C0A29394CC /* GlobalHotKey.swift */,
+				4AD0D900059D43B6614722CAC1820D8F /* LoginItemService.swift */,
+				E1474804058257CD0C88F1967F91889D /* NoteStore.swift */,
+				6AA8CEBB6F40D544626E7FFA19D49D9F /* PanelGeometry.swift */,
+				B9C48EA036A6C4F1AD833458E1D483A4 /* PersistenceController.swift */,
+				0A4005F7C1102539F0289ACEE2F18854 /* TaskStore.swift */,
+				6BAE1C5E3180DFFD1F9864BD122EF9CC /* MenuBarView.swift */,
+				B3B378E29C0F1F23B7C6A77BF158E206 /* NotesPanelContent.swift */,
+				CEEB87F385F80E416AE504BD7648E67E /* PeekPanelView.swift */,
+				FD84D36263B845D31F801C5A3BF105EA /* TaskComposerView.swift */,
+				C183922296C1DA3D1D609A1ED0BF7038 /* TaskRowView.swift */,
+				E47E1A0CD1BFC83423E3C59672EDDFC7 /* TaskSectionView.swift */,
+				9837BCE0D08FEEB4F02DE771C5868C25 /* TaskStatusButton.swift */,
+				B3DF588ADBE86907115847055B3E912E /* CornerPicker.swift */,
+				B66E21C0868346E66EA2A3EAB932A73F /* SettingsView.swift */,
+				0896853202EA4429710C2AD3DD49FF41 /* PanelSection.swift */,
+				F3D291638F60BFDAEEE23735D3B2DF9D /* PanelUIState.swift */,
+				4033E3FCD4FC6DE24D08A8731361909A /* PeekPanel.swift */,
+				6EE077AEDBFDCF9D4367B0D6AF32B7C7 /* PeekPanelController.swift */,
+				A191833131F53801297C333A6591308E /* SettingsWindowController.swift */,
+				95CB71AAFE663821B3F1274549595E96 /* Assets.xcassets */,
+				3F61A7A026928A0F9670A31EEFAB35A6 /* PrivacyInfo.xcprivacy */,
+				26DAD3DFFB87C4C11B590FBC33C6744A /* Peekaboo.entitlements */,
+				465E3D0A37375FEB5B771203C5D60799 /* PeekabooDebug.entitlements */,
+				54CBFA1CAD901C268E521ACD076F5468 /* PeekabooLocal.entitlements */,
+				AFE17A8300211D9A343CC3B0207BC83D /* PeekabooNotesLocal.entitlements */,
+				F539838E34810B4FF1EF0E6C14CD2F3C /* Info.plist */,
+			);
+			name = Peekaboo;
+			path = Peekaboo;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -833,6 +835,38 @@
 			};
 			name = Local;
 		};
+		6056CB9F00820AE3A9ACB6BCDD4B9303 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APS_ENVIRONMENT = production;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Peekaboo/Peekaboo.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 11;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				ICLOUD_CONTAINER_ENVIRONMENT = Production;
+				INFOPLIST_FILE = Peekaboo/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.1;
+				PEEKABOO_DISPLAY_NAME = Peekaboo;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Peekaboo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 		6083502EFEBDA2263737A4028115CF4E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -959,37 +993,6 @@
 			};
 			name = Local;
 		};
-		921FF486D36201926BE2C98F2EB5782F /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APS_ENVIRONMENT = production;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Peekaboo/Peekaboo.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				ICLOUD_CONTAINER_ENVIRONMENT = Production;
-				INFOPLIST_FILE = Peekaboo/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Peekaboo;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
 		92384F6DE07B74AE8DDE26AFC5A4AE1B /* Local */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1027,27 +1030,7 @@
 			};
 			name = Local;
 		};
-		A87D90E5EAD9C4FD4142D56D992BFEFB /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CLANG_ENABLE_OBJC_WEAK = NO;
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.PeekabooMobileTests;
-				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PeekabooMobile.app/PeekabooMobile";
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
-		AAD7AD09CCAA1B1B3DC2784F69273F55 /* Local */ = {
+		9EB7F896A3381292BD19FD725AF7BA3A /* Local */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APS_ENVIRONMENT = development;
@@ -1069,6 +1052,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.1;
+				PEEKABOO_DISPLAY_NAME = Peekaboo;
 				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Peekaboo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1077,6 +1061,58 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Local;
+		};
+		A6A1CA79B97BD93E79F6D293DC7AFDC7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APS_ENVIRONMENT = development;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Peekaboo/PeekabooDebug.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 11;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				ICLOUD_CONTAINER_ENVIRONMENT = Development;
+				INFOPLIST_FILE = Peekaboo/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.1;
+				PEEKABOO_DISPLAY_NAME = Peekaboo;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Peekaboo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A87D90E5EAD9C4FD4142D56D992BFEFB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.PeekabooMobileTests;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PeekabooMobile.app/PeekabooMobile";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
 		};
 		ACAF7FED64CE47516BE9639BECF0B34D /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -1220,37 +1256,6 @@
 			};
 			name = Release;
 		};
-		BAF3247F133E3CB280D368349AB55FBE /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APS_ENVIRONMENT = development;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Peekaboo/PeekabooDebug.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				ICLOUD_CONTAINER_ENVIRONMENT = Development;
-				INFOPLIST_FILE = Peekaboo/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Peekaboo;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
 		BB9349429F8DF8B938892ACF5F9A0613 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1383,9 +1388,9 @@
 		940B8666FDE41CE3B66C57C935B1D68E /* Build configuration list for PBXNativeTarget "Peekaboo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				921FF486D36201926BE2C98F2EB5782F /* Release */,
-				BAF3247F133E3CB280D368349AB55FBE /* Debug */,
-				AAD7AD09CCAA1B1B3DC2784F69273F55 /* Local */,
+				6056CB9F00820AE3A9ACB6BCDD4B9303 /* Release */,
+				A6A1CA79B97BD93E79F6D293DC7AFDC7 /* Debug */,
+				9EB7F896A3381292BD19FD725AF7BA3A /* Local */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

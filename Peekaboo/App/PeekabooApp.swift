@@ -7,7 +7,7 @@ struct PeekabooApp: App {
     private let coordinator = AppCoordinator.shared
 
     var body: some Scene {
-        MenuBarExtra("Peekaboo", systemImage: "eye") {
+        MenuBarExtra(menuBarTitle, systemImage: menuBarSystemImage) {
             MenuBarView(store: coordinator.store, coordinator: coordinator)
         }
         .menuBarExtraStyle(.menu)
@@ -19,5 +19,21 @@ struct PeekabooApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
         }
+    }
+
+    private var menuBarTitle: String {
+        #if PEEKABOO_LOCAL_ONLY
+        "Peekaboo Notes Local"
+        #else
+        "Peekaboo"
+        #endif
+    }
+
+    private var menuBarSystemImage: String {
+        #if PEEKABOO_LOCAL_ONLY
+        "note.text"
+        #else
+        "eye"
+        #endif
     }
 }

@@ -34,7 +34,7 @@ final class AppCoordinator {
             || environment["XCTestBundlePath"] != nil
 
         let settings = AppSettings()
-        #if DEBUG
+        #if DEBUG && !PEEKABOO_LOCAL_ONLY
         if !isUITesting && !isRunningTests {
             do {
                 try PersistenceController.initializeCloudKitDevelopmentSchemaIfNeeded()
@@ -47,6 +47,16 @@ final class AppCoordinator {
         }
         #endif
         let container: ModelContainer
+        #if PEEKABOO_LOCAL_ONLY
+        do {
+            container = try PersistenceController.makeContainer(
+                inMemory: isUITesting || isRunningTests,
+                cloudSyncEnabled: false
+            )
+        } catch {
+            fatalError("Unable to create the local-only SwiftData container: \(error)")
+        }
+        #else
         do {
             container = try PersistenceController.makeContainer(
                 inMemory: isUITesting || isRunningTests
@@ -65,6 +75,7 @@ final class AppCoordinator {
                 )
             }
         }
+        #endif
 
         let store = TaskStore(container: container)
         let noteStore = NoteStore(container: container)

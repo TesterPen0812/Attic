@@ -2,7 +2,9 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if !PEEKABOO_LOCAL_ONLY
         NSApplication.shared.registerForRemoteNotifications()
+        #endif
         AppCoordinator.shared.start()
     }
 
