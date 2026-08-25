@@ -257,8 +257,7 @@ struct AtticPanelView: View {
                         store: store,
                         uiState: uiState,
                         status: section.status,
-                        tasks: section.tasks,
-                        showsEmptyDropZone: uiState.isDraggingTask
+                        tasks: section.tasks
                     )
                 }
             }

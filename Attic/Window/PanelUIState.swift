@@ -8,7 +8,7 @@ final class PanelUIState: ObservableObject {
     @Published var editingNoteID: UUID?
     @Published var isMenuTracking = false
     @Published private(set) var selectedSection: PanelSection = .tasks
-    @Published private(set) var draggedTaskID: UUID?
+    private(set) var draggedTaskID: UUID?
 
     /// Tasks/Backlog still drive `TaskStore`; notes are a separate surface.
     /// Kept computed so task views can derive creation status/placeholder.
