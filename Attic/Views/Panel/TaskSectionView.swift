@@ -22,6 +22,11 @@ struct TaskSectionView: View {
             }
             .frame(height: 24)
             .padding(.horizontal, 4)
+            .onDrop(
+                of: [TaskDragPayload.internalTaskType],
+                isTargeted: $isDropTargeted,
+                perform: acceptSectionDrop
+            )
 
             if tasks.isEmpty {
                 dropPlaceholder
@@ -43,9 +48,6 @@ struct TaskSectionView: View {
             Color.accentColor.opacity(isDropTargeted ? 0.08 : 0),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
-        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: $isDropTargeted) { providers, _ in
-            acceptSectionDrop(from: providers)
-        }
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isDropTargeted)
         .animation(reduceMotion ? nil : AtticMotion.spring, value: tasks.map(\.id))
     }
@@ -62,9 +64,14 @@ struct TaskSectionView: View {
             )
             .padding(.horizontal, 4)
             .accessibilityIdentifier("task-section-drop-zone-\(status.rawValue)")
+            .onDrop(
+                of: [TaskDragPayload.internalTaskType],
+                isTargeted: $isDropTargeted,
+                perform: acceptSectionDrop
+            )
     }
 
-    private func acceptSectionDrop(from providers: [NSItemProvider]) -> Bool {
+    private func acceptSectionDrop(_ providers: [NSItemProvider], at _: CGPoint) -> Bool {
         TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
             uiState.endDragging()
             _ = store.drop(taskID: draggedTaskID, into: status)
