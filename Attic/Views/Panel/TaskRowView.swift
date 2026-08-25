@@ -9,6 +9,8 @@ struct TaskRowView: View {
 
     @State private var editTitle = ""
     @State private var isHovering = false
+    @State private var isDropTargeted = false
+    @State private var reorderedDragID: UUID?
     @FocusState private var isRenameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -62,8 +64,24 @@ struct TaskRowView: View {
         } preview: {
             dragPreview
         }
-        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: nil) { providers, _ in
+        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: $isDropTargeted) { providers, _ in
             acceptDrop(from: providers)
+        }
+        .onChange(of: isDropTargeted) { _, isTargeted in
+            guard isTargeted,
+                  let draggedTaskID = uiState.draggedTaskID,
+                  draggedTaskID != task.id,
+                  reorderedDragID != draggedTaskID else {
+                return
+            }
+            if store.drop(taskID: draggedTaskID, onto: task.id) {
+                reorderedDragID = draggedTaskID
+            }
+        }
+        .onChange(of: uiState.draggedTaskID) { _, draggedTaskID in
+            if draggedTaskID == nil {
+                reorderedDragID = nil
+            }
         }
         .onHover { hovering in
             withAnimation(reduceMotion ? nil : AtticMotion.quick) {
@@ -108,6 +126,11 @@ struct TaskRowView: View {
 
     private func acceptDrop(from providers: [NSItemProvider]) -> Bool {
         if let draggedTaskID = uiState.draggedTaskID {
+            if reorderedDragID == draggedTaskID {
+                reorderedDragID = nil
+                uiState.endDragging()
+                return true
+            }
             uiState.endDragging()
             return store.drop(taskID: draggedTaskID, onto: task.id)
         }
