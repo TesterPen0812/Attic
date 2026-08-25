@@ -1,0 +1,58 @@
+name: Apply queued macOS audit patch
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-2026-08-25
+    paths:
+      - .github/audit-patches/**
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-macos-audit-patch
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply queued source patch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply exactly one queued patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          patches=(.github/audit-patches/*.py)
+          if [[ ${#patches[@]} -ne 1 ]]; then
+            echo "Expected exactly one queued patch, found ${#patches[@]}" >&2
+            exit 1
+          fi
+
+          patch="${patches[0]}"
+          commit_message="$(python3 "$patch")"
+          if [[ -z "$commit_message" || "$commit_message" == *$'\n'* ]]; then
+            echo "Patch must print exactly one non-empty commit message" >&2
+            exit 1
+          fi
+          rm "$patch"
+
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "Queued patch produced no changes" >&2
+            exit 1
+          fi
+
+          git config user.name "Muhammad Taha"
+          git config user.email "tahamuhammad0812@gmail.com"
+          git commit -m "$commit_message"
+          git push origin HEAD:audit/macos-reliability-2026-08-25
