@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct TaskSectionView: View {
     @ObservedObject var store: TaskStore
@@ -25,11 +24,11 @@ struct TaskSectionView: View {
                     }
                     .frame(height: 24)
                     .padding(.horizontal, 4)
-                    .onDrop(
-                        of: [TaskDragPayload.internalTaskType],
-                        isTargeted: $isDropTargeted,
-                        perform: acceptSectionDrop
-                    )
+                    .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+                        acceptSectionDrop(payloads)
+                    } isTargeted: { isTargeted in
+                        isDropTargeted = isTargeted
+                    }
 
                     if tasks.isEmpty {
                         dropPlaceholder
@@ -69,22 +68,18 @@ struct TaskSectionView: View {
             )
             .padding(.horizontal, 4)
             .accessibilityIdentifier("task-section-drop-zone-\(status.rawValue)")
-            .onDrop(
-                of: [TaskDragPayload.internalTaskType],
-                isTargeted: $isDropTargeted,
-                perform: acceptSectionDrop
-            )
+            .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+                acceptSectionDrop(payloads)
+            } isTargeted: { isTargeted in
+                isDropTargeted = isTargeted
+            }
     }
 
-    private func acceptSectionDrop(_ providers: [NSItemProvider], at _: CGPoint) -> Bool {
-        if let draggedTaskID = uiState.draggedTaskID {
-            uiState.endDragging()
-            return store.drop(taskID: draggedTaskID, into: status)
+    private func acceptSectionDrop(_ payloads: [TaskDragPayload]) -> Bool {
+        guard let draggedTaskID = payloads.first?.taskID else {
+            return false
         }
-
-        return TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
-            uiState.endDragging()
-            _ = store.drop(taskID: draggedTaskID, into: status)
-        }
+        uiState.endDragging()
+        return store.drop(taskID: draggedTaskID, into: status)
     }
 }

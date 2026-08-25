@@ -1,6 +1,4 @@
-import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct TaskRowView: View {
     @ObservedObject var store: TaskStore
@@ -10,7 +8,6 @@ struct TaskRowView: View {
     @State private var editTitle = ""
     @State private var isHovering = false
     @State private var isDropTargeted = false
-    @State private var reorderedDragID: UUID?
     @FocusState private var isRenameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -52,36 +49,26 @@ struct TaskRowView: View {
         .frame(minHeight: AtticStyle.rowHeight)
         .padding(.horizontal, 4)
         .background(
-            Color.primary.opacity(isHovering ? 0.055 : 0),
+            isDropTargeted
+                ? Color.accentColor.opacity(0.08)
+                : Color.primary.opacity(isHovering ? 0.055 : 0),
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: handleDoubleClick)
         .help(progressToggleHelp)
         .contextMenu { taskActions }
-        .onDrag {
-            dragItemProvider()
-        } preview: {
+        .draggable(TaskDragPayload(taskID: task.id, title: task.title)) {
             dragPreview
         }
-        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: $isDropTargeted) { providers, _ in
-            acceptDrop(from: providers)
-        }
-        .onChange(of: isDropTargeted) { _, isTargeted in
-            guard isTargeted,
-                  let draggedTaskID = uiState.draggedTaskID,
-                  draggedTaskID != task.id,
-                  reorderedDragID != draggedTaskID else {
-                return
+        .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+            guard let draggedTaskID = payloads.first?.taskID else {
+                return false
             }
-            if store.drop(taskID: draggedTaskID, onto: task.id) {
-                reorderedDragID = draggedTaskID
-            }
-        }
-        .onChange(of: uiState.draggedTaskID) { _, draggedTaskID in
-            if draggedTaskID == nil {
-                reorderedDragID = nil
-            }
+            uiState.endDragging()
+            return store.drop(taskID: draggedTaskID, onto: task.id)
+        } isTargeted: { isTargeted in
+            isDropTargeted = isTargeted
         }
         .onHover { hovering in
             withAnimation(reduceMotion ? nil : AtticMotion.quick) {
@@ -110,34 +97,8 @@ struct TaskRowView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-
-    private func dragItemProvider() -> NSItemProvider {
-        let provider = TaskDragPayload(taskID: task.id, title: task.title).itemProvider()
-
-        // Publishing drag state reveals empty drop zones. Defer that view
-        // update until AppKit has accepted the provider and started its drag
-        // session; doing it synchronously can cancel the drag.
-        DispatchQueue.main.async {
+        .onAppear {
             uiState.beginDragging(task)
-        }
-        return provider
-    }
-
-    private func acceptDrop(from providers: [NSItemProvider]) -> Bool {
-        if let draggedTaskID = uiState.draggedTaskID {
-            if reorderedDragID == draggedTaskID {
-                reorderedDragID = nil
-                uiState.endDragging()
-                return true
-            }
-            uiState.endDragging()
-            return store.drop(taskID: draggedTaskID, onto: task.id)
-        }
-
-        return TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
-            uiState.endDragging()
-            _ = store.drop(taskID: draggedTaskID, onto: task.id)
         }
     }
 
