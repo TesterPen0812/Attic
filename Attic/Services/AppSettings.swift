@@ -26,6 +26,52 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
+/// User-adjustable corner radius of the panel squircle, in points.
+enum PanelCornerSize: Double, CaseIterable, Identifiable {
+    case small = 10
+    case standard = 18
+    case large = 28
+    case extraLarge = 40
+
+    var id: Double { rawValue }
+
+    var title: String {
+        switch self {
+        case .small: return "Small"
+        case .standard: return "Default"
+        case .large: return "Large"
+        case .extraLarge: return "Extra Large"
+        }
+    }
+
+    static let min = PanelCornerSize.small.rawValue
+    static let max = PanelCornerSize.extraLarge.rawValue
+    static let defaultValue = PanelCornerSize.standard.rawValue
+}
+
+/// User-adjustable content width of the panel, in points.
+enum PanelContentSize: Double, CaseIterable, Identifiable {
+    case compact = 300
+    case standard = 332
+    case large = 360
+    case extraLarge = 380
+
+    var id: Double { rawValue }
+
+    var title: String {
+        switch self {
+        case .compact: return "Compact"
+        case .standard: return "Default"
+        case .large: return "Large"
+        case .extraLarge: return "Extra Large"
+        }
+    }
+
+    static let min = PanelContentSize.compact.rawValue
+    static let max = PanelContentSize.extraLarge.rawValue
+    static let defaultValue = PanelContentSize.standard.rawValue
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     private enum Key {
@@ -41,6 +87,8 @@ final class AppSettings: ObservableObject {
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
+        static let panelCornerSize = "panelCornerSize"
+        static let panelContentSize = "panelContentSize"
     }
 
     @Published var corner: ScreenCorner {
@@ -57,6 +105,28 @@ final class AppSettings: ObservableObject {
 
     @Published var isAgentAccessEnabled: Bool {
         didSet { defaults.set(isAgentAccessEnabled, forKey: Key.isAgentAccessEnabled) }
+    }
+
+    @Published var panelCornerSize: Double {
+        didSet {
+            let clamped = Self.clamp(panelCornerSize, to: PanelCornerSize.min...PanelCornerSize.max, fallback: PanelCornerSize.defaultValue)
+            if panelCornerSize != clamped {
+                panelCornerSize = clamped
+            } else {
+                defaults.set(panelCornerSize, forKey: Key.panelCornerSize)
+            }
+        }
+    }
+
+    @Published var panelContentSize: Double {
+        didSet {
+            let clamped = Self.clamp(panelContentSize, to: PanelContentSize.min...PanelContentSize.max, fallback: PanelContentSize.defaultValue)
+            if panelContentSize != clamped {
+                panelContentSize = clamped
+            } else {
+                defaults.set(panelContentSize, forKey: Key.panelContentSize)
+            }
+        }
     }
 
     @Published private(set) var cloudSyncStartupErrorMessage: String?
@@ -124,6 +194,16 @@ final class AppSettings: ObservableObject {
             defaults.set(true, forKey: Key.hasAdoptedAgentAccessOptIn)
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
+        panelCornerSize = Self.clamp(
+            defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
+            to: PanelCornerSize.min...PanelCornerSize.max,
+            fallback: PanelCornerSize.defaultValue
+        )
+        panelContentSize = Self.clamp(
+            defaults.object(forKey: Key.panelContentSize) as? Double ?? PanelContentSize.defaultValue,
+            to: PanelContentSize.min...PanelContentSize.max,
+            fallback: PanelContentSize.defaultValue
+        )
     }
 
     var agentServerPort: UInt16 {

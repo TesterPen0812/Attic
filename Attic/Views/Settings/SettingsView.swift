@@ -144,6 +144,40 @@ struct SettingsView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Corner size", systemImage: "square.dashed")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(Int(settings.panelCornerSize)) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $settings.panelCornerSize, in: PanelCornerSize.min...PanelCornerSize.max, step: 1)
+                Text("Control how round the panel corners are. Larger corners curve more content inward.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Panel size", systemImage: "rectangle.expand.vertical")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(Int(settings.panelContentSize)) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $settings.panelContentSize, in: PanelContentSize.min...PanelContentSize.max, step: 1)
+                Text("Adjust the panel width. Content insets adapt automatically to keep everything inside the squircle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
                 Toggle(isOn: loginBinding) {
                     Label("Launch at login", systemImage: "power")
                         .font(.headline)
