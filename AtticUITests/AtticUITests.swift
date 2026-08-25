@@ -87,7 +87,13 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(betaRow.isHittable)
         XCTAssertTrue(alphaRow.isHittable)
 
-        betaRow.click(forDuration: 0.6, thenDragTo: alphaRow)
+        let start = betaRow.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        )
+        let destination = alphaRow.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)
+        )
+        start.press(forDuration: 0.2, thenDragTo: destination)
 
         let deadline = Date().addingTimeInterval(2)
         while second.frame.minY <= first.frame.minY && Date() < deadline {

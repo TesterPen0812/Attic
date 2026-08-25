@@ -1,1 +1,0 @@
-Run the macOS build and regression suite after the CloudKit export-protection and note-content integrity repairs.

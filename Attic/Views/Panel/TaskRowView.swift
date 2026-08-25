@@ -94,8 +94,15 @@ struct TaskRowView: View {
     }
 
     private func dragItemProvider() -> NSItemProvider {
-        uiState.beginDragging(task)
-        return TaskDragPayload(taskID: task.id, title: task.title).itemProvider()
+        let provider = TaskDragPayload(taskID: task.id, title: task.title).itemProvider()
+
+        // Publishing drag state rebuilds the section list to reveal empty drop
+        // zones. Defer that rebuild until AppKit has accepted the provider and
+        // started its drag session; doing it synchronously cancels the drag.
+        DispatchQueue.main.async {
+            uiState.beginDragging(task)
+        }
+        return provider
     }
 
     private func acceptDrop(from providers: [NSItemProvider]) -> Bool {
