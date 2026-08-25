@@ -2,10 +2,9 @@ import AppKit
 import SwiftUI
 
 /// The notes surface shown in the panel when the Notes section is selected.
-/// Add and edit both reuse the composer slot so the panel reserves height for
-/// a multi-line body instead of clipping an inline editor.
 struct NotesPanelContent: View {
     @ObservedObject var noteStore: NoteStore
+    let noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -28,13 +27,18 @@ struct NotesPanelContent: View {
                 ScrollView {
                     LazyVStack(spacing: AtticStyle.taskSpacing) {
                         ForEach(notes) { note in
-                            NoteRowView(noteStore: noteStore, uiState: uiState, note: note)
-                                .transition(
-                                    .asymmetric(
-                                        insertion: .move(edge: .top).combined(with: .opacity),
-                                        removal: .scale(scale: 0.96).combined(with: .opacity)
-                                    )
+                            NoteRowView(
+                                noteStore: noteStore,
+                                noteDraft: noteDraft,
+                                uiState: uiState,
+                                note: note
+                            )
+                            .transition(
+                                .asymmetric(
+                                    insertion: .move(edge: .top).combined(with: .opacity),
+                                    removal: .scale(scale: 0.96).combined(with: .opacity)
                                 )
+                            )
                         }
                     }
                     .padding(.horizontal, AtticStyle.horizontalPadding - 4)
@@ -47,128 +51,193 @@ struct NotesPanelContent: View {
     }
 }
 
-/// Single field for the note title (optional) plus a multi-line body. When
-/// `uiState.editingNoteID` is set the composer edits that note; otherwise it
-/// creates a new one.
+/// Edits the app-owned draft. The draft outlives this SwiftUI view, so a panel
+/// transition or model-context refresh cannot discard pending text.
 struct NoteComposerView: View {
-    @ObservedObject var noteStore: NoteStore
+    @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
 
-    @State private var title = ""
-    @State private var bodyText = ""
     @FocusState private var isBodyFocused: Bool
-
-    private var editingNote: NoteItem? {
-        guard let id = uiState.editingNoteID else { return nil }
-        return noteStore.notes.first { $0.id == id }
-    }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 9) {
-                TextField("Title (optional)", text: $title)
+                TextField("Title (optional)", text: $noteDraft.title)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .onSubmit(save)
-                    .onExitCommand(perform: cancel)
+                    .onSubmit(saveAndClose)
+                    .onExitCommand(perform: saveAndClose)
                     .accessibilityIdentifier("note-title")
 
-                Button(action: save) {
+                Button(action: saveAndClose) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 9, weight: .bold))
                         .frame(width: 20, height: 20)
-                        .background(canSave ? Color.accentColor : Color.secondary.opacity(0.3), in: Circle())
+                        .background(
+                            noteDraft.canPersist
+                                ? Color.accentColor
+                                : Color.secondary.opacity(0.3),
+                            in: Circle()
+                        )
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
-                .disabled(!canSave)
+                .disabled(!noteDraft.canPersist)
                 .help(saveLabel)
                 .accessibilityLabel(saveLabel)
                 .accessibilityIdentifier("save-note")
             }
 
-            TextEditor(text: $bodyText)
+            TextEditor(text: $noteDraft.body)
                 .font(.system(size: 12, design: .rounded))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 60, idealHeight: 78, maxHeight: 90)
                 .focused($isBodyFocused)
                 .accessibilityIdentifier("note-body")
+
+            if let conflictMessage = noteDraft.conflictMessage {
+                conflictControls(message: conflictMessage)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 7)
-        .onAppear { load() }
-        .onChange(of: uiState.editingNoteID) { _, _ in load() }
-    }
-
-    private var canSave: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var saveLabel: String { editingNote == nil ? "Add note" : "Save note" }
-
-    private func load() {
-        if let editing = editingNote {
-            title = editing.title
-            bodyText = editing.body
-            DispatchQueue.main.async { isBodyFocused = true }
-        } else {
-            title = ""
-            bodyText = ""
+        .onAppear {
             DispatchQueue.main.async { isBodyFocused = true }
         }
-    }
-
-    private func save() {
-        if let editing = editingNote {
-            guard noteStore.update(editing, title: title, body: bodyText) else { return }
-        } else {
-            guard noteStore.create(title: title, body: bodyText) != nil else { return }
+        .onChange(of: isBodyFocused) { _, isFocused in
+            if !isFocused { _ = noteDraft.flush() }
         }
-        cancel()
+        .onDisappear { _ = noteDraft.flush() }
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: noteDraft.conflict)
     }
 
-    private func cancel() {
-        title = ""
-        bodyText = ""
+    private func conflictControls(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 6) {
+                switch noteDraft.conflict {
+                case .remoteChange:
+                    conflictButton(
+                        "Use Remote",
+                        identifier: "use-remote-note",
+                        action: useRemoteVersion
+                    )
+                    conflictButton(
+                        "Keep Mine",
+                        identifier: "keep-local-note",
+                        action: overwriteRemoteVersion
+                    )
+                    conflictButton(
+                        "Save Copy",
+                        identifier: "save-note-copy",
+                        action: saveAsNew
+                    )
+                case .missingOriginal:
+                    conflictButton(
+                        "Save as New",
+                        identifier: "recover-note-as-new",
+                        action: saveAsNew
+                    )
+                    conflictButton(
+                        "Discard",
+                        role: .destructive,
+                        identifier: "discard-note-draft",
+                        action: discardDraft
+                    )
+                case nil:
+                    EmptyView()
+                }
+            }
+        }
+        .padding(7)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("note-conflict")
+    }
+
+    private func conflictButton(
+        _ title: String,
+        role: ButtonRole? = nil,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(title, role: role, action: action)
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .accessibilityIdentifier(identifier)
+    }
+
+    private var saveLabel: String {
+        noteDraft.activeNoteID == nil ? "Add note" : "Save note"
+    }
+
+    private func saveAndClose() {
+        guard noteDraft.close() else { return }
+        uiState.endAdding()
+    }
+
+    private func useRemoteVersion() {
+        _ = noteDraft.useRemoteVersion()
+    }
+
+    private func overwriteRemoteVersion() {
+        _ = noteDraft.overwriteRemoteVersion()
+    }
+
+    private func saveAsNew() {
+        _ = noteDraft.saveAsNew()
+    }
+
+    private func discardDraft() {
+        noteDraft.discardDraft()
         uiState.endAdding()
     }
 }
 
 struct NoteRowView: View {
     @ObservedObject var noteStore: NoteStore
+    let noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     let note: NoteItem
 
     @State private var isHovering = false
+    @State private var isConfirmingDeletion = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(displayTitle)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
-                Text(preview)
-                    .font(.system(size: 11, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .layoutPriority(1)
+            Button(action: beginEditing) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(displayTitle)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                    Text(preview)
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture { uiState.beginEditingNote(note) }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Edit note, \(displayTitle)")
+            .accessibilityIdentifier("edit-note-\(note.id.uuidString)")
 
             Menu {
-                Button("Edit", systemImage: "pencil") {
-                    uiState.beginEditingNote(note)
-                }
+                Button("Edit", systemImage: "pencil", action: beginEditing)
                 Button("Copy", systemImage: "doc.on.doc", action: copyNote)
                 Divider()
                 Button("Delete", systemImage: "trash", role: .destructive) {
-                    noteStore.delete(note)
+                    isConfirmingDeletion = true
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -196,26 +265,47 @@ struct NoteRowView: View {
                 isHovering = hovering
             }
         }
+        .alert("Delete note?", isPresented: $isConfirmingDeletion) {
+            Button("Delete", role: .destructive, action: deleteNote)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes the note from synced devices.")
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("note-row-\(note.id.uuidString)")
     }
 
+    private func beginEditing() {
+        guard noteDraft.beginEditing(note) else { return }
+        uiState.beginEditingNote(note)
+    }
+
+    private func deleteNote() {
+        guard noteStore.delete(note) else { return }
+        noteDraft.discardDeletedNote(note.id)
+        if uiState.editingNoteID == note.id {
+            uiState.endAdding()
+        }
+    }
+
     private var displayTitle: String {
-        let titleTrimmed = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !titleTrimmed.isEmpty { return titleTrimmed }
+        let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
         return note.body
-            .trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .newlines)
-            .first ?? "Note"
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
+            ?? "Untitled note"
     }
 
     private var preview: String {
-        let titleTrimmed = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let bodyLines = note.body
-            .trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
 
-        if titleTrimmed.isEmpty {
+        guard !bodyLines.isEmpty else { return "No additional text" }
+        if note.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let rest = bodyLines.dropFirst().joined(separator: " ")
             return rest.isEmpty ? "No additional text" : rest
         }

@@ -44,7 +44,7 @@ struct TaskDragPayload: Sendable {
     @discardableResult
     static func loadTaskID(
         from providers: [NSItemProvider],
-        completion: @escaping @MainActor (UUID) -> Void
+        completion: @escaping @MainActor @Sendable (UUID) -> Void
     ) -> Bool {
         guard let provider = providers.first(where: {
             $0.hasItemConformingToTypeIdentifier(internalTaskType.identifier)

@@ -63,7 +63,7 @@ final class AppSettings: ObservableObject {
 
     @Published var revealDelay: Double {
         didSet {
-            let clamped = Self.clamp(revealDelay, to: 0.2...2.0)
+            let clamped = Self.clamp(revealDelay, to: 0.2...2.0, fallback: 0.2)
             if revealDelay != clamped {
                 revealDelay = clamped
             } else {
@@ -74,7 +74,7 @@ final class AppSettings: ObservableObject {
 
     @Published var hideDelay: Double {
         didSet {
-            let clamped = Self.clamp(hideDelay, to: 0.1...2.0)
+            let clamped = Self.clamp(hideDelay, to: 0.1...2.0, fallback: 0.3)
             if hideDelay != clamped {
                 hideDelay = clamped
             } else {
@@ -112,9 +112,9 @@ final class AppSettings: ObservableObject {
             }
             defaults.set(true, forKey: Key.hasAdoptedInstantReveal)
         }
-        revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0)
+        revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
-        hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0)
+        hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
         isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
@@ -146,7 +146,12 @@ final class AppSettings: ObservableObject {
         cloudSyncStartupErrorMessage = message
     }
 
-    private static func clamp(_ value: Double, to range: ClosedRange<Double>) -> Double {
-        min(max(value, range.lowerBound), range.upperBound)
+    private static func clamp(
+        _ value: Double,
+        to range: ClosedRange<Double>,
+        fallback: Double
+    ) -> Double {
+        guard value.isFinite else { return fallback }
+        return min(max(value, range.lowerBound), range.upperBound)
     }
 }

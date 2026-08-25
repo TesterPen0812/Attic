@@ -9,6 +9,7 @@ final class AppCoordinator {
     let settings: AppSettings
     let store: TaskStore
     let noteStore: NoteStore
+    let noteDraft: NoteDraftController
     let loginItemService: LoginItemService
     let uiState: PanelUIState
 
@@ -80,6 +81,7 @@ final class AppCoordinator {
 
         let store = TaskStore(container: container)
         let noteStore = NoteStore(container: container)
+        let noteDraft = NoteDraftController(noteStore: noteStore)
         let uiState = PanelUIState()
         let loginItemService = LoginItemService()
         let agentAccessToken = AgentAccessTokenStore().loadOrCreate()
@@ -95,11 +97,18 @@ final class AppCoordinator {
             store: store,
             agentAccessToken: agentAccessToken
         )
-        let panelController = AtticPanelController(store: store, noteStore: noteStore, settings: settings, uiState: uiState)
+        let panelController = AtticPanelController(
+            store: store,
+            noteStore: noteStore,
+            noteDraft: noteDraft,
+            settings: settings,
+            uiState: uiState
+        )
 
         self.settings = settings
         self.store = store
         self.noteStore = noteStore
+        self.noteDraft = noteDraft
         self.uiState = uiState
         self.panelController = panelController
         self.loginItemService = loginItemService
@@ -111,7 +120,8 @@ final class AppCoordinator {
             panelController: panelController,
             uiState: uiState,
             store: store,
-            noteStore: noteStore
+            noteStore: noteStore,
+            noteDraft: noteDraft
         )
     }
 
@@ -130,12 +140,17 @@ final class AppCoordinator {
 
         newTaskHotKey.register()
         hoverMonitor.start()
-        appearanceObservation = settings.$appearance.sink { [weak self] preference in
+        appearanceObservation = settings.$appearance.sink { preference in
             NSApp.appearance = preference.nsAppearance
         }
         if !isRunningTests {
             agentAccessObservation = settings.$isAgentAccessEnabled.sink { [weak self] isEnabled in
-                isEnabled ? self?.agentServer.start() : self?.agentServer.stop()
+                guard let self else { return }
+                if isEnabled {
+                    agentServer.start()
+                } else {
+                    agentServer.stop()
+                }
             }
         }
         if !settings.hasShownWelcome {
@@ -147,6 +162,7 @@ final class AppCoordinator {
     }
 
     func stop() {
+        _ = noteDraft.flush()
         cleanupService.stop()
         hoverMonitor.stop()
         newTaskHotKey.unregister()
@@ -156,6 +172,14 @@ final class AppCoordinator {
         menuNotificationTokens.forEach(NotificationCenter.default.removeObserver)
         menuNotificationTokens.removeAll()
         hasStarted = false
+    }
+
+    func prepareForTermination() -> Bool {
+        guard noteDraft.flush() else {
+            hoverMonitor.revealProgrammatically(section: .notes)
+            return false
+        }
+        return true
     }
 
     func showPanel() {

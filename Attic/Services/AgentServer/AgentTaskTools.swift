@@ -175,7 +175,7 @@ final class AgentTaskTools {
                     ],
                     "body": [
                         "type": "string",
-                        "description": "Note body. Leading and trailing whitespace is trimmed."
+                        "description": "Note body. Meaningful leading and trailing whitespace is preserved."
                     ]
                 ],
                 "additionalProperties": false

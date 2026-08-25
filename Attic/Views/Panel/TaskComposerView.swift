@@ -7,6 +7,7 @@ struct TaskComposerView: View {
     @State private var title = ""
     @State private var priority: TaskPriority = .none
     @FocusState private var isTitleFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -72,7 +73,7 @@ struct TaskComposerView: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 7)
         .frame(height: 62)
-        .animation(AtticMotion.quick, value: priority)
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: priority)
         .onAppear(perform: focus)
     }
 

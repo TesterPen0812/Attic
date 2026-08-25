@@ -76,13 +76,12 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func create(title: String = "", body: String = "") -> NoteItem? {
         let normalizedTitle = Self.normalizedTitle(title)
-        let trimmedBody = Self.trimmedBody(body)
-        guard !normalizedTitle.isEmpty || !trimmedBody.isEmpty else { return nil }
+        guard !normalizedTitle.isEmpty || Self.hasMeaningfulBody(body) else { return nil }
 
         let timestamp = now()
         let note = NoteItem(
             title: normalizedTitle,
-            body: trimmedBody,
+            body: body,
             createdAt: timestamp,
             updatedAt: timestamp
         )
@@ -107,8 +106,8 @@ final class NoteStore: ObservableObject {
             return false
         }
         let destinationTitle = title.map(Self.normalizedTitle) ?? note.title
-        let destinationBody = body.map(Self.trimmedBody) ?? note.body
-        guard !(destinationTitle.isEmpty && destinationBody.isEmpty) else { return false }
+        let destinationBody = body ?? note.body
+        guard !destinationTitle.isEmpty || Self.hasMeaningfulBody(destinationBody) else { return false }
 
         let titleChanged = destinationTitle != note.title
         let bodyChanged = destinationBody != note.body
@@ -402,8 +401,8 @@ final class NoteStore: ObservableObject {
             .joined(separator: " ")
     }
 
-    private static func trimmedBody(_ body: String) -> String {
-        body.trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func hasMeaningfulBody(_ body: String) -> Bool {
+        !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func tieBreakKey(for note: NoteItem) -> String {

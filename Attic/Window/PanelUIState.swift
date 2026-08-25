@@ -58,6 +58,15 @@ final class PanelUIState: ObservableObject {
         isComposerPresented = true
     }
 
+    func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
+        if let editingTaskID, !availableIDs.contains(editingTaskID) {
+            self.editingTaskID = nil
+        }
+        if let draggedTaskID, !availableIDs.contains(draggedTaskID) {
+            self.draggedTaskID = nil
+        }
+    }
+
     func beginDragging(_ task: TaskItem) {
         draggedTaskID = task.id
     }

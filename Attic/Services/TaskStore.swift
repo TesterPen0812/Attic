@@ -113,7 +113,8 @@ struct CloudSyncProtectionState: Equatable {
                 exportStartGenerationByID[update.id] = localSaveGeneration
             }
         case (.exportData, .some):
-            if let coveredGeneration = exportStartGenerationByID.removeValue(forKey: update.id) {
+            if let coveredGeneration = exportStartGenerationByID.removeValue(forKey: update.id),
+               update.succeeded {
                 exportedSaveGeneration = max(exportedSaveGeneration, coveredGeneration)
             }
         case (.importData, nil):

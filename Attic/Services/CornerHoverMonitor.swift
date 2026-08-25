@@ -7,8 +7,8 @@ final class CornerHoverMonitor {
     private let panelController: AtticPanelController
     private let uiState: PanelUIState
     private let store: TaskStore
-
     private let noteStore: NoteStore
+    private let noteDraft: NoteDraftController
 
     private var stateMachine = CornerHoverStateMachine()
     private var pollingTimer: DispatchSourceTimer?
@@ -21,13 +21,15 @@ final class CornerHoverMonitor {
         panelController: AtticPanelController,
         uiState: PanelUIState,
         store: TaskStore,
-        noteStore: NoteStore
+        noteStore: NoteStore,
+        noteDraft: NoteDraftController
     ) {
         self.settings = settings
         self.panelController = panelController
         self.uiState = uiState
         self.store = store
         self.noteStore = noteStore
+        self.noteDraft = noteDraft
     }
 
     func start() {
@@ -77,22 +79,41 @@ final class CornerHoverMonitor {
 
     func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
+        guard preparePresentation(openComposer: openComposer, section: section) else { return }
         refreshStoreForReveal()
-        if let section { uiState.selectSection(section) }
-        if openComposer {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { uiState.beginAdding() }
-        }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
         panelController.show(on: screen, corner: settings.corner, makeKey: openComposer)
     }
 
     func keepVisibleForUITesting(openComposer: Bool = false) {
         guard let screen = NSScreen.main else { return }
-        if openComposer { uiState.beginAdding() }
+        guard preparePresentation(openComposer: openComposer, section: nil) else { return }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
         panelController.show(on: screen, corner: settings.corner, makeKey: true)
+    }
+
+    private func preparePresentation(
+        openComposer: Bool,
+        section: PanelSection?
+    ) -> Bool {
+        let targetSection = section ?? uiState.selectedSection
+
+        if targetSection != uiState.selectedSection {
+            if uiState.selectedSection.isNotes, noteDraft.isActive {
+                guard noteDraft.close() else { return false }
+            }
+            uiState.selectSection(targetSection)
+        }
+
+        guard openComposer else { return true }
+        if targetSection.isNotes {
+            guard noteDraft.beginNew() else { return false }
+        }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { uiState.beginAdding() }
+        return true
     }
 
     private func samplePointer() {
