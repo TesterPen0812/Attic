@@ -1,1 +1,1 @@
-Trigger the macOS CI baseline after adding the failed-export regression test.
+Trigger the macOS CI baseline after applying the failed-export and note-content repairs.
