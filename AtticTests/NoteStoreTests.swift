@@ -4,14 +4,14 @@ import XCTest
 
 final class NoteStoreTests: XCTestCase {
     @MainActor
-    func testCreateNormalizesTitleAndTrimsBody() throws {
+    func testCreateNormalizesTitleWithoutChangingMeaningfulBodyWhitespace() throws {
         let store = try makeTestNoteStore()
 
         XCTAssertNil(store.create(title: "   ", body: "   \n  "))
         let note = try XCTUnwrap(store.create(title: "  Meeting   notes ", body: "  Discuss\nrelease  "))
 
         XCTAssertEqual(note.title, "Meeting notes")
-        XCTAssertEqual(note.body, "Discuss\nrelease")
+        XCTAssertEqual(note.body, "  Discuss\nrelease  ")
         XCTAssertEqual(store.notes.count, 1)
     }
 
