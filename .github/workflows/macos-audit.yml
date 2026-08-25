@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-audit-${{ github.ref }}
+  group: macos-audit-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -33,13 +33,54 @@ jobs:
           {
             echo "HEAD=$(git rev-parse HEAD)"
             echo "BRANCH=$(git branch --show-current)"
+            echo "COMMIT_COUNT=$(git rev-list --count HEAD)"
+            echo "SHALLOW=$(git rev-parse --is-shallow-repository)"
             echo "MACOS=$(sw_vers -productVersion)"
             xcodebuild -version
             swift --version
             git status --short
           } | tee AuditArtifacts/environment.txt
-          git log --oneline --decorate -10 > AuditArtifacts/recent-commits.txt
+          git log --oneline --decorate -20 > AuditArtifacts/recent-commits.txt
           git ls-files > AuditArtifacts/tracked-files.txt
+
+      - name: Archive complete-history checkout and macOS source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude='./AuditArtifacts' \
+            --exclude='./build' \
+            --exclude='./DerivedData' \
+            -czf /tmp/attic-full-history.tar.gz .
+          cp /tmp/attic-full-history.tar.gz AuditArtifacts/
+
+          tar -czf AuditArtifacts/macos-source.tar.gz \
+            Attic \
+            AtticTests \
+            AtticUITests \
+            Attic.xcodeproj \
+            Scripts \
+            project.yml \
+            Gemfile \
+            Gemfile.lock \
+            AGENTS.md \
+            claude.md \
+            .gitignore \
+            .codex \
+            .github/workflows/macos-audit.yml
+
+      - name: Upload source and history evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-audit-source-${{ github.sha }}
+          path: |
+            AuditArtifacts/attic-full-history.tar.gz
+            AuditArtifacts/macos-source.tar.gz
+            AuditArtifacts/environment.txt
+            AuditArtifacts/recent-commits.txt
+            AuditArtifacts/tracked-files.txt
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Capture project and scheme discovery
         shell: bash
@@ -111,6 +152,7 @@ jobs:
             test 2>&1 | tee AuditArtifacts/tests.log
 
       - name: Capture scoped static audit evidence
+        if: always()
         shell: bash
         run: |
           set +e
@@ -125,7 +167,7 @@ jobs:
             grep -RInE --include='*.swift' 'try\?|catch[[:space:]]*\{|TODO|FIXME|HACK|print\(' Attic AtticTests AtticUITests
             echo
             echo '=== Concurrency and lifecycle constructs ==='
-            grep -RInE --include='*.swift' 'Task\{|Task\.detached|DispatchQueue|NotificationCenter|Timer|addGlobalMonitor|addLocalMonitor|unowned|ModelContext|ModelContainer' Attic AtticTests AtticUITests
+            grep -RInE --include='*.swift' 'Task[[:space:]]*\{|Task\.detached|DispatchQueue|NotificationCenter|Timer|addGlobalMonitor|addLocalMonitor|unowned|ModelContext|ModelContainer' Attic AtticTests AtticUITests
             echo
             echo '=== Rename remnants in behavior-affecting scope ==='
             grep -RInE 'Peekaboo|PEEKABOO|peekaboo' Attic AtticTests AtticUITests Attic.xcodeproj Scripts project.yml 2>/dev/null
@@ -134,28 +176,6 @@ jobs:
             grep -RInE --include='*.swift' 'print\(|debugPrint\(|NSLog\(|Logger\.|os_log' Attic AtticTests AtticUITests
           } > AuditArtifacts/static-audit.txt 2>&1
           exit 0
-
-      - name: Archive macOS-scoped source for offline inspection
-        shell: bash
-        run: |
-          set -o pipefail
-          tar -czf AuditArtifacts/macos-source.tar.gz \
-            Attic \
-            AtticTests \
-            AtticUITests \
-            Attic.xcodeproj \
-            Scripts \
-            project.yml \
-            Gemfile \
-            Gemfile.lock \
-            AGENTS.md \
-            claude.md \
-            .gitignore \
-            .codex 2>/dev/null || {
-              status=$?
-              echo "Source archive completed with tar status $status; listing included paths" >&2
-              tar -tzf AuditArtifacts/macos-source.tar.gz >/dev/null
-            }
 
       - name: Record step outcomes
         if: always()
@@ -173,14 +193,17 @@ jobs:
             echo "tests=$TESTS"
           } | tee AuditArtifacts/outcomes.txt
 
-      - name: Upload audit evidence
+      - name: Upload build and test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-audit-evidence
-          path: AuditArtifacts
-          if-no-files-found: error
-          retention-days: 7
+          name: macos-audit-evidence-${{ github.sha }}
+          path: |
+            AuditArtifacts/*.log
+            AuditArtifacts/*.txt
+            AuditArtifacts/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Fail on baseline verification failures
         if: always()
