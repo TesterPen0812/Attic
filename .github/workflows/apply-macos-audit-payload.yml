@@ -1,0 +1,58 @@
+name: Apply macOS Audit Payload
+
+on:
+  push:
+    branches:
+      - audit/macos-upload-staging
+    paths:
+      - .audit-upload/payload.tar.gz.b64
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-macos-audit-payload
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply verified audit commit to working branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out staging payload
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decode payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/attic-audit-payload
+          base64 --decode .audit-upload/payload.tar.gz.b64 > /tmp/attic-audit-payload.tar.gz
+          tar -xzf /tmp/attic-audit-payload.tar.gz -C /tmp/attic-audit-payload
+          test -s /tmp/attic-audit-payload/change.patch
+          test -s /tmp/attic-audit-payload/commit-message.txt
+          test -s /tmp/attic-audit-payload/expected-tree.txt
+
+      - name: Apply and publish logical commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Attic macOS Audit"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin audit/macos-reliability-2026-08-25
+          git switch --force-create audit/macos-reliability-2026-08-25 origin/audit/macos-reliability-2026-08-25
+          git apply --index --whitespace=error-all /tmp/attic-audit-payload/change.patch
+
+          expected_tree="$(cat /tmp/attic-audit-payload/expected-tree.txt)"
+          actual_tree="$(git write-tree)"
+          if [[ "$actual_tree" != "$expected_tree" ]]; then
+            echo "Tree verification failed: expected $expected_tree, got $actual_tree" >&2
+            exit 1
+          fi
+
+          git commit --file /tmp/attic-audit-payload/commit-message.txt
+          git push origin HEAD:audit/macos-reliability-2026-08-25
