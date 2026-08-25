@@ -15,6 +15,7 @@ final class CornerHoverMonitor {
     private var screenChangeToken: NSObjectProtocol?
     private var responsivenessActivity: NSObjectProtocol?
     private var revealRefreshTask: Task<Void, Never>?
+    private var dragReleaseTask: Task<Void, Never>?
 
     init(
         settings: AppSettings,
@@ -67,6 +68,8 @@ final class CornerHoverMonitor {
         pollingTimer = nil
         revealRefreshTask?.cancel()
         revealRefreshTask = nil
+        dragReleaseTask?.cancel()
+        dragReleaseTask = nil
         if let screenChangeToken { NotificationCenter.default.removeObserver(screenChangeToken) }
         screenChangeToken = nil
         if let responsivenessActivity {
@@ -129,9 +132,25 @@ final class CornerHoverMonitor {
         } ?? false
         let isInPanel = panelController.visibleFrame?.contains(location) ?? false
         let isMouseButtonPressed = NSEvent.pressedMouseButtons != 0
-        if !isMouseButtonPressed,
-           let draggedTaskID = uiState.finishDragging(releasedOutsidePanel: !isInPanel) {
-            store.startAfterExternalDrag(taskID: draggedTaskID)
+        if isMouseButtonPressed {
+            dragReleaseTask?.cancel()
+            dragReleaseTask = nil
+        } else if uiState.isDraggingTask, dragReleaseTask == nil {
+            // SwiftUI dispatches performDrop just after mouse-up. Give an
+            // in-panel destination a short chance to consume draggedTaskID
+            // before treating the release as a cancelled or external drag.
+            dragReleaseTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard let self, !Task.isCancelled else { return }
+                let releasedInPanel = panelController.visibleFrame?
+                    .contains(NSEvent.mouseLocation) ?? false
+                if let draggedTaskID = uiState.finishDragging(
+                    releasedOutsidePanel: !releasedInPanel
+                ) {
+                    store.startAfterExternalDrag(taskID: draggedTaskID)
+                }
+                dragReleaseTask = nil
+            }
         }
 
         let uptime = ProcessInfo.processInfo.systemUptime
