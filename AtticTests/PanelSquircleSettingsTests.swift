@@ -14,6 +14,17 @@ final class PanelSquircleSettingsTests: XCTestCase {
     }
 
     @MainActor
+    func testCornerSizeRangeAndPresets() {
+        XCTAssertEqual(PanelCornerSize.min, 10)
+        XCTAssertEqual(PanelCornerSize.max, 140)
+        XCTAssertEqual(PanelCornerSize.defaultValue, 18)
+        XCTAssertEqual(
+            PanelCornerSize.allCases.map(\.rawValue),
+            [10, 18, 28, 40, 80, 110, 140]
+        )
+    }
+
+    @MainActor
     func testCornerSizeClampedToRange() {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -24,7 +35,14 @@ final class PanelSquircleSettingsTests: XCTestCase {
         XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.min)
 
         settings.panelCornerSize = 100
+        // 100 is within the expanded 10...140 range and must not be clamped.
+        XCTAssertEqual(settings.panelCornerSize, 100)
+
+        settings.panelCornerSize = 200
         XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.max)
+
+        settings.panelCornerSize = 140
+        XCTAssertEqual(settings.panelCornerSize, 140)
     }
 
     @MainActor

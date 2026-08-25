@@ -179,4 +179,105 @@ final class PanelSquircleGeometryTests: XCTestCase {
         // Verify that at the corner depth, content is safe
         XCTAssertGreaterThanOrEqual(insets.leading, cornerInset + 4)
     }
+
+    // MARK: - Expanded corner range (10...140)
+
+    func testSquirclePathAtMax140WithMin300Width() {
+        // Maximum radius 140 on the smallest 300pt panel. The radius clamps to
+        // half the shorter dimension (190), so 140 stays unclamped and leaves a
+        // 20pt straight section on each side (300 - 2*140 = 20).
+        let rect = CGRect(x: 0, y: 0, width: 300, height: 380)
+        let shape = Squircle(cornerRadius: 140, exponent: PanelGeometry.squircleExponent)
+        let path = shape.path(in: rect)
+
+        XCTAssertFalse(path.isEmpty)
+        XCTAssertGreaterThanOrEqual(path.boundingRect.minX, -0.5)
+        XCTAssertGreaterThanOrEqual(path.boundingRect.minY, -0.5)
+        XCTAssertLessThanOrEqual(path.boundingRect.maxX, 300.5)
+        XCTAssertLessThanOrEqual(path.boundingRect.maxY, 380.5)
+    }
+
+    func testSquirclePathAtMax140With380Width() {
+        let rect = CGRect(x: 0, y: 0, width: 380, height: 380)
+        let shape = Squircle(cornerRadius: 140, exponent: PanelGeometry.squircleExponent)
+        let path = shape.path(in: rect)
+
+        XCTAssertFalse(path.isEmpty)
+        XCTAssertGreaterThanOrEqual(path.boundingRect.minX, -0.5)
+        XCTAssertGreaterThanOrEqual(path.boundingRect.minY, -0.5)
+        XCTAssertLessThanOrEqual(path.boundingRect.maxX, 380.5)
+        XCTAssertLessThanOrEqual(path.boundingRect.maxY, 380.5)
+    }
+
+    func testContentInsetsAtExpandedRadii() {
+        let panelSize = CGSize(width: PanelContentSize.min, height: 380)
+        for caseValue in PanelCornerSize.allCases {
+            let insets = PanelGeometry.contentInsets(cornerSize: caseValue.rawValue, panelSize: panelSize)
+            let cornerInset = caseValue.rawValue * Squircle.cornerInsetFactor(exponent: PanelGeometry.squircleExponent)
+            let expectedHorizontal = max(AtticStyle.horizontalPadding, cornerInset + 6)
+            let expectedTop = max(8, cornerInset + 4)
+            let expectedBottom = max(10, cornerInset + 6)
+
+            XCTAssertEqual(insets.leading, expectedHorizontal, accuracy: 0.01, "at \(caseValue.rawValue)")
+            XCTAssertEqual(insets.trailing, expectedHorizontal, accuracy: 0.01, "at \(caseValue.rawValue)")
+            XCTAssertEqual(insets.top, expectedTop, accuracy: 0.01, "at \(caseValue.rawValue)")
+            XCTAssertEqual(insets.bottom, expectedBottom, accuracy: 0.01, "at \(caseValue.rawValue)")
+        }
+    }
+
+    func testContentInsetsMonotonicAcrossExpandedRadii() {
+        let panelSize = CGSize(width: PanelContentSize.min, height: 380)
+        let radii = PanelCornerSize.allCases.map(\.rawValue)
+        var prevLeading: CGFloat = 0
+        var prevTop: CGFloat = 0
+        var prevBottom: CGFloat = 0
+        for radius in radii {
+            let insets = PanelGeometry.contentInsets(cornerSize: radius, panelSize: panelSize)
+            XCTAssertGreaterThanOrEqual(insets.leading, prevLeading)
+            XCTAssertGreaterThanOrEqual(insets.top, prevTop)
+            XCTAssertGreaterThanOrEqual(insets.bottom, prevBottom)
+            prevLeading = insets.leading
+            prevTop = insets.top
+            prevBottom = insets.bottom
+        }
+    }
+
+    func testContentInsetsSymmetric() {
+        let panelSize = CGSize(width: PanelContentSize.min, height: 380)
+        for radius in PanelCornerSize.allCases.map(\.rawValue) {
+            let insets = PanelGeometry.contentInsets(cornerSize: radius, panelSize: panelSize)
+            XCTAssertEqual(insets.leading, insets.trailing, accuracy: 0.0001, "at \(radius)")
+        }
+    }
+
+    func testUsableContentWidthReasonableAtMinPanelAndMax140() {
+        // At the smallest 300pt panel with the maximum 140pt corner radius, the
+        // usable content width must remain reasonable for task rows, the
+        // header, and the tabs.
+        let panelWidth: CGFloat = 300
+        let insets = PanelGeometry.contentInsets(cornerSize: 140, panelSize: CGSize(width: panelWidth, height: 380))
+        let usableWidth = panelWidth - insets.leading - insets.trailing
+        XCTAssertGreaterThan(usableWidth, 240, "Usable content width too small at 140pt on 300pt panel")
+        XCTAssertLessThanOrEqual(usableWidth, panelWidth)
+    }
+
+    func testUsableContentHeightReasonableAtMinHeightAndMax140() {
+        // With the vertical content insets now applied, the content height
+        // inside the squircle at the minimum 380pt panel and maximum 140pt
+        // corner must remain usable for the header, picker, and scroll area.
+        let panelHeight: CGFloat = 380
+        let insets = PanelGeometry.contentInsets(cornerSize: 140, panelSize: CGSize(width: 300, height: panelHeight))
+        let usableHeight = panelHeight - insets.top - insets.bottom
+        XCTAssertGreaterThan(usableHeight, 300, "Usable content height too small at 140pt on 380pt panel")
+    }
+
+    func testContentSafeBoundariesAtMax140On300And380Width() {
+        for panelWidth in [CGFloat(PanelContentSize.min), CGFloat(PanelContentSize.max)] {
+            let insets = PanelGeometry.contentInsets(cornerSize: 140, panelSize: CGSize(width: panelWidth, height: 380))
+            let cornerInset: CGFloat = 140 * Squircle.cornerInsetFactor(exponent: PanelGeometry.squircleExponent)
+            XCTAssertGreaterThanOrEqual(insets.leading, cornerInset + 4, "leading at width \(panelWidth)")
+            XCTAssertGreaterThanOrEqual(insets.top, cornerInset + 2, "top at width \(panelWidth)")
+            XCTAssertGreaterThanOrEqual(insets.bottom, cornerInset + 4, "bottom at width \(panelWidth)")
+        }
+    }
 }

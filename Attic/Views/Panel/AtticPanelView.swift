@@ -58,6 +58,8 @@ struct AtticPanelView: View {
                     .padding(.bottom, 10)
             }
         }
+        .padding(.top, contentInsets.top)
+        .padding(.bottom, contentInsets.bottom)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .atticPanelSurface(translucent: settings.isTranslucent, cornerRadius: cornerRadius)
         .animation(reduceMotion ? nil : AtticMotion.spring, value: uiState.isComposerPresented)
