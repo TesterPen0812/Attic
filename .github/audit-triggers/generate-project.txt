@@ -1,1 +1,1 @@
-Generate the deterministic Xcode project for the macOS audit branch.
+Generate the deterministic Xcode project for the macOS audit branch after pinning Ruby 3.3.11.
