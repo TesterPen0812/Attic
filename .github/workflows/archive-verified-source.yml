@@ -1,0 +1,48 @@
+name: Archive Verified macOS Source
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-verified-2026-08-25
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    name: Archive complete history and macOS scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify and archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p AuditArchive
+          git fsck --full
+          git bundle create AuditArchive/Attic-verified.bundle --all
+          git bundle verify AuditArchive/Attic-verified.bundle > AuditArchive/bundle-verification.txt 2>&1
+          tar -czf AuditArchive/macos-source.tar.gz \
+            Attic AtticTests AtticUITests Attic.xcodeproj Scripts \
+            AGENTS.md claude.md .gitignore .github
+          {
+            echo "HEAD=$(git rev-parse HEAD)"
+            echo "SHALLOW=$(git rev-parse --is-shallow-repository)"
+            echo "COMMIT_COUNT=$(git rev-list --count HEAD)"
+            git log --oneline --decorate -20
+          } > AuditArchive/repository-state.txt
+
+      - name: Upload source and history
+        uses: actions/upload-artifact@v4
+        with:
+          name: attic-verified-source-${{ github.sha }}
+          path: AuditArchive
+          if-no-files-found: error
+          retention-days: 14
