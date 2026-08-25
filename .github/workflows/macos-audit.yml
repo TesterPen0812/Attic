@@ -41,18 +41,16 @@ jobs:
             git status --short
           } | tee AuditArtifacts/environment.txt
           git log --oneline --decorate -20 > AuditArtifacts/recent-commits.txt
+          git show-ref > AuditArtifacts/refs.txt
           git ls-files > AuditArtifacts/tracked-files.txt
 
-      - name: Archive complete-history checkout and macOS source
+      - name: Export complete history and macOS source
         shell: bash
         run: |
           set -euo pipefail
-          tar \
-            --exclude='./AuditArtifacts' \
-            --exclude='./build' \
-            --exclude='./DerivedData' \
-            -czf /tmp/attic-full-history.tar.gz .
-          cp /tmp/attic-full-history.tar.gz AuditArtifacts/
+          git bundle create AuditArtifacts/attic-full-history.bundle --all
+          git bundle verify AuditArtifacts/attic-full-history.bundle \
+            2>&1 | tee AuditArtifacts/bundle-verification.txt
 
           candidates=(
             Attic
@@ -81,10 +79,12 @@ jobs:
         with:
           name: macos-audit-source-${{ github.sha }}
           path: |
-            AuditArtifacts/attic-full-history.tar.gz
+            AuditArtifacts/attic-full-history.bundle
             AuditArtifacts/macos-source.tar.gz
             AuditArtifacts/environment.txt
+            AuditArtifacts/bundle-verification.txt
             AuditArtifacts/recent-commits.txt
+            AuditArtifacts/refs.txt
             AuditArtifacts/tracked-files.txt
           if-no-files-found: error
           retention-days: 14
@@ -149,6 +149,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          rm -rf AuditArtifacts/AtticTests.xcresult
           xcodebuild \
             -project Attic.xcodeproj \
             -scheme Attic \
@@ -157,6 +158,26 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -resultBundlePath AuditArtifacts/AtticTests.xcresult \
             test 2>&1 | tee AuditArtifacts/tests.log
+
+      - name: Export test result diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -d AuditArtifacts/AtticTests.xcresult ]]; then
+            xcrun xcresulttool get test-results tests \
+              --path AuditArtifacts/AtticTests.xcresult \
+              --format json > AuditArtifacts/test-results.json 2> AuditArtifacts/test-results-export.log
+            xcrun xcresulttool get test-results activities \
+              --path AuditArtifacts/AtticTests.xcresult \
+              --format json > AuditArtifacts/test-activities.json 2> AuditArtifacts/test-activities-export.log
+            mkdir -p AuditArtifacts/TestAttachments
+            xcrun xcresulttool export attachments \
+              --path AuditArtifacts/AtticTests.xcresult \
+              --output-path AuditArtifacts/TestAttachments \
+              > AuditArtifacts/test-attachments-export.log 2>&1
+          fi
+          exit 0
 
       - name: Capture scoped static audit evidence
         if: always()
@@ -208,7 +229,9 @@ jobs:
           path: |
             AuditArtifacts/*.log
             AuditArtifacts/*.txt
+            AuditArtifacts/*.json
             AuditArtifacts/*.xcresult
+            AuditArtifacts/TestAttachments
           if-no-files-found: warn
           retention-days: 14
 
