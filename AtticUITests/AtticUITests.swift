@@ -36,7 +36,7 @@ final class AtticUITests: XCTestCase {
         let doneSection = app.staticTexts["task-section-done"]
         XCTAssertTrue(doneSection.waitForExistence(timeout: 2))
 
-        let actions = app.menuButtons["Edit task"]
+        let actions = app.popUpButtons["Edit task"]
         XCTAssertTrue(actions.waitForExistence(timeout: 2))
         actions.click()
 
@@ -78,7 +78,16 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(second.waitForExistence(timeout: 2))
         XCTAssertLessThan(second.frame.minY, first.frame.minY)
 
-        second.press(forDuration: 0.6, thenDragTo: first)
+        let rows = app.groups.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "task-row-")
+        )
+        XCTAssertEqual(rows.count, 2)
+        let betaRow = rows.element(boundBy: 0)
+        let alphaRow = rows.element(boundBy: 1)
+        XCTAssertTrue(betaRow.isHittable)
+        XCTAssertTrue(alphaRow.isHittable)
+
+        betaRow.click(forDuration: 0.6, thenDragTo: alphaRow)
 
         let deadline = Date().addingTimeInterval(2)
         while second.frame.minY <= first.frame.minY && Date() < deadline {
