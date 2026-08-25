@@ -1,0 +1,58 @@
+import AppKit
+import SwiftUI
+
+@MainActor
+final class SettingsWindowController: NSWindowController {
+    private var hasPositionedWindow = false
+
+    init(
+        settings: AppSettings,
+        loginItemService: LoginItemService,
+        agentServer: AgentServer,
+        store: TaskStore,
+        agentAccessToken: String
+    ) {
+        let rootView = SettingsView(
+            settings: settings,
+            loginItemService: loginItemService,
+            agentServer: agentServer,
+            store: store,
+            agentAccessToken: agentAccessToken
+        )
+        let hostingController = NSHostingController(rootView: rootView)
+        let window = NSWindow(contentViewController: hostingController)
+
+        window.title = "Attic Settings"
+        window.styleMask = [.titled, .closable]
+        window.setContentSize(NSSize(width: 520, height: 800))
+        window.isReleasedWhenClosed = false
+        window.tabbingMode = .disallowed
+        window.collectionBehavior = [.moveToActiveSpace]
+
+        super.init(window: window)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func show() {
+        guard let window else { return }
+
+        if !hasPositionedWindow {
+            // Fit short displays: the SwiftUI content scrolls when this caps it.
+            if let screenHeight = (window.screen ?? NSScreen.main)?.visibleFrame.height {
+                let height = min(800, screenHeight - 40)
+                window.setContentSize(NSSize(width: 520, height: height))
+            }
+            window.center()
+            hasPositionedWindow = true
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+    }
+}

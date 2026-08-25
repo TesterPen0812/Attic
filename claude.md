@@ -1,16 +1,16 @@
-<!-- BEGIN PEEKABOO LIVE SYNC CONTRACT -->
+<!-- BEGIN ATTIC LIVE SYNC CONTRACT -->
 ## Live Sync Contract — Non-Negotiable
 
-Peekaboo is a local-first SwiftData app whose Mac and iPhone targets synchronize
+Attic is a local-first SwiftData app whose Mac and iPhone targets synchronize
 through the same private CloudKit database. Live two-way sync is a core product
 feature, not an optional integration. Never merge, archive, upload, or install a
 sync-related change unless every invariant and release check below remains true.
 
 ### Mandatory identifiers and environments
 
-- Both targets MUST use bundle identifier `com.emanueledipietro.Peekaboo`.
+- Both targets MUST use bundle identifier `com.emanueledipietro.Attic`.
 - Both targets MUST use CloudKit container
-  `iCloud.com.emanueledipietro.Peekaboo`.
+  `iCloud.com.emanueledipietro.Attic`.
 - Release/TestFlight builds MUST use CloudKit `Production` and production APNs.
 - Debug and Local builds MUST use CloudKit `Development` and development APNs.
 - `ICLOUD_CONTAINER_ENVIRONMENT` and `APS_ENVIRONMENT` MUST always describe the
@@ -23,8 +23,8 @@ sync-related change unless every invariant and release check below remains true.
 
 ### Mandatory macOS entitlements — do not remove
 
-Every macOS configuration (`Peekaboo.entitlements`,
-`PeekabooDebug.entitlements`, and `PeekabooLocal.entitlements`) MUST retain both
+Every macOS configuration (`Attic.entitlements`,
+`AtticDebug.entitlements`, and `AtticLocal.entitlements`) MUST retain both
 values under `com.apple.security.temporary-exception.mach-lookup.global-name`:
 
 ```text
@@ -54,7 +54,7 @@ restored the entitlement. Never repeat this change.
 - Keep `UIApplication.registerForRemoteNotifications()` on iPhone so silent
   CloudKit pushes can wake a suspended app and schedule an import.
 - Keep the bounded `ProcessInfo` activity assertion around macOS local
-  save-to-export and import-to-refresh windows. Peekaboo is an `LSUIElement`
+  save-to-export and import-to-refresh windows. Attic is an `LSUIElement`
   app and can otherwise enter App Nap while Core Data is still mirroring. The
   assertion must remain event-driven, allow idle system sleep, and retain its
   timeout; never replace it with permanent activity or polling.
@@ -104,20 +104,20 @@ Treat these as real failures until disproved:
   local mutation: do not report sync as healthy.
 - Data exists in SQLite but not in the panel: inspect stale `ModelContext`
   handling and completed-import refresh before changing CloudKit configuration.
-- Multiple installed/running Peekaboo copies can use different builds or
-  environments. Confirm the exact executable with `pgrep -fl Peekaboo`, the
+- Multiple installed/running Attic copies can use different builds or
+  environments. Confirm the exact executable with `pgrep -fl Attic`, the
   bundle version, code signature, entitlements, and opened store before testing.
 
 ### Required verification after any sync, persistence, signing, or release change
 
 Build success and unit tests are insufficient. Complete all of the following:
 
-1. Regenerate `Peekaboo.xcodeproj` from `Scripts/generate_project.rb` and run
+1. Regenerate `Attic.xcodeproj` from `Scripts/generate_project.rb` and run
    `Scripts/verify_project_generation.rb`.
 2. Inspect the archived AND installed app entitlements with `codesign`. Confirm
    Production CloudKit/APNs and both Mach lookup services in the TestFlight Mac
    app.
-3. Confirm only the intended Peekaboo build is running and record its bundle
+3. Confirm only the intended Attic build is running and record its bundle
    version. Do not accidentally test DerivedData or an old `/Applications` copy.
 4. Use real TestFlight builds on a real Mac and real iPhone signed into the same
    iCloud account. Simulator or development-only success does not prove
@@ -155,7 +155,7 @@ one-way failure before making the next change.
 Keep this entire Live Sync Contract synchronized verbatim between the root
 `AGENTS.md` and `claude.md`. Any deliberate change to these invariants requires
 a written reason and a successful real-device two-way sync verification.
-<!-- END PEEKABOO LIVE SYNC CONTRACT -->
+<!-- END ATTIC LIVE SYNC CONTRACT -->
 
 ## Model Selection
 

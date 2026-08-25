@@ -8,7 +8,7 @@ require 'securerandom'
 require 'tmpdir'
 
 ROOT = File.expand_path('..', __dir__)
-DEFAULT_PROJECT_PATH = File.join(ROOT, 'Peekaboo.xcodeproj')
+DEFAULT_PROJECT_PATH = File.join(ROOT, 'Attic.xcodeproj')
 options = { project_path: DEFAULT_PROJECT_PATH }
 
 OptionParser.new do |parser|
@@ -24,7 +24,7 @@ end.parse!
 
 project_path = options.fetch(:project_path)
 FileUtils.mkdir_p(File.dirname(project_path))
-staging_directory = Dir.mktmpdir('.peekaboo-project-', File.dirname(project_path))
+staging_directory = Dir.mktmpdir('.attic-project-', File.dirname(project_path))
 at_exit { FileUtils.rm_rf(staging_directory) if File.exist?(staging_directory) }
 staged_project_path = File.join(staging_directory, File.basename(project_path))
 # xcodeproj 1.27 can emit Xcode 16 projects but does not expose Apple's
@@ -35,12 +35,12 @@ project.root_object.attributes['LastSwiftUpdateCheck'] = '2660'
 project.root_object.attributes['LastUpgradeCheck'] = '2660'
 project.add_build_configuration('Local', :debug)
 
-app = project.new_target(:application, 'Peekaboo', :osx, '14.0')
-unit_tests = project.new_target(:unit_test_bundle, 'PeekabooTests', :osx, '14.0')
-ui_tests = project.new_target(:ui_test_bundle, 'PeekabooUITests', :osx, '14.0')
-mobile_app = project.new_target(:application, 'PeekabooMobile', :ios, '17.0')
-mobile_tests = project.new_target(:unit_test_bundle, 'PeekabooMobileTests', :ios, '17.0')
-mobile_ui_tests = project.new_target(:ui_test_bundle, 'PeekabooMobileUITests', :ios, '17.0')
+app = project.new_target(:application, 'Attic', :osx, '14.0')
+unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '14.0')
+ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '14.0')
+mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
+mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
+mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
 unit_tests.add_dependency(app)
 ui_tests.add_dependency(app)
 mobile_tests.add_dependency(mobile_app)
@@ -56,25 +56,25 @@ def add_swift_sources(project, target, group_name, directory)
   group
 end
 
-app_group = add_swift_sources(project, app, 'Peekaboo', 'Peekaboo')
-tests_group = add_swift_sources(project, unit_tests, 'PeekabooTests', 'PeekabooTests')
-ui_tests_group = add_swift_sources(project, ui_tests, 'PeekabooUITests', 'PeekabooUITests')
-mobile_group = add_swift_sources(project, mobile_app, 'PeekabooMobile', 'PeekabooMobile')
+app_group = add_swift_sources(project, app, 'Attic', 'Attic')
+tests_group = add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
+ui_tests_group = add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
+mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
 mobile_tests_group = add_swift_sources(
   project,
   mobile_tests,
-  'PeekabooMobileTests',
-  'PeekabooMobileTests'
+  'AtticMobileTests',
+  'AtticMobileTests'
 )
 mobile_ui_tests_group = add_swift_sources(
   project,
   mobile_ui_tests,
-  'PeekabooMobileUITests',
-  'PeekabooMobileUITests'
+  'AtticMobileUITests',
+  'AtticMobileUITests'
 )
 
 shared_mobile_sources = [
-  'Design/PeekabooTheme.swift',
+  'Design/AtticTheme.swift',
   'Design/TaskActionsMenu.swift',
   'Models/TaskItem.swift',
   'Models/TaskTypes.swift',
@@ -85,7 +85,7 @@ shared_mobile_sources = [
 ]
 shared_mobile_sources.each do |path|
   reference = app_group.files.find { |file| file.path == path }
-  abort "Missing shared source: Peekaboo/#{path}" unless reference
+  abort "Missing shared source: Attic/#{path}" unless reference
 
   mobile_app.source_build_phase.add_file_reference(reference)
 end
@@ -96,12 +96,12 @@ mobile_app.resources_build_phase.add_file_reference(assets)
 privacy_manifest = app_group.new_file('Resources/PrivacyInfo.xcprivacy')
 app.resources_build_phase.add_file_reference(privacy_manifest)
 mobile_app.resources_build_phase.add_file_reference(privacy_manifest)
-app_group.new_file('Peekaboo.entitlements')
-app_group.new_file('PeekabooDebug.entitlements')
-app_group.new_file('PeekabooLocal.entitlements')
-app_group.new_file('PeekabooNotesLocal.entitlements')
+app_group.new_file('Attic.entitlements')
+app_group.new_file('AtticDebug.entitlements')
+app_group.new_file('AtticLocal.entitlements')
+app_group.new_file('AtticNotesLocal.entitlements')
 app_group.new_file('Info.plist')
-mobile_group.new_file('PeekabooMobile.entitlements')
+mobile_group.new_file('AtticMobile.entitlements')
 mobile_group.new_file('Info.plist')
 
 project.build_configurations.each do |config|
@@ -111,15 +111,15 @@ end
 
 app.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Peekaboo'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Attic'
   settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
-  settings['PEEKABOO_DISPLAY_NAME'] = 'Peekaboo'
+  settings['ATTIC_DISPLAY_NAME'] = 'Attic'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
-  settings['INFOPLIST_FILE'] = 'Peekaboo/Info.plist'
+  settings['INFOPLIST_FILE'] = 'Attic/Info.plist'
   settings['CODE_SIGN_ENTITLEMENTS'] = case config.name
-                                       when 'Debug' then 'Peekaboo/PeekabooDebug.entitlements'
-                                       when 'Local' then 'Peekaboo/PeekabooLocal.entitlements'
-                                       else 'Peekaboo/Peekaboo.entitlements'
+                                       when 'Debug' then 'Attic/AtticDebug.entitlements'
+                                       when 'Local' then 'Attic/AtticLocal.entitlements'
+                                       else 'Attic/Attic.entitlements'
                                        end
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
@@ -134,42 +134,42 @@ app.build_configurations.each do |config|
   settings['CURRENT_PROJECT_VERSION'] = '11'
   settings['ICLOUD_CONTAINER_ENVIRONMENT'] = config.name == 'Release' ? 'Production' : 'Development'
   settings['APS_ENVIRONMENT'] = config.name == 'Release' ? 'production' : 'development'
-  abort "Mismatched Peekaboo CloudKit/APNs environment for #{config.name}" unless
+  abort "Mismatched Attic CloudKit/APNs environment for #{config.name}" unless
     (settings['ICLOUD_CONTAINER_ENVIRONMENT'] == 'Production') ==
       (settings['APS_ENVIRONMENT'] == 'production')
 end
 
 unit_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.PeekabooTests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticTests'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
-  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/Peekaboo.app/Contents/MacOS/Peekaboo'
+  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 
 ui_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.PeekabooUITests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticUITests'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
-  settings['TEST_TARGET_NAME'] = 'Peekaboo'
+  settings['TEST_TARGET_NAME'] = 'Attic'
 end
 
 mobile_app.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Peekaboo'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Attic'
   settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
-  settings['PRODUCT_MODULE_NAME'] = 'PeekabooMobile'
+  settings['PRODUCT_MODULE_NAME'] = 'AtticMobile'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
-  settings['INFOPLIST_FILE'] = 'PeekabooMobile/Info.plist'
-  settings['CODE_SIGN_ENTITLEMENTS'] = 'PeekabooMobile/PeekabooMobile.entitlements'
+  settings['INFOPLIST_FILE'] = 'AtticMobile/Info.plist'
+  settings['CODE_SIGN_ENTITLEMENTS'] = 'AtticMobile/AtticMobile.entitlements'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
   settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
@@ -186,14 +186,14 @@ mobile_app.build_configurations.each do |config|
   settings['CURRENT_PROJECT_VERSION'] = '9'
   settings['ICLOUD_CONTAINER_ENVIRONMENT'] = config.name == 'Release' ? 'Production' : 'Development'
   settings['APS_ENVIRONMENT'] = config.name == 'Release' ? 'production' : 'development'
-  abort "Mismatched PeekabooMobile CloudKit/APNs environment for #{config.name}" unless
+  abort "Mismatched AtticMobile CloudKit/APNs environment for #{config.name}" unless
     (settings['ICLOUD_CONTAINER_ENVIRONMENT'] == 'Production') ==
       (settings['APS_ENVIRONMENT'] == 'production')
 end
 
 mobile_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.PeekabooMobileTests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticMobileTests'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
@@ -203,13 +203,13 @@ mobile_tests.build_configurations.each do |config|
   settings['SDKROOT'] = 'iphoneos'
   settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
   settings['TARGETED_DEVICE_FAMILY'] = '1'
-  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/PeekabooMobile.app/PeekabooMobile'
+  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/AtticMobile.app/AtticMobile'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 
 mobile_ui_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.PeekabooMobileUITests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticMobileUITests'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
@@ -219,7 +219,7 @@ mobile_ui_tests.build_configurations.each do |config|
   settings['SDKROOT'] = 'iphoneos'
   settings['SUPPORTED_PLATFORMS'] = 'iphoneos iphonesimulator'
   settings['TARGETED_DEVICE_FAMILY'] = '1'
-  settings['TEST_TARGET_NAME'] = 'PeekabooMobile'
+  settings['TEST_TARGET_NAME'] = 'AtticMobile'
 end
 
 # xcodeproj includes the current random project/target UUIDs in proxy paths when
@@ -264,9 +264,9 @@ scheme.launch_action.build_configuration = 'Local'
 scheme.add_test_target(unit_tests)
 scheme.add_test_target(ui_tests)
 scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
-  { key: 'PEEKABOO_TESTING', value: '1', enabled: true }
+  { key: 'ATTIC_TESTING', value: '1', enabled: true }
 ])
-scheme.save_as(staged_project_path, 'Peekaboo', true)
+scheme.save_as(staged_project_path, 'Attic', true)
 
 mobile_scheme = Xcodeproj::XCScheme.new
 mobile_scheme.add_build_target(mobile_app)
@@ -275,9 +275,9 @@ mobile_scheme.launch_action.build_configuration = 'Local'
 mobile_scheme.add_test_target(mobile_tests)
 mobile_scheme.add_test_target(mobile_ui_tests)
 mobile_scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
-  { key: 'PEEKABOO_TESTING', value: '1', enabled: true }
+  { key: 'ATTIC_TESTING', value: '1', enabled: true }
 ])
-mobile_scheme.save_as(staged_project_path, 'PeekabooMobile', true)
+mobile_scheme.save_as(staged_project_path, 'AtticMobile', true)
 
 project.save
 
