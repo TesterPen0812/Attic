@@ -54,20 +54,27 @@ jobs:
             -czf /tmp/attic-full-history.tar.gz .
           cp /tmp/attic-full-history.tar.gz AuditArtifacts/
 
-          tar -czf AuditArtifacts/macos-source.tar.gz \
-            Attic \
-            AtticTests \
-            AtticUITests \
-            Attic.xcodeproj \
-            Scripts \
-            project.yml \
-            Gemfile \
-            Gemfile.lock \
-            AGENTS.md \
-            claude.md \
-            .gitignore \
-            .codex \
+          candidates=(
+            Attic
+            AtticTests
+            AtticUITests
+            Attic.xcodeproj
+            Scripts
+            Gemfile
+            Gemfile.lock
+            AGENTS.md
+            claude.md
+            .gitignore
+            .codex
             .github/workflows/macos-audit.yml
+          )
+          existing=()
+          for path in "${candidates[@]}"; do
+            if [[ -e "$path" ]]; then
+              existing+=("$path")
+            fi
+          done
+          tar -czf AuditArtifacts/macos-source.tar.gz "${existing[@]}"
 
       - name: Upload source and history evidence
         uses: actions/upload-artifact@v4
@@ -170,7 +177,7 @@ jobs:
             grep -RInE --include='*.swift' 'Task[[:space:]]*\{|Task\.detached|DispatchQueue|NotificationCenter|Timer|addGlobalMonitor|addLocalMonitor|unowned|ModelContext|ModelContainer' Attic AtticTests AtticUITests
             echo
             echo '=== Rename remnants in behavior-affecting scope ==='
-            grep -RInE 'Peekaboo|PEEKABOO|peekaboo' Attic AtticTests AtticUITests Attic.xcodeproj Scripts project.yml 2>/dev/null
+            grep -RInE 'Peekaboo|PEEKABOO|peekaboo' Attic AtticTests AtticUITests Attic.xcodeproj Scripts 2>/dev/null
             echo
             echo '=== Sensitive logging candidates ==='
             grep -RInE --include='*.swift' 'print\(|debugPrint\(|NSLog\(|Logger\.|os_log' Attic AtticTests AtticUITests
