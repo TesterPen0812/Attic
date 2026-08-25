@@ -16,6 +16,15 @@ final class NoteStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdatePreservesMeaningfulBodyWhitespace() throws {
+        let store = try makeTestNoteStore()
+        let note = try XCTUnwrap(store.create(body: "Original"))
+
+        XCTAssertTrue(store.update(note, body: "  Indented\ntext  "))
+        XCTAssertEqual(try XCTUnwrap(store.notes.first).body, "  Indented\ntext  ")
+    }
+
+    @MainActor
     func testCreateAcceptsBodyWithoutTitle() throws {
         let store = try makeTestNoteStore()
         let note = try XCTUnwrap(store.create(body: "Quick jot"))
