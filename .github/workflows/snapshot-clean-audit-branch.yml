@@ -1,0 +1,61 @@
+name: Snapshot Clean Audit Branch
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-final-2026-08-25
+    paths:
+      - .github/workflows/snapshot-clean-audit-branch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/macos-reliability-final-2026-08-25
+          fetch-depth: 0
+
+      - name: Capture pre-snapshot branch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p Snapshot
+          snapshot_commit=$(git rev-parse HEAD^)
+          echo "SNAPSHOT_COMMIT=$snapshot_commit" | tee Snapshot/state.txt
+          echo "TRIGGER_COMMIT=$GITHUB_SHA" | tee -a Snapshot/state.txt
+          git show -s --format='TREE=%T%nPARENTS=%P%nSUBJECT=%s' "$snapshot_commit" | tee -a Snapshot/state.txt
+          git log --oneline --decorate -20 "$snapshot_commit" > Snapshot/history.txt
+          git diff --name-status bcc1234f0d8da5533c3c1745f07a2ff01f0ea55b.."$snapshot_commit" > Snapshot/diff-names.txt
+          git ls-tree -r --name-only "$snapshot_commit" > Snapshot/files.txt
+          git archive --format=tar.gz --output=Snapshot/source.tar.gz "$snapshot_commit" \
+            Attic AtticTests AtticUITests Attic.xcodeproj Scripts .github
+          git bundle create Snapshot/history.bundle "$snapshot_commit" ^bcc1234f0d8da5533c3c1745f07a2ff01f0ea55b
+
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-audit-snapshot-${{ github.sha }}
+          path: Snapshot
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Restore pre-snapshot branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot_commit=$(git rev-parse HEAD^)
+          git fetch origin audit/macos-reliability-final-2026-08-25
+          remote_head=$(git rev-parse origin/audit/macos-reliability-final-2026-08-25)
+          if [[ "$remote_head" != "$GITHUB_SHA" ]]; then
+            echo "Branch advanced from $GITHUB_SHA to $remote_head; refusing cleanup."
+            exit 1
+          fi
+          git push \
+            --force-with-lease=refs/heads/audit/macos-reliability-final-2026-08-25:$GITHUB_SHA \
+            origin \
+            "$snapshot_commit":refs/heads/audit/macos-reliability-final-2026-08-25
