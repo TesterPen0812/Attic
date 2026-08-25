@@ -1,0 +1,379 @@
+# commit-message: fix: protect macOS persistence and CloudKit reconciliation
+# verification: unit
+#
+diff --git a/Attic/Services/DailyCleanupService.swift b/Attic/Services/DailyCleanupService.swift
+index 6000eae..2c3be77 100644
+--- a/Attic/Services/DailyCleanupService.swift
++++ b/Attic/Services/DailyCleanupService.swift
+@@ -6,6 +6,7 @@ final class DailyCleanupService {
+     private let store: TaskStore
+     private let now: () -> Date
+     private let calendar: () -> Calendar
++    private let refreshStore: () -> Bool
+     private var timer: Timer?
+     private var notificationTokens: [NSObjectProtocol] = []
+     private var workspaceTokens: [NSObjectProtocol] = []
+@@ -13,11 +14,13 @@ final class DailyCleanupService {
+     init(
+         store: TaskStore,
+         now: @escaping () -> Date = Date.init,
+-        calendar: @escaping () -> Calendar = { .autoupdatingCurrent }
++        calendar: @escaping () -> Calendar = { .autoupdatingCurrent },
++        refreshStore: (() -> Bool)? = nil
+     ) {
+         self.store = store
+         self.now = now
+         self.calendar = calendar
++        self.refreshStore = refreshStore ?? { store.refresh() }
+     }
+ 
+     func start() {
+@@ -70,8 +73,9 @@ final class DailyCleanupService {
+         let timestamp = now()
+         // Foreground/wake refresh is a fallback for delayed or dropped
+         // CloudKit remote-change pushes.
+-        store.refresh()
+-        performCleanup(at: timestamp)
++        if refreshStore() {
++            performCleanup(at: timestamp)
++        }
+         scheduleNextMidnight(after: timestamp)
+     }
+ 
+diff --git a/Attic/Services/NoteStore.swift b/Attic/Services/NoteStore.swift
+index 93149f2..ed9616e 100644
+--- a/Attic/Services/NoteStore.swift
++++ b/Attic/Services/NoteStore.swift
+@@ -76,13 +76,12 @@ final class NoteStore: ObservableObject {
+     @discardableResult
+     func create(title: String = "", body: String = "") -> NoteItem? {
+         let normalizedTitle = Self.normalizedTitle(title)
+-        let trimmedBody = Self.trimmedBody(body)
+-        guard !normalizedTitle.isEmpty || !trimmedBody.isEmpty else { return nil }
++        guard !normalizedTitle.isEmpty || Self.hasMeaningfulText(body) else { return nil }
+ 
+         let timestamp = now()
+         let note = NoteItem(
+             title: normalizedTitle,
+-            body: trimmedBody,
++            body: body,
+             createdAt: timestamp,
+             updatedAt: timestamp
+         )
+@@ -107,8 +106,8 @@ final class NoteStore: ObservableObject {
+             return false
+         }
+         let destinationTitle = title.map(Self.normalizedTitle) ?? note.title
+-        let destinationBody = body.map(Self.trimmedBody) ?? note.body
+-        guard !(destinationTitle.isEmpty && destinationBody.isEmpty) else { return false }
++        let destinationBody = body ?? note.body
++        guard !destinationTitle.isEmpty || Self.hasMeaningfulText(destinationBody) else { return false }
+ 
+         let titleChanged = destinationTitle != note.title
+         let bodyChanged = destinationBody != note.body
+@@ -152,12 +151,17 @@ final class NoteStore: ObservableObject {
+         }
+     }
+ 
+-    func refresh() {
++    @discardableResult
++    func refresh() -> Bool {
+         do {
+             try reloadNotes()
+             lastErrorMessage = nil
++            cloudSyncProtection.completeImportRefresh()
++            reconcileProtectedCloudSyncActivity(for: .importData)
++            return true
+         } catch {
+             lastErrorMessage = error.localizedDescription
++            return false
+         }
+     }
+ 
+@@ -177,9 +181,7 @@ final class NoteStore: ObservableObject {
+         cloudImportRefreshTask = Task { @MainActor [weak self] in
+             try? await Task.sleep(for: .milliseconds(100))
+             guard !Task.isCancelled else { return }
+-            self?.refresh()
+-            self?.cloudSyncProtection.completeImportRefresh()
+-            self?.reconcileProtectedCloudSyncActivity(for: .importData)
++            _ = self?.refresh()
+             self?.cloudImportRefreshTask = nil
+         }
+     }
+@@ -402,8 +404,8 @@ final class NoteStore: ObservableObject {
+             .joined(separator: " ")
+     }
+ 
+-    private static func trimmedBody(_ body: String) -> String {
+-        body.trimmingCharacters(in: .whitespacesAndNewlines)
++    private static func hasMeaningfulText(_ body: String) -> Bool {
++        !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+     }
+ 
+     private static func tieBreakKey(for note: NoteItem) -> String {
+diff --git a/Attic/Services/PersistenceController.swift b/Attic/Services/PersistenceController.swift
+index 6b4362c..955fe85 100644
+--- a/Attic/Services/PersistenceController.swift
++++ b/Attic/Services/PersistenceController.swift
+@@ -78,10 +78,13 @@ enum PersistenceController {
+ 
+         try autoreleasepool {
+             let fileManager = FileManager.default
+-            let directory = fileManager.urls(
++            guard let cachesDirectory = fileManager.urls(
+                 for: .cachesDirectory,
+                 in: .userDomainMask
+-            )[0].appendingPathComponent(
++            ).first else {
++                throw CloudKitSchemaInitializationError.unableToLocateCachesDirectory
++            }
++            let directory = cachesDirectory.appendingPathComponent(
+                 "CloudKitSchemaBootstrap",
+                 isDirectory: true
+             )
+@@ -139,7 +142,7 @@ enum PersistenceController {
+ 
+     /// Copies the unopened legacy SQLite store once before CloudKit first
+     /// attaches to it. The app continues to use the original files.
+-    private static func createPreCloudKitBackupIfNeeded(
++    static func createPreCloudKitBackupIfNeeded(
+         for configuration: ModelConfiguration,
+         defaults: UserDefaults = .standard,
+         fileManager: FileManager = .default
+@@ -148,10 +151,11 @@ enum PersistenceController {
+         guard !defaults.bool(forKey: marker) else { return }
+ 
+         let storeURL = configuration.url
+-        guard fileManager.fileExists(atPath: storeURL.path) else {
+-            defaults.set(true, forKey: marker)
+-            return
+-        }
++        // Do not mark an absent store as backed up. A cloud-enabled launch can
++        // fail before SwiftData opens the store and then fall back to local-only
++        // persistence. The next launch must still back up that newly created
++        // store before CloudKit first attaches to it.
++        guard fileManager.fileExists(atPath: storeURL.path) else { return }
+ 
+         for suffix in ["", "-wal", "-shm"] {
+             let source = URL(fileURLWithPath: storeURL.path + suffix)
+@@ -172,9 +176,15 @@ enum PersistenceController {
+ #if DEBUG
+ private enum CloudKitSchemaInitializationError: LocalizedError {
+     case unableToCreateManagedObjectModel
++    case unableToLocateCachesDirectory
+ 
+     var errorDescription: String? {
+-        "Unable to create the Core Data model required to initialize CloudKit."
++        switch self {
++        case .unableToCreateManagedObjectModel:
++            "Unable to create the Core Data model required to initialize CloudKit."
++        case .unableToLocateCachesDirectory:
++            "Unable to locate the caches directory required to initialize CloudKit."
++        }
+     }
+ }
+ #endif
+diff --git a/Attic/Services/TaskStore.swift b/Attic/Services/TaskStore.swift
+index 20340df..36b3df7 100644
+--- a/Attic/Services/TaskStore.swift
++++ b/Attic/Services/TaskStore.swift
+@@ -113,7 +113,8 @@ struct CloudSyncProtectionState: Equatable {
+                 exportStartGenerationByID[update.id] = localSaveGeneration
+             }
+         case (.exportData, .some):
+-            if let coveredGeneration = exportStartGenerationByID.removeValue(forKey: update.id) {
++            if let coveredGeneration = exportStartGenerationByID.removeValue(forKey: update.id),
++               update.succeeded {
+                 exportedSaveGeneration = max(exportedSaveGeneration, coveredGeneration)
+             }
+         case (.importData, nil):
+@@ -126,7 +127,8 @@ struct CloudSyncProtectionState: Equatable {
+         }
+     }
+ 
+-    mutating func completeImportRefresh() {
++    mutating func completeImportRefresh(succeeded: Bool = true) {
++        guard succeeded else { return }
+         importRefreshPending = false
+     }
+ }
+@@ -532,12 +534,17 @@ final class TaskStore: ObservableObject {
+         return save()
+     }
+ 
+-    func refresh() {
++    @discardableResult
++    func refresh() -> Bool {
+         do {
+             try reloadTasks()
+             lastErrorMessage = nil
++            cloudSyncProtection.completeImportRefresh()
++            reconcileProtectedCloudSyncActivity(for: .importData)
++            return true
+         } catch {
+             lastErrorMessage = error.localizedDescription
++            return false
+         }
+     }
+ 
+@@ -671,9 +678,7 @@ final class TaskStore: ObservableObject {
+         cloudImportRefreshTask = Task { @MainActor [weak self] in
+             try? await Task.sleep(for: .milliseconds(100))
+             guard !Task.isCancelled else { return }
+-            self?.refresh()
+-            self?.cloudSyncProtection.completeImportRefresh()
+-            self?.reconcileProtectedCloudSyncActivity(for: .importData)
++            _ = self?.refresh()
+             self?.cloudImportRefreshTask = nil
+         }
+     }
+diff --git a/AtticTests/DailyCleanupServiceTests.swift b/AtticTests/DailyCleanupServiceTests.swift
+index 6d0f6ca..369ea82 100644
+--- a/AtticTests/DailyCleanupServiceTests.swift
++++ b/AtticTests/DailyCleanupServiceTests.swift
+@@ -127,4 +127,25 @@ final class DailyCleanupServiceTests: XCTestCase {
+         XCTAssertEqual(service.performCleanup(), 0)
+         XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskItem>()), 2)
+     }
++    @MainActor
++    func testAutomaticCleanupDoesNotDeleteFromStaleStateWhenRefreshFails() throws {
++        let now = Date(timeIntervalSince1970: 500_000)
++        let old = now.addingTimeInterval(-3 * 24 * 60 * 60)
++        let clock = MutableNow(old)
++        let store = try makeTestStore(now: { clock.value })
++        let task = try XCTUnwrap(store.create(title: "Needs fresh state"))
++        XCTAssertTrue(store.markDone(task))
++        clock.value = now
++
++        let service = DailyCleanupService(
++            store: store,
++            now: { now },
++            refreshStore: { false }
++        )
++        service.start()
++        defer { service.stop() }
++
++        XCTAssertTrue(store.tasks.contains { $0.id == task.id })
++    }
++
++}
++diff --git a/AtticTests/PersistenceControllerTests.swift b/AtticTests/PersistenceControllerTests.swift
++new file mode 100644
++index 0000000..264f35f
++--- /dev/null
+++++ b/AtticTests/PersistenceControllerTests.swift
++@@ -0,0 +1,54 @@
+++import Foundation
+++import SwiftData
+++import XCTest
+++@testable import Attic
+++
+++final class PersistenceControllerTests: XCTestCase {
+++    func testBackupRemainsPendingWhenStoreDoesNotExistYet() throws {
+++        let fileManager = FileManager.default
+++        let directory = fileManager.temporaryDirectory
+++            .appendingPathComponent("AtticBackupTests-\(UUID().uuidString)", isDirectory: true)
+++        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+++        defer { try? fileManager.removeItem(at: directory) }
+++
+++        let suiteName = "AtticTests.PersistenceBackup.\(UUID().uuidString)"
+++        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+++        defer { defaults.removePersistentDomain(forName: suiteName) }
+++
+++        let storeURL = directory.appendingPathComponent("fallback.store")
+++        let configuration = ModelConfiguration(
+++            "backup-test",
+++            url: storeURL,
+++            cloudKitDatabase: .none
+++        )
+++
+++        try PersistenceController.createPreCloudKitBackupIfNeeded(
+++            for: configuration,
+++            defaults: defaults,
+++            fileManager: fileManager
+++        )
+++
+++        try Data("database".utf8).write(to: storeURL)
+++        try Data("wal".utf8).write(to: URL(fileURLWithPath: storeURL.path + "-wal"))
+++        try Data("shm".utf8).write(to: URL(fileURLWithPath: storeURL.path + "-shm"))
+++
+++        try PersistenceController.createPreCloudKitBackupIfNeeded(
+++            for: configuration,
+++            defaults: defaults,
+++            fileManager: fileManager
+++        )
+++
+++        XCTAssertEqual(
+++            try Data(contentsOf: URL(fileURLWithPath: storeURL.path + ".pre-cloudkit")),
+++            Data("database".utf8)
+++        )
+++        XCTAssertEqual(
+++            try Data(contentsOf: URL(fileURLWithPath: storeURL.path + ".pre-cloudkit-wal")),
+++            Data("wal".utf8)
+++        )
+++        XCTAssertEqual(
+++            try Data(contentsOf: URL(fileURLWithPath: storeURL.path + ".pre-cloudkit-shm")),
+++            Data("shm".utf8)
+++        )
+++    }
+++}
++diff --git a/AtticTests/TaskStoreTests.swift b/AtticTests/TaskStoreTests.swift
++index ccb58a0..5d521d6 100644
++--- a/AtticTests/TaskStoreTests.swift
+++++ b/AtticTests/TaskStoreTests.swift
++@@ -864,6 +864,54 @@ final class TaskStoreTests: XCTestCase {
++         XCTAssertFalse(protection.protectsExport)
++     }
++ 
+++    func testFailedExportDoesNotMarkUnsyncedSaveAsExported() {
+++        let exportID = UUID()
+++        var protection = CloudSyncProtectionState()
+++
+++        protection.noteLocalSave()
+++        protection.apply(CloudSyncEventUpdate(
+++            id: exportID,
+++            kind: .exportData,
+++            endedAt: nil,
+++            succeeded: false,
+++            errorMessage: nil
+++        ))
+++        protection.apply(CloudSyncEventUpdate(
+++            id: exportID,
+++            kind: .exportData,
+++            endedAt: Date(),
+++            succeeded: false,
+++            errorMessage: "Network unavailable"
+++        ))
+++
+++        XCTAssertTrue(protection.protectsExport)
+++    }
+++
+++    func testFailedImportRefreshKeepsProtectionPending() {
+++        let importID = UUID()
+++        var protection = CloudSyncProtectionState()
+++
+++        protection.apply(CloudSyncEventUpdate(
+++            id: importID,
+++            kind: .importData,
+++            endedAt: nil,
+++            succeeded: false,
+++            errorMessage: nil
+++        ))
+++        protection.apply(CloudSyncEventUpdate(
+++            id: importID,
+++            kind: .importData,
+++            endedAt: Date(),
+++            succeeded: false,
+++            errorMessage: "Store unavailable"
+++        ))
+++        protection.completeImportRefresh(succeeded: false)
+++
+++        XCTAssertTrue(protection.protectsImport)
+++        protection.completeImportRefresh(succeeded: true)
+++        XCTAssertFalse(protection.protectsImport)
+++    }
+++
++     func testCloudSyncProtectionKeepsOverlappingImportsProtectedUntilRefresh() {
++         let firstImportID = UUID()
++         let secondImportID = UUID()
