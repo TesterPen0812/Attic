@@ -1,4 +1,5 @@
 import CoreGraphics
+import SwiftUI
 
 enum PanelGeometry {
     static let triggerSize: CGFloat = 16
@@ -6,6 +7,26 @@ enum PanelGeometry {
     static let minimumHeight: CGFloat = 380
     static let maximumHeight: CGFloat = 700
     static let screenInset: CGFloat = 12
+
+    /// Superellipse exponent used for the squircle corners.
+    static let squircleExponent: CGFloat = 5
+
+    /// Minimum horizontal padding from the panel edge to content, ensuring
+    /// content never intersects the corner curve. Derived from the maximum
+    /// inward deviation of the corner superellipse plus a safety margin.
+    static func contentInsets(cornerSize: CGFloat, panelSize: CGSize) -> EdgeInsets {
+        let insetFactor = Squircle.cornerInsetFactor(exponent: squircleExponent)
+        let cornerInset = cornerSize * insetFactor
+        let horizontal = max(AtticStyle.horizontalPadding, cornerInset + 6)
+        let top = max(8, cornerInset + 4)
+        let bottom = max(10, cornerInset + 6)
+        return EdgeInsets(top: top, leading: horizontal, bottom: bottom, trailing: horizontal)
+    }
+
+    /// The effective panel width for a given content size setting.
+    static func panelWidth(for contentSize: CGFloat) -> CGFloat {
+        contentSize
+    }
 
     static func hotspot(in screenFrame: CGRect, corner: ScreenCorner, size: CGFloat = triggerSize) -> CGRect {
         let origin: CGPoint

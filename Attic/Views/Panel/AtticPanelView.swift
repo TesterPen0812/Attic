@@ -9,6 +9,22 @@ struct AtticPanelView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var cornerRadius: CGFloat {
+        settings.panelCornerSize
+    }
+
+    private var panelSize: CGSize {
+        CGSize(width: settings.panelContentSize, height: 380)
+    }
+
+    private var contentInsets: EdgeInsets {
+        PanelGeometry.contentInsets(cornerSize: cornerRadius, panelSize: panelSize)
+    }
+
+    private var horizontalInset: CGFloat {
+        contentInsets.leading
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header(activeCount: headerActiveCount)
@@ -16,7 +32,7 @@ struct AtticPanelView: View {
 
             if uiState.isComposerPresented {
                 composerView
-                    .padding(.horizontal, AtticStyle.horizontalPadding)
+                    .padding(.horizontal, horizontalInset)
                     .padding(.bottom, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -38,12 +54,12 @@ struct AtticPanelView: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
                     .lineLimit(2)
-                    .padding(.horizontal, AtticStyle.horizontalPadding)
+                    .padding(.horizontal, horizontalInset)
                     .padding(.bottom, 10)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .atticPanelSurface(translucent: settings.isTranslucent)
+        .atticPanelSurface(translucent: settings.isTranslucent, cornerRadius: cornerRadius)
         .animation(reduceMotion ? nil : AtticMotion.spring, value: uiState.isComposerPresented)
         .animation(reduceMotion ? nil : AtticMotion.spring, value: store.tasks.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.spring, value: noteStore.notes.map(\.id))
@@ -146,7 +162,7 @@ struct AtticPanelView: View {
             .accessibilityLabel(composerButtonLabel)
             .accessibilityIdentifier(uiState.selectedSection.isNotes ? "add-note-button" : "add-task-button")
         }
-        .padding(.horizontal, AtticStyle.horizontalPadding)
+        .padding(.horizontal, horizontalInset)
         .frame(height: 44)
     }
 
@@ -157,7 +173,7 @@ struct AtticPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, AtticStyle.horizontalPadding)
+        .padding(.horizontal, horizontalInset)
         .padding(.bottom, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("panel-section-picker")
@@ -261,7 +277,7 @@ struct AtticPanelView: View {
                     )
                 }
             }
-            .padding(.horizontal, AtticStyle.horizontalPadding - 4)
+            .padding(.horizontal, horizontalInset - 4)
             .padding(.bottom, 14)
         }
         .scrollIndicators(.never)

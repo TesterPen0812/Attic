@@ -33,7 +33,7 @@ final class AtticPanelController {
         self.uiState = uiState
 
         panel = AtticPanel(
-            contentRect: CGRect(x: 0, y: 0, width: PanelGeometry.panelWidth, height: PanelGeometry.minimumHeight),
+            contentRect: CGRect(x: 0, y: 0, width: settings.panelContentSize, height: PanelGeometry.minimumHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -172,6 +172,20 @@ final class AtticPanelController {
                 self.resizeAndReanchor()
             }
             .store(in: &cancellables)
+
+        settings.$panelCornerSize
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.resizeAndReanchor()
+            }
+            .store(in: &cancellables)
+
+        settings.$panelContentSize
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.resizeAndReanchor()
+            }
+            .store(in: &cancellables)
     }
 
     private func resizeAndReanchor() {
@@ -218,7 +232,7 @@ final class AtticPanelController {
         }
         return PanelGeometry.panelFrame(
             in: screen.visibleFrame,
-            size: CGSize(width: PanelGeometry.panelWidth, height: height),
+            size: CGSize(width: settings.panelContentSize, height: height),
             corner: corner
         )
     }
