@@ -1,0 +1,41 @@
+name: Audit Source Bundle
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-2026-08-25
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: Verify and archive complete Git history
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify repository and create bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fsck --full
+          git bundle create Attic-complete.bundle --all
+          git bundle verify Attic-complete.bundle
+          git log --all --oneline --decorate > complete-history.txt
+
+      - name: Upload complete-history bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: attic-complete-history
+          path: |
+            Attic-complete.bundle
+            complete-history.txt
+          if-no-files-found: error
+          retention-days: 7
