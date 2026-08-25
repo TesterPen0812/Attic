@@ -77,7 +77,12 @@ struct TaskSectionView: View {
     }
 
     private func acceptSectionDrop(_ providers: [NSItemProvider], at _: CGPoint) -> Bool {
-        TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
+        if let draggedTaskID = uiState.draggedTaskID {
+            uiState.endDragging()
+            return store.drop(taskID: draggedTaskID, into: status)
+        }
+
+        return TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
             uiState.endDragging()
             _ = store.drop(taskID: draggedTaskID, into: status)
         }

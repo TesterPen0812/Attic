@@ -107,7 +107,12 @@ struct TaskRowView: View {
     }
 
     private func acceptDrop(from providers: [NSItemProvider]) -> Bool {
-        TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
+        if let draggedTaskID = uiState.draggedTaskID {
+            uiState.endDragging()
+            return store.drop(taskID: draggedTaskID, onto: task.id)
+        }
+
+        return TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
             uiState.endDragging()
             _ = store.drop(taskID: draggedTaskID, onto: task.id)
         }
