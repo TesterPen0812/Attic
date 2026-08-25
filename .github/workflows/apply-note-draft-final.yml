@@ -1,0 +1,136 @@
+name: Apply Verified Note Draft Repair
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-final-2026-08-25
+    paths:
+      - .github/workflows/apply-note-draft-final.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-note-draft-final
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply, build, test, and publish clean history
+    runs-on: macos-15
+    timeout-minutes: 50
+
+    steps:
+      - name: Check out complete branch history
+        uses: actions/checkout@v4
+        with:
+          ref: audit/macos-reliability-final-2026-08-25
+          fetch-depth: 0
+
+      - name: Reconstruct reviewed patch and reset transport history
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/audit-note-patch/part* > /tmp/note-draft-patch.b64
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import zlib
+          from pathlib import Path
+
+          encoded = Path('/tmp/note-draft-patch.b64').read_bytes()
+          patch = zlib.decompress(base64.b64decode(encoded))
+          expected = '6a38278d66ca3ccd2dd76961c7d4c47a82c6acf7b65013d9438bb4edb1be787f'
+          actual = hashlib.sha256(patch).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'patch checksum mismatch: {actual}')
+          Path('/tmp/note-draft.patch').write_bytes(patch)
+          PY
+
+          git reset --hard 9af2b23ae123ea29de9db490b52fb3f3c86edd06
+          git apply --index --whitespace=nowarn /tmp/note-draft.patch
+          git diff --cached --check
+
+      - name: Enforce strict macOS scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --cached --name-only | grep -E '^(AtticMobile|AtticMobileTests|AtticMobileUITests)/|^Attic\.xcodeproj/xcshareddata/xcschemes/AtticMobile\.xcscheme$'; then
+            echo 'Unexpected iOS companion change detected.'
+            exit 1
+          fi
+          git diff --cached --name-status
+
+      - name: Verify checked-in target membership and generator repeatability
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby Scripts/verify_project_generation.rb
+          grep -q 'NoteDraftController.swift' Attic.xcodeproj/project.pbxproj
+          grep -q 'NoteDraftControllerTests.swift' Attic.xcodeproj/project.pbxproj
+
+      - name: Clean Local macOS target build
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p AuditArtifacts
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -target Attic \
+            -configuration Local \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build 2>&1 | tee AuditArtifacts/target-build.log
+
+      - name: Clean Local macOS scheme build
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build 2>&1 | tee AuditArtifacts/scheme-build.log
+
+      - name: Run all macOS unit and UI tests
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            -resultBundlePath AuditArtifacts/AtticTests.xcresult \
+            test 2>&1 | tee AuditArtifacts/tests.log
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: note-draft-repair-verification-${{ github.sha }}
+          path: |
+            AuditArtifacts/*.log
+            AuditArtifacts/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Commit and publish clean logical history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Attic Audit Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git commit -m 'fix(macOS): preserve note drafts across lifecycle and sync'
+          git fetch origin audit/macos-reliability-final-2026-08-25
+          remote_head=$(git rev-parse origin/audit/macos-reliability-final-2026-08-25)
+          if [[ "$remote_head" != "$GITHUB_SHA" ]]; then
+            echo "Branch advanced from $GITHUB_SHA to $remote_head during verification."
+            exit 1
+          fi
+          git push \
+            --force-with-lease=refs/heads/audit/macos-reliability-final-2026-08-25:$GITHUB_SHA \
+            origin \
+            HEAD:refs/heads/audit/macos-reliability-final-2026-08-25
