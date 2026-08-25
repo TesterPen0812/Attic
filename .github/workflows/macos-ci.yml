@@ -79,7 +79,17 @@ jobs:
             -only-testing:AtticUITests \
             test
 
+      - name: Upload failing UI test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-ui-test-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticUITests.xcresult
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Run macOS static analyzer
+        if: always()
         run: |
           xcodebuild \
             -project Attic.xcodeproj \
