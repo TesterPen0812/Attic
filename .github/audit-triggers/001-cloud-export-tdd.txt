@@ -1,1 +1,0 @@
-Trigger the macOS CI baseline after applying the failed-export and note-content repairs.
