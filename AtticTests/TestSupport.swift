@@ -33,9 +33,11 @@ final class PersistenceGate {
     struct Failure: Error {}
 
     var shouldFail = false
+    private(set) var saveCount = 0
 
     func save(_ context: ModelContext) throws {
         if shouldFail { throw Failure() }
         try context.save()
+        saveCount += 1
     }
 }

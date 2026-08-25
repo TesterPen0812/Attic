@@ -3,6 +3,7 @@ import SwiftUI
 struct AtticPanelView: View {
     @ObservedObject var store: TaskStore
     @ObservedObject var noteStore: NoteStore
+    let noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
 
@@ -21,7 +22,11 @@ struct AtticPanelView: View {
             }
 
             if uiState.selectedSection.isNotes {
-                NotesPanelContent(noteStore: noteStore, uiState: uiState)
+                NotesPanelContent(
+                    noteStore: noteStore,
+                    noteDraft: noteDraft,
+                    uiState: uiState
+                )
                     .transition(.opacity)
             } else {
                 taskSurface
@@ -43,11 +48,14 @@ struct AtticPanelView: View {
         .animation(reduceMotion ? nil : AtticMotion.spring, value: store.tasks.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.spring, value: noteStore.notes.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.quick, value: uiState.selectedSection)
-        .animation(reduceMotion ? nil : AtticMotion.quick, value: uiState.isDraggingTask)
         .onChange(of: uiState.selectedSection) { _, _ in
             openMostRecentNoteIfNeeded()
         }
-        .onChange(of: noteStore.notes.map(\.id)) { _, _ in
+        .onChange(of: store.revision) { _, _ in
+            uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
+        }
+        .onChange(of: noteStore.revision) { _, _ in
+            reconcileNoteDraft()
             openMostRecentNoteIfNeeded()
         }
     }
@@ -67,7 +75,7 @@ struct AtticPanelView: View {
     @ViewBuilder
     private var composerView: some View {
         if uiState.selectedSection.isNotes {
-            NoteComposerView(noteStore: noteStore, uiState: uiState)
+            NoteComposerView(noteDraft: noteDraft, uiState: uiState)
         } else {
             TaskComposerView(store: store, uiState: uiState)
         }
@@ -87,7 +95,9 @@ struct AtticPanelView: View {
         guard uiState.selectedSection.isNotes,
               !uiState.isComposerPresented,
               uiState.editingNoteID == nil,
-              let mostRecentNote = noteStore.orderedNotes().first else {
+              !noteDraft.isActive,
+              let mostRecentNote = noteStore.orderedNotes().first,
+              noteDraft.beginEditing(mostRecentNote) else {
             return
         }
 
@@ -123,13 +133,7 @@ struct AtticPanelView: View {
             .accessibilityLabel("Settings")
             .accessibilityIdentifier("settings-button")
 
-            Button {
-                if uiState.isComposerPresented {
-                    uiState.endAdding()
-                } else {
-                    uiState.beginAdding()
-                }
-            } label: {
+            Button(action: toggleComposer) {
                 Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
                     .font(.system(size: 10, weight: .semibold))
                     .frame(width: 24, height: 24)
@@ -138,8 +142,8 @@ struct AtticPanelView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
-            .help(uiState.isComposerPresented ? "Cancel" : newItemTitle)
-            .accessibilityLabel(uiState.isComposerPresented ? "Cancel" : newItemTitle)
+            .help(composerButtonLabel)
+            .accessibilityLabel(composerButtonLabel)
             .accessibilityIdentifier(uiState.selectedSection.isNotes ? "add-note-button" : "add-task-button")
         }
         .padding(.horizontal, AtticStyle.horizontalPadding)
@@ -192,6 +196,9 @@ struct AtticPanelView: View {
 
     private func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
+        if uiState.selectedSection.isNotes, noteDraft.isActive {
+            guard noteDraft.close() else { return }
+        }
 
         let select = {
             uiState.selectSection(section)
@@ -209,10 +216,43 @@ struct AtticPanelView: View {
         }
     }
 
+    private func toggleComposer() {
+        if uiState.isComposerPresented {
+            if uiState.selectedSection.isNotes {
+                guard noteDraft.close() else { return }
+            }
+            uiState.endAdding()
+            return
+        }
+
+        if uiState.selectedSection.isNotes {
+            guard noteDraft.beginNew() else { return }
+        }
+        uiState.beginAdding()
+    }
+
+    private func reconcileNoteDraft() {
+        guard uiState.selectedSection.isNotes,
+              uiState.isComposerPresented,
+              noteDraft.isActive else {
+            return
+        }
+
+        guard noteDraft.reconcileWithStore() else {
+            uiState.endAdding()
+            openMostRecentNoteIfNeeded()
+            return
+        }
+
+        if uiState.editingNoteID != noteDraft.activeNoteID {
+            uiState.editingNoteID = noteDraft.activeNoteID
+        }
+    }
+
     private func taskList(sections: [TaskSectionSnapshot]) -> some View {
         ScrollView {
             LazyVStack(spacing: 7) {
-                ForEach(displaySections(from: sections)) { section in
+                ForEach(allSections(from: sections)) { section in
                     TaskSectionView(
                         store: store,
                         uiState: uiState,
@@ -227,10 +267,10 @@ struct AtticPanelView: View {
         .scrollIndicators(.never)
     }
 
-    /// While a task is being dragged, surface every section of the scope —
-    /// including empty ones — so any status is reachable as a drop target.
-    private func displaySections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {
-        guard uiState.isDraggingTask else { return sections }
+    /// Keep section identity stable before, during, and after a drag. Replacing
+    /// the section tree when a drag starts can invalidate the source row and
+    /// cancel AppKit's drag session before it reaches a drop target.
+    private func allSections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {
         return uiState.selectedScope.statuses.map { status in
             sections.first { $0.status == status }
                 ?? TaskSectionSnapshot(status: status, tasks: [])
@@ -257,5 +297,10 @@ struct AtticPanelView: View {
 
     private var newItemTitle: String {
         uiState.selectedSection.newItemTitle
+    }
+
+    private var composerButtonLabel: String {
+        guard uiState.isComposerPresented else { return newItemTitle }
+        return uiState.selectedSection.isNotes ? "Close note" : "Cancel"
     }
 }

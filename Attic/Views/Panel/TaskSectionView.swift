@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct TaskSectionView: View {
     @ObservedObject var store: TaskStore
@@ -22,10 +21,13 @@ struct TaskSectionView: View {
             }
             .frame(height: 24)
             .padding(.horizontal, 4)
+            .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+                acceptSectionDrop(payloads)
+            } isTargeted: { isTargeted in
+                isDropTargeted = isTargeted
+            }
 
-            if tasks.isEmpty {
-                dropPlaceholder
-            } else {
+            if !tasks.isEmpty {
                 VStack(spacing: AtticStyle.taskSpacing) {
                     ForEach(tasks) { task in
                         TaskRowView(store: store, uiState: uiState, task: task)
@@ -43,31 +45,15 @@ struct TaskSectionView: View {
             Color.accentColor.opacity(isDropTargeted ? 0.08 : 0),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
-        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: $isDropTargeted) { providers, _ in
-            acceptSectionDrop(from: providers)
-        }
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isDropTargeted)
         .animation(reduceMotion ? nil : AtticMotion.spring, value: tasks.map(\.id))
     }
 
-    private var dropPlaceholder: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-            .foregroundStyle(Color.secondary.opacity(isDropTargeted ? 0.6 : 0.3))
-            .frame(height: AtticStyle.rowHeight)
-            .overlay(
-                Text("Drop here")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
-            )
-            .padding(.horizontal, 4)
-            .accessibilityIdentifier("task-section-drop-zone-\(status.rawValue)")
-    }
-
-    private func acceptSectionDrop(from providers: [NSItemProvider]) -> Bool {
-        TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
-            uiState.endDragging()
-            _ = store.drop(taskID: draggedTaskID, into: status)
+    private func acceptSectionDrop(_ payloads: [TaskDragPayload]) -> Bool {
+        guard let draggedTaskID = payloads.first?.taskID else {
+            return false
         }
+        uiState.endDragging()
+        return store.drop(taskID: draggedTaskID, into: status)
     }
 }

@@ -1,8 +1,9 @@
 import AppKit
+import CoreTransferable
 import Foundation
 import UniformTypeIdentifiers
 
-struct TaskDragPayload: Sendable {
+struct TaskDragPayload: Codable, Sendable, Transferable {
     static let internalTaskType = UTType(
         exportedAs: "com.emanueledipietro.attic.task-id"
     )
@@ -13,6 +14,11 @@ struct TaskDragPayload: Sendable {
     init(taskID: UUID? = nil, title: String) {
         self.taskID = taskID
         self.title = title
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: internalTaskType)
+        ProxyRepresentation(exporting: \.title)
     }
 
     func itemProvider() -> NSItemProvider {
@@ -38,13 +44,10 @@ struct TaskDragPayload: Sendable {
         return provider
     }
 
-    /// Resolve the task identity from the drag itself instead of transient UI
-    /// state. The pointer monitor may clear that state as the mouse button is
-    /// released, before SwiftUI finishes dispatching its drop callback.
     @discardableResult
     static func loadTaskID(
         from providers: [NSItemProvider],
-        completion: @escaping @MainActor (UUID) -> Void
+        completion: @escaping @MainActor @Sendable (UUID) -> Void
     ) -> Bool {
         guard let provider = providers.first(where: {
             $0.hasItemConformingToTypeIdentifier(internalTaskType.identifier)

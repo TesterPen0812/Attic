@@ -1,6 +1,4 @@
-import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct TaskRowView: View {
     @ObservedObject var store: TaskStore
@@ -9,6 +7,7 @@ struct TaskRowView: View {
 
     @State private var editTitle = ""
     @State private var isHovering = false
+    @State private var isDropTargeted = false
     @FocusState private var isRenameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -50,20 +49,26 @@ struct TaskRowView: View {
         .frame(minHeight: AtticStyle.rowHeight)
         .padding(.horizontal, 4)
         .background(
-            Color.primary.opacity(isHovering ? 0.055 : 0),
+            isDropTargeted
+                ? Color.accentColor.opacity(0.08)
+                : Color.primary.opacity(isHovering ? 0.055 : 0),
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: handleDoubleClick)
         .help(progressToggleHelp)
         .contextMenu { taskActions }
-        .onDrag {
-            dragItemProvider()
-        } preview: {
+        .draggable(TaskDragPayload(taskID: task.id, title: task.title)) {
             dragPreview
         }
-        .onDrop(of: [TaskDragPayload.internalTaskType], isTargeted: nil) { providers, _ in
-            acceptDrop(from: providers)
+        .dropDestination(for: TaskDragPayload.self) { payloads, _ in
+            guard let draggedTaskID = payloads.first?.taskID else {
+                return false
+            }
+            uiState.endDragging()
+            return store.drop(taskID: draggedTaskID, onto: task.id)
+        } isTargeted: { isTargeted in
+            isDropTargeted = isTargeted
         }
         .onHover { hovering in
             withAnimation(reduceMotion ? nil : AtticMotion.quick) {
@@ -78,6 +83,7 @@ struct TaskRowView: View {
             DispatchQueue.main.async { isRenameFocused = true }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityLabel(task.title)
         .accessibilityIdentifier("task-row-\(task.id.uuidString)")
     }
 
@@ -91,17 +97,8 @@ struct TaskRowView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-
-    private func dragItemProvider() -> NSItemProvider {
-        uiState.beginDragging(task)
-        return TaskDragPayload(taskID: task.id, title: task.title).itemProvider()
-    }
-
-    private func acceptDrop(from providers: [NSItemProvider]) -> Bool {
-        TaskDragPayload.loadTaskID(from: providers) { draggedTaskID in
-            uiState.endDragging()
-            _ = store.drop(taskID: draggedTaskID, onto: task.id)
+        .onAppear {
+            uiState.beginDragging(task)
         }
     }
 

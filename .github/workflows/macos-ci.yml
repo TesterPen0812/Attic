@@ -1,0 +1,101 @@
+name: macOS CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build, test, and analyze Attic for macOS
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Ruby dependencies
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Verify generated Xcode project
+        run: bundle exec ruby Scripts/verify_project_generation.rb
+
+      - name: Build macOS target
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -target Attic \
+            -configuration Local \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      - name: Build with strict concurrency checking
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticStrictBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete \
+            clean build
+
+      - name: Run macOS unit tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticUnitTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticTests \
+            test
+
+      - name: Run macOS UI tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticUITests \
+            test
+
+      - name: Upload failing UI test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-ui-test-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticUITests.xcresult
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Run macOS static analyzer
+        if: always()
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticAnalyze" \
+            CODE_SIGNING_ALLOWED=NO \
+            analyze

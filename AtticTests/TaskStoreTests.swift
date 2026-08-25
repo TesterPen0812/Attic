@@ -820,6 +820,50 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertFalse(protection.protectsExport)
     }
 
+    func testCloudSyncProtectionDoesNotMarkFailedExportAsCovered() {
+        let failedExportID = UUID()
+        let retryExportID = UUID()
+        var protection = CloudSyncProtectionState()
+
+        protection.noteLocalSave()
+        protection.apply(CloudSyncEventUpdate(
+            id: failedExportID,
+            kind: .exportData,
+            endedAt: nil,
+            succeeded: false,
+            errorMessage: nil
+        ))
+        protection.apply(CloudSyncEventUpdate(
+            id: failedExportID,
+            kind: .exportData,
+            endedAt: Date(),
+            succeeded: false,
+            errorMessage: "Network unavailable"
+        ))
+
+        XCTAssertTrue(
+            protection.protectsExport,
+            "A failed CloudKit export must leave the local save protected until a later successful export covers it."
+        )
+
+        protection.apply(CloudSyncEventUpdate(
+            id: retryExportID,
+            kind: .exportData,
+            endedAt: nil,
+            succeeded: false,
+            errorMessage: nil
+        ))
+        protection.apply(CloudSyncEventUpdate(
+            id: retryExportID,
+            kind: .exportData,
+            endedAt: Date(),
+            succeeded: true,
+            errorMessage: nil
+        ))
+
+        XCTAssertFalse(protection.protectsExport)
+    }
+
     func testCloudSyncProtectionKeepsOverlappingImportsProtectedUntilRefresh() {
         let firstImportID = UUID()
         let secondImportID = UUID()
