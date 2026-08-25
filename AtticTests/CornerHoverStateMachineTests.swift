@@ -89,4 +89,18 @@ final class PanelUIStateTests: XCTestCase {
         XCTAssertNil(state.finishDragging(releasedOutsidePanel: false))
         XCTAssertNil(state.draggedTaskID)
     }
+
+    @MainActor
+    func testReconcileClearsEditingAndDragStateForDeletedTask() {
+        let state = PanelUIState()
+        let task = TaskItem(title: "Removed remotely")
+
+        state.beginEditing(task)
+        state.beginDragging(task)
+        state.reconcileTaskIDs([])
+
+        XCTAssertNil(state.editingTaskID)
+        XCTAssertNil(state.draggedTaskID)
+        XCTAssertFalse(state.isInteractionLocked)
+    }
 }

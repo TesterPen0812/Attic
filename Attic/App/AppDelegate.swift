@@ -22,6 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("Remote notification registration succeeded")
     }
 
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        AppCoordinator.shared.prepareForTermination() ? .terminateNow : .terminateCancel
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         AppCoordinator.shared.stop()
     }

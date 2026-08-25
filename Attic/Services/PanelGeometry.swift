@@ -81,9 +81,13 @@ enum PanelGeometry {
         return min(max(header + composer + content + 16, minimumHeight), maximumHeight)
     }
 
-    static func preferredHeight(noteCount: Int, isComposing: Bool) -> CGFloat {
+    static func preferredHeight(
+        noteCount: Int,
+        isComposing: Bool,
+        hasConflict: Bool = false
+    ) -> CGFloat {
         let header: CGFloat = 76
-        let composer: CGFloat = isComposing ? 128 : 0
+        let composer: CGFloat = isComposing ? (hasConflict ? 196 : 128) : 0
         let rowHeight: CGFloat = 52
         let content: CGFloat = noteCount == 0 ? 90 : CGFloat(noteCount) * rowHeight + 12
         return min(max(header + composer + content + 16, minimumHeight), maximumHeight)

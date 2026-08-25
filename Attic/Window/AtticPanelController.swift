@@ -9,6 +9,7 @@ final class AtticPanelController {
     private let hostingView: NSHostingView<AtticPanelView>
     private let store: TaskStore
     private let noteStore: NoteStore
+    private let noteDraft: NoteDraftController
     private let settings: AppSettings
     private let uiState: PanelUIState
     private var cancellables: Set<AnyCancellable> = []
@@ -18,9 +19,16 @@ final class AtticPanelController {
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
 
-    init(store: TaskStore, noteStore: NoteStore, settings: AppSettings, uiState: PanelUIState) {
+    init(
+        store: TaskStore,
+        noteStore: NoteStore,
+        noteDraft: NoteDraftController,
+        settings: AppSettings,
+        uiState: PanelUIState
+    ) {
         self.store = store
         self.noteStore = noteStore
+        self.noteDraft = noteDraft
         self.settings = settings
         self.uiState = uiState
 
@@ -30,7 +38,13 @@ final class AtticPanelController {
             backing: .buffered,
             defer: true
         )
-        hostingView = NSHostingView(rootView: AtticPanelView(store: store, noteStore: noteStore, uiState: uiState, settings: settings))
+        hostingView = NSHostingView(rootView: AtticPanelView(
+            store: store,
+            noteStore: noteStore,
+            noteDraft: noteDraft,
+            uiState: uiState,
+            settings: settings
+        ))
 
         configurePanel()
         bindContentSize()
@@ -96,6 +110,7 @@ final class AtticPanelController {
 
     func hide() {
         guard panel.isVisible else { return }
+        guard noteDraft.flush() else { return }
         transitionGeneration += 1
         let generation = transitionGeneration
         isShowing = false
@@ -141,6 +156,14 @@ final class AtticPanelController {
             }
             .store(in: &cancellables)
 
+        noteDraft.$conflict
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.resizeAndReanchor()
+            }
+            .store(in: &cancellables)
+
         settings.$corner
             .receive(on: RunLoop.main)
             .sink { [weak self] corner in
@@ -160,7 +183,11 @@ final class AtticPanelController {
         let targetFrame = frame(on: screen, corner: currentCorner)
         guard !framesMatch(panel.frame, targetFrame) else { return }
         if panel.isVisible {
-            panel.setFrame(targetFrame, display: true, animate: true)
+            panel.setFrame(
+                targetFrame,
+                display: true,
+                animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            )
         } else {
             panel.setFrame(targetFrame, display: false)
         }
@@ -178,7 +205,8 @@ final class AtticPanelController {
         if uiState.selectedSection.isNotes {
             height = PanelGeometry.preferredHeight(
                 noteCount: noteStore.notes.count,
-                isComposing: uiState.isComposerPresented
+                isComposing: uiState.isComposerPresented,
+                hasConflict: noteDraft.hasConflict
             )
         } else {
             let snapshot = store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks)
