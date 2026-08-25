@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   audit:
-    name: Build, test, and capture macOS audit evidence
+    name: Build, test, and analyze Attic for macOS
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Check out complete history
@@ -68,9 +68,7 @@ jobs:
           )
           existing=()
           for path in "${candidates[@]}"; do
-            if [[ -e "$path" ]]; then
-              existing+=("$path")
-            fi
+            [[ -e "$path" ]] && existing+=("$path")
           done
           tar -czf AuditArtifacts/macos-source.tar.gz "${existing[@]}"
 
@@ -89,19 +87,30 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Set up locked Ruby dependencies
+        id: ruby_dependencies
+        continue-on-error: true
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
       - name: Capture project and scheme discovery
+        id: project_discovery
+        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          xcodebuild -list -project Attic.xcodeproj 2>&1 | tee AuditArtifacts/xcodebuild-list.log
-          xcodebuild -showBuildSettings \
-            -project Attic.xcodeproj \
-            -target Attic \
-            -configuration Local \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tee AuditArtifacts/build-settings-local.log
-          xcodebuild -showdestinations \
-            -project Attic.xcodeproj \
-            -scheme Attic 2>&1 | tee AuditArtifacts/destinations.log
+          {
+            xcodebuild -list -project Attic.xcodeproj
+            xcodebuild -showBuildSettings \
+              -project Attic.xcodeproj \
+              -target Attic \
+              -configuration Local \
+              CODE_SIGNING_ALLOWED=NO
+            xcodebuild -showdestinations \
+              -project Attic.xcodeproj \
+              -scheme Attic
+          } 2>&1 | tee AuditArtifacts/project-discovery.log
 
       - name: Verify generated project is current
         id: project_generation
@@ -109,12 +118,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          if [[ -f Scripts/verify_project_generation.rb ]]; then
-            ruby Scripts/verify_project_generation.rb 2>&1 | tee AuditArtifacts/project-generation.log
-          else
-            echo "Scripts/verify_project_generation.rb is absent" | tee AuditArtifacts/project-generation.log
-            exit 2
-          fi
+          bundle exec ruby Scripts/verify_project_generation.rb \
+            2>&1 | tee AuditArtifacts/project-generation.log
 
       - name: Clean Local macOS target build
         id: target_build
@@ -122,10 +127,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          rm -rf "$RUNNER_TEMP/AtticTargetBuild" "$RUNNER_TEMP/AtticTargetObjects"
           xcodebuild \
             -project Attic.xcodeproj \
             -target Attic \
             -configuration Local \
+            SYMROOT="$RUNNER_TEMP/AtticTargetBuild" \
+            OBJROOT="$RUNNER_TEMP/AtticTargetObjects" \
             CODE_SIGNING_ALLOWED=NO \
             clean build 2>&1 | tee AuditArtifacts/target-build.log
 
@@ -135,48 +143,90 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          rm -rf "$RUNNER_TEMP/AtticSchemeDerivedData"
           xcodebuild \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticSchemeDerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             clean build 2>&1 | tee AuditArtifacts/scheme-build.log
 
-      - name: Run macOS unit and UI tests
-        id: tests
+      - name: Run macOS unit tests
+        id: unit_tests
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          rm -rf AuditArtifacts/AtticTests.xcresult
+          rm -rf "$RUNNER_TEMP/AtticUnitTests" AuditArtifacts/UnitTests.xcresult
           xcodebuild \
             -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            -resultBundlePath AuditArtifacts/UnitTests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            -resultBundlePath AuditArtifacts/AtticTests.xcresult \
-            test 2>&1 | tee AuditArtifacts/tests.log
+            -only-testing:AtticTests \
+            test 2>&1 | tee AuditArtifacts/unit-tests.log
+
+      - name: Run macOS UI tests
+        id: ui_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          rm -rf "$RUNNER_TEMP/AtticUITests" AuditArtifacts/UITests.xcresult
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
+            -resultBundlePath AuditArtifacts/UITests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticUITests \
+            test 2>&1 | tee AuditArtifacts/ui-tests.log
+
+      - name: Run macOS static analyzer
+        id: analyze
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          rm -rf "$RUNNER_TEMP/AtticAnalyze"
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticAnalyze" \
+            CODE_SIGNING_ALLOWED=NO \
+            analyze 2>&1 | tee AuditArtifacts/analyze.log
 
       - name: Export test result diagnostics
         if: always()
         shell: bash
         run: |
           set +e
-          if [[ -d AuditArtifacts/AtticTests.xcresult ]]; then
+          for name in UnitTests UITests; do
+            bundle="AuditArtifacts/${name}.xcresult"
+            [[ -d "$bundle" ]] || continue
             xcrun xcresulttool get test-results tests \
-              --path AuditArtifacts/AtticTests.xcresult \
-              --format json > AuditArtifacts/test-results.json 2> AuditArtifacts/test-results-export.log
+              --path "$bundle" \
+              --format json > "AuditArtifacts/${name}-results.json" \
+              2> "AuditArtifacts/${name}-results-export.log"
             xcrun xcresulttool get test-results activities \
-              --path AuditArtifacts/AtticTests.xcresult \
-              --format json > AuditArtifacts/test-activities.json 2> AuditArtifacts/test-activities-export.log
-            mkdir -p AuditArtifacts/TestAttachments
+              --path "$bundle" \
+              --format json > "AuditArtifacts/${name}-activities.json" \
+              2> "AuditArtifacts/${name}-activities-export.log"
+            mkdir -p "AuditArtifacts/${name}-attachments"
             xcrun xcresulttool export attachments \
-              --path AuditArtifacts/AtticTests.xcresult \
-              --output-path AuditArtifacts/TestAttachments \
-              > AuditArtifacts/test-attachments-export.log 2>&1
-          fi
+              --path "$bundle" \
+              --output-path "AuditArtifacts/${name}-attachments" \
+              > "AuditArtifacts/${name}-attachments-export.log" 2>&1
+          done
           exit 0
 
       - name: Capture scoped static audit evidence
@@ -188,20 +238,20 @@ jobs:
             echo '=== Swift files in macOS scope ==='
             find Attic AtticTests AtticUITests -type f -name '*.swift' -print | sort
             echo
-            echo '=== Unsafe constructs ==='
-            grep -RInE --include='*.swift' 'fatalError|precondition\(|preconditionFailure|as!|try!|[[:alnum:]_\)\]]!([[:space:][:punct:]]|$)|\[[^]]+\]' Attic AtticTests AtticUITests
+            echo '=== Unsafe and terminating constructs ==='
+            grep -RInE --include='*.swift' 'fatalError|precondition\(|preconditionFailure|as!|try!|unowned' Attic AtticTests AtticUITests
             echo
             echo '=== Error suppression and temporary markers ==='
-            grep -RInE --include='*.swift' 'try\?|catch[[:space:]]*\{|TODO|FIXME|HACK|print\(' Attic AtticTests AtticUITests
+            grep -RInE --include='*.swift' 'try\?|TODO|FIXME|HACK|print\(|debugPrint\(|NSLog\(' Attic AtticTests AtticUITests
             echo
             echo '=== Concurrency and lifecycle constructs ==='
-            grep -RInE --include='*.swift' 'Task[[:space:]]*\{|Task\.detached|DispatchQueue|NotificationCenter|Timer|addGlobalMonitor|addLocalMonitor|unowned|ModelContext|ModelContainer' Attic AtticTests AtticUITests
+            grep -RInE --include='*.swift' 'Task[[:space:]]*\{|Task\.detached|DispatchQueue|NotificationCenter|Timer|addGlobalMonitor|addLocalMonitor|ModelContext|ModelContainer' Attic AtticTests AtticUITests
             echo
-            echo '=== Rename remnants in behavior-affecting scope ==='
+            echo '=== Rename remnants in behavior-affecting macOS scope ==='
             grep -RInE 'Peekaboo|PEEKABOO|peekaboo' Attic AtticTests AtticUITests Attic.xcodeproj Scripts 2>/dev/null
             echo
             echo '=== Sensitive logging candidates ==='
-            grep -RInE --include='*.swift' 'print\(|debugPrint\(|NSLog\(|Logger\.|os_log' Attic AtticTests AtticUITests
+            grep -RInE --include='*.swift' 'Logger\.|os_log|print\(|debugPrint\(|NSLog\(' Attic AtticTests AtticUITests
           } > AuditArtifacts/static-audit.txt 2>&1
           exit 0
 
@@ -209,16 +259,24 @@ jobs:
         if: always()
         shell: bash
         env:
+          RUBY_DEPENDENCIES: ${{ steps.ruby_dependencies.outcome }}
+          PROJECT_DISCOVERY: ${{ steps.project_discovery.outcome }}
           PROJECT_GENERATION: ${{ steps.project_generation.outcome }}
           TARGET_BUILD: ${{ steps.target_build.outcome }}
           SCHEME_BUILD: ${{ steps.scheme_build.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
+          UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          UI_TESTS: ${{ steps.ui_tests.outcome }}
+          ANALYZE: ${{ steps.analyze.outcome }}
         run: |
           {
+            echo "ruby_dependencies=$RUBY_DEPENDENCIES"
+            echo "project_discovery=$PROJECT_DISCOVERY"
             echo "project_generation=$PROJECT_GENERATION"
             echo "target_build=$TARGET_BUILD"
             echo "scheme_build=$SCHEME_BUILD"
-            echo "tests=$TESTS"
+            echo "unit_tests=$UNIT_TESTS"
+            echo "ui_tests=$UI_TESTS"
+            echo "analyze=$ANALYZE"
           } | tee AuditArtifacts/outcomes.txt
 
       - name: Upload build and test evidence
@@ -231,20 +289,39 @@ jobs:
             AuditArtifacts/*.txt
             AuditArtifacts/*.json
             AuditArtifacts/*.xcresult
-            AuditArtifacts/TestAttachments
+            AuditArtifacts/*-attachments
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Fail on baseline verification failures
+      - name: Enforce macOS audit result
         if: always()
         shell: bash
         env:
+          RUBY_DEPENDENCIES: ${{ steps.ruby_dependencies.outcome }}
+          PROJECT_DISCOVERY: ${{ steps.project_discovery.outcome }}
           PROJECT_GENERATION: ${{ steps.project_generation.outcome }}
           TARGET_BUILD: ${{ steps.target_build.outcome }}
           SCHEME_BUILD: ${{ steps.scheme_build.outcome }}
-          TESTS: ${{ steps.tests.outcome }}
+          UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          UI_TESTS: ${{ steps.ui_tests.outcome }}
+          ANALYZE: ${{ steps.analyze.outcome }}
         run: |
-          if [[ "$PROJECT_GENERATION" != success || "$TARGET_BUILD" != success || "$SCHEME_BUILD" != success || "$TESTS" != success ]]; then
-            echo "One or more baseline verification steps failed. See uploaded evidence."
-            exit 1
-          fi
+          set -euo pipefail
+          printf '%-24s %s\n' \
+            'Ruby dependencies' "$RUBY_DEPENDENCIES" \
+            'project discovery' "$PROJECT_DISCOVERY" \
+            'project generation' "$PROJECT_GENERATION" \
+            'Local target build' "$TARGET_BUILD" \
+            'Local scheme build' "$SCHEME_BUILD" \
+            'unit tests' "$UNIT_TESTS" \
+            'UI tests' "$UI_TESTS" \
+            'static analyzer' "$ANALYZE"
+
+          test "$RUBY_DEPENDENCIES" = success
+          test "$PROJECT_DISCOVERY" = success
+          test "$PROJECT_GENERATION" = success
+          test "$TARGET_BUILD" = success
+          test "$SCHEME_BUILD" = success
+          test "$UNIT_TESTS" = success
+          test "$UI_TESTS" = success
+          test "$ANALYZE" = success

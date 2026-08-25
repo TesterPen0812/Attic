@@ -1,0 +1,61 @@
+name: Generate Audit Xcode Project
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-2026-08-25
+    paths:
+      - .github/audit-triggers/generate-project.txt
+      - .github/workflows/generate-audit-project.yml
+      - Scripts/generate_project.rb
+      - Gemfile
+      - Gemfile.lock
+      - Attic/**
+      - AtticTests/**
+      - AtticUITests/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: generate-audit-project-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: Generate deterministic Xcode project artifact
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up locked Ruby dependencies
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Generate and verify repeatability
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf Generated GeneratedSecond
+          bundle exec ruby Scripts/generate_project.rb --output Generated/Attic.xcodeproj
+          bundle exec ruby Scripts/generate_project.rb --output GeneratedSecond/Attic.xcodeproj
+          diff -ru Generated/Attic.xcodeproj GeneratedSecond/Attic.xcodeproj
+          mkdir -p GeneratorEvidence
+          diff -ru Attic.xcodeproj Generated/Attic.xcodeproj             > GeneratorEvidence/checked-project-diff.patch || true
+          git status --short > GeneratorEvidence/repository-status.txt
+
+      - name: Upload generated project
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-attic-project-${{ github.sha }}
+          path: |
+            Generated/Attic.xcodeproj
+            GeneratorEvidence
+          if-no-files-found: error
+          retention-days: 14
