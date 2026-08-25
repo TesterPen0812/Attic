@@ -21,6 +21,7 @@ final class AppCoordinator {
     private let isRunningTests: Bool
     private var menuNotificationTokens: [NSObjectProtocol] = []
     private var agentAccessObservation: AnyCancellable?
+    private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private lazy var newTaskHotKey = GlobalHotKey { [weak self] in
         self?.showNewTask()
@@ -117,6 +118,7 @@ final class AppCoordinator {
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
+        NSApp.appearance = settings.appearance.nsAppearance
 
         observeMenuTracking()
         cleanupService.start()
@@ -128,6 +130,9 @@ final class AppCoordinator {
 
         newTaskHotKey.register()
         hoverMonitor.start()
+        appearanceObservation = settings.$appearance.sink { [weak self] preference in
+            NSApp.appearance = preference.nsAppearance
+        }
         if !isRunningTests {
             agentAccessObservation = settings.$isAgentAccessEnabled.sink { [weak self] isEnabled in
                 isEnabled ? self?.agentServer.start() : self?.agentServer.stop()
@@ -145,6 +150,7 @@ final class AppCoordinator {
         cleanupService.stop()
         hoverMonitor.stop()
         newTaskHotKey.unregister()
+        appearanceObservation = nil
         agentAccessObservation = nil
         agentServer.stop()
         menuNotificationTokens.forEach(NotificationCenter.default.removeObserver)

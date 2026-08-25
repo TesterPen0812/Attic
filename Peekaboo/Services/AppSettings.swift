@@ -1,5 +1,30 @@
+import AppKit
 import Combine
 import Foundation
+
+enum AppearancePreference: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: return nil
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
+    }
+}
 
 @MainActor
 final class AppSettings: ObservableObject {
@@ -12,6 +37,7 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedInstantReveal = "hasAdoptedInstantRevealV3"
         static let hasShownWelcome = "hasShownWelcome"
         static let isTranslucent = "isTranslucent"
+        static let appearance = "appearancePreference"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
@@ -23,6 +49,10 @@ final class AppSettings: ObservableObject {
 
     @Published var isTranslucent: Bool {
         didSet { defaults.set(isTranslucent, forKey: Key.isTranslucent) }
+    }
+
+    @Published var appearance: AppearancePreference {
+        didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
     }
 
     @Published var isAgentAccessEnabled: Bool {
@@ -86,6 +116,7 @@ final class AppSettings: ObservableObject {
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0)
         isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
+        appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
             // Require one explicit opt-in from every existing installation.

@@ -111,6 +111,27 @@ struct SettingsView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Appearance", systemImage: "sun.max")
+                        .font(.headline)
+                    Spacer()
+                    Picker("Appearance", selection: $settings.appearance) {
+                        ForEach(AppearancePreference.allCases) { preference in
+                            Text(preference.title).tag(preference)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
+                    .labelsHidden()
+                }
+                Text("Force light or dark for Peekaboo, or follow your Mac's appearance.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
                 Toggle(isOn: $settings.isTranslucent) {
                     Label("Translucency", systemImage: "circle.lefthalf.filled")
                         .font(.headline)
