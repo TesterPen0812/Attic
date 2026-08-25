@@ -1,0 +1,201 @@
+name: macOS Reliability CI
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-final-2026-08-25
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-reliability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and test Attic for macOS
+    runs-on: macos-15
+    timeout-minutes: 50
+
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Record environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p AuditArtifacts
+          {
+            echo "HEAD=$(git rev-parse HEAD)"
+            echo "BRANCH=$(git branch --show-current)"
+            echo "SHALLOW=$(git rev-parse --is-shallow-repository)"
+            echo "COMMIT_COUNT=$(git rev-list --count HEAD)"
+            echo "MACOS=$(sw_vers -productVersion)"
+            xcodebuild -version
+            swift --version
+          } | tee AuditArtifacts/environment.txt
+
+      - name: Regenerate project and capture consistency diff
+        id: project
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cp Attic.xcodeproj/project.pbxproj AuditArtifacts/committed-project.pbxproj
+          ruby Scripts/generate_project.rb 2>&1 | tee AuditArtifacts/project-generation.log
+          ruby Scripts/verify_project_generation.rb 2>&1 | tee AuditArtifacts/project-repeatability.log
+          cp Attic.xcodeproj/project.pbxproj AuditArtifacts/generated-project.pbxproj
+          git diff -- Attic.xcodeproj/project.pbxproj > AuditArtifacts/project-generation.diff
+          git diff --quiet -- Attic.xcodeproj/project.pbxproj
+
+      - name: Clean Local target build
+        id: target_build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -target Attic \
+            -configuration Local \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build 2>&1 | tee AuditArtifacts/target-build.log
+
+      - name: Strict-concurrency scheme build
+        id: strict_build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete \
+            clean build 2>&1 | tee AuditArtifacts/strict-build.log
+
+      - name: Run macOS unit tests
+        id: unit_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          rm -rf AuditArtifacts/UnitTests.xcresult
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticTests \
+            -resultBundlePath AuditArtifacts/UnitTests.xcresult \
+            test 2>&1 | tee AuditArtifacts/unit-tests.log
+
+      - name: Run macOS UI tests
+        id: ui_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          rm -rf AuditArtifacts/UITests.xcresult
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticUITests \
+            -resultBundlePath AuditArtifacts/UITests.xcresult \
+            test 2>&1 | tee AuditArtifacts/ui-tests.log
+
+      - name: Export test diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          for suite in UnitTests UITests; do
+            result="AuditArtifacts/${suite}.xcresult"
+            if [[ -d "$result" ]]; then
+              xcrun xcresulttool get test-results tests \
+                --path "$result" --format json \
+                > "AuditArtifacts/${suite}-results.json" 2> "AuditArtifacts/${suite}-export.log"
+              mkdir -p "AuditArtifacts/${suite}-attachments"
+              xcrun xcresulttool export attachments \
+                --path "$result" \
+                --output-path "AuditArtifacts/${suite}-attachments" \
+                >> "AuditArtifacts/${suite}-export.log" 2>&1
+            fi
+          done
+          exit 0
+
+      - name: Capture scoped static evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '=== Changed paths from main ==='
+            git diff --name-status origin/main...HEAD
+            echo
+            echo '=== Unsafe constructs ==='
+            grep -RInE --include='*.swift' 'fatalError|precondition\(|preconditionFailure|as!|try!|unowned|Task\.detached' Attic AtticTests AtticUITests
+            echo
+            echo '=== Error suppression and temporary markers ==='
+            grep -RInE --include='*.swift' 'try\?|catch[[:space:]]*\{|TODO|FIXME|HACK|print\(' Attic AtticTests AtticUITests
+            echo
+            echo '=== Rename remnants ==='
+            grep -RInE 'Peekaboo|PEEKABOO|peekaboo' Attic AtticTests AtticUITests Attic.xcodeproj Scripts 2>/dev/null
+            echo
+            echo '=== iOS scope changed ==='
+            git diff --name-only origin/main...HEAD -- AtticMobile AtticMobileTests AtticMobileUITests
+          } > AuditArtifacts/static-audit.txt 2>&1
+          exit 0
+
+      - name: Record outcomes
+        if: always()
+        shell: bash
+        env:
+          PROJECT: ${{ steps.project.outcome }}
+          TARGET_BUILD: ${{ steps.target_build.outcome }}
+          STRICT_BUILD: ${{ steps.strict_build.outcome }}
+          UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          UI_TESTS: ${{ steps.ui_tests.outcome }}
+        run: |
+          {
+            echo "project=$PROJECT"
+            echo "target_build=$TARGET_BUILD"
+            echo "strict_build=$STRICT_BUILD"
+            echo "unit_tests=$UNIT_TESTS"
+            echo "ui_tests=$UI_TESTS"
+          } | tee AuditArtifacts/outcomes.txt
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-reliability-${{ github.sha }}
+          path: AuditArtifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce verification
+        if: always()
+        shell: bash
+        env:
+          PROJECT: ${{ steps.project.outcome }}
+          TARGET_BUILD: ${{ steps.target_build.outcome }}
+          STRICT_BUILD: ${{ steps.strict_build.outcome }}
+          UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          UI_TESTS: ${{ steps.ui_tests.outcome }}
+        run: |
+          if [[ "$PROJECT" != success || "$TARGET_BUILD" != success || "$STRICT_BUILD" != success || "$UNIT_TESTS" != success || "$UI_TESTS" != success ]]; then
+            echo "macOS reliability verification failed; inspect the uploaded evidence."
+            exit 1
+          fi
