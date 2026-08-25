@@ -1,0 +1,137 @@
+name: Apply reviewed macOS settings safety fix
+
+on:
+  push:
+    branches:
+      - audit/macos-reliability-2026-08-25
+    paths:
+      - .github/workflows/apply-macos-settings-finite-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply finite delay normalization and regression tests
+    runs-on: macos-15
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply reviewed macOS-only patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          source = Path("Attic/Services/AppSettings.swift")
+          text = source.read_text()
+          original = text
+          replacements = {
+              "Self.clamp(revealDelay, to: 0.2...2.0)": "Self.clamp(revealDelay, to: 0.2...2.0, fallback: 0.2)",
+              "Self.clamp(hideDelay, to: 0.1...2.0)": "Self.clamp(hideDelay, to: 0.1...2.0, fallback: 0.3)",
+              "Self.clamp(resolvedDelay, to: 0.2...2.0)": "Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)",
+              "Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0)": "Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)",
+              """    private static func clamp(_ value: Double, to range: ClosedRange<Double>) -> Double {
+                  min(max(value, range.lowerBound), range.upperBound)
+              }""": """    private static func clamp(
+                  _ value: Double,
+                  to range: ClosedRange<Double>,
+                  fallback: Double
+              ) -> Double {
+                  guard value.isFinite else { return fallback }
+                  return min(max(value, range.lowerBound), range.upperBound)
+              }""",
+          }
+          for old, new in replacements.items():
+              if old in text:
+                  text = text.replace(old, new)
+              elif new not in text:
+                  raise SystemExit(f"Expected AppSettings source pattern is absent: {old[:80]}")
+          source.write_text(text)
+
+          marker = "AppSettingsFinitePreferenceRegressionTests"
+          candidates = [
+              path for path in sorted(Path("AtticTests").rglob("*.swift"))
+              if "import XCTest" in path.read_text(errors="ignore")
+          ]
+          if not candidates:
+              raise SystemExit("No existing macOS XCTest source was found")
+          if not any(marker in path.read_text(errors="ignore") for path in candidates):
+              test_file = candidates[0]
+              tests = test_file.read_text()
+              if "import Foundation" not in tests:
+                  lines = tests.splitlines()
+                  insertion = 0
+                  while insertion < len(lines) and (lines[insertion].startswith("import ") or not lines[insertion].strip()):
+                      insertion += 1
+                  lines.insert(insertion, "import Foundation")
+                  tests = "\n".join(lines) + "\n"
+              tests = tests.rstrip() + r'''
+
+          @MainActor
+          final class AppSettingsFinitePreferenceRegressionTests: XCTestCase {
+              func testNonFiniteStoredPanelDelaysFallBackToSafeDefaults() throws {
+                  let suiteName = "AppSettingsFinitePreferenceRegressionTests.\(UUID().uuidString)"
+                  let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+                  defer { defaults.removePersistentDomain(forName: suiteName) }
+
+                  defaults.set(true, forKey: "hasAdoptedFasterReveal")
+                  defaults.set(true, forKey: "hasAdoptedQuickerRevealV2")
+                  defaults.set(true, forKey: "hasAdoptedInstantRevealV3")
+                  defaults.set(true, forKey: "hasAdoptedAgentAccessOptIn")
+                  defaults.set(Double.nan, forKey: "revealDelay")
+                  defaults.set(Double.infinity, forKey: "hideDelay")
+
+                  let settings = AppSettings(defaults: defaults)
+
+                  XCTAssertEqual(settings.revealDelay, 0.2, accuracy: 0.000_1)
+                  XCTAssertEqual(settings.hideDelay, 0.3, accuracy: 0.000_1)
+              }
+
+              func testNonFiniteRuntimePanelDelaysAreNormalizedBeforePersistence() throws {
+                  let suiteName = "AppSettingsFinitePreferenceRegressionTests.\(UUID().uuidString)"
+                  let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+                  defer { defaults.removePersistentDomain(forName: suiteName) }
+
+                  defaults.set(true, forKey: "hasAdoptedFasterReveal")
+                  defaults.set(true, forKey: "hasAdoptedQuickerRevealV2")
+                  defaults.set(true, forKey: "hasAdoptedInstantRevealV3")
+                  defaults.set(true, forKey: "hasAdoptedAgentAccessOptIn")
+                  let settings = AppSettings(defaults: defaults)
+
+                  settings.revealDelay = -Double.infinity
+                  settings.hideDelay = .nan
+
+                  XCTAssertEqual(settings.revealDelay, 0.2, accuracy: 0.000_1)
+                  XCTAssertEqual(settings.hideDelay, 0.3, accuracy: 0.000_1)
+                  XCTAssertEqual(defaults.double(forKey: "revealDelay"), 0.2, accuracy: 0.000_1)
+                  XCTAssertEqual(defaults.double(forKey: "hideDelay"), 0.3, accuracy: 0.000_1)
+              }
+          }
+          ''' + "\n"
+              test_file.write_text(tests)
+
+          workflow = Path(".github/workflows/apply-macos-settings-finite-fix.yml")
+          workflow.unlink()
+          PY
+
+          if git diff --quiet; then
+            echo "Patch is already present."
+            exit 0
+          fi
+
+          if git status --short | awk '{print $2}' | grep -Eq '^(AtticMobile/|.*iOS.*Tests)'; then
+            echo "Refusing to commit an out-of-scope change." >&2
+            exit 1
+          fi
+
+          git diff --check
+          git config user.name "TesterPen0812"
+          git config user.email "tahamuhammad0812@gmail.com"
+          git add Attic/Services/AppSettings.swift AtticTests .github/workflows/apply-macos-settings-finite-fix.yml
+          git commit -m "fix(macOS): sanitize non-finite panel delay preferences"
+          git push
