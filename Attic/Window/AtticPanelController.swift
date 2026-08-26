@@ -134,7 +134,7 @@ final class AtticPanelController {
         panel.contentView = hostingView
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = AtticStyle.panelUsesSystemShadow
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isMovable = false

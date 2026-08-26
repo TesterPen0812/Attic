@@ -6,6 +6,10 @@ enum AtticStyle {
     /// recognisably squircular silhouette without aggressive inward
     /// curvature.
     static let panelSquircleExponent: CGFloat = 5
+
+    /// The AppKit window remains rectangular while the visible panel is a squircle.
+    /// Disabling its system shadow prevents square bounds from showing beyond large corners.
+    static let panelUsesSystemShadow = false
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4

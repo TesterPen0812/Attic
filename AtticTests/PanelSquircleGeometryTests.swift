@@ -2,6 +2,10 @@ import XCTest
 @testable import Attic
 
 final class PanelSquircleGeometryTests: XCTestCase {
+    func testRectangularSystemShadowIsDisabledForSquirclePanel() {
+        XCTAssertFalse(AtticStyle.panelUsesSystemShadow)
+    }
+
     func testContentInsetsAtMinimumCornerSize() {
         let insets = PanelGeometry.contentInsets(
             cornerSize: PanelCornerSize.min,
