@@ -1,6 +1,8 @@
 import Foundation
 
 struct CanvasInputStateMachine {
+    static let maximumBufferedPointCount = 12_000
+
     enum State: Equatable {
         case idle
         case drawing
@@ -16,6 +18,8 @@ struct CanvasInputStateMachine {
     private(set) var state: State = .idle
     private var bufferedPoints: [CanvasPoint] = []
 
+    var bufferedPointCount: Int { bufferedPoints.count }
+
     @discardableResult
     mutating func beginInk(
         tool: CanvasTool,
@@ -23,7 +27,8 @@ struct CanvasInputStateMachine {
     ) -> Bool {
         guard state == .idle, point.isFinite else { return false }
 
-        bufferedPoints = [point]
+        bufferedPoints.removeAll(keepingCapacity: true)
+        bufferedPoints.append(point)
         switch tool {
         case .pen:
             state = .drawing
@@ -37,6 +42,10 @@ struct CanvasInputStateMachine {
         guard point.isFinite else { return }
         guard state == .drawing || state == .erasing else { return }
         guard bufferedPoints.last != point else { return }
+
+        if bufferedPoints.count >= Self.maximumBufferedPointCount {
+            compactBufferedPoints()
+        }
         bufferedPoints.append(point)
     }
 
@@ -83,5 +92,28 @@ struct CanvasInputStateMachine {
         bufferedPoints.removeAll(keepingCapacity: true)
         state = .idle
         return true
+    }
+
+    /// Bounds memory for exceptionally long gestures while retaining the
+    /// original start, the latest endpoint, and deterministic intermediate
+    /// samples. Repeated compaction lowers historical resolution rather than
+    /// rejecting the operation or growing without bound.
+    private mutating func compactBufferedPoints() {
+        guard bufferedPoints.count > 2 else { return }
+
+        var compacted: [CanvasPoint] = []
+        compacted.reserveCapacity(bufferedPoints.count / 2 + 2)
+        compacted.append(bufferedPoints[0])
+        for index in stride(
+            from: 2,
+            to: bufferedPoints.count - 1,
+            by: 2
+        ) {
+            compacted.append(bufferedPoints[index])
+        }
+        if compacted.last != bufferedPoints.last {
+            compacted.append(bufferedPoints[bufferedPoints.count - 1])
+        }
+        bufferedPoints = compacted
     }
 }
