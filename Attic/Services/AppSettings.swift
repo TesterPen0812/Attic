@@ -206,8 +206,8 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// Temporary compatibility for the existing panel and Settings view while
-    /// the custom renderer replaces the old binary translucency switch.
+    /// Compatibility for the existing panel call site while the AppKit
+    /// backdrop owns the actual optical rendering.
     var isTranslucent: Bool {
         get { glassTransparency > 0 }
         set {
@@ -239,7 +239,11 @@ final class AppSettings: ObservableObject {
 
     @Published var panelCornerSize: Double {
         didSet {
-            let clamped = Self.clamp(panelCornerSize, to: PanelCornerSize.min...PanelCornerSize.max, fallback: PanelCornerSize.defaultValue)
+            let clamped = Self.clamp(
+                panelCornerSize,
+                to: PanelCornerSize.min...PanelCornerSize.max,
+                fallback: PanelCornerSize.defaultValue
+            )
             if panelCornerSize != clamped {
                 panelCornerSize = clamped
             } else {
@@ -250,7 +254,11 @@ final class AppSettings: ObservableObject {
 
     @Published var panelContentSize: Double {
         didSet {
-            let clamped = Self.clamp(panelContentSize, to: PanelContentSize.min...PanelContentSize.max, fallback: PanelContentSize.defaultValue)
+            let clamped = Self.clamp(
+                panelContentSize,
+                to: PanelContentSize.min...PanelContentSize.max,
+                fallback: PanelContentSize.defaultValue
+            )
             if panelContentSize != clamped {
                 panelContentSize = clamped
             } else {
@@ -289,6 +297,7 @@ final class AppSettings: ObservableObject {
         self.defaults = defaults
         cloudSyncStartupErrorMessage = nil
         corner = ScreenCorner(rawValue: defaults.string(forKey: Key.corner) ?? "") ?? .topRight
+
         let storedDelay = defaults.object(forKey: Key.revealDelay) as? Double
         var resolvedDelay = storedDelay ?? 0.2
         if !defaults.bool(forKey: Key.hasAdoptedFasterReveal) {
@@ -299,7 +308,9 @@ final class AppSettings: ObservableObject {
             defaults.set(true, forKey: Key.hasAdoptedFasterReveal)
         }
         if !defaults.bool(forKey: Key.hasAdoptedQuickerReveal) {
-            if storedDelay == nil || abs(resolvedDelay - 0.4) < 0.001 || abs(resolvedDelay - 0.5) < 0.001 {
+            if storedDelay == nil
+                || abs(resolvedDelay - 0.4) < 0.001
+                || abs(resolvedDelay - 0.5) < 0.001 {
                 resolvedDelay = 0.3
                 defaults.set(resolvedDelay, forKey: Key.revealDelay)
             }
@@ -314,25 +325,33 @@ final class AppSettings: ObservableObject {
         }
         revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
-        hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
+        hideDelay = Self.clamp(
+            storedHideDelay ?? 0.3,
+            to: 0.1...2.0,
+            fallback: 0.3
+        )
 
         let opticalDefaults = OpticalGlassControls.defaults
         let storedTransparency = defaults.object(forKey: Key.glassTransparency) as? Double
         let legacyTranslucency = defaults.object(forKey: Key.legacyIsTranslucent) as? Bool
-        glassTransparency = Self.opticalControl(
-            storedTransparency ?? (legacyTranslucency == false ? 0 : opticalDefaults.transparency),
+        let resolvedTransparency = Self.opticalControl(
+            storedTransparency
+                ?? (legacyTranslucency == false ? 0 : opticalDefaults.transparency),
             fallback: opticalDefaults.transparency
         )
+        glassTransparency = resolvedTransparency
         glassFrost = Self.opticalControl(
             defaults.object(forKey: Key.glassFrost) as? Double ?? opticalDefaults.frost,
             fallback: opticalDefaults.frost
         )
         glassRefraction = Self.opticalControl(
-            defaults.object(forKey: Key.glassRefraction) as? Double ?? opticalDefaults.refraction,
+            defaults.object(forKey: Key.glassRefraction) as? Double
+                ?? opticalDefaults.refraction,
             fallback: opticalDefaults.refraction
         )
         glassEdgeShine = Self.opticalControl(
-            defaults.object(forKey: Key.glassEdgeShine) as? Double ?? opticalDefaults.edgeShine,
+            defaults.object(forKey: Key.glassEdgeShine) as? Double
+                ?? opticalDefaults.edgeShine,
             fallback: opticalDefaults.edgeShine
         )
         glassTint = Self.opticalControl(
@@ -340,7 +359,8 @@ final class AppSettings: ObservableObject {
             fallback: opticalDefaults.tint
         )
         glassReadability = Self.opticalControl(
-            defaults.object(forKey: Key.glassReadability) as? Double ?? opticalDefaults.readability,
+            defaults.object(forKey: Key.glassReadability) as? Double
+                ?? opticalDefaults.readability,
             fallback: opticalDefaults.readability
         )
         glassInteractionResponse = Self.opticalControl(
@@ -349,24 +369,29 @@ final class AppSettings: ObservableObject {
             fallback: opticalDefaults.interactionResponse
         )
         if storedTransparency == nil {
-            defaults.set(glassTransparency, forKey: Key.glassTransparency)
+            defaults.set(resolvedTransparency, forKey: Key.glassTransparency)
         }
 
-        appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
+        appearance = AppearancePreference(
+            rawValue: defaults.string(forKey: Key.appearance) ?? ""
+        ) ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
             // Require one explicit opt-in from every existing installation.
             defaults.set(false, forKey: Key.isAgentAccessEnabled)
             defaults.set(true, forKey: Key.hasAdoptedAgentAccessOptIn)
         }
-        isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
+        isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool)
+            ?? false
         panelCornerSize = Self.clamp(
-            defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
+            defaults.object(forKey: Key.panelCornerSize) as? Double
+                ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,
             fallback: PanelCornerSize.defaultValue
         )
         panelContentSize = Self.clamp(
-            defaults.object(forKey: Key.panelContentSize) as? Double ?? PanelContentSize.defaultValue,
+            defaults.object(forKey: Key.panelContentSize) as? Double
+                ?? PanelContentSize.defaultValue,
             to: PanelContentSize.min...PanelContentSize.max,
             fallback: PanelContentSize.defaultValue
         )
