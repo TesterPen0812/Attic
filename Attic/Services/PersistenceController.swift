@@ -71,6 +71,47 @@ enum PersistenceController {
         )
     }
 
+    /// A durable, CloudKit-free store used only by controlled UI tests that
+    /// need to terminate and relaunch the app. Its path is disjoint from every
+    /// normal Attic store, and reset removes only this store family.
+    static func makeCanvasUITestContainer(
+        reset: Bool,
+        baseDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> ModelContainer {
+        let root = baseDirectory ?? fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+        let bundleComponent = (Bundle.main.bundleIdentifier ?? "unknown-bundle")
+            .replacingOccurrences(of: "/", with: "-")
+        let directory = root
+            .appendingPathComponent("AtticCanvasUITests", isDirectory: true)
+            .appendingPathComponent(bundleComponent, isDirectory: true)
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+
+        let storeURL = directory.appendingPathComponent("canvas.store")
+        if reset {
+            try removeStoreFamily(at: storeURL, fileManager: fileManager)
+        }
+
+        let configuration = ModelConfiguration(
+            "canvas-ui-testing",
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            configurations: configuration
+        )
+    }
+
     #if DEBUG
     /// Creates the Core Data record types in CloudKit's Development
     /// environment before SwiftData starts using the same store. Apple
@@ -146,6 +187,17 @@ enum PersistenceController {
         #else
         return .production
         #endif
+    }
+
+    private static func removeStoreFamily(
+        at storeURL: URL,
+        fileManager: FileManager
+    ) throws {
+        for suffix in ["", "-wal", "-shm"] {
+            let url = URL(fileURLWithPath: storeURL.path + suffix)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            try fileManager.removeItem(at: url)
+        }
     }
 
     /// Copies the unopened legacy SQLite store once before CloudKit first
