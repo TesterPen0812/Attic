@@ -64,6 +64,50 @@ final class CornerHoverStateMachineTests: XCTestCase {
             hideDelay: 0.7
         ), .hide)
     }
+
+    func testPinKeepsVisiblePanelOpenUntilUnpinnedHideDelayCompletes() {
+        var machine = CornerHoverStateMachine()
+        machine.forceVisible(at: 0, grace: 0)
+
+        XCTAssertEqual(machine.update(
+            at: 10,
+            isInHotspot: false,
+            isInPanel: false,
+            isInteractionLocked: false,
+            isPinned: true,
+            revealDelay: 0.2,
+            hideDelay: 0.3
+        ), .none)
+        XCTAssertTrue(machine.isVisible)
+
+        XCTAssertEqual(machine.update(
+            at: 11,
+            isInHotspot: false,
+            isInPanel: false,
+            isInteractionLocked: false,
+            isPinned: false,
+            revealDelay: 0.2,
+            hideDelay: 0.3
+        ), .none)
+        XCTAssertEqual(machine.update(
+            at: 11.29,
+            isInHotspot: false,
+            isInPanel: false,
+            isInteractionLocked: false,
+            isPinned: false,
+            revealDelay: 0.2,
+            hideDelay: 0.3
+        ), .none)
+        XCTAssertEqual(machine.update(
+            at: 11.3,
+            isInHotspot: false,
+            isInPanel: false,
+            isInteractionLocked: false,
+            isPinned: false,
+            revealDelay: 0.2,
+            hideDelay: 0.3
+        ), .hide)
+    }
 }
 
 final class PanelUIStateTests: XCTestCase {
@@ -101,6 +145,17 @@ final class PanelUIStateTests: XCTestCase {
 
         XCTAssertNil(state.editingTaskID)
         XCTAssertNil(state.draggedTaskID)
+        XCTAssertFalse(state.isInteractionLocked)
+    }
+
+    @MainActor
+    func testPanelPinIsSessionOnlyAndDoesNotLockInteraction() {
+        let state = PanelUIState()
+
+        XCTAssertFalse(state.isPanelPinned)
+        state.isPanelPinned = true
+
+        XCTAssertTrue(state.isPanelPinned)
         XCTAssertFalse(state.isInteractionLocked)
     }
 }
