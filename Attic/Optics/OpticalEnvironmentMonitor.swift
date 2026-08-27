@@ -93,10 +93,10 @@ final class OpticalEnvironmentMonitor: ObservableObject {
         snapshotProvider: @escaping () -> OpticalEnvironmentSnapshot = {
             OpticalEnvironmentSnapshot.current()
         },
-        powerSourceObserver: OpticalPowerSourceObserving = IOKitOpticalPowerSourceObserver()
+        powerSourceObserver: OpticalPowerSourceObserving? = nil
     ) {
         self.snapshotProvider = snapshotProvider
-        self.powerSourceObserver = powerSourceObserver
+        self.powerSourceObserver = powerSourceObserver ?? IOKitOpticalPowerSourceObserver()
         snapshot = snapshotProvider()
     }
 
