@@ -57,25 +57,18 @@ def add_swift_sources(project, target, group_name, directory)
 end
 
 app_group = add_swift_sources(project, app, 'Attic', 'Attic')
-tests_group = add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
-ui_tests_group = add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
+add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
+add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
-mobile_tests_group = add_swift_sources(
-  project,
-  mobile_tests,
-  'AtticMobileTests',
-  'AtticMobileTests'
-)
-mobile_ui_tests_group = add_swift_sources(
-  project,
-  mobile_ui_tests,
-  'AtticMobileUITests',
-  'AtticMobileUITests'
-)
+add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
+add_swift_sources(project, mobile_ui_tests, 'AtticMobileUITests', 'AtticMobileUITests')
 
 shared_mobile_sources = [
   'Canvas/CanvasControls.swift',
+  'Canvas/CanvasImageImporter.swift',
+  'Canvas/CanvasImageTypes.swift',
   'Canvas/CanvasInputStateMachine.swift',
+  'Canvas/CanvasSendable.swift',
   'Canvas/CanvasSession.swift',
   'Canvas/CanvasStrokeCodec.swift',
   'Canvas/CanvasSurface.swift',
@@ -87,11 +80,19 @@ shared_mobile_sources = [
   'Design/AtticTheme.swift',
   'Design/TaskActionsMenu.swift',
   'Models/CanvasBoardItem.swift',
+  'Models/CanvasImageItem.swift',
   'Models/CanvasStrokeItem.swift',
   'Models/TaskItem.swift',
   'Models/TaskTypes.swift',
   'Models/NoteItem.swift',
   'Services/CanvasStore.swift',
+  'Services/CanvasStoreBoards.swift',
+  'Services/CanvasStoreCloudSync.swift',
+  'Services/CanvasStoreImages.swift',
+  'Services/CanvasStoreLifecycle.swift',
+  'Services/CanvasStorePersistence.swift',
+  'Services/CanvasStoreReplicaResolution.swift',
+  'Services/CanvasStoreStrokes.swift',
   'Services/PersistenceController.swift',
   'Services/NoteStore.swift',
   'Services/TaskStore.swift'
