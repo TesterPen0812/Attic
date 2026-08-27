@@ -1,13 +1,13 @@
 import Foundation
 
-/// Top-level surface shown in the Attic panel. `tasks` and `backlog` keep
-/// the existing task semantics through `TaskScope`; `notes` switches the panel
-/// to the notes surface. Keeping notes out of `TaskScope` avoids entangling
-/// notes with task status/priority ordering and the CloudKit task pipeline.
+/// Top-level surface shown in the Attic panel. Tasks and Backlog retain the
+/// existing `TaskScope` semantics; Notes and Canvas own independent stores and
+/// interaction state.
 enum PanelSection: String, CaseIterable, Identifiable {
     case tasks
     case backlog
     case notes
+    case canvas
 
     var id: String { rawValue }
 
@@ -16,16 +16,18 @@ enum PanelSection: String, CaseIterable, Identifiable {
         case .tasks: "Tasks"
         case .backlog: "Backlog"
         case .notes: "Notes"
+        case .canvas: "Canvas"
         }
     }
 
     var isNotes: Bool { self == .notes }
+    var isCanvas: Bool { self == .canvas }
 
     var taskScope: TaskScope? {
         switch self {
         case .tasks: .tasks
         case .backlog: .backlog
-        case .notes: nil
+        case .notes, .canvas: nil
         }
     }
 
@@ -34,6 +36,7 @@ enum PanelSection: String, CaseIterable, Identifiable {
         case .tasks: "New Task"
         case .backlog: "New Backlog Idea"
         case .notes: "New Note"
+        case .canvas: "Canvas"
         }
     }
 
@@ -42,6 +45,7 @@ enum PanelSection: String, CaseIterable, Identifiable {
         case .tasks: "What needs doing?"
         case .backlog: "Capture an idea…"
         case .notes: "Write a note…"
+        case .canvas: "Draw on the canvas"
         }
     }
 
@@ -50,6 +54,7 @@ enum PanelSection: String, CaseIterable, Identifiable {
         case .tasks: "Nothing hiding here"
         case .backlog: "No ideas waiting"
         case .notes: "Nothing saved yet"
+        case .canvas: "Blank canvas"
         }
     }
 
@@ -58,6 +63,7 @@ enum PanelSection: String, CaseIterable, Identifiable {
         case .tasks: count == 1 ? "1 Active Task" : "\(count) Active Tasks"
         case .backlog: count == 1 ? "1 Idea" : "\(count) Ideas"
         case .notes: count == 1 ? "1 Note" : "\(count) Notes"
+        case .canvas: count == 1 ? "1 Stroke" : "\(count) Strokes"
         }
     }
 }

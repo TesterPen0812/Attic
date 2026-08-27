@@ -8,6 +8,7 @@ final class CornerHoverMonitor {
     private let uiState: PanelUIState
     private let store: TaskStore
     private let noteStore: NoteStore
+    private let canvasStore: CanvasStore
     private let noteDraft: NoteDraftController
 
     private var stateMachine = CornerHoverStateMachine()
@@ -23,6 +24,7 @@ final class CornerHoverMonitor {
         uiState: PanelUIState,
         store: TaskStore,
         noteStore: NoteStore,
+        canvasStore: CanvasStore,
         noteDraft: NoteDraftController
     ) {
         self.settings = settings
@@ -30,6 +32,7 @@ final class CornerHoverMonitor {
         self.uiState = uiState
         self.store = store
         self.noteStore = noteStore
+        self.canvasStore = canvasStore
         self.noteDraft = noteDraft
     }
 
@@ -188,12 +191,14 @@ final class CornerHoverMonitor {
     private func refreshStoreForReveal() {
         store.refresh()
         noteStore.refresh()
+        canvasStore.refresh()
         revealRefreshTask?.cancel()
         revealRefreshTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(900))
-            guard !Task.isCancelled else { return }
-            self?.store.refresh()
-            self?.noteStore.refresh()
+            guard let self, !Task.isCancelled else { return }
+            self.store.refresh()
+            self.noteStore.refresh()
+            self.canvasStore.refresh()
         }
     }
 }

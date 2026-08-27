@@ -3,6 +3,7 @@ import SwiftUI
 struct AtticPanelView: View {
     @ObservedObject var store: TaskStore
     @ObservedObject var noteStore: NoteStore
+    @ObservedObject var canvasSession: CanvasSession
     let noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
@@ -30,20 +31,27 @@ struct AtticPanelView: View {
             header(activeCount: headerActiveCount)
             sectionPicker
 
-            if uiState.isComposerPresented {
+            if uiState.isComposerPresented, !uiState.selectedSection.isCanvas {
                 composerView
                     .padding(.horizontal, horizontalInset)
                     .padding(.bottom, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            if uiState.selectedSection.isNotes {
+            if uiState.selectedSection.isCanvas {
+                CanvasPanelContent(
+                    session: canvasSession,
+                    horizontalInset: horizontalInset,
+                    isClearConfirmationPresented: $uiState.isCanvasConfirmationPresented
+                )
+                .transition(.opacity)
+            } else if uiState.selectedSection.isNotes {
                 NotesPanelContent(
                     noteStore: noteStore,
                     noteDraft: noteDraft,
                     uiState: uiState
                 )
-                    .transition(.opacity)
+                .transition(.opacity)
             } else {
                 taskSurface
                     .transition(.opacity)
@@ -56,6 +64,7 @@ struct AtticPanelView: View {
                     .lineLimit(2)
                     .padding(.horizontal, horizontalInset)
                     .padding(.bottom, 10)
+                    .accessibilityIdentifier("panel-error-message")
             }
         }
         .padding(.top, contentInsets.top)
@@ -100,13 +109,24 @@ struct AtticPanelView: View {
     }
 
     private var headerActiveCount: Int {
-        uiState.selectedSection.isNotes
-            ? noteStore.notes.count
-            : store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks).activeCount
+        if uiState.selectedSection.isCanvas {
+            return canvasSession.strokes.count
+        }
+        if uiState.selectedSection.isNotes {
+            return noteStore.notes.count
+        }
+        return store.snapshot(
+            for: uiState.selectedSection.taskScope ?? .tasks
+        ).activeCount
     }
 
     private var currentErrorMessage: String? {
-        uiState.selectedSection.isNotes ? noteStore.lastErrorMessage : store.lastErrorMessage
+        if uiState.selectedSection.isCanvas {
+            return canvasSession.lastErrorMessage
+        }
+        return uiState.selectedSection.isNotes
+            ? noteStore.lastErrorMessage
+            : store.lastErrorMessage
     }
 
     private func openMostRecentNoteIfNeeded() {
@@ -151,27 +171,50 @@ struct AtticPanelView: View {
             .accessibilityLabel("Settings")
             .accessibilityIdentifier("settings-button")
 
-            Button(action: toggleComposer) {
-                Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
-                    .font(.system(size: 10, weight: .semibold))
-                    .frame(width: 24, height: 24)
-                    .background(Color.primary.opacity(0.06), in: Circle())
-                    .contentShape(Circle())
-                    .contentTransition(.symbolEffect(.replace))
+            if !uiState.selectedSection.isCanvas {
+                Button(action: toggleComposer) {
+                    Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .background(Color.primary.opacity(0.06), in: Circle())
+                        .contentShape(Circle())
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .help(composerButtonLabel)
+                .accessibilityLabel(composerButtonLabel)
+                .accessibilityIdentifier(
+                    uiState.selectedSection.isNotes
+                        ? "add-note-button"
+                        : "add-task-button"
+                )
             }
-            .buttonStyle(.plain)
-            .help(composerButtonLabel)
-            .accessibilityLabel(composerButtonLabel)
-            .accessibilityIdentifier(uiState.selectedSection.isNotes ? "add-note-button" : "add-task-button")
         }
         .padding(.horizontal, horizontalInset)
         .frame(height: 44)
     }
 
     private var sectionPicker: some View {
-        HStack(spacing: 6) {
-            ForEach(PanelSection.allCases) { section in
-                sectionCapsule(section)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                ForEach(PanelSection.allCases) { section in
+                    sectionCapsule(section)
+                }
+            }
+
+            VStack(spacing: 5) {
+                HStack(spacing: 6) {
+                    ForEach(Array(PanelSection.allCases.prefix(2))) { section in
+                        sectionCapsule(section)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                HStack(spacing: 6) {
+                    ForEach(Array(PanelSection.allCases.suffix(2))) { section in
+                        sectionCapsule(section)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -207,15 +250,28 @@ struct AtticPanelView: View {
                 .contentShape(Capsule(style: .continuous))
         }
         .buttonStyle(.plain)
+        .keyboardShortcut(shortcut(for: section), modifiers: .command)
         .accessibilityLabel(section.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("panel-section-\(section.rawValue)")
+    }
+
+    private func shortcut(for section: PanelSection) -> KeyEquivalent {
+        switch section {
+        case .tasks: "1"
+        case .backlog: "2"
+        case .notes: "3"
+        case .canvas: "4"
+        }
     }
 
     private func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
         if uiState.selectedSection.isNotes, noteDraft.isActive {
             guard noteDraft.close() else { return }
+        }
+        if uiState.selectedSection.isCanvas {
+            canvasSession.cancelActiveInteraction()
         }
 
         let select = {
@@ -235,6 +291,8 @@ struct AtticPanelView: View {
     }
 
     private func toggleComposer() {
+        guard !uiState.selectedSection.isCanvas else { return }
+
         if uiState.isComposerPresented {
             if uiState.selectedSection.isNotes {
                 guard noteDraft.close() else { return }
@@ -289,7 +347,7 @@ struct AtticPanelView: View {
     /// the section tree when a drag starts can invalidate the source row and
     /// cancel AppKit's drag session before it reaches a drop target.
     private func allSections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {
-        return uiState.selectedScope.statuses.map { status in
+        uiState.selectedScope.statuses.map { status in
             sections.first { $0.status == status }
                 ?? TaskSectionSnapshot(status: status, tasks: [])
         }

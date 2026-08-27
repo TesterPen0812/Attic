@@ -113,4 +113,8 @@ enum PanelGeometry {
         let content: CGFloat = noteCount == 0 ? 90 : CGFloat(noteCount) * rowHeight + 12
         return min(max(header + composer + content + 16, minimumHeight), maximumHeight)
     }
+
+    static func preferredCanvasHeight() -> CGFloat {
+        min(max(560, minimumHeight), maximumHeight)
+    }
 }

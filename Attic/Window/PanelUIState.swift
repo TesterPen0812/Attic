@@ -7,17 +7,21 @@ final class PanelUIState: ObservableObject {
     @Published var editingTaskID: UUID?
     @Published var editingNoteID: UUID?
     @Published var isMenuTracking = false
+    @Published var isCanvasConfirmationPresented = false
     @Published private(set) var selectedSection: PanelSection = .tasks
     private(set) var draggedTaskID: UUID?
 
-    /// Tasks/Backlog still drive `TaskStore`; notes are a separate surface.
-    /// Kept computed so task views can derive creation status/placeholder.
+    /// Tasks/Backlog still drive `TaskStore`; Notes and Canvas use their own
+    /// focused stores and surfaces.
     var selectedScope: TaskScope { selectedSection.taskScope ?? .tasks }
 
     var isDraggingTask: Bool { draggedTaskID != nil }
 
     var isInteractionLocked: Bool {
-        isComposerPresented || editingTaskID != nil || isMenuTracking
+        isComposerPresented
+            || editingTaskID != nil
+            || isMenuTracking
+            || isCanvasConfirmationPresented
     }
 
     func beginAdding() {
@@ -32,6 +36,7 @@ final class PanelUIState: ObservableObject {
         editingTaskID = nil
         editingNoteID = nil
         draggedTaskID = nil
+        isCanvasConfirmationPresented = false
         selectedSection = section
     }
 

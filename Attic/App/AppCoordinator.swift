@@ -9,6 +9,8 @@ final class AppCoordinator {
     let settings: AppSettings
     let store: TaskStore
     let noteStore: NoteStore
+    let canvasStore: CanvasStore
+    let canvasSession: CanvasSession
     let noteDraft: NoteDraftController
     let loginItemService: LoginItemService
     let uiState: PanelUIState
@@ -34,6 +36,8 @@ final class AppCoordinator {
         isRunningTests = environment["ATTIC_TESTING"] == "1"
             || environment["XCTestConfigurationFilePath"] != nil
             || environment["XCTestBundlePath"] != nil
+        let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
+            && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
 
         let settings = AppSettings()
         #if DEBUG && !ATTIC_LOCAL_ONLY
@@ -49,38 +53,50 @@ final class AppCoordinator {
         }
         #endif
         let container: ModelContainer
-        #if ATTIC_LOCAL_ONLY
-        do {
-            container = try PersistenceController.makeContainer(
-                inMemory: isUITesting || isRunningTests,
-                cloudSyncEnabled: false
-            )
-        } catch {
-            fatalError("Unable to create the local-only SwiftData container: \(error)")
-        }
-        #else
-        do {
-            container = try PersistenceController.makeContainer(
-                inMemory: isUITesting || isRunningTests
-            )
-        } catch let cloudError {
+        if usesCanvasUITestPersistence {
+            do {
+                container = try PersistenceController.makeCanvasUITestContainer(
+                    reset: environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1"
+                )
+            } catch {
+                fatalError("Unable to create the isolated Canvas UI test store: \(error)")
+            }
+        } else {
+            #if ATTIC_LOCAL_ONLY
             do {
                 container = try PersistenceController.makeContainer(
                     inMemory: isUITesting || isRunningTests,
                     cloudSyncEnabled: false
                 )
-                settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
             } catch {
-                fatalError(
-                    "Unable to create the SwiftData container with CloudKit "
-                        + "(\(cloudError)) or local-only (\(error))"
-                )
+                fatalError("Unable to create the local-only SwiftData container: \(error)")
             }
+            #else
+            do {
+                container = try PersistenceController.makeContainer(
+                    inMemory: isUITesting || isRunningTests
+                )
+            } catch let cloudError {
+                do {
+                    container = try PersistenceController.makeContainer(
+                        inMemory: isUITesting || isRunningTests,
+                        cloudSyncEnabled: false
+                    )
+                    settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
+                } catch {
+                    fatalError(
+                        "Unable to create the SwiftData container with CloudKit "
+                            + "(\(cloudError)) or local-only (\(error))"
+                    )
+                }
+            }
+            #endif
         }
-        #endif
 
         let store = TaskStore(container: container)
         let noteStore = NoteStore(container: container)
+        let canvasStore = CanvasStore(container: container)
+        let canvasSession = CanvasSession(store: canvasStore)
         let noteDraft = NoteDraftController(noteStore: noteStore)
         let uiState = PanelUIState()
         let loginItemService = LoginItemService()
@@ -100,6 +116,7 @@ final class AppCoordinator {
         let panelController = AtticPanelController(
             store: store,
             noteStore: noteStore,
+            canvasSession: canvasSession,
             noteDraft: noteDraft,
             settings: settings,
             uiState: uiState
@@ -108,6 +125,8 @@ final class AppCoordinator {
         self.settings = settings
         self.store = store
         self.noteStore = noteStore
+        self.canvasStore = canvasStore
+        self.canvasSession = canvasSession
         self.noteDraft = noteDraft
         self.uiState = uiState
         self.panelController = panelController
@@ -121,6 +140,7 @@ final class AppCoordinator {
             uiState: uiState,
             store: store,
             noteStore: noteStore,
+            canvasStore: canvasStore,
             noteDraft: noteDraft
         )
     }
@@ -162,6 +182,7 @@ final class AppCoordinator {
     }
 
     func stop() {
+        canvasSession.cancelActiveInteraction()
         _ = noteDraft.flush()
         cleanupService.stop()
         hoverMonitor.stop()
@@ -175,6 +196,7 @@ final class AppCoordinator {
     }
 
     func prepareForTermination() -> Bool {
+        canvasSession.cancelActiveInteraction()
         guard noteDraft.flush() else {
             hoverMonitor.revealProgrammatically(section: .notes)
             return false

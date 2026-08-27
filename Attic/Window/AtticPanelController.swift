@@ -9,6 +9,7 @@ final class AtticPanelController {
     private let hostingView: NSHostingView<AtticPanelView>
     private let store: TaskStore
     private let noteStore: NoteStore
+    private let canvasSession: CanvasSession
     private let noteDraft: NoteDraftController
     private let settings: AppSettings
     private let uiState: PanelUIState
@@ -22,12 +23,14 @@ final class AtticPanelController {
     init(
         store: TaskStore,
         noteStore: NoteStore,
+        canvasSession: CanvasSession,
         noteDraft: NoteDraftController,
         settings: AppSettings,
         uiState: PanelUIState
     ) {
         self.store = store
         self.noteStore = noteStore
+        self.canvasSession = canvasSession
         self.noteDraft = noteDraft
         self.settings = settings
         self.uiState = uiState
@@ -41,6 +44,7 @@ final class AtticPanelController {
         hostingView = NSHostingView(rootView: AtticPanelView(
             store: store,
             noteStore: noteStore,
+            canvasSession: canvasSession,
             noteDraft: noteDraft,
             uiState: uiState,
             settings: settings
@@ -109,6 +113,8 @@ final class AtticPanelController {
     }
 
     func hide() {
+        canvasSession.cancelActiveInteraction()
+        uiState.isCanvasConfirmationPresented = false
         guard panel.isVisible else { return }
         guard noteDraft.flush() else { return }
         transitionGeneration += 1
@@ -216,7 +222,9 @@ final class AtticPanelController {
 
     private func frame(on screen: NSScreen, corner: ScreenCorner) -> CGRect {
         let height: CGFloat
-        if uiState.selectedSection.isNotes {
+        if uiState.selectedSection.isCanvas {
+            height = PanelGeometry.preferredCanvasHeight()
+        } else if uiState.selectedSection.isNotes {
             height = PanelGeometry.preferredHeight(
                 noteCount: noteStore.notes.count,
                 isComposing: uiState.isComposerPresented,
