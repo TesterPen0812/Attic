@@ -29,6 +29,17 @@ jobs:
           ruby-version: "3.3"
           bundler-cache: true
 
+      - name: Regenerate Xcode project for feature-branch validation
+        run: bundle exec ruby Scripts/generate_project.rb
+
+      - name: Upload generated Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-xcode-project-${{ github.sha }}
+          path: Attic.xcodeproj
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Verify generated Xcode project
         run: bundle exec ruby Scripts/verify_project_generation.rb
 
