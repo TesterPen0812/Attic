@@ -338,35 +338,35 @@ struct PanelOpticalBoundary {
     }
 }
 
+/// The SwiftUI subtree owns only the accepted squircle clip. The live optical
+/// background is installed below `NSHostingView`, so foreground Attic content
+/// never enters the displacement filter and the old material/outline cannot
+/// obscure the custom backdrop.
 struct AtticPanelSurface: ViewModifier {
     let translucent: Bool
     let cornerRadius: CGFloat
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     func body(content: Content) -> some View {
         content
-            .background {
-                ZStack {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .opacity(translucent ? 1 : 0)
-                    Rectangle()
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                        .opacity(translucent ? 0 : 1)
-                }
-                .animation(reduceMotion ? nil : AtticMotion.background, value: translucent)
-            }
-            .clipShape(Squircle(cornerRadius: cornerRadius, exponent: AtticStyle.panelSquircleExponent))
-            .overlay {
-                Squircle(cornerRadius: cornerRadius, exponent: AtticStyle.panelSquircleExponent)
-                    .stroke(Color.primary.opacity(0.055), lineWidth: 0.7)
-            }
+            .clipShape(
+                Squircle(
+                    cornerRadius: cornerRadius,
+                    exponent: AtticStyle.panelSquircleExponent
+                )
+            )
     }
 }
 
 extension View {
-    func atticPanelSurface(translucent: Bool, cornerRadius: CGFloat = AtticStyle.panelCornerRadius) -> some View {
-        modifier(AtticPanelSurface(translucent: translucent, cornerRadius: cornerRadius))
+    func atticPanelSurface(
+        translucent: Bool,
+        cornerRadius: CGFloat = AtticStyle.panelCornerRadius
+    ) -> some View {
+        modifier(
+            AtticPanelSurface(
+                translucent: translucent,
+                cornerRadius: cornerRadius
+            )
+        )
     }
 }
