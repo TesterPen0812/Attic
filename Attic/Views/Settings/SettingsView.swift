@@ -348,7 +348,7 @@ struct SettingsView: View {
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
 
-            Link(destination: URL(string: "https://github.com/Emanuele-web04/Attic")!) {
+            Link(destination: URL(string: "https://github.com/TesterPen0812/Attic")!) {
                 Label("Open source on GitHub", systemImage: "arrow.up.right")
                     .font(.system(size: 10, weight: .medium, design: .rounded))
             }
