@@ -144,6 +144,72 @@ final class AppSettingsTests: XCTestCase {
         })
     }
 
+    func testPanelAppearanceImplementationDoesNotReadWindowFocusState() throws {
+        let sourcePaths = [
+            "Attic/Design/AtticStyle.swift",
+            "Attic/Services/AppSettings.swift",
+            "Attic/Views/Panel/AtticPanelView.swift",
+            "Attic/Window/AtticPanelController.swift"
+        ]
+        let forbiddenInputs = [
+            "appearsActive",
+            "controlActiveState",
+            "isKeyWindow",
+            "keyWindow",
+            "didBecomeKeyNotification",
+            "didResignKeyNotification",
+            "NSApp.isActive"
+        ]
+
+        for sourcePath in sourcePaths {
+            let source = try repositorySource(at: sourcePath)
+            for forbiddenInput in forbiddenInputs {
+                XCTAssertFalse(
+                    source.contains(forbiddenInput),
+                    "\(sourcePath) must not read focus input \(forbiddenInput)"
+                )
+            }
+        }
+    }
+
+    func testPanelSurfaceContainsNoSyntheticOpticalEffects() throws {
+        let source = try repositorySource(at: "Attic/Design/AtticStyle.swift")
+        let forbiddenEffects = [
+            "distortionEffect",
+            "layerEffect",
+            "visualEffect",
+            "Shader(",
+            "CoreImage",
+            "CIFilter",
+            "NSVisualEffectView",
+            "value(forKey:",
+            ".opacity(",
+            ".blur(",
+            ".overlay(",
+            ".stroke("
+        ]
+
+        XCTAssertTrue(source.contains(".glassEffect("))
+        XCTAssertTrue(source.contains(".tint("))
+        XCTAssertTrue(source.contains(".interactive("))
+        for forbiddenEffect in forbiddenEffects {
+            XCTAssertFalse(
+                source.contains(forbiddenEffect),
+                "Panel surface must not contain synthetic effect \(forbiddenEffect)"
+            )
+        }
+    }
+
+    private func repositorySource(at relativePath: String) throws -> String {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
+    }
+
     private func makeDefaults() -> (UserDefaults, String) {
         let suiteName = "AppSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
