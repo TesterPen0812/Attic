@@ -20,6 +20,15 @@ func makeTestNoteStore(
     return NoteStore(container: container, now: now, persist: persist)
 }
 
+@MainActor
+func makeTestCanvasStore(
+    now: @escaping () -> Date = Date.init,
+    persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+) throws -> CanvasStore {
+    let container = try PersistenceController.makeContainer(inMemory: true)
+    return CanvasStore(container: container, now: now, persist: persist)
+}
+
 final class MutableNow {
     var value: Date
 
