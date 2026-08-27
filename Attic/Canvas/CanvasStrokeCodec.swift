@@ -6,6 +6,7 @@ enum CanvasStrokeCodecError: LocalizedError, Equatable {
     case emptyPoints
     case nonFinitePoint
     case tooManyPoints
+    case archiveTooLarge
     case invalidArchive
 
     var errorDescription: String? {
@@ -20,6 +21,8 @@ enum CanvasStrokeCodecError: LocalizedError, Equatable {
             "A canvas stroke contains a non-finite coordinate."
         case .tooManyPoints:
             "The canvas stroke contains too many points."
+        case .archiveTooLarge:
+            "The canvas stroke archive exceeds the supported size."
         case .invalidArchive:
             "The canvas stroke archive is malformed."
         }
@@ -28,8 +31,7 @@ enum CanvasStrokeCodecError: LocalizedError, Equatable {
 
 enum CanvasStrokeCodec {
     static let currentVersion = 1
-    private static let maximumPointCount = 200_000
-    private static let maximumArchiveBytes = 32 * 1_024 * 1_024
+    static let maximumArchiveBytes = 900 * 1_024
     private static let maximumEncodedWidth = 64.0
 
     private struct Archive: Codable {
@@ -47,12 +49,16 @@ enum CanvasStrokeCodec {
         try validate(width: width, points: points)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        return try encoder.encode(Archive(
+        let data = try encoder.encode(Archive(
             version: currentVersion,
             color: color,
             width: width,
             points: points
         ))
+        guard data.count <= maximumArchiveBytes else {
+            throw CanvasStrokeCodecError.archiveTooLarge
+        }
+        return data
     }
 
     static func decode(
@@ -60,7 +66,7 @@ enum CanvasStrokeCodec {
         expectedVersion: Int
     ) throws -> CanvasStrokeGeometry {
         guard data.count <= maximumArchiveBytes else {
-            throw CanvasStrokeCodecError.invalidArchive
+            throw CanvasStrokeCodecError.archiveTooLarge
         }
 
         let archive: Archive
@@ -92,7 +98,7 @@ enum CanvasStrokeCodec {
         guard !points.isEmpty else {
             throw CanvasStrokeCodecError.emptyPoints
         }
-        guard points.count <= maximumPointCount else {
+        guard points.count <= CanvasInputStateMachine.maximumBufferedPointCount else {
             throw CanvasStrokeCodecError.tooManyPoints
         }
         guard points.allSatisfy(\.isFinite) else {
