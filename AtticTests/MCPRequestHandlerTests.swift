@@ -121,6 +121,17 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(error["code"] as? Int, -32602)
     }
 
+    func testToolsCallRejectsNonObjectArguments() throws {
+        let response = try send(method: "tools/call", params: [
+            "name": "create_task",
+            "arguments": ["title", "Unexpected array"]
+        ])
+
+        let error = try XCTUnwrap(response["error"] as? [String: Any])
+        XCTAssertEqual(error["code"] as? Int, -32602)
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
     func testUnknownMethodReturnsMethodNotFound() throws {
         let response = try send(method: "resources/list")
         let error = try XCTUnwrap(response["error"] as? [String: Any])
@@ -160,6 +171,20 @@ final class MCPRequestHandlerTests: XCTestCase {
             "name": "create_task",
             "arguments": ["title": "   "]
         ])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    func testCreateTaskRejectsUnknownArgumentsWithoutMutating() throws {
+        let response = try send(method: "tools/call", params: [
+            "name": "create_task",
+            "arguments": [
+                "title": "Must not be created",
+                "unexpected": true
+            ]
+        ])
+
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertEqual(result["isError"] as? Bool, true)
         XCTAssertTrue(store.tasks.isEmpty)

@@ -103,7 +103,19 @@ final class MCPRequestHandler {
         guard let name = params["name"] as? String else {
             return errorResponse(id: id, code: -32602, message: "Missing tool name")
         }
-        let arguments = params["arguments"] as? [String: Any] ?? [:]
+        let arguments: [String: Any]
+        if let rawArguments = params["arguments"] {
+            guard let objectArguments = rawArguments as? [String: Any] else {
+                return errorResponse(
+                    id: id,
+                    code: -32602,
+                    message: "Tool arguments must be an object"
+                )
+            }
+            arguments = objectArguments
+        } else {
+            arguments = [:]
+        }
         do {
             let text = try tools.call(name: name, arguments: arguments)
             return toolResponse(id: id, text: text, isError: false)

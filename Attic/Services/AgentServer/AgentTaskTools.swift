@@ -248,6 +248,7 @@ final class AgentTaskTools {
     }
 
     private func listTasks(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: ["status"])
         let statuses: [TaskStatus]
         if arguments["status"] != nil {
             statuses = [try status(from: arguments, allowed: TaskStatus.allCases)]
@@ -259,6 +260,7 @@ final class AgentTaskTools {
     }
 
     private func createTask(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: ["title", "status", "priority"])
         guard let title = arguments["title"] as? String,
               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentToolError.invalidArguments("A non-empty title is required.")
@@ -274,6 +276,7 @@ final class AgentTaskTools {
     }
 
     private func updateTask(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: ["id", "title", "status", "priority"])
         // Validate every argument before mutating so an invalid one
         // doesn't leave the task half-updated.
         let task = try findTask(arguments)
@@ -302,6 +305,7 @@ final class AgentTaskTools {
     }
 
     private func deleteTask(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: ["id"])
         let task = try findTask(arguments)
         let id = task.id.uuidString
         try perform { store.delete(task) }
@@ -346,12 +350,14 @@ final class AgentTaskTools {
     // MARK: - Notes
 
     private func listNotes(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: [])
         guard let noteStore else { throw AgentToolError.unknownTool("list_notes") }
         let notes = noteStore.orderedNotes()
         return try encode(["count": notes.count, "notes": notes.map(serializeNote)])
     }
 
     private func createNote(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: ["title", "body"])
         guard let noteStore else { throw AgentToolError.unknownTool("create_note") }
         let title = (arguments["title"] as? String) ?? ""
         let body = (arguments["body"] as? String) ?? ""
@@ -367,6 +373,7 @@ final class AgentTaskTools {
     }
 
     private func updateNote(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: ["id", "title", "body"])
         guard let noteStore else { throw AgentToolError.unknownTool("update_note") }
         let note = try findNote(arguments)
         var newTitle: String?
@@ -393,6 +400,7 @@ final class AgentTaskTools {
     }
 
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
+        try validateArguments(arguments, allowed: ["id"])
         guard let noteStore else { throw AgentToolError.unknownTool("delete_note") }
         let note = try findNote(arguments)
         let id = note.id.uuidString
@@ -413,6 +421,19 @@ final class AgentTaskTools {
     private func performNote(_ change: () throws -> Bool) throws {
         guard try change() else {
             throw AgentToolError.storeFailure(noteStore?.lastErrorMessage ?? "Unknown error.")
+        }
+    }
+
+    private func validateArguments(
+        _ arguments: [String: Any],
+        allowed: Set<String>
+    ) throws {
+        let unexpected = Set(arguments.keys).subtracting(allowed).sorted()
+        guard unexpected.isEmpty else {
+            throw AgentToolError.invalidArguments(
+                "Unexpected argument\(unexpected.count == 1 ? "" : "s"): "
+                    + unexpected.joined(separator: ", ")
+            )
         }
     }
 
