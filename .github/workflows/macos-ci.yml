@@ -48,12 +48,14 @@ jobs:
           retention-days: 7
 
       - name: Verify generated Xcode project
+        id: project_verify
+        continue-on-error: true
         run: bundle exec ruby Scripts/verify_project_generation.rb
 
       - name: Build macOS target
         run: |
           xcodebuild \
-            -project Attic.xcodeproj \
+            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
             -target Attic \
             -configuration Local \
             CODE_SIGNING_ALLOWED=NO \
@@ -62,7 +64,7 @@ jobs:
       - name: Build with strict concurrency checking
         run: |
           xcodebuild \
-            -project Attic.xcodeproj \
+            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
@@ -74,7 +76,7 @@ jobs:
       - name: Run macOS unit tests
         run: |
           xcodebuild \
-            -project Attic.xcodeproj \
+            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
@@ -87,7 +89,7 @@ jobs:
       - name: Run macOS UI tests
         run: |
           xcodebuild \
-            -project Attic.xcodeproj \
+            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
@@ -119,13 +121,19 @@ jobs:
         if: always()
         run: |
           xcodebuild \
-            -project Attic.xcodeproj \
+            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticAnalyze" \
             CODE_SIGNING_ALLOWED=NO \
             analyze
+
+      - name: Require checked-in generated project
+        if: always() && steps.project_verify.outcome == 'failure'
+        run: |
+          echo 'Attic.xcodeproj is not current with Scripts/generate_project.rb'
+          exit 1
 
   iphone:
     name: Build Attic for iPhone Simulator
@@ -142,7 +150,14 @@ jobs:
           ruby-version: "3.3"
           bundler-cache: true
 
+      - name: Generate iPhone project
+        run: |
+          bundle exec ruby Scripts/generate_project.rb \
+            --output "$RUNNER_TEMP/GeneratedAttic.xcodeproj"
+
       - name: Verify generated Xcode project
+        id: project_verify
+        continue-on-error: true
         run: bundle exec ruby Scripts/verify_project_generation.rb
 
       - name: Select an available iPhone simulator
@@ -169,7 +184,7 @@ jobs:
       - name: Build iPhone app and tests
         run: |
           xcodebuild \
-            -project Attic.xcodeproj \
+            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
             -scheme AtticMobile \
             -configuration Local \
             -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_UDID" \
@@ -177,3 +192,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             SWIFT_STRICT_CONCURRENCY=complete \
             clean build-for-testing
+
+      - name: Require checked-in generated project
+        if: always() && steps.project_verify.outcome == 'failure'
+        run: |
+          echo 'Attic.xcodeproj is not current with Scripts/generate_project.rb'
+          exit 1
