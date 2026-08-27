@@ -270,6 +270,7 @@ final class OpticalPanelBackdropView: NSView {
         effectView.blendingMode = .behindWindow
         effectView.state = .active
         effectView.wantsLayer = true
+        effectView.layerUsesCoreImageFilters = true
         effectView.layer?.backgroundColor = NSColor.clear.cgColor
         effectView.layer?.masksToBounds = true
         effectMask.fillColor = NSColor.black.cgColor
@@ -378,7 +379,7 @@ final class OpticalPanelBackdropView: NSView {
     func stop() {
         lifecycle.stop()
         effectView.layer?.removeAllAnimations()
-        effectView.backgroundFilters = []
+        effectView.contentFilters = []
         lastRenderKey = nil
         restDisplacementPoints = 0
     }
@@ -473,26 +474,26 @@ final class OpticalPanelBackdropView: NSView {
         switch backend {
         case .opaque:
             effectView.isHidden = true
-            effectView.backgroundFilters = []
+            effectView.contentFilters = []
         case .liveMaterial:
             effectView.isHidden = false
-            effectView.backgroundFilters = []
+            effectView.contentFilters = []
         case .liveFiltered:
-            guard let filters = makeBackgroundFilters(backingScale: backingScale) else {
+            guard let filters = makeContentFilters(backingScale: backingScale) else {
                 backend = .liveMaterial
                 effectView.isHidden = false
-                effectView.backgroundFilters = []
+                effectView.contentFilters = []
                 updateOverlayOpacities(reduceTransparency: reduceTransparency)
                 return
             }
             effectView.isHidden = false
-            effectView.backgroundFilters = filters
+            effectView.contentFilters = filters
         }
 
         updateOverlayOpacities(reduceTransparency: reduceTransparency)
     }
 
-    private func makeBackgroundFilters(backingScale: Double) -> [CIFilter]? {
+    private func makeContentFilters(backingScale: Double) -> [CIFilter]? {
         var filters: [CIFilter] = []
 
         if profile.baseDisplacementPixels > 0, profile.refractionBandPixels > 0 {
@@ -569,7 +570,7 @@ final class OpticalPanelBackdropView: NSView {
             / currentBackingScale
         guard peakDisplacement > restDisplacementPoints + 0.001 else { return }
 
-        let keyPath = "backgroundFilters.atticOpticalWarp.inputDisplacement"
+        let keyPath = "filters.atticOpticalWarp.inputDisplacement"
         layer.setValue(restDisplacementPoints, forKeyPath: keyPath)
         let animation = CAKeyframeAnimation(keyPath: keyPath)
         animation.values = [
