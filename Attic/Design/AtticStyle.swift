@@ -117,20 +117,4 @@ extension View {
     ) -> some View {
         modifier(AtticPanelSurface(preferences: preferences, cornerRadius: cornerRadius))
     }
-
-    /// Temporary source compatibility while callers move from the former
-    /// translucency toggle to the discrete native glass profile.
-    func atticPanelSurface(
-        translucent _: Bool,
-        cornerRadius: CGFloat = AtticStyle.panelCornerRadius
-    ) -> some View {
-        modifier(AtticPanelSurface(
-            preferences: PanelGlassPreferences(
-                material: .regular,
-                tint: .none,
-                response: .interactive
-            ),
-            cornerRadius: cornerRadius
-        ))
-    }
 }
