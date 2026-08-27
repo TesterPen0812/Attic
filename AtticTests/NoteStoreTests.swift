@@ -205,4 +205,191 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertFalse(store.update(capturedNote, body: "Resurrected"))
         XCTAssertFalse(store.delete(capturedNote))
     }
+
+    @MainActor
+    func testExternalRecordsRefreshFreshContextAndOrderDeterministically() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = NoteStore(container: container, now: { clock.value })
+        let older = try XCTUnwrap(store.create(title: "Older", body: "one"))
+        clock.value = Date(timeIntervalSince1970: 2_000)
+        let newer = try XCTUnwrap(store.create(title: "Newer", body: "two"))
+
+        let externalContext = ModelContext(container)
+        let externalOlder = try XCTUnwrap(
+            externalContext.fetch(FetchDescriptor<NoteItem>()).first { $0.id == older.id }
+        )
+        externalOlder.body = "changed outside the store"
+        externalOlder.updatedAt = Date(timeIntervalSince1970: 3_000)
+        try externalContext.save()
+
+        let records = try store.recordsForExternalAccess()
+
+        XCTAssertEqual(records.map(\.id), [older.id, newer.id])
+        XCTAssertEqual(records.first?.body, "changed outside the store")
+        XCTAssertTrue(records.allSatisfy { $0.revision.hasPrefix("v1:") })
+    }
+
+    @MainActor
+    func testExternalUpdateChecksRevisionAndMutatesEveryPhysicalReplica() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seedContext = ModelContext(container)
+        let sharedID = UUID()
+        seedContext.insert(NoteItem(
+            id: sharedID,
+            title: "Older",
+            body: "one",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        ))
+        seedContext.insert(NoteItem(
+            id: sharedID,
+            title: "Visible",
+            body: "two",
+            createdAt: Date(timeIntervalSince1970: 200),
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        ))
+        try seedContext.save()
+        let clock = MutableNow(Date(timeIntervalSince1970: 3_000))
+        let store = NoteStore(container: container, now: { clock.value })
+        let before = try store.recordForExternalAccess(id: sharedID)
+
+        let updated = try store.updateForExternalAccess(
+            id: sharedID,
+            expectedRevision: before.revision,
+            title: nil,
+            body: "unified"
+        )
+
+        XCTAssertEqual(updated.title, "Visible")
+        XCTAssertEqual(updated.body, "unified")
+        XCTAssertEqual(updated.createdAt, Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(updated.updatedAt, clock.value)
+        XCTAssertNotEqual(updated.revision, before.revision)
+        let verificationContext = ModelContext(container)
+        let replicas = try verificationContext.fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(replicas.count, 2)
+        XCTAssertTrue(replicas.allSatisfy {
+            $0.title == "Visible"
+                && $0.body == "unified"
+                && $0.createdAt == Date(timeIntervalSince1970: 200)
+                && $0.updatedAt == clock.value
+        })
+    }
+
+    @MainActor
+    func testExternalStaleRevisionConflictsWithoutChangingReplicas() throws {
+        let store = try makeTestNoteStore()
+        let created = try store.createForExternalAccess(title: "Title", body: "v1")
+        let updated = try store.updateForExternalAccess(
+            id: created.id,
+            expectedRevision: created.revision,
+            title: nil,
+            body: "v2"
+        )
+
+        XCTAssertThrowsError(try store.updateForExternalAccess(
+            id: created.id,
+            expectedRevision: created.revision,
+            title: nil,
+            body: "stale"
+        )) { error in
+            guard let accessError = error as? NoteExternalAccessError,
+                  case let .conflict(currentRevision) = accessError else {
+                return XCTFail("Expected a revision conflict, got \(error)")
+            }
+            XCTAssertEqual(currentRevision, updated.revision)
+        }
+        XCTAssertEqual(store.notes.first?.body, "v2")
+    }
+
+    @MainActor
+    func testExternalAppendPreservesExactPlainTextAndEnforcesResultLimit() throws {
+        let store = try makeTestNoteStore()
+        let prefix = String(repeating: "a", count: NoteExternalAccessLimits.maximumBodyUTF8Bytes - 4)
+        let created = try store.createForExternalAccess(title: "", body: prefix)
+
+        let full = try store.appendForExternalAccess(
+            id: created.id,
+            expectedRevision: created.revision,
+            content: "👋"
+        )
+        XCTAssertEqual(full.body, prefix + "👋")
+        XCTAssertEqual(full.body.utf8.count, NoteExternalAccessLimits.maximumBodyUTF8Bytes)
+
+        XCTAssertThrowsError(try store.appendForExternalAccess(
+            id: full.id,
+            expectedRevision: full.revision,
+            content: "x"
+        )) { error in
+            XCTAssertEqual(error as? NoteExternalAccessError, .invalidContent)
+        }
+        XCTAssertEqual(store.notes.first?.body, prefix + "👋")
+    }
+
+    @MainActor
+    func testExternalDeleteRequiresCurrentRevisionAndDeletesAllReplicas() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let sharedID = UUID()
+        context.insert(NoteItem(id: sharedID, body: "a"))
+        context.insert(NoteItem(id: sharedID, body: "b", updatedAt: Date().addingTimeInterval(1)))
+        try context.save()
+        let store = NoteStore(container: container)
+        let record = try store.recordForExternalAccess(id: sharedID)
+
+        XCTAssertThrowsError(try store.deleteForExternalAccess(
+            id: sharedID,
+            expectedRevision: "v1:stale"
+        )) { error in
+            guard let accessError = error as? NoteExternalAccessError,
+                  case .conflict = accessError else {
+                return XCTFail("Expected a revision conflict, got \(error)")
+            }
+        }
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 2)
+
+        try store.deleteForExternalAccess(id: sharedID, expectedRevision: record.revision)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 0)
+        XCTAssertTrue(store.notes.isEmpty)
+    }
+
+    @MainActor
+    func testExternalRevisionIsStableAcrossOnDiskStoreRelaunch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("development.store")
+
+        var firstContainer: ModelContainer? = try makeOnDiskTestContainer(at: storeURL)
+        var firstStore: NoteStore? = NoteStore(container: try XCTUnwrap(firstContainer))
+        let created = try XCTUnwrap(firstStore).createForExternalAccess(
+            title: "Persistent",
+            body: "survives relaunch"
+        )
+        firstStore = nil
+        firstContainer = nil
+
+        let secondContainer = try makeOnDiskTestContainer(at: storeURL)
+        let secondStore = NoteStore(container: secondContainer)
+        let relaunched = try secondStore.recordForExternalAccess(id: created.id)
+
+        XCTAssertEqual(relaunched.title, "Persistent")
+        XCTAssertEqual(relaunched.body, "survives relaunch")
+        XCTAssertEqual(relaunched.revision, created.revision)
+    }
+
+    private func makeOnDiskTestContainer(at url: URL) throws -> ModelContainer {
+        let configuration = ModelConfiguration(
+            "development-test",
+            url: url,
+            cloudKitDatabase: .none
+        )
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            configurations: configuration
+        )
+    }
 }

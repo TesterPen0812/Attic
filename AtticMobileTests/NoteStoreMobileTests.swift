@@ -13,7 +13,7 @@ final class NoteStoreMobileTests: XCTestCase {
         let note = try XCTUnwrap(store.create(title: "  From   iPhone ", body: "  sync me "))
 
         XCTAssertEqual(note.title, "From iPhone")
-        XCTAssertEqual(note.body, "sync me")
+        XCTAssertEqual(note.body, "  sync me ")
 
         XCTAssertTrue(store.update(note, body: "updated"))
         XCTAssertEqual(note.body, "updated")

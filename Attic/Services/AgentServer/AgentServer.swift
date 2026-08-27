@@ -4,7 +4,7 @@ import Network
 import os
 
 /// Loopback-only HTTP server that exposes the MCP endpoint at /mcp so local
-/// AI agents (Claude Code, Codex, Synara, …) can read and update tasks.
+/// AI agents (Claude Code, Codex, Synara, …) can manage tasks and notes.
 @MainActor
 final class AgentServer: ObservableObject {
     enum State: Equatable {
@@ -15,9 +15,11 @@ final class AgentServer: ObservableObject {
     }
 
     static let defaultPort: UInt16 = 7335
-    nonisolated private static let maxRequestBytes = 1_048_576
+    nonisolated private static let maxRequestBytes =
+        AgentHTTPRequest.maximumHeaderBytes + AgentHTTPRequest.maximumBodyBytes + 4
 
     @Published private(set) var state: State = .stopped
+    @Published private(set) var listeningPort: UInt16?
 
     private let port: UInt16
     private let bearerToken: String
@@ -25,6 +27,8 @@ final class AgentServer: ObservableObject {
     private let queue = DispatchQueue(label: "com.emanueledipietro.Attic.AgentServer")
     private let logger = Logger(subsystem: "com.emanueledipietro.Attic", category: "AgentServer")
     private var listener: NWListener?
+    private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
+    private var activeRequestTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
 
     init(port: UInt16, bearerToken: String, handler: MCPRequestHandler) {
         self.port = port
@@ -57,10 +61,12 @@ final class AgentServer: ObservableObject {
         listener.stateUpdateHandler = { [weak self, weak listener, logger, port] state in
             switch state {
             case .ready:
-                logger.info("Agent MCP server listening on http://127.0.0.1:\(port)/mcp")
                 Task { @MainActor in
                     guard let self, let listener, self.listener === listener else { return }
+                    let resolvedPort = listener.port?.rawValue ?? port
+                    self.listeningPort = resolvedPort
                     self.state = .running
+                    logger.info("Agent MCP server listening on http://127.0.0.1:\(resolvedPort)/mcp")
                 }
             case let .failed(error):
                 logger.error("Agent MCP server failed: \(error.localizedDescription)")
@@ -68,6 +74,8 @@ final class AgentServer: ObservableObject {
                     guard let self, let listener, self.listener === listener else { return }
                     listener.cancel()
                     self.listener = nil
+                    self.listeningPort = nil
+                    self.cancelActiveConnections()
                     self.state = .failed(error.localizedDescription)
                 }
             default:
@@ -75,18 +83,54 @@ final class AgentServer: ObservableObject {
             }
         }
         listener.newConnectionHandler = { [weak self] connection in
-            connection.start(queue: self?.queue ?? .global())
-            self?.receive(on: connection, buffer: Data())
+            Task { @MainActor in
+                self?.accept(connection)
+            }
         }
 
-        listener.start(queue: queue)
         self.listener = listener
+        listener.start(queue: queue)
     }
 
     func stop() {
+        cancelActiveConnections()
         listener?.cancel()
         listener = nil
+        listeningPort = nil
         state = .stopped
+    }
+
+    private func cancelActiveConnections() {
+        activeRequestTasks.values.forEach { $0.cancel() }
+        activeRequestTasks.removeAll()
+        activeConnections.values.forEach { $0.cancel() }
+        activeConnections.removeAll()
+    }
+
+    private func accept(_ connection: NWConnection) {
+        guard listener != nil else {
+            connection.cancel()
+            return
+        }
+        let id = ObjectIdentifier(connection)
+        activeConnections[id] = connection
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .cancelled, .failed:
+                Task { @MainActor in
+                    self?.connectionDidEnd(id)
+                }
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+        receive(on: connection, buffer: Data())
+    }
+
+    private func connectionDidEnd(_ id: ObjectIdentifier) {
+        activeRequestTasks.removeValue(forKey: id)?.cancel()
+        activeConnections.removeValue(forKey: id)
     }
 
     nonisolated private func receive(on connection: NWConnection, buffer: Data, searchedBytes: Int = 0) {
@@ -146,8 +190,28 @@ final class AgentServer: ObservableObject {
             )
             return
         }
+        guard Self.isJSONContentType(request.headers["content-type"]) else {
+            send(status: 415, reason: "Unsupported Media Type", body: nil, on: connection)
+            return
+        }
         Task { @MainActor [weak self] in
-            guard let self, self.listener != nil else {
+            self?.beginHandling(request, on: connection)
+        }
+    }
+
+    private func beginHandling(_ request: AgentHTTPRequest, on connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        guard listener != nil, activeConnections[id] != nil else {
+            connection.cancel()
+            return
+        }
+
+        let requestTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self,
+                  !Task.isCancelled,
+                  self.listener != nil,
+                  self.activeConnections[id] != nil else {
                 connection.cancel()
                 return
             }
@@ -155,8 +219,29 @@ final class AgentServer: ObservableObject {
                 body: request.body,
                 protocolVersion: request.headers["mcp-protocol-version"]
             )
-            self.send(status: result.status, reason: result.reason, body: result.body, on: connection)
+            guard !Task.isCancelled, self.activeConnections[id] != nil else {
+                connection.cancel()
+                return
+            }
+            self.activeRequestTasks.removeValue(forKey: id)
+            self.send(
+                status: result.status,
+                reason: result.reason,
+                body: result.body,
+                on: connection
+            )
         }
+        activeRequestTasks[id]?.cancel()
+        activeRequestTasks[id] = requestTask
+    }
+
+    nonisolated private static func isJSONContentType(_ rawValue: String?) -> Bool {
+        guard let rawValue else { return false }
+        let mediaType = rawValue
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return mediaType == "application/json"
     }
 
     nonisolated private func send(
@@ -189,8 +274,7 @@ final class AgentServer: ObservableObject {
 
 enum AgentRequestSecurity {
     static func isAuthorized(headers: [String: String], bearerToken: String) -> Bool {
-        guard let host = headers["host"]?.lowercased(),
-              host == "127.0.0.1" || host.hasPrefix("127.0.0.1:") else {
+        guard let host = headers["host"]?.lowercased(), isLoopbackHost(host) else {
             return false
         }
         guard let authorization = headers["authorization"] else { return false }
@@ -200,11 +284,25 @@ enum AgentRequestSecurity {
     private static func constantTimeEquals(_ lhs: String, _ rhs: String) -> Bool {
         let lhsBytes = Array(lhs.utf8)
         let rhsBytes = Array(rhs.utf8)
-        guard lhsBytes.count == rhsBytes.count else { return false }
-        var difference: UInt8 = 0
-        for (left, right) in zip(lhsBytes, rhsBytes) {
-            difference |= left ^ right
+        let count = max(lhsBytes.count, rhsBytes.count)
+        var difference = UInt(lhsBytes.count ^ rhsBytes.count)
+        for index in 0..<count {
+            let left = index < lhsBytes.count ? lhsBytes[index] : 0
+            let right = index < rhsBytes.count ? rhsBytes[index] : 0
+            difference |= UInt(left ^ right)
         }
         return difference == 0
+    }
+
+    private static func isLoopbackHost(_ host: String) -> Bool {
+        if host == "127.0.0.1" { return true }
+        let pieces = host.split(separator: ":", omittingEmptySubsequences: false)
+        guard pieces.count == 2,
+              pieces[0] == "127.0.0.1",
+              !pieces[1].isEmpty,
+              UInt16(pieces[1]) != nil else {
+            return false
+        }
+        return true
     }
 }

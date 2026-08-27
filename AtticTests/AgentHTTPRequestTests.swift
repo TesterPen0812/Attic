@@ -62,6 +62,27 @@ final class AgentHTTPRequestTests: XCTestCase {
         }
     }
 
+    func testDuplicateAuthorizationHeaderReturnsInvalid() {
+        let raw = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer one\r\nAuthorization: Bearer two\r\nContent-Length: 2\r\n\r\n{}"
+        guard case .invalid = AgentHTTPRequest.parse(Data(raw.utf8)) else {
+            return XCTFail("Expected invalid")
+        }
+    }
+
+    func testOversizedHeaderReturnsInvalidBeforeTerminatorArrives() {
+        let raw = "POST /mcp HTTP/1.1\r\nX-Fill: " + String(repeating: "a", count: 16_384)
+        guard case .invalid = AgentHTTPRequest.parse(Data(raw.utf8)) else {
+            return XCTFail("Expected invalid")
+        }
+    }
+
+    func testDeclaredOversizedBodyReturnsInvalidWithoutWaitingForBody() {
+        let raw = "POST /mcp HTTP/1.1\r\nContent-Length: 1048577\r\n\r\n"
+        guard case .invalid = AgentHTTPRequest.parse(Data(raw.utf8)) else {
+            return XCTFail("Expected invalid")
+        }
+    }
+
     /// Feeds the request one byte at a time, resuming each parse from the
     /// offset reported by the previous one, exactly like AgentServer.receive.
     /// Splitting on every byte also covers a head terminator that straddles
@@ -135,6 +156,20 @@ final class AgentHTTPRequestTests: XCTestCase {
             headers: [
                 "host": "127.0.0.1:7335",
                 "authorization": "Bearer wrong"
+            ],
+            bearerToken: token
+        ))
+        XCTAssertFalse(AgentRequestSecurity.isAuthorized(
+            headers: [
+                "host": "127.0.0.1:7335.evil.example",
+                "authorization": "Bearer \(token)"
+            ],
+            bearerToken: token
+        ))
+        XCTAssertFalse(AgentRequestSecurity.isAuthorized(
+            headers: [
+                "host": "127.0.0.1:not-a-port",
+                "authorization": "Bearer \(token)"
             ],
             bearerToken: token
         ))
