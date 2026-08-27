@@ -155,7 +155,7 @@ extension CanvasStore {
                     ?? CanvasBoardItem.logicalBoardID
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return false
         }
         return save()

@@ -4,6 +4,23 @@ import Foundation
 import SwiftData
 
 extension CanvasStore {
+    /// Discard mutations that failed before `save()` was reached. SwiftData
+    /// keeps inserts/updates in the context after a thrown validation or
+    /// replica-resolution error; leaving those changes in place would let a
+    /// later, unrelated canvas action persist a partial earlier operation.
+    func discardPendingChanges(after error: Error) {
+        let failureMessage = error.localizedDescription
+        context.rollback()
+        do {
+            let warning = try reloadCanvas()
+            lastErrorMessage = warning.map {
+                "\(failureMessage) · \($0)"
+            } ?? failureMessage
+        } catch {
+            lastErrorMessage = "\(failureMessage) · Reload failed: \(error.localizedDescription)"
+        }
+    }
+
     @discardableResult
     func save() -> Bool {
         do {

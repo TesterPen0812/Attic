@@ -37,28 +37,59 @@ extension CanvasStore {
         let timestamp = now()
         do {
             try ensureSelectedBoardReplicaExists(at: timestamp)
+            let replicas = try storedImageReplicas(matching: [id])[id] ?? []
+            if replicas.isEmpty {
+                context.insert(CanvasImageItem(
+                    id: id,
+                    canvasID: selectedCanvasID,
+                    encodedData: prepared.encodedData,
+                    contentType: prepared.contentType,
+                    pixelWidth: prepared.pixelWidth,
+                    pixelHeight: prepared.pixelHeight,
+                    centerX: transform.center.x,
+                    centerY: transform.center.y,
+                    width: transform.width,
+                    height: transform.height,
+                    zIndex: transform.zIndex,
+                    boardGeneration: boardGeneration,
+                    mutationVersion: 1,
+                    tombstoned: false,
+                    createdAt: timestamp,
+                    updatedAt: timestamp
+                ))
+            } else {
+                // Treat a caller-supplied ID as an idempotent logical
+                // identity, just like strokes. Updating every physical row
+                // prevents an old tombstone from winning over a retry and
+                // avoids creating another CloudKit duplicate.
+                let winner = try Self.winningImageReplica(in: replicas)
+                let nextVersion = try Self.nextMutationVersion(
+                    after: replicas.map(\.mutationVersion).max() ?? 0,
+                    objectID: id
+                )
+                for replica in replicas {
+                    replica.canvasID = selectedCanvasID
+                    replica.encodedData = prepared.encodedData
+                    replica.contentType = prepared.contentType
+                    replica.pixelWidth = Int64(prepared.pixelWidth)
+                    replica.pixelHeight = Int64(prepared.pixelHeight)
+                    replica.centerX = transform.center.x
+                    replica.centerY = transform.center.y
+                    replica.width = transform.width
+                    replica.height = transform.height
+                    replica.zIndex = transform.zIndex
+                    replica.boardGeneration = boardGeneration
+                    replica.mutationVersion = nextVersion
+                    replica.tombstoned = false
+                    replica.createdAt = winner.createdAt
+                    replica.updatedAt = timestamp
+                    replica.deletedAt = nil
+                }
+            }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return nil
         }
-        context.insert(CanvasImageItem(
-            id: id,
-            canvasID: selectedCanvasID,
-            encodedData: prepared.encodedData,
-            contentType: prepared.contentType,
-            pixelWidth: prepared.pixelWidth,
-            pixelHeight: prepared.pixelHeight,
-            centerX: transform.center.x,
-            centerY: transform.center.y,
-            width: transform.width,
-            height: transform.height,
-            zIndex: transform.zIndex,
-            boardGeneration: boardGeneration,
-            mutationVersion: 1,
-            tombstoned: false,
-            createdAt: timestamp,
-            updatedAt: timestamp
-        ))
         guard save() else { return nil }
         return images.first { $0.id == id }
     }
@@ -99,7 +130,7 @@ extension CanvasStore {
                 replica.deletedAt = nil
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return false
         }
         return save()
@@ -135,7 +166,7 @@ extension CanvasStore {
                 }
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return false
         }
         return save()
@@ -161,6 +192,10 @@ extension CanvasStore {
             for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
                 guard let snapshot = uniqueSnapshots[id],
                       !snapshot.encodedData.isEmpty,
+                      snapshot.encodedData.count
+                        <= CanvasImageImportPolicy.standard.maximumEncodedBytes,
+                      snapshot.pixelWidth > 0,
+                      snapshot.pixelHeight > 0,
                       snapshot.transform.isValid else {
                     throw CanvasReplicaMutationError.invalidImage
                 }
@@ -214,7 +249,7 @@ extension CanvasStore {
                 }
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return false
         }
         return save()

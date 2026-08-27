@@ -232,6 +232,53 @@ final class CanvasStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedMultiStrokeRestoreRollsBackEarlierInserts() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let blockedID = UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
+        let timestamp = Date(timeIntervalSince1970: 10)
+        context.insert(CanvasStrokeItem(
+            id: blockedID,
+            payload: try CanvasStrokeCodec.encode(
+                color: .ink,
+                width: 3,
+                points: [CanvasPoint(x: 2, y: 3)]
+            ),
+            mutationVersion: Int64.max,
+            tombstoned: true,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            deletedAt: timestamp
+        ))
+        try context.save()
+
+        let store = CanvasStore(container: container)
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let first = CanvasStroke(
+            id: firstID,
+            color: .blue,
+            width: 3,
+            points: [CanvasPoint(x: 8, y: 9)]
+        )
+        let blockedSnapshot = CanvasStroke(
+            id: blockedID,
+            color: .red,
+            width: 4,
+            points: [CanvasPoint(x: 12, y: 13)]
+        )
+
+        XCTAssertFalse(store.restore([first, blockedSnapshot]))
+        XCTAssertTrue(store.strokes.isEmpty)
+        XCTAssertNotNil(store.lastErrorMessage)
+
+        let verification = ModelContext(container)
+        let rows = try verification.fetch(FetchDescriptor<CanvasStrokeItem>())
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.id, blockedID)
+        XCTAssertTrue(rows.first?.tombstoned == true)
+    }
+
+    @MainActor
     func testMalformedPayloadIsRetainedButNotRendered() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)

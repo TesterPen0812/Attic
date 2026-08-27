@@ -48,7 +48,7 @@ extension CanvasStore {
                 }
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return false
         }
         return save()

@@ -58,7 +58,7 @@ extension CanvasStore {
                 }
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return nil
         }
 
@@ -108,7 +108,7 @@ extension CanvasStore {
                 }
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return false
         }
 
@@ -175,7 +175,7 @@ extension CanvasStore {
                 }
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            discardPendingChanges(after: error)
             return false
         }
         return save()

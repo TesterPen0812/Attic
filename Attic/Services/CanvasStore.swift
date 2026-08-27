@@ -87,6 +87,11 @@ struct CanvasImageCacheEntry {
             && contentType == replica.contentType
             && pixelWidth == replica.pixelWidth
             && pixelHeight == replica.pixelHeight
+            // The cache token must change when the bitmap changes even if its
+            // dimensions and encoded byte count happen to remain identical.
+            // `image` already owns the prior bytes, so this exact comparison
+            // does not duplicate the payload in the cache.
+            && image.encodedData == replica.encodedData
     }
 
     func matches(_ replica: CanvasImageItem) -> Bool {
@@ -105,14 +110,14 @@ struct CanvasImageCacheEntry {
 
 @MainActor
 final class CanvasStore: ObservableObject {
-    @Published private(set) var canvases: [CanvasBoard] = [.defaultBoard]
-    @Published private(set) var selectedCanvasID = CanvasBoardItem.logicalBoardID
-    @Published private(set) var strokes: [CanvasStroke] = []
-    @Published private(set) var images: [CanvasPlacedImage] = []
-    @Published private(set) var boardGeneration: Int64 = 0
-    @Published private(set) var lastErrorMessage: String?
-    @Published private(set) var revision: UInt64 = 0
-    @Published private(set) var cloudSyncStatus = CloudSyncStatus()
+    @Published var canvases: [CanvasBoard] = [.defaultBoard]
+    @Published var selectedCanvasID = CanvasBoardItem.logicalBoardID
+    @Published var strokes: [CanvasStroke] = []
+    @Published var images: [CanvasPlacedImage] = []
+    @Published var boardGeneration: Int64 = 0
+    @Published var lastErrorMessage: String?
+    @Published var revision: UInt64 = 0
+    @Published var cloudSyncStatus = CloudSyncStatus()
 
     let container: ModelContainer
     var context: ModelContext
