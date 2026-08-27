@@ -143,7 +143,7 @@ xcodebuild test \
 xcodebuild test \
   -project Attic.xcodeproj \
   -scheme AtticMobile \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest'
 ```
 
 ## Project generation

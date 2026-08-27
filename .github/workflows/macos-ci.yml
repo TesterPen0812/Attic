@@ -1,4 +1,4 @@
-name: macOS CI
+name: Attic CI
 
 on:
   pull_request:
@@ -67,6 +67,7 @@ jobs:
             test
 
       - name: Run macOS UI tests
+        id: macos-ui-tests
         run: |
           xcodebuild \
             -project Attic.xcodeproj \
@@ -80,7 +81,7 @@ jobs:
             test
 
       - name: Upload failing UI test results
-        if: failure()
+        if: failure() && steps.macos-ui-tests.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: macos-ui-test-results-${{ github.sha }}
@@ -97,5 +98,94 @@ jobs:
             -configuration Local \
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticAnalyze" \
+            CODE_SIGNING_ALLOWED=NO \
+            analyze
+
+  ios:
+    name: Build, test, and analyze Attic for iPhone
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Ruby dependencies
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Verify generated Xcode project
+        run: bundle exec ruby Scripts/verify_project_generation.rb
+
+      - name: Build iPhone target
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      - name: Build iPhone target with strict concurrency checking
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileStrictBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete \
+            clean build
+
+      - name: Run iPhone unit tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileUnitTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticMobileUnitTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticMobileTests \
+            test
+
+      - name: Run iPhone UI tests
+        id: ios-ui-tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileUITests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticMobileUITests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticMobileUITests \
+            test
+
+      - name: Upload failing iPhone UI test results
+        if: failure() && steps.ios-ui-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-test-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticMobileUITests.xcresult
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Run iPhone static analyzer
+        if: always()
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileAnalyze" \
             CODE_SIGNING_ALLOWED=NO \
             analyze
