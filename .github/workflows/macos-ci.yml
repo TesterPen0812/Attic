@@ -31,6 +31,22 @@ jobs:
           ruby-version: "3.3"
           bundler-cache: true
 
+      - name: Generate project artifact
+        run: |
+          bundle exec ruby Scripts/generate_project.rb \
+            --output "$RUNNER_TEMP/GeneratedAttic.xcodeproj"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
+            "$RUNNER_TEMP/GeneratedAttic.xcodeproj.zip"
+
+      - name: Upload generated project
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-xcode-project-${{ github.sha }}
+          path: ${{ runner.temp }}/GeneratedAttic.xcodeproj.zip
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Verify generated Xcode project
         run: bundle exec ruby Scripts/verify_project_generation.rb
 
@@ -80,6 +96,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:AtticUITests \
             test
+
+      - name: Print macOS UI test summary
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/AtticUITests.xcresult" ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/AtticUITests.xcresult" \
+              --format json || true
+          fi
 
       - name: Upload failing macOS UI test results
         if: failure()
