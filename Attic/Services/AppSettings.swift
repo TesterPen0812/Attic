@@ -202,10 +202,6 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(corner.rawValue, forKey: Key.corner) }
     }
 
-    /// Temporary source compatibility while the panel and Settings view move
-    /// to the discrete native profile. It intentionally does not persist.
-    @Published var isTranslucent = true
-
     @Published var panelGlassMaterial: PanelGlassMaterialPreference {
         didSet { defaults.set(panelGlassMaterial.rawValue, forKey: Key.panelGlassMaterial) }
     }
