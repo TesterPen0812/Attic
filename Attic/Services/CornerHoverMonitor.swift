@@ -162,6 +162,7 @@ final class CornerHoverMonitor {
             isInHotspot: isInHotspot,
             isInPanel: isInPanel,
             isInteractionLocked: uiState.isInteractionLocked || isMouseButtonPressed,
+            isPinned: uiState.isPanelPinned,
             revealDelay: settings.revealDelay,
             hideDelay: settings.hideDelay
         )
