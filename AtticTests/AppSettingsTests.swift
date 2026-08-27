@@ -153,3 +153,307 @@ final class AppSettingsTests: XCTestCase {
         defaults.set(true, forKey: "hasAdoptedInstantRevealV3")
     }
 }
+
+final class OpticalGlassContractTests: XCTestCase {
+    func testOpticalAxesResolveIndependently() {
+        let baselineControls = OpticalGlassControls.defaults
+        let baseline = OpticalGlassProfile.resolve(
+            controls: baselineControls,
+            windowActivity: .key
+        )
+
+        var controls = baselineControls
+        controls.transparency = 35
+        XCTAssertEqual(changedFields(from: baseline, to: resolved(controls)), ["surfaceOpacity"])
+
+        controls = baselineControls
+        controls.frost = 71
+        XCTAssertEqual(changedFields(from: baseline, to: resolved(controls)), ["frostRadius"])
+
+        controls = baselineControls
+        controls.refraction = 41
+        XCTAssertEqual(
+            changedFields(from: baseline, to: resolved(controls)),
+            ["baseDisplacementPixels", "refractionBandPixels"]
+        )
+
+        controls = baselineControls
+        controls.edgeShine = 73
+        XCTAssertEqual(changedFields(from: baseline, to: resolved(controls)), ["edgeShineOpacity"])
+
+        controls = baselineControls
+        controls.tint = 64
+        XCTAssertEqual(changedFields(from: baseline, to: resolved(controls)), ["tintOpacity"])
+
+        controls = baselineControls
+        controls.readability = 52
+        XCTAssertEqual(changedFields(from: baseline, to: resolved(controls)), ["readabilityOpacity"])
+
+        controls = baselineControls
+        controls.interactionResponse = 87
+        XCTAssertEqual(changedFields(from: baseline, to: resolved(controls)), ["interactionBoost"])
+    }
+
+    func testZeroRefractionIsIdentityAcrossThePanel() {
+        var controls = OpticalGlassControls.defaults
+        controls.refraction = 0
+        let profile = resolved(controls)
+        let boundary = PanelOpticalBoundary(
+            size: CGSize(width: 332, height: 380),
+            cornerRadius: 18,
+            exponent: 5
+        )
+        let points = [
+            CGPoint(x: 1, y: 190),
+            CGPoint(x: 331, y: 190),
+            CGPoint(x: 166, y: 1),
+            CGPoint(x: 166, y: 379),
+            CGPoint(x: 2.75, y: 2.75),
+            CGPoint(x: 166, y: 190)
+        ]
+
+        for point in points {
+            let sample = boundary.sample(at: point, profile: profile, backingScale: 2)
+            XCTAssertEqual(sample.edgeInfluence, 0, accuracy: 0.000_001)
+            XCTAssertEqual(sample.displacement, .zero)
+            XCTAssertEqual(sample.sourcePoint, point)
+        }
+    }
+
+    func testEdgeMaskIsContinuousAtStraightToCornerJoin() {
+        let profile = resolved(.defaults)
+        let boundary = PanelOpticalBoundary(
+            size: CGSize(width: 332, height: 380),
+            cornerRadius: 18,
+            exponent: 5
+        )
+        let beforeJoin = boundary.sample(
+            at: CGPoint(x: 313.75, y: 379),
+            profile: profile,
+            backingScale: 2
+        )
+        let afterJoin = boundary.sample(
+            at: CGPoint(x: 314.25, y: 379),
+            profile: profile,
+            backingScale: 2
+        )
+
+        XCTAssertEqual(beforeJoin.edgeInfluence, afterJoin.edgeInfluence, accuracy: 0.001)
+        XCTAssertEqual(beforeJoin.displacement.x, afterJoin.displacement.x, accuracy: 0.02)
+        XCTAssertEqual(beforeJoin.displacement.y, afterJoin.displacement.y, accuracy: 0.02)
+    }
+
+    func testEdgeMaskFallsContinuouslyToZeroBeforeTheCenter() {
+        let profile = resolved(.defaults)
+        let boundary = PanelOpticalBoundary(
+            size: CGSize(width: 332, height: 380),
+            cornerRadius: 18,
+            exponent: 5
+        )
+        let samples = [1.0, 5.0, 10.0, 17.0, 19.0].map {
+            boundary.sample(
+                at: CGPoint(x: 166, y: $0),
+                profile: profile,
+                backingScale: 2
+            ).edgeInfluence
+        }
+
+        XCTAssertGreaterThan(samples[0], samples[1])
+        XCTAssertGreaterThan(samples[1], samples[2])
+        XCTAssertGreaterThan(samples[2], samples[3])
+        XCTAssertEqual(samples[4], 0, accuracy: 0.000_001)
+    }
+
+    func testCenterHasNoOpticalContributionOrSeam() {
+        let profile = resolved(.defaults)
+        let boundary = PanelOpticalBoundary(
+            size: CGSize(width: 332, height: 380),
+            cornerRadius: 18,
+            exponent: 5
+        )
+        let centerPoints = [
+            CGPoint(x: 166, y: 190),
+            CGPoint(x: 165.75, y: 190),
+            CGPoint(x: 166.25, y: 190),
+            CGPoint(x: 116, y: 190),
+            CGPoint(x: 216, y: 190)
+        ]
+
+        for point in centerPoints {
+            let sample = boundary.sample(at: point, profile: profile, backingScale: 2)
+            XCTAssertEqual(sample.edgeInfluence, 0, accuracy: 0.000_001)
+            XCTAssertEqual(sample.displacement, .zero)
+        }
+    }
+
+    func testResolvedProfileIsIndependentOfWindowFocus() {
+        let controls = OpticalGlassControls.defaults
+        let key = OpticalGlassProfile.resolve(controls: controls, windowActivity: .key)
+        let inactive = OpticalGlassProfile.resolve(controls: controls, windowActivity: .inactive)
+
+        XCTAssertEqual(key, inactive)
+    }
+
+    func testMaximumRefractionMatchesReferenceBandAndDisplacementEnvelopeAtRest() {
+        var controls = OpticalGlassControls.defaults
+        controls.refraction = 100
+        let profile = resolved(controls)
+        let boundary = PanelOpticalBoundary(
+            size: CGSize(width: 332, height: 380),
+            cornerRadius: 18,
+            exponent: 5
+        )
+
+        XCTAssertEqual(profile.refractionBandPixels, 36, accuracy: 0.001)
+        XCTAssertEqual(profile.baseDisplacementPixels, 19, accuracy: 0.001)
+
+        let side = pixelMagnitude(
+            boundary.sample(at: CGPoint(x: 1, y: 190), profile: profile, backingScale: 2)
+        )
+        let bottom = pixelMagnitude(
+            boundary.sample(at: CGPoint(x: 166, y: 1), profile: profile, backingScale: 2)
+        )
+        let top = pixelMagnitude(
+            boundary.sample(at: CGPoint(x: 166, y: 379), profile: profile, backingScale: 2)
+        )
+        let bottomCorner = pixelMagnitude(
+            boundary.sample(at: CGPoint(x: 2.75, y: 2.75), profile: profile, backingScale: 2)
+        )
+
+        XCTAssertTrue((15.5...16.5).contains(side))
+        XCTAssertTrue((18.5...19.5).contains(bottom))
+        XCTAssertTrue((15.5...16.5).contains(top))
+        XCTAssertTrue((22...24).contains(bottomCorner))
+        XCTAssertGreaterThan(bottom, side)
+        XCTAssertGreaterThan(bottomCorner, bottom)
+    }
+
+    func testSyntheticGridHasStableGoldenDisplacementSignature() {
+        let profile = resolved(.defaults)
+        let boundary = PanelOpticalBoundary(
+            size: CGSize(width: 332, height: 380),
+            cornerRadius: 18,
+            exponent: 5
+        )
+
+        XCTAssertEqual(
+            opticalSignature(boundary: boundary, profile: profile),
+            [
+                991, 1582, 0,
+                991, -1582, 0,
+                991, 0, 1883,
+                991, 0, -1582,
+                997, 1665, 1601,
+                997, -1665, 1601,
+                997, -1447, -1391,
+                997, 1391, -1447,
+                0, 0, 0
+            ]
+        )
+    }
+
+    func testBackdropLifecycleRejectsStaleWorkAndClearsOnStop() {
+        var lifecycle = OpticalBackdropLifecycle()
+        let firstGeneration = lifecycle.install()
+        XCTAssertEqual(lifecycle.phase, .installed)
+        XCTAssertTrue(lifecycle.accepts(firstGeneration))
+
+        lifecycle.show()
+        XCTAssertEqual(lifecycle.phase, .visible)
+        lifecycle.hide()
+        XCTAssertEqual(lifecycle.phase, .installed)
+
+        lifecycle.stop()
+        XCTAssertEqual(lifecycle.phase, .stopped)
+        XCTAssertFalse(lifecycle.accepts(firstGeneration))
+
+        let secondGeneration = lifecycle.install()
+        XCTAssertGreaterThan(secondGeneration, firstGeneration)
+        XCTAssertTrue(lifecycle.accepts(secondGeneration))
+        XCTAssertFalse(lifecycle.accepts(firstGeneration))
+    }
+
+    func testBackdropFallbackPrefersLiveFilteringWithoutFakingUnsupportedOptics() {
+        XCTAssertEqual(
+            OpticalBackdropBackend.resolve(
+                backgroundFiltersAvailable: true,
+                reduceTransparency: false
+            ),
+            .liveFiltered
+        )
+        XCTAssertEqual(
+            OpticalBackdropBackend.resolve(
+                backgroundFiltersAvailable: false,
+                reduceTransparency: false
+            ),
+            .liveMaterial
+        )
+        XCTAssertEqual(
+            OpticalBackdropBackend.resolve(
+                backgroundFiltersAvailable: true,
+                reduceTransparency: true
+            ),
+            .opaque
+        )
+    }
+
+    private func resolved(_ controls: OpticalGlassControls) -> OpticalGlassProfile {
+        OpticalGlassProfile.resolve(controls: controls, windowActivity: .key)
+    }
+
+    private func changedFields(
+        from lhs: OpticalGlassProfile,
+        to rhs: OpticalGlassProfile
+    ) -> Set<String> {
+        var fields: Set<String> = []
+        if lhs.surfaceOpacity != rhs.surfaceOpacity { fields.insert("surfaceOpacity") }
+        if lhs.frostRadius != rhs.frostRadius { fields.insert("frostRadius") }
+        if lhs.refractionBandPixels != rhs.refractionBandPixels {
+            fields.insert("refractionBandPixels")
+        }
+        if lhs.baseDisplacementPixels != rhs.baseDisplacementPixels {
+            fields.insert("baseDisplacementPixels")
+        }
+        if lhs.edgeShineOpacity != rhs.edgeShineOpacity {
+            fields.insert("edgeShineOpacity")
+        }
+        if lhs.tintOpacity != rhs.tintOpacity { fields.insert("tintOpacity") }
+        if lhs.readabilityOpacity != rhs.readabilityOpacity {
+            fields.insert("readabilityOpacity")
+        }
+        if lhs.interactionBoost != rhs.interactionBoost {
+            fields.insert("interactionBoost")
+        }
+        return fields
+    }
+
+    private func pixelMagnitude(_ sample: OpticalDisplacementSample) -> Double {
+        hypot(sample.displacement.x, sample.displacement.y) * 2
+    }
+
+    private func opticalSignature(
+        boundary: PanelOpticalBoundary,
+        profile: OpticalGlassProfile
+    ) -> [Int] {
+        let points = [
+            CGPoint(x: 1, y: 190),
+            CGPoint(x: 331, y: 190),
+            CGPoint(x: 166, y: 1),
+            CGPoint(x: 166, y: 379),
+            CGPoint(x: 2.75, y: 2.75),
+            CGPoint(x: 329.25, y: 2.75),
+            CGPoint(x: 329.25, y: 377.25),
+            CGPoint(x: 2.75, y: 377.25),
+            CGPoint(x: 166, y: 190)
+        ]
+
+        return points.flatMap { point in
+            let sample = boundary.sample(at: point, profile: profile, backingScale: 2)
+            return [
+                Int((sample.edgeInfluence * 1_000).rounded()),
+                Int((sample.displacement.x * 200).rounded()),
+                Int((sample.displacement.y * 200).rounded())
+            ]
+        }
+    }
+}
