@@ -61,7 +61,10 @@ struct AtticPanelView: View {
         .padding(.top, contentInsets.top)
         .padding(.bottom, contentInsets.bottom)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .atticPanelSurface(translucent: settings.isTranslucent, cornerRadius: cornerRadius)
+        .atticPanelSurface(
+            preferences: settings.panelGlassPreferences,
+            cornerRadius: cornerRadius
+        )
         .animation(reduceMotion ? nil : AtticMotion.spring, value: uiState.isComposerPresented)
         .animation(reduceMotion ? nil : AtticMotion.spring, value: store.tasks.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.spring, value: noteStore.notes.map(\.id))
