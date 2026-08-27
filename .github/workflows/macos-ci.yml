@@ -3,7 +3,7 @@ name: macOS CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, experiment/custom-optical-glass]
   workflow_dispatch:
 
 permissions:
