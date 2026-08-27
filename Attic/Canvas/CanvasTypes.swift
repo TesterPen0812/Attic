@@ -84,6 +84,7 @@ struct CanvasStroke: Identifiable, Equatable {
     let mutationVersion: Int64
     let createdAt: Date
     let updatedAt: Date
+    let bounds: CGRect?
 
     init(
         id: UUID = UUID(),
@@ -105,6 +106,7 @@ struct CanvasStroke: Identifiable, Equatable {
         self.mutationVersion = mutationVersion
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
+        bounds = Self.makeBounds(points: points, width: width)
     }
 
     static func == (lhs: CanvasStroke, rhs: CanvasStroke) -> Bool {
@@ -122,14 +124,16 @@ struct CanvasStroke: Identifiable, Equatable {
         CanvasStrokeRenderKey(id: id, token: renderToken)
     }
 
-    var bounds: CGRect? {
+    private static func makeBounds(
+        points: [CanvasPoint],
+        width: Double
+    ) -> CGRect? {
         guard let first = points.first else { return nil }
 
         var minimumX = first.x
         var maximumX = first.x
         var minimumY = first.y
         var maximumY = first.y
-
         for point in points.dropFirst() {
             minimumX = min(minimumX, point.x)
             maximumX = max(maximumX, point.x)
@@ -137,12 +141,12 @@ struct CanvasStroke: Identifiable, Equatable {
             maximumY = max(maximumY, point.y)
         }
 
-        let halfWidth = width / 2
+        let halfWidth = max(width, 0) / 2
         return CGRect(
-            x: CGFloat(minimumX - halfWidth),
-            y: CGFloat(minimumY - halfWidth),
-            width: CGFloat(max(maximumX - minimumX, 0) + width),
-            height: CGFloat(max(maximumY - minimumY, 0) + width)
+            x: minimumX - halfWidth,
+            y: minimumY - halfWidth,
+            width: max(maximumX - minimumX, 0) + halfWidth * 2,
+            height: max(maximumY - minimumY, 0) + halfWidth * 2
         )
     }
 }
@@ -167,6 +171,7 @@ enum CanvasHitTesting {
             dy: -CGFloat(radius)
         )
         var result: Set<UUID> = []
+        result.reserveCapacity(min(strokes.count, 16))
         for stroke in strokes {
             guard stroke.bounds?.intersects(eraserBounds) == true else {
                 continue
@@ -210,49 +215,26 @@ enum CanvasHitTesting {
         guard !stroke.points.isEmpty else { return false }
         let threshold = radius + max(stroke.width, 0) / 2
         let thresholdSquared = threshold * threshold
+        let eraserSegmentCount = max(eraserPoints.count - 1, 1)
+        let strokeSegmentCount = max(stroke.points.count - 1, 1)
 
-        if eraserPoints.count == 1 {
-            return strokeSegments(stroke.points).contains { segment in
-                pointToSegmentDistanceSquared(
-                    eraserPoints[0],
-                    segment.start,
-                    segment.end
-                ) <= thresholdSquared
-            }
-        }
-
-        if stroke.points.count == 1 {
-            return strokeSegments(eraserPoints).contains { segment in
-                pointToSegmentDistanceSquared(
-                    stroke.points[0],
-                    segment.start,
-                    segment.end
-                ) <= thresholdSquared
-            }
-        }
-
-        for eraserSegment in strokeSegments(eraserPoints) {
-            for strokeSegment in strokeSegments(stroke.points) {
+        for eraserIndex in 0..<eraserSegmentCount {
+            let eraserStart = eraserPoints[eraserIndex]
+            let eraserEnd = eraserPoints[min(eraserIndex + 1, eraserPoints.count - 1)]
+            for strokeIndex in 0..<strokeSegmentCount {
+                let strokeStart = stroke.points[strokeIndex]
+                let strokeEnd = stroke.points[min(strokeIndex + 1, stroke.points.count - 1)]
                 if segmentDistanceSquared(
-                    eraserSegment.start,
-                    eraserSegment.end,
-                    strokeSegment.start,
-                    strokeSegment.end
+                    eraserStart,
+                    eraserEnd,
+                    strokeStart,
+                    strokeEnd
                 ) <= thresholdSquared {
                     return true
                 }
             }
         }
         return false
-    }
-
-    private static func strokeSegments(
-        _ points: [CanvasPoint]
-    ) -> [(start: CanvasPoint, end: CanvasPoint)] {
-        guard let first = points.first else { return [] }
-        guard points.count > 1 else { return [(first, first)] }
-
-        return zip(points, points.dropFirst()).map { ($0.0, $0.1) }
     }
 
     private static func segmentDistanceSquared(
@@ -265,12 +247,12 @@ enum CanvasHitTesting {
             return 0
         }
 
-        return [
+        return min(
             pointToSegmentDistanceSquared(a0, b0, b1),
             pointToSegmentDistanceSquared(a1, b0, b1),
             pointToSegmentDistanceSquared(b0, a0, a1),
             pointToSegmentDistanceSquared(b1, a0, a1)
-        ].min() ?? .infinity
+        )
     }
 
     private static func pointToSegmentDistanceSquared(
