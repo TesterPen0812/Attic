@@ -94,7 +94,11 @@ struct AtticPanelView: View {
     @ViewBuilder
     private var composerView: some View {
         if uiState.selectedSection.isNotes {
-            NoteComposerView(noteDraft: noteDraft, uiState: uiState)
+            NoteComposerView(
+                noteDraft: noteDraft,
+                noteStore: noteStore,
+                uiState: uiState
+            )
         } else {
             TaskComposerView(store: store, uiState: uiState)
         }

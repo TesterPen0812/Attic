@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The notes surface shown in the panel when the Notes section is selected.
 struct NotesPanelContent: View {
@@ -60,6 +61,7 @@ struct NoteComposerView: View {
     }
 
     @ObservedObject var noteDraft: NoteDraftController
+    @ObservedObject var noteStore: NoteStore
     @ObservedObject var uiState: PanelUIState
 
     @FocusState private var focusedField: FocusedField?
@@ -102,6 +104,8 @@ struct NoteComposerView: View {
                 .focused($focusedField, equals: .body)
                 .onExitCommand(perform: finishKeyboardInteraction)
                 .accessibilityIdentifier("note-body")
+
+            NoteAttachmentTray(noteStore: noteStore, noteDraft: noteDraft)
 
             if let conflictMessage = noteDraft.conflictMessage {
                 conflictControls(message: conflictMessage)

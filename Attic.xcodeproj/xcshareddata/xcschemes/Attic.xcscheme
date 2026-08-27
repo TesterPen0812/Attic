@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "A7714C2169D9DBD5A01DC94837E1C051"
+               BlueprintIdentifier = "F0F94A5A0990B6D08979E7DAAA263A73"
                BuildableName = "Attic.app"
                BlueprintName = "Attic"
                ReferencedContainer = "container:Attic.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A7714C2169D9DBD5A01DC94837E1C051"
+            BlueprintIdentifier = "F0F94A5A0990B6D08979E7DAAA263A73"
             BuildableName = "Attic.app"
             BlueprintName = "Attic"
             ReferencedContainer = "container:Attic.xcodeproj">
@@ -41,7 +41,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6276F3101BBBD6791E37F0DC63F158C3"
+               BlueprintIdentifier = "6C28AF6351F5E4AE7DD848B4EDB32F5B"
                BuildableName = "AtticTests.xctest"
                BlueprintName = "AtticTests"
                ReferencedContainer = "container:Attic.xcodeproj">
@@ -80,7 +80,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A7714C2169D9DBD5A01DC94837E1C051"
+            BlueprintIdentifier = "F0F94A5A0990B6D08979E7DAAA263A73"
             BuildableName = "Attic.app"
             BlueprintName = "Attic"
             ReferencedContainer = "container:Attic.xcodeproj">
@@ -97,7 +97,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "A7714C2169D9DBD5A01DC94837E1C051"
+            BlueprintIdentifier = "F0F94A5A0990B6D08979E7DAAA263A73"
             BuildableName = "Attic.app"
             BlueprintName = "Attic"
             ReferencedContainer = "container:Attic.xcodeproj">

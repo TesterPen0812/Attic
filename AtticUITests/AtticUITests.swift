@@ -136,6 +136,16 @@ final class AtticUITests: XCTestCase {
         XCTAssertFalse(app.buttons["save-note"].exists)
     }
 
+    func testNotesComposerShowsAttachmentTray() throws {
+        selectPanelSection("notes")
+        let addButton = app.buttons["add-note-button"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 2))
+        addButton.click()
+
+        XCTAssertTrue(app.buttons["add-note-attachment"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.otherElements["note-attachment-drop-target"].waitForExistence(timeout: 2))
+    }
+
     func testSectionChangeSuspendsAndRestoresTheActiveNoteDraft() throws {
         selectPanelSection("notes")
         let addButton = app.buttons["add-note-button"]
