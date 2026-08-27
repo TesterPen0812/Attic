@@ -1,5 +1,170 @@
 import Foundation
 
+struct OpticalGlassControls: Equatable, Sendable {
+    static let range = 0.0...100.0
+    static let defaults = OpticalGlassControls(
+        transparency: 88,
+        frost: 14,
+        refraction: 100,
+        edgeShine: 18,
+        tint: 10,
+        readability: 22,
+        interactionResponse: 28
+    )
+
+    var transparency: Double
+    var frost: Double
+    var refraction: Double
+    var edgeShine: Double
+    var tint: Double
+    var readability: Double
+    var interactionResponse: Double
+
+    static func normalized(_ value: Double, fallback: Double) -> Double {
+        guard value.isFinite else { return fallback / 100 }
+        return min(max(value, range.lowerBound), range.upperBound) / 100
+    }
+}
+
+enum OpticalWindowActivity: Equatable, Sendable {
+    case key
+    case inactive
+}
+
+/// Constants shared by the deterministic CPU reference model and the Metal
+/// source. At Maximum and Refraction 100, the resting field spans roughly
+/// 15.5 px on ordinary sides, 18.7 px at the bottom, 19.7 px at top corners,
+/// and 22.9 px at bottom corners. Interaction can use the remaining 1 px of
+/// headroom without crossing the 24 px hard cap.
+enum OpticalRefractionEnvelope {
+    static let restingDisplacementFraction = 23.0 / 24.0
+    static let sideMultiplier = 0.68
+    static let bottomContribution = 0.14
+    static let cornerContribution = 0.18
+    static let bottomStart = 0.58
+    static let bottomSpan = 0.42
+    static let cornerProductScale = 2.0
+    static let maximumEdgeMultiplier = 1.0
+
+    static func edgeMultiplier(
+        bottomProximity: Double,
+        inwardX: Double,
+        inwardY: Double
+    ) -> Double {
+        let bottomWeight = smoothstep((bottomProximity - bottomStart) / bottomSpan)
+        let cornerWeight = min(
+            1,
+            cornerProductScale * abs(inwardX * inwardY)
+        )
+        return min(
+            maximumEdgeMultiplier,
+            sideMultiplier
+                + bottomContribution * bottomWeight
+                + cornerContribution * cornerWeight
+        )
+    }
+
+    static func smoothstep(_ value: Double) -> Double {
+        let clamped = min(max(value, 0), 1)
+        return clamped * clamped * (3 - 2 * clamped)
+    }
+}
+
+/// A resolved rendering profile. Each user-facing axis maps to its own output
+/// field so Transparency, Frost, and Refraction cannot silently drive one
+/// another. Window activity is accepted for compatibility but deliberately
+/// ignored, making the resting profile focus invariant.
+struct OpticalGlassProfile: Equatable, Sendable {
+    let surfaceOpacity: Double
+    let frostRadius: Double
+    let refractionBandPixels: Double
+    let baseDisplacementPixels: Double
+    let maximumDisplacementPixels: Double
+    let edgeShineOpacity: Double
+    let tintOpacity: Double
+    let readabilityOpacity: Double
+    let interactionBoost: Double
+
+    static func resolve(
+        controls: OpticalGlassControls,
+        windowActivity: OpticalWindowActivity
+    ) -> OpticalGlassProfile {
+        resolve(
+            controls: controls,
+            workload: OpticalWorkloadProfile.workload(for: .maximum),
+            windowActivity: windowActivity
+        )
+    }
+
+    static func resolve(
+        controls: OpticalGlassControls,
+        workload: OpticalWorkloadProfile,
+        windowActivity _: OpticalWindowActivity
+    ) -> OpticalGlassProfile {
+        let defaults = OpticalGlassControls.defaults
+        let transparency = OpticalGlassControls.normalized(
+            controls.transparency,
+            fallback: defaults.transparency
+        )
+        let frost = OpticalGlassControls.normalized(
+            controls.frost,
+            fallback: defaults.frost
+        )
+        let refraction = OpticalGlassControls.normalized(
+            controls.refraction,
+            fallback: defaults.refraction
+        )
+        let edgeShine = OpticalGlassControls.normalized(
+            controls.edgeShine,
+            fallback: defaults.edgeShine
+        )
+        let tint = OpticalGlassControls.normalized(
+            controls.tint,
+            fallback: defaults.tint
+        )
+        let readability = OpticalGlassControls.normalized(
+            controls.readability,
+            fallback: defaults.readability
+        )
+        let interaction = OpticalGlassControls.normalized(
+            controls.interactionResponse,
+            fallback: defaults.interactionResponse
+        )
+        let refractionEnabled = workload.allowsLiveOptics && refraction > 0
+        let restingMaximum = workload.maximumDisplacementPixels
+            * OpticalRefractionEnvelope.restingDisplacementFraction
+
+        return OpticalGlassProfile(
+            surfaceOpacity: pow(1 - transparency, 1.35),
+            frostRadius: frost * 8,
+            refractionBandPixels: refractionEnabled
+                ? workload.maximumBandPixels * sqrt(refraction)
+                : 0,
+            baseDisplacementPixels: refractionEnabled
+                ? restingMaximum * pow(refraction, 1.15)
+                : 0,
+            maximumDisplacementPixels: workload.allowsLiveOptics
+                ? workload.maximumDisplacementPixels
+                : 0,
+            edgeShineOpacity: edgeShine * 0.30,
+            tintOpacity: tint * 0.16,
+            readabilityOpacity: readability * 0.22,
+            interactionBoost: 1 + interaction * 0.06
+        )
+    }
+
+    func displacementPixels(interactionProgress: Double) -> Double {
+        guard baseDisplacementPixels > 0, maximumDisplacementPixels > 0 else {
+            return 0
+        }
+        let progress = min(max(interactionProgress, 0), 1)
+        return min(
+            maximumDisplacementPixels,
+            baseDisplacementPixels * (1 + (interactionBoost - 1) * progress)
+        )
+    }
+}
+
 enum OpticalPerformancePreset: String, CaseIterable, Identifiable, Sendable {
     case off
     case low
@@ -95,60 +260,6 @@ struct OpticalWorkloadProfile: Equatable, Sendable {
                 maximumDisplacementPixels: 24
             )
         }
-    }
-}
-
-extension OpticalGlassProfile {
-    static func resolve(
-        controls: OpticalGlassControls,
-        workload: OpticalWorkloadProfile,
-        windowActivity _: OpticalWindowActivity
-    ) -> OpticalGlassProfile {
-        let defaults = OpticalGlassControls.defaults
-        let transparency = OpticalGlassControls.normalized(
-            controls.transparency,
-            fallback: defaults.transparency
-        )
-        let frost = OpticalGlassControls.normalized(
-            controls.frost,
-            fallback: defaults.frost
-        )
-        let refraction = OpticalGlassControls.normalized(
-            controls.refraction,
-            fallback: defaults.refraction
-        )
-        let edgeShine = OpticalGlassControls.normalized(
-            controls.edgeShine,
-            fallback: defaults.edgeShine
-        )
-        let tint = OpticalGlassControls.normalized(
-            controls.tint,
-            fallback: defaults.tint
-        )
-        let readability = OpticalGlassControls.normalized(
-            controls.readability,
-            fallback: defaults.readability
-        )
-        let interaction = OpticalGlassControls.normalized(
-            controls.interactionResponse,
-            fallback: defaults.interactionResponse
-        )
-        let refractionEnabled = workload.allowsLiveOptics && refraction > 0
-
-        return OpticalGlassProfile(
-            surfaceOpacity: pow(1 - transparency, 1.35),
-            frostRadius: frost * 8,
-            refractionBandPixels: refractionEnabled
-                ? workload.maximumBandPixels * sqrt(refraction)
-                : 0,
-            baseDisplacementPixels: refractionEnabled
-                ? workload.maximumDisplacementPixels * pow(refraction, 1.15)
-                : 0,
-            edgeShineOpacity: edgeShine * 0.30,
-            tintOpacity: tint * 0.16,
-            readabilityOpacity: readability * 0.22,
-            interactionBoost: 1 + interaction * 0.06
-        )
     }
 }
 

@@ -199,14 +199,20 @@ enum OpticalShaderLibrary {
             float2 outwardNormal = normalize(normalSum);
             float2 inwardNormal = -outwardNormal;
             edgeInfluence = attic_smoothstep(1.0f - distanceInside / bandPixels);
-            float bottomWeight = attic_smoothstep((input.uv.y - 0.58f) / 0.42f);
+            float bottomWeight = attic_smoothstep(
+                (input.uv.y - \#(OpticalRefractionEnvelope.bottomStart)f)
+                    / \#(OpticalRefractionEnvelope.bottomSpan)f
+            );
             float cornerWeight = min(
                 1.0f,
-                2.0f * abs(inwardNormal.x * inwardNormal.y)
+                \#(OpticalRefractionEnvelope.cornerProductScale)f
+                    * abs(inwardNormal.x * inwardNormal.y)
             );
             float edgeMultiplier = min(
-                1.0f,
-                0.68f + 0.14f * bottomWeight + 0.18f * cornerWeight
+                \#(OpticalRefractionEnvelope.maximumEdgeMultiplier)f,
+                \#(OpticalRefractionEnvelope.sideMultiplier)f
+                    + \#(OpticalRefractionEnvelope.bottomContribution)f * bottomWeight
+                    + \#(OpticalRefractionEnvelope.cornerContribution)f * cornerWeight
             );
             float maximumDisplacement = max(uniforms.optics3.x, 0.0f);
             float interactionDisplacement = displacementPixels
