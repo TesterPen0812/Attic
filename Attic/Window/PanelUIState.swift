@@ -8,6 +8,7 @@ final class PanelUIState: ObservableObject {
     @Published var editingNoteID: UUID?
     @Published var isMenuTracking = false
     @Published var isCanvasConfirmationPresented = false
+    @Published var isPanelPinned = false
     @Published private(set) var selectedSection: PanelSection = .tasks
     private(set) var draggedTaskID: UUID?
 
