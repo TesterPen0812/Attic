@@ -289,7 +289,7 @@ final class OpticalPanelBackdropView: NSView {
                 isLowPowerModeEnabled: environment.isLowPowerModeEnabled,
                 thermalState: environment.thermalState,
                 isOnBatteryPower: environment.isOnBatteryPower,
-                displayScale: targetScreen?.backingScaleFactor ?? 1,
+                displayScale: Double(targetScreen?.backingScaleFactor ?? 1),
                 performance: hasPerformance ? performance : nil
             ),
             now: CACurrentMediaTime()
@@ -328,7 +328,7 @@ final class OpticalPanelBackdropView: NSView {
         }
     }
 
-    private func receive(_ frame: OpticalCaptureFrame) {
+    fileprivate func receive(_ frame: OpticalCaptureFrame) {
         guard isPanelVisible,
               captureLifecycle.acceptsFrame(generation: frame.generation),
               let renderer,
@@ -351,7 +351,7 @@ final class OpticalPanelBackdropView: NSView {
         }
     }
 
-    private func handleCaptureFailure(_ message: String) {
+    fileprivate func handleCaptureFailure(_ message: String) {
         guard isPanelVisible else { return }
         captureAvailable = false
         NSLog("Attic optical capture unavailable: %@", message)

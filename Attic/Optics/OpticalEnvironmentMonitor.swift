@@ -45,7 +45,7 @@ final class OpticalEnvironmentMonitor: ObservableObject {
         guard !isStarted else { return }
         isStarted = true
 
-        NotificationCenter.default.publisher(for: ProcessInfo.powerStateDidChangeNotification)
+        NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
             .merge(with: NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification))
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
