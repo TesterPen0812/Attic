@@ -36,7 +36,7 @@ On Mac, Attic lives in the menu bar and reveals a lightweight panel when the poi
 1. Clone the repository.
 2. Open `Attic.xcodeproj` in Xcode.
 3. Select both the `Attic` and `AtticMobile` targets and choose your development team under Signing & Capabilities.
-4. Change the bundle identifier if your Apple developer account does not own `com.emanueledipietro.Attic`.
+4. Confirm both targets retain the mandatory `com.emanueledipietro.Attic` bundle identifier. Development and distribution require signing access to that identifier; do not substitute a different identifier because it would break the Mac/iPhone pairing.
 5. Run the `Attic` scheme for Mac or `AtticMobile` for iPhone.
 
 Choose a corner and reveal delay in Settings. Press `Control–Option–Space` from anywhere in macOS to reveal Attic with the new-task field focused.
@@ -47,7 +47,7 @@ Press `Command–,` while Attic is focused to open Settings.
 Both app targets use the explicit CloudKit container `iCloud.com.emanueledipietro.Attic`. Before running a device build:
 
 1. In Xcode, confirm that both targets use the same Apple development team and have iCloud/CloudKit plus remote-notification capabilities.
-2. Create or select `iCloud.com.emanueledipietro.Attic` for both targets. If you change the container identifier, also update `PersistenceController.cloudKitContainerIdentifier` and both entitlement files.
+2. Confirm both targets use the existing `iCloud.com.emanueledipietro.Attic` container. Do not substitute another container: the production app, entitlements and persisted CloudKit metadata depend on this exact pairing.
 3. Sign in to the same iCloud account on the Mac and iPhone. Each app keeps a local SwiftData replica, so edits remain available offline and synchronize when CloudKit becomes available.
 4. After the first Development sync, inspect the generated `CD_TaskItem` type in CloudKit Console. Deploy the schema to Production before TestFlight, App Store or production distribution.
 
