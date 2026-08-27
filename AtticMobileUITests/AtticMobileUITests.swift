@@ -88,6 +88,30 @@ final class AtticMobileUITests: XCTestCase {
         XCTAssertTrue(inProgressSection.waitForExistence(timeout: 3))
     }
 
+    func testEnteringNotesDoesNotAutomaticallyPresentTheNewestNote() throws {
+        selectMobileSection("Notes")
+        let addButton = app.buttons["add-note-button"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 3))
+        addButton.tap()
+
+        let titleField = app.textViews["note-title-field"].exists
+            ? app.textViews["note-title-field"]
+            : app.textFields["note-title-field"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 3))
+        titleField.typeText("Open the notes list")
+
+        let saveButton = app.buttons["save-note"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 3))
+        saveButton.tap()
+        XCTAssertTrue(app.staticTexts["Open the notes list"].waitForExistence(timeout: 3))
+
+        selectMobileSection("Tasks")
+        selectMobileSection("Notes")
+
+        XCTAssertTrue(app.staticTexts["Open the notes list"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["save-note"].exists)
+    }
+
     private func addTask(named title: String, priority: String? = nil) {
         let addButton = app.buttons["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
@@ -109,5 +133,13 @@ final class AtticMobileUITests: XCTestCase {
         XCTAssertTrue(saveButton.waitForExistence(timeout: 3))
         saveButton.tap()
         XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 3))
+    }
+
+    private func selectMobileSection(_ title: String) {
+        let picker = app.segmentedControls["mobile-section-picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        let segment = picker.buttons[title]
+        XCTAssertTrue(segment.exists)
+        segment.tap()
     }
 }

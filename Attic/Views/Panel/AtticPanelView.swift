@@ -66,15 +66,16 @@ struct AtticPanelView: View {
         .animation(reduceMotion ? nil : AtticMotion.spring, value: store.tasks.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.spring, value: noteStore.notes.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.quick, value: uiState.selectedSection)
-        .onChange(of: uiState.selectedSection) { _, _ in
-            openMostRecentNoteIfNeeded()
+        .onChange(of: uiState.selectedSection) { _, section in
+            if section.isNotes {
+                reconcileNoteDraft()
+            }
         }
         .onChange(of: store.revision) { _, _ in
             uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
         }
         .onChange(of: noteStore.revision) { _, _ in
             reconcileNoteDraft()
-            openMostRecentNoteIfNeeded()
         }
     }
 
@@ -107,21 +108,6 @@ struct AtticPanelView: View {
 
     private var currentErrorMessage: String? {
         uiState.selectedSection.isNotes ? noteStore.lastErrorMessage : store.lastErrorMessage
-    }
-
-    private func openMostRecentNoteIfNeeded() {
-        guard uiState.selectedSection.isNotes,
-              !uiState.isComposerPresented,
-              uiState.editingNoteID == nil,
-              !noteDraft.isActive,
-              let mostRecentNote = noteStore.orderedNotes().first,
-              noteDraft.beginEditing(mostRecentNote) else {
-            return
-        }
-
-        withAnimation(reduceMotion ? nil : AtticMotion.spring) {
-            uiState.beginEditingNote(mostRecentNote)
-        }
     }
 
     private func header(activeCount: Int) -> some View {
@@ -215,14 +201,13 @@ struct AtticPanelView: View {
     private func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
         if uiState.selectedSection.isNotes, noteDraft.isActive {
-            guard noteDraft.close() else { return }
+            // Navigation is not an implicit Done action. Persist pending text,
+            // keep the editor session, and restore it when Notes is selected.
+            guard noteDraft.flush() else { return }
         }
 
         let select = {
             uiState.selectSection(section)
-            if section.isNotes {
-                openMostRecentNoteIfNeeded()
-            }
         }
 
         if reduceMotion {
@@ -238,33 +223,36 @@ struct AtticPanelView: View {
         if uiState.isComposerPresented {
             if uiState.selectedSection.isNotes {
                 guard noteDraft.close() else { return }
+                uiState.endNoteEditing()
+            } else {
+                uiState.endAdding()
             }
-            uiState.endAdding()
             return
         }
 
         if uiState.selectedSection.isNotes {
             guard noteDraft.beginNew() else { return }
+            uiState.beginNewNote()
+        } else {
+            uiState.beginAddingTask()
         }
-        uiState.beginAdding()
     }
 
     private func reconcileNoteDraft() {
-        guard uiState.selectedSection.isNotes,
-              uiState.isComposerPresented,
-              noteDraft.isActive else {
+        guard noteDraft.isActive else {
+            uiState.reconcileNoteEditor(activeNoteID: nil, isActive: false)
             return
         }
 
         guard noteDraft.reconcileWithStore() else {
-            uiState.endAdding()
-            openMostRecentNoteIfNeeded()
+            uiState.endNoteEditing()
             return
         }
 
-        if uiState.editingNoteID != noteDraft.activeNoteID {
-            uiState.editingNoteID = noteDraft.activeNoteID
-        }
+        uiState.reconcileNoteEditor(
+            activeNoteID: noteDraft.activeNoteID,
+            isActive: noteDraft.isActive
+        )
     }
 
     private func taskList(sections: [TaskSectionSnapshot]) -> some View {
@@ -319,6 +307,6 @@ struct AtticPanelView: View {
 
     private var composerButtonLabel: String {
         guard uiState.isComposerPresented else { return newItemTitle }
-        return uiState.selectedSection.isNotes ? "Close note" : "Cancel"
+        return uiState.selectedSection.isNotes ? "Done editing note" : "Cancel"
     }
 }

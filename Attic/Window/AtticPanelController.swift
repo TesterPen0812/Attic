@@ -143,16 +143,24 @@ final class AtticPanelController {
     }
 
     private func bindContentSize() {
-        Publishers.CombineLatest4(
+        Publishers.CombineLatest3(
             store.$revision,
-            uiState.$isComposerPresented,
             uiState.$selectedSection,
             noteStore.$revision
         )
             .receive(on: RunLoop.main)
-            .sink { [weak self] _, _, _, _ in
-                guard let self else { return }
-                self.resizeAndReanchor()
+            .sink { [weak self] _, _, _ in
+                self?.resizeAndReanchor()
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest(
+            uiState.$isTaskComposerPresented,
+            uiState.$noteEditorPresentation
+        )
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _ in
+                self?.resizeAndReanchor()
             }
             .store(in: &cancellables)
 

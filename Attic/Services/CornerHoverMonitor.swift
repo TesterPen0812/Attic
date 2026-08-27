@@ -103,9 +103,15 @@ final class CornerHoverMonitor {
 
         if targetSection != uiState.selectedSection {
             if uiState.selectedSection.isNotes, noteDraft.isActive {
-                guard noteDraft.close() else { return false }
+                guard noteDraft.flush() else { return false }
             }
             uiState.selectSection(targetSection)
+            if targetSection.isNotes {
+                uiState.reconcileNoteEditor(
+                    activeNoteID: noteDraft.activeNoteID,
+                    isActive: noteDraft.isActive
+                )
+            }
         }
 
         guard openComposer else { return true }
@@ -115,7 +121,13 @@ final class CornerHoverMonitor {
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) { uiState.beginAdding() }
+        withTransaction(transaction) {
+            if targetSection.isNotes {
+                uiState.beginNewNote()
+            } else {
+                uiState.beginAddingTask()
+            }
+        }
         return true
     }
 

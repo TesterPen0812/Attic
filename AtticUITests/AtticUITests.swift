@@ -105,6 +105,57 @@ final class AtticUITests: XCTestCase {
         XCTAssertGreaterThan(second.frame.minY, first.frame.minY)
     }
 
+    func testNotesOpenToListAndKeyboardDoesNotDismissTheEditor() throws {
+        selectPanelSection("notes")
+        XCTAssertFalse(app.buttons["save-note"].exists)
+
+        let addButton = app.buttons["add-note-button"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 2))
+        addButton.click()
+
+        let titleField = app.textFields["note-title"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 2))
+        titleField.typeText("Keyboard contract")
+        titleField.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.buttons["save-note"].exists)
+
+        let bodyField = app.textViews["note-body"]
+        XCTAssertTrue(bodyField.waitForExistence(timeout: 2))
+        bodyField.typeText("Return and Escape keep this editor open")
+        bodyField.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(app.buttons["save-note"].exists)
+        XCTAssertTrue(bodyField.exists)
+
+        app.buttons["save-note"].click()
+        XCTAssertTrue(app.staticTexts["Keyboard contract"].waitForExistence(timeout: 2))
+        assertEventuallyDoesNotExist(app.buttons["save-note"])
+
+        selectPanelSection("tasks")
+        selectPanelSection("notes")
+        XCTAssertTrue(app.staticTexts["Keyboard contract"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["save-note"].exists)
+    }
+
+    func testSectionChangeSuspendsAndRestoresTheActiveNoteDraft() throws {
+        selectPanelSection("notes")
+        let addButton = app.buttons["add-note-button"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 2))
+        addButton.click()
+
+        let bodyField = app.textViews["note-body"]
+        XCTAssertTrue(bodyField.waitForExistence(timeout: 2))
+        bodyField.typeText("Navigation must preserve this draft")
+
+        selectPanelSection("tasks")
+        XCTAssertFalse(app.textViews["note-body"].exists)
+        selectPanelSection("notes")
+
+        let restoredBody = app.textViews["note-body"]
+        XCTAssertTrue(restoredBody.waitForExistence(timeout: 2))
+        XCTAssertEqual(restoredBody.value as? String, "Navigation must preserve this draft")
+        XCTAssertTrue(app.buttons["save-note"].exists)
+    }
+
     private func addTask(named title: String) {
         let addButton = app.buttons["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 2))
@@ -114,5 +165,22 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
+    }
+
+    private func selectPanelSection(_ rawValue: String) {
+        let button = app.buttons["panel-section-\(rawValue)"]
+        XCTAssertTrue(button.waitForExistence(timeout: 2))
+        button.click()
+    }
+
+    private func assertEventuallyDoesNotExist(
+        _ element: XCUIElement,
+        timeout: TimeInterval = 2
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while element.exists, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertFalse(element.exists)
     }
 }

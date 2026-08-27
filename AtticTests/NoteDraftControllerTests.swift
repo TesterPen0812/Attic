@@ -252,6 +252,26 @@ final class NoteDraftControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testIncidentalFlushesPersistButNeverCloseTheEditor() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: gate.save)
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        draft.body = "Keep editing after focus, panel, or Settings changes"
+
+        XCTAssertTrue(draft.flush())
+        XCTAssertTrue(draft.flush())
+        XCTAssertTrue(draft.flush())
+
+        XCTAssertEqual(gate.saveCount, 1)
+        XCTAssertTrue(draft.isActive)
+        XCTAssertNotNil(draft.activeNoteID)
+        XCTAssertEqual(draft.body, "Keep editing after focus, panel, or Settings changes")
+        XCTAssertFalse(draft.isDirty)
+    }
+
+    @MainActor
     func testCloseFlushesThenClearsEditorState() throws {
         let store = try makeTestNoteStore()
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
@@ -265,5 +285,86 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertNil(draft.activeNoteID)
         XCTAssertEqual(draft.title, "")
         XCTAssertEqual(draft.body, "")
+    }
+}
+
+final class PanelUIStateNotePresentationTests: XCTestCase {
+    @MainActor
+    func testEnteringNotesWithoutAnActiveSessionLeavesTheListVisible() {
+        let state = PanelUIState()
+
+        state.selectSection(.notes)
+
+        XCTAssertEqual(state.noteEditorPresentation, .hidden)
+        XCTAssertNil(state.editingNoteID)
+        XCTAssertFalse(state.isComposerPresented)
+    }
+
+    @MainActor
+    func testNewAndExistingNotesHaveDistinctPresentationStates() {
+        let state = PanelUIState()
+        let note = NoteItem(body: "Existing")
+        state.selectSection(.notes)
+
+        state.beginNewNote()
+        XCTAssertEqual(state.noteEditorPresentation, .new)
+        XCTAssertNil(state.editingNoteID)
+        XCTAssertTrue(state.isComposerPresented)
+
+        state.beginEditingNote(note)
+        XCTAssertEqual(state.noteEditorPresentation, .editing(note.id))
+        XCTAssertEqual(state.editingNoteID, note.id)
+        XCTAssertTrue(state.isComposerPresented)
+    }
+
+    @MainActor
+    func testSectionNavigationSuspendsAndRestoresTheSameNoteEditor() {
+        let state = PanelUIState()
+        let note = NoteItem(body: "Existing")
+        state.selectSection(.notes)
+        state.beginEditingNote(note)
+
+        state.selectSection(.tasks)
+        XCTAssertEqual(state.noteEditorPresentation, .editing(note.id))
+        XCTAssertFalse(state.isComposerPresented)
+        XCTAssertFalse(state.isInteractionLocked)
+
+        state.selectSection(.notes)
+        XCTAssertEqual(state.noteEditorPresentation, .editing(note.id))
+        XCTAssertEqual(state.editingNoteID, note.id)
+        XCTAssertTrue(state.isComposerPresented)
+        XCTAssertTrue(state.isInteractionLocked)
+    }
+
+    @MainActor
+    func testTaskComposerDoesNotDiscardASuspendedNoteSession() {
+        let state = PanelUIState()
+        state.selectSection(.notes)
+        state.beginNewNote()
+        state.selectSection(.backlog)
+
+        state.beginAddingTask()
+        XCTAssertTrue(state.isComposerPresented)
+        state.endAdding()
+        XCTAssertFalse(state.isComposerPresented)
+        XCTAssertEqual(state.noteEditorPresentation, .new)
+
+        state.selectSection(.notes)
+        XCTAssertTrue(state.isComposerPresented)
+        XCTAssertEqual(state.noteEditorPresentation, .new)
+    }
+
+    @MainActor
+    func testFirstAutosavePromotesNewPresentationToEditing() {
+        let state = PanelUIState()
+        let noteID = UUID()
+        state.selectSection(.notes)
+        state.beginNewNote()
+
+        state.reconcileNoteEditor(activeNoteID: noteID, isActive: true)
+
+        XCTAssertEqual(state.noteEditorPresentation, .editing(noteID))
+        XCTAssertEqual(state.editingNoteID, noteID)
+        XCTAssertTrue(state.isComposerPresented)
     }
 }

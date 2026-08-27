@@ -54,10 +54,15 @@ struct NotesPanelContent: View {
 /// Edits the app-owned draft. The draft outlives this SwiftUI view, so a panel
 /// transition or model-context refresh cannot discard pending text.
 struct NoteComposerView: View {
+    private enum FocusedField: Hashable {
+        case title
+        case body
+    }
+
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
 
-    @FocusState private var isBodyFocused: Bool
+    @FocusState private var focusedField: FocusedField?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -66,8 +71,9 @@ struct NoteComposerView: View {
                 TextField("Title (optional)", text: $noteDraft.title)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .onSubmit(saveAndClose)
-                    .onExitCommand(perform: saveAndClose)
+                    .focused($focusedField, equals: .title)
+                    .onSubmit { focusedField = .body }
+                    .onExitCommand(perform: finishKeyboardInteraction)
                     .accessibilityIdentifier("note-title")
 
                 Button(action: saveAndClose) {
@@ -93,7 +99,8 @@ struct NoteComposerView: View {
                 .font(.system(size: 12, design: .rounded))
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 60, idealHeight: 78, maxHeight: 90)
-                .focused($isBodyFocused)
+                .focused($focusedField, equals: .body)
+                .onExitCommand(perform: finishKeyboardInteraction)
                 .accessibilityIdentifier("note-body")
 
             if let conflictMessage = noteDraft.conflictMessage {
@@ -104,10 +111,12 @@ struct NoteComposerView: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 7)
         .onAppear {
-            DispatchQueue.main.async { isBodyFocused = true }
+            DispatchQueue.main.async { focusedField = .body }
         }
-        .onChange(of: isBodyFocused) { _, isFocused in
-            if !isFocused { _ = noteDraft.flush() }
+        .onChange(of: focusedField) { previousField, newField in
+            if previousField != nil, newField == nil {
+                _ = noteDraft.flush()
+            }
         }
         .onDisappear { _ = noteDraft.flush() }
         .animation(reduceMotion ? nil : AtticMotion.quick, value: noteDraft.conflict)
@@ -177,9 +186,14 @@ struct NoteComposerView: View {
         noteDraft.activeNoteID == nil ? "Add note" : "Save note"
     }
 
+    private func finishKeyboardInteraction() {
+        focusedField = nil
+        _ = noteDraft.flush()
+    }
+
     private func saveAndClose() {
         guard noteDraft.close() else { return }
-        uiState.endAdding()
+        uiState.endNoteEditing()
     }
 
     private func useRemoteVersion() {
@@ -196,7 +210,7 @@ struct NoteComposerView: View {
 
     private func discardDraft() {
         noteDraft.discardDraft()
-        uiState.endAdding()
+        uiState.endNoteEditing()
     }
 }
 
@@ -284,7 +298,7 @@ struct NoteRowView: View {
         guard noteStore.delete(note) else { return }
         noteDraft.discardDeletedNote(note.id)
         if uiState.editingNoteID == note.id {
-            uiState.endAdding()
+            uiState.endNoteEditing()
         }
     }
 
