@@ -20,6 +20,16 @@ private enum CanvasReplicaMutationError: LocalizedError {
     }
 }
 
+private struct CanvasStrokeCacheKey: Hashable {
+    let id: UUID
+    let payloadVersion: Int
+    let payload: Data
+    let boardGeneration: Int64
+    let mutationVersion: Int64
+    let createdAt: Date
+    let updatedAt: Date
+}
+
 @MainActor
 final class CanvasStore: ObservableObject {
     @Published private(set) var strokes: [CanvasStroke] = []
@@ -32,6 +42,8 @@ final class CanvasStore: ObservableObject {
     private var context: ModelContext
     private let now: () -> Date
     private let persist: (ModelContext) throws -> Void
+    private let decodeStroke: (Data, Int) throws -> CanvasStrokeGeometry
+    private var visibleStrokeCache: [CanvasStrokeCacheKey: CanvasStroke] = [:]
     private var remoteChangeObservation: AnyCancellable?
     private var cloudKitEventObservation: AnyCancellable?
     private var cloudImportRefreshTask: Task<Void, Never>?
@@ -47,12 +59,16 @@ final class CanvasStore: ObservableObject {
     init(
         container: ModelContainer,
         now: @escaping () -> Date = Date.init,
-        persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+        persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        decodeStroke: @escaping (Data, Int) throws -> CanvasStrokeGeometry = { data, version in
+            try CanvasStrokeCodec.decode(data, expectedVersion: version)
+        }
     ) {
         self.container = container
         context = ModelContext(container)
         self.now = now
         self.persist = persist
+        self.decodeStroke = decodeStroke
         refresh()
         observeRemoteChanges()
         observeCloudKitEvents()
@@ -388,10 +404,19 @@ final class CanvasStore: ObservableObject {
             .max() ?? 0
 
         var warnings: [String] = []
+        var omittedWarningCount = 0
+        func recordWarning(_ warning: String) {
+            if warnings.count < 3 {
+                warnings.append(warning)
+            } else {
+                omittedWarningCount += 1
+            }
+        }
+
         if relevantBoards.contains(where: {
             $0.formatVersion != CanvasStrokeCodec.currentVersion
         }) {
-            warnings.append("The canvas board format is newer than this version of Attic.")
+            recordWarning("The canvas board format is newer than this version of Attic.")
         }
 
         var winnerByID: [UUID: CanvasStrokeItem] = [:]
@@ -405,6 +430,8 @@ final class CanvasStore: ObservableObject {
             }
         }
 
+        var nextCache: [CanvasStrokeCacheKey: CanvasStroke] = [:]
+        nextCache.reserveCapacity(winnerByID.count)
         var visible: [CanvasStroke] = []
         visible.reserveCapacity(winnerByID.count)
         for id in winnerByID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -414,12 +441,27 @@ final class CanvasStore: ObservableObject {
                 continue
             }
 
+            let cacheKey = CanvasStrokeCacheKey(
+                id: replica.id,
+                payloadVersion: replica.payloadVersion,
+                payload: replica.payload,
+                boardGeneration: replica.boardGeneration,
+                mutationVersion: replica.mutationVersion,
+                createdAt: replica.createdAt,
+                updatedAt: replica.updatedAt
+            )
+            if let cached = visibleStrokeCache[cacheKey] {
+                nextCache[cacheKey] = cached
+                visible.append(cached)
+                continue
+            }
+
             do {
-                let geometry = try CanvasStrokeCodec.decode(
+                let geometry = try decodeStroke(
                     replica.payload,
-                    expectedVersion: replica.payloadVersion
+                    replica.payloadVersion
                 )
-                visible.append(CanvasStroke(
+                let decoded = CanvasStroke(
                     id: replica.id,
                     color: geometry.color,
                     width: geometry.width,
@@ -428,9 +470,11 @@ final class CanvasStore: ObservableObject {
                     mutationVersion: replica.mutationVersion,
                     createdAt: replica.createdAt,
                     updatedAt: replica.updatedAt
-                ))
+                )
+                nextCache[cacheKey] = decoded
+                visible.append(decoded)
             } catch {
-                warnings.append(
+                recordWarning(
                     "Stroke \(replica.id.uuidString) was retained but could not be rendered: "
                         + error.localizedDescription
                 )
@@ -447,7 +491,12 @@ final class CanvasStore: ObservableObject {
             return $0.id.uuidString < $1.id.uuidString
         }
 
+        if omittedWarningCount > 0 {
+            warnings.append("\(omittedWarningCount) additional canvas warning(s) were omitted.")
+        }
+
         context = refreshedContext
+        visibleStrokeCache = nextCache
         boardGeneration = resolvedGeneration
         strokes = visible
         revision &+= 1
@@ -500,7 +549,21 @@ final class CanvasStore: ObservableObject {
         if candidate.updatedAt != existing.updatedAt {
             return candidate.updatedAt > existing.updatedAt
         }
-        return tieBreakKey(for: candidate) > tieBreakKey(for: existing)
+        if candidate.payloadVersion != existing.payloadVersion {
+            return candidate.payloadVersion > existing.payloadVersion
+        }
+        if candidate.payload != existing.payload {
+            return existing.payload.lexicographicallyPrecedes(candidate.payload)
+        }
+        if candidate.createdAt != existing.createdAt {
+            return candidate.createdAt > existing.createdAt
+        }
+        if candidate.deletedAt != existing.deletedAt {
+            return (candidate.deletedAt ?? .distantPast)
+                > (existing.deletedAt ?? .distantPast)
+        }
+        return String(reflecting: candidate.persistentModelID)
+            > String(reflecting: existing.persistentModelID)
     }
 
     private static func preferredSnapshot(
@@ -527,19 +590,6 @@ final class CanvasStore: ObservableObject {
             throw CanvasReplicaMutationError.mutationVersionExhausted(strokeID)
         }
         return max(version, 0) + 1
-    }
-
-    private static func tieBreakKey(for replica: CanvasStrokeItem) -> String {
-        [
-            String(replica.payloadVersion),
-            replica.payload.base64EncodedString(),
-            String(replica.createdAt.timeIntervalSinceReferenceDate.bitPattern),
-            String(replica.updatedAt.timeIntervalSinceReferenceDate.bitPattern),
-            replica.deletedAt.map {
-                String($0.timeIntervalSinceReferenceDate.bitPattern)
-            } ?? "",
-            String(reflecting: replica.persistentModelID)
-        ].joined(separator: "\u{1F}")
     }
 
     private func observeRemoteChanges() {
