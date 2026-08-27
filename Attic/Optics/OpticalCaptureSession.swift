@@ -32,7 +32,7 @@ protocol OpticalCaptureSessionProtocol: AnyObject {
     func start(
         configuration: OpticalCaptureConfiguration,
         frameHandler: @escaping @Sendable (OpticalCaptureFrame) -> Void,
-        failureHandler: @escaping @Sendable (String) -> Void
+        failureHandler: @escaping @Sendable (Int, String) -> Void
     ) async throws
 
     func update(configuration: OpticalCaptureConfiguration) async throws
@@ -57,17 +57,14 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
     func start(
         configuration: OpticalCaptureConfiguration,
         frameHandler: @escaping @Sendable (OpticalCaptureFrame) -> Void,
-        failureHandler: @escaping @Sendable (String) -> Void
+        failureHandler: @escaping @Sendable (Int, String) -> Void
     ) async throws {
         await stop()
-        relay.configure(
-            generation: configuration.generation,
-            frameHandler: frameHandler,
-            failureHandler: failureHandler
-        )
+        try Task.checkCancellation()
 
         do {
             let content = try await loadShareableContent()
+            try Task.checkCancellation()
             guard let display = content.displays.first(where: {
                 $0.displayID == configuration.displayID
             }) else {
@@ -95,7 +92,15 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
             )
             self.stream = stream
             activeConfiguration = configuration
+            relay.configure(
+                stream: stream,
+                generation: configuration.generation,
+                frameHandler: frameHandler,
+                failureHandler: failureHandler
+            )
+            try Task.checkCancellation()
             try await startCapture(stream)
+            try Task.checkCancellation()
         } catch {
             await releaseFailedStart()
             throw error
@@ -114,6 +119,7 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
             stream,
             configuration: makeStreamConfiguration(from: configuration)
         )
+        try Task.checkCancellation()
         self.activeConfiguration = configuration
         relay.updateGeneration(configuration.generation)
     }
@@ -153,7 +159,7 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
             value: 1,
             timescale: CMTimeScale(max(1, configuration.maximumFramesPerSecond))
         )
-        streamConfiguration.queueDepth = min(max(1, configuration.queueDepth), 8)
+        streamConfiguration.queueDepth = configuration.screenCaptureQueueDepth
         streamConfiguration.showsCursor = false
         streamConfiguration.capturesAudio = false
         streamConfiguration.pixelFormat = kCVPixelFormatType_32BGRA
@@ -227,33 +233,36 @@ extension OpticalCaptureSession: SCStreamOutput {
         of outputType: SCStreamOutputType
     ) {
         guard outputType == .screen else { return }
-        relay.handle(sampleBuffer)
+        relay.handle(stream: stream, sampleBuffer: sampleBuffer)
     }
 }
 
 extension OpticalCaptureSession: SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
-        relay.fail(error.localizedDescription)
+        relay.fail(stream: stream, message: error.localizedDescription)
     }
 }
 
 private final class OpticalCaptureFrameRelay: @unchecked Sendable {
     private let lock = NSLock()
     private let metrics: OpticalPerformanceMetrics
+    private var streamIdentifier: ObjectIdentifier?
     private var generation: Int?
     private var frameHandler: (@Sendable (OpticalCaptureFrame) -> Void)?
-    private var failureHandler: (@Sendable (String) -> Void)?
+    private var failureHandler: (@Sendable (Int, String) -> Void)?
 
     init(metrics: OpticalPerformanceMetrics) {
         self.metrics = metrics
     }
 
     func configure(
+        stream: SCStream,
         generation: Int,
         frameHandler: @escaping @Sendable (OpticalCaptureFrame) -> Void,
-        failureHandler: @escaping @Sendable (String) -> Void
+        failureHandler: @escaping @Sendable (Int, String) -> Void
     ) {
         lock.lock()
+        streamIdentifier = ObjectIdentifier(stream)
         self.generation = generation
         self.frameHandler = frameHandler
         self.failureHandler = failureHandler
@@ -268,13 +277,14 @@ private final class OpticalCaptureFrameRelay: @unchecked Sendable {
 
     func deactivate() {
         lock.lock()
+        streamIdentifier = nil
         generation = nil
         frameHandler = nil
         failureHandler = nil
         lock.unlock()
     }
 
-    func handle(_ sampleBuffer: CMSampleBuffer) {
+    func handle(stream: SCStream, sampleBuffer: CMSampleBuffer) {
         guard CMSampleBufferIsValid(sampleBuffer),
               let attachments = CMSampleBufferGetSampleAttachmentsArray(
                   sampleBuffer,
@@ -288,10 +298,11 @@ private final class OpticalCaptureFrameRelay: @unchecked Sendable {
         }
 
         lock.lock()
+        let isActiveStream = streamIdentifier == ObjectIdentifier(stream)
         let activeGeneration = generation
         let activeHandler = frameHandler
         lock.unlock()
-        guard let activeGeneration, let activeHandler else {
+        guard isActiveStream, let activeGeneration, let activeHandler else {
             metrics.recordDroppedFrame()
             return
         }
@@ -311,10 +322,13 @@ private final class OpticalCaptureFrameRelay: @unchecked Sendable {
         )
     }
 
-    func fail(_ message: String) {
+    func fail(stream: SCStream, message: String) {
         lock.lock()
+        let isActiveStream = streamIdentifier == ObjectIdentifier(stream)
+        let activeGeneration = generation
         let handler = failureHandler
         lock.unlock()
-        handler?(message)
+        guard isActiveStream, let activeGeneration else { return }
+        handler?(activeGeneration, message)
     }
 }

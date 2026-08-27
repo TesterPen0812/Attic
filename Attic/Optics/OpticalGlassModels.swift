@@ -68,7 +68,7 @@ struct OpticalWorkloadProfile: Equatable, Sendable {
             return OpticalWorkloadProfile(
                 captureScale: 0.50,
                 maximumFramesPerSecond: 15,
-                queueDepth: 2,
+                queueDepth: 3,
                 blurSampleCount: 5,
                 edgeEvaluationCount: 1,
                 maximumBandPixels: 28,
@@ -78,7 +78,7 @@ struct OpticalWorkloadProfile: Equatable, Sendable {
             return OpticalWorkloadProfile(
                 captureScale: 0.75,
                 maximumFramesPerSecond: 30,
-                queueDepth: 3,
+                queueDepth: 4,
                 blurSampleCount: 9,
                 edgeEvaluationCount: 3,
                 maximumBandPixels: 32,
@@ -264,6 +264,10 @@ struct OpticalCaptureLifecycle: Equatable, Sendable {
     func acceptsFrame(generation candidate: Int) -> Bool {
         guard case let .running(activeGeneration, _) = phase else { return false }
         return candidate == activeGeneration
+    }
+
+    func acceptsFailure(generation candidate: Int) -> Bool {
+        acceptsFrame(generation: candidate)
     }
 }
 

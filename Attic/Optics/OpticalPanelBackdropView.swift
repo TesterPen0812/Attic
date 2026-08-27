@@ -318,12 +318,17 @@ final class OpticalPanelBackdropView: NSView {
                 try await captureSession.start(
                     configuration: configuration,
                     frameHandler: { frame in callbacks.receive(frame) },
-                    failureHandler: { message in callbacks.fail(message) }
+                    failureHandler: { generation, message in
+                        callbacks.fail(generation: generation, message: message)
+                    }
                 )
             } catch is CancellationError {
                 await captureSession.stop()
             } catch {
-                handleCaptureFailure(error.localizedDescription)
+                handleCaptureFailure(
+                    generation: configuration.generation,
+                    message: error.localizedDescription
+                )
             }
         }
     }
@@ -351,8 +356,11 @@ final class OpticalPanelBackdropView: NSView {
         }
     }
 
-    fileprivate func handleCaptureFailure(_ message: String) {
-        guard isPanelVisible else { return }
+    fileprivate func handleCaptureFailure(generation: Int, message: String) {
+        guard isPanelVisible,
+              captureLifecycle.acceptsFailure(generation: generation) else {
+            return
+        }
         captureAvailable = false
         NSLog("Attic optical capture unavailable: %@", message)
         applyBackdropMode(.material(reason: .captureUnavailable))
@@ -452,9 +460,12 @@ private final class OpticalPanelCaptureCallbacks: @unchecked Sendable {
         }
     }
 
-    func fail(_ message: String) {
+    func fail(generation: Int, message: String) {
         Task { @MainActor [weak self] in
-            self?.owner?.handleCaptureFailure(message)
+            self?.owner?.handleCaptureFailure(
+                generation: generation,
+                message: message
+            )
         }
     }
 

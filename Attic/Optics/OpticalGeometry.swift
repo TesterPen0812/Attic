@@ -108,6 +108,10 @@ struct OpticalCaptureConfiguration: Equatable, Sendable {
 
     var maximumFramesPerSecond: Int { workload.maximumFramesPerSecond }
     var queueDepth: Int { workload.queueDepth }
+    var screenCaptureQueueDepth: Int {
+        guard workload.allowsLiveOptics else { return 0 }
+        return min(max(queueDepth, 3), 8)
+    }
     var outputPixelWidth: Int { region.outputPixelWidth }
     var outputPixelHeight: Int { region.outputPixelHeight }
 
@@ -129,7 +133,7 @@ struct OpticalCaptureConfiguration: Equatable, Sendable {
         mix(UInt64(truncatingIfNeeded: region.outputPixelHeight))
         mix(Double(workload.captureScale).bitPattern)
         mix(UInt64(truncatingIfNeeded: workload.maximumFramesPerSecond))
-        mix(UInt64(truncatingIfNeeded: workload.queueDepth))
+        mix(UInt64(truncatingIfNeeded: screenCaptureQueueDepth))
         mix(UInt64(truncatingIfNeeded: workload.blurSampleCount))
         mix(UInt64(truncatingIfNeeded: workload.edgeEvaluationCount))
         return Int(truncatingIfNeeded: hash)
