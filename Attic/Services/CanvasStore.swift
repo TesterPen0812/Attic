@@ -87,7 +87,7 @@ final class CanvasStore: ObservableObject {
                     payload: payload,
                     boardGeneration: boardGeneration,
                     mutationVersion: 1,
-                    isDeleted: false,
+                    tombstoned: false,
                     createdAt: timestamp,
                     updatedAt: timestamp
                 ))
@@ -102,7 +102,7 @@ final class CanvasStore: ObservableObject {
                     replica.payload = payload
                     replica.boardGeneration = boardGeneration
                     replica.mutationVersion = nextVersion
-                    replica.isDeleted = false
+                    replica.tombstoned = false
                     replica.createdAt = winner.createdAt
                     replica.updatedAt = timestamp
                     replica.deletedAt = nil
@@ -164,7 +164,7 @@ final class CanvasStore: ObservableObject {
                         ? mutation.winner.boardGeneration
                         : boardGeneration
                     replica.mutationVersion = mutation.nextVersion
-                    replica.isDeleted = deleted
+                    replica.tombstoned = deleted
                     replica.createdAt = mutation.winner.createdAt
                     replica.updatedAt = timestamp
                     replica.deletedAt = deleted ? timestamp : nil
@@ -246,7 +246,7 @@ final class CanvasStore: ObservableObject {
                     payload: restore.payload,
                     boardGeneration: boardGeneration,
                     mutationVersion: restore.nextVersion,
-                    isDeleted: false,
+                    tombstoned: false,
                     createdAt: restore.snapshot.createdAt,
                     updatedAt: timestamp
                 ))
@@ -258,7 +258,7 @@ final class CanvasStore: ObservableObject {
                 replica.payload = restore.payload
                 replica.boardGeneration = boardGeneration
                 replica.mutationVersion = restore.nextVersion
-                replica.isDeleted = false
+                replica.tombstoned = false
                 replica.createdAt = restore.snapshot.createdAt
                 replica.updatedAt = timestamp
                 replica.deletedAt = nil
@@ -410,7 +410,7 @@ final class CanvasStore: ObservableObject {
         for id in winnerByID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard let replica = winnerByID[id],
                   replica.boardGeneration == resolvedGeneration,
-                  !replica.isDeleted else {
+                  !replica.tombstoned else {
                 continue
             }
 
@@ -494,8 +494,8 @@ final class CanvasStore: ObservableObject {
         if candidate.boardGeneration != existing.boardGeneration {
             return candidate.boardGeneration > existing.boardGeneration
         }
-        if candidate.isDeleted != existing.isDeleted {
-            return candidate.isDeleted
+        if candidate.tombstoned != existing.tombstoned {
+            return candidate.tombstoned
         }
         if candidate.updatedAt != existing.updatedAt {
             return candidate.updatedAt > existing.updatedAt

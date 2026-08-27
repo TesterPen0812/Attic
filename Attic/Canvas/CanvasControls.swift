@@ -53,7 +53,7 @@ struct CanvasWidthControl: View {
             Slider(
                 value: Binding(
                     get: { session.width },
-                    set: session.setWidth
+                    set: { session.setWidth($0) }
                 ),
                 in: CanvasSession.minimumWidth...CanvasSession.maximumWidth
             )

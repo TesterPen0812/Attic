@@ -279,14 +279,43 @@ mobile_scheme.test_action.environment_variables = Xcodeproj::XCScheme::Environme
 ])
 mobile_scheme.save_as(staged_project_path, 'AtticMobile', true)
 
+# Keep target UUIDs stable when the macOS source graph changes. The checked-in
+# schemes are part of the generated project contract, and changing only the
+# macOS target's source list must not churn their buildable references.
+stable_target_uuids = {
+  app => 'A7714C2169D9DBD5A01DC94837E1C051',
+  unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
+  ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',
+  mobile_app => '6A9C0775F09BF19B3C70496EEC4AF237',
+  mobile_tests => 'A7E2FBB4FDEEC93FE643B32D6940915E',
+  mobile_ui_tests => '1BD194A0EE08899209C8473CFFD68DA0'
+}.freeze
+
 project.save
 
 project_file = File.join(staged_project_path, 'project.pbxproj')
 project_contents = File.read(project_file)
+stable_target_uuids.each do |target, stable_uuid|
+  project_contents.gsub!(target.uuid, stable_uuid)
+end
 project_contents.sub!("\tobjectVersion = 77;", "\tobjectVersion = 71;")
 project_contents.gsub!(/^\s*minimizedProjectReferenceProxies = 0;\n/, '')
 project_contents.gsub!(/^\s*preferredProjectObjectVersion = 77;\n/, '')
 File.write(project_file, project_contents)
+
+['Attic', 'AtticMobile'].each do |scheme_name|
+  scheme_file = File.join(
+    staged_project_path,
+    'xcshareddata',
+    'xcschemes',
+    "#{scheme_name}.xcscheme"
+  )
+  scheme_contents = File.read(scheme_file)
+  stable_target_uuids.each do |target, stable_uuid|
+    scheme_contents.gsub!(target.uuid, stable_uuid)
+  end
+  File.write(scheme_file, scheme_contents)
+end
 
 Xcodeproj::Project.open(staged_project_path)
 

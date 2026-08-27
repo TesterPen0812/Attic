@@ -10,7 +10,7 @@ final class CanvasStrokeItem {
     var payload: Data = Data()
     var boardGeneration: Int64 = 0
     var mutationVersion: Int64 = 1
-    var isDeleted: Bool = false
+    var tombstoned: Bool = false
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var deletedAt: Date? = nil
@@ -21,7 +21,7 @@ final class CanvasStrokeItem {
         payload: Data = Data(),
         boardGeneration: Int64 = 0,
         mutationVersion: Int64 = 1,
-        isDeleted: Bool = false,
+        tombstoned: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date? = nil,
         deletedAt: Date? = nil
@@ -31,7 +31,7 @@ final class CanvasStrokeItem {
         self.payload = payload
         self.boardGeneration = boardGeneration
         self.mutationVersion = mutationVersion
-        self.isDeleted = isDeleted
+        self.tombstoned = tombstoned
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.deletedAt = deletedAt

@@ -118,14 +118,14 @@ final class CanvasStoreTests: XCTestCase {
         var verificationContext = ModelContext(container)
         var replicas = try verificationContext.fetch(FetchDescriptor<CanvasStrokeItem>())
         XCTAssertEqual(replicas.count, 2)
-        XCTAssertTrue(replicas.allSatisfy(\.isDeleted))
+        XCTAssertTrue(replicas.allSatisfy(\.tombstoned))
         XCTAssertEqual(Set(replicas.map(\.mutationVersion)).count, 1)
         XCTAssertTrue(store.strokes.isEmpty)
 
         XCTAssertTrue(store.restore([visible]))
         verificationContext = ModelContext(container)
         replicas = try verificationContext.fetch(FetchDescriptor<CanvasStrokeItem>())
-        XCTAssertTrue(replicas.allSatisfy { !$0.isDeleted })
+        XCTAssertTrue(replicas.allSatisfy { !$0.tombstoned })
         XCTAssertTrue(replicas.allSatisfy { $0.boardGeneration == store.boardGeneration })
         XCTAssertEqual(Set(replicas.map(\.mutationVersion)).count, 1)
         XCTAssertEqual(store.strokes.map(\.id), [sharedID])
@@ -287,7 +287,7 @@ final class CanvasStoreTests: XCTestCase {
         points: [CanvasPoint],
         boardGeneration: Int64 = 0,
         mutationVersion: Int64 = 1,
-        isDeleted: Bool = false,
+        tombstoned: Bool = false,
         updatedAt: Date = Date(timeIntervalSince1970: 1_000)
     ) throws -> CanvasStrokeItem {
         CanvasStrokeItem(
@@ -300,10 +300,10 @@ final class CanvasStoreTests: XCTestCase {
             ),
             boardGeneration: boardGeneration,
             mutationVersion: mutationVersion,
-            isDeleted: isDeleted,
+            tombstoned: tombstoned,
             createdAt: Date(timeIntervalSince1970: 500),
             updatedAt: updatedAt,
-            deletedAt: isDeleted ? updatedAt : nil
+            deletedAt: tombstoned ? updatedAt : nil
         )
     }
 }

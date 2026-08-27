@@ -1,5 +1,5 @@
 #if os(macOS)
-import AppKit
+@preconcurrency import AppKit
 import SwiftUI
 
 struct CanvasNSViewRepresentable: NSViewRepresentable {
@@ -63,8 +63,8 @@ final class CanvasNSView: NSView {
     private let pathCache = CanvasPathCache()
     private var panLastPoint: CGPoint?
     private var spacePressed = false
-    private var appResignObservation: NSObjectProtocol?
-    private var windowResignObservation: NSObjectProtocol?
+    private nonisolated(unsafe) var appResignObservation: NSObjectProtocol?
+    private nonisolated(unsafe) var windowResignObservation: NSObjectProtocol?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

@@ -19,7 +19,7 @@ No shapes, arrows, text, files/images, layers, multiple boards, collaboration, t
 Two CloudKit-compatible SwiftData models are added without unique constraints or relationships:
 
 - `CanvasBoardItem`: deterministic app-level board UUID, `formatVersion` defaulting to `1`, monotonic `clearGeneration` defaulting to `0`, and `updatedAt`.
-- `CanvasStrokeItem`: logical stroke UUID, `payloadVersion` defaulting to `1`, JSON `payload` defaulting to empty `Data`, `boardGeneration` defaulting to `0`, monotonic `mutationVersion` defaulting to `1`, `isDeleted` defaulting to `false`, and created/updated/deleted timestamps.
+- `CanvasStrokeItem`: logical stroke UUID, `payloadVersion` defaulting to `1`, JSON `payload` defaulting to empty `Data`, `boardGeneration` defaulting to `0`, monotonic `mutationVersion` defaulting to `1`, `tombstoned` defaulting to `false`, and created/updated/deleted timestamps. The field avoids the `NSManagedObject.isDeleted` name reserved by SwiftData's Core Data backing.
 
 The board row is lazily materialized; no row means generation zero. A completed stroke is encoded once as sorted-key UTF-8 JSON:
 
