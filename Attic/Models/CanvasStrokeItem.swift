@@ -6,6 +6,7 @@ final class CanvasStrokeItem {
     /// Logical stroke identity. This deliberately has no SwiftData unique
     /// constraint because CloudKit cannot enforce one.
     var id: UUID = UUID()
+    var canvasID: UUID = CanvasBoardItem.logicalBoardID
     var payloadVersion: Int = 1
     var payload: Data = Data()
     var boardGeneration: Int64 = 0
@@ -17,6 +18,7 @@ final class CanvasStrokeItem {
 
     init(
         id: UUID = UUID(),
+        canvasID: UUID = CanvasBoardItem.logicalBoardID,
         payloadVersion: Int = 1,
         payload: Data = Data(),
         boardGeneration: Int64 = 0,
@@ -27,6 +29,7 @@ final class CanvasStrokeItem {
         deletedAt: Date? = nil
     ) {
         self.id = id
+        self.canvasID = canvasID
         self.payloadVersion = payloadVersion
         self.payload = payload
         self.boardGeneration = boardGeneration
