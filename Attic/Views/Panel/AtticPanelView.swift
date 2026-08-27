@@ -157,6 +157,37 @@ struct AtticPanelView: View {
             Spacer()
 
             Button {
+                uiState.isPanelPinned.toggle()
+            } label: {
+                Image(systemName: uiState.isPanelPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 9, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .background(
+                        Color.primary.opacity(uiState.isPanelPinned ? 0.12 : 0.06),
+                        in: Circle()
+                    )
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                uiState.isPanelPinned
+                                    ? Color.primary.opacity(0.34)
+                                    : Color.clear,
+                                lineWidth: 1
+                            )
+                    }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .help(uiState.isPanelPinned ? "Unpin panel" : "Keep panel visible")
+            .accessibilityLabel(
+                uiState.isPanelPinned ? "Unpin Attic panel" : "Pin Attic panel"
+            )
+            .accessibilityValue(uiState.isPanelPinned ? "Pinned" : "Not pinned")
+            .accessibilityAddTraits(uiState.isPanelPinned ? .isSelected : [])
+            .accessibilityIdentifier("panel-pin-button")
+
+            Button {
                 AppCoordinator.shared.openSettings()
             } label: {
                 Image(systemName: "gearshape")
