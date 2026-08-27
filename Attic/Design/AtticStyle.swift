@@ -29,9 +29,11 @@ struct AtticPanelSurface: ViewModifier {
     }
 
     private var supportsNativeGlass: Bool {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             return true
         }
+        #endif
         return false
     }
 
@@ -47,6 +49,7 @@ struct AtticPanelSurface: ViewModifier {
 
         switch profile.surface {
         case let .native(material):
+            #if compiler(>=6.2)
             if #available(macOS 26.0, *) {
                 content
                     .clipShape(panelShape)
@@ -61,6 +64,9 @@ struct AtticPanelSurface: ViewModifier {
             } else {
                 legacyMaterialSurface(content)
             }
+            #else
+            legacyMaterialSurface(content)
+            #endif
         case .legacyMaterial:
             legacyMaterialSurface(content)
         case .opaque:
@@ -84,6 +90,7 @@ struct AtticPanelSurface: ViewModifier {
             .clipShape(panelShape)
     }
 
+    #if compiler(>=6.2)
     @available(macOS 26.0, *)
     private func nativeGlass(
         material: PanelGlassMaterialPreference,
@@ -108,6 +115,7 @@ struct AtticPanelSurface: ViewModifier {
 
         return tinted.interactive(response == .interactive)
     }
+    #endif
 }
 
 extension View {
