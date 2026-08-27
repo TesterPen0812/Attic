@@ -7,7 +7,83 @@ final class AtticUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchArguments += [
+            "-AtticSettings.selectedSection", "general",
+            "-hasAdoptedAgentAccessOptIn", "YES",
+            "-isAgentAccessEnabled", "NO",
+            "-appearancePreference", "system"
+        ]
         app.launch()
+    }
+
+    func testSettingsNavigationAndSelectionPersistAfterClosingWindow() throws {
+        var settingsWindow = openSettings()
+
+        let sections = ["general", "panel", "appearance", "sync", "agentAccess", "about"]
+        for section in sections {
+            selectSettingsSection(section, in: settingsWindow)
+            XCTAssertTrue(
+                settingsWindow.descendants(matching: .any)["settings-page-\(section)"]
+                    .waitForExistence(timeout: 2)
+            )
+        }
+
+        selectSettingsSection("panel", in: settingsWindow)
+        settingsWindow.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(settingsWindow.waitForNonExistence(timeout: 2))
+
+        settingsWindow = openSettings()
+        XCTAssertTrue(
+            settingsWindow.descendants(matching: .any)["settings-page-panel"]
+                .waitForExistence(timeout: 2)
+        )
+    }
+
+    func testSettingsBindingSurvivesNavigation() throws {
+        let settingsWindow = openSettings()
+        selectSettingsSection("appearance", in: settingsWindow)
+
+        let translucency = settingsWindow.descendants(matching: .any)["setting-translucency"]
+        XCTAssertTrue(translucency.waitForExistence(timeout: 2))
+        let initialValue = String(describing: translucency.value)
+        translucency.click()
+        let changedValue = String(describing: translucency.value)
+        XCTAssertNotEqual(changedValue, initialValue)
+
+        selectSettingsSection("about", in: settingsWindow)
+        selectSettingsSection("appearance", in: settingsWindow)
+        XCTAssertEqual(String(describing: translucency.value), changedValue)
+
+        translucency.click()
+        XCTAssertEqual(String(describing: translucency.value), initialValue)
+    }
+
+    func testAgentAccessConditionalContentAndSensitiveTextHandling() throws {
+        let settingsWindow = openSettings()
+        selectSettingsSection("agentAccess", in: settingsWindow)
+
+        let accessToggle = settingsWindow.descendants(matching: .any)["setting-agent-access"]
+        let connection = settingsWindow.descendants(matching: .any)["settings-agent-connection"]
+        let disabledMessage = settingsWindow.descendants(matching: .any)["settings-agent-disabled-message"]
+        XCTAssertTrue(accessToggle.waitForExistence(timeout: 2))
+        XCTAssertTrue(disabledMessage.waitForExistence(timeout: 2))
+        XCTAssertFalse(connection.exists)
+
+        accessToggle.click()
+        XCTAssertTrue(connection.waitForExistence(timeout: 2))
+        XCTAssertTrue(
+            settingsWindow.descendants(matching: .any)["settings-agent-authorization-summary"]
+                .waitForExistence(timeout: 2)
+        )
+        XCTAssertEqual(
+            settingsWindow.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS[c] %@", "Authorization: Bearer")
+            ).count,
+            0
+        )
+
+        accessToggle.click()
+        XCTAssertTrue(connection.waitForNonExistence(timeout: 2))
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
@@ -114,5 +190,21 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
+    }
+
+    private func openSettings() -> XCUIElement {
+        let settingsButton = app.buttons["settings-button"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 2))
+        settingsButton.click()
+
+        let settingsWindow = app.windows["Attic Settings"]
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 2))
+        return settingsWindow
+    }
+
+    private func selectSettingsSection(_ section: String, in settingsWindow: XCUIElement) {
+        let row = settingsWindow.descendants(matching: .any)["settings-nav-\(section)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 2))
+        row.click()
     }
 }

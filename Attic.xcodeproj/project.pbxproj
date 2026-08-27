@@ -7,101 +7,110 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		056610B728EFA14F36CE5C1BC18181A8 /* AgentTaskTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5BD1100ACEDCDEE6DB455605B8244C /* AgentTaskTools.swift */; };
-		070507B5E5ED66990F3CDDEB4FBF98BB /* AtticApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32D326E95B5F56DE163EB1692AA8C111 /* AtticApp.swift */; };
-		077645E17ABC53323E4DA3C9EE4D4151 /* CornerPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22BE992297A330A445A5FC1642754869 /* CornerPicker.swift */; };
-		08A3C66AD356C0DC3C166C62AB8A6D59 /* NoteStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C7AC39F89618D0C7FB67E42BBDA0D67 /* NoteStoreTests.swift */; };
-		093D427F47C7DFDA16FB97E91D7E9193 /* AtticTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DCF15C1E4D70269A47C9FF6866C6C0B /* AtticTheme.swift */; };
-		0B959C36DB68AA813E242BB1E229DB58 /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F55D6C7F9F4ACDC1C0A3FF3B058A234E /* TaskStore.swift */; };
-		0F42A73CF39C5574143514C31CEA4A19 /* TaskDragPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A68B4B29D01B2B0C6A7F6B9E75913B8 /* TaskDragPayload.swift */; };
-		1401A963350279C023875B7F562DB82D /* TaskStatusButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71FA50D5768F48807DB589310E4749F2 /* TaskStatusButton.swift */; };
-		168894670DAFB0FB169A97F15FD005C5 /* LoginItemService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FB7904817115770DB68DA1651FC24B9 /* LoginItemService.swift */; };
-		171407B54992B8E56D8B4642A2CCECC1 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC85072F8654CAD17AAC0567F11372C /* SettingsWindowController.swift */; };
-		1CB0F3E3E53B516FD4BD1186E23B668B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9280BDB9CCCF56584BD57344189CB332 /* Assets.xcassets */; };
-		1DF275F582E595D9B1B031C2B5A46F80 /* PanelGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC105BB97E2D7278AACE5D803DF2A534 /* PanelGeometry.swift */; };
-		21079C9BACB55AEB78771916F9594D1C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B795F86FAC5D0A7C9CD82F4BA2FAEA /* SettingsView.swift */; };
+		0B959C36DB68AA813E242BB1E229DB58 /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E629717F8D109136981ED4DCBEA93E2 /* TaskStore.swift */; };
+		0DFD0C499843B72356A5D736C80CBA62 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21CAC33D871466BD1BA3B6FDF98CE158 /* GeneralSettingsView.swift */; };
+		109A3BF6669A1EFEDBAE23EE28EE77D6 /* CornerHoverMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0D738AC3E219B4B6D6C1B1CB0A006F4 /* CornerHoverMonitor.swift */; };
+		111783351D5F6263C2B160E9208F95AE /* TaskSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D6F9E17BCD4F93E9FA0F022635683EF /* TaskSectionView.swift */; };
+		1118A358F43301F161B0CBA39FFFBB3D /* AtticStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 855A7F1A9079162E9277D6ED99DEE75C /* AtticStyle.swift */; };
+		1147DA5016E2FEC243D2A199B4AD60D0 /* AppearanceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15E410660BBB4F0BC150FF10A09AEE8C /* AppearanceSettingsView.swift */; };
+		12CB1FCC92C3E4119042C45118E9F0FB /* TaskStatusButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 376D829F450E5DA6E0E503D0CEF1CF38 /* TaskStatusButton.swift */; };
+		15631C186FD8B4D26EB086717660D21E /* AgentAccessTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A6FD297C465E270C543BB21CC7DF26E /* AgentAccessTokenStore.swift */; };
+		15BF45594CDCBE70D476C94202EBC770 /* DailyCleanupServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE52689E97C5D820F9A54E41757C865 /* DailyCleanupServiceTests.swift */; };
+		1CB0F3E3E53B516FD4BD1186E23B668B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6CB646282285F46BF5A774600283F425 /* Assets.xcassets */; };
+		203719D819FEB52D6475868A88559613 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A03C0866CEEACEA58CD311EABF9FC1 /* TestSupport.swift */; };
+		213FCE65D30C5F3B1DCF3F1B58D06E91 /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E314ADB34B28D974EBD65B67F017C4EA /* PersistenceController.swift */; };
 		22302F0100CF42A5D34F4F24F7211266 /* AtticUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41B2BC0C11366C2FE6F1971276462A3 /* AtticUITests.swift */; };
 		224664C3A77668DDC7D351736CB9295D /* AtticMobileUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282C41FFC40E2525158A681403A551CD /* AtticMobileUITests.swift */; };
-		22699118820E310ADABBE452B67D29B8 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 486C6612328995D09389ABB1AA2957CD /* MenuBarView.swift */; };
-		2757C94EEE6239ABF489D88F9A3A9A3B /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE07CCB5F8D79B66C39774491811904 /* NoteStore.swift */; };
-		28A5F5B745C9A4663030DFB5FB4EBDBB /* CornerHoverStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030CD7DBB13C6AF4BDE46555A56651E2 /* CornerHoverStateMachine.swift */; };
-		2DB2A5E7FFAA8208A5E066D8A70BEE1E /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04AFEAE90A937C74FE703AC35F313B5 /* NoteItem.swift */; };
-		2E4A933ED9B3840AB1A2A4B03A6BF1B5 /* DailyCleanupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92EA788B597F19A58843350D86CAFA48 /* DailyCleanupService.swift */; };
-		2E77C7B77CF1BD55E219FE5E69174BAC /* AgentAccessTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EACAF8C071549043A855049B511AE2A /* AgentAccessTokenStore.swift */; };
+		2327E51388A04D5097E20D9C88176072 /* AppSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34D9F316125ED68692CC0EDEFB186C42 /* AppSettingsTests.swift */; };
+		23BC390D0D8C2D274A0DE3026E827EE1 /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 571B88762359B345BDB1EE32DFCC2C18 /* TaskItem.swift */; };
+		2757C94EEE6239ABF489D88F9A3A9A3B /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A4D5D7365269264689FC653A3F0DDFF /* NoteStore.swift */; };
+		27BCF573A3F1A38E24FA948FAF100B07 /* CornerHoverStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27DD7750B0AE08C349E9895BAF6282BE /* CornerHoverStateMachineTests.swift */; };
+		2BFED3F162D248D9341775E4C31589BE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B89F6AFF9608924D5508CE2C21EB0F /* SettingsView.swift */; };
+		2DB2A5E7FFAA8208A5E066D8A70BEE1E /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE924B343DC822533EF41D7E5006CF55 /* NoteItem.swift */; };
+		3224C70D6724BC7D34B5F1F2576E2BD0 /* AgentTaskTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 893892CBE4108C4AFF019DF5D62C450B /* AgentTaskTools.swift */; };
 		33B02780FA5E6DBCBD7E171F0DCCC61D /* MobileNotesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3557DB597395240B932B8C759F957E4E /* MobileNotesScreen.swift */; };
-		36F746D4C9F79CAE8480E1E4F7DD10AC /* MCPRequestHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28176A9DBD083239859FFE4BD895CE42 /* MCPRequestHandlerTests.swift */; };
+		353637263EEB740186822D668A82812A /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8359BE3DE730EB8FDA12CE6178D83DD /* Cocoa.framework */; };
+		36677806ADB146CAFFFCFAD05121F76B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6CB646282285F46BF5A774600283F425 /* Assets.xcassets */; };
 		382073F99EDBA94AC8C27F86B245B089 /* MobileAppRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BDD43DB2A02518BACFDFFD5283C5E8A /* MobileAppRoot.swift */; };
-		3DA5C36AE34F643B53A60F0E60B30D99 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8359BE3DE730EB8FDA12CE6178D83DD /* Cocoa.framework */; };
-		42331CA9B84D71BF9EF1818C0844D240 /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1920E4FBE5464E5355106CB0A5F33D69 /* TaskActionsMenu.swift */; };
-		456393E9B27D910423B573C085B463B9 /* NoteDraftControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88D1EB5C4433112F9208287F1D13C017 /* NoteDraftControllerTests.swift */; };
-		45C4567955465D9CF634D9F228538F3F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 9E39BA86FD34B145AA4559C1A5A4284B /* PrivacyInfo.xcprivacy */; };
-		46072849227E8F8DECAD9E020D91AB47 /* TaskSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F98755E619A7BA454996EA7D86E0482C /* TaskSectionView.swift */; };
-		492688537093C94DB6C52D236022B12C /* NotesPanelContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C861F55C50EC3A0A47F1F743A396EC1 /* NotesPanelContent.swift */; };
-		4ADF68290E27897A7F3C2984265BE6FD /* PanelUIState.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB5D9106F4E33E6B965F308340C30C4D /* PanelUIState.swift */; };
-		561A62F7D259034339B6A4202A6311E1 /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE07CCB5F8D79B66C39774491811904 /* NoteStore.swift */; };
-		6035B774D7CAD79CD2C3E693F6C60164 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 9E39BA86FD34B145AA4559C1A5A4284B /* PrivacyInfo.xcprivacy */; };
-		6109F1000A615B0824D1F5A497326445 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8359BE3DE730EB8FDA12CE6178D83DD /* Cocoa.framework */; };
-		69D327EA764199ECBD3061DCEC26BFB4 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D0C74964603201C3FFD4AF40BAF1ABD /* AppDelegate.swift */; };
-		6F8C1976B81CF74477C3785048F977F9 /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC5F64918111A51709520825AEDF4032 /* AgentServer.swift */; };
-		75C17437DB0C6DB65461F62466134E08 /* AtticPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674881E436D9F843F333BDEEBA07AC64 /* AtticPanelController.swift */; };
-		7B9943ABC8CA0578A9BB03ED8687FFA6 /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C5F084539D03B5FA355F7B670E280A1 /* PersistenceController.swift */; };
-		80119F6E680490CFBA7D051AEE5FBD73 /* AgentHTTPRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A79B907F710335F71504539756039C6 /* AgentHTTPRequest.swift */; };
-		81F45D3491875D4E679841C7A07AF147 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD93333C7090AAE7BEDA96199E68D20 /* AppSettings.swift */; };
+		38D56B64838152960CCFA4DDBDB32E84 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BA4741F3A8986018DE2F20DA6F7291F /* AppDelegate.swift */; };
+		40DB0C5DD8898CF4B96E80EBBA64DAA1 /* AtticPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761D22F33D1097636139170FF7CF6782 /* AtticPanel.swift */; };
+		4487DB7B97984DDC6F69DAC712D230C1 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6470489F1C928CC3AACF80E9EDAF509A /* SettingsComponents.swift */; };
+		4F5FAD7E10322D41DE47585EB81840C1 /* PanelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16A695D0837E2513C8AFE78DC0942BEC /* PanelSettingsView.swift */; };
+		5A2FA0E84A6EFA5368E1CE24B9CDC735 /* AtticApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFA83BD596DB6C5709292F7DCA056844 /* AtticApp.swift */; };
+		6035B774D7CAD79CD2C3E693F6C60164 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 38BB5B806462A19BD839E4D4306C89C6 /* PrivacyInfo.xcprivacy */; };
+		63380C60F32F5CDBBFEBF4E525FBF9C8 /* PanelUIState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E60D672D0D18E54DC87BCA7CC1B25072 /* PanelUIState.swift */; };
+		66800AE23896A32B5ADFF32A95B5F6CC /* AtticTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 891B0AC944D6ABE4E7E5D8097537BE69 /* AtticTheme.swift */; };
+		66A652A3AB4825E45F2796539A8A5FD6 /* NoteDraftControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDFFD0F90E9248B104212F8F45D5AEBD /* NoteDraftControllerTests.swift */; };
+		6752AB523F044C4A70B9D90D03601397 /* NoteDraftController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E925F16D636FEDA4E65118CF8917B42 /* NoteDraftController.swift */; };
+		6888A6D6B3EA5E11857F0975110C18E3 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14F81DA75F0E791EDAD91AB55C3AAA9E /* SettingsWindowController.swift */; };
+		6998008A05EB936E5EAF849369FBAEFB /* PanelSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C75EA076CDD3BFF1FEE5FBB6D7E86579 /* PanelSection.swift */; };
+		6B7E261063DBE8E1E75F12C3F434D342 /* NoteStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEB96351F033738EEB9948B9ECCEAB49 /* NoteStoreTests.swift */; };
+		72577D7DA7FD8B8AAF5A41EA637E6EDD /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49ACBF06AD1C238641EDD800AA96BBA1 /* AppSettings.swift */; };
+		74D4D9E54B68C9843FB651AD26A9A0ED /* AboutSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD68C855291F1AD676B461919FA07BD8 /* AboutSettingsView.swift */; };
+		7B9943ABC8CA0578A9BB03ED8687FFA6 /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E314ADB34B28D974EBD65B67F017C4EA /* PersistenceController.swift */; };
+		7E7C8AC50384AAB84478CD82C9B6A8F8 /* SettingsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BBA2867E4C14D743A9A4E832713D69 /* SettingsPresentationTests.swift */; };
+		80D908C9A5D7EC52C6C5E8553EE8C222 /* AtticPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DFF479AB4703486594FEDBD809B80BA /* AtticPanelController.swift */; };
+		815CFAA9ED52EF9F5732FB904BC03DFF /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8359BE3DE730EB8FDA12CE6178D83DD /* Cocoa.framework */; };
 		8220546A667363CBFF68C029AFE0AC8C /* NoteStoreMobileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FC2A296652FD7F54BB165EB955668A6 /* NoteStoreMobileTests.swift */; };
-		8324DB714A09A3DBA3555950BC198C15 /* PanelGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0536384AE8E24B50D256D4AD420CFB9 /* PanelGeometryTests.swift */; };
-		845AB44DD4A80995EF4A524A45940225 /* PanelSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 538117D0EBAA72B097A5331869BB26B1 /* PanelSection.swift */; };
+		877D21D7F6A5BB64D8B45231BA3A7FDE /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 38BB5B806462A19BD839E4D4306C89C6 /* PrivacyInfo.xcprivacy */; };
 		87C5972CFF392C0AA799C3DF9FF272F3 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8359BE3DE730EB8FDA12CE6178D83DD /* Cocoa.framework */; };
-		8FE9B7B7FA28DBFBAFA3E111EBB4BE41 /* TaskComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F25A0F5A00BECF32CE4FDB861DA72E99 /* TaskComposerView.swift */; };
-		914F8B87C7676B7B0D295C1A520B12E7 /* AtticTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DCF15C1E4D70269A47C9FF6866C6C0B /* AtticTheme.swift */; };
-		924D84E9112E1412098C0B940F1545DB /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB58EA14A47D4B03AD1C6C9D7CA715C /* TaskItem.swift */; };
-		94EFF1618BE0285FCC4A94BB909D1464 /* AtticStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10FAF06EF5AEBB4EE2F58E1EB08D917F /* AtticStyle.swift */; };
-		97A56FA52BDD9C293AD8AAFA6F30614B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9280BDB9CCCF56584BD57344189CB332 /* Assets.xcassets */; };
-		9B3375FFFDE98EB4E425F454F8E38257 /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEB58EA14A47D4B03AD1C6C9D7CA715C /* TaskItem.swift */; };
-		9B8549772966F7FFE97BEFF0EA241D84 /* AtticPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C010299BF11019769F89970AEAEFCCA /* AtticPanelView.swift */; };
+		89BE11BF2EB57669AFEDF66AFCA842C7 /* TaskDragPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 228D0B36C1FA4DA5DAC7FDF8A04F07C5 /* TaskDragPayload.swift */; };
+		914F8B87C7676B7B0D295C1A520B12E7 /* AtticTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 891B0AC944D6ABE4E7E5D8097537BE69 /* AtticTheme.swift */; };
+		924D84E9112E1412098C0B940F1545DB /* TaskItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 571B88762359B345BDB1EE32DFCC2C18 /* TaskItem.swift */; };
+		9AB53C6579AA284338F4B4AE9062B0BD /* AgentHTTPRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8697AF7380DB3B1EF7DFA4E8E6A36180 /* AgentHTTPRequest.swift */; };
+		9BF1AAA04F2B8E5E97B147A2C83E95AE /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE924B343DC822533EF41D7E5006CF55 /* NoteItem.swift */; };
 		A0495EA3F13234AE9DB35BF7666AA1B6 /* MobileTaskRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46745CD0187C6ADFCD09D6416BD95BCD /* MobileTaskRow.swift */; };
+		A09DEAFE008E8FFECBB1117F26F9B335 /* PanelGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE20B1C2088B9DB3DCAA33160BF8DC9A /* PanelGeometryTests.swift */; };
 		A1CA7040A04320AEAADCA5D874776B97 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EADA223201BD18D2E5FFF1DE28821A67 /* Foundation.framework */; };
+		A8F1305921A136FA5BF0433EF92AC4B6 /* LoginItemService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 826B34F4903DCBC718C4ACC04C271C84 /* LoginItemService.swift */; };
+		AA8FF2DE7E0C3F478EB7BF23C44995C1 /* NotesPanelContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8855859B7C962223411AB635C9D8E045 /* NotesPanelContent.swift */; };
+		AAB2A698E5645464F69A7ADF44B909CC /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73A8A20C78849FA82E4BB1C34F2B1300 /* AppCoordinator.swift */; };
 		AAD2061138E0D7EC0FF176F0826D0359 /* MobileTaskEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C098830DBB93C3B27C8DF18651EA2EF1 /* MobileTaskEditor.swift */; };
+		AB302357E86F3583682A1474E91F6317 /* AtticPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217A54A768492E750F576E88D3DD8356 /* AtticPanelView.swift */; };
+		AE46861A237B019DE316B7D8EE888782 /* AgentAccessSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0DF84CA880283D575A9795E2780FA4A /* AgentAccessSettingsView.swift */; };
+		B17AAE096D249D98791E2402A7392481 /* MCPRequestHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B540F7E06A141AB63A1565BFF2A09C2C /* MCPRequestHandlerTests.swift */; };
+		B227A164F981AC539513AEDA155EE15D /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B4847D057AB94D9B41DF4FF2DD21751 /* TaskActionsMenu.swift */; };
 		B2353B23C25311A70E0A3C71595ADDC0 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EADA223201BD18D2E5FFF1DE28821A67 /* Foundation.framework */; };
 		B42C8D84E9918FA4739D027EC14BEF06 /* MobileTaskListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10383B9483963B8415CD0CDBB8228560 /* MobileTaskListScreen.swift */; };
-		B560C2316A5FED0CFC193F8DA86F8754 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0C9CD1CB1B217C24B5596B1A32AC4AA /* GlobalHotKey.swift */; };
-		B9B451291C0A78F01401AFE77A373A61 /* CornerHoverStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8608C21BC3FD9BA003ADF0B060AFCC15 /* CornerHoverStateMachineTests.swift */; };
-		C29175CCB9611C85C3CED268CA789A58 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0122376BD7207E20D9E85855AA7EA5A2 /* TestSupport.swift */; };
-		C36A05B7A51C62539C832EFF51AD94CD /* TaskRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76A8D178C2B6D93984BD0827989FF6D /* TaskRowView.swift */; };
+		B852CCFE22ECE2DE15BBF94291740481 /* NoteStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A4D5D7365269264689FC653A3F0DDFF /* NoteStore.swift */; };
+		BD86C0B5E5B05E52E3CC8F2540E52D9B /* SettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D3FBD0C19CB11C685808356D6ECC0A9 /* SettingsSection.swift */; };
+		C165A64AFAEB3A026A17999477C268BF /* TaskComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 556ADDBD064A5CFD47AAC55F7A396477 /* TaskComposerView.swift */; };
+		C1A0866F0E01C216769BA31114740403 /* MCPRequestHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86092472B17442CEDA5641C80970154A /* MCPRequestHandler.swift */; };
+		C1AB7E024E5D280DAF04BEC46D6C4FAA /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AA4BDD1570D1175F93A67F9560B939 /* TaskTypes.swift */; };
+		C1C169E4871D49EDA6CB487CF39E8FE1 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 227CD630D32DEBD11B8AE10455DBBB9E /* GlobalHotKey.swift */; };
 		CA2E38716673C63B39746C40C7EB7874 /* MobileAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CCDD71379949118B8647FA9D206DD3D /* MobileAppModel.swift */; };
-		CC0322AAD238C0A4D1C382B13F9FFD65 /* AgentHTTPRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F5102C251E2D555EE99AADB9E15CD5 /* AgentHTTPRequestTests.swift */; };
-		CC5EC540AE8DF5A7F0EC987830A9DBE4 /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C5F084539D03B5FA355F7B670E280A1 /* PersistenceController.swift */; };
+		CE9FAA863FCA06719A1BBB1E439837AE /* AgentHTTPRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0343BF22D7683791A89AFAF05AF878D6 /* AgentHTTPRequestTests.swift */; };
 		CF35CCEE96D14A09B77A6A6E3B9F76BC /* TaskStoreMobileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64B7A949AB67E79B7F59707B62118ABB /* TaskStoreMobileTests.swift */; };
-		D19191D73C32B3B2F28BD4F2465CC485 /* NoteDraftController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4872AC80223553244A6DF3646D292A2A /* NoteDraftController.swift */; };
-		D5FDF3F715B80225AA306E98E89A97E7 /* NoteItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E04AFEAE90A937C74FE703AC35F313B5 /* NoteItem.swift */; };
-		D6176349F7BE8E7CA6643D92EAC45A4A /* MCPRequestHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F81BB93DA417C794A4C68EC606B7C52 /* MCPRequestHandler.swift */; };
-		DD95BB159D63FDE2242AFBA23F6592DA /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F55D6C7F9F4ACDC1C0A3FF3B058A234E /* TaskStore.swift */; };
-		DE286E4860D69820E9F3F5510BAC2E45 /* DailyCleanupServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21627C205EA4748A119A5C966B25CB8F /* DailyCleanupServiceTests.swift */; };
-		E159F36475D44A46BDD212F54A2EE392 /* AppSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5122F35EF92E9776B4D855295FA30C /* AppSettingsTests.swift */; };
+		D09AFF8518E89C05EED72498F86FF5C3 /* CornerPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E358062A1AD93724B4AA1277B2E99817 /* CornerPicker.swift */; };
+		D4008DA05C649525F84D9B7B30FA88C8 /* SyncSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 185642973FEACAB0D63144561D4728E0 /* SyncSettingsView.swift */; };
+		D6AF5BCDDD267FF75228C1549AF75FBB /* TaskStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DBCA342F911825793EC4F3053426DEC /* TaskStoreTests.swift */; };
+		DE88D729F300A3AA7056EB1FA20B9E9A /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E629717F8D109136981ED4DCBEA93E2 /* TaskStore.swift */; };
 		E1EC39A42F6E30038394CDC684AA8781 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EADA223201BD18D2E5FFF1DE28821A67 /* Foundation.framework */; };
-		E3E6245B0DAB4B40D3B7B3FFC952C5B0 /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1920E4FBE5464E5355106CB0A5F33D69 /* TaskActionsMenu.swift */; };
-		E54CEE14140F623E959C089E47D2272C /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8A1A43EF08C5DEDD6D62890A1DAA03A /* TaskTypes.swift */; };
-		E81778FEAFC165842902EDC2E795E29E /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8A1A43EF08C5DEDD6D62890A1DAA03A /* TaskTypes.swift */; };
-		EB23FA6AA60162F54A1554FB3A87C84B /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E5E237515E775677B089278AFF659EB /* AppCoordinator.swift */; };
+		E3E6245B0DAB4B40D3B7B3FFC952C5B0 /* TaskActionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B4847D057AB94D9B41DF4FF2DD21751 /* TaskActionsMenu.swift */; };
+		E81778FEAFC165842902EDC2E795E29E /* TaskTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1AA4BDD1570D1175F93A67F9560B939 /* TaskTypes.swift */; };
+		EA6B3722A1E85C37FB38FFE1ABD9FF46 /* PanelGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B17C7683F0C9DFE76EED26541B0EB309 /* PanelGeometry.swift */; };
 		ECA900475DDD5B6159B29883DC631D72 /* AtticMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CCED2455D96FDDE3B4FB220CA9534 /* AtticMobileApp.swift */; };
-		F32540BF66B5A3B61CC8660834B39908 /* TaskStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDDCF302A6E341DCB9F8D7418F240756 /* TaskStoreTests.swift */; };
-		F693E98713950416E589ECC55D21A046 /* AtticPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D48D8035D1B34168F9816A72CE4D6DF9 /* AtticPanel.swift */; };
-		FE2CA99D1A631EA0D8AE1E34F9F7801A /* CornerHoverMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA2C7A8219E1B1AB229559DD33AEAA6C /* CornerHoverMonitor.swift */; };
+		F03DCB05A0EC15E66315CDF2FC63B3EC /* AgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3182A443DD97E5CD44F9E5503084503 /* AgentServer.swift */; };
+		F0DEBC2D6E33E0D6CC045C2425A9F9C1 /* TaskRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CCF3EA89A1E5C0B7B9DDA70C797601D /* TaskRowView.swift */; };
+		F208F5B8D9FB33E3079FAC5402533762 /* CornerHoverStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5C3D83DB69085014ADE6475620EABEC /* CornerHoverStateMachine.swift */; };
+		F8A2036AB095D23EC586C74E8AD1E081 /* DailyCleanupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4848FBBE77D5570E3172D1BB75F5294 /* DailyCleanupService.swift */; };
+		FFB43770376AFA3425B9FFE52F644376 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849AF620A3FF4D3D233FEF3A0176B7C9 /* MenuBarView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		1936B476A94483DDBD5A1F09EFD66BB1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DA958AEF55466F70E6607154738295C0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 86AE68D87B2CE17260FE6F50EA7D88CA;
+			remoteInfo = Attic;
+		};
 		A342E5C634AF2B75BCB36090080BEF14 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = DA958AEF55466F70E6607154738295C0 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 6A9C0775F09BF19B3C70496EEC4AF237;
 			remoteInfo = AtticMobile;
-		};
-		B5A02E71568128A130A258F84290B5D8 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = DA958AEF55466F70E6607154738295C0 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = F0F9BDCD18B518BFBE3D8A21FAB0FEE1;
-			remoteInfo = Attic;
 		};
 		C360DB55EE6C1DA6E09845349014A993 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -114,101 +123,102 @@
 			isa = PBXContainerItemProxy;
 			containerPortal = DA958AEF55466F70E6607154738295C0 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = F0F9BDCD18B518BFBE3D8A21FAB0FEE1;
+			remoteGlobalIDString = 86AE68D87B2CE17260FE6F50EA7D88CA;
 			remoteInfo = Attic;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		0122376BD7207E20D9E85855AA7EA5A2 /* TestSupport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
-		030CD7DBB13C6AF4BDE46555A56651E2 /* CornerHoverStateMachine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverStateMachine.swift; path = Services/CornerHoverStateMachine.swift; sourceTree = "<group>"; };
-		0FBC1A4A6B7E24F79D085819A73487B5 /* Attic.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Attic.entitlements; sourceTree = "<group>"; };
+		0343BF22D7683791A89AFAF05AF878D6 /* AgentHTTPRequestTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentHTTPRequestTests.swift; sourceTree = "<group>"; };
 		10383B9483963B8415CD0CDBB8228560 /* MobileTaskListScreen.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileTaskListScreen.swift; path = Views/MobileTaskListScreen.swift; sourceTree = "<group>"; };
-		10FAF06EF5AEBB4EE2F58E1EB08D917F /* AtticStyle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticStyle.swift; path = Design/AtticStyle.swift; sourceTree = "<group>"; };
-		15F5102C251E2D555EE99AADB9E15CD5 /* AgentHTTPRequestTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentHTTPRequestTests.swift; sourceTree = "<group>"; };
-		1920E4FBE5464E5355106CB0A5F33D69 /* TaskActionsMenu.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskActionsMenu.swift; path = Design/TaskActionsMenu.swift; sourceTree = "<group>"; };
-		1A68B4B29D01B2B0C6A7F6B9E75913B8 /* TaskDragPayload.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskDragPayload.swift; path = Models/TaskDragPayload.swift; sourceTree = "<group>"; };
-		1AE07CCB5F8D79B66C39774491811904 /* NoteStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteStore.swift; path = Services/NoteStore.swift; sourceTree = "<group>"; };
-		1C7AC39F89618D0C7FB67E42BBDA0D67 /* NoteStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NoteStoreTests.swift; sourceTree = "<group>"; };
+		11B89F6AFF9608924D5508CE2C21EB0F /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		14F81DA75F0E791EDAD91AB55C3AAA9E /* SettingsWindowController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsWindowController.swift; path = Window/SettingsWindowController.swift; sourceTree = "<group>"; };
+		15E410660BBB4F0BC150FF10A09AEE8C /* AppearanceSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppearanceSettingsView.swift; path = Views/Settings/AppearanceSettingsView.swift; sourceTree = "<group>"; };
+		16A695D0837E2513C8AFE78DC0942BEC /* PanelSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelSettingsView.swift; path = Views/Settings/PanelSettingsView.swift; sourceTree = "<group>"; };
+		185642973FEACAB0D63144561D4728E0 /* SyncSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SyncSettingsView.swift; path = Views/Settings/SyncSettingsView.swift; sourceTree = "<group>"; };
+		1B4847D057AB94D9B41DF4FF2DD21751 /* TaskActionsMenu.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskActionsMenu.swift; path = Design/TaskActionsMenu.swift; sourceTree = "<group>"; };
+		1D6F9E17BCD4F93E9FA0F022635683EF /* TaskSectionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskSectionView.swift; path = Views/Panel/TaskSectionView.swift; sourceTree = "<group>"; };
+		1DFF479AB4703486594FEDBD809B80BA /* AtticPanelController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticPanelController.swift; path = Window/AtticPanelController.swift; sourceTree = "<group>"; };
+		1E925F16D636FEDA4E65118CF8917B42 /* NoteDraftController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteDraftController.swift; path = Services/NoteDraftController.swift; sourceTree = "<group>"; };
 		202E07D5B85798E2D9A5C7D49CC7C5C5 /* Attic.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Attic.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		21627C205EA4748A119A5C966B25CB8F /* DailyCleanupServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DailyCleanupServiceTests.swift; sourceTree = "<group>"; };
-		22BE992297A330A445A5FC1642754869 /* CornerPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerPicker.swift; path = Views/Settings/CornerPicker.swift; sourceTree = "<group>"; };
-		28176A9DBD083239859FFE4BD895CE42 /* MCPRequestHandlerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MCPRequestHandlerTests.swift; sourceTree = "<group>"; };
+		217A54A768492E750F576E88D3DD8356 /* AtticPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticPanelView.swift; path = Views/Panel/AtticPanelView.swift; sourceTree = "<group>"; };
+		21CAC33D871466BD1BA3B6FDF98CE158 /* GeneralSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GeneralSettingsView.swift; path = Views/Settings/GeneralSettingsView.swift; sourceTree = "<group>"; };
+		227CD630D32DEBD11B8AE10455DBBB9E /* GlobalHotKey.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GlobalHotKey.swift; path = Services/GlobalHotKey.swift; sourceTree = "<group>"; };
+		228D0B36C1FA4DA5DAC7FDF8A04F07C5 /* TaskDragPayload.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskDragPayload.swift; path = Models/TaskDragPayload.swift; sourceTree = "<group>"; };
+		25BBA2867E4C14D743A9A4E832713D69 /* SettingsPresentationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SettingsPresentationTests.swift; sourceTree = "<group>"; };
+		27DD7750B0AE08C349E9895BAF6282BE /* CornerHoverStateMachineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CornerHoverStateMachineTests.swift; sourceTree = "<group>"; };
 		282C41FFC40E2525158A681403A551CD /* AtticMobileUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtticMobileUITests.swift; sourceTree = "<group>"; };
-		2C5BD1100ACEDCDEE6DB455605B8244C /* AgentTaskTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentTaskTools.swift; path = Services/AgentServer/AgentTaskTools.swift; sourceTree = "<group>"; };
-		2D0C74964603201C3FFD4AF40BAF1ABD /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = App/AppDelegate.swift; sourceTree = "<group>"; };
-		2FB7904817115770DB68DA1651FC24B9 /* LoginItemService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LoginItemService.swift; path = Services/LoginItemService.swift; sourceTree = "<group>"; };
-		32D326E95B5F56DE163EB1692AA8C111 /* AtticApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticApp.swift; path = App/AtticApp.swift; sourceTree = "<group>"; };
+		2BA4741F3A8986018DE2F20DA6F7291F /* AppDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = App/AppDelegate.swift; sourceTree = "<group>"; };
+		34D9F316125ED68692CC0EDEFB186C42 /* AppSettingsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppSettingsTests.swift; sourceTree = "<group>"; };
 		3557DB597395240B932B8C759F957E4E /* MobileNotesScreen.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileNotesScreen.swift; path = Views/MobileNotesScreen.swift; sourceTree = "<group>"; };
+		376D829F450E5DA6E0E503D0CEF1CF38 /* TaskStatusButton.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStatusButton.swift; path = Views/Panel/TaskStatusButton.swift; sourceTree = "<group>"; };
+		38BB5B806462A19BD839E4D4306C89C6 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		3A4D5D7365269264689FC653A3F0DDFF /* NoteStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteStore.swift; path = Services/NoteStore.swift; sourceTree = "<group>"; };
 		46745CD0187C6ADFCD09D6416BD95BCD /* MobileTaskRow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileTaskRow.swift; path = Views/MobileTaskRow.swift; sourceTree = "<group>"; };
 		468CCED2455D96FDDE3B4FB220CA9534 /* AtticMobileApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticMobileApp.swift; path = App/AtticMobileApp.swift; sourceTree = "<group>"; };
-		486C6612328995D09389ABB1AA2957CD /* MenuBarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MenuBarView.swift; path = Views/MenuBarView.swift; sourceTree = "<group>"; };
-		4872AC80223553244A6DF3646D292A2A /* NoteDraftController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteDraftController.swift; path = Services/NoteDraftController.swift; sourceTree = "<group>"; };
-		488EC5079C0613DF1E937B89AC6B8C8B /* AtticNotesLocal.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AtticNotesLocal.entitlements; sourceTree = "<group>"; };
-		4A79B907F710335F71504539756039C6 /* AgentHTTPRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentHTTPRequest.swift; path = Services/AgentServer/AgentHTTPRequest.swift; sourceTree = "<group>"; };
-		4EACAF8C071549043A855049B511AE2A /* AgentAccessTokenStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentAccessTokenStore.swift; path = Services/AgentServer/AgentAccessTokenStore.swift; sourceTree = "<group>"; };
-		538117D0EBAA72B097A5331869BB26B1 /* PanelSection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelSection.swift; path = Window/PanelSection.swift; sourceTree = "<group>"; };
-		5DCF15C1E4D70269A47C9FF6866C6C0B /* AtticTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticTheme.swift; path = Design/AtticTheme.swift; sourceTree = "<group>"; };
+		49ACBF06AD1C238641EDD800AA96BBA1 /* AppSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppSettings.swift; path = Services/AppSettings.swift; sourceTree = "<group>"; };
+		4DBCA342F911825793EC4F3053426DEC /* TaskStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskStoreTests.swift; sourceTree = "<group>"; };
+		4E629717F8D109136981ED4DCBEA93E2 /* TaskStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStore.swift; path = Services/TaskStore.swift; sourceTree = "<group>"; };
+		556ADDBD064A5CFD47AAC55F7A396477 /* TaskComposerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskComposerView.swift; path = Views/Panel/TaskComposerView.swift; sourceTree = "<group>"; };
+		571B88762359B345BDB1EE32DFCC2C18 /* TaskItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskItem.swift; path = Models/TaskItem.swift; sourceTree = "<group>"; };
 		5FC2A296652FD7F54BB165EB955668A6 /* NoteStoreMobileTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NoteStoreMobileTests.swift; sourceTree = "<group>"; };
-		61AD673702F772F6E490F7AB966802B7 /* AtticLocal.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AtticLocal.entitlements; sourceTree = "<group>"; };
+		6470489F1C928CC3AACF80E9EDAF509A /* SettingsComponents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsComponents.swift; path = Views/Settings/SettingsComponents.swift; sourceTree = "<group>"; };
 		64B7A949AB67E79B7F59707B62118ABB /* TaskStoreMobileTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskStoreMobileTests.swift; sourceTree = "<group>"; };
-		674881E436D9F843F333BDEEBA07AC64 /* AtticPanelController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticPanelController.swift; path = Window/AtticPanelController.swift; sourceTree = "<group>"; };
-		71EBAA654B194BEB7D3E976C4D5A0495 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		71FA50D5768F48807DB589310E4749F2 /* TaskStatusButton.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStatusButton.swift; path = Views/Panel/TaskStatusButton.swift; sourceTree = "<group>"; };
-		7C010299BF11019769F89970AEAEFCCA /* AtticPanelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticPanelView.swift; path = Views/Panel/AtticPanelView.swift; sourceTree = "<group>"; };
-		7C861F55C50EC3A0A47F1F743A396EC1 /* NotesPanelContent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NotesPanelContent.swift; path = Views/Panel/NotesPanelContent.swift; sourceTree = "<group>"; };
-		7F81BB93DA417C794A4C68EC606B7C52 /* MCPRequestHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MCPRequestHandler.swift; path = Services/AgentServer/MCPRequestHandler.swift; sourceTree = "<group>"; };
-		8608C21BC3FD9BA003ADF0B060AFCC15 /* CornerHoverStateMachineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CornerHoverStateMachineTests.swift; sourceTree = "<group>"; };
-		88D1EB5C4433112F9208287F1D13C017 /* NoteDraftControllerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NoteDraftControllerTests.swift; sourceTree = "<group>"; };
+		66CE21B7B9ED6DBD0BD3646A0D61C1F0 /* Attic.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Attic.entitlements; sourceTree = "<group>"; };
+		6CB646282285F46BF5A774600283F425 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
+		6CCF3EA89A1E5C0B7B9DDA70C797601D /* TaskRowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskRowView.swift; path = Views/Panel/TaskRowView.swift; sourceTree = "<group>"; };
+		6D3FBD0C19CB11C685808356D6ECC0A9 /* SettingsSection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsSection.swift; path = Views/Settings/SettingsSection.swift; sourceTree = "<group>"; };
+		73A8A20C78849FA82E4BB1C34F2B1300 /* AppCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppCoordinator.swift; path = App/AppCoordinator.swift; sourceTree = "<group>"; };
+		761D22F33D1097636139170FF7CF6782 /* AtticPanel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticPanel.swift; path = Window/AtticPanel.swift; sourceTree = "<group>"; };
+		826B34F4903DCBC718C4ACC04C271C84 /* LoginItemService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LoginItemService.swift; path = Services/LoginItemService.swift; sourceTree = "<group>"; };
+		849AF620A3FF4D3D233FEF3A0176B7C9 /* MenuBarView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MenuBarView.swift; path = Views/MenuBarView.swift; sourceTree = "<group>"; };
+		855A7F1A9079162E9277D6ED99DEE75C /* AtticStyle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticStyle.swift; path = Design/AtticStyle.swift; sourceTree = "<group>"; };
+		86092472B17442CEDA5641C80970154A /* MCPRequestHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MCPRequestHandler.swift; path = Services/AgentServer/MCPRequestHandler.swift; sourceTree = "<group>"; };
+		8697AF7380DB3B1EF7DFA4E8E6A36180 /* AgentHTTPRequest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentHTTPRequest.swift; path = Services/AgentServer/AgentHTTPRequest.swift; sourceTree = "<group>"; };
+		86D609EC2EF7FFEFC16A7AE6189D935B /* AtticNotesLocal.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AtticNotesLocal.entitlements; sourceTree = "<group>"; };
+		8855859B7C962223411AB635C9D8E045 /* NotesPanelContent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NotesPanelContent.swift; path = Views/Panel/NotesPanelContent.swift; sourceTree = "<group>"; };
+		891B0AC944D6ABE4E7E5D8097537BE69 /* AtticTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticTheme.swift; path = Design/AtticTheme.swift; sourceTree = "<group>"; };
+		893892CBE4108C4AFF019DF5D62C450B /* AgentTaskTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentTaskTools.swift; path = Services/AgentServer/AgentTaskTools.swift; sourceTree = "<group>"; };
 		8BDD43DB2A02518BACFDFFD5283C5E8A /* MobileAppRoot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileAppRoot.swift; path = Views/MobileAppRoot.swift; sourceTree = "<group>"; };
 		8CCDD71379949118B8647FA9D206DD3D /* MobileAppModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileAppModel.swift; path = App/MobileAppModel.swift; sourceTree = "<group>"; };
-		9280BDB9CCCF56584BD57344189CB332 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
-		92EA788B597F19A58843350D86CAFA48 /* DailyCleanupService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DailyCleanupService.swift; path = Services/DailyCleanupService.swift; sourceTree = "<group>"; };
-		95842749B77CA6E616568D3A249071A9 /* AtticDebug.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AtticDebug.entitlements; sourceTree = "<group>"; };
-		9C5F084539D03B5FA355F7B670E280A1 /* PersistenceController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceController.swift; path = Services/PersistenceController.swift; sourceTree = "<group>"; };
-		9E39BA86FD34B145AA4559C1A5A4284B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		9E5E237515E775677B089278AFF659EB /* AppCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppCoordinator.swift; path = App/AppCoordinator.swift; sourceTree = "<group>"; };
+		8FE52689E97C5D820F9A54E41757C865 /* DailyCleanupServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DailyCleanupServiceTests.swift; sourceTree = "<group>"; };
+		9A6FD297C465E270C543BB21CC7DF26E /* AgentAccessTokenStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentAccessTokenStore.swift; path = Services/AgentServer/AgentAccessTokenStore.swift; sourceTree = "<group>"; };
+		9BFED3CBD617D0C9E3EF94DC2552B5E3 /* AtticLocal.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AtticLocal.entitlements; sourceTree = "<group>"; };
 		A8891FE18A7E065F90C30D71337E672F /* AtticMobileUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AtticMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		AC105BB97E2D7278AACE5D803DF2A534 /* PanelGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelGeometry.swift; path = Services/PanelGeometry.swift; sourceTree = "<group>"; };
-		AC5F64918111A51709520825AEDF4032 /* AgentServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentServer.swift; path = Services/AgentServer/AgentServer.swift; sourceTree = "<group>"; };
-		B0C9CD1CB1B217C24B5596B1A32AC4AA /* GlobalHotKey.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = GlobalHotKey.swift; path = Services/GlobalHotKey.swift; sourceTree = "<group>"; };
+		AD68C855291F1AD676B461919FA07BD8 /* AboutSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AboutSettingsView.swift; path = Views/Settings/AboutSettingsView.swift; sourceTree = "<group>"; };
+		AEB96351F033738EEB9948B9ECCEAB49 /* NoteStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NoteStoreTests.swift; sourceTree = "<group>"; };
+		B0D738AC3E219B4B6D6C1B1CB0A006F4 /* CornerHoverMonitor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverMonitor.swift; path = Services/CornerHoverMonitor.swift; sourceTree = "<group>"; };
+		B17C7683F0C9DFE76EED26541B0EB309 /* PanelGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelGeometry.swift; path = Services/PanelGeometry.swift; sourceTree = "<group>"; };
 		B41B2BC0C11366C2FE6F1971276462A3 /* AtticUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtticUITests.swift; sourceTree = "<group>"; };
+		B540F7E06A141AB63A1565BFF2A09C2C /* MCPRequestHandlerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MCPRequestHandlerTests.swift; sourceTree = "<group>"; };
 		B5EB3D8A5FA9D6C5324791251955F025 /* AtticMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AtticMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		B8A1A43EF08C5DEDD6D62890A1DAA03A /* TaskTypes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskTypes.swift; path = Models/TaskTypes.swift; sourceTree = "<group>"; };
-		BB5D9106F4E33E6B965F308340C30C4D /* PanelUIState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelUIState.swift; path = Window/PanelUIState.swift; sourceTree = "<group>"; };
+		BDFFD0F90E9248B104212F8F45D5AEBD /* NoteDraftControllerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NoteDraftControllerTests.swift; sourceTree = "<group>"; };
+		BE20B1C2088B9DB3DCAA33160BF8DC9A /* PanelGeometryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PanelGeometryTests.swift; sourceTree = "<group>"; };
 		BF8605B21712B69387D2D40566081086 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C098830DBB93C3B27C8DF18651EA2EF1 /* MobileTaskEditor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MobileTaskEditor.swift; path = Views/MobileTaskEditor.swift; sourceTree = "<group>"; };
-		CD5122F35EF92E9776B4D855295FA30C /* AppSettingsTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppSettingsTests.swift; sourceTree = "<group>"; };
-		D48D8035D1B34168F9816A72CE4D6DF9 /* AtticPanel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticPanel.swift; path = Window/AtticPanel.swift; sourceTree = "<group>"; };
-		D76A8D178C2B6D93984BD0827989FF6D /* TaskRowView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskRowView.swift; path = Views/Panel/TaskRowView.swift; sourceTree = "<group>"; };
+		C4A9126FEEA9D131F6609B655AE34C83 /* AtticDebug.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AtticDebug.entitlements; sourceTree = "<group>"; };
+		C5C3D83DB69085014ADE6475620EABEC /* CornerHoverStateMachine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverStateMachine.swift; path = Services/CornerHoverStateMachine.swift; sourceTree = "<group>"; };
+		C75EA076CDD3BFF1FEE5FBB6D7E86579 /* PanelSection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelSection.swift; path = Window/PanelSection.swift; sourceTree = "<group>"; };
+		D3182A443DD97E5CD44F9E5503084503 /* AgentServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentServer.swift; path = Services/AgentServer/AgentServer.swift; sourceTree = "<group>"; };
 		D8359BE3DE730EB8FDA12CE6178D83DD /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		D86B30B1BFC57D704A3E1A1BBC18E5CC /* AtticUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AtticUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DCFD55D7951F15D6FCE879F18DFA7F0D /* AtticMobile.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = AtticMobile.entitlements; sourceTree = "<group>"; };
-		DEC85072F8654CAD17AAC0567F11372C /* SettingsWindowController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsWindowController.swift; path = Window/SettingsWindowController.swift; sourceTree = "<group>"; };
-		DFD93333C7090AAE7BEDA96199E68D20 /* AppSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AppSettings.swift; path = Services/AppSettings.swift; sourceTree = "<group>"; };
-		E04AFEAE90A937C74FE703AC35F313B5 /* NoteItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteItem.swift; path = Models/NoteItem.swift; sourceTree = "<group>"; };
-		EA2C7A8219E1B1AB229559DD33AEAA6C /* CornerHoverMonitor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerHoverMonitor.swift; path = Services/CornerHoverMonitor.swift; sourceTree = "<group>"; };
+		DE924B343DC822533EF41D7E5006CF55 /* NoteItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NoteItem.swift; path = Models/NoteItem.swift; sourceTree = "<group>"; };
+		DFA83BD596DB6C5709292F7DCA056844 /* AtticApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AtticApp.swift; path = App/AtticApp.swift; sourceTree = "<group>"; };
+		E0DF84CA880283D575A9795E2780FA4A /* AgentAccessSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AgentAccessSettingsView.swift; path = Views/Settings/AgentAccessSettingsView.swift; sourceTree = "<group>"; };
+		E314ADB34B28D974EBD65B67F017C4EA /* PersistenceController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PersistenceController.swift; path = Services/PersistenceController.swift; sourceTree = "<group>"; };
+		E358062A1AD93724B4AA1277B2E99817 /* CornerPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = CornerPicker.swift; path = Views/Settings/CornerPicker.swift; sourceTree = "<group>"; };
+		E4848FBBE77D5570E3172D1BB75F5294 /* DailyCleanupService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DailyCleanupService.swift; path = Services/DailyCleanupService.swift; sourceTree = "<group>"; };
+		E60D672D0D18E54DC87BCA7CC1B25072 /* PanelUIState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PanelUIState.swift; path = Window/PanelUIState.swift; sourceTree = "<group>"; };
+		E9A03C0866CEEACEA58CD311EABF9FC1 /* TestSupport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		EAA6E70A1F7D6A7598991AE50B4B32B0 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		EADA223201BD18D2E5FFF1DE28821A67 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		ED1844739C3F5556E80C3747F801FD85 /* AtticMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AtticMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		EDDCF302A6E341DCB9F8D7418F240756 /* TaskStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskStoreTests.swift; sourceTree = "<group>"; };
-		F0536384AE8E24B50D256D4AD420CFB9 /* PanelGeometryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PanelGeometryTests.swift; sourceTree = "<group>"; };
-		F25A0F5A00BECF32CE4FDB861DA72E99 /* TaskComposerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskComposerView.swift; path = Views/Panel/TaskComposerView.swift; sourceTree = "<group>"; };
-		F55D6C7F9F4ACDC1C0A3FF3B058A234E /* TaskStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskStore.swift; path = Services/TaskStore.swift; sourceTree = "<group>"; };
-		F98755E619A7BA454996EA7D86E0482C /* TaskSectionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskSectionView.swift; path = Views/Panel/TaskSectionView.swift; sourceTree = "<group>"; };
-		F9B795F86FAC5D0A7C9CD82F4BA2FAEA /* SettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		F1AA4BDD1570D1175F93A67F9560B939 /* TaskTypes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskTypes.swift; path = Models/TaskTypes.swift; sourceTree = "<group>"; };
 		FD6591C171BA7256A2A3DD06F1BDDBED /* AtticTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AtticTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		FEB58EA14A47D4B03AD1C6C9D7CA715C /* TaskItem.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = TaskItem.swift; path = Models/TaskItem.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		08492DC4F0C32283EEE942DF7D1FFBDC /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				6109F1000A615B0824D1F5A497326445 /* Cocoa.framework in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		55202AE09988B3F0957D53F273D390EE /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -241,17 +251,88 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		A2E7CA935C02D3A909025680ACD74849 /* Frameworks */ = {
+		CE539C48D05E4CEB649719AFF64C0336 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				3DA5C36AE34F643B53A60F0E60B30D99 /* Cocoa.framework in Frameworks */,
+				815CFAA9ED52EF9F5732FB904BC03DFF /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CF0036EC2DE97C9473244426A5C52E23 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				353637263EEB740186822D668A82812A /* Cocoa.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		29ECB8402F12D53F05153F2CE769A1F4 /* Attic */ = {
+			isa = PBXGroup;
+			children = (
+				73A8A20C78849FA82E4BB1C34F2B1300 /* AppCoordinator.swift */,
+				2BA4741F3A8986018DE2F20DA6F7291F /* AppDelegate.swift */,
+				DFA83BD596DB6C5709292F7DCA056844 /* AtticApp.swift */,
+				855A7F1A9079162E9277D6ED99DEE75C /* AtticStyle.swift */,
+				891B0AC944D6ABE4E7E5D8097537BE69 /* AtticTheme.swift */,
+				1B4847D057AB94D9B41DF4FF2DD21751 /* TaskActionsMenu.swift */,
+				DE924B343DC822533EF41D7E5006CF55 /* NoteItem.swift */,
+				228D0B36C1FA4DA5DAC7FDF8A04F07C5 /* TaskDragPayload.swift */,
+				571B88762359B345BDB1EE32DFCC2C18 /* TaskItem.swift */,
+				F1AA4BDD1570D1175F93A67F9560B939 /* TaskTypes.swift */,
+				9A6FD297C465E270C543BB21CC7DF26E /* AgentAccessTokenStore.swift */,
+				8697AF7380DB3B1EF7DFA4E8E6A36180 /* AgentHTTPRequest.swift */,
+				D3182A443DD97E5CD44F9E5503084503 /* AgentServer.swift */,
+				893892CBE4108C4AFF019DF5D62C450B /* AgentTaskTools.swift */,
+				86092472B17442CEDA5641C80970154A /* MCPRequestHandler.swift */,
+				49ACBF06AD1C238641EDD800AA96BBA1 /* AppSettings.swift */,
+				B0D738AC3E219B4B6D6C1B1CB0A006F4 /* CornerHoverMonitor.swift */,
+				C5C3D83DB69085014ADE6475620EABEC /* CornerHoverStateMachine.swift */,
+				E4848FBBE77D5570E3172D1BB75F5294 /* DailyCleanupService.swift */,
+				227CD630D32DEBD11B8AE10455DBBB9E /* GlobalHotKey.swift */,
+				826B34F4903DCBC718C4ACC04C271C84 /* LoginItemService.swift */,
+				1E925F16D636FEDA4E65118CF8917B42 /* NoteDraftController.swift */,
+				3A4D5D7365269264689FC653A3F0DDFF /* NoteStore.swift */,
+				B17C7683F0C9DFE76EED26541B0EB309 /* PanelGeometry.swift */,
+				E314ADB34B28D974EBD65B67F017C4EA /* PersistenceController.swift */,
+				4E629717F8D109136981ED4DCBEA93E2 /* TaskStore.swift */,
+				849AF620A3FF4D3D233FEF3A0176B7C9 /* MenuBarView.swift */,
+				217A54A768492E750F576E88D3DD8356 /* AtticPanelView.swift */,
+				8855859B7C962223411AB635C9D8E045 /* NotesPanelContent.swift */,
+				556ADDBD064A5CFD47AAC55F7A396477 /* TaskComposerView.swift */,
+				6CCF3EA89A1E5C0B7B9DDA70C797601D /* TaskRowView.swift */,
+				1D6F9E17BCD4F93E9FA0F022635683EF /* TaskSectionView.swift */,
+				376D829F450E5DA6E0E503D0CEF1CF38 /* TaskStatusButton.swift */,
+				AD68C855291F1AD676B461919FA07BD8 /* AboutSettingsView.swift */,
+				E0DF84CA880283D575A9795E2780FA4A /* AgentAccessSettingsView.swift */,
+				15E410660BBB4F0BC150FF10A09AEE8C /* AppearanceSettingsView.swift */,
+				E358062A1AD93724B4AA1277B2E99817 /* CornerPicker.swift */,
+				21CAC33D871466BD1BA3B6FDF98CE158 /* GeneralSettingsView.swift */,
+				16A695D0837E2513C8AFE78DC0942BEC /* PanelSettingsView.swift */,
+				6470489F1C928CC3AACF80E9EDAF509A /* SettingsComponents.swift */,
+				6D3FBD0C19CB11C685808356D6ECC0A9 /* SettingsSection.swift */,
+				11B89F6AFF9608924D5508CE2C21EB0F /* SettingsView.swift */,
+				185642973FEACAB0D63144561D4728E0 /* SyncSettingsView.swift */,
+				761D22F33D1097636139170FF7CF6782 /* AtticPanel.swift */,
+				1DFF479AB4703486594FEDBD809B80BA /* AtticPanelController.swift */,
+				C75EA076CDD3BFF1FEE5FBB6D7E86579 /* PanelSection.swift */,
+				E60D672D0D18E54DC87BCA7CC1B25072 /* PanelUIState.swift */,
+				14F81DA75F0E791EDAD91AB55C3AAA9E /* SettingsWindowController.swift */,
+				6CB646282285F46BF5A774600283F425 /* Assets.xcassets */,
+				38BB5B806462A19BD839E4D4306C89C6 /* PrivacyInfo.xcprivacy */,
+				66CE21B7B9ED6DBD0BD3646A0D61C1F0 /* Attic.entitlements */,
+				C4A9126FEEA9D131F6609B655AE34C83 /* AtticDebug.entitlements */,
+				9BFED3CBD617D0C9E3EF94DC2552B5E3 /* AtticLocal.entitlements */,
+				86D609EC2EF7FFEFC16A7AE6189D935B /* AtticNotesLocal.entitlements */,
+				EAA6E70A1F7D6A7598991AE50B4B32B0 /* Info.plist */,
+			);
+			name = Attic;
+			path = Attic;
+			sourceTree = "<group>";
+		};
 		3259EFB1B6DA0C3406CC9EA07AAC8112 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -269,86 +350,13 @@
 			name = iOS;
 			sourceTree = "<group>";
 		};
-		884FA1959EA4CC8D920732420083DAF7 /* Attic */ = {
-			isa = PBXGroup;
-			children = (
-				9E5E237515E775677B089278AFF659EB /* AppCoordinator.swift */,
-				2D0C74964603201C3FFD4AF40BAF1ABD /* AppDelegate.swift */,
-				32D326E95B5F56DE163EB1692AA8C111 /* AtticApp.swift */,
-				10FAF06EF5AEBB4EE2F58E1EB08D917F /* AtticStyle.swift */,
-				5DCF15C1E4D70269A47C9FF6866C6C0B /* AtticTheme.swift */,
-				1920E4FBE5464E5355106CB0A5F33D69 /* TaskActionsMenu.swift */,
-				E04AFEAE90A937C74FE703AC35F313B5 /* NoteItem.swift */,
-				1A68B4B29D01B2B0C6A7F6B9E75913B8 /* TaskDragPayload.swift */,
-				FEB58EA14A47D4B03AD1C6C9D7CA715C /* TaskItem.swift */,
-				B8A1A43EF08C5DEDD6D62890A1DAA03A /* TaskTypes.swift */,
-				4EACAF8C071549043A855049B511AE2A /* AgentAccessTokenStore.swift */,
-				4A79B907F710335F71504539756039C6 /* AgentHTTPRequest.swift */,
-				AC5F64918111A51709520825AEDF4032 /* AgentServer.swift */,
-				2C5BD1100ACEDCDEE6DB455605B8244C /* AgentTaskTools.swift */,
-				7F81BB93DA417C794A4C68EC606B7C52 /* MCPRequestHandler.swift */,
-				DFD93333C7090AAE7BEDA96199E68D20 /* AppSettings.swift */,
-				EA2C7A8219E1B1AB229559DD33AEAA6C /* CornerHoverMonitor.swift */,
-				030CD7DBB13C6AF4BDE46555A56651E2 /* CornerHoverStateMachine.swift */,
-				92EA788B597F19A58843350D86CAFA48 /* DailyCleanupService.swift */,
-				B0C9CD1CB1B217C24B5596B1A32AC4AA /* GlobalHotKey.swift */,
-				2FB7904817115770DB68DA1651FC24B9 /* LoginItemService.swift */,
-				4872AC80223553244A6DF3646D292A2A /* NoteDraftController.swift */,
-				1AE07CCB5F8D79B66C39774491811904 /* NoteStore.swift */,
-				AC105BB97E2D7278AACE5D803DF2A534 /* PanelGeometry.swift */,
-				9C5F084539D03B5FA355F7B670E280A1 /* PersistenceController.swift */,
-				F55D6C7F9F4ACDC1C0A3FF3B058A234E /* TaskStore.swift */,
-				486C6612328995D09389ABB1AA2957CD /* MenuBarView.swift */,
-				7C010299BF11019769F89970AEAEFCCA /* AtticPanelView.swift */,
-				7C861F55C50EC3A0A47F1F743A396EC1 /* NotesPanelContent.swift */,
-				F25A0F5A00BECF32CE4FDB861DA72E99 /* TaskComposerView.swift */,
-				D76A8D178C2B6D93984BD0827989FF6D /* TaskRowView.swift */,
-				F98755E619A7BA454996EA7D86E0482C /* TaskSectionView.swift */,
-				71FA50D5768F48807DB589310E4749F2 /* TaskStatusButton.swift */,
-				22BE992297A330A445A5FC1642754869 /* CornerPicker.swift */,
-				F9B795F86FAC5D0A7C9CD82F4BA2FAEA /* SettingsView.swift */,
-				D48D8035D1B34168F9816A72CE4D6DF9 /* AtticPanel.swift */,
-				674881E436D9F843F333BDEEBA07AC64 /* AtticPanelController.swift */,
-				538117D0EBAA72B097A5331869BB26B1 /* PanelSection.swift */,
-				BB5D9106F4E33E6B965F308340C30C4D /* PanelUIState.swift */,
-				DEC85072F8654CAD17AAC0567F11372C /* SettingsWindowController.swift */,
-				9280BDB9CCCF56584BD57344189CB332 /* Assets.xcassets */,
-				9E39BA86FD34B145AA4559C1A5A4284B /* PrivacyInfo.xcprivacy */,
-				0FBC1A4A6B7E24F79D085819A73487B5 /* Attic.entitlements */,
-				95842749B77CA6E616568D3A249071A9 /* AtticDebug.entitlements */,
-				61AD673702F772F6E490F7AB966802B7 /* AtticLocal.entitlements */,
-				488EC5079C0613DF1E937B89AC6B8C8B /* AtticNotesLocal.entitlements */,
-				71EBAA654B194BEB7D3E976C4D5A0495 /* Info.plist */,
-			);
-			name = Attic;
-			path = Attic;
-			sourceTree = "<group>";
-		};
-		9A841F53DE1077F888FD47363D3EC486 /* AtticTests */ = {
-			isa = PBXGroup;
-			children = (
-				15F5102C251E2D555EE99AADB9E15CD5 /* AgentHTTPRequestTests.swift */,
-				CD5122F35EF92E9776B4D855295FA30C /* AppSettingsTests.swift */,
-				8608C21BC3FD9BA003ADF0B060AFCC15 /* CornerHoverStateMachineTests.swift */,
-				21627C205EA4748A119A5C966B25CB8F /* DailyCleanupServiceTests.swift */,
-				28176A9DBD083239859FFE4BD895CE42 /* MCPRequestHandlerTests.swift */,
-				88D1EB5C4433112F9208287F1D13C017 /* NoteDraftControllerTests.swift */,
-				1C7AC39F89618D0C7FB67E42BBDA0D67 /* NoteStoreTests.swift */,
-				F0536384AE8E24B50D256D4AD420CFB9 /* PanelGeometryTests.swift */,
-				EDDCF302A6E341DCB9F8D7418F240756 /* TaskStoreTests.swift */,
-				0122376BD7207E20D9E85855AA7EA5A2 /* TestSupport.swift */,
-			);
-			name = AtticTests;
-			path = AtticTests;
-			sourceTree = "<group>";
-		};
 		9EF6F9328742506296773AEE13C6F434 = {
 			isa = PBXGroup;
 			children = (
 				B699DC5D2D20A8B8843736F9220381BC /* Products */,
 				3259EFB1B6DA0C3406CC9EA07AAC8112 /* Frameworks */,
-				884FA1959EA4CC8D920732420083DAF7 /* Attic */,
-				9A841F53DE1077F888FD47363D3EC486 /* AtticTests */,
+				29ECB8402F12D53F05153F2CE769A1F4 /* Attic */,
+				A3F46977527E3AB95BD8A88D1DDB0C7E /* AtticTests */,
 				BCCCFD9A0D94C97535D82607FDB93083 /* AtticUITests */,
 				E9B20F0510A07C3BF7C055D472E65FCC /* AtticMobile */,
 				C02FC1869F90D04A9BF93FE9FD4CA69F /* AtticMobileTests */,
@@ -362,6 +370,25 @@
 				D8359BE3DE730EB8FDA12CE6178D83DD /* Cocoa.framework */,
 			);
 			name = "OS X";
+			sourceTree = "<group>";
+		};
+		A3F46977527E3AB95BD8A88D1DDB0C7E /* AtticTests */ = {
+			isa = PBXGroup;
+			children = (
+				0343BF22D7683791A89AFAF05AF878D6 /* AgentHTTPRequestTests.swift */,
+				34D9F316125ED68692CC0EDEFB186C42 /* AppSettingsTests.swift */,
+				27DD7750B0AE08C349E9895BAF6282BE /* CornerHoverStateMachineTests.swift */,
+				8FE52689E97C5D820F9A54E41757C865 /* DailyCleanupServiceTests.swift */,
+				B540F7E06A141AB63A1565BFF2A09C2C /* MCPRequestHandlerTests.swift */,
+				BDFFD0F90E9248B104212F8F45D5AEBD /* NoteDraftControllerTests.swift */,
+				AEB96351F033738EEB9948B9ECCEAB49 /* NoteStoreTests.swift */,
+				BE20B1C2088B9DB3DCAA33160BF8DC9A /* PanelGeometryTests.swift */,
+				25BBA2867E4C14D743A9A4E832713D69 /* SettingsPresentationTests.swift */,
+				4DBCA342F911825793EC4F3053426DEC /* TaskStoreTests.swift */,
+				E9A03C0866CEEACEA58CD311EABF9FC1 /* TestSupport.swift */,
+			);
+			name = AtticTests;
+			path = AtticTests;
 			sourceTree = "<group>";
 		};
 		B699DC5D2D20A8B8843736F9220381BC /* Products */ = {
@@ -478,6 +505,23 @@
 			productReference = ED1844739C3F5556E80C3747F801FD85 /* AtticMobile.app */;
 			productType = "com.apple.product-type.application";
 		};
+		86AE68D87B2CE17260FE6F50EA7D88CA /* Attic */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 819D4447BF149DDEB514D8C2D0EE86F1 /* Build configuration list for PBXNativeTarget "Attic" */;
+			buildPhases = (
+				E510F7BD918A9DB3D6F9ACB73564A5D1 /* Sources */,
+				CF0036EC2DE97C9473244426A5C52E23 /* Frameworks */,
+				1F9ADBA4F38B645D1A4C2F000B02026B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Attic;
+			productName = Attic;
+			productReference = 202E07D5B85798E2D9A5C7D49CC7C5C5 /* Attic.app */;
+			productType = "com.apple.product-type.application";
+		};
 		A7E2FBB4FDEEC93FE643B32D6940915E /* AtticMobileTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 56DCB616B85CE20E17E96880AD23B8E0 /* Build configuration list for PBXNativeTarget "AtticMobileTests" */;
@@ -496,35 +540,18 @@
 			productReference = B5EB3D8A5FA9D6C5324791251955F025 /* AtticMobileTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		F0F9BDCD18B518BFBE3D8A21FAB0FEE1 /* Attic */ = {
+		F46141B45C392F05DF89651895670681 /* AtticTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = D7D1DC10BC2143AC0AC2563F1EB7A392 /* Build configuration list for PBXNativeTarget "Attic" */;
+			buildConfigurationList = 8BBB8AACD59E7263D36DC4DF33554422 /* Build configuration list for PBXNativeTarget "AtticTests" */;
 			buildPhases = (
-				F214E6C897C2999D2545983EC55B36E6 /* Sources */,
-				A2E7CA935C02D3A909025680ACD74849 /* Frameworks */,
-				36FEE80D5032BA3A065F786DCEE6B715 /* Resources */,
+				2478DF57AFE204B8BB66B8525D417514 /* Sources */,
+				CE539C48D05E4CEB649719AFF64C0336 /* Frameworks */,
+				887302BDB61F6174F8F20B907D44BCF2 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-			);
-			name = Attic;
-			productName = Attic;
-			productReference = 202E07D5B85798E2D9A5C7D49CC7C5C5 /* Attic.app */;
-			productType = "com.apple.product-type.application";
-		};
-		FC0510018202F72C25990096FD863EA3 /* AtticTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 6EA69C0E1D0274E053094E0527CB2C4F /* Build configuration list for PBXNativeTarget "AtticTests" */;
-			buildPhases = (
-				B14C9DC765915CC48FFB709B7F3709BC /* Sources */,
-				08492DC4F0C32283EEE942DF7D1FFBDC /* Frameworks */,
-				F76D3A71E3585F651326B547EC23DC7F /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				06E4E0DFDD4C0780EEFB59B393FEF094 /* PBXTargetDependency */,
+				6F470CA7BF175F9EE2DD6B284219FBCD /* PBXTargetDependency */,
 			);
 			name = AtticTests;
 			productName = AtticTests;
@@ -553,7 +580,7 @@
 							};
 						};
 					};
-					F0F9BDCD18B518BFBE3D8A21FAB0FEE1 = {
+					86AE68D87B2CE17260FE6F50EA7D88CA = {
 						SystemCapabilities = {
 							com.apple.Push = {
 								enabled = 1;
@@ -578,8 +605,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				F0F9BDCD18B518BFBE3D8A21FAB0FEE1 /* Attic */,
-				FC0510018202F72C25990096FD863EA3 /* AtticTests */,
+				86AE68D87B2CE17260FE6F50EA7D88CA /* Attic */,
+				F46141B45C392F05DF89651895670681 /* AtticTests */,
 				29D42C445B39133F6CE8ED3394F0BD54 /* AtticUITests */,
 				6A9C0775F09BF19B3C70496EEC4AF237 /* AtticMobile */,
 				A7E2FBB4FDEEC93FE643B32D6940915E /* AtticMobileTests */,
@@ -596,6 +623,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1F9ADBA4F38B645D1A4C2F000B02026B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				36677806ADB146CAFFFCFAD05121F76B /* Assets.xcassets in Resources */,
+				877D21D7F6A5BB64D8B45231BA3A7FDE /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		262C4F8CA20E6C61E31AD31D833D3347 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -605,16 +641,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		36FEE80D5032BA3A065F786DCEE6B715 /* Resources */ = {
+		373AA20BD79827522AD57E1666A36F50 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				97A56FA52BDD9C293AD8AAFA6F30614B /* Assets.xcassets in Resources */,
-				45C4567955465D9CF634D9F228538F3F /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		373AA20BD79827522AD57E1666A36F50 /* Resources */ = {
+		887302BDB61F6174F8F20B907D44BCF2 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -628,16 +662,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		F76D3A71E3585F651326B547EC23DC7F /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		2478DF57AFE204B8BB66B8525D417514 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CE9FAA863FCA06719A1BBB1E439837AE /* AgentHTTPRequestTests.swift in Sources */,
+				2327E51388A04D5097E20D9C88176072 /* AppSettingsTests.swift in Sources */,
+				27BCF573A3F1A38E24FA948FAF100B07 /* CornerHoverStateMachineTests.swift in Sources */,
+				15BF45594CDCBE70D476C94202EBC770 /* DailyCleanupServiceTests.swift in Sources */,
+				B17AAE096D249D98791E2402A7392481 /* MCPRequestHandlerTests.swift in Sources */,
+				66A652A3AB4825E45F2796539A8A5FD6 /* NoteDraftControllerTests.swift in Sources */,
+				6B7E261063DBE8E1E75F12C3F434D342 /* NoteStoreTests.swift in Sources */,
+				A09DEAFE008E8FFECBB1117F26F9B335 /* PanelGeometryTests.swift in Sources */,
+				7E7C8AC50384AAB84478CD82C9B6A8F8 /* SettingsPresentationTests.swift in Sources */,
+				D6AF5BCDDD267FF75228C1549AF75FBB /* TaskStoreTests.swift in Sources */,
+				203719D819FEB52D6475868A88559613 /* TestSupport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2860B3E5675D392C207E0B28F1B28427 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -677,23 +722,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B14C9DC765915CC48FFB709B7F3709BC /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				CC0322AAD238C0A4D1C382B13F9FFD65 /* AgentHTTPRequestTests.swift in Sources */,
-				E159F36475D44A46BDD212F54A2EE392 /* AppSettingsTests.swift in Sources */,
-				B9B451291C0A78F01401AFE77A373A61 /* CornerHoverStateMachineTests.swift in Sources */,
-				DE286E4860D69820E9F3F5510BAC2E45 /* DailyCleanupServiceTests.swift in Sources */,
-				36F746D4C9F79CAE8480E1E4F7DD10AC /* MCPRequestHandlerTests.swift in Sources */,
-				456393E9B27D910423B573C085B463B9 /* NoteDraftControllerTests.swift in Sources */,
-				08A3C66AD356C0DC3C166C62AB8A6D59 /* NoteStoreTests.swift in Sources */,
-				8324DB714A09A3DBA3555950BC198C15 /* PanelGeometryTests.swift in Sources */,
-				F32540BF66B5A3B61CC8660834B39908 /* TaskStoreTests.swift in Sources */,
-				C29175CCB9611C85C3CED268CA789A58 /* TestSupport.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		C04CA09B4B1A040B71C037EC565B9F9D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -702,72 +730,80 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		F214E6C897C2999D2545983EC55B36E6 /* Sources */ = {
+		E510F7BD918A9DB3D6F9ACB73564A5D1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				EB23FA6AA60162F54A1554FB3A87C84B /* AppCoordinator.swift in Sources */,
-				69D327EA764199ECBD3061DCEC26BFB4 /* AppDelegate.swift in Sources */,
-				070507B5E5ED66990F3CDDEB4FBF98BB /* AtticApp.swift in Sources */,
-				94EFF1618BE0285FCC4A94BB909D1464 /* AtticStyle.swift in Sources */,
-				093D427F47C7DFDA16FB97E91D7E9193 /* AtticTheme.swift in Sources */,
-				42331CA9B84D71BF9EF1818C0844D240 /* TaskActionsMenu.swift in Sources */,
-				D5FDF3F715B80225AA306E98E89A97E7 /* NoteItem.swift in Sources */,
-				0F42A73CF39C5574143514C31CEA4A19 /* TaskDragPayload.swift in Sources */,
-				9B3375FFFDE98EB4E425F454F8E38257 /* TaskItem.swift in Sources */,
-				E54CEE14140F623E959C089E47D2272C /* TaskTypes.swift in Sources */,
-				2E77C7B77CF1BD55E219FE5E69174BAC /* AgentAccessTokenStore.swift in Sources */,
-				80119F6E680490CFBA7D051AEE5FBD73 /* AgentHTTPRequest.swift in Sources */,
-				6F8C1976B81CF74477C3785048F977F9 /* AgentServer.swift in Sources */,
-				056610B728EFA14F36CE5C1BC18181A8 /* AgentTaskTools.swift in Sources */,
-				D6176349F7BE8E7CA6643D92EAC45A4A /* MCPRequestHandler.swift in Sources */,
-				81F45D3491875D4E679841C7A07AF147 /* AppSettings.swift in Sources */,
-				FE2CA99D1A631EA0D8AE1E34F9F7801A /* CornerHoverMonitor.swift in Sources */,
-				28A5F5B745C9A4663030DFB5FB4EBDBB /* CornerHoverStateMachine.swift in Sources */,
-				2E4A933ED9B3840AB1A2A4B03A6BF1B5 /* DailyCleanupService.swift in Sources */,
-				B560C2316A5FED0CFC193F8DA86F8754 /* GlobalHotKey.swift in Sources */,
-				168894670DAFB0FB169A97F15FD005C5 /* LoginItemService.swift in Sources */,
-				D19191D73C32B3B2F28BD4F2465CC485 /* NoteDraftController.swift in Sources */,
-				561A62F7D259034339B6A4202A6311E1 /* NoteStore.swift in Sources */,
-				1DF275F582E595D9B1B031C2B5A46F80 /* PanelGeometry.swift in Sources */,
-				CC5EC540AE8DF5A7F0EC987830A9DBE4 /* PersistenceController.swift in Sources */,
-				DD95BB159D63FDE2242AFBA23F6592DA /* TaskStore.swift in Sources */,
-				22699118820E310ADABBE452B67D29B8 /* MenuBarView.swift in Sources */,
-				9B8549772966F7FFE97BEFF0EA241D84 /* AtticPanelView.swift in Sources */,
-				492688537093C94DB6C52D236022B12C /* NotesPanelContent.swift in Sources */,
-				8FE9B7B7FA28DBFBAFA3E111EBB4BE41 /* TaskComposerView.swift in Sources */,
-				C36A05B7A51C62539C832EFF51AD94CD /* TaskRowView.swift in Sources */,
-				46072849227E8F8DECAD9E020D91AB47 /* TaskSectionView.swift in Sources */,
-				1401A963350279C023875B7F562DB82D /* TaskStatusButton.swift in Sources */,
-				077645E17ABC53323E4DA3C9EE4D4151 /* CornerPicker.swift in Sources */,
-				21079C9BACB55AEB78771916F9594D1C /* SettingsView.swift in Sources */,
-				F693E98713950416E589ECC55D21A046 /* AtticPanel.swift in Sources */,
-				75C17437DB0C6DB65461F62466134E08 /* AtticPanelController.swift in Sources */,
-				845AB44DD4A80995EF4A524A45940225 /* PanelSection.swift in Sources */,
-				4ADF68290E27897A7F3C2984265BE6FD /* PanelUIState.swift in Sources */,
-				171407B54992B8E56D8B4642A2CCECC1 /* SettingsWindowController.swift in Sources */,
+				AAB2A698E5645464F69A7ADF44B909CC /* AppCoordinator.swift in Sources */,
+				38D56B64838152960CCFA4DDBDB32E84 /* AppDelegate.swift in Sources */,
+				5A2FA0E84A6EFA5368E1CE24B9CDC735 /* AtticApp.swift in Sources */,
+				1118A358F43301F161B0CBA39FFFBB3D /* AtticStyle.swift in Sources */,
+				66800AE23896A32B5ADFF32A95B5F6CC /* AtticTheme.swift in Sources */,
+				B227A164F981AC539513AEDA155EE15D /* TaskActionsMenu.swift in Sources */,
+				9BF1AAA04F2B8E5E97B147A2C83E95AE /* NoteItem.swift in Sources */,
+				89BE11BF2EB57669AFEDF66AFCA842C7 /* TaskDragPayload.swift in Sources */,
+				23BC390D0D8C2D274A0DE3026E827EE1 /* TaskItem.swift in Sources */,
+				C1AB7E024E5D280DAF04BEC46D6C4FAA /* TaskTypes.swift in Sources */,
+				15631C186FD8B4D26EB086717660D21E /* AgentAccessTokenStore.swift in Sources */,
+				9AB53C6579AA284338F4B4AE9062B0BD /* AgentHTTPRequest.swift in Sources */,
+				F03DCB05A0EC15E66315CDF2FC63B3EC /* AgentServer.swift in Sources */,
+				3224C70D6724BC7D34B5F1F2576E2BD0 /* AgentTaskTools.swift in Sources */,
+				C1A0866F0E01C216769BA31114740403 /* MCPRequestHandler.swift in Sources */,
+				72577D7DA7FD8B8AAF5A41EA637E6EDD /* AppSettings.swift in Sources */,
+				109A3BF6669A1EFEDBAE23EE28EE77D6 /* CornerHoverMonitor.swift in Sources */,
+				F208F5B8D9FB33E3079FAC5402533762 /* CornerHoverStateMachine.swift in Sources */,
+				F8A2036AB095D23EC586C74E8AD1E081 /* DailyCleanupService.swift in Sources */,
+				C1C169E4871D49EDA6CB487CF39E8FE1 /* GlobalHotKey.swift in Sources */,
+				A8F1305921A136FA5BF0433EF92AC4B6 /* LoginItemService.swift in Sources */,
+				6752AB523F044C4A70B9D90D03601397 /* NoteDraftController.swift in Sources */,
+				B852CCFE22ECE2DE15BBF94291740481 /* NoteStore.swift in Sources */,
+				EA6B3722A1E85C37FB38FFE1ABD9FF46 /* PanelGeometry.swift in Sources */,
+				213FCE65D30C5F3B1DCF3F1B58D06E91 /* PersistenceController.swift in Sources */,
+				DE88D729F300A3AA7056EB1FA20B9E9A /* TaskStore.swift in Sources */,
+				FFB43770376AFA3425B9FFE52F644376 /* MenuBarView.swift in Sources */,
+				AB302357E86F3583682A1474E91F6317 /* AtticPanelView.swift in Sources */,
+				AA8FF2DE7E0C3F478EB7BF23C44995C1 /* NotesPanelContent.swift in Sources */,
+				C165A64AFAEB3A026A17999477C268BF /* TaskComposerView.swift in Sources */,
+				F0DEBC2D6E33E0D6CC045C2425A9F9C1 /* TaskRowView.swift in Sources */,
+				111783351D5F6263C2B160E9208F95AE /* TaskSectionView.swift in Sources */,
+				12CB1FCC92C3E4119042C45118E9F0FB /* TaskStatusButton.swift in Sources */,
+				74D4D9E54B68C9843FB651AD26A9A0ED /* AboutSettingsView.swift in Sources */,
+				AE46861A237B019DE316B7D8EE888782 /* AgentAccessSettingsView.swift in Sources */,
+				1147DA5016E2FEC243D2A199B4AD60D0 /* AppearanceSettingsView.swift in Sources */,
+				D09AFF8518E89C05EED72498F86FF5C3 /* CornerPicker.swift in Sources */,
+				0DFD0C499843B72356A5D736C80CBA62 /* GeneralSettingsView.swift in Sources */,
+				4F5FAD7E10322D41DE47585EB81840C1 /* PanelSettingsView.swift in Sources */,
+				4487DB7B97984DDC6F69DAC712D230C1 /* SettingsComponents.swift in Sources */,
+				BD86C0B5E5B05E52E3CC8F2540E52D9B /* SettingsSection.swift in Sources */,
+				2BFED3F162D248D9341775E4C31589BE /* SettingsView.swift in Sources */,
+				D4008DA05C649525F84D9B7B30FA88C8 /* SyncSettingsView.swift in Sources */,
+				40DB0C5DD8898CF4B96E80EBBA64DAA1 /* AtticPanel.swift in Sources */,
+				80D908C9A5D7EC52C6C5E8553EE8C222 /* AtticPanelController.swift in Sources */,
+				6998008A05EB936E5EAF849369FBAEFB /* PanelSection.swift in Sources */,
+				63380C60F32F5CDBBFEBF4E525FBF9C8 /* PanelUIState.swift in Sources */,
+				6888A6D6B3EA5E11857F0975110C18E3 /* SettingsWindowController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		06E4E0DFDD4C0780EEFB59B393FEF094 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = Attic;
-			target = F0F9BDCD18B518BFBE3D8A21FAB0FEE1 /* Attic */;
-			targetProxy = B5A02E71568128A130A258F84290B5D8 /* PBXContainerItemProxy */;
-		};
 		5BDECB4EFC7FEBB5B8A7C1F1C5729E58 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = AtticMobile;
 			target = 6A9C0775F09BF19B3C70496EEC4AF237 /* AtticMobile */;
 			targetProxy = C360DB55EE6C1DA6E09845349014A993 /* PBXContainerItemProxy */;
 		};
+		6F470CA7BF175F9EE2DD6B284219FBCD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Attic;
+			target = 86AE68D87B2CE17260FE6F50EA7D88CA /* Attic */;
+			targetProxy = 1936B476A94483DDBD5A1F09EFD66BB1 /* PBXContainerItemProxy */;
+		};
 		BE7FCE83A69C806568992B2636943C3E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = Attic;
-			target = F0F9BDCD18B518BFBE3D8A21FAB0FEE1 /* Attic */;
+			target = 86AE68D87B2CE17260FE6F50EA7D88CA /* Attic */;
 			targetProxy = D7F7AB915567429B2ED77567FD567066 /* PBXContainerItemProxy */;
 		};
 		E130EA4BBDDF7A911BED9BC04C720026 /* PBXTargetDependency */ = {
@@ -779,6 +815,38 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		0BC93B620888AA38174153A412CE18AE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APS_ENVIRONMENT = production;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ATTIC_DISPLAY_NAME = Attic;
+				CODE_SIGN_ENTITLEMENTS = Attic/Attic.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 11;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				ICLOUD_CONTAINER_ENVIRONMENT = Production;
+				INFOPLIST_FILE = Attic/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Attic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 		104CC9CD50207B61362539A50FDB1D97 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -842,14 +910,14 @@
 			};
 			name = Debug;
 		};
-		1E4241EE9DD9E61B7A9A409B5B614537 /* Release */ = {
+		26D8012DD1B964F136B4BF702730CBB3 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				APS_ENVIRONMENT = production;
+				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ATTIC_DISPLAY_NAME = Attic;
-				CODE_SIGN_ENTITLEMENTS = Attic/Attic.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Attic/AtticDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 11;
@@ -857,7 +925,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				ICLOUD_CONTAINER_ENVIRONMENT = Production;
+				ICLOUD_CONTAINER_ENVIRONMENT = Development;
 				INFOPLIST_FILE = Attic/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -872,7 +940,39 @@
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
 			};
-			name = Release;
+			name = Debug;
+		};
+		427FBAC4C3B2821F79D09FEDD6781CFF /* Local */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APS_ENVIRONMENT = development;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ATTIC_DISPLAY_NAME = Attic;
+				CODE_SIGN_ENTITLEMENTS = Attic/AtticLocal.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 11;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				ICLOUD_CONTAINER_ENVIRONMENT = Development;
+				INFOPLIST_FILE = Attic/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Attic;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Local;
 		};
 		43A5C444A26C6EAE074B0FF15D2F9559 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -930,6 +1030,38 @@
 			};
 			name = Release;
 		};
+		6055BF58D15295F576C0270C8DD4798F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticTests;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic";
+			};
+			name = Debug;
+		};
+		62823BCCA9B9110E96B3B4A98AE91F23 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticTests;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic";
+			};
+			name = Release;
+		};
 		637E3A28B826F83FC922585FBCC21562 /* Local */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -945,22 +1077,6 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_TARGET_NAME = AtticMobile;
-			};
-			name = Local;
-		};
-		6734CFAAEBA14FB9C848ADB7AD42A2D5 /* Local */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticTests;
-				SDKROOT = macosx;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic";
 			};
 			name = Local;
 		};
@@ -1161,22 +1277,6 @@
 			};
 			name = Local;
 		};
-		BA65253B4AEBD163560D03696A48E96D /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticTests;
-				SDKROOT = macosx;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic";
-			};
-			name = Debug;
-		};
 		C9D688D08DCB0E1858CFD545B9D1F0D9 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1197,6 +1297,22 @@
 			};
 			name = Release;
 		};
+		CC8766B360A5EBA138275C4C2B029DB3 /* Local */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = HR24WHR326;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticTests;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic";
+			};
+			name = Local;
+		};
 		D74ED9EDE3D0D2D3A9D01CC5D0F16E51 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1215,86 +1331,6 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AtticMobile.app/AtticMobile";
 			};
 			name = Debug;
-		};
-		D85C3BB49CAA32A843CBEDEA758AB58D /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.AtticTests;
-				SDKROOT = macosx;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic";
-			};
-			name = Release;
-		};
-		D86AF0ACCF73D63DFDB5DB5B0BB3600D /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APS_ENVIRONMENT = development;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ATTIC_DISPLAY_NAME = Attic;
-				CODE_SIGN_ENTITLEMENTS = Attic/AtticDebug.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				ICLOUD_CONTAINER_ENVIRONMENT = Development;
-				INFOPLIST_FILE = Attic/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Attic;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Debug;
-		};
-		D916BADE06D3F90BA7106BE059C81F00 /* Local */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APS_ENVIRONMENT = development;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ATTIC_DISPLAY_NAME = Attic;
-				CODE_SIGN_ENTITLEMENTS = Attic/AtticLocal.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 11;
-				DEVELOPMENT_TEAM = HR24WHR326;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				ICLOUD_CONTAINER_ENVIRONMENT = Development;
-				INFOPLIST_FILE = Attic/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.emanueledipietro.Attic;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_STRICT_CONCURRENCY = minimal;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Local;
 		};
 		E0253AB16DC6568C157EB6B7FF3C3435 /* Local */ = {
 			isa = XCBuildConfiguration;
@@ -1406,12 +1442,22 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		6EA69C0E1D0274E053094E0527CB2C4F /* Build configuration list for PBXNativeTarget "AtticTests" */ = {
+		819D4447BF149DDEB514D8C2D0EE86F1 /* Build configuration list for PBXNativeTarget "Attic" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				D85C3BB49CAA32A843CBEDEA758AB58D /* Release */,
-				BA65253B4AEBD163560D03696A48E96D /* Debug */,
-				6734CFAAEBA14FB9C848ADB7AD42A2D5 /* Local */,
+				0BC93B620888AA38174153A412CE18AE /* Release */,
+				26D8012DD1B964F136B4BF702730CBB3 /* Debug */,
+				427FBAC4C3B2821F79D09FEDD6781CFF /* Local */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8BBB8AACD59E7263D36DC4DF33554422 /* Build configuration list for PBXNativeTarget "AtticTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				62823BCCA9B9110E96B3B4A98AE91F23 /* Release */,
+				6055BF58D15295F576C0270C8DD4798F /* Debug */,
+				CC8766B360A5EBA138275C4C2B029DB3 /* Local */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1422,16 +1468,6 @@
 				E8C715FF0700DC7BCA23AE3473C0F9D6 /* Release */,
 				6BE07A317AC1A793C251B63D47E7FD1D /* Debug */,
 				637E3A28B826F83FC922585FBCC21562 /* Local */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		D7D1DC10BC2143AC0AC2563F1EB7A392 /* Build configuration list for PBXNativeTarget "Attic" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				1E4241EE9DD9E61B7A9A409B5B614537 /* Release */,
-				D86AF0ACCF73D63DFDB5DB5B0BB3600D /* Debug */,
-				D916BADE06D3F90BA7106BE059C81F00 /* Local */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
