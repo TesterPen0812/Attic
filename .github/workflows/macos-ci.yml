@@ -1,23 +1,25 @@
-name: macOS CI
+name: Attic CI
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - feature/canvas-ink
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: macos-ci-${{ github.workflow }}-${{ github.ref }}
+  group: attic-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify:
+  macos:
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Check out repository
@@ -79,13 +81,13 @@ jobs:
             -only-testing:AtticUITests \
             test
 
-      - name: Upload failing UI test results
+      - name: Upload failing macOS UI test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: macos-ui-test-results-${{ github.sha }}
           path: ${{ runner.temp }}/AtticUITests.xcresult
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Run macOS static analyzer
@@ -99,3 +101,54 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/AtticAnalyze" \
             CODE_SIGNING_ALLOWED=NO \
             analyze
+
+  iphone:
+    name: Build Attic for iPhone Simulator
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Ruby dependencies
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Verify generated Xcode project
+        run: bundle exec ruby Scripts/verify_project_generation.rb
+
+      - name: Select an available iPhone simulator
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+
+          payload = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "available", "-j"],
+                  text=True,
+              )
+          )
+          for runtime in sorted(payload["devices"], reverse=True):
+              for device in payload["devices"][runtime]:
+                  if device["name"].startswith("iPhone") and device.get("isAvailable", True):
+                      with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+                          output.write(f"IOS_SIMULATOR_UDID={device['udid']}\n")
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator was found")
+
+      - name: Build iPhone app and tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete \
+            clean build-for-testing
