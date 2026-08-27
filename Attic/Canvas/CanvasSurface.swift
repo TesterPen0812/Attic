@@ -5,6 +5,10 @@ struct CanvasSurface: View {
 
     var body: some View {
         platformSurface
+            // Rebuild the native bridge only for an explicit lifecycle
+            // cancellation. Dismantling discards unfinished input without
+            // changing completed strokes or viewport state.
+            .id(session.interactionCancellationEpoch)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Canvas drawing board")
             .accessibilityValue(accessibilityValue)

@@ -15,6 +15,7 @@ final class CanvasSession: ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     @Published private(set) var lastErrorMessage: String?
+    @Published private(set) var interactionCancellationEpoch: UInt64 = 0
 
     private enum HistoryCommand {
         case add(CanvasStroke)
@@ -214,6 +215,10 @@ final class CanvasSession: ObservableObject {
         in size: CGSize
     ) {
         viewport.zoom(by: factor, anchoredAt: anchor, in: size)
+    }
+
+    func cancelActiveInteraction() {
+        interactionCancellationEpoch &+= 1
     }
 
     func refresh() {
