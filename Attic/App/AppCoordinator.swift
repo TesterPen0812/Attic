@@ -12,12 +12,14 @@ final class AppCoordinator {
     let noteDraft: NoteDraftController
     let loginItemService: LoginItemService
     let uiState: PanelUIState
+    let opticalPermissionController: OpticalPermissionController
 
     private let cleanupService: DailyCleanupService
     private let panelController: AtticPanelController
     private let settingsWindowController: SettingsWindowController
     private let hoverMonitor: CornerHoverMonitor
     private let agentServer: AgentServer
+    private let opticalEnvironmentMonitor: OpticalEnvironmentMonitor
     private let isUITesting: Bool
     private let isRunningTests: Bool
     private var menuNotificationTokens: [NSObjectProtocol] = []
@@ -36,6 +38,8 @@ final class AppCoordinator {
             || environment["XCTestBundlePath"] != nil
 
         let settings = AppSettings()
+        let opticalPermissionController = OpticalPermissionController()
+        let opticalEnvironmentMonitor = OpticalEnvironmentMonitor()
         #if DEBUG && !ATTIC_LOCAL_ONLY
         if !isUITesting && !isRunningTests {
             do {
@@ -102,7 +106,9 @@ final class AppCoordinator {
             noteStore: noteStore,
             noteDraft: noteDraft,
             settings: settings,
-            uiState: uiState
+            uiState: uiState,
+            opticalPermissionController: opticalPermissionController,
+            opticalEnvironmentMonitor: opticalEnvironmentMonitor
         )
 
         self.settings = settings
@@ -114,6 +120,8 @@ final class AppCoordinator {
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
+        self.opticalPermissionController = opticalPermissionController
+        self.opticalEnvironmentMonitor = opticalEnvironmentMonitor
         cleanupService = DailyCleanupService(store: store)
         hoverMonitor = CornerHoverMonitor(
             settings: settings,
@@ -129,6 +137,8 @@ final class AppCoordinator {
         guard !hasStarted else { return }
         hasStarted = true
         NSApp.appearance = settings.appearance.nsAppearance
+        opticalPermissionController.refresh()
+        opticalEnvironmentMonitor.start()
 
         observeMenuTracking()
         cleanupService.start()
@@ -163,8 +173,10 @@ final class AppCoordinator {
 
     func stop() {
         _ = noteDraft.flush()
+        panelController.stop()
         cleanupService.stop()
         hoverMonitor.stop()
+        opticalEnvironmentMonitor.stop()
         newTaskHotKey.unregister()
         appearanceObservation = nil
         agentAccessObservation = nil

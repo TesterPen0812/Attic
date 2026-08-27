@@ -26,7 +26,9 @@ final class AtticPanelController {
         noteStore: NoteStore,
         noteDraft: NoteDraftController,
         settings: AppSettings,
-        uiState: PanelUIState
+        uiState: PanelUIState,
+        opticalPermissionController: OpticalPermissionController,
+        opticalEnvironmentMonitor: OpticalEnvironmentMonitor
     ) {
         self.store = store
         self.noteStore = noteStore
@@ -47,7 +49,10 @@ final class AtticPanelController {
         containerView = NSView(frame: CGRect(origin: .zero, size: initialSize))
         backdropView = OpticalPanelBackdropView(
             controls: settings.opticalGlassControls,
-            cornerRadius: settings.panelCornerSize
+            preset: settings.glassPerformancePreset,
+            cornerRadius: settings.panelCornerSize,
+            permissionController: opticalPermissionController,
+            environmentMonitor: opticalEnvironmentMonitor
         )
         hostingView = NSHostingView(rootView: AtticPanelView(
             store: store,
@@ -68,9 +73,9 @@ final class AtticPanelController {
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
         currentScreen = screen
         currentCorner = corner
-        backdropView.setVisible(true)
-
         let finalFrame = frame(on: screen, corner: corner)
+        updateOpticalBackdrop(screen: screen, frame: finalFrame)
+        backdropView.setVisible(true)
 
         if panel.isVisible {
             if makeKey {
@@ -112,6 +117,7 @@ final class AtticPanelController {
                 guard let self else { return }
                 guard generation == self.transitionGeneration else { return }
                 self.isShowing = false
+                self.updateOpticalBackdrop(screen: self.currentScreen, frame: finalFrame)
                 if self.needsResizeAfterShowing {
                     self.needsResizeAfterShowing = false
                     self.resizeAndReanchor()
@@ -191,8 +197,7 @@ final class AtticPanelController {
         )
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _, _, _ in
-                guard let self else { return }
-                self.resizeAndReanchor()
+                self?.resizeAndReanchor()
             }
             .store(in: &cancellables)
 
@@ -225,7 +230,15 @@ final class AtticPanelController {
         settings.$panelContentSize
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.resizeAndReanchor()
+                guard let self else { return }
+                self.resizeAndReanchor()
+            }
+            .store(in: &cancellables)
+
+        settings.$glassPerformancePreset
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateOpticalBackdrop()
             }
             .store(in: &cancellables)
 
@@ -254,10 +267,25 @@ final class AtticPanelController {
             .store(in: &cancellables)
     }
 
-    private func updateOpticalBackdrop() {
+    private func updateOpticalBackdrop(
+        screen: NSScreen? = nil,
+        frame suppliedFrame: CGRect? = nil
+    ) {
+        let resolvedScreen = screen ?? currentScreen
+        let resolvedFrame: CGRect
+        if let suppliedFrame {
+            resolvedFrame = suppliedFrame
+        } else if let resolvedScreen {
+            resolvedFrame = frame(on: resolvedScreen, corner: currentCorner)
+        } else {
+            resolvedFrame = panel.frame
+        }
         backdropView.update(
             controls: settings.opticalGlassControls,
-            cornerRadius: settings.panelCornerSize
+            preset: settings.glassPerformancePreset,
+            cornerRadius: settings.panelCornerSize,
+            screen: resolvedScreen,
+            panelFrame: resolvedFrame
         )
     }
 
@@ -268,6 +296,7 @@ final class AtticPanelController {
             return
         }
         let targetFrame = frame(on: screen, corner: currentCorner)
+        updateOpticalBackdrop(screen: screen, frame: targetFrame)
         guard !framesMatch(panel.frame, targetFrame) else { return }
         if panel.isVisible {
             panel.setFrame(
