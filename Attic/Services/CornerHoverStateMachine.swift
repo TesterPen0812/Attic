@@ -19,6 +19,7 @@ struct CornerHoverStateMachine {
         isInHotspot: Bool,
         isInPanel: Bool,
         isInteractionLocked: Bool,
+        isPinned: Bool = false,
         revealDelay: TimeInterval,
         hideDelay: TimeInterval = 0.3
     ) -> Transition {
@@ -40,7 +41,7 @@ struct CornerHoverStateMachine {
             return .reveal
         }
 
-        if isInteractionLocked || isInHotspot {
+        if isPinned || isInteractionLocked || isInHotspot {
             leaveBeganAt = nil
             return .none
         }
