@@ -132,13 +132,62 @@ struct SettingsView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: $settings.isTranslucent) {
-                    Label("Translucency", systemImage: "circle.lefthalf.filled")
-                        .font(.headline)
+                Label("Liquid Glass", systemImage: "circle.lefthalf.filled")
+                    .font(.headline)
+
+                Group {
+                    HStack {
+                        Text("Material")
+                            .font(.callout)
+                        Spacer()
+                        Picker("Glass material", selection: $settings.panelGlassMaterial) {
+                            ForEach(PanelGlassMaterialPreference.allCases) { preference in
+                                Text(preference.title).tag(preference)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 190)
+                        .labelsHidden()
+                        .accessibilityLabel("Glass material")
+                    }
+
+                    HStack {
+                        Text("Tint")
+                            .font(.callout)
+                        Spacer()
+                        Picker("Glass tint", selection: $settings.panelGlassTint) {
+                            ForEach(PanelGlassTintPreference.allCases) { preference in
+                                Text(preference.title).tag(preference)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 190)
+                        .labelsHidden()
+                        .accessibilityLabel("Glass tint")
+                    }
+
+                    HStack {
+                        Text("Response")
+                            .font(.callout)
+                        Spacer()
+                        Picker("Glass response", selection: $settings.panelGlassResponse) {
+                            ForEach(PanelGlassResponsePreference.allCases) { preference in
+                                Text(preference.title).tag(preference)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 190)
+                        .labelsHidden()
+                        .accessibilityLabel("Glass response")
+                    }
                 }
-                Text("Let the desktop shine through the panel background.")
+                .controlSize(.small)
+                .disabled(!supportsNativeLiquidGlass)
+
+                Text(liquidGlassDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
@@ -281,6 +330,20 @@ struct SettingsView: View {
             aboutFooter
         }
         .padding(28)
+    }
+
+    private var supportsNativeLiquidGlass: Bool {
+        if #available(macOS 26.0, *) {
+            return true
+        }
+        return false
+    }
+
+    private var liquidGlassDescription: String {
+        if supportsNativeLiquidGlass {
+            return "Regular is the adaptive default. Clear is permanently transparent and may reduce legibility over busy backgrounds. Accent and Interactive use Apple's native glass capabilities."
+        }
+        return "Native Liquid Glass requires macOS 26. This Mac uses one system-material fallback; Reduce Transparency uses an opaque surface."
     }
 
     private var header: some View {
