@@ -16,12 +16,21 @@ enum NoteAttachmentActions {
 
     static func open(store: NoteStore, attachment: NoteAttachment) {
         guard isSafeToOpen(attachment) else {
-            store.setAttachmentError("Opening this file type is disabled. Export a copy instead.")
+            store.setAttachmentError(
+                "Opening this file type is disabled. Preview or export a copy instead."
+            )
             return
         }
         Task {
             guard let url = await store.materializedURL(for: attachment) else { return }
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    static func reveal(store: NoteStore, attachment: NoteAttachment) {
+        Task {
+            guard let url = await store.materializedURL(for: attachment) else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
 
@@ -31,6 +40,7 @@ enum NoteAttachmentActions {
             let panel = NSSavePanel()
             panel.nameFieldStringValue = attachment.originalFilename
             panel.canCreateDirectories = true
+            panel.prompt = "Export"
             guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
             do {
                 try exportCopy(from: sourceURL, to: destinationURL)
@@ -50,7 +60,9 @@ enum NoteAttachmentActions {
             UTType.diskImage.identifier,
             "com.apple.installer-package"
         ]
-        return !unsafeIdentifiers.contains(where: { type.conforms(to: UTType($0) ?? .data) })
+        return !unsafeIdentifiers.contains(where: {
+            type.conforms(to: UTType($0) ?? .data)
+        })
             && !attachment.contentTypeIdentifier.isEmpty
             && attachment.contentType != .data
     }
@@ -65,7 +77,10 @@ enum NoteAttachmentActions {
         defer { try? fileManager.removeItem(at: temporaryURL) }
         try fileManager.copyItem(at: sourceURL, to: temporaryURL)
         if fileManager.fileExists(atPath: destinationURL.path) {
-            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: temporaryURL)
+            _ = try fileManager.replaceItemAt(
+                destinationURL,
+                withItemAt: temporaryURL
+            )
         } else {
             try fileManager.moveItem(at: temporaryURL, to: destinationURL)
         }
@@ -84,10 +99,18 @@ final class AttachmentQuickLookPresenter: NSObject, QLPreviewPanelDataSource {
         panel.makeKeyAndOrderFront(nil)
     }
 
-    func numberOfPreviewItems(in panel: QLPreviewPanel) -> Int { previewURL == nil ? 0 : 1 }
+    func numberOfPreviewItems(in panel: QLPreviewPanel) -> Int {
+        previewURL == nil ? 0 : 1
+    }
 
-    func previewPanel(_ panel: QLPreviewPanel, previewItemAt index: Int) -> QLPreviewItem {
-        previewURL! as NSURL
+    func previewPanel(
+        _ panel: QLPreviewPanel,
+        previewItemAt index: Int
+    ) -> QLPreviewItem {
+        guard let previewURL else {
+            return NSURL(fileURLWithPath: "/")
+        }
+        return previewURL as NSURL
     }
 }
 
