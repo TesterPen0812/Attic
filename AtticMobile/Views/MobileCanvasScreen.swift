@@ -7,6 +7,10 @@ struct MobileCanvasScreen: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var surfaceSize = CGSize(width: 300, height: 420)
     @State private var isClearConfirmationPresented = false
+    @State private var isCreatePresented = false
+    @State private var isRenamePresented = false
+    @State private var isDeletePresented = false
+    @State private var draftName = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,7 +21,7 @@ struct MobileCanvasScreen: View {
         }
         .background(Color(uiColor: .systemBackground))
         .confirmationDialog(
-            "Clear the entire canvas?",
+            "Clear \(session.selectedCanvas.name)?",
             isPresented: $isClearConfirmationPresented,
             titleVisibility: .visible
         ) {
@@ -27,7 +31,33 @@ struct MobileCanvasScreen: View {
             .accessibilityIdentifier("Confirm Clear Canvas")
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Every visible stroke will be removed. You can undo this during the current session.")
+            Text("Every visible stroke and image will be removed. You can undo this during the current session.")
+        }
+        .confirmationDialog(
+            "Delete \(session.selectedCanvas.name)?",
+            isPresented: $isDeletePresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Canvas", role: .destructive) {
+                _ = session.deleteSelectedCanvas()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("New Canvas", isPresented: $isCreatePresented) {
+            TextField("Canvas name", text: $draftName)
+            Button("Create") {
+                _ = session.createCanvas(name: draftName)
+                draftName = ""
+            }
+            Button("Cancel", role: .cancel) { draftName = "" }
+        }
+        .alert("Rename Canvas", isPresented: $isRenamePresented) {
+            TextField("Canvas name", text: $draftName)
+            Button("Rename") {
+                _ = session.renameSelectedCanvas(to: draftName)
+                draftName = ""
+            }
+            Button("Cancel", role: .cancel) { draftName = "" }
         }
         .onDisappear {
             session.cancelActiveInteraction()
@@ -37,13 +67,57 @@ struct MobileCanvasScreen: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Canvas")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text(strokeCountTitle)
+                Menu {
+                    ForEach(session.canvases) { canvas in
+                        Button {
+                            _ = session.selectCanvas(canvas.id)
+                        } label: {
+                            Label(
+                                canvas.name,
+                                systemImage: canvas.id == session.selectedCanvasID
+                                    ? "checkmark"
+                                    : "rectangle.on.rectangle"
+                            )
+                        }
+                    }
+                    Divider()
+                    Button {
+                        draftName = ""
+                        isCreatePresented = true
+                    } label: {
+                        Label("New Canvas", systemImage: "plus")
+                    }
+                    Button {
+                        draftName = session.selectedCanvas.name
+                        isRenamePresented = true
+                    } label: {
+                        Label("Rename Canvas", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        isDeletePresented = true
+                    } label: {
+                        Label("Delete Canvas", systemImage: "trash")
+                    }
+                    .disabled(session.canvases.count <= 1)
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(session.selectedCanvas.name)
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityLabel("Canvas menu")
+                .accessibilityValue(session.selectedCanvas.name)
+                .accessibilityIdentifier("canvas-document-menu")
+
+                Text(contentCountTitle)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.tertiary)
                     .contentTransition(.numericText())
-                    .accessibilityIdentifier("canvas-stroke-count")
+                    .accessibilityIdentifier("canvas-content-count")
             }
             Spacer()
         }
@@ -81,7 +155,7 @@ struct MobileCanvasScreen: View {
                 Spacer(minLength: 3)
 
                 CanvasCommandButton(
-                    title: "Fit drawing",
+                    title: "Fit content",
                     systemImage: "arrow.up.left.and.arrow.down.right",
                     identifier: "canvas-fit"
                 ) {
@@ -100,7 +174,7 @@ struct MobileCanvasScreen: View {
                     title: "Clear canvas",
                     systemImage: "trash",
                     identifier: "canvas-clear",
-                    isDisabled: session.strokes.isEmpty,
+                    isDisabled: session.strokes.isEmpty && session.images.isEmpty,
                     isDestructive: true
                 ) {
                     isClearConfirmationPresented = true
@@ -120,38 +194,19 @@ struct MobileCanvasScreen: View {
 
     private var board: some View {
         GeometryReader { proxy in
-            ZStack {
-                CanvasSurface(session: session)
-
-                if session.strokes.isEmpty {
-                    VStack(spacing: 6) {
-                        Image(systemName: "pencil.and.outline")
-                            .font(.system(size: 24, weight: .medium))
-                        Text("Draw anywhere")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        Text("Use two fingers to move or pinch to zoom.")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(20)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+            CanvasSurface(session: session)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.primary.opacity(0.13), lineWidth: 0.75)
+                        .allowsHitTesting(false)
                 }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.primary.opacity(0.13), lineWidth: 0.75)
-                    .allowsHitTesting(false)
-            }
-            .onAppear {
-                surfaceSize = proxy.size
-            }
-            .onChange(of: proxy.size) { _, newSize in
-                surfaceSize = newSize
-            }
+                .onAppear {
+                    surfaceSize = proxy.size
+                }
+                .onChange(of: proxy.size) { _, newSize in
+                    surfaceSize = newSize
+                }
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
@@ -185,9 +240,9 @@ struct MobileCanvasScreen: View {
         .padding(.bottom, 8)
     }
 
-    private var strokeCountTitle: String {
-        let count = session.strokes.count
-        return count == 1 ? "1 stroke" : "\(count) strokes"
+    private var contentCountTitle: String {
+        let count = session.strokes.count + session.images.count
+        return count == 1 ? "1 item" : "\(count) items"
     }
 
     private var syncSymbol: String {

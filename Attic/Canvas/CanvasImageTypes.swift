@@ -36,7 +36,12 @@ struct CanvasImageTransform: Equatable, Sendable {
 
 struct CanvasPlacedImage: Identifiable, Equatable {
     let id: UUID
+    let canvasID: UUID
     let renderToken: UUID
+    /// Ephemeral identity for the immutable encoded bytes. Transform-only
+    /// mutations keep this token so decoded bitmaps are reused without
+    /// comparing multi-megabyte Data values on the main actor.
+    let contentToken: UUID
     let encodedData: Data
     let contentType: String
     let pixelWidth: Int
@@ -49,7 +54,9 @@ struct CanvasPlacedImage: Identifiable, Equatable {
 
     init(
         id: UUID = UUID(),
+        canvasID: UUID = CanvasBoardItem.logicalBoardID,
         renderToken: UUID = UUID(),
+        contentToken: UUID = UUID(),
         encodedData: Data,
         contentType: String,
         pixelWidth: Int,
@@ -61,7 +68,9 @@ struct CanvasPlacedImage: Identifiable, Equatable {
         updatedAt: Date? = nil
     ) {
         self.id = id
+        self.canvasID = canvasID
         self.renderToken = renderToken
+        self.contentToken = contentToken
         self.encodedData = encodedData
         self.contentType = contentType
         self.pixelWidth = pixelWidth
@@ -75,6 +84,7 @@ struct CanvasPlacedImage: Identifiable, Equatable {
 
     static func == (lhs: CanvasPlacedImage, rhs: CanvasPlacedImage) -> Bool {
         lhs.id == rhs.id
+            && lhs.canvasID == rhs.canvasID
             && lhs.encodedData == rhs.encodedData
             && lhs.contentType == rhs.contentType
             && lhs.pixelWidth == rhs.pixelWidth
@@ -103,6 +113,24 @@ struct CanvasPlacedImage: Identifiable, Equatable {
     var renderKey: CanvasImageRenderKey {
         CanvasImageRenderKey(id: id, token: renderToken)
     }
+
+    func replacingTransform(_ transform: CanvasImageTransform) -> CanvasPlacedImage {
+        CanvasPlacedImage(
+            id: id,
+            canvasID: canvasID,
+            renderToken: renderToken,
+            contentToken: contentToken,
+            encodedData: encodedData,
+            contentType: contentType,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            transform: transform,
+            boardGeneration: boardGeneration,
+            mutationVersion: mutationVersion,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
 }
 
 struct CanvasImageRenderKey: Equatable, Hashable, Sendable {
@@ -110,9 +138,31 @@ struct CanvasImageRenderKey: Equatable, Hashable, Sendable {
     let token: UUID
 }
 
+struct CanvasImageDisplaySignature: Equatable {
+    let renderKey: CanvasImageRenderKey
+    let transform: CanvasImageTransform
+    let boardGeneration: Int64
+    let mutationVersion: Int64
+
+    init(_ image: CanvasPlacedImage) {
+        renderKey = image.renderKey
+        transform = image.transform
+        boardGeneration = image.boardGeneration
+        mutationVersion = image.mutationVersion
+    }
+}
+
+enum CanvasImageResizeHandle: CaseIterable, Sendable {
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+}
+
 enum CanvasImagePlacement {
     static let defaultMaximumDimension = 360.0
     static let minimumDimension = 48.0
+    static let selectionHandleRadius = 6.0
 
     static func defaultSize(
         pixelWidth: Int,
@@ -128,13 +178,15 @@ enum CanvasImagePlacement {
 
         let sourceWidth = Double(pixelWidth)
         let sourceHeight = Double(pixelHeight)
-        let scale = min(
-            maximumDimension / max(sourceWidth, sourceHeight),
-            1
+        let sourceMaximum = max(sourceWidth, sourceHeight)
+        let displayedMaximum = min(
+            max(sourceMaximum, minimumDimension),
+            maximumDimension
         )
+        let scale = displayedMaximum / sourceMaximum
         return CGSize(
-            width: max(sourceWidth * scale, minimumDimension),
-            height: max(sourceHeight * scale, minimumDimension)
+            width: sourceWidth * scale,
+            height: sourceHeight * scale
         )
     }
 
@@ -165,5 +217,146 @@ enum CanvasImagePlacement {
             width: max(heightDrivenWidth, minimumDimension * aspectRatio),
             height: max(proposedHeight, minimumDimension)
         )
+    }
+
+    static func topmostImage(
+        at worldPoint: CanvasPoint,
+        images: [CanvasPlacedImage]
+    ) -> CanvasPlacedImage? {
+        images
+            .sorted(by: imageIsInFront)
+            .first { $0.worldRect.contains(worldPoint.cgPoint) }
+    }
+
+    static func resizeHandle(
+        at viewPoint: CGPoint,
+        image: CanvasPlacedImage,
+        viewport: CanvasViewport,
+        viewportSize: CGSize,
+        radius: Double = selectionHandleRadius
+    ) -> CanvasImageResizeHandle? {
+        guard radius.isFinite, radius > 0 else { return nil }
+        for handle in CanvasImageResizeHandle.allCases {
+            let point = viewport.viewPoint(
+                for: worldPoint(for: handle, in: image.worldRect),
+                in: viewportSize
+            )
+            let dx = Double(viewPoint.x - point.x)
+            let dy = Double(viewPoint.y - point.y)
+            if dx * dx + dy * dy <= radius * radius {
+                return handle
+            }
+        }
+        return nil
+    }
+
+    static func resizedTransform(
+        from original: CanvasImageTransform,
+        handle: CanvasImageResizeHandle,
+        to worldPoint: CanvasPoint,
+        preserveAspectRatio: Bool = true
+    ) -> CanvasImageTransform {
+        guard original.isValid, worldPoint.isFinite else { return original }
+        let rect = CGRect(
+            x: original.center.x - original.width / 2,
+            y: original.center.y - original.height / 2,
+            width: original.width,
+            height: original.height
+        )
+        let opposite = oppositeWorldPoint(for: handle, in: rect)
+        let signs = handleSigns(handle)
+        let proposedWidth = max(abs(worldPoint.x - opposite.x), minimumDimension)
+        let proposedHeight = max(abs(worldPoint.y - opposite.y), minimumDimension)
+        let size: CGSize
+        if preserveAspectRatio {
+            size = aspectPreservingSize(
+                from: original,
+                proposedWidth: proposedWidth,
+                proposedHeight: proposedHeight
+            )
+        } else {
+            size = CGSize(width: proposedWidth, height: proposedHeight)
+        }
+        let corner = CanvasPoint(
+            x: opposite.x + signs.x * Double(size.width),
+            y: opposite.y + signs.y * Double(size.height)
+        )
+        return CanvasImageTransform(
+            center: CanvasPoint(
+                x: (opposite.x + corner.x) / 2,
+                y: (opposite.y + corner.y) / 2
+            ),
+            width: Double(size.width),
+            height: Double(size.height),
+            zIndex: original.zIndex
+        )
+    }
+
+    static func movedTransform(
+        from original: CanvasImageTransform,
+        by delta: CanvasPoint
+    ) -> CanvasImageTransform {
+        guard original.isValid, delta.isFinite else { return original }
+        return CanvasImageTransform(
+            center: CanvasPoint(
+                x: original.center.x + delta.x,
+                y: original.center.y + delta.y
+            ),
+            width: original.width,
+            height: original.height,
+            zIndex: original.zIndex
+        )
+    }
+
+    static func worldPoint(
+        for handle: CanvasImageResizeHandle,
+        in rect: CGRect
+    ) -> CanvasPoint {
+        switch handle {
+        case .topLeft:
+            CanvasPoint(x: rect.minX, y: rect.minY)
+        case .topRight:
+            CanvasPoint(x: rect.maxX, y: rect.minY)
+        case .bottomLeft:
+            CanvasPoint(x: rect.minX, y: rect.maxY)
+        case .bottomRight:
+            CanvasPoint(x: rect.maxX, y: rect.maxY)
+        }
+    }
+
+    private static func oppositeWorldPoint(
+        for handle: CanvasImageResizeHandle,
+        in rect: CGRect
+    ) -> CanvasPoint {
+        switch handle {
+        case .topLeft:
+            CanvasPoint(x: rect.maxX, y: rect.maxY)
+        case .topRight:
+            CanvasPoint(x: rect.minX, y: rect.maxY)
+        case .bottomLeft:
+            CanvasPoint(x: rect.maxX, y: rect.minY)
+        case .bottomRight:
+            CanvasPoint(x: rect.minX, y: rect.minY)
+        }
+    }
+
+    private static func handleSigns(
+        _ handle: CanvasImageResizeHandle
+    ) -> (x: Double, y: Double) {
+        switch handle {
+        case .topLeft: (-1, -1)
+        case .topRight: (1, -1)
+        case .bottomLeft: (-1, 1)
+        case .bottomRight: (1, 1)
+        }
+    }
+
+    private static func imageIsInFront(
+        _ lhs: CanvasPlacedImage,
+        _ rhs: CanvasPlacedImage
+    ) -> Bool {
+        if lhs.zIndex != rhs.zIndex { return lhs.zIndex > rhs.zIndex }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.id.uuidString > rhs.id.uuidString
     }
 }

@@ -7,13 +7,13 @@ struct CanvasSurface: View {
         platformSurface
             // Rebuild the native bridge only for an explicit lifecycle
             // cancellation. Dismantling discards unfinished input without
-            // changing completed strokes or viewport state.
+            // changing completed strokes, images, or viewport state.
             .id(session.interactionCancellationEpoch)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Canvas drawing board")
             .accessibilityValue(accessibilityValue)
             .accessibilityHint(
-                "Draw with the selected tool. Use the trackpad or two fingers to move and zoom."
+                "Draw with the selected tool. Click an image to select it. Use the trackpad or two fingers to move and zoom."
             )
             .accessibilityIdentifier("canvas-surface")
     }
@@ -28,8 +28,15 @@ struct CanvasSurface: View {
     }
 
     private var accessibilityValue: String {
-        let count = session.strokes.count
-        let strokeSummary = count == 1 ? "1 stroke" : "\(count) strokes"
-        return "\(strokeSummary), \(session.tool.title) selected"
+        let strokeSummary = session.strokes.count == 1
+            ? "1 stroke"
+            : "\(session.strokes.count) strokes"
+        let imageSummary = session.images.count == 1
+            ? "1 image"
+            : "\(session.images.count) images"
+        let selectedSummary = session.selectedImageID == nil
+            ? "no image selected"
+            : "image selected"
+        return "\(strokeSummary), \(imageSummary), \(selectedSummary), \(session.tool.title) selected"
     }
 }

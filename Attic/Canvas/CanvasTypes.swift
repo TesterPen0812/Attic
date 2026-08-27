@@ -66,6 +66,36 @@ struct CanvasPoint: Codable, Hashable {
     }
 }
 
+struct CanvasBoard: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let sortIndex: Int64
+    let clearGeneration: Int64
+    let mutationVersion: Int64
+    let createdAt: Date
+    let updatedAt: Date
+
+    static let defaultBoard = CanvasBoard(
+        id: CanvasBoardItem.logicalBoardID,
+        name: "Canvas",
+        sortIndex: 0,
+        clearGeneration: 0,
+        mutationVersion: 1,
+        createdAt: .distantPast,
+        updatedAt: .distantPast
+    )
+
+    static let recoveryBoard = CanvasBoard(
+        id: CanvasBoardItem.recoveryBoardID,
+        name: "Canvas",
+        sortIndex: 0,
+        clearGeneration: 0,
+        mutationVersion: 1,
+        createdAt: .distantPast,
+        updatedAt: .distantPast
+    )
+}
+
 struct CanvasStrokeGeometry: Equatable {
     let color: CanvasInkColor
     let width: Double
@@ -74,6 +104,7 @@ struct CanvasStrokeGeometry: Equatable {
 
 struct CanvasStroke: Identifiable, Equatable {
     let id: UUID
+    let canvasID: UUID
     /// Ephemeral identity for native rendering caches. It is deliberately not
     /// persisted or included in semantic equality.
     let renderToken: UUID
@@ -88,6 +119,7 @@ struct CanvasStroke: Identifiable, Equatable {
 
     init(
         id: UUID = UUID(),
+        canvasID: UUID = CanvasBoardItem.logicalBoardID,
         renderToken: UUID = UUID(),
         color: CanvasInkColor,
         width: Double,
@@ -98,6 +130,7 @@ struct CanvasStroke: Identifiable, Equatable {
         updatedAt: Date? = nil
     ) {
         self.id = id
+        self.canvasID = canvasID
         self.renderToken = renderToken
         self.color = color
         self.width = width
@@ -111,6 +144,7 @@ struct CanvasStroke: Identifiable, Equatable {
 
     static func == (lhs: CanvasStroke, rhs: CanvasStroke) -> Bool {
         lhs.id == rhs.id
+            && lhs.canvasID == rhs.canvasID
             && lhs.color == rhs.color
             && lhs.width == rhs.width
             && lhs.points == rhs.points

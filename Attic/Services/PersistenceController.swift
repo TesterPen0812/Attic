@@ -122,7 +122,7 @@ enum PersistenceController {
         defaults: UserDefaults = .standard
     ) throws {
         guard currentCloudKitEnvironment == .development else { return }
-        let marker = "didInitializeCloudKitDevelopmentSchemaV3"
+        let marker = "didInitializeCloudKitDevelopmentSchemaV4"
         guard !defaults.bool(forKey: marker) else { return }
 
         try autoreleasepool {

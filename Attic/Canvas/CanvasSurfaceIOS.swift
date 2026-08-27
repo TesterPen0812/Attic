@@ -40,7 +40,9 @@ struct CanvasUIViewRepresentable: UIViewRepresentable {
             session?.setViewport(viewport)
         }
         view.configure(
+            canvasID: session.selectedCanvasID,
             strokes: session.strokes,
+            images: session.images,
             tool: session.tool,
             color: session.color,
             width: session.width,
@@ -61,6 +63,10 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
 
     private let interaction = CanvasInteractionController()
     private let pathCache = CanvasPathCache()
+    private let imageCache = CanvasImageDecodeCache()
+    private var canvasID = CanvasBoardItem.logicalBoardID
+    private var images: [CanvasPlacedImage] = []
+    private var imageSignatures: [CanvasImageDisplaySignature] = []
     private var activeTouch: UITouch?
     private var activeViewportGestureCount = 0
     private var appResignObservation: NSObjectProtocol?
@@ -74,6 +80,9 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
         accessibilityLabel = "Canvas drawing board"
         accessibilityIdentifier = "canvas-surface"
         accessibilityTraits = [.allowsDirectInteraction]
+        imageCache.onImageReady = { [weak self] in
+            self?.setNeedsDisplay()
+        }
 
         let pan = UIPanGestureRecognizer(
             target: self,
@@ -117,12 +126,26 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     func configure(
+        canvasID: UUID,
         strokes: [CanvasStroke],
+        images: [CanvasPlacedImage],
         tool: CanvasTool,
         color: CanvasInkColor,
         width: Double,
         viewport: CanvasViewport
     ) {
+        var changed = false
+        if self.canvasID != canvasID {
+            self.canvasID = canvasID
+            imageCache.removeAll()
+            changed = true
+        }
+        let nextImageSignatures = images.map(CanvasImageDisplaySignature.init)
+        if imageSignatures != nextImageSignatures {
+            self.images = images
+            imageSignatures = nextImageSignatures
+            changed = true
+        }
         if interaction.configure(
             strokes: strokes,
             tool: tool,
@@ -130,11 +153,13 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
             width: width,
             viewport: viewport
         ) {
-            setNeedsDisplay()
+            changed = true
         }
-        let count = strokes.count
-        let strokeSummary = count == 1 ? "1 stroke" : "\(count) strokes"
-        accessibilityValue = "\(strokeSummary), \(tool.title) selected"
+        imageCache.prepare(for: images)
+        if changed { setNeedsDisplay() }
+        let strokeSummary = strokes.count == 1 ? "1 stroke" : "\(strokes.count) strokes"
+        let imageSummary = images.count == 1 ? "1 image" : "\(images.count) images"
+        accessibilityValue = "\(strokeSummary), \(imageSummary), \(tool.title) selected"
     }
 
     override func didMoveToWindow() {
@@ -160,7 +185,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
         guard let context = UIGraphicsGetCurrentContext() else {
             return
         }
-
+        imageCache.prepare(for: images)
         drawCanvas(
             in: context,
             bounds: bounds,
@@ -168,7 +193,11 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
             pathCache: pathCache,
             backgroundColor: UIColor.secondarySystemBackground.cgColor,
             strokeColor: { $0.uiColor.cgColor },
-            eraserOutlineColor: tintColor.cgColor
+            eraserOutlineColor: tintColor.cgColor,
+            images: images,
+            imageProvider: { [imageCache] image in
+                imageCache.image(for: image)
+            }
         )
     }
 
@@ -206,9 +235,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
             return
         }
 
-        let samples = event?.coalescedTouches(
-            for: activeTouch
-        ) ?? [activeTouch]
+        let samples = event?.coalescedTouches(for: activeTouch) ?? [activeTouch]
         var changed = false
         for sample in samples {
             changed = interaction.appendInk(
@@ -216,9 +243,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
                 in: bounds.size
             ) || changed
         }
-        if changed {
-            setNeedsDisplay()
-        }
+        if changed { setNeedsDisplay() }
     }
 
     override func touchesEnded(
@@ -268,9 +293,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc
-    private func handlePan(
-        _ recognizer: UIPanGestureRecognizer
-    ) {
+    private func handlePan(_ recognizer: UIPanGestureRecognizer) {
         switch recognizer.state {
         case .began:
             beginViewportGesture()
@@ -296,9 +319,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc
-    private func handlePinch(
-        _ recognizer: UIPinchGestureRecognizer
-    ) {
+    private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
         switch recognizer.state {
         case .began:
             beginViewportGesture()
