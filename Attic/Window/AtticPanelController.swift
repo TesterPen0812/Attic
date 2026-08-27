@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 final class AtticPanelController {
     private let panel: AtticPanel
+    private let containerView: NSView
+    private let backdropView: OpticalPanelBackdropView
     private let hostingView: NSHostingView<AtticPanelView>
     private let store: TaskStore
     private let noteStore: NoteStore
@@ -32,11 +34,20 @@ final class AtticPanelController {
         self.settings = settings
         self.uiState = uiState
 
+        let initialSize = CGSize(
+            width: settings.panelContentSize,
+            height: PanelGeometry.minimumHeight
+        )
         panel = AtticPanel(
-            contentRect: CGRect(x: 0, y: 0, width: settings.panelContentSize, height: PanelGeometry.minimumHeight),
+            contentRect: CGRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
+        )
+        containerView = NSView(frame: CGRect(origin: .zero, size: initialSize))
+        backdropView = OpticalPanelBackdropView(
+            controls: settings.opticalGlassControls,
+            cornerRadius: settings.panelCornerSize
         )
         hostingView = NSHostingView(rootView: AtticPanelView(
             store: store,
@@ -57,6 +68,7 @@ final class AtticPanelController {
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
         currentScreen = screen
         currentCorner = corner
+        backdropView.setVisible(true)
 
         let finalFrame = frame(on: screen, corner: corner)
 
@@ -111,6 +123,7 @@ final class AtticPanelController {
     func hide() {
         guard panel.isVisible else { return }
         guard noteDraft.flush() else { return }
+        backdropView.setVisible(false)
         transitionGeneration += 1
         let generation = transitionGeneration
         isShowing = false
@@ -130,8 +143,31 @@ final class AtticPanelController {
         }
     }
 
+    func stop() {
+        transitionGeneration += 1
+        isShowing = false
+        needsResizeAfterShowing = false
+        backdropView.stop()
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+    }
+
     private func configurePanel() {
-        panel.contentView = hostingView
+        containerView.wantsLayer = true
+        containerView.layer?.backgroundColor = NSColor.clear.cgColor
+        containerView.autoresizesSubviews = true
+
+        backdropView.frame = containerView.bounds
+        backdropView.autoresizingMask = [.width, .height]
+        containerView.addSubview(backdropView)
+
+        hostingView.frame = containerView.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        containerView.addSubview(hostingView)
+
+        panel.contentView = containerView
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = AtticStyle.panelUsesSystemShadow
@@ -139,7 +175,11 @@ final class AtticPanelController {
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.becomesKeyOnlyIfNeeded = true
+        panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.opticalInteractionHandler = { [weak backdropView = backdropView] in
+            backdropView?.respondToInteraction()
+        }
     }
 
     private func bindContentSize() {
@@ -176,7 +216,9 @@ final class AtticPanelController {
         settings.$panelCornerSize
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.resizeAndReanchor()
+                guard let self else { return }
+                self.updateOpticalBackdrop()
+                self.resizeAndReanchor()
             }
             .store(in: &cancellables)
 
@@ -186,6 +228,37 @@ final class AtticPanelController {
                 self?.resizeAndReanchor()
             }
             .store(in: &cancellables)
+
+        let opticalPublishers: [AnyPublisher<Double, Never>] = [
+            settings.$glassTransparency.eraseToAnyPublisher(),
+            settings.$glassFrost.eraseToAnyPublisher(),
+            settings.$glassRefraction.eraseToAnyPublisher(),
+            settings.$glassEdgeShine.eraseToAnyPublisher(),
+            settings.$glassTint.eraseToAnyPublisher(),
+            settings.$glassReadability.eraseToAnyPublisher(),
+            settings.$glassInteractionResponse.eraseToAnyPublisher()
+        ]
+        Publishers.MergeMany(opticalPublishers)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateOpticalBackdrop()
+            }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateOpticalBackdrop()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func updateOpticalBackdrop() {
+        backdropView.update(
+            controls: settings.opticalGlassControls,
+            cornerRadius: settings.panelCornerSize
+        )
     }
 
     private func resizeAndReanchor() {
