@@ -153,11 +153,14 @@ extension CanvasNSView {
             for: viewPoint,
             in: bounds.size
         )
+        guard worldPoint.isFinite else {
+            return false
+        }
         var accepted = false
         var offsetIndex = 0
         func importPoint() -> CanvasPoint {
             defer { offsetIndex += 1 }
-            let offset = Double(offsetIndex * 12) / interaction.viewport.scale
+            let offset = Double(offsetIndex) * 12 / interaction.viewport.scale
             return CanvasPoint(x: worldPoint.x + offset, y: worldPoint.y + offset)
         }
 

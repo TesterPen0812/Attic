@@ -175,7 +175,7 @@ final class CanvasUITests: XCTestCase {
     }
 
     private func drawStroke(on surface: XCUIElement) {
-        let start = surface.cordinate(
+        let start = surface.coordinate(
             withNormalizedOffset: CGVector(dx: 0.22, dy: 0.35)
         )
         let end = surface.coordinate(

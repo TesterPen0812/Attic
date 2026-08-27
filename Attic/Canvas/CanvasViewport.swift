@@ -31,7 +31,18 @@ struct CanvasViewport: Equatable {
         for viewPoint: CGPoint,
         in viewportSize: CGSize
     ) -> CanvasPoint {
-        CanvasPoint(
+        guard viewPoint.x.isFinite,
+              viewPoint.y.isFinite,
+              viewportSize.width.isFinite,
+              viewportSize.height.isFinite,
+              viewportSize.width > 0,
+              viewportSize.height > 0,
+              center.isFinite,
+              scale.isFinite,
+              scale > 0 else {
+            return CanvasPoint(x: .nan, y: .nan)
+        }
+        return CanvasPoint(
             x: center.x
                 + Double(viewPoint.x - viewportSize.width / 2) / scale,
             y: center.y
@@ -60,12 +71,20 @@ struct CanvasViewport: Equatable {
             for: CGPoint(x: viewRect.maxX, y: viewRect.maxY),
             in: viewportSize
         )
-        return CGRect(
+        guard first.isFinite, second.isFinite else { return .null }
+        let result = CGRect(
             x: min(first.x, second.x),
             y: min(first.y, second.y),
             width: abs(second.x - first.x),
             height: abs(second.y - first.y)
         )
+        guard result.origin.x.isFinite,
+              result.origin.y.isFinite,
+              result.width.isFinite,
+              result.height.isFinite else {
+            return .null
+        }
+        return result
     }
 
     mutating func pan(byViewTranslation translation: CGSize) {
@@ -74,8 +93,18 @@ struct CanvasViewport: Equatable {
             return
         }
 
-        center.x -= Double(translation.width) / scale
-        center.y -= Double(translation.height) / scale
+        let deltaX = Double(translation.width) / scale
+        let deltaY = Double(translation.height) / scale
+        let nextX = center.x - deltaX
+        let nextY = center.y - deltaY
+        guard deltaX.isFinite,
+              deltaY.isFinite,
+              nextX.isFinite,
+              nextY.isFinite else {
+            return
+        }
+        center.x = nextX
+        center.y = nextY
     }
 
     mutating func zoom(
@@ -86,13 +115,29 @@ struct CanvasViewport: Equatable {
         guard factor.isFinite, factor > 0 else { return }
 
         let anchoredWorldPoint = worldPoint(for: anchor, in: viewportSize)
-        let newScale = Self.clampedScale(scale * factor)
+        // Check the ratio before multiplying so a large but finite gesture
+        // cannot overflow to infinity and accidentally fall back to scale 1.
+        let newScale = factor > Self.maximumScale / scale
+            ? Self.maximumScale
+            : Self.clampedScale(scale * factor)
         guard newScale != scale else { return }
 
+        let previousScale = scale
         scale = newScale
         let shiftedWorldPoint = worldPoint(for: anchor, in: viewportSize)
-        center.x += anchoredWorldPoint.x - shiftedWorldPoint.x
-        center.y += anchoredWorldPoint.y - shiftedWorldPoint.y
+        let shiftX = anchoredWorldPoint.x - shiftedWorldPoint.x
+        let shiftY = anchoredWorldPoint.y - shiftedWorldPoint.y
+        let nextX = center.x + shiftX
+        let nextY = center.y + shiftY
+        guard shiftX.isFinite,
+              shiftY.isFinite,
+              nextX.isFinite,
+              nextY.isFinite else {
+            scale = previousScale
+            return
+        }
+        center.x = nextX
+        center.y = nextY
     }
 
     mutating func reset() {
@@ -112,6 +157,8 @@ struct CanvasViewport: Equatable {
               bounds.origin.y.isFinite,
               bounds.width.isFinite,
               bounds.height.isFinite,
+              bounds.width >= 0,
+              bounds.height >= 0,
               viewportSize.width.isFinite,
               viewportSize.height.isFinite,
               viewportSize.width > 0,
@@ -126,10 +173,15 @@ struct CanvasViewport: Equatable {
         let contentWidth = max(Double(bounds.width), 1)
         let contentHeight = max(Double(bounds.height), 1)
 
-        center = CanvasPoint(
+        let fittedCenter = CanvasPoint(
             x: Double(bounds.midX),
             y: Double(bounds.midY)
         )
+        guard fittedCenter.isFinite else {
+            reset()
+            return
+        }
+        center = fittedCenter
         scale = Self.clampedScale(min(
             availableWidth / contentWidth,
             availableHeight / contentHeight
@@ -137,7 +189,9 @@ struct CanvasViewport: Equatable {
     }
 
     private static func clampedScale(_ scale: Double) -> Double {
-        guard scale.isFinite else { return 1 }
+        if scale.isNaN { return 1 }
+        if scale == .infinity { return maximumScale }
+        if scale == -.infinity { return minimumScale }
         return min(max(scale, minimumScale), maximumScale)
     }
 }

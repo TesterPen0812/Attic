@@ -239,12 +239,15 @@ struct CanvasPanelContent: View {
 
                 Spacer(minLength: 4)
 
-                Text("\(Int(selected.width.rounded())) × \(Int(selected.height.rounded()))")
+                let sizeLabel = canvasDimensionLabel(selected.width)
+                    + " × "
+                    + canvasDimensionLabel(selected.height)
+                Text(sizeLabel)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .accessibilityLabel(
-                        "Selected image size, \(Int(selected.width.rounded())) by \(Int(selected.height.rounded()))"
+                        "Selected image size, \(sizeLabel.replacingOccurrences(of: " × ", with: " by "))"
                     )
             }
         } else {
@@ -283,5 +286,10 @@ struct CanvasPanelContent: View {
     private var contentCountLabel: String {
         let count = session.strokes.count + session.images.count
         return count == 1 ? "1 item" : "\(count) items"
+    }
+
+    private func canvasDimensionLabel(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        return value.formatted(.number.precision(.fractionLength(0)))
     }
 }

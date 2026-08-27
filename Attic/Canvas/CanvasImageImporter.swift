@@ -130,13 +130,16 @@ enum CanvasImageImporter {
             throw CanvasImageImportError.invalidDimensions
         }
 
-        var targetDimension = min(
+        // Always process at least one thumbnail. A small icon can have a
+        // maximum dimension below 64 px; the old `while targetDimension >=
+        // 64` loop skipped those valid images and reported them as too large.
+        var targetDimension = max(1, min(
             policy.maximumPixelDimension,
             max(sourceWidth, sourceHeight)
-        )
+        ))
         var lastPrepared: CanvasPreparedImage?
 
-        while targetDimension >= 64 {
+        while true {
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
@@ -169,6 +172,7 @@ enum CanvasImageImporter {
                 return prepared
             }
 
+            guard targetDimension > 64 else { break }
             let nextDimension = Int(Double(targetDimension) * 0.75)
             if nextDimension >= targetDimension {
                 break

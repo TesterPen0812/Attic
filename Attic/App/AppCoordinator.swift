@@ -100,7 +100,12 @@ final class AppCoordinator {
         let noteDraft = NoteDraftController(noteStore: noteStore)
         let uiState = PanelUIState()
         let loginItemService = LoginItemService()
-        let agentAccessToken = AgentAccessTokenStore().loadOrCreate()
+        // Unit/UI test hosts must not prompt for the user's Keychain item while
+        // the application is bootstrapping. The agent server is not started
+        // for test hosts, so a process-local token is sufficient here.
+        let agentAccessToken = isRunningTests
+            ? "attic-test-agent-token"
+            : AgentAccessTokenStore().loadOrCreate()
         let agentServer = AgentServer(
             port: settings.agentServerPort,
             bearerToken: agentAccessToken,

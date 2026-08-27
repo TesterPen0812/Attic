@@ -67,6 +67,16 @@ final class CanvasImageImportTests: XCTestCase {
         )
     }
 
+    func testSmallImageIsAcceptedEvenWhenItsMaximumDimensionIsBelowRetryFloor() async throws {
+        let sourceData = try makeTestImageData(width: 32, height: 16)
+
+        let prepared = try await CanvasImageImporter.prepare(data: sourceData)
+
+        XCTAssertEqual(prepared.pixelWidth, 32)
+        XCTAssertEqual(prepared.pixelHeight, 16)
+        XCTAssertFalse(prepared.encodedData.isEmpty)
+    }
+
     func testInputLargerThanTheReadBudgetIsRejectedBeforeDecode() async {
         let policy = CanvasImageImportPolicy(
             maximumInputBytes: 8,
@@ -129,6 +139,40 @@ final class CanvasImageDomainTests: XCTestCase {
 
         XCTAssertEqual(size.width, 360, accuracy: 0.000_001)
         XCTAssertEqual(size.height, 180, accuracy: 0.000_001)
+    }
+
+    func testCustomMaximumCannotShrinkPlacementBelowInteractionMinimum() {
+        let size = CanvasImagePlacement.defaultSize(
+            pixelWidth: 10,
+            pixelHeight: 10,
+            maximumDimension: 1
+        )
+
+        XCTAssertEqual(size.width, CanvasImagePlacement.minimumDimension)
+        XCTAssertEqual(size.height, CanvasImagePlacement.minimumDimension)
+    }
+
+    func testResizeOverflowKeepsOriginalTransform() {
+        let original = CanvasImageTransform(
+            center: CanvasPoint(
+                x: Double.greatestFiniteMagnitude / 2,
+                y: 1.5e308
+            ),
+            width: Double.greatestFiniteMagnitude,
+            height: 1e308,
+            zIndex: 1
+        )
+
+        let resized = CanvasImagePlacement.resizedTransform(
+            from: original,
+            handle: .bottomRight,
+            to: CanvasPoint(
+                x: Double.greatestFiniteMagnitude,
+                y: 1e308
+            )
+        )
+
+        XCTAssertEqual(resized, original)
     }
 
     func testDropCoordinatesRemainCorrectUnderZoomAndPan() {
@@ -262,6 +306,88 @@ final class CanvasImageStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testAddingAnExistingImageIDUpdatesEveryReplicaInsteadOfCreatingAHiddenDuplicate() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let sharedID = UUID()
+        let timestamp = Date(timeIntervalSince1970: 100)
+        for tombstoned in [false, true] {
+            context.insert(CanvasImageItem(
+                id: sharedID,
+                encodedData: Data([1]),
+                contentType: UTType.png.identifier,
+                pixelWidth: 20,
+                pixelHeight: 10,
+                centerX: 0,
+                centerY: 0,
+                width: 100,
+                height: 50,
+                zIndex: 0,
+                mutationVersion: 4,
+                tombstoned: tombstoned,
+                createdAt: timestamp,
+                updatedAt: timestamp,
+                deletedAt: tombstoned ? timestamp : nil
+            ))
+        }
+        try context.save()
+
+        let store = CanvasStore(container: container)
+        let prepared = CanvasPreparedImage(
+            encodedData: Data([2, 3]),
+            contentType: UTType.png.identifier,
+            pixelWidth: 40,
+            pixelHeight: 20
+        )
+
+        let added = try XCTUnwrap(store.addImage(
+            prepared,
+            center: CanvasPoint(x: 8, y: 9),
+            id: sharedID
+        ))
+
+        XCTAssertEqual(added.id, sharedID)
+        XCTAssertEqual(store.images.count, 1)
+        XCTAssertEqual(store.images.first?.encodedData, prepared.encodedData)
+        let verification = ModelContext(container)
+        let replicas = try verification.fetch(FetchDescriptor<CanvasImageItem>())
+            .filter { $0.id == sharedID }
+        XCTAssertEqual(replicas.count, 2)
+        XCTAssertTrue(replicas.allSatisfy {
+            !$0.tombstoned
+                && $0.encodedData == prepared.encodedData
+                && $0.mutationVersion == 5
+                && $0.centerX == 8
+            && $0.centerY == 9
+        })
+    }
+
+    @MainActor
+    func testInvalidImageSnapshotIsRejectedWithoutPersistingIt() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = CanvasStore(container: container)
+        let snapshot = CanvasPlacedImage(
+            encodedData: Data([1]),
+            contentType: UTType.png.identifier,
+            pixelWidth: -1,
+            pixelHeight: 20,
+            transform: CanvasImageTransform(
+                center: .zero,
+                width: 100,
+                height: 50,
+                zIndex: 0
+            )
+        )
+
+        XCTAssertFalse(store.restoreImages([snapshot]))
+        let verification = ModelContext(container)
+        XCTAssertEqual(
+            try verification.fetchCount(FetchDescriptor<CanvasImageItem>()),
+            0
+        )
+    }
+
+    @MainActor
     func testUnchangedImageRefreshRetainsRenderTokenButTransformInvalidatesIt() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = CanvasStore(container: container)
@@ -288,6 +414,37 @@ final class CanvasImageStoreTests: XCTestCase {
             )
         ))
         XCTAssertNotEqual(store.images.first?.renderToken, image.renderToken)
+    }
+
+    @MainActor
+    func testChangedImagePayloadWithSameMetadataInvalidatesContentToken() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = CanvasStore(container: container)
+        let image = try XCTUnwrap(store.addImage(
+            CanvasPreparedImage(
+                encodedData: Data([1, 2, 3]),
+                contentType: UTType.png.identifier,
+                pixelWidth: 100,
+                pixelHeight: 50
+            ),
+            center: .zero
+        ))
+
+        let externalContext = ModelContext(container)
+        let row = try XCTUnwrap(
+            externalContext.fetch(FetchDescriptor<CanvasImageItem>()).first
+        )
+        row.encodedData = Data([4, 5, 6])
+        row.mutationVersion += 1
+        row.updatedAt = row.updatedAt.addingTimeInterval(1)
+        try externalContext.save()
+
+        store.refresh()
+
+        let changed = try XCTUnwrap(store.images.first)
+        XCTAssertNotEqual(changed.renderToken, image.renderToken)
+        XCTAssertNotEqual(changed.contentToken, image.contentToken)
+        XCTAssertEqual(changed.encodedData, Data([4, 5, 6]))
     }
 }
 

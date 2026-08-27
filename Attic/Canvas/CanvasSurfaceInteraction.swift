@@ -115,13 +115,18 @@ final class CanvasInteractionController {
             for: viewPoint,
             in: size
         )
+        guard worldPoint.isFinite else {
+            return false
+        }
         guard let previousPoint = lastAcceptedWorldPoint else { return false }
 
         let minimumDistance = max(0.65 / viewport.scale, 0.05)
-        guard squaredDistance(
+        let distanceSquared = squaredDistance(
             from: previousPoint,
             to: worldPoint
-        ) >= minimumDistance * minimumDistance else {
+        )
+        guard distanceSquared.isFinite,
+              distanceSquared >= minimumDistance * minimumDistance else {
             return false
         }
 

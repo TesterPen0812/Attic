@@ -156,7 +156,9 @@ final class CanvasNSView: NSView {
         registerForDraggedTypes(
             [.fileURL]
                 + Self.directImagePasteboardTypes
-                + NSFilePromiseReceiver.readableDraggedTypes
+                + NSFilePromiseReceiver.readableDraggedTypes.map {
+                    NSPasteboard.PasteboardType(rawValue: $0)
+                }
         )
         imageCache.onImageReady = { [weak self] in
             self?.needsDisplay = true
@@ -214,16 +216,20 @@ final class CanvasNSView: NSView {
         }
         let nextImageSignatures = images.map(CanvasImageDisplaySignature.init)
         if imageSignatures != nextImageSignatures {
+            if case .none = imagePointerMode {
+                // No in-flight image gesture to cancel.
+            } else {
+                imagePointerMode = .none
+                previewImageTransform = nil
+            }
             self.images = images
             imageSignatures = nextImageSignatures
             changed = true
         }
         if self.selectedImageID != selectedImageID {
             self.selectedImageID = selectedImageID
-            if selectedImageID == nil {
-                previewImageTransform = nil
-                imagePointerMode = .none
-            }
+            imagePointerMode = .none
+            previewImageTransform = nil
             changed = true
         }
         if interaction.configure(

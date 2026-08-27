@@ -147,7 +147,7 @@ final class CanvasImageDecodeCache {
         return max(cost, 1)
     }
 
-    private static func decode(_ data: Data) -> CGImage? {
+    nonisolated private static func decode(_ data: Data) -> CGImage? {
         autoreleasepool {
             guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
                 return nil

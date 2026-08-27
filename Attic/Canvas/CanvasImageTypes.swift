@@ -102,12 +102,28 @@ struct CanvasPlacedImage: Identifiable, Equatable {
     var zIndex: Int64 { transform.zIndex }
 
     var worldRect: CGRect {
-        CGRect(
-            x: center.x - width / 2,
-            y: center.y - height / 2,
-            width: width,
-            height: height
+        let minX = center.x - width / 2
+        let minY = center.y - height / 2
+        let maxX = center.x + width / 2
+        let maxY = center.y + height / 2
+        guard minX.isFinite,
+              minY.isFinite,
+              maxX.isFinite,
+              maxY.isFinite,
+              maxX >= minX,
+              maxY >= minY else {
+            return .null
+        }
+        let result = CGRect(
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
         )
+        guard result.width.isFinite, result.height.isFinite else {
+            return .null
+        }
+        return result
     }
 
     var renderKey: CanvasImageRenderKey {
@@ -179,9 +195,12 @@ enum CanvasImagePlacement {
         let sourceWidth = Double(pixelWidth)
         let sourceHeight = Double(pixelHeight)
         let sourceMaximum = max(sourceWidth, sourceHeight)
+        // Keep a custom maximum from producing a placement smaller than the
+        // interaction minimum. This matters for compact import previews.
+        let safeMaximumDimension = max(maximumDimension, minimumDimension)
         let displayedMaximum = min(
             max(sourceMaximum, minimumDimension),
-            maximumDimension
+            safeMaximumDimension
         )
         let scale = displayedMaximum / sourceMaximum
         return CGSize(
@@ -195,27 +214,38 @@ enum CanvasImagePlacement {
         proposedWidth: Double,
         proposedHeight: Double
     ) -> CGSize {
-        guard original.width > 0,
-              original.height > 0,
+        guard original.isValid,
               proposedWidth.isFinite,
               proposedHeight.isFinite else {
             return CGSize(width: original.width, height: original.height)
         }
 
         let aspectRatio = original.width / original.height
-        let widthDrivenHeight = proposedWidth / aspectRatio
-        let heightDrivenWidth = proposedHeight * aspectRatio
-        let widthDelta = abs(widthDrivenHeight - proposedHeight)
-        let heightDelta = abs(heightDrivenWidth - proposedWidth)
-        if widthDelta <= heightDelta {
+        guard aspectRatio.isFinite, aspectRatio > 0 else {
             return CGSize(
                 width: max(proposedWidth, minimumDimension),
+                height: max(proposedHeight, minimumDimension)
+            )
+        }
+
+        let safeProposedWidth = max(proposedWidth, minimumDimension)
+        let safeProposedHeight = max(proposedHeight, minimumDimension)
+        let widthDrivenHeight = safeProposedWidth / aspectRatio
+        let heightDrivenWidth = safeProposedHeight * aspectRatio
+        guard widthDrivenHeight.isFinite, heightDrivenWidth.isFinite else {
+            return CGSize(width: safeProposedWidth, height: safeProposedHeight)
+        }
+        let widthDelta = abs(widthDrivenHeight - safeProposedHeight)
+        let heightDelta = abs(heightDrivenWidth - safeProposedWidth)
+        if widthDelta <= heightDelta {
+            return CGSize(
+                width: safeProposedWidth,
                 height: max(widthDrivenHeight, minimumDimension / aspectRatio)
             )
         }
         return CGSize(
             width: max(heightDrivenWidth, minimumDimension * aspectRatio),
-            height: max(proposedHeight, minimumDimension)
+            height: safeProposedHeight
         )
     }
 
@@ -267,6 +297,9 @@ enum CanvasImagePlacement {
         let signs = handleSigns(handle)
         let proposedWidth = max(abs(worldPoint.x - opposite.x), minimumDimension)
         let proposedHeight = max(abs(worldPoint.y - opposite.y), minimumDimension)
+        guard proposedWidth.isFinite, proposedHeight.isFinite else {
+            return original
+        }
         let size: CGSize
         if preserveAspectRatio {
             size = aspectPreservingSize(
@@ -277,11 +310,17 @@ enum CanvasImagePlacement {
         } else {
             size = CGSize(width: proposedWidth, height: proposedHeight)
         }
+        guard size.width.isFinite,
+              size.height.isFinite,
+              size.width > 0,
+              size.height > 0 else {
+            return original
+        }
         let corner = CanvasPoint(
             x: opposite.x + signs.x * Double(size.width),
             y: opposite.y + signs.y * Double(size.height)
         )
-        return CanvasImageTransform(
+        let result = CanvasImageTransform(
             center: CanvasPoint(
                 x: (opposite.x + corner.x) / 2,
                 y: (opposite.y + corner.y) / 2
@@ -290,6 +329,10 @@ enum CanvasImagePlacement {
             height: Double(size.height),
             zIndex: original.zIndex
         )
+        // A finite pointer and finite dimensions can still overflow while
+        // reconstructing the opposite corner near Double's limit. Never hand
+        // an invalid preview transform to the renderer or persistence layer.
+        return result.isValid ? result : original
     }
 
     static func movedTransform(
@@ -297,11 +340,13 @@ enum CanvasImagePlacement {
         by delta: CanvasPoint
     ) -> CanvasImageTransform {
         guard original.isValid, delta.isFinite else { return original }
+        let movedCenter = CanvasPoint(
+            x: original.center.x + delta.x,
+            y: original.center.y + delta.y
+        )
+        guard movedCenter.isFinite else { return original }
         return CanvasImageTransform(
-            center: CanvasPoint(
-                x: original.center.x + delta.x,
-                y: original.center.y + delta.y
-            ),
+            center: movedCenter,
             width: original.width,
             height: original.height,
             zIndex: original.zIndex

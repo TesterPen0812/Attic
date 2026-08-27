@@ -93,6 +93,39 @@ final class CanvasDomainTests: XCTestCase {
         }
     }
 
+    func testWorldPointRejectsInvalidViewportGeometry() {
+        let viewport = CanvasViewport()
+
+        XCTAssertFalse(viewport.worldPoint(
+            for: CGPoint(x: 20, y: 20),
+            in: CGSize(width: CGFloat.infinity, height: 100)
+        ).isFinite)
+        XCTAssertFalse(viewport.worldPoint(
+            for: CGPoint(x: CGFloat.nan, y: 20),
+            in: CGSize(width: 100, height: 100)
+        ).isFinite)
+    }
+
+    func testAppendInkRejectsNonFiniteWorldPointWithoutPoisoningStroke() {
+        let controller = CanvasInteractionController()
+
+        XCTAssertTrue(controller.beginInk(
+            at: CGPoint(x: 20, y: 20),
+            in: CGSize(width: 100, height: 100)
+        ))
+        XCTAssertFalse(controller.appendInk(
+            at: CGPoint(x: 25, y: 25),
+            in: CGSize(width: CGFloat.infinity, height: 100)
+        ))
+        XCTAssertEqual(controller.machine.bufferedPointCount, 1)
+
+        guard case let .stroke(points, _, _) = controller.finishInk() else {
+            return XCTFail("Expected the valid starting point to remain finishable")
+        }
+        XCTAssertEqual(points.count, 1)
+        XCTAssertTrue(points[0].isFinite)
+    }
+
     func testZoomKeepsAnchorWorldPointStationaryAndClampsScale() {
         var viewport = CanvasViewport(
             center: CanvasPoint(x: 30, y: -20),
@@ -111,6 +144,53 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertEqual(viewport.scale, CanvasViewport.maximumScale)
         viewport.zoom(by: 0.000_001, anchoredAt: anchor, in: size)
         XCTAssertEqual(viewport.scale, CanvasViewport.minimumScale)
+    }
+
+    func testZoomOverflowClampsToMaximumInsteadOfResettingToOne() {
+        var viewport = CanvasViewport(
+            center: CanvasPoint(x: 30, y: -20),
+            scale: 2
+        )
+
+        viewport.zoom(
+            by: Double.greatestFiniteMagnitude,
+            anchoredAt: CGPoint(x: 150, y: 190),
+            in: CGSize(width: 300, height: 380)
+        )
+
+        XCTAssertEqual(viewport.scale, CanvasViewport.maximumScale)
+        XCTAssertTrue(viewport.center.isFinite)
+    }
+
+    func testZoomWithInvalidViewportRestoresScaleAndCenter() {
+        var viewport = CanvasViewport(
+            center: CanvasPoint(x: 30, y: -20),
+            scale: 2
+        )
+        let original = viewport
+
+        viewport.zoom(
+            by: 2,
+            anchoredAt: CGPoint(x: 150, y: 190),
+            in: CGSize(width: CGFloat.infinity, height: 380)
+        )
+
+        XCTAssertEqual(viewport, original)
+    }
+
+    func testPanOverflowLeavesViewportUnchanged() {
+        var viewport = CanvasViewport(
+            center: CanvasPoint(x: Double.greatestFiniteMagnitude, y: 4),
+            scale: 0.25
+        )
+        let original = viewport
+
+        viewport.pan(byViewTranslation: CGSize(
+            width: -CGFloat(Double.greatestFiniteMagnitude),
+            height: 0
+        ))
+
+        XCTAssertEqual(viewport, original)
     }
 
     func testPanUsesViewTranslationWithoutMutatingWorldGeometry() {
