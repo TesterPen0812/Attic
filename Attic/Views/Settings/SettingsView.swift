@@ -333,9 +333,11 @@ struct SettingsView: View {
     }
 
     private var supportsNativeLiquidGlass: Bool {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             return true
         }
+        #endif
         return false
     }
 
@@ -343,7 +345,7 @@ struct SettingsView: View {
         if supportsNativeLiquidGlass {
             return "Regular is the adaptive default. Clear is permanently transparent and may reduce legibility over busy backgrounds. Accent and Interactive use Apple's native glass capabilities."
         }
-        return "Native Liquid Glass requires macOS 26. This Mac uses one system-material fallback; Reduce Transparency uses an opaque surface."
+        return "Native Liquid Glass requires macOS 26 with the Xcode 26 SDK. This build uses one system-material fallback; Reduce Transparency uses an opaque surface."
     }
 
     private var header: some View {
