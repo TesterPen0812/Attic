@@ -52,8 +52,9 @@ struct NotesPanelContent: View {
     }
 }
 
-/// Edits the app-owned draft. The draft outlives this SwiftUI view, so a panel
-/// transition or model-context refresh cannot discard pending text.
+/// Edits the app-owned draft. The AppKit-backed body editor keeps Cocoa text
+/// selection, marked-text, undo, link, and keyboard behavior while routing
+/// actual Finder items into the attachment transaction before generic strings.
 struct NoteComposerView: View {
     private enum FocusedField: Hashable {
         case title
@@ -65,18 +66,38 @@ struct NoteComposerView: View {
     @ObservedObject var uiState: PanelUIState
 
     @FocusState private var focusedField: FocusedField?
+    @State private var isImporterPresented = false
+    @State private var isFileTargeted = false
+    @State private var attachmentImportTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 9) {
+            HStack(spacing: 7) {
                 TextField("Title (optional)", text: $noteDraft.title)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .focused($focusedField, equals: .title)
                     .onSubmit { focusedField = .body }
-                    .onExitCommand(perform: finishKeyboardInteraction)
+                    .onExitCommand {
+                        // Escape is not an implicit save, close, or discard.
+                    }
                     .accessibilityIdentifier("note-title")
+
+                Button {
+                    isImporterPresented = true
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .background(Color.primary.opacity(0.05), in: Circle())
+                .disabled(isImporting)
+                .help("Attach files")
+                .accessibilityLabel("Attach files")
+                .accessibilityIdentifier("add-note-attachment")
 
                 Button(action: saveAndClose) {
                     Image(systemName: "arrow.up")
@@ -97,15 +118,37 @@ struct NoteComposerView: View {
                 .accessibilityIdentifier("save-note")
             }
 
-            TextEditor(text: $noteDraft.body)
-                .font(.system(size: 12, design: .rounded))
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 60, idealHeight: 78, maxHeight: 90)
-                .focused($focusedField, equals: .body)
-                .onExitCommand(perform: finishKeyboardInteraction)
-                .accessibilityIdentifier("note-body")
+            AttachmentAwareTextEditor(
+                text: $noteDraft.body,
+                isFileTargeted: $isFileTargeted,
+                isFocused: focusedField == .body,
+                onFocusChange: updateBodyFocus,
+                onImportFiles: importURLs,
+                onImportError: noteStore.setAttachmentError
+            )
+            .frame(minHeight: 60, idealHeight: 78, maxHeight: 90)
+            .overlay {
+                if isFileTargeted {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.055))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(
+                                    Color.accentColor.opacity(0.38),
+                                    lineWidth: 1
+                                )
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .animation(reduceMotion ? nil : AtticMotion.quick, value: isFileTargeted)
 
-            NoteAttachmentTray(noteStore: noteStore, noteDraft: noteDraft)
+            NoteAttachmentTray(
+                noteStore: noteStore,
+                noteDraft: noteDraft,
+                onCancelImport: cancelAttachmentImport
+            )
 
             if let conflictMessage = noteDraft.conflictMessage {
                 conflictControls(message: conflictMessage)
@@ -117,13 +160,97 @@ struct NoteComposerView: View {
         .onAppear {
             DispatchQueue.main.async { focusedField = .body }
         }
-        .onChange(of: focusedField) { previousField, newField in
-            if previousField != nil, newField == nil {
-                _ = noteDraft.flush()
+        .onDisappear {
+            // Section/panel controllers flush before their transitions. This is
+            // a final durability boundary, not a request to discard the draft.
+            _ = noteDraft.flush()
+        }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case let .success(urls):
+                importURLs(urls, [])
+            case let .failure(error):
+                let cocoaError = error as NSError
+                guard cocoaError.domain != NSCocoaErrorDomain
+                    || cocoaError.code != CocoaError.Code.userCancelled.rawValue else {
+                    return
+                }
+                noteStore.setAttachmentError(
+                    "Unable to choose attachments: \(error.localizedDescription)"
+                )
             }
         }
-        .onDisappear { _ = noteDraft.flush() }
         .animation(reduceMotion ? nil : AtticMotion.quick, value: noteDraft.conflict)
+    }
+
+    private var isImporting: Bool {
+        if case .importing = noteStore.attachmentImportState { return true }
+        return false
+    }
+
+    private func updateBodyFocus(_ isFocused: Bool) {
+        if isFocused {
+            focusedField = .body
+        } else if focusedField == .body {
+            focusedField = nil
+        }
+    }
+
+    private func importURLs(_ urls: [URL], _ cleanupDirectories: [URL]) {
+        guard !urls.isEmpty else {
+            removeTemporaryDirectories(cleanupDirectories)
+            return
+        }
+        guard !isImporting else {
+            removeTemporaryDirectories(cleanupDirectories)
+            noteStore.setAttachmentError(
+                "Finish or cancel the current attachment import before adding more files."
+            )
+            return
+        }
+        guard noteDraft.flush() else {
+            removeTemporaryDirectories(cleanupDirectories)
+            return
+        }
+
+        let previousNoteID = noteDraft.activeNoteID
+        attachmentImportTask = Task { @MainActor in
+            defer {
+                removeTemporaryDirectories(cleanupDirectories)
+                attachmentImportTask = nil
+            }
+            let noteID = await noteStore.importAttachments(
+                from: urls,
+                noteID: previousNoteID
+            )
+            guard !Task.isCancelled else { return }
+            if previousNoteID == nil,
+               noteDraft.isActive,
+               let noteID {
+                noteDraft.adoptAttachmentOnlyNote(noteID)
+                uiState.reconcileNoteEditor(
+                    activeNoteID: noteID,
+                    isActive: true
+                )
+            }
+        }
+    }
+
+    private func cancelAttachmentImport() {
+        attachmentImportTask?.cancel()
+    }
+
+    private func removeTemporaryDirectories(_ directories: [URL]) {
+        guard !directories.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            for directory in directories {
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
     }
 
     private func conflictControls(message: String) -> some View {
@@ -188,11 +315,6 @@ struct NoteComposerView: View {
 
     private var saveLabel: String {
         noteDraft.activeNoteID == nil ? "Add note" : "Save note"
-    }
-
-    private func finishKeyboardInteraction() {
-        focusedField = nil
-        _ = noteDraft.flush()
     }
 
     private func saveAndClose() {
@@ -287,7 +409,7 @@ struct NoteRowView: View {
             Button("Delete", role: .destructive, action: deleteNote)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes the note from synced devices.")
+            Text("This permanently removes the note and its attachments from synced devices.")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("note-row-\(note.id.uuidString)")
@@ -309,10 +431,13 @@ struct NoteRowView: View {
     private var displayTitle: String {
         let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !title.isEmpty { return title }
-        return note.body
+        if let firstBodyLine = note.body
             .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty })
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) {
+            return firstBodyLine
+        }
+        return noteStore.attachments(for: note.id).first?.originalFilename
             ?? "Untitled note"
     }
 
@@ -322,12 +447,19 @@ struct NoteRowView: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
-        guard !bodyLines.isEmpty else { return "No additional text" }
-        if note.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let rest = bodyLines.dropFirst().joined(separator: " ")
-            return rest.isEmpty ? "No additional text" : rest
+        if !bodyLines.isEmpty {
+            if note.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let rest = bodyLines.dropFirst().joined(separator: " ")
+                if !rest.isEmpty { return rest }
+            } else if let first = bodyLines.first {
+                return first
+            }
         }
-        return bodyLines.first ?? "No additional text"
+
+        let count = noteStore.attachments(for: note.id).count
+        if count == 1 { return "1 attachment" }
+        if count > 1 { return "\(count) attachments" }
+        return "No additional text"
     }
 
     private func copyNote() {
