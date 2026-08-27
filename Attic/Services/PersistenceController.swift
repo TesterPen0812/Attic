@@ -67,6 +67,7 @@ enum PersistenceController {
             NoteItem.self,
             CanvasBoardItem.self,
             CanvasStrokeItem.self,
+            CanvasImageItem.self,
             configurations: configuration
         )
     }
@@ -108,6 +109,7 @@ enum PersistenceController {
             NoteItem.self,
             CanvasBoardItem.self,
             CanvasStrokeItem.self,
+            CanvasImageItem.self,
             configurations: configuration
         )
     }
@@ -120,7 +122,7 @@ enum PersistenceController {
         defaults: UserDefaults = .standard
     ) throws {
         guard currentCloudKitEnvironment == .development else { return }
-        let marker = "didInitializeCloudKitDevelopmentSchemaV2"
+        let marker = "didInitializeCloudKitDevelopmentSchemaV3"
         guard !defaults.bool(forKey: marker) else { return }
 
         try autoreleasepool {
@@ -148,7 +150,8 @@ enum PersistenceController {
                     TaskItem.self,
                     NoteItem.self,
                     CanvasBoardItem.self,
-                    CanvasStrokeItem.self
+                    CanvasStrokeItem.self,
+                    CanvasImageItem.self
                 ]
             ) else {
                 throw CloudKitSchemaInitializationError.unableToCreateManagedObjectModel
