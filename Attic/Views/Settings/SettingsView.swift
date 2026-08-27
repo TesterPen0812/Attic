@@ -183,7 +183,7 @@ struct SettingsView: View {
                 }
                 .toggleStyle(.switch)
 
-                Text("Allow local AI agents to read, create, update and permanently delete tasks over MCP.")
+                Text("Allow local AI agents to read, create, update and permanently delete tasks and notes over MCP.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

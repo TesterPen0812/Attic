@@ -87,15 +87,22 @@ final class MCPRequestHandler {
         let version = Self.supportedProtocolVersions.contains(requested ?? "")
             ? requested!
             : Self.supportedProtocolVersions[0]
+        let supportsNotes = tools.definitions.contains { definition in
+            definition["name"] as? String == "list_notes"
+        }
+        let title = supportsNotes ? "Attic Tasks and Notes" : "Attic Tasks"
+        let instructions = supportsNotes
+            ? "When the user asks to manage Attic tasks or notes, use these MCP tools directly. Do not open or control the Attic GUI with Computer Use unless the user explicitly asks for UI interaction. Use list_tasks before updating a task and list_notes before updating a note so you reference current ids. Keep task titles short; use backlog for ideas, inProgress for active work, and done to complete."
+            : "When the user says Attic or asks to manage their Attic task list, use these MCP tools directly. Do not open or control the Attic GUI with Computer Use unless the user explicitly asks for UI interaction. Use list_tasks before updating so you reference current task ids. Keep titles short; use backlog for ideas, inProgress for active work, and done to complete."
         return [
             "protocolVersion": version,
             "capabilities": ["tools": [:] as [String: Any]],
             "serverInfo": [
                 "name": "attic",
-                "title": "Attic Tasks",
+                "title": title,
                 "version": serverVersion
             ],
-            "instructions": "When the user says Attic or asks to manage their Attic task list, use these MCP tools directly. Do not open or control the Attic GUI with Computer Use unless the user explicitly asks for UI interaction. Use list_tasks before updating so you reference current task ids. Keep titles short; use backlog for ideas, inProgress for active work, and done to complete."
+            "instructions": instructions
         ]
     }
 

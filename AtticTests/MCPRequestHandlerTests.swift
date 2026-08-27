@@ -48,6 +48,21 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(result["protocolVersion"] as? String, "2025-11-25")
     }
 
+    func testProductionInitializeInstructionsDiscloseNoteAccess() throws {
+        let (_, noteHandler) = try makeNoteHandler()
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": ["protocolVersion": "2025-11-25"]
+        ])
+
+        let response = try decode(noteHandler.handle(body: body))
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let instructions = try XCTUnwrap(result["instructions"] as? String)
+        XCTAssertTrue(instructions.contains("list_notes"))
+    }
+
     func testNotificationReturnsAcceptedWithoutBody() throws {
         let body = try JSONSerialization.data(withJSONObject: [
             "jsonrpc": "2.0",

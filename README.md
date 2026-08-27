@@ -23,7 +23,7 @@ On Mac, Attic lives in the menu bar and reveals a lightweight panel when the poi
 - Launch at login support
 - Native menu bar app with no Dock icon
 - Event-driven UI and low-overhead pointer sampling
-- Built-in MCP server so local AI agents can read and update tasks
+- Built-in MCP server so local AI agents can read and update tasks and notes
 
 ## Requirements
 
@@ -90,11 +90,11 @@ Usage Information** in App Store Connect:
 
 ## Agent access (MCP)
 
-When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and every request must include the random bearer token shown under Settings → Agent access. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.emanueledipietro.Attic agentServerPort <port>`.
+When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and every request must include the random bearer token shown under Settings → Agent access. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update and delete tasks and notes, including completing tasks, and every change appears live in the panel. Change the port with `defaults write com.emanueledipietro.Attic agentServerPort <port>`.
 
 Settings also provides **Copy setup prompt**, which creates a client-aware prompt containing the local endpoint and private bearer token. Paste it into Codex, Synara, or Claude to have that client configure or repair only its `attic` MCP entry and verify the connection.
 
-Tools: `list_tasks`, `create_task`, `update_task` (set `status` to `done` to complete), `delete_task`. Statuses are `todo`, `inProgress`, `done`, `backlog`; priorities are `none`, `low`, `medium`, `high`.
+Task tools: `list_tasks`, `create_task`, `update_task` (set `status` to `done` to complete), `delete_task`. Note tools: `list_notes`, `create_note`, `update_note`, `delete_note`. Statuses are `todo`, `inProgress`, `done`, `backlog`; priorities are `none`, `low`, `medium`, `high`.
 
 Claude Code / Synara (available in every project via `--scope user`):
 
