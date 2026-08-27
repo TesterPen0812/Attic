@@ -95,6 +95,7 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
         static let panelCornerSize = "panelCornerSize"
         static let panelContentSize = "panelContentSize"
+        static let glassPerformancePreset = "glassPerformancePreset"
         static let glassTransparency = "glassTransparency"
         static let glassFrost = "glassFrost"
         static let glassRefraction = "glassRefraction"
@@ -141,6 +142,12 @@ final class AppSettings: ObservableObject {
                 panelContentSize = clamped
             }
             defaults.set(clamped, forKey: Key.panelContentSize)
+        }
+    }
+
+    @Published var glassPerformancePreset: OpticalPerformancePreset {
+        didSet {
+            defaults.set(glassPerformancePreset.rawValue, forKey: Key.glassPerformancePreset)
         }
     }
 
@@ -307,6 +314,32 @@ final class AppSettings: ObservableObject {
             to: PanelContentSize.min...PanelContentSize.max,
             fallback: PanelContentSize.defaultValue
         )
+
+        let opticalAxisKeys = [
+            Key.glassTransparency,
+            Key.glassFrost,
+            Key.glassRefraction,
+            Key.glassEdgeShine,
+            Key.glassTint,
+            Key.glassReadability,
+            Key.glassInteractionResponse
+        ]
+        let hadStoredOpticalAxis = opticalAxisKeys.contains {
+            defaults.object(forKey: $0) != nil
+        }
+        let storedPresetObject = defaults.object(forKey: Key.glassPerformancePreset)
+        if let rawValue = storedPresetObject as? String,
+           let storedPreset = OpticalPerformancePreset(rawValue: rawValue) {
+            glassPerformancePreset = storedPreset
+        } else if storedPresetObject == nil,
+                  !hadStoredOpticalAxis,
+                  defaults.object(forKey: Key.legacyIsTranslucent) as? Bool == false {
+            glassPerformancePreset = .off
+            defaults.set(OpticalPerformancePreset.off.rawValue, forKey: Key.glassPerformancePreset)
+        } else {
+            glassPerformancePreset = .balanced
+            defaults.set(OpticalPerformancePreset.balanced.rawValue, forKey: Key.glassPerformancePreset)
+        }
 
         let defaultsProfile = OpticalGlassControls.defaults
         let storedTransparency = defaults.object(forKey: Key.glassTransparency) as? Double

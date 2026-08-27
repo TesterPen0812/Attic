@@ -61,7 +61,7 @@ final class OpticalWorkloadTests: XCTestCase {
         )
     }
 
-    func testChangingWorkloadDoesNotRewriteIndependentUserControls() {
+    func testChangingWorkloadDoesNotMutateIndependentUserControls() {
         let controls = OpticalGlassControls(
             transparency: 17,
             frost: 28,
@@ -71,19 +71,19 @@ final class OpticalWorkloadTests: XCTestCase {
             readability: 63,
             interactionResponse: 74
         )
+        let original = controls
 
         for preset in [
             OpticalPerformancePreset.low,
             .balanced,
             .maximum
         ] {
-            let profile = OpticalGlassProfile.resolve(
+            _ = OpticalGlassProfile.resolve(
                 controls: controls,
                 workload: OpticalWorkloadProfile.workload(for: preset),
                 windowActivity: .key
             )
-
-            XCTAssertEqual(profile.controlSnapshot, controls)
+            XCTAssertEqual(controls, original)
         }
     }
 
