@@ -133,7 +133,7 @@ final class OpticalWorkloadTests: XCTestCase {
         }
     }
 
-    func testMaximumRefractionUsesEachWorkloadsRealEnvelope() {
+    func testMaximumRefractionUsesEachWorkloadsRealEnvelopeWithInteractionHeadroom() {
         var controls = OpticalGlassControls.defaults
         controls.refraction = 100
 
@@ -154,10 +154,15 @@ final class OpticalWorkloadTests: XCTestCase {
         )
 
         XCTAssertEqual(low.refractionBandPixels, 28)
-        XCTAssertEqual(low.baseDisplacementPixels, 12)
+        XCTAssertEqual(low.baseDisplacementPixels, 11.5, accuracy: 0.000_001)
         XCTAssertEqual(balanced.refractionBandPixels, 32)
-        XCTAssertEqual(balanced.baseDisplacementPixels, 19)
+        XCTAssertEqual(
+            balanced.baseDisplacementPixels,
+            19 * 23.0 / 24.0,
+            accuracy: 0.000_001
+        )
         XCTAssertEqual(maximum.refractionBandPixels, 36)
-        XCTAssertEqual(maximum.baseDisplacementPixels, 24)
+        XCTAssertEqual(maximum.baseDisplacementPixels, 23, accuracy: 0.000_001)
+        XCTAssertEqual(maximum.maximumDisplacementPixels, 24, accuracy: 0.000_001)
     }
 }

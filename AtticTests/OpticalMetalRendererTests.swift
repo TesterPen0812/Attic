@@ -63,7 +63,7 @@ final class OpticalMetalRendererTests: XCTestCase {
         XCTAssertEqual(uniforms.geometry1.w, 760)
         XCTAssertEqual(uniforms.optics0.x, 36)
         XCTAssertEqual(uniforms.optics0.y, 36)
-        XCTAssertEqual(uniforms.optics0.z, 24)
+        XCTAssertEqual(uniforms.optics0.z, 23)
         XCTAssertEqual(uniforms.optics0.w, 1)
         XCTAssertEqual(uniforms.optics2.z, 13)
         XCTAssertEqual(uniforms.optics2.w, 5)
@@ -80,6 +80,13 @@ final class OpticalMetalRendererTests: XCTestCase {
         XCTAssertTrue(source.contains("sampleIndex >= blurSampleCount"))
         XCTAssertTrue(source.contains("evaluationIndex < 5u"))
         XCTAssertTrue(source.contains("evaluationIndex >= edgeEvaluationCount"))
+    }
+
+    func testShaderUsesTheSharedBottomAndCornerEnvelope() {
+        let source = OpticalShaderLibrary.source
+
+        XCTAssertTrue(source.contains("2.0f * abs(inwardNormal.x * inwardNormal.y)"))
+        XCTAssertTrue(source.contains("0.68f + 0.14f * bottomWeight + 0.18f * cornerWeight"))
     }
 
     @MainActor
