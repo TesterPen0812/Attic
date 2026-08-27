@@ -1,5 +1,68 @@
 import SwiftUI
 
+/// Shared geometry for the visible panel mask and the optical displacement
+/// field. Keeping one boundary definition prevents the refracted layer from
+/// exposing a rectangular remnant outside the accepted squircle.
+enum SquircleGeometry {
+    static func boundaryPoints(
+        in rect: CGRect,
+        cornerRadius: CGFloat,
+        exponent: CGFloat,
+        segmentsPerCorner: Int = 32
+    ) -> [CGPoint] {
+        let radius = min(cornerRadius, rect.width / 2, rect.height / 2)
+        guard radius > 0, rect.width > 0, rect.height > 0 else { return [] }
+
+        let n = max(1, exponent)
+        let segmentCount = max(1, segmentsPerCorner)
+        let corners: [(x: CGFloat, y: CGFloat, start: CGFloat)] = [
+            (rect.minX + radius, rect.minY + radius, .pi),
+            (rect.maxX - radius, rect.minY + radius, 3 * .pi / 2),
+            (rect.maxX - radius, rect.maxY - radius, 0),
+            (rect.minX + radius, rect.maxY - radius, .pi / 2)
+        ]
+
+        return corners.flatMap { corner in
+            (0...segmentCount).map { index in
+                let t = corner.start
+                    + (CGFloat(index) / CGFloat(segmentCount)) * (.pi / 2)
+                let cosine = cos(t)
+                let sine = sin(t)
+                let dx = radius * copysign(pow(abs(cosine), 2 / n), cosine)
+                let dy = radius * copysign(pow(abs(sine), 2 / n), sine)
+                return CGPoint(x: corner.x + dx, y: corner.y + dy)
+            }
+        }
+    }
+
+    static func path(
+        in rect: CGRect,
+        cornerRadius: CGFloat,
+        exponent: CGFloat,
+        segmentsPerCorner: Int = 32
+    ) -> CGPath {
+        let path = CGMutablePath()
+        let points = boundaryPoints(
+            in: rect,
+            cornerRadius: cornerRadius,
+            exponent: exponent,
+            segmentsPerCorner: segmentsPerCorner
+        )
+
+        guard let first = points.first else {
+            path.addRect(rect)
+            return path
+        }
+
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
 /// A squircular rounded rectangle: straight side sections with continuous
 /// superellipse corners.
 ///
@@ -23,45 +86,13 @@ struct Squircle: Shape {
     var exponent: CGFloat = 5
 
     func path(in rect: CGRect) -> Path {
-        let r = min(cornerRadius, rect.width / 2, rect.height / 2)
-        guard r > 0, rect.width > 0, rect.height > 0 else {
-            return Path(roundedRect: rect, cornerRadius: 0)
-        }
-
-        let n = max(1.0, exponent)
-        let segments = 32
-        var path = Path()
-
-        // Each corner is a quarter superellipse. Walking clockwise on screen
-        // (y increases downward), the corners and their parametric start
-        // angles are:
-        //   top-left:     center (minX + r, minY + r), start π
-        //   top-right:    center (maxX - r, minY + r), start 3π/2
-        //   bottom-right: center (maxX - r, maxY - r), start 0
-        //   bottom-left:  center (minX + r, maxY - r), start π/2
-        let corners: [(cx: CGFloat, cy: CGFloat, start: CGFloat)] = [
-            (rect.minX + r, rect.minY + r, .pi),
-            (rect.maxX - r, rect.minY + r, 3 * .pi / 2),
-            (rect.maxX - r, rect.maxY - r, 0),
-            (rect.minX + r, rect.maxY - r, .pi / 2)
-        ]
-
-        for (cornerIndex, corner) in corners.enumerated() {
-            for i in 0...segments {
-                let t = corner.start + (CGFloat(i) / CGFloat(segments)) * (.pi / 2)
-                let dx = r * copysign(pow(abs(cos(t)), 2 / n), cos(t))
-                let dy = r * copysign(pow(abs(sin(t)), 2 / n), sin(t))
-                let point = CGPoint(x: corner.cx + dx, y: corner.cy + dy)
-                if cornerIndex == 0 && i == 0 {
-                    path.move(to: point)
-                } else {
-                    path.addLine(to: point)
-                }
-            }
-        }
-
-        path.closeSubpath()
-        return path
+        Path(
+            SquircleGeometry.path(
+                in: rect,
+                cornerRadius: cornerRadius,
+                exponent: exponent
+            )
+        )
     }
 }
 

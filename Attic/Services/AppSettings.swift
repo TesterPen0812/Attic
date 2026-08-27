@@ -88,7 +88,14 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedQuickerReveal = "hasAdoptedQuickerRevealV2"
         static let hasAdoptedInstantReveal = "hasAdoptedInstantRevealV3"
         static let hasShownWelcome = "hasShownWelcome"
-        static let isTranslucent = "isTranslucent"
+        static let legacyIsTranslucent = "isTranslucent"
+        static let glassTransparency = "glassTransparency"
+        static let glassFrost = "glassFrost"
+        static let glassRefraction = "glassRefraction"
+        static let glassEdgeShine = "glassEdgeShine"
+        static let glassTint = "glassTint"
+        static let glassReadability = "glassReadability"
+        static let glassInteractionResponse = "glassInteractionResponse"
         static let appearance = "appearancePreference"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
@@ -101,8 +108,125 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(corner.rawValue, forKey: Key.corner) }
     }
 
-    @Published var isTranslucent: Bool {
-        didSet { defaults.set(isTranslucent, forKey: Key.isTranslucent) }
+    @Published var glassTransparency: Double {
+        didSet {
+            let value = Self.opticalControl(
+                glassTransparency,
+                fallback: OpticalGlassControls.defaults.transparency
+            )
+            if glassTransparency != value {
+                glassTransparency = value
+            } else {
+                defaults.set(value, forKey: Key.glassTransparency)
+            }
+        }
+    }
+
+    @Published var glassFrost: Double {
+        didSet {
+            let value = Self.opticalControl(
+                glassFrost,
+                fallback: OpticalGlassControls.defaults.frost
+            )
+            if glassFrost != value {
+                glassFrost = value
+            } else {
+                defaults.set(value, forKey: Key.glassFrost)
+            }
+        }
+    }
+
+    @Published var glassRefraction: Double {
+        didSet {
+            let value = Self.opticalControl(
+                glassRefraction,
+                fallback: OpticalGlassControls.defaults.refraction
+            )
+            if glassRefraction != value {
+                glassRefraction = value
+            } else {
+                defaults.set(value, forKey: Key.glassRefraction)
+            }
+        }
+    }
+
+    @Published var glassEdgeShine: Double {
+        didSet {
+            let value = Self.opticalControl(
+                glassEdgeShine,
+                fallback: OpticalGlassControls.defaults.edgeShine
+            )
+            if glassEdgeShine != value {
+                glassEdgeShine = value
+            } else {
+                defaults.set(value, forKey: Key.glassEdgeShine)
+            }
+        }
+    }
+
+    @Published var glassTint: Double {
+        didSet {
+            let value = Self.opticalControl(
+                glassTint,
+                fallback: OpticalGlassControls.defaults.tint
+            )
+            if glassTint != value {
+                glassTint = value
+            } else {
+                defaults.set(value, forKey: Key.glassTint)
+            }
+        }
+    }
+
+    @Published var glassReadability: Double {
+        didSet {
+            let value = Self.opticalControl(
+                glassReadability,
+                fallback: OpticalGlassControls.defaults.readability
+            )
+            if glassReadability != value {
+                glassReadability = value
+            } else {
+                defaults.set(value, forKey: Key.glassReadability)
+            }
+        }
+    }
+
+    @Published var glassInteractionResponse: Double {
+        didSet {
+            let value = Self.opticalControl(
+                glassInteractionResponse,
+                fallback: OpticalGlassControls.defaults.interactionResponse
+            )
+            if glassInteractionResponse != value {
+                glassInteractionResponse = value
+            } else {
+                defaults.set(value, forKey: Key.glassInteractionResponse)
+            }
+        }
+    }
+
+    /// Temporary compatibility for the existing panel and Settings view while
+    /// the custom renderer replaces the old binary translucency switch.
+    var isTranslucent: Bool {
+        get { glassTransparency > 0 }
+        set {
+            glassTransparency = newValue
+                ? OpticalGlassControls.defaults.transparency
+                : 0
+        }
+    }
+
+    var opticalGlassControls: OpticalGlassControls {
+        OpticalGlassControls(
+            transparency: glassTransparency,
+            frost: glassFrost,
+            refraction: glassRefraction,
+            edgeShine: glassEdgeShine,
+            tint: glassTint,
+            readability: glassReadability,
+            interactionResponse: glassInteractionResponse
+        )
     }
 
     @Published var appearance: AppearancePreference {
@@ -191,7 +315,43 @@ final class AppSettings: ObservableObject {
         revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
-        isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
+
+        let opticalDefaults = OpticalGlassControls.defaults
+        let storedTransparency = defaults.object(forKey: Key.glassTransparency) as? Double
+        let legacyTranslucency = defaults.object(forKey: Key.legacyIsTranslucent) as? Bool
+        glassTransparency = Self.opticalControl(
+            storedTransparency ?? (legacyTranslucency == false ? 0 : opticalDefaults.transparency),
+            fallback: opticalDefaults.transparency
+        )
+        glassFrost = Self.opticalControl(
+            defaults.object(forKey: Key.glassFrost) as? Double ?? opticalDefaults.frost,
+            fallback: opticalDefaults.frost
+        )
+        glassRefraction = Self.opticalControl(
+            defaults.object(forKey: Key.glassRefraction) as? Double ?? opticalDefaults.refraction,
+            fallback: opticalDefaults.refraction
+        )
+        glassEdgeShine = Self.opticalControl(
+            defaults.object(forKey: Key.glassEdgeShine) as? Double ?? opticalDefaults.edgeShine,
+            fallback: opticalDefaults.edgeShine
+        )
+        glassTint = Self.opticalControl(
+            defaults.object(forKey: Key.glassTint) as? Double ?? opticalDefaults.tint,
+            fallback: opticalDefaults.tint
+        )
+        glassReadability = Self.opticalControl(
+            defaults.object(forKey: Key.glassReadability) as? Double ?? opticalDefaults.readability,
+            fallback: opticalDefaults.readability
+        )
+        glassInteractionResponse = Self.opticalControl(
+            defaults.object(forKey: Key.glassInteractionResponse) as? Double
+                ?? opticalDefaults.interactionResponse,
+            fallback: opticalDefaults.interactionResponse
+        )
+        if storedTransparency == nil {
+            defaults.set(glassTransparency, forKey: Key.glassTransparency)
+        }
+
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
@@ -230,6 +390,10 @@ final class AppSettings: ObservableObject {
 
     func reportCloudSyncStartupFailure(_ message: String) {
         cloudSyncStartupErrorMessage = message
+    }
+
+    private static func opticalControl(_ value: Double, fallback: Double) -> Double {
+        clamp(value, to: OpticalGlassControls.range, fallback: fallback)
     }
 
     private static func clamp(
