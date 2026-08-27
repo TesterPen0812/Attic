@@ -10,14 +10,16 @@ final class SettingsWindowController: NSWindowController {
         loginItemService: LoginItemService,
         agentServer: AgentServer,
         store: TaskStore,
-        agentAccessToken: String
+        agentAccessToken: String,
+        opticalPermissionController: OpticalPermissionController
     ) {
         let rootView = SettingsView(
             settings: settings,
             loginItemService: loginItemService,
             agentServer: agentServer,
             store: store,
-            agentAccessToken: agentAccessToken
+            agentAccessToken: agentAccessToken,
+            opticalPermissionController: opticalPermissionController
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)

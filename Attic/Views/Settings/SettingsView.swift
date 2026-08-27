@@ -30,6 +30,7 @@ struct SettingsView: View {
     @ObservedObject var agentServer: AgentServer
     @ObservedObject var store: TaskStore
     let agentAccessToken: String
+    @ObservedObject var opticalPermissionController: OpticalPermissionController
     @State private var didCopyAgentSetupPrompt = false
     @State private var isOpticalGlassAdvancedExpanded = false
 
@@ -42,9 +43,11 @@ struct SettingsView: View {
         .frame(width: 520)
         .onAppear {
             loginItemService.refresh()
+            opticalPermissionController.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginItemService.refresh()
+            opticalPermissionController.refresh()
         }
     }
 
@@ -307,6 +310,35 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Performance", systemImage: "gauge.with.dots.needle.50percent")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Picker("Performance", selection: $settings.glassPerformancePreset) {
+                        ForEach(OpticalPerformancePreset.allCases) { preset in
+                            Text(preset.title).tag(preset)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 132)
+                    .labelsHidden()
+                    .accessibilityIdentifier("optical-performance-preset")
+                }
+                Text(settings.glassPerformancePreset.powerImpactDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if settings.glassPerformancePreset == .off {
+                    Text("Off stops ScreenCaptureKit and releases the Metal renderer. Transparency, Frost, and Refraction settings remain saved for the next enabled profile.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            opticalPermissionSection
+
             opticalControl(
                 title: "Transparency",
                 systemImage: "circle.lefthalf.filled",
@@ -325,7 +357,7 @@ struct SettingsView: View {
                 title: "Refraction",
                 systemImage: "arrow.left.and.right",
                 value: $settings.glassRefraction,
-                description: "Bends only the perimeter backdrop. 0 is an exact identity; 100 is the strongest resting profile."
+                description: "Bends only the perimeter backdrop. 0 is an exact identity; 100 is the strongest resting profile supported by the selected workload."
             )
 
             DisclosureGroup(isExpanded: $isOpticalGlassAdvancedExpanded) {
@@ -360,7 +392,66 @@ struct SettingsView: View {
                 Label("Advanced", systemImage: "slider.horizontal.3")
                     .font(.subheadline.weight(.semibold))
             }
+            .accessibilityIdentifier("optical-advanced-controls")
         }
+    }
+
+    @ViewBuilder
+    private var opticalPermissionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch opticalPermissionController.state {
+            case .notRequested:
+                Label("Live refraction needs Screen Recording access", systemImage: "rectangle.inset.filled.and.person.filled")
+                    .font(.subheadline.weight(.semibold))
+                Text("macOS does not otherwise provide the live backdrop pixels needed for real displacement. Attic will request access only when you press the button below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Enable Live Refraction") {
+                    opticalPermissionController.requestAccess()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .accessibilityIdentifier("optical-permission-action")
+
+            case .authorized:
+                Label("Live backdrop access enabled", systemImage: "checkmark.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.green)
+                Text("While Attic is visible, it captures only the small overscanned panel region, excludes Attic's own windows, records no audio or cursor, and never saves screen frames. Hiding the panel or choosing Off releases capture and GPU resources.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Check Access Again") {
+                    opticalPermissionController.refresh()
+                }
+                .buttonStyle(.link)
+                .controlSize(.small)
+
+            case .denied:
+                Label("Using the lightweight native fallback", systemImage: "exclamationmark.shield")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Text("Screen Recording access was not granted, so Attic remains fully functional with native material and does not imitate refraction with a rim or saved screenshot. In System Settings, open Privacy & Security → Screen & System Audio Recording, enable Attic, then return here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button("Open System Settings") {
+                        opticalPermissionController.openSystemSettings()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Button("Check Again") {
+                        opticalPermissionController.refresh()
+                    }
+                    .buttonStyle(.link)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private func opticalControl(

@@ -19,10 +19,10 @@ final class OpticalPermissionController: ObservableObject {
         preflight: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
         request: @escaping () -> Bool = { CGRequestScreenCaptureAccess() },
         openSettings: @escaping () -> Void = {
-            guard let url = URL(
-                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            guard let settingsURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.apple.systempreferences"
             ) else { return }
-            NSWorkspace.shared.open(url)
+            NSWorkspace.shared.open(settingsURL)
         }
     ) {
         self.defaults = defaults

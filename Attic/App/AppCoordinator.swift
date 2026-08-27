@@ -99,7 +99,8 @@ final class AppCoordinator {
             loginItemService: loginItemService,
             agentServer: agentServer,
             store: store,
-            agentAccessToken: agentAccessToken
+            agentAccessToken: agentAccessToken,
+            opticalPermissionController: opticalPermissionController
         )
         let panelController = AtticPanelController(
             store: store,
