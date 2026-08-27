@@ -52,9 +52,11 @@ final class CanvasUITests: XCTestCase {
         drawStroke(on: surface)
         assertStrokeCount(1)
 
-        app.buttons["section-tasks"].click()
-        XCTAssertTrue(app.buttons["section-canvas"].waitForExistence(timeout: 2))
-        app.buttons["section-canvas"].click()
+        app.buttons["panel-section-tasks"].click()
+        XCTAssertTrue(
+            app.buttons["panel-section-canvas"].waitForExistence(timeout: 2)
+        )
+        app.buttons["panel-section-canvas"].click()
         assertStrokeCount(1)
 
         app.typeKey(",", modifierFlags: .command)
@@ -80,7 +82,7 @@ final class CanvasUITests: XCTestCase {
     }
 
     private func openCanvas() {
-        let button = app.buttons["section-canvas"]
+        let button = app.buttons["panel-section-canvas"]
         XCTAssertTrue(button.waitForExistence(timeout: 3))
         button.click()
         XCTAssertTrue(
