@@ -31,6 +31,7 @@ struct SettingsView: View {
     @ObservedObject var store: TaskStore
     let agentAccessToken: String
     @State private var didCopyAgentSetupPrompt = false
+    @State private var isOpticalGlassAdvancedExpanded = false
 
     var body: some View {
         // Scrolls when the window is shorter than the content (small screens,
@@ -131,15 +132,7 @@ struct SettingsView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: $settings.isTranslucent) {
-                    Label("Translucency", systemImage: "circle.lefthalf.filled")
-                        .font(.headline)
-                }
-                Text("Let the desktop shine through the panel background.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            opticalGlassSection
 
             Divider()
 
@@ -300,6 +293,97 @@ struct SettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var opticalGlassSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 5) {
+                Label("Optical glass", systemImage: "circle.hexagongrid")
+                    .font(.headline)
+                Text("Attic samples the live macOS backdrop. The task and note interface stays in a separate, undistorted foreground layer.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            opticalControl(
+                title: "Transparency",
+                systemImage: "circle.lefthalf.filled",
+                value: $settings.glassTransparency,
+                description: "Controls how much of the live desktop remains visible. 0 is opaque; 100 is clearest."
+            )
+
+            opticalControl(
+                title: "Frost",
+                systemImage: "cloud.fog",
+                value: $settings.glassFrost,
+                description: "Adds diffusion without changing transparency or edge refraction."
+            )
+
+            opticalControl(
+                title: "Refraction",
+                systemImage: "arrow.left.and.right",
+                value: $settings.glassRefraction,
+                description: "Bends only the perimeter backdrop. 0 is an exact identity; 100 is the strongest resting profile."
+            )
+
+            DisclosureGroup(isExpanded: $isOpticalGlassAdvancedExpanded) {
+                VStack(alignment: .leading, spacing: 14) {
+                    opticalControl(
+                        title: "Edge shine",
+                        systemImage: "sparkle",
+                        value: $settings.glassEdgeShine,
+                        description: "Adds a broad optical highlight inside the edge band, never a stroked outline."
+                    )
+                    opticalControl(
+                        title: "Tint",
+                        systemImage: "paintpalette",
+                        value: $settings.glassTint,
+                        description: "Adds a restrained adaptive colour cast without changing the optical displacement."
+                    )
+                    opticalControl(
+                        title: "Readability",
+                        systemImage: "textformat",
+                        value: $settings.glassReadability,
+                        description: "Adds a soft centre veil behind content while leaving the foreground geometry untouched."
+                    )
+                    opticalControl(
+                        title: "Interaction response",
+                        systemImage: "cursorarrow.click",
+                        value: $settings.glassInteractionResponse,
+                        description: "Controls the brief refraction pulse from pointer and scroll interaction. The resting profile is unchanged."
+                    )
+                }
+                .padding(.top, 12)
+            } label: {
+                Label("Advanced", systemImage: "slider.horizontal.3")
+                    .font(.subheadline.weight(.semibold))
+            }
+        }
+    }
+
+    private func opticalControl(
+        title: String,
+        systemImage: String,
+        value: Binding<Double>,
+        description: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Label(title, systemImage: systemImage)
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                Text(value.wrappedValue, format: .number.precision(.fractionLength(0)))
+                    .monospacedDigit()
+                Text("%")
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: value, in: 0...100, step: 1)
+            Text(description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
