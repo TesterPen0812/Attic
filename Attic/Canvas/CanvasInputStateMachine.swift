@@ -3,8 +3,8 @@ import Foundation
 struct CanvasInputStateMachine {
     enum State: Equatable {
         case idle
-        case drawing([CanvasPoint])
-        case erasing([CanvasPoint])
+        case drawing
+        case erasing
         case panning
     }
 
@@ -14,6 +14,7 @@ struct CanvasInputStateMachine {
     }
 
     private(set) var state: State = .idle
+    private var bufferedPoints: [CanvasPoint] = []
 
     @discardableResult
     mutating func beginInk(
@@ -22,32 +23,21 @@ struct CanvasInputStateMachine {
     ) -> Bool {
         guard state == .idle, point.isFinite else { return false }
 
+        bufferedPoints = [point]
         switch tool {
         case .pen:
-            state = .drawing([point])
+            state = .drawing
         case .eraser:
-            state = .erasing([point])
+            state = .erasing
         }
         return true
     }
 
     mutating func append(_ point: CanvasPoint) {
         guard point.isFinite else { return }
-
-        switch state {
-        case var .drawing(points):
-            if points.last != point {
-                points.append(point)
-                state = .drawing(points)
-            }
-        case var .erasing(points):
-            if points.last != point {
-                points.append(point)
-                state = .erasing(points)
-            }
-        case .idle, .panning:
-            break
-        }
+        guard state == .drawing || state == .erasing else { return }
+        guard bufferedPoints.last != point else { return }
+        bufferedPoints.append(point)
     }
 
     /// Returns true when taking ownership for pan discarded unfinished ink.
@@ -55,6 +45,7 @@ struct CanvasInputStateMachine {
     mutating func beginPan() -> Bool {
         switch state {
         case .drawing, .erasing:
+            bufferedPoints.removeAll(keepingCapacity: true)
             state = .panning
             return true
         case .idle:
@@ -66,11 +57,14 @@ struct CanvasInputStateMachine {
     }
 
     mutating func finishInk() -> Completion? {
+        let points = bufferedPoints
         switch state {
-        case let .drawing(points):
+        case .drawing:
+            bufferedPoints.removeAll(keepingCapacity: true)
             state = .idle
             return points.isEmpty ? nil : .stroke(points)
-        case let .erasing(points):
+        case .erasing:
+            bufferedPoints.removeAll(keepingCapacity: true)
             state = .idle
             return points.isEmpty ? nil : .erase(points)
         case .idle, .panning:
@@ -86,6 +80,7 @@ struct CanvasInputStateMachine {
     @discardableResult
     mutating func cancel() -> Bool {
         guard state != .idle else { return false }
+        bufferedPoints.removeAll(keepingCapacity: true)
         state = .idle
         return true
     }
