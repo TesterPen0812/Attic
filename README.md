@@ -49,7 +49,7 @@ Both app targets use the explicit CloudKit container `iCloud.com.emanueledipietr
 1. In Xcode, confirm that both targets use the same Apple development team and have iCloud/CloudKit plus remote-notification capabilities.
 2. Confirm both targets use the existing `iCloud.com.emanueledipietro.Attic` container. Do not substitute another container: the production app, entitlements and persisted CloudKit metadata depend on this exact pairing.
 3. Sign in to the same iCloud account on the Mac and iPhone. Each app keeps a local SwiftData replica, so edits remain available offline and synchronize when CloudKit becomes available.
-4. After the first Development sync, inspect the generated `CD_TaskItem` type in CloudKit Console. Deploy the schema to Production before TestFlight, App Store or production distribution.
+4. After the first Development sync, inspect the generated `CD_TaskItem` and `CD_NoteItem` types in CloudKit Console. Deploy the complete schema to Production before TestFlight, App Store or production distribution.
 
 The Mac app makes a one-time `default.store.pre-cloudkit*` backup before first attaching the existing local store to CloudKit. Completed tasks keep the existing cleanup behavior: tasks completed before the current day are deleted, and that deletion synchronizes to every device.
 
