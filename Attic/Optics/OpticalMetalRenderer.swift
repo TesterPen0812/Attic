@@ -324,9 +324,8 @@ private final class OpticalMetalFrameRetention: @unchecked Sendable {
 }
 
 extension NSColor {
-    func opticalSIMDColor(using appearance: NSAppearance? = nil) -> SIMD4<Float> {
-        let resolved = appearance.map { self.resolvedColor(with: $0) } ?? self
-        let color = resolved.usingColorSpace(.sRGB) ?? resolved
+    func opticalSIMDColor() -> SIMD4<Float> {
+        let color = usingColorSpace(NSColorSpace.sRGB) ?? self
         return SIMD4<Float>(
             Float(color.redComponent),
             Float(color.greenComponent),
