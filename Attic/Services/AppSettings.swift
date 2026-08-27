@@ -26,6 +26,102 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
+enum PanelGlassMaterialPreference: String, CaseIterable, Identifiable, Hashable {
+    case regular
+    case clear
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .regular: return "Regular"
+        case .clear: return "Clear"
+        }
+    }
+}
+
+enum PanelGlassTintPreference: String, CaseIterable, Identifiable, Hashable {
+    case none
+    case accent
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .accent: return "Accent"
+        }
+    }
+}
+
+enum PanelGlassResponsePreference: String, CaseIterable, Identifiable, Hashable {
+    case `static`
+    case interactive
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .static: return "Static"
+        case .interactive: return "Interactive"
+        }
+    }
+}
+
+/// The independent user choices Apple exposes for a custom Glass surface.
+struct PanelGlassPreferences: Equatable {
+    let material: PanelGlassMaterialPreference
+    let tint: PanelGlassTintPreference
+    let response: PanelGlassResponsePreference
+}
+
+/// Every application-owned input to panel appearance resolution.
+///
+/// Window focus is deliberately absent. AppKit and SwiftUI may adapt system
+/// rendering internally, but Attic never supplies a different profile when the
+/// panel becomes key, resigns key, or the app deactivates.
+struct PanelGlassResolutionInputs: Equatable {
+    let preferences: PanelGlassPreferences
+    let supportsNativeGlass: Bool
+    let reduceTransparency: Bool
+}
+
+enum PanelGlassSurface: Equatable {
+    case native(PanelGlassMaterialPreference)
+    case legacyMaterial
+    case opaque
+}
+
+struct PanelGlassProfile: Equatable {
+    let surface: PanelGlassSurface
+    let tint: PanelGlassTintPreference
+    let response: PanelGlassResponsePreference
+
+    static func resolve(_ inputs: PanelGlassResolutionInputs) -> PanelGlassProfile {
+        if inputs.reduceTransparency {
+            return PanelGlassProfile(
+                surface: .opaque,
+                tint: .none,
+                response: .static
+            )
+        }
+
+        guard inputs.supportsNativeGlass else {
+            return PanelGlassProfile(
+                surface: .legacyMaterial,
+                tint: .none,
+                response: .static
+            )
+        }
+
+        return PanelGlassProfile(
+            surface: .native(inputs.preferences.material),
+            tint: inputs.preferences.tint,
+            response: inputs.preferences.response
+        )
+    }
+}
+
 /// User-adjustable corner radius of the panel squircle, in points.
 enum PanelCornerSize: Double, CaseIterable, Identifiable {
     case small = 10
@@ -88,7 +184,12 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedQuickerReveal = "hasAdoptedQuickerRevealV2"
         static let hasAdoptedInstantReveal = "hasAdoptedInstantRevealV3"
         static let hasShownWelcome = "hasShownWelcome"
-        static let isTranslucent = "isTranslucent"
+        static let legacyTranslucency = "isTranslucent"
+        static let legacyConsistentAppearance = "consistentAppearance"
+        static let panelGlassMaterial = "panelGlassMaterial"
+        static let panelGlassTint = "panelGlassTint"
+        static let panelGlassResponse = "panelGlassResponse"
+        static let hasMigratedToNativeGlassProfile = "hasMigratedToNativeGlassProfileV1"
         static let appearance = "appearancePreference"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
@@ -101,8 +202,20 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(corner.rawValue, forKey: Key.corner) }
     }
 
-    @Published var isTranslucent: Bool {
-        didSet { defaults.set(isTranslucent, forKey: Key.isTranslucent) }
+    /// Temporary source compatibility while the panel and Settings view move
+    /// to the discrete native profile. It intentionally does not persist.
+    @Published var isTranslucent = true
+
+    @Published var panelGlassMaterial: PanelGlassMaterialPreference {
+        didSet { defaults.set(panelGlassMaterial.rawValue, forKey: Key.panelGlassMaterial) }
+    }
+
+    @Published var panelGlassTint: PanelGlassTintPreference {
+        didSet { defaults.set(panelGlassTint.rawValue, forKey: Key.panelGlassTint) }
+    }
+
+    @Published var panelGlassResponse: PanelGlassResponsePreference {
+        didSet { defaults.set(panelGlassResponse.rawValue, forKey: Key.panelGlassResponse) }
     }
 
     @Published var appearance: AppearancePreference {
@@ -191,7 +304,12 @@ final class AppSettings: ObservableObject {
         revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
-        isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
+
+        let glassPreferences = Self.resolvePanelGlassPreferences(defaults: defaults)
+        panelGlassMaterial = glassPreferences.material
+        panelGlassTint = glassPreferences.tint
+        panelGlassResponse = glassPreferences.response
+
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
@@ -209,6 +327,14 @@ final class AppSettings: ObservableObject {
             defaults.object(forKey: Key.panelContentSize) as? Double ?? PanelContentSize.defaultValue,
             to: PanelContentSize.min...PanelContentSize.max,
             fallback: PanelContentSize.defaultValue
+        )
+    }
+
+    var panelGlassPreferences: PanelGlassPreferences {
+        PanelGlassPreferences(
+            material: panelGlassMaterial,
+            tint: panelGlassTint,
+            response: panelGlassResponse
         )
     }
 
@@ -230,6 +356,36 @@ final class AppSettings: ObservableObject {
 
     func reportCloudSyncStartupFailure(_ message: String) {
         cloudSyncStartupErrorMessage = message
+    }
+
+    private static func resolvePanelGlassPreferences(defaults: UserDefaults) -> PanelGlassPreferences {
+        let material = PanelGlassMaterialPreference(
+            rawValue: defaults.string(forKey: Key.panelGlassMaterial) ?? ""
+        ) ?? .regular
+        let tint = PanelGlassTintPreference(
+            rawValue: defaults.string(forKey: Key.panelGlassTint) ?? ""
+        ) ?? .none
+        let response = PanelGlassResponsePreference(
+            rawValue: defaults.string(forKey: Key.panelGlassResponse) ?? ""
+        ) ?? .interactive
+
+        let preferences = PanelGlassPreferences(
+            material: material,
+            tint: tint,
+            response: response
+        )
+
+        // The former translucency and focus-consistency controls do not map to
+        // independent native Glass capabilities. Normalize once to the honest
+        // native profile, persist it, and remove the obsolete inputs.
+        defaults.set(preferences.material.rawValue, forKey: Key.panelGlassMaterial)
+        defaults.set(preferences.tint.rawValue, forKey: Key.panelGlassTint)
+        defaults.set(preferences.response.rawValue, forKey: Key.panelGlassResponse)
+        defaults.set(true, forKey: Key.hasMigratedToNativeGlassProfile)
+        defaults.removeObject(forKey: Key.legacyTranslucency)
+        defaults.removeObject(forKey: Key.legacyConsistentAppearance)
+
+        return preferences
     }
 
     private static func clamp(
