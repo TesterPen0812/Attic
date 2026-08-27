@@ -32,15 +32,33 @@ final class OpticalMetalRendererTests: XCTestCase {
         )
 
         let uniforms = OpticalMetalUniforms.make(
-            textureWidth: 736,
-            textureHeight: 832,
+            textureWidth: region.outputPixelWidth,
+            textureHeight: region.outputPixelHeight,
             state: state
         )
 
-        XCTAssertEqual(uniforms.geometry0.x, 736)
-        XCTAssertEqual(uniforms.geometry0.y, 832)
-        XCTAssertEqual(uniforms.geometry0.z, Float(18.0 / 368.0), accuracy: 0.0001)
-        XCTAssertEqual(uniforms.geometry0.w, Float(18.0 / 416.0), accuracy: 0.0001)
+        XCTAssertEqual(uniforms.geometry0.x, Float(region.outputPixelWidth))
+        XCTAssertEqual(uniforms.geometry0.y, Float(region.outputPixelHeight))
+        XCTAssertEqual(
+            uniforms.geometry0.z,
+            Float(region.panelRectInCapturePoints.minX / region.sourceRect.width),
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            uniforms.geometry0.w,
+            Float(region.panelRectInCapturePoints.minY / region.sourceRect.height),
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            uniforms.geometry1.x,
+            Float(region.panelRectInCapturePoints.width / region.sourceRect.width),
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            uniforms.geometry1.y,
+            Float(region.panelRectInCapturePoints.height / region.sourceRect.height),
+            accuracy: 0.0001
+        )
         XCTAssertEqual(uniforms.geometry1.z, 664)
         XCTAssertEqual(uniforms.geometry1.w, 760)
         XCTAssertEqual(uniforms.optics0.x, 36)
