@@ -271,6 +271,29 @@ struct OpticalCaptureLifecycle: Equatable, Sendable {
     }
 }
 
+/// Guards actor-reentrant ScreenCaptureKit start/stop operations. A newer
+/// operation invalidates all older async continuations before they can install,
+/// tear down, or report against a replacement stream.
+struct OpticalCaptureOperationGate: Equatable, Sendable {
+    private(set) var generation = 0
+    private(set) var activeOperation: Int?
+
+    mutating func begin() -> Int {
+        generation += 1
+        activeOperation = generation
+        return generation
+    }
+
+    mutating func stop() {
+        generation += 1
+        activeOperation = nil
+    }
+
+    func accepts(_ operation: Int) -> Bool {
+        activeOperation == operation
+    }
+}
+
 struct OpticalRendererLifecycle: Equatable, Sendable {
     private(set) var isPrepared = false
     private(set) var hasRetainedFrame = false

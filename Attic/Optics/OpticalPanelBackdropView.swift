@@ -34,6 +34,7 @@ final class OpticalPanelBackdropView: NSView {
     private var metalRuntimeAvailable = true
     private var interactionMultiplier = 1.0
     private var adaptiveFrameCounter = 0
+    private var performanceReportFrameCounter = 0
 
     init(
         controls: OpticalGlassControls,
@@ -104,6 +105,7 @@ final class OpticalPanelBackdropView: NSView {
         isPanelVisible = visible
         if visible {
             captureAvailable = true
+            metrics.reset()
         }
         reconcile()
     }
@@ -111,7 +113,6 @@ final class OpticalPanelBackdropView: NSView {
     func stop() {
         isPanelVisible = false
         captureOperationTask?.cancel()
-        captureOperationTask = nil
         interactionResetWorkItem?.cancel()
         interactionResetWorkItem = nil
         stopLiveResources()
@@ -280,9 +281,6 @@ final class OpticalPanelBackdropView: NSView {
         guard selectedPreset == .adaptive else { return selectedPreset }
         let environment = environmentMonitor.snapshot
         let performance = metrics.snapshot()
-        let hasPerformance = performance.capturedFrameCount > 0
-            || performance.renderedFrameCount > 0
-            || performance.droppedFrameCount > 0
         return adaptiveController.evaluate(
             inputs: OpticalAdaptiveInputs(
                 isPanelVisible: isPanelVisible,
@@ -290,7 +288,7 @@ final class OpticalPanelBackdropView: NSView {
                 thermalState: environment.thermalState,
                 isOnBatteryPower: environment.isOnBatteryPower,
                 displayScale: Double(targetScreen?.backingScaleFactor ?? 1),
-                performance: hasPerformance ? performance : nil
+                performance: metrics.hasRecentPerformanceSamples() ? performance : nil
             ),
             now: CACurrentMediaTime()
         )
@@ -310,10 +308,13 @@ final class OpticalPanelBackdropView: NSView {
     }
 
     private func startCapture(_ configuration: OpticalCaptureConfiguration) {
-        captureOperationTask?.cancel()
+        let previousOperation = captureOperationTask
+        previousOperation?.cancel()
         let callbacks = callbacks
         captureOperationTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+            await previousOperation?.value
+            guard let self, !Task.isCancelled else { return }
+            metrics.reset()
             do {
                 try await captureSession.start(
                     configuration: configuration,
@@ -323,7 +324,7 @@ final class OpticalPanelBackdropView: NSView {
                     }
                 )
             } catch is CancellationError {
-                await captureSession.stop()
+                return
             } catch {
                 handleCaptureFailure(
                     generation: configuration.generation,
@@ -342,6 +343,13 @@ final class OpticalPanelBackdropView: NSView {
             return
         }
         renderer.submit(frame: frame, state: state)
+
+        performanceReportFrameCounter += 1
+        let reportInterval = max(15, (activeWorkload?.maximumFramesPerSecond ?? 30) * 10)
+        if performanceReportFrameCounter >= reportInterval {
+            metrics.report(reason: "running-\(effectivePreset.rawValue)")
+            performanceReportFrameCounter = 0
+        }
 
         guard selectedPreset == .adaptive else { return }
         adaptiveFrameCounter += 1
@@ -404,16 +412,20 @@ final class OpticalPanelBackdropView: NSView {
     }
 
     private func stopLiveResources() {
-        captureOperationTask?.cancel()
-        captureOperationTask = nil
+        if metrics.hasRecentPerformanceSamples() {
+            metrics.report(reason: "stopped-\(effectivePreset.rawValue)")
+        }
+        let previousOperation = captureOperationTask
+        previousOperation?.cancel()
+        captureOperationTask = Task { @MainActor [captureSession] in
+            await previousOperation?.value
+            await captureSession.stop()
+        }
         _ = captureLifecycle.reconcile(
             shouldRun: false,
             configurationFingerprint: 0
         )
         callbacks.deactivate()
-        Task { @MainActor [captureSession] in
-            await captureSession.stop()
-        }
         renderer?.releaseResources()
         renderer?.view.removeFromSuperview()
         renderer = nil
@@ -422,6 +434,8 @@ final class OpticalPanelBackdropView: NSView {
         activeWorkload = nil
         interactionMultiplier = 1
         adaptiveFrameCounter = 0
+        performanceReportFrameCounter = 0
+        metrics.reset()
     }
 
     private func updateMask() {

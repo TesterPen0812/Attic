@@ -48,6 +48,7 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
     )
     private var stream: SCStream?
     private var activeConfiguration: OpticalCaptureConfiguration?
+    private var operationGate = OpticalCaptureOperationGate()
 
     init(metrics: OpticalPerformanceMetrics) {
         relay = OpticalCaptureFrameRelay(metrics: metrics)
@@ -59,12 +60,14 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
         frameHandler: @escaping @Sendable (OpticalCaptureFrame) -> Void,
         failureHandler: @escaping @Sendable (Int, String) -> Void
     ) async throws {
-        await stop()
-        try Task.checkCancellation()
+        let operation = operationGate.begin()
+        await stopCurrentStream()
+        try ensureActive(operation)
 
+        var candidateStream: SCStream?
         do {
             let content = try await loadShareableContent()
-            try Task.checkCancellation()
+            try ensureActive(operation)
             guard let display = content.displays.first(where: {
                 $0.displayID == configuration.displayID
             }) else {
@@ -80,35 +83,40 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
                 exceptingWindows: []
             )
             let streamConfiguration = makeStreamConfiguration(from: configuration)
-            let stream = SCStream(
+            let candidate = SCStream(
                 filter: filter,
                 configuration: streamConfiguration,
                 delegate: self
             )
-            try stream.addStreamOutput(
+            candidateStream = candidate
+            try candidate.addStreamOutput(
                 self,
                 type: .screen,
                 sampleHandlerQueue: outputQueue
             )
-            self.stream = stream
+            try ensureActive(operation)
+
+            stream = candidate
             activeConfiguration = configuration
             relay.configure(
-                stream: stream,
+                stream: candidate,
                 generation: configuration.generation,
                 frameHandler: frameHandler,
                 failureHandler: failureHandler
             )
-            try Task.checkCancellation()
-            try await startCapture(stream)
-            try Task.checkCancellation()
+            try await startCapture(candidate)
+            try ensureActive(operation)
         } catch {
-            await releaseFailedStart()
+            if let candidateStream {
+                await release(candidateStream)
+            }
             throw error
         }
     }
 
     func update(configuration: OpticalCaptureConfiguration) async throws {
-        guard let stream, let activeConfiguration else {
+        guard let stream, let activeConfiguration,
+              let operation = operationGate.activeOperation else {
             throw OpticalCaptureSessionError.notRunning
         }
         guard activeConfiguration.displayID == configuration.displayID else {
@@ -119,33 +127,46 @@ final class OpticalCaptureSession: NSObject, OpticalCaptureSessionProtocol {
             stream,
             configuration: makeStreamConfiguration(from: configuration)
         )
-        try Task.checkCancellation()
+        try ensureActive(operation)
+        guard self.stream === stream else {
+            throw CancellationError()
+        }
         self.activeConfiguration = configuration
         relay.updateGeneration(configuration.generation)
     }
 
     func stop() async {
-        relay.deactivate()
+        operationGate.stop()
+        await stopCurrentStream()
+    }
+
+    private func ensureActive(_ operation: Int) throws {
+        guard operationGate.accepts(operation), !Task.isCancelled else {
+            throw CancellationError()
+        }
+    }
+
+    private func stopCurrentStream() async {
         guard let stream else {
             activeConfiguration = nil
+            relay.deactivate()
             return
         }
         self.stream = nil
         activeConfiguration = nil
+        relay.deactivate(stream: stream)
         try? stream.removeStreamOutput(self, type: .screen)
         await stopCapture(stream)
     }
 
-    private func releaseFailedStart() async {
-        relay.deactivate()
-        guard let stream else {
+    private func release(_ candidate: SCStream) async {
+        relay.deactivate(stream: candidate)
+        if stream === candidate {
+            stream = nil
             activeConfiguration = nil
-            return
         }
-        self.stream = nil
-        activeConfiguration = nil
-        try? stream.removeStreamOutput(self, type: .screen)
-        await stopCapture(stream)
+        try? candidate.removeStreamOutput(self, type: .screen)
+        await stopCapture(candidate)
     }
 
     private func makeStreamConfiguration(
@@ -281,6 +302,17 @@ private final class OpticalCaptureFrameRelay: @unchecked Sendable {
         generation = nil
         frameHandler = nil
         failureHandler = nil
+        lock.unlock()
+    }
+
+    func deactivate(stream: SCStream) {
+        lock.lock()
+        if streamIdentifier == ObjectIdentifier(stream) {
+            streamIdentifier = nil
+            generation = nil
+            frameHandler = nil
+            failureHandler = nil
+        }
         lock.unlock()
     }
 

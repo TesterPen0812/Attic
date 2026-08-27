@@ -1,4 +1,5 @@
 import Combine
+import CoreFoundation
 import Foundation
 import IOKit.ps
 
@@ -25,19 +26,77 @@ struct OpticalEnvironmentSnapshot: Equatable, Sendable {
 }
 
 @MainActor
+protocol OpticalPowerSourceObserving: AnyObject {
+    func start(onChange: @escaping () -> Void)
+    func stop()
+}
+
+@MainActor
+final class IOKitOpticalPowerSourceObserver: OpticalPowerSourceObserving {
+    private var runLoopSource: CFRunLoopSource?
+    private var changeHandler: (() -> Void)?
+
+    func start(onChange: @escaping () -> Void) {
+        stop()
+        changeHandler = onChange
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        guard let unmanagedSource = IOPSNotificationCreateRunLoopSource({ context in
+            guard let context else { return }
+            let observer = Unmanaged<IOKitOpticalPowerSourceObserver>
+                .fromOpaque(context)
+                .takeUnretainedValue()
+            Task { @MainActor [weak observer] in
+                observer?.notifyChange()
+            }
+        }, context) else {
+            return
+        }
+        let source = unmanagedSource.takeRetainedValue()
+        runLoopSource = source
+        CFRunLoopAddSource(
+            CFRunLoopGetMain(),
+            source,
+            CFRunLoopMode.commonModes
+        )
+    }
+
+    func stop() {
+        guard let runLoopSource else {
+            changeHandler = nil
+            return
+        }
+        CFRunLoopRemoveSource(
+            CFRunLoopGetMain(),
+            runLoopSource,
+            CFRunLoopMode.commonModes
+        )
+        CFRunLoopSourceInvalidate(runLoopSource)
+        self.runLoopSource = nil
+        changeHandler = nil
+    }
+
+    private func notifyChange() {
+        changeHandler?()
+    }
+}
+
+@MainActor
 final class OpticalEnvironmentMonitor: ObservableObject {
     @Published private(set) var snapshot: OpticalEnvironmentSnapshot
 
     private let snapshotProvider: () -> OpticalEnvironmentSnapshot
+    private let powerSourceObserver: OpticalPowerSourceObserving
     private var cancellables: Set<AnyCancellable> = []
     private var isStarted = false
 
     init(
         snapshotProvider: @escaping () -> OpticalEnvironmentSnapshot = {
             OpticalEnvironmentSnapshot.current()
-        }
+        },
+        powerSourceObserver: OpticalPowerSourceObserving = IOKitOpticalPowerSourceObserver()
     ) {
         self.snapshotProvider = snapshotProvider
+        self.powerSourceObserver = powerSourceObserver
         snapshot = snapshotProvider()
     }
 
@@ -53,10 +112,14 @@ final class OpticalEnvironmentMonitor: ObservableObject {
             }
             .store(in: &cancellables)
 
+        powerSourceObserver.start { [weak self] in
+            self?.refresh()
+        }
         refresh()
     }
 
     func stop() {
+        powerSourceObserver.stop()
         cancellables.removeAll()
         isStarted = false
     }

@@ -208,7 +208,8 @@ final class OpticalMetalRenderer: NSObject, MTKViewDelegate {
             queueDepth: state.workload.queueDepth,
             rendererTextureCount: 2
         )
-        view.isPaused = false
+        // MTKView stays paused. Each complete ScreenCaptureKit frame requests
+        // exactly one draw, so Low and Balanced never inherit a 60 Hz timer.
         view.draw()
     }
 
@@ -220,6 +221,7 @@ final class OpticalMetalRenderer: NSObject, MTKViewDelegate {
         }
         textureCache = nil
         lifecycle.release()
+        metrics.clearMemoryEstimate()
         view.isPaused = true
     }
 
@@ -280,8 +282,12 @@ final class OpticalMetalRenderer: NSObject, MTKViewDelegate {
             texture: cvTexture
         )
         let startedAt = CACurrentMediaTime()
-        commandBuffer.addCompletedHandler { [metrics] _ in
+        commandBuffer.addCompletedHandler { [metrics] completedBuffer in
             _ = retention
+            guard completedBuffer.status == .completed else {
+                metrics.recordDroppedFrame()
+                return
+            }
             metrics.recordRenderedFrame(
                 durationMilliseconds: (CACurrentMediaTime() - startedAt) * 1_000
             )

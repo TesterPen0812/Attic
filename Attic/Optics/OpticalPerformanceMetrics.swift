@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 struct OpticalPerformanceSnapshot: Equatable, Sendable {
     let capturedFrameCount: Int
@@ -25,6 +26,11 @@ struct OpticalPerformanceSnapshot: Equatable, Sendable {
 }
 
 final class OpticalPerformanceMetrics: @unchecked Sendable {
+    private static let logger = Logger(
+        subsystem: "com.emanueledipietro.Attic",
+        category: "OpticalPerformance"
+    )
+
     private let lock = NSLock()
     private let windowCapacity: Int
     private var capturedFrameCount = 0
@@ -33,6 +39,7 @@ final class OpticalPerformanceMetrics: @unchecked Sendable {
     private var incompleteFrameCount = 0
     private var frameDurations: [Double] = []
     private var captureLatencies: [Double] = []
+    private var frameOutcomes: [Bool] = []
     private var estimatedMemoryBytes = 0
 
     init(windowCapacity: Int = 120) {
@@ -44,6 +51,7 @@ final class OpticalPerformanceMetrics: @unchecked Sendable {
         defer { lock.unlock() }
         capturedFrameCount += 1
         appendBounded(sanitized(latencyMilliseconds), to: &captureLatencies)
+        appendBounded(true, to: &frameOutcomes)
     }
 
     func recordRenderedFrame(durationMilliseconds: Double) {
@@ -57,6 +65,7 @@ final class OpticalPerformanceMetrics: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         droppedFrameCount += 1
+        appendBounded(false, to: &frameOutcomes)
     }
 
     func recordIncompleteFrame() {
@@ -81,10 +90,39 @@ final class OpticalPerformanceMetrics: @unchecked Sendable {
         estimatedMemoryBytes = width * height * bytes * surfaces
     }
 
+    func clearMemoryEstimate() {
+        lock.lock()
+        estimatedMemoryBytes = 0
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        capturedFrameCount = 0
+        renderedFrameCount = 0
+        droppedFrameCount = 0
+        incompleteFrameCount = 0
+        frameDurations.removeAll(keepingCapacity: true)
+        captureLatencies.removeAll(keepingCapacity: true)
+        frameOutcomes.removeAll(keepingCapacity: true)
+        estimatedMemoryBytes = 0
+        lock.unlock()
+    }
+
+    func hasRecentPerformanceSamples() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !frameDurations.isEmpty
+            || !captureLatencies.isEmpty
+            || !frameOutcomes.isEmpty
+    }
+
     func snapshot() -> OpticalPerformanceSnapshot {
         lock.lock()
         defer { lock.unlock() }
-        let dropDenominator = capturedFrameCount + droppedFrameCount
+        let recentDropCount = frameOutcomes.reduce(into: 0) { count, wasCaptured in
+            if !wasCaptured { count += 1 }
+        }
         return OpticalPerformanceSnapshot(
             capturedFrameCount: capturedFrameCount,
             renderedFrameCount: renderedFrameCount,
@@ -92,15 +130,30 @@ final class OpticalPerformanceMetrics: @unchecked Sendable {
             incompleteFrameCount: incompleteFrameCount,
             meanFrameTimeMilliseconds: mean(frameDurations),
             p95FrameTimeMilliseconds: percentile95(frameDurations),
-            droppedFrameRate: dropDenominator > 0
-                ? Double(droppedFrameCount) / Double(dropDenominator)
-                : 0,
+            droppedFrameRate: frameOutcomes.isEmpty
+                ? 0
+                : Double(recentDropCount) / Double(frameOutcomes.count),
             meanCaptureLatencyMilliseconds: mean(captureLatencies),
             estimatedMemoryBytes: estimatedMemoryBytes
         )
     }
 
-    private func appendBounded(_ value: Double, to values: inout [Double]) {
+    /// Emits aggregate numeric diagnostics only. It never receives or records a
+    /// pixel buffer, image, window title, application name, or screen content.
+    func report(reason: String) {
+        let value = snapshot()
+        guard value.capturedFrameCount > 0
+                || value.renderedFrameCount > 0
+                || value.droppedFrameCount > 0
+                || value.incompleteFrameCount > 0 else {
+            return
+        }
+        Self.logger.info(
+            "reason=\(reason, privacy: .public) captured=\(value.capturedFrameCount, privacy: .public) rendered=\(value.renderedFrameCount, privacy: .public) dropped=\(value.droppedFrameCount, privacy: .public) incomplete=\(value.incompleteFrameCount, privacy: .public) mean_frame_ms=\(value.meanFrameTimeMilliseconds, privacy: .public) p95_frame_ms=\(value.p95FrameTimeMilliseconds, privacy: .public) drop_rate=\(value.droppedFrameRate, privacy: .public) capture_latency_ms=\(value.meanCaptureLatencyMilliseconds, privacy: .public) estimated_bytes=\(value.estimatedMemoryBytes, privacy: .public)"
+        )
+    }
+
+    private func appendBounded<Value>(_ value: Value, to values: inout [Value]) {
         values.append(value)
         if values.count > windowCapacity {
             values.removeFirst(values.count - windowCapacity)
