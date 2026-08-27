@@ -39,6 +39,35 @@ struct CanvasViewport: Equatable {
         )
     }
 
+    func worldRect(
+        for viewRect: CGRect,
+        in viewportSize: CGSize
+    ) -> CGRect {
+        guard !viewRect.isNull,
+              !viewRect.isInfinite,
+              viewportSize.width.isFinite,
+              viewportSize.height.isFinite,
+              viewportSize.width > 0,
+              viewportSize.height > 0 else {
+            return .null
+        }
+
+        let first = worldPoint(
+            for: CGPoint(x: viewRect.minX, y: viewRect.minY),
+            in: viewportSize
+        )
+        let second = worldPoint(
+            for: CGPoint(x: viewRect.maxX, y: viewRect.maxY),
+            in: viewportSize
+        )
+        return CGRect(
+            x: min(first.x, second.x),
+            y: min(first.y, second.y),
+            width: abs(second.x - first.x),
+            height: abs(second.y - first.y)
+        )
+    }
+
     mutating func pan(byViewTranslation translation: CGSize) {
         guard translation.width.isFinite,
               translation.height.isFinite else {
