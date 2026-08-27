@@ -1,0 +1,203 @@
+name: Canvas project regeneration
+
+on:
+  push:
+    branches: [feature/canvas-ink]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: canvas-project-regeneration
+  cancel-in-progress: true
+
+jobs:
+  regenerate-and-verify:
+    name: Regenerate, build, and test Canvas
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v5
+        with:
+          ref: feature/canvas-ink
+          fetch-depth: 0
+
+      - name: Set up Ruby dependencies
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Add Canvas shared sources to project generator
+        shell: ruby {0}
+        run: |
+          path = 'Scripts/generate_project.rb'
+          source = File.read(path)
+          old_block = <<~'BLOCK'.chomp
+            shared_mobile_sources = [
+              'Design/AtticTheme.swift',
+              'Design/TaskActionsMenu.swift',
+              'Models/TaskItem.swift',
+              'Models/TaskTypes.swift',
+              'Models/NoteItem.swift',
+              'Services/PersistenceController.swift',
+              'Services/NoteStore.swift',
+              'Services/TaskStore.swift'
+            ]
+          BLOCK
+          new_block = <<~'BLOCK'.chomp
+            shared_mobile_sources = [
+              'Canvas/CanvasControls.swift',
+              'Canvas/CanvasInputStateMachine.swift',
+              'Canvas/CanvasSession.swift',
+              'Canvas/CanvasStrokeCodec.swift',
+              'Canvas/CanvasSurface.swift',
+              'Canvas/CanvasSurfaceIOS.swift',
+              'Canvas/CanvasSurfaceInteraction.swift',
+              'Canvas/CanvasSurfaceMac.swift',
+              'Canvas/CanvasSurfaceRenderer.swift',
+              'Canvas/CanvasTypes.swift',
+              'Canvas/CanvasViewport.swift',
+              'Design/AtticTheme.swift',
+              'Design/TaskActionsMenu.swift',
+              'Models/CanvasBoardItem.swift',
+              'Models/CanvasStrokeItem.swift',
+              'Models/TaskItem.swift',
+              'Models/TaskTypes.swift',
+              'Models/NoteItem.swift',
+              'Services/CanvasStore.swift',
+              'Services/PersistenceController.swift',
+              'Services/NoteStore.swift',
+              'Services/TaskStore.swift'
+            ]
+          BLOCK
+
+          unless source.include?(new_block)
+            abort 'Expected shared_mobile_sources block was not found' unless source.include?(old_block)
+            source = source.sub(old_block, new_block)
+            File.write(path, source)
+          end
+
+      - name: Regenerate checked-in Xcode project
+        run: bundle exec ruby Scripts/generate_project.rb
+
+      - name: Verify deterministic project generation
+        run: bundle exec ruby Scripts/verify_project_generation.rb
+
+      - name: Check generated diff integrity
+        run: git diff --check
+
+      - name: Build macOS target
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -target Attic \
+            -configuration Local \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      - name: Build macOS scheme with strict concurrency
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticStrictBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete \
+            clean build
+
+      - name: Run macOS unit tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUnitTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticUnitTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticTests \
+            test
+
+      - name: Run macOS UI tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticUITests \
+            test
+
+      - name: Select an available iPhone simulator
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+
+          payload = json.loads(
+              subprocess.check_output(
+                  ['xcrun', 'simctl', 'list', 'devices', 'available', '-j'],
+                  text=True,
+              )
+          )
+          for runtime, devices in payload['devices'].items():
+              for device in devices:
+                  if device['name'].startswith('iPhone') and device.get('isAvailable', True):
+                      with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+                          output.write(f"IOS_SIMULATOR_UDID={device['udid']}\n")
+                      raise SystemExit(0)
+          raise SystemExit('No available iPhone simulator was found')
+
+      - name: Build iPhone app and test bundles
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build-for-testing
+
+      - name: Run iPhone unit tests
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticMobile \
+            -configuration Local \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/AtticMobileTests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticMobileTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:AtticMobileTests \
+            test
+
+      - name: Run macOS static analyzer
+        run: |
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme Attic \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticAnalyze" \
+            CODE_SIGNING_ALLOWED=NO \
+            analyze
+
+      - name: Commit generated project and remove one-shot workflow
+        run: |
+          rm .github/workflows/canvas-project-regenerate.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Scripts/generate_project.rb Attic.xcodeproj .github/workflows/canvas-project-regenerate.yml
+          git diff --cached --quiet && exit 0
+          git commit -m 'chore: regenerate Xcode project for Canvas'
+          git push origin HEAD:feature/canvas-ink
