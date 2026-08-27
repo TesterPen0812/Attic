@@ -13,9 +13,16 @@ final class CanvasPathCache {
     var cachedPathCount: Int { entries.count }
 
     func prepare(for strokes: [CanvasStroke]) {
-        let keys = strokes.map(\.renderKey)
-        guard keys != preparedKeys else { return }
+        if preparedKeys.count == strokes.count {
+            var unchanged = true
+            for index in strokes.indices where preparedKeys[index] != strokes[index].renderKey {
+                unchanged = false
+                break
+            }
+            if unchanged { return }
+        }
 
+        let keys = strokes.map(\.renderKey)
         preparedKeys = keys
         let visibleIDs = Set(keys.map(\.id))
         entries = entries.filter { visibleIDs.contains($0.key) }
@@ -35,15 +42,11 @@ final class CanvasPathCache {
         return path
     }
 
-    private static func makePath(
-        points: [CanvasPoint]
-    ) -> CGPath {
+    private static func makePath(points: [CanvasPoint]) -> CGPath {
         let path = CGMutablePath()
         guard let first = points.first else { return path }
 
         path.move(to: first.cgPoint)
-        // Stored and in-progress paths use the same polyline geometry so a
-        // completed stroke never visibly changes shape after persistence.
         if points.count == 1 {
             path.addLine(to: first.cgPoint)
         } else {
@@ -68,6 +71,8 @@ func drawCanvas(
     context.setFillColor(backgroundColor)
     context.fill(bounds)
     context.clip(to: bounds)
+
+    pathCache.prepare(for: interaction.strokes)
 
     let worldViewport = interaction.viewport.worldRect(
         for: bounds,
@@ -104,12 +109,8 @@ func drawCanvas(
 
     if let activePath = interaction.activePath {
         context.addPath(activePath)
-        context.setStrokeColor(
-            strokeColor(interaction.activeStrokeColor)
-        )
-        context.setLineWidth(
-            CGFloat(interaction.activeStrokeWidth)
-        )
+        context.setStrokeColor(strokeColor(interaction.activeStrokeColor))
+        context.setLineWidth(CGFloat(interaction.activeStrokeWidth))
         context.strokePath()
     }
     context.restoreGState()
