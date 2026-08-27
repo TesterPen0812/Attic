@@ -18,4 +18,19 @@ final class NoteStoreMobileTests: XCTestCase {
         XCTAssertTrue(store.update(note, body: "updated"))
         XCTAssertEqual(note.body, "updated")
     }
+
+    func testEditorPatchOmitsUnchangedBodySoAnImportedEditIsPreserved() {
+        let baseline = MobileNoteEditBaseline(
+            title: "Original title",
+            body: "Body imported from Mac"
+        )
+
+        let patch = baseline.patch(
+            title: "Renamed on iPhone",
+            body: "Body imported from Mac"
+        )
+
+        XCTAssertEqual(patch.title, "Renamed on iPhone")
+        XCTAssertNil(patch.body)
+    }
 }

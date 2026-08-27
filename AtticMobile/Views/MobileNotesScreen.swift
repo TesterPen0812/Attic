@@ -1,5 +1,22 @@
 import SwiftUI
 
+struct MobileNoteEditPatch: Equatable {
+    let title: String?
+    let body: String?
+}
+
+struct MobileNoteEditBaseline: Equatable {
+    let title: String
+    let body: String
+
+    func patch(title editedTitle: String, body editedBody: String) -> MobileNoteEditPatch {
+        MobileNoteEditPatch(
+            title: editedTitle == title ? nil : editedTitle,
+            body: editedBody == body ? nil : editedBody
+        )
+    }
+}
+
 struct MobileNoteEditorConfiguration: Identifiable {
     enum Mode {
         case create
@@ -246,6 +263,7 @@ struct MobileNoteEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
     @State private var bodyText: String
+    private let editBaseline: MobileNoteEditBaseline?
     @FocusState private var bodyIsFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -257,9 +275,11 @@ struct MobileNoteEditor: View {
         case .create:
             _title = State(initialValue: "")
             _bodyText = State(initialValue: "")
+            editBaseline = nil
         case let .edit(note):
             _title = State(initialValue: note.title)
             _bodyText = State(initialValue: note.body)
+            editBaseline = MobileNoteEditBaseline(title: note.title, body: note.body)
         }
     }
 
@@ -350,7 +370,9 @@ struct MobileNoteEditor: View {
             case .create:
                 return noteStore.create(title: title, body: bodyText) != nil
             case let .edit(note):
-                return noteStore.update(note, title: title, body: bodyText)
+                guard let editBaseline else { return false }
+                let patch = editBaseline.patch(title: title, body: bodyText)
+                return noteStore.update(note, title: patch.title, body: patch.body)
             }
         }
 
