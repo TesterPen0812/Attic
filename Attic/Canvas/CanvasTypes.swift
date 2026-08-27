@@ -74,6 +74,9 @@ struct CanvasStrokeGeometry: Equatable {
 
 struct CanvasStroke: Identifiable, Equatable {
     let id: UUID
+    /// Ephemeral identity for native rendering caches. It is deliberately not
+    /// persisted or included in semantic equality.
+    let renderToken: UUID
     let color: CanvasInkColor
     let width: Double
     let points: [CanvasPoint]
@@ -84,6 +87,7 @@ struct CanvasStroke: Identifiable, Equatable {
 
     init(
         id: UUID = UUID(),
+        renderToken: UUID = UUID(),
         color: CanvasInkColor,
         width: Double,
         points: [CanvasPoint],
@@ -93,6 +97,7 @@ struct CanvasStroke: Identifiable, Equatable {
         updatedAt: Date? = nil
     ) {
         self.id = id
+        self.renderToken = renderToken
         self.color = color
         self.width = width
         self.points = points
@@ -100,6 +105,21 @@ struct CanvasStroke: Identifiable, Equatable {
         self.mutationVersion = mutationVersion
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
+    }
+
+    static func == (lhs: CanvasStroke, rhs: CanvasStroke) -> Bool {
+        lhs.id == rhs.id
+            && lhs.color == rhs.color
+            && lhs.width == rhs.width
+            && lhs.points == rhs.points
+            && lhs.boardGeneration == rhs.boardGeneration
+            && lhs.mutationVersion == rhs.mutationVersion
+            && lhs.createdAt == rhs.createdAt
+            && lhs.updatedAt == rhs.updatedAt
+    }
+
+    var renderKey: CanvasStrokeRenderKey {
+        CanvasStrokeRenderKey(id: id, token: renderToken)
     }
 
     var bounds: CGRect? {
@@ -127,6 +147,11 @@ struct CanvasStroke: Identifiable, Equatable {
     }
 }
 
+struct CanvasStrokeRenderKey: Equatable, Hashable {
+    let id: UUID
+    let token: UUID
+}
+
 enum CanvasHitTesting {
     static func strokeIDs(
         hitBy eraserPoints: [CanvasPoint],
@@ -137,15 +162,44 @@ enum CanvasHitTesting {
             return []
         }
 
+        let eraserBounds = pointBounds(eraserPoints).insetBy(
+            dx: -CGFloat(radius),
+            dy: -CGFloat(radius)
+        )
         var result: Set<UUID> = []
-        for stroke in strokes where intersects(
-            eraserPoints: eraserPoints,
-            stroke: stroke,
-            radius: radius
-        ) {
-            result.insert(stroke.id)
+        for stroke in strokes {
+            guard stroke.bounds?.intersects(eraserBounds) == true else {
+                continue
+            }
+            if intersects(
+                eraserPoints: eraserPoints,
+                stroke: stroke,
+                radius: radius
+            ) {
+                result.insert(stroke.id)
+            }
         }
         return result
+    }
+
+    private static func pointBounds(_ points: [CanvasPoint]) -> CGRect {
+        guard let first = points.first else { return .null }
+        var minimumX = first.x
+        var maximumX = first.x
+        var minimumY = first.y
+        var maximumY = first.y
+        for point in points.dropFirst() {
+            minimumX = min(minimumX, point.x)
+            maximumX = max(maximumX, point.x)
+            minimumY = min(minimumY, point.y)
+            maximumY = max(maximumY, point.y)
+        }
+        return CGRect(
+            x: minimumX,
+            y: minimumY,
+            width: maximumX - minimumX,
+            height: maximumY - minimumY
+        )
     }
 
     private static func intersects(

@@ -80,12 +80,26 @@ final class CanvasSession: ObservableObject {
     }
 
     @discardableResult
-    func completeStroke(points: [CanvasPoint]) -> Bool {
+    func completeStroke(
+        points: [CanvasPoint],
+        color strokeColor: CanvasInkColor? = nil,
+        width strokeWidth: Double? = nil
+    ) -> Bool {
+        let resolvedColor = strokeColor ?? color
+        let requestedWidth = strokeWidth ?? width
+        guard requestedWidth.isFinite else {
+            lastErrorMessage = "The canvas stroke width is invalid."
+            return false
+        }
+        let resolvedWidth = min(
+            max(requestedWidth, Self.minimumWidth),
+            Self.maximumWidth
+        )
         var persistedStroke: CanvasStroke?
         let succeeded = applyLocalMutation {
             persistedStroke = store.addStroke(
-                color: color,
-                width: width,
+                color: resolvedColor,
+                width: resolvedWidth,
                 points: points
             )
             return persistedStroke != nil
@@ -184,6 +198,10 @@ final class CanvasSession: ObservableObject {
             partial.map { $0.union(bounds) } ?? bounds
         }
         viewport.fit(bounds: bounds, in: size)
+    }
+
+    func setViewport(_ viewport: CanvasViewport) {
+        self.viewport = viewport
     }
 
     func pan(byViewTranslation translation: CGSize) {
