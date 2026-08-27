@@ -74,11 +74,24 @@ mobile_ui_tests_group = add_swift_sources(
 )
 
 shared_mobile_sources = [
+  'Canvas/CanvasControls.swift',
+  'Canvas/CanvasInputStateMachine.swift',
+  'Canvas/CanvasSession.swift',
+  'Canvas/CanvasStrokeCodec.swift',
+  'Canvas/CanvasSurface.swift',
+  'Canvas/CanvasSurfaceIOS.swift',
+  'Canvas/CanvasSurfaceInteraction.swift',
+  'Canvas/CanvasSurfaceRenderer.swift',
+  'Canvas/CanvasTypes.swift',
+  'Canvas/CanvasViewport.swift',
   'Design/AtticTheme.swift',
   'Design/TaskActionsMenu.swift',
+  'Models/CanvasBoardItem.swift',
+  'Models/CanvasStrokeItem.swift',
   'Models/TaskItem.swift',
   'Models/TaskTypes.swift',
   'Models/NoteItem.swift',
+  'Services/CanvasStore.swift',
   'Services/PersistenceController.swift',
   'Services/NoteStore.swift',
   'Services/TaskStore.swift'
