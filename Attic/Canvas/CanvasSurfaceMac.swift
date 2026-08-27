@@ -120,7 +120,7 @@ final class CanvasNSView: NSView {
         ) {
             needsDisplay = true
         }
-        invalidateCursorRects()
+        window?.invalidateCursorRects(for: self)
     }
 
     override func viewDidMoveToWindow() {
@@ -263,7 +263,7 @@ final class CanvasNSView: NSView {
         if !spacePressed {
             cancelInteraction()
             spacePressed = true
-            invalidateCursorRects()
+            window?.invalidateCursorRects(for: self)
         }
     }
 
@@ -278,7 +278,7 @@ final class CanvasNSView: NSView {
             interaction.finishViewportGesture()
             panLastPoint = nil
         }
-        invalidateCursorRects()
+        window?.invalidateCursorRects(for: self)
     }
 
     override func resignFirstResponder() -> Bool {
@@ -292,7 +292,7 @@ final class CanvasNSView: NSView {
         }
         panLastPoint = nil
         spacePressed = false
-        invalidateCursorRects()
+        window?.invalidateCursorRects(for: self)
     }
 
     private func beginPan(at point: CGPoint) {
