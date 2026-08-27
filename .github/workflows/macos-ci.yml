@@ -15,6 +15,9 @@ concurrency:
   group: attic-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LUNA_REPAIRED_COMMIT: 8063d92c995015b77a0493723270b6c183adb784
+
 jobs:
   macos:
     name: Build, test, and analyze Attic for macOS
@@ -24,6 +27,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify branch ancestry and initial cleanliness
+        run: |
+          git merge-base --is-ancestor "$LUNA_REPAIRED_COMMIT" HEAD
+          test -z "$(git status --porcelain)"
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "Luna base=$(git merge-base "$LUNA_REPAIRED_COMMIT" HEAD)"
 
       - name: Set up Ruby dependencies
         uses: ruby/setup-ruby@v1
@@ -31,19 +43,20 @@ jobs:
           ruby-version: "3.3"
           bundler-cache: true
 
-      - name: Generate project artifact
+      - name: Regenerate checked-in Xcode project
+        run: bundle exec ruby Scripts/generate_project.rb
+
+      - name: Archive generated project evidence
         run: |
-          bundle exec ruby Scripts/generate_project.rb \
-            --output "$RUNNER_TEMP/GeneratedAttic.xcodeproj"
           ditto -c -k --sequesterRsrc --keepParent \
-            "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
-            "$RUNNER_TEMP/GeneratedAttic.xcodeproj.zip"
+            Attic.xcodeproj \
+            "$RUNNER_TEMP/Attic.xcodeproj.zip"
 
       - name: Upload generated project
         uses: actions/upload-artifact@v4
         with:
           name: generated-xcode-project-${{ github.sha }}
-          path: ${{ runner.temp }}/GeneratedAttic.xcodeproj.zip
+          path: ${{ runner.temp }}/Attic.xcodeproj.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -53,18 +66,24 @@ jobs:
         run: bundle exec ruby Scripts/verify_project_generation.rb
 
       - name: Build macOS target
+        id: mac_build
+        continue-on-error: true
         run: |
           xcodebuild \
-            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
-            -target Attic \
+            -project Attic.xcodeproj \
+            -scheme Attic \
             -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticBuild" \
             CODE_SIGNING_ALLOWED=NO \
             clean build
 
       - name: Build with strict concurrency checking
+        id: strict_build
+        continue-on-error: true
         run: |
           xcodebuild \
-            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
+            -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
@@ -74,9 +93,12 @@ jobs:
             clean build
 
       - name: Run macOS unit tests
+        id: unit_tests
+        continue-on-error: true
         run: |
+          rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
           xcodebuild \
-            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
+            -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
@@ -86,10 +108,25 @@ jobs:
             -only-testing:AtticTests \
             test
 
-      - name: Run macOS UI tests
+      - name: Print macOS unit-test summary
+        if: always()
         run: |
+          if [ -d "$RUNNER_TEMP/AtticUnitTests.xcresult" ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/AtticUnitTests.xcresult" \
+              --format json
+          fi
+
+      - name: Run macOS UI tests
+        id: ui_tests
+        continue-on-error: true
+        run: |
+          rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
+          rm -rf "$RUNNER_TEMP/attic-visual-uat"
+          mkdir -p "$RUNNER_TEMP/attic-visual-uat"
+          ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
           xcodebuild \
-            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
+            -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
@@ -99,17 +136,17 @@ jobs:
             -only-testing:AtticUITests \
             test
 
-      - name: Print macOS UI test summary
+      - name: Print macOS UI-test summary
         if: always()
         run: |
           if [ -d "$RUNNER_TEMP/AtticUITests.xcresult" ]; then
             xcrun xcresulttool get test-results summary \
               --path "$RUNNER_TEMP/AtticUITests.xcresult" \
-              --format json || true
+              --format json
           fi
 
-      - name: Upload failing macOS UI test results
-        if: failure()
+      - name: Upload macOS UI-test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-ui-test-results-${{ github.sha }}
@@ -117,11 +154,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Run macOS static analyzer
+      - name: Upload visual UAT screenshots
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-visual-uat-${{ github.sha }}
+          path: ${{ runner.temp }}/attic-visual-uat
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Run macOS static analyzer
+        id: analyzer
+        continue-on-error: true
         run: |
           xcodebuild \
-            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
+            -project Attic.xcodeproj \
             -scheme Attic \
             -configuration Local \
             -destination 'platform=macOS' \
@@ -129,11 +176,40 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             analyze
 
-      - name: Require checked-in generated project
-        if: always() && steps.project_verify.outcome == 'failure'
+      - name: Verify final project and worktree state
+        id: final_state
+        continue-on-error: true
         run: |
-          echo 'Attic.xcodeproj is not current with Scripts/generate_project.rb'
-          exit 1
+          bundle exec ruby Scripts/verify_project_generation.rb
+          git diff --exit-code -- Attic.xcodeproj
+          test -z "$(git status --porcelain)"
+
+      - name: Require every macOS verification
+        if: always()
+        env:
+          PROJECT_VERIFY: ${{ steps.project_verify.outcome }}
+          MAC_BUILD: ${{ steps.mac_build.outcome }}
+          STRICT_BUILD: ${{ steps.strict_build.outcome }}
+          UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          UI_TESTS: ${{ steps.ui_tests.outcome }}
+          ANALYZER: ${{ steps.analyzer.outcome }}
+          FINAL_STATE: ${{ steps.final_state.outcome }}
+        run: |
+          printf '%-24s %s\n' \
+            project-generation "$PROJECT_VERIFY" \
+            mac-build "$MAC_BUILD" \
+            strict-concurrency "$STRICT_BUILD" \
+            unit-tests "$UNIT_TESTS" \
+            ui-tests "$UI_TESTS" \
+            analyzer "$ANALYZER" \
+            final-worktree "$FINAL_STATE"
+          test "$PROJECT_VERIFY" = success
+          test "$MAC_BUILD" = success
+          test "$STRICT_BUILD" = success
+          test "$UNIT_TESTS" = success
+          test "$UI_TESTS" = success
+          test "$ANALYZER" = success
+          test "$FINAL_STATE" = success
 
   iphone:
     name: Build Attic for iPhone Simulator
@@ -143,6 +219,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify branch ancestry and initial cleanliness
+        run: |
+          git merge-base --is-ancestor "$LUNA_REPAIRED_COMMIT" HEAD
+          test -z "$(git status --porcelain)"
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "Luna base=$(git merge-base "$LUNA_REPAIRED_COMMIT" HEAD)"
 
       - name: Set up Ruby dependencies
         uses: ruby/setup-ruby@v1
@@ -150,10 +235,8 @@ jobs:
           ruby-version: "3.3"
           bundler-cache: true
 
-      - name: Generate iPhone project
-        run: |
-          bundle exec ruby Scripts/generate_project.rb \
-            --output "$RUNNER_TEMP/GeneratedAttic.xcodeproj"
+      - name: Regenerate checked-in Xcode project
+        run: bundle exec ruby Scripts/generate_project.rb
 
       - name: Verify generated Xcode project
         id: project_verify
@@ -182,9 +265,11 @@ jobs:
           raise SystemExit("No available iPhone simulator was found")
 
       - name: Build iPhone app and tests
+        id: iphone_build
+        continue-on-error: true
         run: |
           xcodebuild \
-            -project "$RUNNER_TEMP/GeneratedAttic.xcodeproj" \
+            -project Attic.xcodeproj \
             -scheme AtticMobile \
             -configuration Local \
             -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_UDID" \
@@ -193,8 +278,25 @@ jobs:
             SWIFT_STRICT_CONCURRENCY=complete \
             clean build-for-testing
 
-      - name: Require checked-in generated project
-        if: always() && steps.project_verify.outcome == 'failure'
+      - name: Verify final project and worktree state
+        id: final_state
+        continue-on-error: true
         run: |
-          echo 'Attic.xcodeproj is not current with Scripts/generate_project.rb'
-          exit 1
+          bundle exec ruby Scripts/verify_project_generation.rb
+          git diff --exit-code -- Attic.xcodeproj
+          test -z "$(git status --porcelain)"
+
+      - name: Require every iPhone verification
+        if: always()
+        env:
+          PROJECT_VERIFY: ${{ steps.project_verify.outcome }}
+          IPHONE_BUILD: ${{ steps.iphone_build.outcome }}
+          FINAL_STATE: ${{ steps.final_state.outcome }}
+        run: |
+          printf '%-24s %s\n' \
+            project-generation "$PROJECT_VERIFY" \
+            iphone-build-for-testing "$IPHONE_BUILD" \
+            final-worktree "$FINAL_STATE"
+          test "$PROJECT_VERIFY" = success
+          test "$IPHONE_BUILD" = success
+          test "$FINAL_STATE" = success
