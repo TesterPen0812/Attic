@@ -12,6 +12,8 @@ enum AgentSetupPrompt {
         - URL: \(endpoint)
         - Authorization: Bearer \(bearerToken)
 
+        Attic exposes tools for tasks and UTF-8 plain-text notes. Discover the available tools after connecting. For notes, use list_notes then get_note; pass the latest returned revision to update_note, append_note, or delete_note so a stale agent edit conflicts instead of overwriting newer content. update_note replaces only supplied fields, while append_note adds content exactly and inserts no separator automatically.
+
         Complete the setup now using this client's native MCP configuration:
         - Detect whether you are running in Codex, Synara, or Claude and use its user-level configuration.
         - In Codex, configure `mcp_servers.attic` with the URL and `bearer_token_env_var = "ATTIC_MCP_TOKEN"`, then securely set that environment variable for GUI launches. Tell me if Codex must be restarted or a new task opened.
@@ -19,7 +21,7 @@ enum AgentSetupPrompt {
         - If `attic` already exists, repair that entry instead of creating a duplicate.
         - Do not alter or remove any other MCP servers.
 
-        Treat the bearer token as a secret: do not echo it in your reply or expose it in logs. After setup, verify the connection by listing Attic's MCP tools. Report only whether setup succeeded and any restart still required.
+        Treat the bearer token as a secret: do not echo it in your reply or expose it in logs. After setup, verify the connection by listing Attic's MCP tools and confirm that both task and note tools are discoverable. Do not read or modify user data just to test setup. Report only whether setup succeeded and any restart still required.
         """
     }
 }
@@ -183,7 +185,7 @@ struct SettingsView: View {
                 }
                 .toggleStyle(.switch)
 
-                Text("Allow local AI agents to read, create, update and permanently delete tasks over MCP.")
+                Text("Allow authorized local AI agents to read, create, update and permanently delete tasks and plain-text notes over MCP.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

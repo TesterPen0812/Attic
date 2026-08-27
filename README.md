@@ -1,8 +1,8 @@
 # Attic
 
-A tiny native task list for Mac and iPhone that stays out of the way until you need it.
+A tiny native task and notes app for Mac and iPhone that stays out of the way until you need it.
 
-On Mac, Attic lives in the menu bar and reveals a lightweight panel when the pointer rests in a chosen screen corner. Its iPhone companion uses the same SwiftData model and synchronizes tasks through the user's private CloudKit database.
+On Mac, Attic lives in the menu bar and reveals a lightweight panel when the pointer rests in a chosen screen corner. Its iPhone companion uses the same SwiftData model and synchronizes tasks and notes through the user's private CloudKit database.
 
 ## Demo
 
@@ -23,7 +23,7 @@ On Mac, Attic lives in the menu bar and reveals a lightweight panel when the poi
 - Launch at login support
 - Native menu bar app with no Dock icon
 - Event-driven UI and low-overhead pointer sampling
-- Built-in MCP server so local AI agents can read and update tasks
+- Built-in MCP server so authorized local AI agents can operate on tasks and notes
 
 ## Requirements
 
@@ -49,7 +49,7 @@ Both app targets use the explicit CloudKit container `iCloud.com.emanueledipietr
 1. In Xcode, confirm that both targets use the same Apple development team and have iCloud/CloudKit plus remote-notification capabilities.
 2. Create or select `iCloud.com.emanueledipietro.Attic` for both targets. If you change the container identifier, also update `PersistenceController.cloudKitContainerIdentifier` and both entitlement files.
 3. Sign in to the same iCloud account on the Mac and iPhone. Each app keeps a local SwiftData replica, so edits remain available offline and synchronize when CloudKit becomes available.
-4. After the first Development sync, inspect the generated `CD_TaskItem` type in CloudKit Console. Deploy the schema to Production before TestFlight, App Store or production distribution.
+4. After the first Development sync, inspect the generated `CD_TaskItem` and `CD_NoteItem` types in CloudKit Console. Deploy the schema to Production before TestFlight, App Store or production distribution.
 
 The Mac app makes a one-time `default.store.pre-cloudkit*` backup before first attaching the existing local store to CloudKit. Completed tasks keep the existing cleanup behavior: tasks completed before the current day are deleted, and that deletion synchronizes to every device.
 
@@ -90,11 +90,13 @@ Usage Information** in App Store Connect:
 
 ## Agent access (MCP)
 
-When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and every request must include the random bearer token shown under Settings → Agent access. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.emanueledipietro.Attic agentServerPort <port>`.
+When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and every request must include the random bearer token shown under Settings → Agent access. Authorized clients such as Claude Code, Synara, Codex or Cursor can operate on tasks and notes, and every saved change uses the same SwiftData and CloudKit path as the UI. Change the port with `defaults write com.emanueledipietro.Attic agentServerPort <port>`.
 
 Settings also provides **Copy setup prompt**, which creates a client-aware prompt containing the local endpoint and private bearer token. Paste it into Codex, Synara, or Claude to have that client configure or repair only its `attic` MCP entry and verify the connection.
 
-Tools: `list_tasks`, `create_task`, `update_task` (set `status` to `done` to complete), `delete_task`. Statuses are `todo`, `inProgress`, `done`, `backlog`; priorities are `none`, `low`, `medium`, `high`.
+Task tools remain `list_tasks`, `create_task`, `update_task` (set `status` to `done` to complete), and `delete_task`. Statuses are `todo`, `inProgress`, `done`, `backlog`; priorities are `none`, `low`, `medium`, `high`.
+
+Note tools are `list_notes`, `get_note`, `create_note`, `update_note`, `append_note`, and `delete_note`. Notes are UTF-8 plain text: Markdown syntax is stored literally and attributed text or attachments are not exposed. `list_notes` returns at most 100 bounded summaries per page; use its `nextCursor` to continue and `get_note` for the full body. Titles are limited to 512 UTF-8 bytes and bodies to 262,144 UTF-8 bytes. A pre-existing UI note beyond those limits remains stored, appears only as a bounded summary, and returns `content_too_large` instead of an oversized full response. `update_note` replaces only fields supplied by the caller, while `append_note` appends its `content` exactly without inserting a separator. Update, append, and delete require the latest opaque `revision` returned by a read or mutation; stale revisions return a conflict and write nothing. Note deletion removes every physical SwiftData/CloudKit replica sharing the app-level UUID.
 
 Claude Code / Synara (available in every project via `--scope user`):
 
