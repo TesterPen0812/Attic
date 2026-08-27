@@ -44,6 +44,40 @@ final class OpticalPerformanceMetricsTests: XCTestCase {
         XCTAssertEqual(snapshot.p95FrameTimeMilliseconds, 100, accuracy: 0.001)
     }
 
+    func testDroppedFrameRateUsesOnlyTheSustainedRecentWindow() {
+        let metrics = OpticalPerformanceMetrics(windowCapacity: 4)
+        for _ in 0..<4 {
+            metrics.recordDroppedFrame()
+        }
+        for _ in 0..<4 {
+            metrics.recordCapturedFrame(latencyMilliseconds: 10)
+        }
+
+        let snapshot = metrics.snapshot()
+
+        XCTAssertEqual(snapshot.droppedFrameCount, 4)
+        XCTAssertEqual(snapshot.capturedFrameCount, 4)
+        XCTAssertEqual(snapshot.droppedFrameRate, 0, accuracy: 0.000_001)
+    }
+
+    func testResetClearsMeasurementsAndReleasedMemoryEstimate() {
+        let metrics = OpticalPerformanceMetrics(windowCapacity: 4)
+        metrics.recordCapturedFrame(latencyMilliseconds: 20)
+        metrics.recordRenderedFrame(durationMilliseconds: 8)
+        metrics.recordDroppedFrame()
+        metrics.updateMemoryEstimate(
+            pixelWidth: 400,
+            pixelHeight: 500,
+            bytesPerPixel: 4,
+            queueDepth: 5,
+            rendererTextureCount: 2
+        )
+
+        metrics.reset()
+
+        XCTAssertEqual(metrics.snapshot(), .empty)
+    }
+
     func testSnapshotContainsOnlyAggregateNumericFields() {
         let snapshot = OpticalPerformanceSnapshot.empty
         let labels = Set(Mirror(reflecting: snapshot).children.compactMap(\.label))

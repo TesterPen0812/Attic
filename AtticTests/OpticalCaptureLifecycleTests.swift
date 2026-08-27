@@ -63,6 +63,28 @@ final class OpticalCaptureLifecycleTests: XCTestCase {
         )
     }
 
+    func testAsyncOperationGateInvalidatesAnOlderStart() {
+        var gate = OpticalCaptureOperationGate()
+        let first = gate.begin()
+        XCTAssertTrue(gate.accepts(first))
+
+        let second = gate.begin()
+
+        XCTAssertFalse(gate.accepts(first))
+        XCTAssertTrue(gate.accepts(second))
+        XCTAssertGreaterThan(second, first)
+    }
+
+    func testAsyncOperationGateInvalidatesActiveWorkOnStop() {
+        var gate = OpticalCaptureOperationGate()
+        let operation = gate.begin()
+
+        gate.stop()
+
+        XCTAssertFalse(gate.accepts(operation))
+        XCTAssertNil(gate.activeOperation)
+    }
+
     func testRendererLifecycleClearsFrameAndResourcesWhenReleased() {
         var lifecycle = OpticalRendererLifecycle()
         lifecycle.prepare()

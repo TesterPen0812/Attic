@@ -91,6 +91,19 @@ final class OpticalMetalRendererTests: XCTestCase {
         XCTAssertNotNil(OpticalMetalRenderer(metrics: OpticalPerformanceMetrics()))
     }
 
+    @MainActor
+    func testRendererRemainsPausedAndDrawsOnlyWhenAFrameArrives() throws {
+        guard OpticalMetalRenderer.isSupported else {
+            throw XCTSkip("No Metal device is available on this test host.")
+        }
+        guard let renderer = OpticalMetalRenderer(metrics: OpticalPerformanceMetrics()) else {
+            return XCTFail("Expected a Metal renderer")
+        }
+
+        XCTAssertTrue(renderer.view.enableSetNeedsDisplay)
+        XCTAssertTrue(renderer.view.isPaused)
+    }
+
     func testFocusDoesNotAppearInMetalRenderStateOrUniforms() {
         let stateLabels = Set(
             Mirror(reflecting: emptyState()).children.compactMap(\.label)
