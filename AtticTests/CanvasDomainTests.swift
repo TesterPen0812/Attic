@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import SwiftData
 import XCTest
 @testable import Attic
 
@@ -62,6 +63,22 @@ final class CanvasDomainTests: XCTestCase {
         )
     }
 
+    func testCodecRejectsPointCountsAboveTheInteractiveBufferLimit() {
+        let points = (0...CanvasInputStateMachine.maximumBufferedPointCount).map {
+            CanvasPoint(x: Double($0), y: 0)
+        }
+
+        XCTAssertThrowsError(
+            try CanvasStrokeCodec.encode(
+                color: .ink,
+                width: 3,
+                points: points
+            )
+        ) { error in
+            XCTAssertEqual(error as? CanvasStrokeCodecError, .tooManyPoints)
+        }
+    }
+
     func testViewportWorldViewRoundTripSurvivesResize() {
         let viewport = CanvasViewport(
             center: CanvasPoint(x: 120, y: -40),
@@ -121,6 +138,23 @@ final class CanvasDomainTests: XCTestCase {
 
         assertEqual(viewport.center, .zero)
         XCTAssertEqual(viewport.scale, 2.6, accuracy: 0.000_001)
+    }
+
+    func testWorldRectTracksZoomAndPanForRenderCulling() {
+        let viewport = CanvasViewport(
+            center: CanvasPoint(x: 100, y: -50),
+            scale: 2
+        )
+
+        let worldRect = viewport.worldRect(
+            for: CGRect(x: 0, y: 0, width: 300, height: 200),
+            in: CGSize(width: 300, height: 200)
+        )
+
+        XCTAssertEqual(worldRect.minX, 25, accuracy: 0.000_001)
+        XCTAssertEqual(worldRect.maxX, 175, accuracy: 0.000_001)
+        XCTAssertEqual(worldRect.minY, -100, accuracy: 0.000_001)
+        XCTAssertEqual(worldRect.maxY, 0, accuracy: 0.000_001)
     }
 
     func testHitTestingErasesWholeIntersectedStrokeOnly() {
@@ -197,6 +231,110 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertEqual(machine.finishInk(), .stroke(points))
         XCTAssertNil(machine.finishInk())
         XCTAssertEqual(machine.state, .idle)
+    }
+
+    func testLongGestureCompactsWithoutLosingItsEndpoints() throws {
+        var machine = CanvasInputStateMachine()
+        let first = CanvasPoint(x: 0, y: 0)
+        XCTAssertTrue(machine.beginInk(tool: .pen, at: first))
+
+        let finalIndex = CanvasInputStateMachine.maximumBufferedPointCount * 3
+        for index in 1...finalIndex {
+            machine.append(CanvasPoint(x: Double(index), y: Double(index % 13)))
+        }
+
+        guard case let .stroke(points) = try XCTUnwrap(machine.finishInk()) else {
+            return XCTFail("Expected a completed stroke")
+        }
+        XCTAssertLessThanOrEqual(
+            points.count,
+            CanvasInputStateMachine.maximumBufferedPointCount
+        )
+        XCTAssertEqual(points.first, first)
+        XCTAssertEqual(
+            points.last,
+            CanvasPoint(x: Double(finalIndex), y: Double(finalIndex % 13))
+        )
+    }
+
+    @MainActor
+    func testUnchangedRefreshReusesDecodedStrokeAndRenderToken() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        var decodeCount = 0
+        let store = CanvasStore(
+            container: container,
+            decodeStroke: { data, version in
+                decodeCount += 1
+                return try CanvasStrokeCodec.decode(
+                    data,
+                    expectedVersion: version
+                )
+            }
+        )
+
+        let first = try XCTUnwrap(store.addStroke(
+            color: .blue,
+            width: 4,
+            points: [CanvasPoint(x: 1, y: 2)]
+        ))
+        XCTAssertEqual(decodeCount, 1)
+
+        store.refresh()
+        XCTAssertEqual(decodeCount, 1)
+        XCTAssertEqual(store.strokes.first?.renderToken, first.renderToken)
+
+        XCTAssertNotNil(store.addStroke(
+            color: .red,
+            width: 3,
+            points: [CanvasPoint(x: 10, y: 20)]
+        ))
+        XCTAssertEqual(decodeCount, 2)
+        XCTAssertEqual(
+            store.strokes.first(where: { $0.id == first.id })?.renderToken,
+            first.renderToken
+        )
+    }
+
+    @MainActor
+    func testChangedReplicaInvalidatesOnlyItsRenderToken() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        var decodeCount = 0
+        let store = CanvasStore(
+            container: container,
+            decodeStroke: { data, version in
+                decodeCount += 1
+                return try CanvasStrokeCodec.decode(
+                    data,
+                    expectedVersion: version
+                )
+            }
+        )
+        let original = try XCTUnwrap(store.addStroke(
+            color: .ink,
+            width: 3,
+            points: [CanvasPoint(x: 0, y: 0)]
+        ))
+        XCTAssertEqual(decodeCount, 1)
+
+        let externalContext = ModelContext(container)
+        let row = try XCTUnwrap(
+            externalContext.fetch(FetchDescriptor<CanvasStrokeItem>()).first
+        )
+        row.payload = try CanvasStrokeCodec.encode(
+            color: .green,
+            width: 5,
+            points: [CanvasPoint(x: 8, y: 9)]
+        )
+        row.mutationVersion += 1
+        row.updatedAt = row.updatedAt.addingTimeInterval(1)
+        try externalContext.save()
+
+        store.refresh()
+
+        XCTAssertEqual(decodeCount, 2)
+        let changed = try XCTUnwrap(store.strokes.first)
+        XCTAssertNotEqual(changed.renderToken, original.renderToken)
+        XCTAssertEqual(changed.color, .green)
     }
 
     private func assertEqual(
