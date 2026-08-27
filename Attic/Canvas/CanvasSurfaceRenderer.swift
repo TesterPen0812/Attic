@@ -8,6 +8,18 @@ final class CanvasPathCache {
     }
 
     private var entries: [UUID: Entry] = [:]
+    private var preparedKeys: [CanvasStrokeRenderKey] = []
+
+    var cachedPathCount: Int { entries.count }
+
+    func prepare(for strokes: [CanvasStroke]) {
+        let keys = strokes.map(\.renderKey)
+        guard keys != preparedKeys else { return }
+
+        preparedKeys = keys
+        let visibleIDs = Set(keys.map(\.id))
+        entries = entries.filter { visibleIDs.contains($0.key) }
+    }
 
     func path(for stroke: CanvasStroke) -> CGPath {
         if let entry = entries[stroke.id],
@@ -23,11 +35,6 @@ final class CanvasPathCache {
         return path
     }
 
-    func prune(to strokes: [CanvasStroke]) {
-        let visibleIDs = Set(strokes.map(\.id))
-        entries = entries.filter { visibleIDs.contains($0.key) }
-    }
-
     private static func makePath(
         points: [CanvasPoint]
     ) -> CGPath {
@@ -35,28 +42,15 @@ final class CanvasPathCache {
         guard let first = points.first else { return path }
 
         path.move(to: first.cgPoint)
-        guard points.count > 1 else {
+        // Stored and in-progress paths use the same polyline geometry so a
+        // completed stroke never visibly changes shape after persistence.
+        if points.count == 1 {
             path.addLine(to: first.cgPoint)
-            return path
+        } else {
+            for point in points.dropFirst() {
+                path.addLine(to: point.cgPoint)
+            }
         }
-        guard points.count > 2 else {
-            path.addLine(to: points[1].cgPoint)
-            return path
-        }
-
-        for index in 1..<(points.count - 1) {
-            let control = points[index]
-            let next = points[index + 1]
-            let midpoint = CGPoint(
-                x: CGFloat((control.x + next.x) / 2),
-                y: CGFloat((control.y + next.y) / 2)
-            )
-            path.addQuadCurve(
-                to: midpoint,
-                control: control.cgPoint
-            )
-        }
-        path.addLine(to: points[points.count - 1].cgPoint)
         return path
     }
 }
@@ -75,7 +69,15 @@ func drawCanvas(
     context.fill(bounds)
     context.clip(to: bounds)
 
-    pathCache.prune(to: interaction.strokes)
+    let worldViewport = interaction.viewport.worldRect(
+        for: bounds,
+        in: bounds.size
+    )
+    let cullingMargin = CGFloat(64 / interaction.viewport.scale)
+    let cullingRect = worldViewport.insetBy(
+        dx: -cullingMargin,
+        dy: -cullingMargin
+    )
 
     context.saveGState()
     context.translateBy(x: bounds.midX, y: bounds.midY)
@@ -91,6 +93,9 @@ func drawCanvas(
     context.setLineJoin(.round)
 
     for stroke in interaction.strokes {
+        guard stroke.bounds?.intersects(cullingRect) != false else {
+            continue
+        }
         context.addPath(pathCache.path(for: stroke))
         context.setStrokeColor(strokeColor(stroke.color))
         context.setLineWidth(CGFloat(stroke.width))
