@@ -16,34 +16,121 @@ enum AtticStyle {
 }
 
 struct AtticPanelSurface: ViewModifier {
-    let translucent: Bool
+    let preferences: PanelGlassPreferences
     let cornerRadius: CGFloat
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    private var panelShape: Squircle {
+        Squircle(
+            cornerRadius: cornerRadius,
+            exponent: AtticStyle.panelSquircleExponent
+        )
+    }
+
+    private var supportsNativeGlass: Bool {
+        if #available(macOS 26.0, *) {
+            return true
+        }
+        return false
+    }
+
+    @ViewBuilder
     func body(content: Content) -> some View {
+        let profile = PanelGlassProfile.resolve(
+            PanelGlassResolutionInputs(
+                preferences: preferences,
+                supportsNativeGlass: supportsNativeGlass,
+                reduceTransparency: reduceTransparency
+            )
+        )
+
+        switch profile.surface {
+        case let .native(material):
+            if #available(macOS 26.0, *) {
+                content
+                    .clipShape(panelShape)
+                    .glassEffect(
+                        nativeGlass(
+                            material: material,
+                            tint: profile.tint,
+                            response: profile.response
+                        ),
+                        in: panelShape
+                    )
+            } else {
+                legacyMaterialSurface(content)
+            }
+        case .legacyMaterial:
+            legacyMaterialSurface(content)
+        case .opaque:
+            opaqueSurface(content)
+        }
+    }
+
+    private func legacyMaterialSurface(_ content: Content) -> some View {
         content
             .background {
-                ZStack {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .opacity(translucent ? 1 : 0)
-                    Rectangle()
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                        .opacity(translucent ? 0 : 1)
-                }
-                .animation(reduceMotion ? nil : AtticMotion.background, value: translucent)
+                Rectangle().fill(.ultraThinMaterial)
             }
-            .clipShape(Squircle(cornerRadius: cornerRadius, exponent: AtticStyle.panelSquircleExponent))
-            .overlay {
-                Squircle(cornerRadius: cornerRadius, exponent: AtticStyle.panelSquircleExponent)
-                    .stroke(Color.primary.opacity(0.055), lineWidth: 0.7)
+            .clipShape(panelShape)
+    }
+
+    private func opaqueSurface(_ content: Content) -> some View {
+        content
+            .background {
+                Rectangle().fill(Color(nsColor: .windowBackgroundColor))
             }
+            .clipShape(panelShape)
+    }
+
+    @available(macOS 26.0, *)
+    private func nativeGlass(
+        material: PanelGlassMaterialPreference,
+        tint: PanelGlassTintPreference,
+        response: PanelGlassResponsePreference
+    ) -> Glass {
+        let base: Glass
+        switch material {
+        case .regular:
+            base = .regular
+        case .clear:
+            base = .clear
+        }
+
+        let tinted: Glass
+        switch tint {
+        case .none:
+            tinted = base
+        case .accent:
+            tinted = base.tint(Color.accentColor)
+        }
+
+        return tinted.interactive(response == .interactive)
     }
 }
 
 extension View {
-    func atticPanelSurface(translucent: Bool, cornerRadius: CGFloat = AtticStyle.panelCornerRadius) -> some View {
-        modifier(AtticPanelSurface(translucent: translucent, cornerRadius: cornerRadius))
+    func atticPanelSurface(
+        preferences: PanelGlassPreferences,
+        cornerRadius: CGFloat = AtticStyle.panelCornerRadius
+    ) -> some View {
+        modifier(AtticPanelSurface(preferences: preferences, cornerRadius: cornerRadius))
+    }
+
+    /// Temporary source compatibility while callers move from the former
+    /// translucency toggle to the discrete native glass profile.
+    func atticPanelSurface(
+        translucent _: Bool,
+        cornerRadius: CGFloat = AtticStyle.panelCornerRadius
+    ) -> some View {
+        modifier(AtticPanelSurface(
+            preferences: PanelGlassPreferences(
+                material: .regular,
+                tint: .none,
+                response: .interactive
+            ),
+            cornerRadius: cornerRadius
+        ))
     }
 }
