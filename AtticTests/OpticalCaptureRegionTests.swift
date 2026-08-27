@@ -114,11 +114,60 @@ final class OpticalCaptureRegionTests: XCTestCase {
         )
 
         XCTAssertEqual(first.maximumFramesPerSecond, 15)
-        XCTAssertEqual(first.queueDepth, 2)
+        XCTAssertEqual(first.queueDepth, 3)
+        XCTAssertEqual(first.screenCaptureQueueDepth, 3)
         XCTAssertEqual(first.outputPixelWidth, region.outputPixelWidth)
         XCTAssertEqual(first.outputPixelHeight, region.outputPixelHeight)
         XCTAssertEqual(first.configurationFingerprint, second.configurationFingerprint)
         XCTAssertNotEqual(first.generation, second.generation)
+    }
+
+    func testScreenCaptureQueueDepthIsClampedToPublicContract() {
+        let base = OpticalWorkloadProfile.workload(for: .low)
+        let region = ScreenCaptureRegionMapper.makeRegion(
+            panelFrame: CGRect(x: 100, y: 100, width: 332, height: 380),
+            displayFrame: CGRect(x: 0, y: 0, width: 1_440, height: 900),
+            backingScale: 2,
+            workload: base,
+            frostRadiusPixels: 0
+        )
+        let belowMinimum = OpticalWorkloadProfile(
+            captureScale: base.captureScale,
+            maximumFramesPerSecond: base.maximumFramesPerSecond,
+            queueDepth: 1,
+            blurSampleCount: base.blurSampleCount,
+            edgeEvaluationCount: base.edgeEvaluationCount,
+            maximumBandPixels: base.maximumBandPixels,
+            maximumDisplacementPixels: base.maximumDisplacementPixels
+        )
+        let aboveMaximum = OpticalWorkloadProfile(
+            captureScale: base.captureScale,
+            maximumFramesPerSecond: base.maximumFramesPerSecond,
+            queueDepth: 99,
+            blurSampleCount: base.blurSampleCount,
+            edgeEvaluationCount: base.edgeEvaluationCount,
+            maximumBandPixels: base.maximumBandPixels,
+            maximumDisplacementPixels: base.maximumDisplacementPixels
+        )
+
+        XCTAssertEqual(
+            OpticalCaptureConfiguration(
+                displayID: 1,
+                region: region,
+                workload: belowMinimum,
+                generation: 1
+            ).screenCaptureQueueDepth,
+            3
+        )
+        XCTAssertEqual(
+            OpticalCaptureConfiguration(
+                displayID: 1,
+                region: region,
+                workload: aboveMaximum,
+                generation: 1
+            ).screenCaptureQueueDepth,
+            8
+        )
     }
 
     private func assertRect(

@@ -32,6 +32,19 @@ final class OpticalCaptureLifecycleTests: XCTestCase {
         XCTAssertTrue(lifecycle.acceptsFrame(generation: 2))
     }
 
+    func testStaleCaptureFailuresAreRejectedAfterRestartAndStop() {
+        var lifecycle = OpticalCaptureLifecycle()
+        _ = lifecycle.reconcile(shouldRun: true, configurationFingerprint: 1)
+        XCTAssertTrue(lifecycle.acceptsFailure(generation: 1))
+
+        _ = lifecycle.reconcile(shouldRun: true, configurationFingerprint: 2)
+        XCTAssertFalse(lifecycle.acceptsFailure(generation: 1))
+        XCTAssertTrue(lifecycle.acceptsFailure(generation: 2))
+
+        _ = lifecycle.reconcile(shouldRun: false, configurationFingerprint: 2)
+        XCTAssertFalse(lifecycle.acceptsFailure(generation: 2))
+    }
+
     func testHiddenOrOffStopsCaptureAndRequestsResourceRelease() {
         var lifecycle = OpticalCaptureLifecycle()
         _ = lifecycle.reconcile(shouldRun: true, configurationFingerprint: 9)

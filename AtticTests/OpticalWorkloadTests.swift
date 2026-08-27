@@ -19,7 +19,7 @@ final class OpticalWorkloadTests: XCTestCase {
 
         XCTAssertEqual(low.captureScale, 0.50)
         XCTAssertEqual(low.maximumFramesPerSecond, 15)
-        XCTAssertEqual(low.queueDepth, 2)
+        XCTAssertEqual(low.queueDepth, 3)
         XCTAssertEqual(low.blurSampleCount, 5)
         XCTAssertEqual(low.edgeEvaluationCount, 1)
         XCTAssertEqual(low.maximumBandPixels, 28)
@@ -28,7 +28,7 @@ final class OpticalWorkloadTests: XCTestCase {
 
         XCTAssertEqual(balanced.captureScale, 0.75)
         XCTAssertEqual(balanced.maximumFramesPerSecond, 30)
-        XCTAssertEqual(balanced.queueDepth, 3)
+        XCTAssertEqual(balanced.queueDepth, 4)
         XCTAssertEqual(balanced.blurSampleCount, 9)
         XCTAssertEqual(balanced.edgeEvaluationCount, 3)
         XCTAssertEqual(balanced.maximumBandPixels, 32)
@@ -44,10 +44,16 @@ final class OpticalWorkloadTests: XCTestCase {
         XCTAssertEqual(maximum.maximumDisplacementPixels, 24)
         XCTAssertTrue(maximum.allowsLiveOptics)
 
+        for enabled in [low, balanced, maximum] {
+            XCTAssertGreaterThanOrEqual(enabled.queueDepth, 3)
+            XCTAssertLessThanOrEqual(enabled.queueDepth, 8)
+        }
         XCTAssertLessThan(low.captureScale, balanced.captureScale)
         XCTAssertLessThan(balanced.captureScale, maximum.captureScale)
         XCTAssertLessThan(low.maximumFramesPerSecond, balanced.maximumFramesPerSecond)
         XCTAssertLessThan(balanced.maximumFramesPerSecond, maximum.maximumFramesPerSecond)
+        XCTAssertLessThan(low.queueDepth, balanced.queueDepth)
+        XCTAssertLessThan(balanced.queueDepth, maximum.queueDepth)
         XCTAssertLessThan(low.blurSampleCount, balanced.blurSampleCount)
         XCTAssertLessThan(balanced.blurSampleCount, maximum.blurSampleCount)
         XCTAssertLessThan(low.edgeEvaluationCount, balanced.edgeEvaluationCount)
