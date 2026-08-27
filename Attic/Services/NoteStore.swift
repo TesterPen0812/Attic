@@ -3,6 +3,12 @@ import CoreData
 import Foundation
 import SwiftData
 
+#if os(macOS)
+typealias NoteAttachmentFileStore = AttachmentFileStore
+#else
+typealias NoteAttachmentFileStore = Any
+#endif
+
 private struct NoteReplicaSnapshot: Equatable {
     let id: UUID
     let title: String
@@ -42,8 +48,15 @@ final class NoteStore: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
+#if os(macOS)
+    @Published private(set) var attachmentsByNoteID: [UUID: [NoteAttachment]] = [:]
+    @Published private(set) var attachmentImportState: AttachmentImportState = .idle
+#endif
 
     private let container: ModelContainer
+#if os(macOS)
+    private let attachmentFileStore: AttachmentFileStore
+#endif
     private var context: ModelContext
     private let now: () -> Date
     private let persist: (ModelContext) throws -> Void
@@ -62,9 +75,13 @@ final class NoteStore: ObservableObject {
     init(
         container: ModelContainer,
         now: @escaping () -> Date = Date.init,
-        persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+        persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        attachmentFileStore: NoteAttachmentFileStore? = nil
     ) {
         self.container = container
+#if os(macOS)
+        self.attachmentFileStore = attachmentFileStore ?? AttachmentFileStore()
+#endif
         context = ModelContext(container)
         self.now = now
         self.persist = persist
@@ -135,10 +152,155 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = error.localizedDescription
             return false
         }
+#if os(macOS)
+        let attachmentReplicas: [NoteAttachment]
+        do {
+            attachmentReplicas = try storedAttachments(forNoteID: note.id)
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+        let references = attachmentReplicas.map { AttachmentFileReference($0) }
+#endif
         replicas.forEach(context.delete)
+#if os(macOS)
+        attachmentReplicas.forEach(context.delete)
+#endif
         notes.removeAll { $0.id == note.id }
-        return save()
+#if os(macOS)
+        attachmentsByNoteID[note.id] = nil
+#endif
+        guard save() else { return false }
+#if os(macOS)
+        removeMaterializationsAfterSuccessfulSave(references)
+#endif
+        return true
     }
+
+#if os(macOS)
+    func attachments(for noteID: UUID) -> [NoteAttachment] {
+        attachmentsByNoteID[noteID] ?? []
+    }
+
+    /// Imports a batch into an existing note, or creates an attachment-only
+    /// note when noteID is nil. The filesystem transaction completes before
+    /// the single SwiftData save; every created byte is removed on failure.
+    @discardableResult
+    func importAttachments(
+        from urls: [URL],
+        noteID: UUID? = nil
+    ) async -> UUID? {
+        guard !urls.isEmpty else { return noteID }
+        attachmentImportState = .importing(completed: 0, total: urls.count)
+
+        do {
+            let targetNoteID: UUID
+            if let noteID {
+                let noteReplicas = try storedNotes(matching: noteID)
+                guard !noteReplicas.isEmpty else {
+                    throw AttachmentFileStoreError.inaccessible(
+                        URL(fileURLWithPath: noteID.uuidString),
+                        "The note is no longer available."
+                    )
+                }
+                targetNoteID = noteID
+            } else {
+                targetNoteID = UUID()
+            }
+
+            let existing = attachments(for: targetNoteID)
+            let baseSortIndex = existing.map(\.sortIndex).max().map { $0 + 1 } ?? 0
+            let existingBytes = existing.reduce(Int64.zero) { $0 + $1.byteCount }
+            let imported = try await attachmentFileStore.importFiles(
+                urls,
+                baseSortIndex: baseSortIndex,
+                existingCount: existing.count,
+                existingBytes: existingBytes
+            )
+            attachmentImportState = .importing(completed: urls.count, total: urls.count)
+
+            if noteID == nil {
+                let timestamp = now()
+                context.insert(NoteItem(
+                    id: targetNoteID,
+                    title: "",
+                    body: "",
+                    createdAt: timestamp,
+                    updatedAt: timestamp
+                ))
+            }
+
+            let references = imported.map { item in
+                NoteAttachment(
+                    id: item.id,
+                    noteID: targetNoteID,
+                    originalFilename: item.filename,
+                    contentTypeIdentifier: item.contentTypeIdentifier,
+                    byteCount: item.byteCount,
+                    sortIndex: item.sortIndex,
+                    contentDigest: item.digest,
+                    createdAt: item.createdAt,
+                    payload: item.payload
+                )
+            }
+            references.forEach(context.insert)
+            guard save() else {
+                try? await attachmentFileStore.removeMaterializations(
+                    imported.map {
+                        AttachmentFileReference(
+                            id: $0.id,
+                            digest: $0.digest,
+                            filename: $0.filename,
+                            payload: nil
+                        )
+                    }
+                )
+                attachmentImportState = .failed(lastErrorMessage ?? "Unable to save attachments.")
+                return nil
+            }
+
+            refresh()
+            attachmentImportState = .idle
+            return targetNoteID
+        } catch {
+            attachmentImportState = .failed(error.localizedDescription)
+            lastErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    @discardableResult
+    func removeAttachment(_ attachment: NoteAttachment) -> Bool {
+        let replicas: [NoteAttachment]
+        do {
+            replicas = try storedAttachments(matching: attachment.id)
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+        let references = replicas.map { AttachmentFileReference($0) }
+        replicas.forEach(context.delete)
+        attachmentsByNoteID[attachment.noteID]?.removeAll { $0.id == attachment.id }
+        guard save() else { return false }
+        removeMaterializationsAfterSuccessfulSave(references)
+        return true
+    }
+
+    func materializedURL(for attachment: NoteAttachment) async -> URL? {
+        do {
+            return try await attachmentFileStore.ensureMaterialized(
+                AttachmentFileReference(attachment)
+            )
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func setAttachmentError(_ message: String) {
+        lastErrorMessage = message
+    }
+#endif
 
     /// Newest first, with a deterministic tiebreak so a refreshed duplicate
     /// keeps its position instead of flickering between physical rows.
@@ -153,7 +315,7 @@ final class NoteStore: ObservableObject {
 
     func refresh() {
         do {
-            try reloadNotes()
+            try reloadModels()
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = error.localizedDescription
@@ -198,7 +360,7 @@ final class NoteStore: ObservableObject {
             let saveError = error.localizedDescription
             context.rollback()
             do {
-                try reloadNotes()
+                try reloadModels()
                 lastErrorMessage = saveError
             } catch {
                 lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
@@ -207,16 +369,25 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    private func reloadNotes() throws {
+    private func reloadModels() throws {
         // A long-lived ModelContext can return cached model instances after
         // CloudKit updates the underlying store. Refresh through a new context
         // so remote values replace the old objects instead of being written
         // back to CloudKit by the next local save.
         let refreshedContext = ModelContext(container)
-        let fetched = try refreshedContext.fetch(FetchDescriptor<NoteItem>())
+        let fetchedNotes = try refreshedContext.fetch(FetchDescriptor<NoteItem>())
+#if os(macOS)
+        let fetchedAttachments = try refreshedContext.fetch(FetchDescriptor<NoteAttachment>())
+#endif
         context = refreshedContext
-        notes = visibleUniqueNotes(from: fetched)
+        notes = visibleUniqueNotes(from: fetchedNotes)
+#if os(macOS)
+        attachmentsByNoteID = visibleUniqueAttachments(from: fetchedAttachments)
+#endif
         revision &+= 1
+#if os(macOS)
+        reconcileFileStorage(with: fetchedAttachments)
+#endif
     }
 
     /// CloudKit can't enforce a unique UUID attribute. If a malformed import
@@ -253,6 +424,70 @@ final class NoteStore: ObservableObject {
         }
         return replicas
     }
+
+#if os(macOS)
+    private func storedAttachments(matching id: UUID) throws -> [NoteAttachment] {
+        let stored = try context.fetch(FetchDescriptor<NoteAttachment>())
+        let replicas = stored.filter { $0.id == id }
+        guard !replicas.isEmpty else {
+            throw NoteReplicaMutationError.missingReplica(id)
+        }
+        return replicas
+    }
+
+    private func storedAttachments(forNoteID noteID: UUID) throws -> [NoteAttachment] {
+        let stored = try context.fetch(FetchDescriptor<NoteAttachment>())
+        return stored.filter { $0.noteID == noteID }
+    }
+
+    private func visibleUniqueAttachments(
+        from fetched: [NoteAttachment]
+    ) -> [UUID: [NoteAttachment]] {
+        var newestByID: [UUID: NoteAttachment] = [:]
+        for attachment in fetched {
+            guard let existing = newestByID[attachment.id] else {
+                newestByID[attachment.id] = attachment
+                continue
+            }
+            if attachment.updatedAt > existing.updatedAt
+                || (attachment.updatedAt == existing.updatedAt
+                    && String(reflecting: attachment.persistentModelID)
+                    > String(reflecting: existing.persistentModelID)) {
+                newestByID[attachment.id] = attachment
+            }
+        }
+
+        return Dictionary(grouping: newestByID.values) { $0.noteID }
+            .mapValues { attachments in
+                attachments.sorted {
+                    if $0.sortIndex != $1.sortIndex { return $0.sortIndex < $1.sortIndex }
+                    if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                    return $0.id.uuidString < $1.id.uuidString
+                }
+            }
+    }
+
+    private func reconcileFileStorage(with attachments: [NoteAttachment]) {
+        let references = attachments.map { AttachmentFileReference($0) }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await attachmentFileStore.reconcile(references)
+            } catch {
+                NSLog("Attic attachment reconciliation failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    private func removeMaterializationsAfterSuccessfulSave(
+        _ references: [AttachmentFileReference]
+    ) {
+        guard !references.isEmpty else { return }
+        Task { [attachmentFileStore] in
+            try? await attachmentFileStore.removeMaterializations(references)
+        }
+    }
+#endif
 
     private func observeRemoteChanges() {
         remoteChangeObservation = NotificationCenter.default.publisher(

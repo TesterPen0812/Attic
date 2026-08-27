@@ -14,10 +14,16 @@ func makeTestStore(
 @MainActor
 func makeTestNoteStore(
     now: @escaping () -> Date = Date.init,
-    persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+    attachmentFileStore: AttachmentFileStore = AttachmentFileStore()
 ) throws -> NoteStore {
     let container = try PersistenceController.makeContainer(inMemory: true)
-    return NoteStore(container: container, now: now, persist: persist)
+    return NoteStore(
+        container: container,
+        now: now,
+        persist: persist,
+        attachmentFileStore: attachmentFileStore
+    )
 }
 
 final class MutableNow {

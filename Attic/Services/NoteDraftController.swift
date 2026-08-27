@@ -87,6 +87,20 @@ final class NoteDraftController: ObservableObject {
         return true
     }
 
+    /// Promotes a blank attachment-only draft to the note created by the
+    /// attachment transaction without changing the editor's identity or
+    /// stealing focus from the text fields.
+    func adoptAttachmentOnlyNote(_ noteID: UUID) {
+        guard activeNoteID == nil,
+              let note = noteStore.notes.first(where: { $0.id == noteID }) else { return }
+        applySnapshot(
+            noteID: note.id,
+            title: note.title,
+            body: note.body,
+            isActive: true
+        )
+    }
+
     /// Persists pending text without closing the editor. The current store
     /// snapshot is compared with the snapshot loaded into the editor before a
     /// write, preventing autosave from silently overwriting a CloudKit change.
