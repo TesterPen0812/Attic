@@ -32,17 +32,21 @@ struct AtticPanelView: View {
     var body: some View {
         ZStack {
             sectionWorkspace
-
+        }
+        .overlay(alignment: .top) {
             topChrome
-
+        }
+        .overlay(alignment: .bottom) {
             if uiState.selectedSection.isTaskBased {
                 taskEntryBar
             }
-
+        }
+        .overlay(alignment: .bottom) {
             if uiState.isComposerPresented, uiState.selectedSection.isTaskBased {
                 advancedTaskComposer
             }
-
+        }
+        .overlay(alignment: .bottom) {
             if let error = currentErrorMessage {
                 errorBanner(error)
             }
@@ -54,7 +58,15 @@ struct AtticPanelView: View {
             \.colorScheme,
             uiState.selectedSection.isTaskBased ? .dark : systemColorScheme
         )
-        .atticPanelSurface(translucent: settings.isTranslucent, cornerRadius: cornerRadius)
+        .environment(\.controlActiveState, .key)
+        .atticPanelSurface(
+            translucent: settings.isTranslucent,
+            glassStyle: settings.panelGlassStyle,
+            opaqueColor: uiState.selectedSection.isTaskBased
+                ? Color(red: 0.075, green: 0.075, blue: 0.082)
+                : Color(nsColor: .windowBackgroundColor),
+            cornerRadius: cornerRadius
+        )
         .contextMenu {
             Button("Settings…", systemImage: "gearshape") {
                 AppCoordinator.shared.openSettings()
@@ -86,7 +98,7 @@ struct AtticPanelView: View {
             modeDock
         }
         .padding(.horizontal, chromeInset)
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity)
     }
 
     private var pinButton: some View {
@@ -152,7 +164,6 @@ struct AtticPanelView: View {
         if uiState.selectedSection.isTaskBased {
             taskWorkspace
                 .padding(.top, 78)
-                .padding(.bottom, 70)
                 .transition(.opacity)
         } else if uiState.selectedSection.isCanvas {
             CanvasPanelContent(
@@ -188,12 +199,26 @@ struct AtticPanelView: View {
                         }
                     }
                     .padding(.horizontal, horizontalInset + 2)
-                    .padding(.top, 8)
-                    .padding(.bottom, 18)
+                    .padding(.top, 22)
+                    .padding(.bottom, 96)
                 }
                 .scrollIndicators(.never)
             }
         }
+        .mask(taskScrollMask)
+    }
+
+    private var taskScrollMask: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .black, location: 0.055),
+                .init(color: .black, location: 0.80),
+                .init(color: .clear, location: 1)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 
     private var legacyNotesWorkspace: some View {
@@ -273,7 +298,7 @@ struct AtticPanelView: View {
             .accessibilityLabel("Add task")
         }
         .padding(.horizontal, chromeInset)
-        .frame(maxHeight: .infinity, alignment: .bottom)
+        .frame(maxWidth: .infinity)
     }
 
     private var advancedTaskComposer: some View {
@@ -286,7 +311,6 @@ struct AtticPanelView: View {
             .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
             .padding(.horizontal, chromeInset)
             .padding(.bottom, 62)
-            .frame(maxHeight: .infinity, alignment: .bottom)
             .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
@@ -314,7 +338,6 @@ struct AtticPanelView: View {
             .atticGlassControl(in: Capsule(), interactive: false)
             .padding(.horizontal, chromeInset)
             .padding(.bottom, uiState.selectedSection.isTaskBased ? 118 : 20)
-            .frame(maxHeight: .infinity, alignment: .bottom)
             .accessibilityIdentifier("panel-error-message")
     }
 

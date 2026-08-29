@@ -133,7 +133,8 @@ final class CornerHoverMonitor {
                 .insetBy(dx: -1, dy: -1)
                 .contains(location)
         } ?? false
-        let isInPanel = panelController.visibleFrame?.contains(location) ?? false
+        panelController.updateMousePassthrough(at: location)
+        let isInPanel = panelController.containsScreenPoint(location)
         let isMouseButtonPressed = NSEvent.pressedMouseButtons != 0
         if isMouseButtonPressed {
             dragReleaseTask?.cancel()
@@ -145,8 +146,7 @@ final class CornerHoverMonitor {
             dragReleaseTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(150))
                 guard let self, !Task.isCancelled else { return }
-                let releasedInPanel = panelController.visibleFrame?
-                    .contains(NSEvent.mouseLocation) ?? false
+                let releasedInPanel = panelController.containsScreenPoint(NSEvent.mouseLocation)
                 if let draggedTaskID = uiState.finishDragging(
                     releasedOutsidePanel: !releasedInPanel
                 ) {

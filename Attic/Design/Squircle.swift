@@ -66,6 +66,34 @@ struct Squircle: Shape {
 }
 
 extension Squircle {
+    /// Analytic containment used by AppKit hit testing. `Path.contains` can
+    /// include exact boundary pixels outside a closed superellipse, which is
+    /// undesirable for a transparent, click-through window.
+    static func contains(
+        _ point: CGPoint,
+        in rect: CGRect,
+        cornerRadius: CGFloat,
+        exponent: CGFloat = 5
+    ) -> Bool {
+        guard rect.contains(point) else { return false }
+
+        let radius = min(cornerRadius, rect.width / 2, rect.height / 2)
+        guard radius > 0 else { return true }
+
+        let innerHorizontal = rect.insetBy(dx: radius, dy: 0)
+        let innerVertical = rect.insetBy(dx: 0, dy: radius)
+        if innerHorizontal.contains(point) || innerVertical.contains(point) {
+            return true
+        }
+
+        let centerX = point.x < rect.midX ? rect.minX + radius : rect.maxX - radius
+        let centerY = point.y < rect.midY ? rect.minY + radius : rect.maxY - radius
+        let normalizedX = abs(point.x - centerX) / radius
+        let normalizedY = abs(point.y - centerY) / radius
+        let power = max(1, exponent)
+        return pow(normalizedX, power) + pow(normalizedY, power) <= 1
+    }
+
     /// The maximum inward deviation of the corner curve from the rectangular
     /// bounding box, occurring at the 45° point of the superellipse.
     ///

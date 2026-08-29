@@ -26,6 +26,29 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
+enum PanelGlassStyle: String, CaseIterable, Identifiable {
+    case clear
+    case frosted
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .clear: return "Clear"
+        case .frosted: return "Frosted"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .clear:
+            return "Highly translucent with vivid native refraction."
+        case .frosted:
+            return "A calmer, less transparent native glass surface."
+        }
+    }
+}
+
 /// User-adjustable corner radius of the panel squircle, in points.
 enum PanelCornerSize: Double, CaseIterable, Identifiable {
     case small = 10
@@ -89,6 +112,7 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedInstantReveal = "hasAdoptedInstantRevealV3"
         static let hasShownWelcome = "hasShownWelcome"
         static let isTranslucent = "isTranslucent"
+        static let panelGlassStyle = "panelGlassStyle"
         static let appearance = "appearancePreference"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
@@ -103,6 +127,10 @@ final class AppSettings: ObservableObject {
 
     @Published var isTranslucent: Bool {
         didSet { defaults.set(isTranslucent, forKey: Key.isTranslucent) }
+    }
+
+    @Published var panelGlassStyle: PanelGlassStyle {
+        didSet { defaults.set(panelGlassStyle.rawValue, forKey: Key.panelGlassStyle) }
     }
 
     @Published var appearance: AppearancePreference {
@@ -192,6 +220,9 @@ final class AppSettings: ObservableObject {
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
         isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
+        panelGlassStyle = PanelGlassStyle(
+            rawValue: defaults.string(forKey: Key.panelGlassStyle) ?? ""
+        ) ?? .clear
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.

@@ -136,7 +136,25 @@ struct SettingsView: View {
                     Label("Translucency", systemImage: "circle.lefthalf.filled")
                         .font(.headline)
                 }
-                Text("Let the desktop shine through the panel background.")
+
+                if settings.isTranslucent {
+                    Picker("Glass style", selection: $settings.panelGlassStyle) {
+                        ForEach(PanelGlassStyle.allCases) { style in
+                            Text(style.title).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(settings.panelGlassStyle.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Use a solid, readable panel without glass or refraction.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Choose the glass character explicitly instead of tying it to task interactions.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

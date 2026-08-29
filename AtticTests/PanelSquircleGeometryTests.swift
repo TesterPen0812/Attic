@@ -164,6 +164,56 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertLessThanOrEqual(path.boundingRect.height, 380)
     }
 
+    func testAnalyticHitRegionExcludesTransparentCorners() {
+        let rect = CGRect(x: 0, y: 0, width: 332, height: 481.4)
+
+        XCTAssertFalse(
+            Squircle.contains(
+                CGPoint(x: 0, y: 0),
+                in: rect,
+                cornerRadius: 80,
+                exponent: 5
+            )
+        )
+        XCTAssertFalse(
+            Squircle.contains(
+                CGPoint(x: 331.9, y: 481.3),
+                in: rect,
+                cornerRadius: 80,
+                exponent: 5
+            )
+        )
+    }
+
+    func testAnalyticHitRegionIncludesVisibleSurfaceAndEdges() {
+        let rect = CGRect(x: 0, y: 0, width: 332, height: 481.4)
+
+        XCTAssertTrue(
+            Squircle.contains(
+                CGPoint(x: rect.midX, y: rect.midY),
+                in: rect,
+                cornerRadius: 80,
+                exponent: 5
+            )
+        )
+        XCTAssertTrue(
+            Squircle.contains(
+                CGPoint(x: rect.midX, y: rect.minY + 0.01),
+                in: rect,
+                cornerRadius: 80,
+                exponent: 5
+            )
+        )
+        XCTAssertTrue(
+            Squircle.contains(
+                CGPoint(x: rect.minX + 0.01, y: rect.midY),
+                in: rect,
+                cornerRadius: 80,
+                exponent: 5
+            )
+        )
+    }
+
     func testSquircleShapeWithMaxCornerAndMinPanel() {
         let rect = CGRect(x: 0, y: 0, width: 300, height: 380)
         let shape = Squircle(cornerRadius: 40, exponent: 5)

@@ -17,6 +17,8 @@ enum AtticStyle {
 
 struct AtticPanelSurface: ViewModifier {
     let translucent: Bool
+    let glassStyle: PanelGlassStyle
+    let opaqueColor: Color
     let cornerRadius: CGFloat
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -29,51 +31,71 @@ struct AtticPanelSurface: ViewModifier {
         )
 
         if #available(macOS 26.0, *), translucent {
-            content
-                .background {
-                    ZStack {
-                        shape
-                            .fill(Color.clear)
-                            .glassEffect(
-                                .clear.tint(Color.black.opacity(0.14)),
-                                in: shape
-                            )
-                        LinearGradient(
-                            stops: [
-                                .init(color: Color.black.opacity(0.90), location: 0),
-                                .init(color: Color.black.opacity(0.72), location: 0.42),
-                                .init(color: Color.black.opacity(0.30), location: 0.74),
-                                .init(color: Color.black.opacity(0.08), location: 1)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .clipShape(shape)
-                    }
-                    .allowsHitTesting(false)
-                }
-                .overlay {
-                    shape.stroke(Color.white.opacity(0.16), lineWidth: 0.75)
-                }
-                .clipShape(shape)
+            nativeGlassSurface(content: content, shape: shape)
         } else {
             content
                 .background {
                     ZStack {
                         Rectangle()
                             .fill(.ultraThinMaterial)
-                            .opacity(translucent ? 1 : 0)
+                            .opacity(translucent && glassStyle == .clear ? 1 : 0)
                         Rectangle()
-                            .fill(Color(nsColor: .windowBackgroundColor))
+                            .fill(.regularMaterial)
+                            .opacity(translucent && glassStyle == .frosted ? 1 : 0)
+                        Rectangle()
+                            .fill(opaqueColor)
                             .opacity(translucent ? 0 : 1)
                     }
                     .animation(reduceMotion ? nil : AtticMotion.background, value: translucent)
+                    .animation(reduceMotion ? nil : AtticMotion.background, value: glassStyle)
                 }
                 .clipShape(shape)
+                .contentShape(shape)
                 .overlay {
                     shape.stroke(Color.primary.opacity(0.075), lineWidth: 0.7)
                 }
         }
+    }
+
+    @available(macOS 26.0, *)
+    private func nativeGlassSurface(content: Content, shape: Squircle) -> some View {
+        let glass: Glass = glassStyle == .clear
+            ? .clear.tint(Color.black.opacity(0.10))
+            : .regular.tint(Color.black.opacity(0.22))
+        let lightingStops: [Gradient.Stop] = glassStyle == .clear
+            ? [
+                .init(color: Color.black.opacity(0.90), location: 0),
+                .init(color: Color.black.opacity(0.72), location: 0.42),
+                .init(color: Color.black.opacity(0.30), location: 0.74),
+                .init(color: Color.black.opacity(0.06), location: 1)
+            ]
+            : [
+                .init(color: Color.black.opacity(0.94), location: 0),
+                .init(color: Color.black.opacity(0.82), location: 0.42),
+                .init(color: Color.black.opacity(0.58), location: 0.74),
+                .init(color: Color.black.opacity(0.30), location: 1)
+            ]
+
+        return content
+            .background {
+                ZStack {
+                    shape
+                        .fill(Color.clear)
+                        .glassEffect(glass, in: shape)
+                    LinearGradient(
+                        stops: lightingStops,
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .clipShape(shape)
+                }
+                .allowsHitTesting(false)
+            }
+            .overlay {
+                shape.stroke(Color.white.opacity(0.16), lineWidth: 0.75)
+            }
+            .clipShape(shape)
+            .contentShape(shape)
     }
 }
 
@@ -98,8 +120,20 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
 }
 
 extension View {
-    func atticPanelSurface(translucent: Bool, cornerRadius: CGFloat = AtticStyle.panelCornerRadius) -> some View {
-        modifier(AtticPanelSurface(translucent: translucent, cornerRadius: cornerRadius))
+    func atticPanelSurface(
+        translucent: Bool,
+        glassStyle: PanelGlassStyle = .clear,
+        opaqueColor: Color = Color(nsColor: .windowBackgroundColor),
+        cornerRadius: CGFloat = AtticStyle.panelCornerRadius
+    ) -> some View {
+        modifier(
+            AtticPanelSurface(
+                translucent: translucent,
+                glassStyle: glassStyle,
+                opaqueColor: opaqueColor,
+                cornerRadius: cornerRadius
+            )
+        )
     }
 
     func atticGlassControl<S: Shape>(

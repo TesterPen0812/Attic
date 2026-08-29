@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class AtticPanelController {
     private let panel: AtticPanel
-    private let hostingView: NSHostingView<AtticPanelView>
+    private let hostingView: AtticPanelHostingView
     private let store: TaskStore
     private let noteStore: NoteStore
     private let canvasSession: CanvasSession
@@ -41,14 +41,17 @@ final class AtticPanelController {
             backing: .buffered,
             defer: true
         )
-        hostingView = NSHostingView(rootView: AtticPanelView(
-            store: store,
-            noteStore: noteStore,
-            canvasSession: canvasSession,
-            noteDraft: noteDraft,
-            uiState: uiState,
-            settings: settings
-        ))
+        hostingView = AtticPanelHostingView(
+            rootView: AtticPanelView(
+                store: store,
+                noteStore: noteStore,
+                canvasSession: canvasSession,
+                noteDraft: noteDraft,
+                uiState: uiState,
+                settings: settings
+            ),
+            panelCornerRadius: settings.panelCornerSize
+        )
 
         configurePanel()
         bindContentSize()
@@ -56,6 +59,25 @@ final class AtticPanelController {
 
     var visibleFrame: CGRect? {
         panel.isVisible ? panel.frame : nil
+    }
+
+    func containsScreenPoint(_ point: CGPoint) -> Bool {
+        guard panel.isVisible, panel.frame.contains(point) else { return false }
+        let localPoint = CGPoint(
+            x: point.x - panel.frame.minX,
+            y: point.y - panel.frame.minY
+        )
+        return Squircle.contains(
+            localPoint,
+            in: CGRect(origin: .zero, size: panel.frame.size),
+            cornerRadius: settings.panelCornerSize,
+            exponent: AtticStyle.panelSquircleExponent
+        )
+    }
+
+    func updateMousePassthrough(at point: CGPoint) {
+        let isInsideRectangularFrame = panel.isVisible && panel.frame.contains(point)
+        panel.ignoresMouseEvents = isInsideRectangularFrame && !containsScreenPoint(point)
     }
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
@@ -181,7 +203,8 @@ final class AtticPanelController {
 
         settings.$panelCornerSize
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] cornerRadius in
+                self?.hostingView.panelCornerRadius = cornerRadius
                 self?.resizeAndReanchor()
             }
             .store(in: &cancellables)

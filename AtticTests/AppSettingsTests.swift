@@ -3,6 +3,30 @@ import XCTest
 
 final class AppSettingsTests: XCTestCase {
     @MainActor
+    func testGlassStyleDefaultsToClearAndPersists() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let initial = AppSettings(defaults: defaults)
+        XCTAssertEqual(initial.panelGlassStyle, .clear)
+
+        initial.panelGlassStyle = .frosted
+        let reloaded = AppSettings(defaults: defaults)
+        XCTAssertEqual(reloaded.panelGlassStyle, .frosted)
+    }
+
+    @MainActor
+    func testInvalidGlassStyleFallsBackToClear() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set("unknown-style", forKey: "panelGlassStyle")
+        let settings = AppSettings(defaults: defaults)
+
+        XCTAssertEqual(settings.panelGlassStyle, .clear)
+    }
+
+    @MainActor
     func testNonFiniteStoredDelaysUseSafeFallbacks() {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
