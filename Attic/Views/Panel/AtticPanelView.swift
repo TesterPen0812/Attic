@@ -58,6 +58,7 @@ struct AtticPanelView: View {
             \.colorScheme,
             uiState.selectedSection.isTaskBased ? .dark : systemColorScheme
         )
+        .environment(\.atticPanelGlassStyle, settings.panelGlassStyle)
         .environment(\.controlActiveState, .key)
         .atticPanelSurface(
             translucent: settings.isTranslucent,
@@ -65,7 +66,8 @@ struct AtticPanelView: View {
             opaqueColor: uiState.selectedSection.isTaskBased
                 ? Color(red: 0.075, green: 0.075, blue: 0.082)
                 : Color(nsColor: .windowBackgroundColor),
-            cornerRadius: cornerRadius
+            cornerRadius: cornerRadius,
+            prefersDarkSurface: uiState.selectedSection.isTaskBased || systemColorScheme == .dark
         )
         .contextMenu {
             Button("Settings…", systemImage: "gearshape") {

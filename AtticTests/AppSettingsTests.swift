@@ -10,9 +10,21 @@ final class AppSettingsTests: XCTestCase {
         let initial = AppSettings(defaults: defaults)
         XCTAssertEqual(initial.panelGlassStyle, .clear)
 
-        initial.panelGlassStyle = .frosted
-        let reloaded = AppSettings(defaults: defaults)
-        XCTAssertEqual(reloaded.panelGlassStyle, .frosted)
+        for style in PanelGlassStyle.allCases {
+            initial.panelGlassStyle = style
+            let reloaded = AppSettings(defaults: defaults)
+            XCTAssertEqual(reloaded.panelGlassStyle, style)
+        }
+    }
+
+    func testGlassStylesAreUniqueAndUseProductNames() {
+        XCTAssertEqual(PanelGlassStyle.allCases.map(\.title), [
+            "Clear",
+            "Frosted",
+            "Stable Acrylic"
+        ])
+        XCTAssertEqual(Set(PanelGlassStyle.allCases.map(\.rawValue)).count, 3)
+        XCTAssertEqual(PanelGlassStyle.stableAcrylic.rawValue, "stable")
     }
 
     @MainActor
