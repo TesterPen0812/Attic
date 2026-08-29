@@ -28,4 +28,18 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 0, sectionCount: 0, isComposing: false), PanelGeometry.minimumHeight)
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 100, sectionCount: 3, isComposing: true), PanelGeometry.maximumHeight)
     }
+
+    func testWorkspaceHeightIsStableAndResponsiveToConfiguredWidth() {
+        XCTAssertEqual(PanelGeometry.preferredWorkspaceHeight(contentWidth: 300), 480)
+        XCTAssertEqual(
+            PanelGeometry.preferredWorkspaceHeight(contentWidth: 332),
+            481.4,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(PanelGeometry.preferredWorkspaceHeight(contentWidth: 380), 551)
+        XCTAssertEqual(
+            PanelGeometry.preferredWorkspaceHeight(contentWidth: 1_000),
+            PanelGeometry.maximumHeight
+        )
+    }
 }

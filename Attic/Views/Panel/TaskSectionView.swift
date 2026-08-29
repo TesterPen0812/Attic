@@ -10,17 +10,17 @@ struct TaskSectionView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 8) {
             HStack(spacing: 5) {
                 Text("\(status.title) · \(tasks.count)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.58))
                     .contentTransition(.numericText())
                     .accessibilityIdentifier("task-section-\(status.rawValue)")
                 Spacer()
             }
-            .frame(height: 24)
-            .padding(.horizontal, 4)
+            .frame(height: 22)
+            .padding(.horizontal, 8)
             .dropDestination(for: TaskDragPayload.self) { payloads, _ in
                 acceptSectionDrop(payloads)
             } isTargeted: { isTargeted in
@@ -28,7 +28,7 @@ struct TaskSectionView: View {
             }
 
             if !tasks.isEmpty {
-                VStack(spacing: AtticStyle.taskSpacing) {
+                VStack(spacing: 3) {
                     ForEach(tasks) { task in
                         TaskRowView(store: store, uiState: uiState, task: task)
                             .transition(

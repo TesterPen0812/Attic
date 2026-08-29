@@ -52,7 +52,7 @@ enum PanelCornerSize: Double, CaseIterable, Identifiable {
 
     static let min = PanelCornerSize.small.rawValue
     static let max = PanelCornerSize.maximum.rawValue
-    static let defaultValue = PanelCornerSize.standard.rawValue
+    static let defaultValue = PanelCornerSize.huge.rawValue
 }
 
 /// User-adjustable content width of the panel, in points.

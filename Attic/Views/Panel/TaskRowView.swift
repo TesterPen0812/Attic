@@ -14,7 +14,7 @@ struct TaskRowView: View {
     private var isEditing: Bool { uiState.editingTaskID == task.id }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             TaskStatusButton(status: task.status, priority: task.priority) {
                 store.performPrimaryAction(task)
             }
@@ -36,18 +36,20 @@ struct TaskRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .layoutPriority(1)
                         .strikethrough(task.status == .done, color: .secondary)
-                        .foregroundStyle(task.status == .done ? .secondary : .primary)
+                        .foregroundStyle(
+                            Color.white.opacity(task.status == .done ? 0.48 : 0.92)
+                        )
                         .accessibilityLabel(task.title)
                 }
             }
-            .font(.system(size: 13, weight: task.status == .inProgress ? .medium : .regular, design: .rounded))
+            .font(.system(size: 14, weight: task.status == .inProgress ? .medium : .regular, design: .rounded))
             .frame(maxWidth: .infinity, alignment: .leading)
 
             trailingAction
         }
-        .padding(.vertical, 2)
-        .frame(minHeight: AtticStyle.rowHeight)
-        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .frame(minHeight: 42)
+        .padding(.horizontal, 8)
         .background(
             isDropTargeted
                 ? Color.accentColor.opacity(0.08)
@@ -122,6 +124,7 @@ struct TaskRowView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.72))
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }

@@ -117,4 +117,11 @@ enum PanelGeometry {
     static func preferredCanvasHeight() -> CGFloat {
         min(max(560, minimumHeight), maximumHeight)
     }
+
+    /// The redesigned panel is a stable workspace rather than a card that
+    /// repeatedly changes size as content comes and goes. Keeping one frame
+    /// also preserves the user's spatial memory when switching sections.
+    static func preferredWorkspaceHeight(contentWidth: CGFloat) -> CGFloat {
+        min(max(contentWidth * 1.45, 480), maximumHeight)
+    }
 }

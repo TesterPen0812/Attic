@@ -103,9 +103,16 @@ final class AppCoordinator {
         // Unit/UI test hosts must not prompt for the user's Keychain item while
         // the application is bootstrapping. The agent server is not started
         // for test hosts, so a process-local token is sufficient here.
-        let agentAccessToken = isRunningTests
+        let agentAccessToken: String
+        #if ATTIC_LOCAL_ONLY
+        // Local-only previews keep the MCP server disabled and must never
+        // prompt for or reuse credentials from another bundle identity.
+        agentAccessToken = "attic-local-only-agent-disabled"
+        #else
+        agentAccessToken = isRunningTests
             ? "attic-test-agent-token"
             : AgentAccessTokenStore().loadOrCreate()
+        #endif
         let agentServer = AgentServer(
             port: settings.agentServerPort,
             bearerToken: agentAccessToken,

@@ -9,7 +9,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
 
         let settings = AppSettings(defaults: defaults)
 
-        XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.standard.rawValue)
+        XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.huge.rawValue)
         XCTAssertEqual(settings.panelContentSize, PanelContentSize.standard.rawValue)
     }
 
@@ -17,7 +17,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
     func testCornerSizeRangeAndPresets() {
         XCTAssertEqual(PanelCornerSize.min, 10)
         XCTAssertEqual(PanelCornerSize.max, 140)
-        XCTAssertEqual(PanelCornerSize.defaultValue, 18)
+        XCTAssertEqual(PanelCornerSize.defaultValue, 80)
         XCTAssertEqual(
             PanelCornerSize.allCases.map(\.rawValue),
             [10, 18, 28, 40, 80, 110, 140]
@@ -90,7 +90,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
 
         defaults.set(Double.nan, forKey: "panelCornerSize")
         let settings = AppSettings(defaults: defaults)
-        XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.standard.rawValue)
+        XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.huge.rawValue)
     }
 
     @MainActor

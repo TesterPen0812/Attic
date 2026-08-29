@@ -231,11 +231,8 @@ final class AtticPanelController {
                 hasConflict: noteDraft.hasConflict
             )
         } else {
-            let snapshot = store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks)
-            height = PanelGeometry.preferredHeight(
-                taskCount: snapshot.visibleCount,
-                sectionCount: snapshot.sections.count,
-                isComposing: uiState.isComposerPresented
+            height = PanelGeometry.preferredWorkspaceHeight(
+                contentWidth: settings.panelContentSize
             )
         }
         return PanelGeometry.panelFrame(

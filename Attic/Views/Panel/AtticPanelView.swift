@@ -9,69 +9,61 @@ struct AtticPanelView: View {
     @ObservedObject var settings: AppSettings
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var systemColorScheme
+    @State private var quickEntryTitle = ""
+    @FocusState private var isQuickEntryFocused: Bool
 
-    private var cornerRadius: CGFloat {
-        settings.panelCornerSize
-    }
+    private var cornerRadius: CGFloat { settings.panelCornerSize }
 
     private var panelSize: CGSize {
-        CGSize(width: settings.panelContentSize, height: 380)
+        CGSize(
+            width: settings.panelContentSize,
+            height: PanelGeometry.preferredWorkspaceHeight(contentWidth: settings.panelContentSize)
+        )
     }
 
     private var contentInsets: EdgeInsets {
         PanelGeometry.contentInsets(cornerSize: cornerRadius, panelSize: panelSize)
     }
 
-    private var horizontalInset: CGFloat {
-        contentInsets.leading
-    }
+    private var horizontalInset: CGFloat { contentInsets.leading }
+    private var chromeInset: CGFloat { max(horizontalInset, 22) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header(activeCount: headerActiveCount)
-            sectionPicker
+        ZStack {
+            sectionWorkspace
 
-            if uiState.isComposerPresented, !uiState.selectedSection.isCanvas {
-                composerView
-                    .padding(.horizontal, horizontalInset)
-                    .padding(.bottom, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+            topChrome
+
+            if uiState.selectedSection.isTaskBased {
+                taskEntryBar
             }
 
-            if uiState.selectedSection.isCanvas {
-                CanvasPanelContent(
-                    session: canvasSession,
-                    horizontalInset: horizontalInset,
-                    isClearConfirmationPresented: $uiState.isCanvasConfirmationPresented
-                )
-                .transition(.opacity)
-            } else if uiState.selectedSection.isNotes {
-                NotesPanelContent(
-                    noteStore: noteStore,
-                    noteDraft: noteDraft,
-                    uiState: uiState
-                )
-                .transition(.opacity)
-            } else {
-                taskSurface
-                    .transition(.opacity)
+            if uiState.isComposerPresented, uiState.selectedSection.isTaskBased {
+                advancedTaskComposer
             }
 
             if let error = currentErrorMessage {
-                Text(error)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .padding(.horizontal, horizontalInset)
-                    .padding(.bottom, 10)
-                    .accessibilityIdentifier("panel-error-message")
+                errorBanner(error)
             }
         }
         .padding(.top, contentInsets.top)
         .padding(.bottom, contentInsets.bottom)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environment(
+            \.colorScheme,
+            uiState.selectedSection.isTaskBased ? .dark : systemColorScheme
+        )
         .atticPanelSurface(translucent: settings.isTranslucent, cornerRadius: cornerRadius)
-        .animation(reduceMotion ? nil : AtticMotion.spring, value: uiState.isComposerPresented)
+        .contextMenu {
+            Button("Settings…", systemImage: "gearshape") {
+                AppCoordinator.shared.openSettings()
+            }
+            Divider()
+            Button(uiState.isPanelPinned ? "Unpin Panel" : "Pin Panel", systemImage: "pin") {
+                uiState.isPanelPinned.toggle()
+            }
+        }
         .animation(reduceMotion ? nil : AtticMotion.spring, value: store.tasks.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.spring, value: noteStore.notes.map(\.id))
         .animation(reduceMotion ? nil : AtticMotion.quick, value: uiState.selectedSection)
@@ -87,213 +79,257 @@ struct AtticPanelView: View {
         }
     }
 
-    private var taskSurface: some View {
-        let snapshot = store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks)
-        return Group {
-            if snapshot.visibleCount == 0 {
-                emptyState
-                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
-            } else {
-                taskList(sections: snapshot.sections)
-            }
+    private var topChrome: some View {
+        HStack(alignment: .top) {
+            pinButton
+            Spacer(minLength: 12)
+            modeDock
         }
+        .padding(.horizontal, chromeInset)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    @ViewBuilder
-    private var composerView: some View {
-        if uiState.selectedSection.isNotes {
-            NoteComposerView(noteDraft: noteDraft, uiState: uiState)
-        } else {
-            TaskComposerView(store: store, uiState: uiState)
+    private var pinButton: some View {
+        Button {
+            uiState.isPanelPinned.toggle()
+        } label: {
+            Image(systemName: uiState.isPanelPinned ? "pin.fill" : "pin")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.9))
+                .frame(width: 42, height: 42)
+                .contentShape(Circle())
+                .atticGlassControl(in: Circle())
         }
+        .buttonStyle(.plain)
+        .keyboardShortcut("p", modifiers: [.command, .shift])
+        .help(uiState.isPanelPinned ? "Unpin panel" : "Keep panel visible")
+        .accessibilityLabel(uiState.isPanelPinned ? "Unpin Attic panel" : "Pin Attic panel")
+        .accessibilityAddTraits(uiState.isPanelPinned ? .isSelected : [])
+        .accessibilityIdentifier("panel-pin-button")
     }
 
-    private var headerActiveCount: Int {
-        if uiState.selectedSection.isCanvas {
-            return canvasSession.strokes.count
-        }
-        if uiState.selectedSection.isNotes {
-            return noteStore.notes.count
-        }
-        return store.snapshot(
-            for: uiState.selectedSection.taskScope ?? .tasks
-        ).activeCount
-    }
+    private var modeDock: some View {
+        HStack(spacing: 2) {
+            ForEach(PanelSection.allCases) { section in
+                let isSelected = uiState.selectedSection == section
 
-    private var currentErrorMessage: String? {
-        if uiState.selectedSection.isCanvas {
-            return canvasSession.lastErrorMessage
-        }
-        return uiState.selectedSection.isNotes
-            ? noteStore.lastErrorMessage
-            : store.lastErrorMessage
-    }
-
-    private func openMostRecentNoteIfNeeded() {
-        guard uiState.selectedSection.isNotes,
-              !uiState.isComposerPresented,
-              uiState.editingNoteID == nil,
-              !noteDraft.isActive,
-              let mostRecentNote = noteStore.orderedNotes().first,
-              noteDraft.beginEditing(mostRecentNote) else {
-            return
-        }
-
-        withAnimation(reduceMotion ? nil : AtticMotion.spring) {
-            uiState.beginEditingNote(mostRecentNote)
-        }
-    }
-
-    private func header(activeCount: Int) -> some View {
-        HStack(spacing: 8) {
-            Text("Attic")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-            Text("· \(activeSubtitle(count: activeCount))")
-                .font(.system(size: 10, design: .rounded))
-                .foregroundStyle(.tertiary)
-                .contentTransition(.numericText())
-                .animation(reduceMotion ? nil : AtticMotion.quick, value: activeCount)
-
-            Spacer()
-
-            Button {
-                uiState.isPanelPinned.toggle()
-            } label: {
-                Image(systemName: uiState.isPanelPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 24, height: 24)
-                    .background(
-                        Color.primary.opacity(uiState.isPanelPinned ? 0.12 : 0.06),
-                        in: Circle()
-                    )
-                    .overlay {
-                        Circle()
-                            .stroke(
-                                uiState.isPanelPinned
-                                    ? Color.primary.opacity(0.34)
-                                    : Color.clear,
-                                lineWidth: 1
-                            )
-                    }
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("p", modifiers: [.command, .shift])
-            .help(uiState.isPanelPinned ? "Unpin panel" : "Keep panel visible")
-            .accessibilityLabel(
-                uiState.isPanelPinned ? "Unpin Attic panel" : "Pin Attic panel"
-            )
-            .accessibilityValue(uiState.isPanelPinned ? "Pinned" : "Not pinned")
-            .accessibilityAddTraits(uiState.isPanelPinned ? .isSelected : [])
-            .accessibilityIdentifier("panel-pin-button")
-
-            Button {
-                AppCoordinator.shared.openSettings()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 10, weight: .semibold))
-                    .frame(width: 24, height: 24)
-                    .background(Color.primary.opacity(0.06), in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(",", modifiers: .command)
-            .help("Settings")
-            .accessibilityLabel("Settings")
-            .accessibilityIdentifier("settings-button")
-
-            if !uiState.selectedSection.isCanvas {
-                Button(action: toggleComposer) {
-                    Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
-                        .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                        .background(Color.primary.opacity(0.06), in: Circle())
+                Button {
+                    selectSection(section)
+                } label: {
+                    Image(systemName: symbol(for: section))
+                        .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
+                        .frame(width: 39, height: 39)
+                        .foregroundStyle(
+                            Color.white.opacity(isSelected ? 0.96 : 0.68)
+                        )
+                        .background(
+                            Color.primary.opacity(isSelected ? 0.15 : 0),
+                            in: Circle()
+                        )
+                        .overlay {
+                            if isSelected {
+                                Circle().stroke(Color.primary.opacity(0.16), lineWidth: 0.75)
+                            }
+                        }
                         .contentShape(Circle())
-                        .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.plain)
-                .help(composerButtonLabel)
-                .accessibilityLabel(composerButtonLabel)
-                .accessibilityIdentifier(
-                    uiState.selectedSection.isNotes
-                        ? "add-note-button"
-                        : "add-task-button"
-                )
+                .keyboardShortcut(shortcut(for: section), modifiers: .command)
+                .help(section.title)
+                .accessibilityLabel(section.title)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityIdentifier("panel-section-\(section.rawValue)")
             }
         }
-        .padding(.horizontal, horizontalInset)
-        .frame(height: 44)
-    }
-
-    private var sectionPicker: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
-                ForEach(PanelSection.allCases) { section in
-                    sectionCapsule(section)
-                }
-            }
-
-            VStack(spacing: 5) {
-                HStack(spacing: 6) {
-                    ForEach(Array(PanelSection.allCases.prefix(2))) { section in
-                        sectionCapsule(section)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                HStack(spacing: 6) {
-                    ForEach(Array(PanelSection.allCases.suffix(2))) { section in
-                        sectionCapsule(section)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, horizontalInset)
-        .padding(.bottom, 8)
+        .padding(4)
+        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("panel-section-picker")
     }
 
-    private func sectionCapsule(_ section: PanelSection) -> some View {
-        let isSelected = uiState.selectedSection == section
-
-        return Button {
-            selectSection(section)
-        } label: {
-            Text(section.title)
-                .font(.system(
-                    size: 10,
-                    weight: isSelected ? .semibold : .medium,
-                    design: .rounded
-                ))
-                .foregroundStyle(
-                    isSelected
-                        ? Color(nsColor: .windowBackgroundColor)
-                        : Color.secondary
-                )
-                .padding(.horizontal, 10)
-                .frame(height: 22)
-                .background(
-                    Color.primary.opacity(isSelected ? 0.9 : 0.035),
-                    in: Capsule(style: .continuous)
-                )
-                .contentShape(Capsule(style: .continuous))
+    @ViewBuilder
+    private var sectionWorkspace: some View {
+        if uiState.selectedSection.isTaskBased {
+            taskWorkspace
+                .padding(.top, 78)
+                .padding(.bottom, 70)
+                .transition(.opacity)
+        } else if uiState.selectedSection.isCanvas {
+            CanvasPanelContent(
+                session: canvasSession,
+                horizontalInset: horizontalInset,
+                isClearConfirmationPresented: $uiState.isCanvasConfirmationPresented
+            )
+            .padding(.top, 62)
+            .transition(.opacity)
+        } else {
+            legacyNotesWorkspace
+                .padding(.top, 64)
+                .transition(.opacity)
         }
-        .buttonStyle(.plain)
-        .keyboardShortcut(shortcut(for: section), modifiers: .command)
-        .accessibilityLabel(section.title)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier("panel-section-\(section.rawValue)")
     }
 
-    private func shortcut(for section: PanelSection) -> KeyEquivalent {
-        switch section {
-        case .tasks: "1"
-        case .backlog: "2"
-        case .notes: "3"
-        case .canvas: "4"
+    private var taskWorkspace: some View {
+        let snapshot = store.snapshot(for: uiState.selectedSection.taskScope ?? .tasks)
+
+        return Group {
+            if snapshot.visibleCount == 0 {
+                taskEmptyState
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 18) {
+                        ForEach(allSections(from: snapshot.sections)) { section in
+                            TaskSectionView(
+                                store: store,
+                                uiState: uiState,
+                                status: section.status,
+                                tasks: section.tasks
+                            )
+                        }
+                    }
+                    .padding(.horizontal, horizontalInset + 2)
+                    .padding(.top, 8)
+                    .padding(.bottom, 18)
+                }
+                .scrollIndicators(.never)
+            }
         }
+    }
+
+    private var legacyNotesWorkspace: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button(action: toggleNoteComposer) {
+                    Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                        .atticGlassControl(in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(uiState.isComposerPresented ? "Close note" : "New note")
+            }
+            .padding(.horizontal, horizontalInset)
+            .padding(.bottom, 8)
+
+            if uiState.isComposerPresented {
+                NoteComposerView(noteDraft: noteDraft, uiState: uiState)
+                    .padding(.horizontal, horizontalInset)
+            }
+
+            NotesPanelContent(
+                noteStore: noteStore,
+                noteDraft: noteDraft,
+                uiState: uiState
+            )
+        }
+    }
+
+    private var taskEntryBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(reduceMotion ? nil : AtticMotion.spring) {
+                    if uiState.isComposerPresented {
+                        uiState.endAdding()
+                    } else {
+                        uiState.beginAdding()
+                    }
+                }
+            } label: {
+                Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 42, height: 42)
+                    .contentShape(Circle())
+                    .atticGlassControl(in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help(uiState.isComposerPresented ? "Close task options" : "Task options")
+            .accessibilityLabel(uiState.isComposerPresented ? "Close task options" : "Task options")
+            .accessibilityIdentifier("add-task-button")
+
+            TextField("Add a task, note, or idea", text: $quickEntryTitle)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, minHeight: 42)
+                .contentShape(Capsule(style: .continuous))
+                .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
+                .focused($isQuickEntryFocused)
+                .onSubmit(saveQuickTask)
+                .accessibilityIdentifier("quick-entry-title")
+
+            Button(action: saveQuickTask) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .frame(width: 42, height: 42)
+                    .contentShape(Circle())
+                    .atticGlassControl(in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .help("Add task")
+            .accessibilityLabel("Add task")
+        }
+        .padding(.horizontal, chromeInset)
+        .frame(maxHeight: .infinity, alignment: .bottom)
+    }
+
+    private var advancedTaskComposer: some View {
+        TaskComposerView(store: store, uiState: uiState)
+            .padding(10)
+            .atticGlassControl(
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                interactive: false
+            )
+            .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
+            .padding(.horizontal, chromeInset)
+            .padding(.bottom, 62)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var taskEmptyState: some View {
+        VStack(spacing: 6) {
+            Text(uiState.selectedScope.emptyStateTitle)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+            Text(uiState.selectedScope == .tasks
+                ? "Add a task and it will stay close by."
+                : "Capture an idea for later.")
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, horizontalInset)
+    }
+
+    private func errorBanner(_ error: String) -> some View {
+        Text(error)
+            .font(.caption2)
+            .foregroundStyle(.red)
+            .lineLimit(2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .atticGlassControl(in: Capsule(), interactive: false)
+            .padding(.horizontal, chromeInset)
+            .padding(.bottom, uiState.selectedSection.isTaskBased ? 118 : 20)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .accessibilityIdentifier("panel-error-message")
+    }
+
+    private var currentErrorMessage: String? {
+        if uiState.selectedSection.isCanvas { return canvasSession.lastErrorMessage }
+        return uiState.selectedSection.isNotes ? noteStore.lastErrorMessage : store.lastErrorMessage
+    }
+
+    private func saveQuickTask() {
+        guard store.create(
+            title: quickEntryTitle,
+            status: uiState.selectedScope.creationStatus
+        ) != nil else { return }
+        quickEntryTitle = ""
+        DispatchQueue.main.async { isQuickEntryFocused = true }
     }
 
     private func selectSection(_ section: PanelSection) {
@@ -305,45 +341,44 @@ struct AtticPanelView: View {
             canvasSession.cancelActiveInteraction()
         }
 
-        let select = {
+        let selection = {
             uiState.selectSection(section)
-            if section.isNotes {
-                openMostRecentNoteIfNeeded()
-            }
+            if section.isNotes { openMostRecentNoteIfNeeded() }
         }
-
         if reduceMotion {
-            select()
+            selection()
         } else {
-            withAnimation(AtticMotion.quick) {
-                select()
-            }
+            withAnimation(AtticMotion.quick) { selection() }
         }
     }
 
-    private func toggleComposer() {
-        guard !uiState.selectedSection.isCanvas else { return }
-
+    private func toggleNoteComposer() {
         if uiState.isComposerPresented {
-            if uiState.selectedSection.isNotes {
-                guard noteDraft.close() else { return }
-            }
+            guard noteDraft.close() else { return }
             uiState.endAdding()
-            return
-        }
-
-        if uiState.selectedSection.isNotes {
+        } else {
             guard noteDraft.beginNew() else { return }
+            uiState.beginAdding()
         }
-        uiState.beginAdding()
+    }
+
+    private func openMostRecentNoteIfNeeded() {
+        guard uiState.selectedSection.isNotes,
+              !uiState.isComposerPresented,
+              uiState.editingNoteID == nil,
+              !noteDraft.isActive,
+              let mostRecentNote = noteStore.orderedNotes().first,
+              noteDraft.beginEditing(mostRecentNote) else { return }
+
+        withAnimation(reduceMotion ? nil : AtticMotion.spring) {
+            uiState.beginEditingNote(mostRecentNote)
+        }
     }
 
     private func reconcileNoteDraft() {
         guard uiState.selectedSection.isNotes,
               uiState.isComposerPresented,
-              noteDraft.isActive else {
-            return
-        }
+              noteDraft.isActive else { return }
 
         guard noteDraft.reconcileWithStore() else {
             uiState.endAdding()
@@ -356,27 +391,6 @@ struct AtticPanelView: View {
         }
     }
 
-    private func taskList(sections: [TaskSectionSnapshot]) -> some View {
-        ScrollView {
-            LazyVStack(spacing: 7) {
-                ForEach(allSections(from: sections)) { section in
-                    TaskSectionView(
-                        store: store,
-                        uiState: uiState,
-                        status: section.status,
-                        tasks: section.tasks
-                    )
-                }
-            }
-            .padding(.horizontal, horizontalInset - 4)
-            .padding(.bottom, 14)
-        }
-        .scrollIndicators(.never)
-    }
-
-    /// Keep section identity stable before, during, and after a drag. Replacing
-    /// the section tree when a drag starts can invalidate the source row and
-    /// cancel AppKit's drag session before it reaches a drop target.
     private func allSections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {
         uiState.selectedScope.statuses.map { status in
             sections.first { $0.status == status }
@@ -384,30 +398,25 @@ struct AtticPanelView: View {
         }
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 5) {
-            Text(uiState.selectedScope.emptyStateTitle)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-            Text(uiState.selectedScope == .tasks
-                ? "Add a task and it will stay close by."
-                : "Capture an idea for later.")
-                .font(.system(size: 11, design: .rounded))
-                .foregroundStyle(.secondary)
+    private func symbol(for section: PanelSection) -> String {
+        switch section {
+        case .tasks: "checkmark.circle"
+        case .backlog: "line.3.horizontal.circle"
+        case .notes: "doc"
+        case .canvas: "square.grid.3x3"
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.bottom, 18)
     }
 
-    private func activeSubtitle(count: Int) -> String {
-        uiState.selectedSection.activeSubtitle(count: count)
+    private func shortcut(for section: PanelSection) -> KeyEquivalent {
+        switch section {
+        case .tasks: "1"
+        case .backlog: "2"
+        case .notes: "3"
+        case .canvas: "4"
+        }
     }
+}
 
-    private var newItemTitle: String {
-        uiState.selectedSection.newItemTitle
-    }
-
-    private var composerButtonLabel: String {
-        guard uiState.isComposerPresented else { return newItemTitle }
-        return uiState.selectedSection.isNotes ? "Close note" : "Cancel"
-    }
+private extension PanelSection {
+    var isTaskBased: Bool { taskScope != nil }
 }
