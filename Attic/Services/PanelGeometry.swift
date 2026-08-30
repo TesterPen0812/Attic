@@ -179,3 +179,18 @@ enum PanelModeDockLayout {
         isExpanded || section == selectedSection
     }
 }
+
+enum TaskEntryBarLayout {
+    static func width(panelWidth: CGFloat, chromeInsets: EdgeInsets) -> CGFloat {
+        max(0, panelWidth - chromeInsets.leading - chromeInsets.trailing)
+    }
+
+    static func textFieldWidth(panelWidth: CGFloat, chromeInsets: EdgeInsets) -> CGFloat {
+        max(
+            0,
+            width(panelWidth: panelWidth, chromeInsets: chromeInsets)
+                - (2 * AtticStyle.controlHitSize)
+                - 4
+        )
+    }
+}

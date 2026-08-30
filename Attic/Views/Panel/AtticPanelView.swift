@@ -50,6 +50,9 @@ struct AtticPanelView: View {
     private var isModeDockExpanded: Bool {
         isModeDockHovered || focusedModeSection != nil
     }
+    private var canSaveQuickTask: Bool {
+        !quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         ZStack {
@@ -311,7 +314,7 @@ struct AtticPanelView: View {
     }
 
     private var taskEntryBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 0) {
             Button {
                 withAnimation(reduceMotion ? nil : AtticMotion.spring) {
                     if uiState.isComposerPresented {
@@ -322,9 +325,13 @@ struct AtticPanelView: View {
                 }
             } label: {
                 Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(width: AtticStyle.actionControlSize, height: AtticStyle.actionControlSize)
-                    .atticGlassControl(in: Circle())
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.primary.opacity(0.92))
+                    .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
+                    .background(
+                        Color.primary.opacity(uiState.isComposerPresented ? 0.10 : 0),
+                        in: Circle()
+                    )
                     .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
                     .contentShape(Circle())
             }
@@ -337,33 +344,53 @@ struct AtticPanelView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(Color.primary.opacity(0.92))
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 5)
                 .frame(maxWidth: .infinity)
                 .frame(height: AtticStyle.entryControlHeight)
-                .contentShape(Capsule(style: .continuous))
-                .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
                 .focused($isQuickEntryFocused)
                 .onSubmit(saveQuickTask)
                 .accessibilityIdentifier("quick-entry-title")
 
             Button(action: saveQuickTask) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.primary.opacity(0.9))
-                    .frame(width: AtticStyle.actionControlSize, height: AtticStyle.actionControlSize)
-                    .atticGlassControl(in: Circle())
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(
+                        canSaveQuickTask
+                            ? Color.white
+                            : Color.primary.opacity(0.34)
+                    )
+                    .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
+                    .background(
+                        canSaveQuickTask
+                            ? Color.accentColor
+                            : Color.primary.opacity(0.055),
+                        in: Circle()
+                    )
+                    .overlay {
+                        Circle().stroke(
+                            Color.primary.opacity(canSaveQuickTask ? 0.08 : 0.06),
+                            lineWidth: 0.75
+                        )
+                    }
                     .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!canSaveQuickTask)
             .help("Add task")
             .accessibilityLabel("Add task")
+            .accessibilityIdentifier("quick-entry-submit")
         }
-        .atticGlassEffectContainer(spacing: 10)
+        .padding(.horizontal, 2)
+        .frame(height: AtticStyle.composerControlHeight)
+        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
+        .contentShape(Capsule(style: .continuous))
         .padding(.horizontal, chromeInset)
         .padding(.bottom, chromeBottomAdjustment)
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Quick task entry")
+        .accessibilityIdentifier("task-entry-bar")
     }
 
     private var advancedTaskComposer: some View {

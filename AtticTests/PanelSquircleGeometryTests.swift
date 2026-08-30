@@ -7,6 +7,8 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(AtticStyle.modeControlSize, 34)
         XCTAssertEqual(AtticStyle.entryControlHeight, 38)
         XCTAssertEqual(AtticStyle.controlHitSize, 42)
+        XCTAssertEqual(AtticStyle.composerControlHeight, 42)
+        XCTAssertEqual(AtticStyle.composerActionSize, 34)
         XCTAssertEqual(AtticStyle.chromeMinimumInset, 22)
         XCTAssertEqual(AtticStyle.chromeCornerClearance, 8)
         XCTAssertEqual(AtticStyle.chromeWorkspaceSpacing, 24)
@@ -158,14 +160,40 @@ final class PanelSquircleGeometryTests: XCTestCase {
             - hitSize
             - modeDockWidth
             - insets.trailing
-        let quickEntryWidth = width
-            - insets.leading
-            - insets.trailing
-            - (2 * hitSize)
-            - 20
+        let quickEntryWidth = TaskEntryBarLayout.textFieldWidth(
+            panelWidth: width,
+            chromeInsets: insets
+        )
 
         XCTAssertGreaterThanOrEqual(topGroupSpacing, 12)
         XCTAssertGreaterThanOrEqual(quickEntryWidth, 120)
+    }
+
+    func testUnifiedTaskEntryBarKeepsItsFieldAndActionsUsableAcrossSupportedGeometry() {
+        for width in stride(from: PanelContentSize.min, through: PanelContentSize.max, by: 1) {
+            let panelSize = CGSize(
+                width: width,
+                height: PanelGeometry.preferredWorkspaceHeight(contentWidth: width)
+            )
+
+            for radius in stride(from: PanelCornerSize.min, through: PanelCornerSize.max, by: 1) {
+                let insets = PanelGeometry.chromeInsets(cornerSize: radius, panelSize: panelSize)
+                let barWidth = TaskEntryBarLayout.width(
+                    panelWidth: width,
+                    chromeInsets: insets
+                )
+                let fieldWidth = TaskEntryBarLayout.textFieldWidth(
+                    panelWidth: width,
+                    chromeInsets: insets
+                )
+
+                XCTAssertGreaterThanOrEqual(
+                    barWidth,
+                    (2 * AtticStyle.controlHitSize) + 120 + 4
+                )
+                XCTAssertGreaterThanOrEqual(fieldWidth, 120)
+            }
+        }
     }
 
     @MainActor
