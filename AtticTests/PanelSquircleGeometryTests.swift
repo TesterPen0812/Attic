@@ -247,6 +247,49 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(panel.contentMaxSize, maximumSize)
     }
 
+    @MainActor
+    func testPanelRoutesAccessibilitySizeChangesWithoutRestoringNativeResizeBorder() {
+        let initialFrame = NSRect(x: 200, y: 150, width: 500, height: 600)
+        let panel = AtticPanel(
+            contentRect: initialFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        AtticPanelResizePolicy.configure(panel)
+        var requestedSize: CGSize?
+        panel.onAccessibilityResizeRequest = { requestedSize = $0 }
+
+        XCTAssertFalse(panel.styleMask.contains(.resizable))
+        XCTAssertTrue(panel.accessibilityIsAttributeSettable(.size))
+
+        panel.setAccessibilityFrame(
+            NSRect(x: 9_000, y: 9_000, width: 280, height: 320)
+        )
+
+        XCTAssertEqual(requestedSize, CGSize(width: 280, height: 320))
+        XCTAssertEqual(panel.frame, initialFrame)
+    }
+
+    @MainActor
+    func testPanelLeavesSameSizeAccessibilityMovementWithAppKit() {
+        let initialFrame = NSRect(x: 200, y: 150, width: 500, height: 600)
+        let panel = AtticPanel(
+            contentRect: initialFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        var requestedSize: CGSize?
+        panel.onAccessibilityResizeRequest = { requestedSize = $0 }
+        let movedFrame = NSRect(origin: CGPoint(x: 260, y: 190), size: initialFrame.size)
+
+        panel.setAccessibilityFrame(movedFrame)
+
+        XCTAssertNil(requestedSize)
+        XCTAssertEqual(panel.frame.origin, movedFrame.origin)
+    }
+
     func testResizeHitTestingFindsVisibleEdgesAndCornersButNotTransparentPixels() {
         let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
 

@@ -2,8 +2,33 @@ import AppKit
 import SwiftUI
 
 final class AtticPanel: NSPanel {
+    var onAccessibilityResizeRequest: ((CGSize) -> Void)?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func accessibilityIsAttributeSettable(
+        _ attribute: NSAccessibility.Attribute
+    ) -> Bool {
+        if attribute == .size, onAccessibilityResizeRequest != nil { return true }
+        return super.accessibilityIsAttributeSettable(attribute)
+    }
+
+    override func setAccessibilityFrame(_ accessibilityFrame: NSRect) {
+        guard accessibilityFrame.size != frame.size else {
+            // Preserve AppKit's standard accessible movement when this is an
+            // origin-only request. Dock anchoring applies only to size changes.
+            super.setAccessibilityFrame(accessibilityFrame)
+            return
+        }
+        guard let onAccessibilityResizeRequest else {
+            super.setAccessibilityFrame(accessibilityFrame)
+            return
+        }
+        // AX clients commonly send an origin together with the new size. The
+        // selected dock corner, not that untrusted origin, owns panel position.
+        onAccessibilityResizeRequest(accessibilityFrame.size)
+    }
 }
 
 struct PanelResizeEdges: OptionSet, Equatable {

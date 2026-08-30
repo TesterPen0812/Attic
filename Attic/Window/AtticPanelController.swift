@@ -233,6 +233,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.isMovable = false
         AtticPanelInteractionPolicy.configure(panel)
         AtticPanelResizePolicy.configure(panel)
+        panel.onAccessibilityResizeRequest = { [weak self] requestedSize in
+            self?.applyAccessibilityResizeRequest(requestedSize)
+        }
         hostingView.onLiveResizeBegan = { [weak self] in
             self?.beginLiveResize()
         }
@@ -335,6 +338,23 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             panel,
             maximumSize: PanelGeometry.resizeMaximumSize(in: screen.visibleFrame)
         )
+    }
+
+    private func applyAccessibilityResizeRequest(_ requestedSize: CGSize) {
+        guard let screen = panel.screen ?? currentScreen else { return }
+        currentScreen = screen
+        updateResizeLimits(for: screen)
+        let targetFrame = frame(
+            on: screen,
+            corner: currentCorner,
+            configuredSize: requestedSize
+        )
+        panel.setFrame(targetFrame, display: panel.isVisible)
+        uiState.updatePanelSize(targetFrame.size)
+
+        isPersistingManualSize = true
+        settings.persistPanelSize(targetFrame.size)
+        isPersistingManualSize = false
     }
 
     func windowWillStartLiveResize(_ notification: Notification) {
