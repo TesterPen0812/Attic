@@ -19,6 +19,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isLiveResizing = false
     private var isPersistingManualSize = false
     private var isApplyingInteractiveCorner = false
+    private var localPointerMonitor: Any?
+    private var globalPointerMonitor: Any?
     private var transitionGeneration = 0
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
@@ -85,17 +87,21 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     func updateMousePassthrough(at point: CGPoint) {
         guard !isLiveResizing else {
-            panel.ignoresMouseEvents = false
+            if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
             return
         }
         let isInsideRectangularFrame = panel.isVisible && panel.frame.contains(point)
-        panel.ignoresMouseEvents = isInsideRectangularFrame && !containsScreenPoint(point)
+        let shouldIgnoreMouseEvents = isInsideRectangularFrame && !containsScreenPoint(point)
+        if panel.ignoresMouseEvents != shouldIgnoreMouseEvents {
+            panel.ignoresMouseEvents = shouldIgnoreMouseEvents
+        }
     }
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
         currentScreen = screen
         currentCorner = corner
         updateResizeLimits(for: screen)
+        startPointerPassthroughMonitoring()
 
         if isLiveResizing {
             if makeKey { panel.makeKey() }
@@ -158,7 +164,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.isCanvasConfirmationPresented = false
         uiState.dockingPreviewCorner = nil
         uiState.setWindowInteractionActive(false)
-        guard panel.isVisible else { return }
+        guard panel.isVisible else {
+            stopPointerPassthroughMonitoring()
+            return
+        }
         guard noteDraft.flush() else { return }
         transitionGeneration += 1
         let generation = transitionGeneration
@@ -175,6 +184,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self, generation == self.transitionGeneration else { return }
                 self.panel.orderOut(nil)
                 self.panel.alphaValue = 1
+                self.stopPointerPassthroughMonitoring()
             }
         }
     }
@@ -345,10 +355,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func updateWindowDrag(frame: CGRect, pointer: CGPoint) {
         guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else { return }
         currentScreen = screen
-        uiState.dockingPreviewCorner = PanelDockingPolicy.nearestCorner(
+        let previewCorner = PanelDockingPolicy.nearestCorner(
             for: frame,
             in: screen.visibleFrame
         )
+        if uiState.dockingPreviewCorner != previewCorner {
+            uiState.dockingPreviewCorner = previewCorner
+        }
     }
 
     private func endWindowDrag(
@@ -402,5 +415,39 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func screen(containing point: CGPoint) -> NSScreen? {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
             ?? NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
+    }
+
+    private func startPointerPassthroughMonitoring() {
+        guard localPointerMonitor == nil, globalPointerMonitor == nil else { return }
+        let mask: NSEvent.EventTypeMask = [
+            .mouseMoved,
+            .leftMouseDragged,
+            .rightMouseDragged,
+            .otherMouseDragged
+        ]
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            MainActor.assumeIsolated {
+                self?.updateMousePassthrough(at: NSEvent.mouseLocation)
+            }
+            return event
+        }
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateMousePassthrough(at: NSEvent.mouseLocation)
+            }
+        }
+        updateMousePassthrough(at: NSEvent.mouseLocation)
+    }
+
+    private func stopPointerPassthroughMonitoring() {
+        if let localPointerMonitor {
+            NSEvent.removeMonitor(localPointerMonitor)
+            self.localPointerMonitor = nil
+        }
+        if let globalPointerMonitor {
+            NSEvent.removeMonitor(globalPointerMonitor)
+            self.globalPointerMonitor = nil
+        }
+        if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
     }
 }

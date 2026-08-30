@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -400,6 +401,105 @@ final class PanelSquircleGeometryTests: XCTestCase {
                 )
             }
         }
+    }
+
+    @MainActor
+    func testFlippedHostingCoordinatesMapVisualTopBottomCornersAndDragLane() {
+        let hostingView = NSHostingView(rootView: EmptyView())
+        hostingView.frame = CGRect(x: 0, y: 0, width: 300, height: 380)
+        let bounds = hostingView.bounds
+        let radius: CGFloat = 140
+
+        XCTAssertTrue(hostingView.isFlipped)
+
+        func policyPoint(_ localPoint: CGPoint) -> CGPoint {
+            AtticPanelCoordinateSpace.policyPoint(
+                fromHostingPoint: localPoint,
+                in: bounds,
+                isFlipped: hostingView.isFlipped
+            )
+        }
+
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: policyPoint(CGPoint(x: bounds.midX, y: 12)),
+                in: bounds,
+                cornerRadius: radius
+            ),
+            .top
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: policyPoint(CGPoint(x: bounds.midX, y: bounds.maxY - 12)),
+                in: bounds,
+                cornerRadius: radius
+            ),
+            .bottom
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: policyPoint(CGPoint(x: 19, y: 19)),
+                in: bounds,
+                cornerRadius: radius
+            ),
+            [.left, .top]
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: policyPoint(CGPoint(x: bounds.maxX - 19, y: bounds.maxY - 19)),
+                in: bounds,
+                cornerRadius: radius
+            ),
+            [.right, .bottom]
+        )
+
+        let policyTopCursorRect = CGRect(
+            x: 28,
+            y: bounds.maxY - AtticPanelResizePolicy.edgeGripThickness,
+            width: bounds.width - 56,
+            height: AtticPanelResizePolicy.edgeGripThickness
+        )
+        let policyBottomCursorRect = CGRect(
+            x: 28,
+            y: bounds.minY,
+            width: bounds.width - 56,
+            height: AtticPanelResizePolicy.edgeGripThickness
+        )
+        let localTopCursorRect = AtticPanelCoordinateSpace.hostingRect(
+            fromPolicyRect: policyTopCursorRect,
+            in: bounds,
+            isFlipped: hostingView.isFlipped
+        )
+        let localBottomCursorRect = AtticPanelCoordinateSpace.hostingRect(
+            fromPolicyRect: policyBottomCursorRect,
+            in: bounds,
+            isFlipped: hostingView.isFlipped
+        )
+        XCTAssertEqual(localTopCursorRect.minY, bounds.minY)
+        XCTAssertEqual(localBottomCursorRect.maxY, bounds.maxY)
+
+        let localDragRegion = AtticPanelCoordinateSpace.hostingRect(
+            fromPolicyRect: AtticPanelDragPolicy.topDragRegion(
+                in: bounds,
+                cornerRadius: radius
+            ),
+            in: bounds,
+            isFlipped: hostingView.isFlipped
+        )
+        XCTAssertLessThan(localDragRegion.minY, 80)
+        XCTAssertFalse(
+            localDragRegion.intersects(
+                CGRect(x: 0, y: bounds.maxY - 80, width: bounds.width, height: 80)
+            ),
+            "The visual top drag lane must not overlap the bottom composer"
+        )
+        XCTAssertTrue(
+            AtticPanelDragPolicy.isTopDragPoint(
+                policyPoint(CGPoint(x: localDragRegion.midX, y: localDragRegion.midY)),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
     }
 
     func testResizeFramePreservesOppositeEdgesAndClampsDimensionsIndependently() {

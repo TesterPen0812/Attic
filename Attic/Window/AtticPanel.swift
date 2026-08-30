@@ -15,6 +15,39 @@ struct PanelResizeEdges: OptionSet, Equatable {
     static let top = PanelResizeEdges(rawValue: 1 << 3)
 }
 
+enum AtticPanelCoordinateSpace {
+    /// Resize and docking policy uses AppKit screen-style coordinates where
+    /// y increases upward. NSHostingView is flipped, so convert exactly once
+    /// at the hosting boundary before classifying an interaction.
+    static func policyPoint(
+        fromHostingPoint point: CGPoint,
+        in bounds: CGRect,
+        isFlipped: Bool
+    ) -> CGPoint {
+        guard isFlipped else { return point }
+        return CGPoint(
+            x: point.x,
+            y: bounds.minY + bounds.maxY - point.y
+        )
+    }
+
+    /// Cursor rectangles are defined in policy coordinates and registered in
+    /// the hosting view's local coordinate space.
+    static func hostingRect(
+        fromPolicyRect rect: CGRect,
+        in bounds: CGRect,
+        isFlipped: Bool
+    ) -> CGRect {
+        guard isFlipped else { return rect }
+        return CGRect(
+            x: rect.minX,
+            y: bounds.minY + bounds.maxY - rect.maxY,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+}
+
 enum AtticPanelInteractionPolicy {
     @MainActor
     static func configure(_ panel: NSPanel) {
@@ -204,8 +237,13 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+        let policyPoint = AtticPanelCoordinateSpace.policyPoint(
+            fromHostingPoint: point,
+            in: bounds,
+            isFlipped: isFlipped
+        )
         guard Squircle.contains(
-            point,
+            policyPoint,
             in: bounds,
             cornerRadius: panelCornerRadius,
             exponent: AtticStyle.panelSquircleExponent
@@ -213,14 +251,14 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return nil
         }
         if AtticPanelResizePolicy.resizeEdges(
-            at: point,
+            at: policyPoint,
             in: bounds,
             cornerRadius: panelCornerRadius
         ) != nil {
             return self
         }
         if AtticPanelDragPolicy.isTopDragPoint(
-            point,
+            policyPoint,
             in: bounds,
             cornerRadius: panelCornerRadius
         ) {
@@ -234,13 +272,18 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     }
 
     override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
+        let hostingPoint = convert(event.locationInWindow, from: nil)
+        let policyPoint = AtticPanelCoordinateSpace.policyPoint(
+            fromHostingPoint: hostingPoint,
+            in: bounds,
+            isFlipped: isFlipped
+        )
         guard let window else {
             super.mouseDown(with: event)
             return
         }
         if let edges = AtticPanelResizePolicy.resizeEdges(
-                at: point,
+                at: policyPoint,
                 in: bounds,
                 cornerRadius: panelCornerRadius
               ) {
@@ -254,7 +297,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return
         }
         guard AtticPanelDragPolicy.isTopDragPoint(
-            point,
+            policyPoint,
             in: bounds,
             cornerRadius: panelCornerRadius
         ) else {
@@ -360,44 +403,72 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         let middleHeight = max(0, bounds.height - (corner * 2))
 
         addCursorRect(
-            AtticPanelDragPolicy.topDragRegion(
+            AtticPanelCoordinateSpace.hostingRect(
+                fromPolicyRect: AtticPanelDragPolicy.topDragRegion(
+                    in: bounds,
+                    cornerRadius: panelCornerRadius
+                ),
                 in: bounds,
-                cornerRadius: panelCornerRadius
+                isFlipped: isFlipped
             ),
             cursor: .openHand
         )
 
         addCursorRect(
-            CGRect(x: bounds.minX, y: bounds.minY, width: corner, height: corner),
+            localCursorRect(
+                CGRect(x: bounds.minX, y: bounds.minY, width: corner, height: corner)
+            ),
             cursor: resizeCursor(for: [.left, .bottom])
         )
         addCursorRect(
-            CGRect(x: bounds.maxX - corner, y: bounds.minY, width: corner, height: corner),
+            localCursorRect(
+                CGRect(x: bounds.maxX - corner, y: bounds.minY, width: corner, height: corner)
+            ),
             cursor: resizeCursor(for: [.right, .bottom])
         )
         addCursorRect(
-            CGRect(x: bounds.minX, y: bounds.maxY - corner, width: corner, height: corner),
+            localCursorRect(
+                CGRect(x: bounds.minX, y: bounds.maxY - corner, width: corner, height: corner)
+            ),
             cursor: resizeCursor(for: [.left, .top])
         )
         addCursorRect(
-            CGRect(x: bounds.maxX - corner, y: bounds.maxY - corner, width: corner, height: corner),
+            localCursorRect(
+                CGRect(x: bounds.maxX - corner, y: bounds.maxY - corner, width: corner, height: corner)
+            ),
             cursor: resizeCursor(for: [.right, .top])
         )
         addCursorRect(
-            CGRect(x: bounds.minX, y: bounds.minY + corner, width: edge, height: middleHeight),
+            localCursorRect(
+                CGRect(x: bounds.minX, y: bounds.minY + corner, width: edge, height: middleHeight)
+            ),
             cursor: resizeCursor(for: .left)
         )
         addCursorRect(
-            CGRect(x: bounds.maxX - edge, y: bounds.minY + corner, width: edge, height: middleHeight),
+            localCursorRect(
+                CGRect(x: bounds.maxX - edge, y: bounds.minY + corner, width: edge, height: middleHeight)
+            ),
             cursor: resizeCursor(for: .right)
         )
         addCursorRect(
-            CGRect(x: bounds.minX + corner, y: bounds.minY, width: middleWidth, height: edge),
+            localCursorRect(
+                CGRect(x: bounds.minX + corner, y: bounds.minY, width: middleWidth, height: edge)
+            ),
             cursor: resizeCursor(for: .bottom)
         )
         addCursorRect(
-            CGRect(x: bounds.minX + corner, y: bounds.maxY - edge, width: middleWidth, height: edge),
+            localCursorRect(
+                CGRect(x: bounds.minX + corner, y: bounds.maxY - edge, width: middleWidth, height: edge)
+            ),
             cursor: resizeCursor(for: .top)
+        )
+    }
+
+    private func localCursorRect(_ policyRect: CGRect) -> CGRect {
+        AtticPanelCoordinateSpace.hostingRect(
+            fromPolicyRect: policyRect,
+            in: bounds,
+            isFlipped: isFlipped
         )
     }
 
