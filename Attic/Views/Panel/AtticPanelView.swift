@@ -150,6 +150,7 @@ struct AtticPanelView: View {
             Image(systemName: uiState.isPanelPinned ? "pin.fill" : "pin")
                 .font(.system(size: AtticStyle.controlSymbolSize, weight: .medium))
                 .foregroundStyle(Color.primary.opacity(0.9))
+                .atticClearGlassForegroundReadability()
                 .frame(width: AtticStyle.actionControlSize, height: AtticStyle.actionControlSize)
                 .atticGlassControl(in: Circle())
                 .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
@@ -185,6 +186,7 @@ struct AtticPanelView: View {
                         .foregroundStyle(
                             Color.primary.opacity(isSelected ? 0.96 : (isEmphasized ? 0.86 : 0.68))
                         )
+                        .atticClearGlassForegroundReadability()
                         .background(
                             Color.primary.opacity(isSelected ? 0.15 : (isEmphasized ? 0.08 : 0)),
                             in: Circle()
@@ -335,6 +337,7 @@ struct AtticPanelView: View {
                 Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Color.primary.opacity(0.92))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .background(
                         Color.primary.opacity(uiState.isComposerPresented ? 0.10 : 0),
@@ -352,6 +355,7 @@ struct AtticPanelView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(Color.primary.opacity(0.92))
+                .atticClearGlassForegroundReadability()
                 .padding(.horizontal, 5)
                 .frame(maxWidth: .infinity)
                 .frame(height: AtticStyle.entryControlHeight)
@@ -367,6 +371,7 @@ struct AtticPanelView: View {
                             ? Color.primary.opacity(0.94)
                             : Color.primary.opacity(0.34)
                     )
+                    .atticClearGlassForegroundReadability()
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .background(
                         Color.primary.opacity(
@@ -424,11 +429,13 @@ struct AtticPanelView: View {
         VStack(spacing: 6) {
             Text(uiState.selectedScope.emptyStateTitle)
                 .font(.system(size: 14, weight: .medium, design: .rounded))
+                .atticClearGlassForegroundReadability()
             Text(uiState.selectedScope == .tasks
                 ? "Add a task and it will stay close by."
                 : "Capture an idea for later.")
                 .font(.system(size: 11, design: .rounded))
                 .foregroundStyle(.secondary)
+                .atticClearGlassForegroundReadability()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, horizontalInset)
@@ -438,6 +445,7 @@ struct AtticPanelView: View {
         Text(error)
             .font(.caption2)
             .foregroundStyle(.red)
+            .atticClearGlassForegroundReadability()
             .lineLimit(2)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
