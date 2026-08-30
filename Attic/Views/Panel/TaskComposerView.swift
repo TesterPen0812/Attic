@@ -18,6 +18,7 @@ struct TaskComposerView: View {
                     .focused($isTitleFocused)
                     .onSubmit(save)
                     .onExitCommand(perform: cancel)
+                    .atticClearGlassForegroundReadability()
                     .accessibilityIdentifier("new-task-title")
 
                 Button(action: save) {
@@ -26,6 +27,7 @@ struct TaskComposerView: View {
                         .frame(width: 20, height: 20)
                         .background(Color.accentColor, in: Circle())
                         .foregroundStyle(.white)
+                        .atticClearGlassForegroundReadability()
                 }
                 .buttonStyle(.plain)
                 .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -47,6 +49,7 @@ struct TaskComposerView: View {
                                 .font(.system(size: 10, weight: .medium, design: .rounded))
                         }
                         .foregroundStyle(option.color)
+                        .atticClearGlassForegroundReadability()
                         .padding(.horizontal, 7)
                         .frame(height: 22)
                         .background(

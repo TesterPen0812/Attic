@@ -1,9 +1,17 @@
 import XCTest
 import SwiftData
+import SwiftUI
 import UniformTypeIdentifiers
 @testable import Attic
 
 final class TaskStoreTests: XCTestCase {
+    func testTaskPriorityIndicatorColoursKeepEstablishedMapping() {
+        assertSameSRGBColor(TaskPriority.none.color, Color.secondary.opacity(0.5))
+        assertSameSRGBColor(TaskPriority.low.color, .blue)
+        assertSameSRGBColor(TaskPriority.medium.color, .orange)
+        assertSameSRGBColor(TaskPriority.high.color, .red)
+    }
+
     @MainActor
     func testAgentAccessRequiresExplicitOptInOnlyOnce() {
         let suiteName = "AtticTests.AgentAccess.\(UUID().uuidString)"
@@ -899,4 +907,34 @@ final class TaskStoreTests: XCTestCase {
         protection.completeImportRefresh()
         XCTAssertFalse(protection.protectsImport)
     }
+}
+
+private func assertSameSRGBColor(
+    _ actual: Color,
+    _ expected: Color,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    guard let actual = NSColor(actual).usingColorSpace(.sRGB),
+          let expected = NSColor(expected).usingColorSpace(.sRGB) else {
+        XCTFail("Expected colours to resolve in sRGB", file: file, line: line)
+        return
+    }
+
+    XCTAssertEqual(
+        actual.redComponent, expected.redComponent,
+        accuracy: 0.001, file: file, line: line
+    )
+    XCTAssertEqual(
+        actual.greenComponent, expected.greenComponent,
+        accuracy: 0.001, file: file, line: line
+    )
+    XCTAssertEqual(
+        actual.blueComponent, expected.blueComponent,
+        accuracy: 0.001, file: file, line: line
+    )
+    XCTAssertEqual(
+        actual.alphaComponent, expected.alphaComponent,
+        accuracy: 0.001, file: file, line: line
+    )
 }

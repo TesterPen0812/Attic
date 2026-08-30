@@ -42,6 +42,7 @@ struct TaskRowView: View {
             }
             .font(.system(size: 14, weight: task.status == .inProgress ? .medium : .regular, design: .rounded))
             .frame(maxWidth: .infinity, alignment: .leading)
+            .atticClearGlassForegroundReadability()
 
             trailingAction
         }
@@ -93,6 +94,7 @@ struct TaskRowView: View {
             Text(task.title)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .lineLimit(2)
+                .atticClearGlassForegroundReadability()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -110,6 +112,7 @@ struct TaskRowView: View {
                     .font(.system(size: 9, weight: .bold))
                     .frame(width: 24, height: 24)
                     .foregroundStyle(Color.accentColor)
+                    .atticClearGlassForegroundReadability()
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -123,6 +126,7 @@ struct TaskRowView: View {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.primary.opacity(0.72))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }

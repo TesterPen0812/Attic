@@ -58,5 +58,36 @@ struct TaskStatusMark: View {
                     .frame(width: size, height: size)
             }
         }
+        .atticClearGlassForegroundReadability()
+    }
+}
+
+/// Keeps small foreground details legible when Clear glass transmits a
+/// similarly coloured desktop underneath. The treatment is deliberately
+/// local to the rendered foreground: it does not add a fill, scrim, material,
+/// or any background sampling work to the panel surface.
+private struct ClearGlassForegroundReadabilityModifier: ViewModifier {
+    @Environment(\.atticPanelGlassStyle) private var glassStyle
+    @Environment(\.colorScheme) private var colorScheme
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if glassStyle == .clear {
+            content.shadow(
+                color: colorScheme == .dark
+                    ? Color.black.opacity(0.56)
+                    : Color.white.opacity(0.62),
+                radius: 0.7,
+                y: 0.35
+            )
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func atticClearGlassForegroundReadability() -> some View {
+        modifier(ClearGlassForegroundReadabilityModifier())
     }
 }

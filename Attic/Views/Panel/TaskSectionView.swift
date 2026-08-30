@@ -15,6 +15,7 @@ struct TaskSectionView: View {
                 Text("\(status.title) · \(tasks.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .atticClearGlassForegroundReadability()
                     .contentTransition(.numericText())
                     .accessibilityIdentifier("task-section-\(status.rawValue)")
                 Spacer()
