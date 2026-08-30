@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum AtticStyle {
@@ -31,7 +32,9 @@ struct AtticPanelSurface: ViewModifier {
             exponent: AtticStyle.panelSquircleExponent
         )
 
-        if translucent && glassStyle == .stableAcrylic {
+        if translucent && glassStyle == .liveStable {
+            liveStableSurface(content: content, shape: shape)
+        } else if translucent && glassStyle == .stableAcrylic {
             stableAcrylicSurface(content: content, shape: shape)
         } else if #available(macOS 26.0, *), translucent {
             nativeGlassSurface(content: content, shape: shape)
@@ -58,6 +61,51 @@ struct AtticPanelSurface: ViewModifier {
                     shape.stroke(Color.primary.opacity(0.075), lineWidth: 0.7)
                 }
         }
+    }
+
+    private func liveStableSurface(content: Content, shape: Squircle) -> some View {
+        let isDark = prefersDarkSurface
+        let edge = isDark ? Color.white.opacity(0.18) : Color.black.opacity(0.12)
+
+        return content
+            .background {
+                ZStack {
+                    LiveStablePanelBackdropView()
+
+                    LinearGradient(
+                        stops: isDark
+                            ? [
+                                .init(color: Color.black.opacity(0.52), location: 0),
+                                .init(color: Color.black.opacity(0.30), location: 0.48),
+                                .init(color: Color.black.opacity(0.14), location: 1)
+                            ]
+                            : [
+                                .init(color: Color.white.opacity(0.30), location: 0),
+                                .init(color: Color.white.opacity(0.16), location: 0.50),
+                                .init(color: Color.black.opacity(0.04), location: 1)
+                            ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(isDark ? 0.07 : 0.28),
+                            Color.clear,
+                            Color.black.opacity(isDark ? 0.10 : 0.035)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+                .clipShape(shape)
+                .allowsHitTesting(false)
+            }
+            .overlay {
+                shape.stroke(edge, lineWidth: 0.75)
+            }
+            .clipShape(shape)
+            .contentShape(shape)
     }
 
     private func stableAcrylicSurface(content: Content, shape: Squircle) -> some View {
@@ -177,7 +225,7 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if glassStyle == .stableAcrylic {
+        if glassStyle == .stableAcrylic || glassStyle == .liveStable {
             content
                 .background {
                     ZStack {
@@ -217,6 +265,31 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
                 .background(.thinMaterial, in: shape)
                 .overlay { shape.stroke(Color.primary.opacity(0.13), lineWidth: 0.75) }
         }
+    }
+}
+
+enum LiveStablePanelBackdrop {
+    @MainActor
+    static func configure(_ view: NSVisualEffectView) {
+        view.material = .underWindowBackground
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.isEmphasized = false
+    }
+}
+
+private struct LiveStablePanelBackdropView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        LiveStablePanelBackdrop.configure(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        // SwiftUI may reuse this AppKit view after the panel changes key state.
+        // Reassert the public active-state contract instead of compensating
+        // with different active/inactive opacity values.
+        LiveStablePanelBackdrop.configure(view)
     }
 }
 

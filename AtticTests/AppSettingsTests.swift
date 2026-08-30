@@ -21,10 +21,23 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(PanelGlassStyle.allCases.map(\.title), [
             "Clear",
             "Frosted",
+            "Live Stable",
             "Stable Acrylic"
         ])
-        XCTAssertEqual(Set(PanelGlassStyle.allCases.map(\.rawValue)).count, 3)
+        XCTAssertEqual(Set(PanelGlassStyle.allCases.map(\.rawValue)).count, 4)
         XCTAssertEqual(PanelGlassStyle.stableAcrylic.rawValue, "stable")
+    }
+
+    @MainActor
+    func testLiveStableBackdropUsesForcedActiveBehindWindowMaterial() {
+        let view = NSVisualEffectView()
+
+        LiveStablePanelBackdrop.configure(view)
+
+        XCTAssertEqual(view.material, .underWindowBackground)
+        XCTAssertEqual(view.blendingMode, .behindWindow)
+        XCTAssertEqual(view.state, .active)
+        XCTAssertFalse(view.isEmphasized)
     }
 
     @MainActor

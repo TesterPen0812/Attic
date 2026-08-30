@@ -29,6 +29,7 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
 enum PanelGlassStyle: String, CaseIterable, Identifiable {
     case clear
     case frosted
+    case liveStable
     /// Keeps the earlier experimental `stable` preference compatible while
     /// replacing its implementation with a capture-free acrylic surface.
     case stableAcrylic = "stable"
@@ -39,6 +40,7 @@ enum PanelGlassStyle: String, CaseIterable, Identifiable {
         switch self {
         case .clear: return "Clear"
         case .frosted: return "Frosted"
+        case .liveStable: return "Live Stable"
         case .stableAcrylic: return "Stable Acrylic"
         }
     }
@@ -49,6 +51,8 @@ enum PanelGlassStyle: String, CaseIterable, Identifiable {
             return "Maximum live transparency and native refraction."
         case .frosted:
             return "Native blur with stronger contrast."
+        case .liveStable:
+            return "Live compositor blur pinned to one focus-independent appearance."
         case .stableAcrylic:
             return "Consistent, fast acrylic without live background transmission."
         }
