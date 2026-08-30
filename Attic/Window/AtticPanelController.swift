@@ -135,6 +135,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
+        let priorFrame = panel.frame
         currentScreen = screen
         currentCorner = corner
         hostingView.dockedCorner = corner
@@ -150,19 +151,38 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let finalFrame = frame(on: screen, corner: corner)
 
         if panel.isVisible {
+            let localPriorFrame = PanelGeometry.constrainedFrame(priorFrame, to: screen.visibleFrame)
+            let mustEstablishOnTargetDisplay = !framesMatch(priorFrame, localPriorFrame)
+
+            if mustEstablishOnTargetDisplay {
+                let localInitialFrame = PanelGeometry.hiddenFrame(
+                    from: finalFrame,
+                    corner: corner,
+                    in: screen.visibleFrame
+                )
+                panel.alphaValue = 0
+                panel.setFrame(localInitialFrame, display: true)
+            }
+
             if makeKey {
                 panel.makeKeyAndOrderFront(nil)
             } else {
                 panel.orderFrontRegardless()
             }
-            panel.alphaValue = 1
 
-            guard !framesMatch(panel.frame, finalFrame) else { return }
-            animateShow(to: finalFrame, fadeIn: false)
+            guard !framesMatch(panel.frame, finalFrame) else {
+                panel.alphaValue = 1
+                return
+            }
+            animateShow(to: finalFrame, fadeIn: mustEstablishOnTargetDisplay)
             return
         }
 
-        let initialFrame = PanelGeometry.hiddenFrame(from: finalFrame, corner: corner)
+        let initialFrame = PanelGeometry.hiddenFrame(
+            from: finalFrame,
+            corner: corner,
+            in: screen.visibleFrame
+        )
         panel.setFrame(initialFrame, display: true)
         panel.alphaValue = 0
 
@@ -212,7 +232,16 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let generation = transitionGeneration
         isShowing = false
         needsResizeAfterShowing = false
-        let targetFrame = PanelGeometry.hiddenFrame(from: panel.frame, corner: currentCorner)
+        guard let screen = panel.screen ?? currentScreen else { return false }
+        let safeFrame = PanelGeometry.constrainedFrame(panel.frame, to: screen.visibleFrame)
+        if !framesMatch(panel.frame, safeFrame) {
+            panel.setFrame(safeFrame, display: true)
+        }
+        let targetFrame = PanelGeometry.hiddenFrame(
+            from: safeFrame,
+            corner: currentCorner,
+            in: screen.visibleFrame
+        )
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)

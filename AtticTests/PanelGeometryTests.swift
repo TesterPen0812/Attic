@@ -205,6 +205,86 @@ final class PanelGeometryTests: XCTestCase {
         )
     }
 
+    func testHiddenTransitionFramesRemainInsideSafeAreaForEveryCorner() {
+        let visibleFrame = CGRect(x: -1_440, y: 70, width: 1_440, height: 800)
+        let safeFrame = visibleFrame.insetBy(
+            dx: PanelGeometry.screenInset,
+            dy: PanelGeometry.screenInset
+        )
+        let size = CGSize(width: 420, height: 560)
+
+        for corner in ScreenCorner.allCases {
+            let dockedFrame = PanelGeometry.panelFrame(
+                in: visibleFrame,
+                size: size,
+                corner: corner
+            )
+            let hiddenFrame = PanelGeometry.hiddenFrame(
+                from: dockedFrame,
+                corner: corner,
+                in: visibleFrame
+            )
+
+            XCTAssertTrue(safeFrame.contains(dockedFrame), "Docked frame escaped at \(corner)")
+            XCTAssertTrue(safeFrame.contains(hiddenFrame), "Hidden frame escaped at \(corner)")
+
+            for step in 0...10 {
+                let progress = CGFloat(step) / 10
+                let interpolated = CGRect(
+                    x: hiddenFrame.minX + ((dockedFrame.minX - hiddenFrame.minX) * progress),
+                    y: hiddenFrame.minY + ((dockedFrame.minY - hiddenFrame.minY) * progress),
+                    width: hiddenFrame.width,
+                    height: hiddenFrame.height
+                )
+                XCTAssertTrue(safeFrame.contains(interpolated), "Transition escaped at \(corner), step \(step)")
+            }
+        }
+    }
+
+    func testCrossDisplayTransitionIsEstablishedLocallyBeforeAnimation() {
+        let sourceVisibleFrame = CGRect(x: 0, y: 70, width: 1_440, height: 800)
+        let targetVisibleFrame = CGRect(x: 1_680, y: 25, width: 1_920, height: 1_055)
+        let targetSafeFrame = targetVisibleFrame.insetBy(
+            dx: PanelGeometry.screenInset,
+            dy: PanelGeometry.screenInset
+        )
+        let size = CGSize(width: 420, height: 560)
+        let sourceFrame = PanelGeometry.panelFrame(
+            in: sourceVisibleFrame,
+            size: size,
+            corner: .bottomLeft
+        )
+        let targetFrame = PanelGeometry.panelFrame(
+            in: targetVisibleFrame,
+            size: size,
+            corner: .topRight
+        )
+
+        XCTAssertNotEqual(
+            PanelGeometry.constrainedFrame(sourceFrame, to: targetVisibleFrame),
+            sourceFrame
+        )
+
+        let localInitialFrame = PanelGeometry.hiddenFrame(
+            from: targetFrame,
+            corner: .topRight,
+            in: targetVisibleFrame
+        )
+        XCTAssertTrue(targetSafeFrame.contains(localInitialFrame))
+        XCTAssertTrue(targetSafeFrame.contains(targetFrame))
+
+        for step in 0...10 {
+            let progress = CGFloat(step) / 10
+            let interpolated = CGRect(
+                x: localInitialFrame.minX + ((targetFrame.minX - localInitialFrame.minX) * progress),
+                y: localInitialFrame.minY + ((targetFrame.minY - localInitialFrame.minY) * progress),
+                width: localInitialFrame.width,
+                height: localInitialFrame.height
+            )
+            XCTAssertTrue(targetSafeFrame.contains(interpolated), "Cross-display local transition escaped at step \(step)")
+        }
+    }
+
     func testTaskScrollMaskUsesPointSizedFadesAcrossPanelHeights() {
         let compact = TaskScrollMaskLayout.stops(panelHeight: 480)
         let tall = TaskScrollMaskLayout.stops(panelHeight: 900)

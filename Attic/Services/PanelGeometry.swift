@@ -173,24 +173,35 @@ enum PanelGeometry {
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
-    static func hiddenFrame(from visibleFrame: CGRect, corner: ScreenCorner, distance: CGFloat = 18) -> CGRect {
+    /// A local, still-on-screen staging frame used while fading the panel.
+    /// Moving inward keeps every intermediate window frame inside the usable
+    /// display area; the panel's alpha supplies the hidden presentation.
+    static func hiddenFrame(
+        from panelFrame: CGRect,
+        corner: ScreenCorner,
+        in visibleFrame: CGRect,
+        distance: CGFloat = 18
+    ) -> CGRect {
         let xOffset: CGFloat
         let yOffset: CGFloat
         switch corner {
         case .topLeft:
-            xOffset = -distance
-            yOffset = distance
+            xOffset = distance
+            yOffset = -distance
         case .topRight:
-            xOffset = distance
-            yOffset = distance
-        case .bottomLeft:
             xOffset = -distance
             yOffset = -distance
-        case .bottomRight:
+        case .bottomLeft:
             xOffset = distance
-            yOffset = -distance
+            yOffset = distance
+        case .bottomRight:
+            xOffset = -distance
+            yOffset = distance
         }
-        return visibleFrame.offsetBy(dx: xOffset, dy: yOffset)
+        return constrainedFrame(
+            panelFrame.offsetBy(dx: xOffset, dy: yOffset),
+            to: visibleFrame
+        )
     }
 
     static func preferredHeight(taskCount: Int, sectionCount: Int, isComposing: Bool) -> CGFloat {
