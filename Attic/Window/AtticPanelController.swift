@@ -60,7 +60,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 uiState: uiState,
                 settings: settings
             ),
-            panelCornerRadius: settings.panelCornerSize
+            panelCornerRadius: settings.panelCornerSize,
+            dockedCorner: settings.corner
         )
 
         super.init()
@@ -106,10 +107,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             y: point.y - panel.frame.minY
         )
         let acquisitionEdges = isInsideRectangularFrame
-            ? AtticPanelResizePolicy.cornerAcquisitionEdges(
-                at: localPoint,
-                in: CGRect(origin: .zero, size: panel.frame.size),
-                cornerRadius: settings.panelCornerSize
+            ? AtticPanelResizePolicy.allowedResizeEdges(
+                AtticPanelResizePolicy.cornerAcquisitionEdges(
+                    at: localPoint,
+                    in: CGRect(origin: .zero, size: panel.frame.size),
+                    cornerRadius: settings.panelCornerSize
+                ),
+                dockedAt: currentCorner
             )
             : nil
         let shouldIgnoreMouseEvents = isInsideRectangularFrame
@@ -127,6 +131,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
         currentScreen = screen
         currentCorner = corner
+        hostingView.dockedCorner = corner
         updateResizeLimits(for: screen)
         startPointerPassthroughMonitoring()
 
@@ -260,6 +265,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             .sink { [weak self] corner in
                 guard let self else { return }
                 self.currentCorner = corner
+                self.hostingView.dockedCorner = corner
                 guard !self.isApplyingInteractiveCorner else { return }
                 self.resizeAndReanchor()
             }
@@ -453,6 +459,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
         if persistsCorner {
             currentCorner = corner
+            hostingView.dockedCorner = corner
             isApplyingInteractiveCorner = true
             settings.corner = corner
             isApplyingInteractiveCorner = false

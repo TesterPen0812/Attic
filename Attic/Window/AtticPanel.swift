@@ -93,7 +93,8 @@ enum AtticPanelResizePolicy {
     static func resizeEdges(
         at point: CGPoint,
         in bounds: CGRect,
-        cornerRadius: CGFloat
+        cornerRadius: CGFloat,
+        dockedAt corner: ScreenCorner? = nil
     ) -> PanelResizeEdges? {
         // NSView's local bounds are half-open, but an event on the visual
         // right/top border can arrive exactly at maxX/maxY. Pull only those
@@ -117,10 +118,13 @@ enum AtticPanelResizePolicy {
             exponent: AtticStyle.panelSquircleExponent
         )
         if !isInsideSquircle {
-            return cornerAcquisitionEdges(
-                at: point,
-                in: bounds,
-                cornerRadius: cornerRadius
+            return allowedResizeEdges(
+                cornerAcquisitionEdges(
+                    at: point,
+                    in: bounds,
+                    cornerRadius: cornerRadius
+                ),
+                dockedAt: corner
             )
         }
 
@@ -129,16 +133,32 @@ enum AtticPanelResizePolicy {
         let nearBottomCorner = point.y - bounds.minY <= cornerGripThickness
         let nearTopCorner = bounds.maxY - point.y <= cornerGripThickness
 
-        if nearLeftCorner && nearBottomCorner { return [.left, .bottom] }
-        if nearLeftCorner && nearTopCorner { return [.left, .top] }
-        if nearRightCorner && nearBottomCorner { return [.right, .bottom] }
-        if nearRightCorner && nearTopCorner { return [.right, .top] }
+        let candidate: PanelResizeEdges?
+        if nearLeftCorner && nearBottomCorner { candidate = [.left, .bottom] }
+        else if nearLeftCorner && nearTopCorner { candidate = [.left, .top] }
+        else if nearRightCorner && nearBottomCorner { candidate = [.right, .bottom] }
+        else if nearRightCorner && nearTopCorner { candidate = [.right, .top] }
+        else if point.x - bounds.minX <= edgeGripThickness { candidate = .left }
+        else if bounds.maxX - point.x <= edgeGripThickness { candidate = .right }
+        else if point.y - bounds.minY <= edgeGripThickness { candidate = .bottom }
+        else if bounds.maxY - point.y <= edgeGripThickness { candidate = .top }
+        else { candidate = nil }
+        return allowedResizeEdges(candidate, dockedAt: corner)
+    }
 
-        if point.x - bounds.minX <= edgeGripThickness { return .left }
-        if bounds.maxX - point.x <= edgeGripThickness { return .right }
-        if point.y - bounds.minY <= edgeGripThickness { return .bottom }
-        if bounds.maxY - point.y <= edgeGripThickness { return .top }
-        return nil
+    static func allowedResizeEdges(
+        _ candidate: PanelResizeEdges?,
+        dockedAt corner: ScreenCorner?
+    ) -> PanelResizeEdges? {
+        guard let candidate, let corner else { return candidate }
+        let lockedEdges: PanelResizeEdges
+        switch corner {
+        case .topLeft: lockedEdges = [.top, .left]
+        case .topRight: lockedEdges = [.top, .right]
+        case .bottomLeft: lockedEdges = [.bottom, .left]
+        case .bottomRight: lockedEdges = [.bottom, .right]
+        }
+        return candidate.isDisjoint(with: lockedEdges) ? candidate : nil
     }
 
     static func cornerAcquisitionEdges(
@@ -290,6 +310,11 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             if let window { window.invalidateCursorRects(for: self) }
         }
     }
+    var dockedCorner: ScreenCorner {
+        didSet {
+            if let window { window.invalidateCursorRects(for: self) }
+        }
+    }
     var onLiveResizeBegan: (() -> Void)?
     var onLiveResizeChanged: ((CGSize) -> Void)?
     var onLiveResizeEnded: ((CGSize) -> Void)?
@@ -299,14 +324,15 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     private var resizeSession: ResizeSession?
     private var moveSession: MoveSession?
 
-    init(rootView: AtticPanelView, panelCornerRadius: CGFloat) {
+    init(rootView: AtticPanelView, panelCornerRadius: CGFloat, dockedCorner: ScreenCorner) {
         self.panelCornerRadius = panelCornerRadius
+        self.dockedCorner = dockedCorner
         super.init(rootView: rootView)
     }
 
     @available(*, unavailable)
     required init(rootView: AtticPanelView) {
-        fatalError("Use init(rootView:panelCornerRadius:)")
+        fatalError("Use init(rootView:panelCornerRadius:dockedCorner:)")
     }
 
     @available(*, unavailable)
@@ -329,7 +355,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         let resizeEdges = AtticPanelResizePolicy.resizeEdges(
             at: policyPoint,
             in: bounds,
-            cornerRadius: panelCornerRadius
+            cornerRadius: panelCornerRadius,
+            dockedAt: dockedCorner
         )
         guard isInsideSquircle || resizeEdges != nil else { return nil }
         if resizeEdges != nil {
@@ -363,7 +390,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         if let edges = AtticPanelResizePolicy.resizeEdges(
                 at: policyPoint,
                 in: bounds,
-                cornerRadius: panelCornerRadius
+                cornerRadius: panelCornerRadius,
+                dockedAt: dockedCorner
               ) {
             resizeSession = ResizeSession(
                 edges: edges,
@@ -495,54 +523,61 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             cursor: .openHand
         )
 
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.minX, y: bounds.minY, width: corner, height: corner)
             ),
-            cursor: resizeCursor(for: [.left, .bottom])
+            edges: [.left, .bottom]
         )
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.maxX - corner, y: bounds.minY, width: corner, height: corner)
             ),
-            cursor: resizeCursor(for: [.right, .bottom])
+            edges: [.right, .bottom]
         )
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.minX, y: bounds.maxY - corner, width: corner, height: corner)
             ),
-            cursor: resizeCursor(for: [.left, .top])
+            edges: [.left, .top]
         )
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.maxX - corner, y: bounds.maxY - corner, width: corner, height: corner)
             ),
-            cursor: resizeCursor(for: [.right, .top])
+            edges: [.right, .top]
         )
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.minX, y: bounds.minY + corner, width: edge, height: middleHeight)
             ),
-            cursor: resizeCursor(for: .left)
+            edges: .left
         )
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.maxX - edge, y: bounds.minY + corner, width: edge, height: middleHeight)
             ),
-            cursor: resizeCursor(for: .right)
+            edges: .right
         )
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.minX + corner, y: bounds.minY, width: middleWidth, height: edge)
             ),
-            cursor: resizeCursor(for: .bottom)
+            edges: .bottom
         )
-        addCursorRect(
+        addResizeCursorRect(
             localCursorRect(
                 CGRect(x: bounds.minX + corner, y: bounds.maxY - edge, width: middleWidth, height: edge)
             ),
-            cursor: resizeCursor(for: .top)
+            edges: .top
         )
+    }
+
+    private func addResizeCursorRect(_ rect: CGRect, edges: PanelResizeEdges) {
+        guard AtticPanelResizePolicy.allowedResizeEdges(edges, dockedAt: dockedCorner) != nil else {
+            return
+        }
+        addCursorRect(rect, cursor: resizeCursor(for: edges))
     }
 
     private func localCursorRect(_ policyRect: CGRect) -> CGRect {

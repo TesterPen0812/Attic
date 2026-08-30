@@ -375,7 +375,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         }
     }
 
-    func testEveryResizeEdgeAndCornerHasAGenerousVisibleTarget() {
+    func testRawResizeGeometryClassifiesEveryGenerousVisibleTarget() {
         let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
         let radius: CGFloat = 140
         let cases: [(CGPoint, PanelResizeEdges)] = [
@@ -398,6 +398,167 @@ final class PanelSquircleGeometryTests: XCTestCase {
                 ),
                 expectedEdges,
                 "Unexpected resize ownership at \(point)"
+            )
+        }
+    }
+
+    func testDockCornerLocksBothScreenFacingResizeEdges() {
+        let allDirections: [PanelResizeEdges] = [
+            .left, .right, .bottom, .top,
+            [.left, .bottom], [.right, .bottom],
+            [.left, .top], [.right, .top]
+        ]
+        let expected: [ScreenCorner: [PanelResizeEdges]] = [
+            .topLeft: [.right, .bottom, [.right, .bottom]],
+            .topRight: [.left, .bottom, [.left, .bottom]],
+            .bottomLeft: [.right, .top, [.right, .top]],
+            .bottomRight: [.left, .top, [.left, .top]]
+        ]
+
+        for corner in ScreenCorner.allCases {
+            for direction in allDirections {
+                let actual = AtticPanelResizePolicy.allowedResizeEdges(
+                    direction,
+                    dockedAt: corner
+                )
+                if expected[corner, default: []].contains(direction) {
+                    XCTAssertEqual(actual, direction, "\(corner) should allow \(direction)")
+                } else {
+                    XCTAssertNil(actual, "\(corner) should lock \(direction)")
+                }
+            }
+        }
+    }
+
+    func testDockAwareHitTestingExposesOnlyThreeInwardResizeHandlesPerCorner() {
+        let bounds = CGRect(x: 0, y: 0, width: 380, height: 560)
+        let radius: CGFloat = 80
+        let handles: [(CGPoint, PanelResizeEdges)] = [
+            (CGPoint(x: 12, y: bounds.midY), .left),
+            (CGPoint(x: bounds.maxX - 12, y: bounds.midY), .right),
+            (CGPoint(x: bounds.midX, y: 12), .bottom),
+            (CGPoint(x: bounds.midX, y: bounds.maxY - 12), .top),
+            (CGPoint(x: 19, y: 19), [.left, .bottom]),
+            (CGPoint(x: bounds.maxX - 19, y: 19), [.right, .bottom]),
+            (CGPoint(x: 19, y: bounds.maxY - 19), [.left, .top]),
+            (CGPoint(x: bounds.maxX - 19, y: bounds.maxY - 19), [.right, .top])
+        ]
+        let expected: [ScreenCorner: [PanelResizeEdges]] = [
+            .topLeft: [.right, .bottom, [.right, .bottom]],
+            .topRight: [.left, .bottom, [.left, .bottom]],
+            .bottomLeft: [.right, .top, [.right, .top]],
+            .bottomRight: [.left, .top, [.left, .top]]
+        ]
+
+        for corner in ScreenCorner.allCases {
+            for (point, direction) in handles {
+                let actual = AtticPanelResizePolicy.resizeEdges(
+                    at: point,
+                    in: bounds,
+                    cornerRadius: radius,
+                    dockedAt: corner
+                )
+                if expected[corner, default: []].contains(direction) {
+                    XCTAssertEqual(actual, direction, "\(corner) should own \(direction)")
+                } else {
+                    XCTAssertNil(actual, "\(corner) should not own \(direction)")
+                }
+            }
+        }
+    }
+
+    func testDockAwareTransparentHaloExistsOnlyAtAllowedInwardCorner() {
+        let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
+        let radius: CGFloat = 140
+        let halos: [(CGPoint, PanelResizeEdges)] = [
+            (CGPoint(x: 14, y: 14), [.left, .bottom]),
+            (CGPoint(x: bounds.maxX - 14, y: 14), [.right, .bottom]),
+            (CGPoint(x: 14, y: bounds.maxY - 14), [.left, .top]),
+            (CGPoint(x: bounds.maxX - 14, y: bounds.maxY - 14), [.right, .top])
+        ]
+        let allowedCorner: [ScreenCorner: PanelResizeEdges] = [
+            .topLeft: [.right, .bottom],
+            .topRight: [.left, .bottom],
+            .bottomLeft: [.right, .top],
+            .bottomRight: [.left, .top]
+        ]
+
+        for corner in ScreenCorner.allCases {
+            for (point, direction) in halos {
+                let actual = AtticPanelResizePolicy.resizeEdges(
+                    at: point,
+                    in: bounds,
+                    cornerRadius: radius,
+                    dockedAt: corner
+                )
+                if allowedCorner[corner] == direction {
+                    XCTAssertEqual(actual, direction)
+                } else {
+                    XCTAssertNil(actual)
+                }
+            }
+        }
+    }
+
+    func testDockAwareResizePreservesTheSelectedCornerAnchor() {
+        let frame = CGRect(x: 500, y: 200, width: 400, height: 520)
+        let cases: [(ScreenCorner, PanelResizeEdges, CGPoint)] = [
+            (.topLeft, [.right, .bottom], CGPoint(x: 80, y: -60)),
+            (.topRight, [.left, .bottom], CGPoint(x: -80, y: -60)),
+            (.bottomLeft, [.right, .top], CGPoint(x: 80, y: 60)),
+            (.bottomRight, [.left, .top], CGPoint(x: -80, y: 60))
+        ]
+
+        for (corner, edges, delta) in cases {
+            let resized = AtticPanelResizePolicy.resizedFrame(
+                from: frame,
+                mouseDelta: delta,
+                edges: edges,
+                minimumSize: PanelGeometry.minimumPanelSize,
+                maximumSize: CGSize(width: 1_200, height: 1_000)
+            )
+            switch corner {
+            case .topLeft:
+                XCTAssertEqual(resized.minX, frame.minX)
+                XCTAssertEqual(resized.maxY, frame.maxY)
+            case .topRight:
+                XCTAssertEqual(resized.maxX, frame.maxX)
+                XCTAssertEqual(resized.maxY, frame.maxY)
+            case .bottomLeft:
+                XCTAssertEqual(resized.minX, frame.minX)
+                XCTAssertEqual(resized.minY, frame.minY)
+            case .bottomRight:
+                XCTAssertEqual(resized.maxX, frame.maxX)
+                XCTAssertEqual(resized.minY, frame.minY)
+            }
+        }
+    }
+
+    func testLockedTopResizeBandDoesNotRemoveTheIntentionalDragLane() {
+        let bounds = CGRect(x: 0, y: 0, width: 480, height: 620)
+        let radius: CGFloat = 80
+        let dragRegion = AtticPanelDragPolicy.topDragRegion(
+            in: bounds,
+            cornerRadius: radius
+        )
+        let topEdge = CGPoint(x: dragRegion.midX, y: bounds.maxY)
+        let dragPoint = CGPoint(x: dragRegion.midX, y: dragRegion.midY)
+
+        for corner in [ScreenCorner.topLeft, .topRight] {
+            XCTAssertNil(
+                AtticPanelResizePolicy.resizeEdges(
+                    at: topEdge,
+                    in: bounds,
+                    cornerRadius: radius,
+                    dockedAt: corner
+                )
+            )
+            XCTAssertTrue(
+                AtticPanelDragPolicy.isTopDragPoint(
+                    dragPoint,
+                    in: bounds,
+                    cornerRadius: radius
+                )
             )
         }
     }
