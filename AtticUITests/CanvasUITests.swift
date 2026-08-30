@@ -54,11 +54,8 @@ final class CanvasUITests: XCTestCase {
         drawStroke(on: surface)
         assertStrokeCount(1)
 
-        app.buttons["panel-section-tasks"].click()
-        XCTAssertTrue(
-            app.buttons["panel-section-canvas"].waitForExistence(timeout: 2)
-        )
-        app.buttons["panel-section-canvas"].click()
+        app.typeKey("1", modifierFlags: .command)
+        app.typeKey("4", modifierFlags: .command)
         assertStrokeCount(1)
 
         app.typeKey(",", modifierFlags: .command)
@@ -155,6 +152,37 @@ final class CanvasUITests: XCTestCase {
         try saveVisualEvidence(named: "canvas-second-document")
     }
 
+    func testModeDockExpandsOnHoverAndCollapsesAfterPointerLeaves() {
+        let dock = app.descendants(matching: .any)
+            .matching(identifier: "panel-section-picker")
+            .firstMatch
+        let tasks = app.buttons["panel-section-tasks"]
+        let backlog = app.buttons["panel-section-backlog"]
+        let notes = app.buttons["panel-section-notes"]
+        let canvas = app.buttons["panel-section-canvas"]
+        let pin = app.buttons["panel-pin-button"]
+
+        XCTAssertTrue(dock.waitForExistence(timeout: 3))
+        XCTAssertTrue(pin.waitForExistence(timeout: 3))
+        pin.hover()
+        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(tasks.exists)
+        XCTAssertFalse(backlog.exists)
+        XCTAssertFalse(notes.exists)
+        XCTAssertFalse(canvas.exists)
+
+        dock.hover()
+        XCTAssertTrue(backlog.waitForExistence(timeout: 2))
+        XCTAssertTrue(notes.exists)
+        XCTAssertTrue(canvas.exists)
+
+        pin.hover()
+        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
+        XCTAssertFalse(notes.exists)
+        XCTAssertFalse(canvas.exists)
+        XCTAssertTrue(tasks.exists)
+    }
+
     private func launch(resetCanvasStore: Bool) {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
@@ -166,9 +194,7 @@ final class CanvasUITests: XCTestCase {
     }
 
     private func openCanvas() {
-        let button = app.buttons["panel-section-canvas"]
-        XCTAssertTrue(button.waitForExistence(timeout: 3))
-        button.click()
+        app.typeKey("4", modifierFlags: .command)
         XCTAssertTrue(
             app.otherElements["canvas-surface"].waitForExistence(timeout: 3)
         )

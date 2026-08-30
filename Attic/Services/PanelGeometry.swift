@@ -164,3 +164,18 @@ enum PanelGeometry {
         min(max(contentWidth * 1.45, 480), maximumHeight)
     }
 }
+
+enum PanelModeDockLayout {
+    static func width(isExpanded: Bool) -> CGFloat {
+        let visibleSectionCount = isExpanded ? PanelSection.allCases.count : 1
+        return AtticStyle.controlHitSize * CGFloat(visibleSectionCount)
+    }
+
+    static func isVisible(
+        _ section: PanelSection,
+        selectedSection: PanelSection,
+        isExpanded: Bool
+    ) -> Bool {
+        isExpanded || section == selectedSection
+    }
+}

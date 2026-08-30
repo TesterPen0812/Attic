@@ -11,7 +11,10 @@ struct AtticPanelView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var quickEntryTitle = ""
+    @State private var isModeDockHovered = false
+    @State private var hoveredModeSection: PanelSection?
     @FocusState private var isQuickEntryFocused: Bool
+    @FocusState private var focusedModeSection: PanelSection?
 
     private var cornerRadius: CGFloat { settings.panelCornerSize }
 
@@ -43,6 +46,9 @@ struct AtticPanelView: View {
             cornerSize: cornerRadius,
             panelSize: panelSize
         )
+    }
+    private var isModeDockExpanded: Bool {
+        isModeDockHovered || focusedModeSection != nil
     }
 
     var body: some View {
@@ -137,6 +143,14 @@ struct AtticPanelView: View {
         HStack(spacing: 0) {
             ForEach(PanelSection.allCases) { section in
                 let isSelected = uiState.selectedSection == section
+                let isVisible = PanelModeDockLayout.isVisible(
+                    section,
+                    selectedSection: uiState.selectedSection,
+                    isExpanded: isModeDockExpanded
+                )
+                let isEmphasized = isSelected
+                    || hoveredModeSection == section
+                    || focusedModeSection == section
 
                 Button {
                     selectSection(section)
@@ -145,30 +159,63 @@ struct AtticPanelView: View {
                         .font(.system(size: AtticStyle.controlSymbolSize, weight: isSelected ? .semibold : .regular))
                         .frame(width: AtticStyle.modeControlSize, height: AtticStyle.modeControlSize)
                         .foregroundStyle(
-                            Color.primary.opacity(isSelected ? 0.96 : 0.68)
+                            Color.primary.opacity(isSelected ? 0.96 : (isEmphasized ? 0.86 : 0.68))
                         )
                         .background(
-                            Color.primary.opacity(isSelected ? 0.15 : 0),
+                            Color.primary.opacity(isSelected ? 0.15 : (isEmphasized ? 0.08 : 0)),
                             in: Circle()
                         )
                         .overlay {
-                            if isSelected {
-                                Circle().stroke(Color.primary.opacity(0.16), lineWidth: 0.75)
+                            if isSelected || focusedModeSection == section {
+                                Circle().stroke(
+                                    Color.primary.opacity(isSelected ? 0.16 : 0.12),
+                                    lineWidth: 0.75
+                                )
                             }
                         }
                         .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .focused($focusedModeSection, equals: section)
                 .keyboardShortcut(shortcut(for: section), modifiers: .command)
                 .help(section.title)
                 .accessibilityLabel(section.title)
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityIdentifier("panel-section-\(section.rawValue)")
+                .frame(
+                    width: isVisible ? AtticStyle.controlHitSize : 0,
+                    height: AtticStyle.controlHitSize
+                )
+                .opacity(isVisible ? 1 : 0)
+                .clipped()
+                .allowsHitTesting(isVisible)
+                .accessibilityHidden(!isVisible)
+                .onHover { hovering in
+                    if hovering {
+                        hoveredModeSection = section
+                    } else if hoveredModeSection == section {
+                        hoveredModeSection = nil
+                    }
+                }
             }
         }
+        .frame(
+            width: PanelModeDockLayout.width(isExpanded: isModeDockExpanded),
+            height: AtticStyle.controlHitSize,
+            alignment: .trailing
+        )
         .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
+        .contentShape(Capsule(style: .continuous))
+        .onHover { hovering in
+            isModeDockHovered = hovering
+            if !hovering {
+                hoveredModeSection = nil
+            }
+        }
+        .animation(reduceMotion ? nil : AtticMotion.modeDock, value: isModeDockExpanded)
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Panel sections")
         .accessibilityIdentifier("panel-section-picker")
     }
 
@@ -374,6 +421,12 @@ struct AtticPanelView: View {
     }
 
     private func selectSection(_ section: PanelSection) {
+        // Pointer activation should not leave keyboard focus holding the dock
+        // open after the pointer exits. Keyboard navigation still keeps it
+        // expanded while focus remains within the four section controls.
+        if isModeDockHovered {
+            focusedModeSection = nil
+        }
         guard uiState.selectedSection != section else { return }
         if uiState.selectedSection.isNotes, noteDraft.isActive {
             guard noteDraft.close() else { return }

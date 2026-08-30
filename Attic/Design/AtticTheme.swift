@@ -5,6 +5,7 @@ import SwiftUI
 enum AtticMotion {
     static let spring = Animation.spring(response: 0.30, dampingFraction: 0.84)
     static let quick = Animation.easeOut(duration: 0.14)
+    static let modeDock = Animation.spring(response: 0.24, dampingFraction: 0.90)
     static let background = Animation.easeInOut(duration: 0.22)
 }
 

@@ -3,7 +3,7 @@ import Foundation
 /// Top-level surface shown in the Attic panel. Tasks and Backlog retain the
 /// existing `TaskScope` semantics; Notes and Canvas own independent stores and
 /// interaction state.
-enum PanelSection: String, CaseIterable, Identifiable {
+enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     case tasks
     case backlog
     case notes

@@ -15,6 +15,37 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.modeControlSize)
     }
 
+    func testModeDockCollapsesToSelectedSectionAndExpandsInCanonicalOrder() {
+        for selectedSection in PanelSection.allCases {
+            let collapsedSections = PanelSection.allCases.filter {
+                PanelModeDockLayout.isVisible(
+                    $0,
+                    selectedSection: selectedSection,
+                    isExpanded: false
+                )
+            }
+            let expandedSections = PanelSection.allCases.filter {
+                PanelModeDockLayout.isVisible(
+                    $0,
+                    selectedSection: selectedSection,
+                    isExpanded: true
+                )
+            }
+
+            XCTAssertEqual(collapsedSections, [selectedSection])
+            XCTAssertEqual(expandedSections, PanelSection.allCases)
+        }
+
+        XCTAssertEqual(
+            PanelModeDockLayout.width(isExpanded: false),
+            AtticStyle.controlHitSize
+        )
+        XCTAssertEqual(
+            PanelModeDockLayout.width(isExpanded: true),
+            AtticStyle.controlHitSize * CGFloat(PanelSection.allCases.count)
+        )
+    }
+
     func testTaskWorkspaceMaintainsDeliberateGapBelowChromeAtEveryRadiusAndWidth() {
         for width in stride(from: PanelContentSize.min, through: PanelContentSize.max, by: 1) {
             let panelSize = CGSize(
