@@ -108,6 +108,36 @@ final class CornerHoverStateMachineTests: XCTestCase {
             hideDelay: 0.3
         ), .hide)
     }
+
+    @MainActor
+    func testInteractiveForceHidePreservesPinAndAllowsCornerReveal() {
+        let uiState = PanelUIState()
+        uiState.isPanelPinned = true
+        var machine = CornerHoverStateMachine()
+        machine.forceVisible(at: 0, grace: 0)
+
+        machine.forceHidden()
+
+        XCTAssertFalse(machine.isVisible)
+        XCTAssertTrue(uiState.isPanelPinned)
+        XCTAssertEqual(machine.update(
+            at: 10,
+            isInHotspot: true,
+            isInPanel: false,
+            isInteractionLocked: false,
+            isPinned: uiState.isPanelPinned,
+            revealDelay: 0.2
+        ), .none)
+        XCTAssertEqual(machine.update(
+            at: 10.21,
+            isInHotspot: true,
+            isInPanel: false,
+            isInteractionLocked: false,
+            isPinned: uiState.isPanelPinned,
+            revealDelay: 0.2
+        ), .reveal)
+        XCTAssertTrue(uiState.isPanelPinned)
+    }
 }
 
 final class PanelUIStateTests: XCTestCase {

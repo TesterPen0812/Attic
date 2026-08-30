@@ -237,6 +237,32 @@ enum PanelDockingPolicy {
         return corner(right: right, top: top)
     }
 
+    enum ReleaseAction: Equatable {
+        case hide
+        case dock(ScreenCorner)
+    }
+
+    /// A deliberate flick back toward the already attached corner dismisses
+    /// the panel. Other flicks retain their existing role of moving it to a
+    /// different corner, while an ordinary release docks to the nearest one.
+    static func releaseAction(
+        velocity: CGPoint,
+        translation: CGPoint,
+        attachedCorner: ScreenCorner,
+        panelFrame: CGRect,
+        in visibleFrame: CGRect
+    ) -> ReleaseAction {
+        if let flick = flickCorner(
+            velocity: velocity,
+            translation: translation,
+            panelFrame: panelFrame,
+            in: visibleFrame
+        ) {
+            return flick == attachedCorner ? .hide : .dock(flick)
+        }
+        return .dock(nearestCorner(for: panelFrame, in: visibleFrame))
+    }
+
     private static func corner(right: Bool, top: Bool) -> ScreenCorner {
         switch (right, top) {
         case (false, true): .topLeft

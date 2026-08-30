@@ -307,6 +307,74 @@ final class PanelSquircleGeometryTests: XCTestCase {
         )
     }
 
+    func testTransparentCornerAcquisitionUsesOnlyAThinDiagonalHalo() {
+        let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
+        let radius: CGFloat = 140
+
+        XCTAssertEqual(
+            AtticPanelResizePolicy.cornerAcquisitionEdges(
+                at: CGPoint(x: 14, y: 14),
+                in: bounds,
+                cornerRadius: radius
+            ),
+            [.left, .bottom]
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: bounds.maxX - 14, y: bounds.maxY - 14),
+                in: bounds,
+                cornerRadius: radius
+            ),
+            [.right, .top]
+        )
+
+        // The far transparent pixel and non-corner transparent side remain
+        // owned by the application behind the panel.
+        XCTAssertNil(
+            AtticPanelResizePolicy.cornerAcquisitionEdges(
+                at: CGPoint(x: 0, y: 0),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
+        XCTAssertNil(
+            AtticPanelResizePolicy.cornerAcquisitionEdges(
+                at: CGPoint(x: 0, y: 50),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
+        XCTAssertNil(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: 0, y: 0),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
+    }
+
+    func testTransparentCornerAcquisitionMapsEveryDiagonalDirection() {
+        let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
+        let radius: CGFloat = 140
+        let cases: [(CGPoint, PanelResizeEdges)] = [
+            (CGPoint(x: 14, y: 14), [.left, .bottom]),
+            (CGPoint(x: bounds.maxX - 14, y: 14), [.right, .bottom]),
+            (CGPoint(x: 14, y: bounds.maxY - 14), [.left, .top]),
+            (CGPoint(x: bounds.maxX - 14, y: bounds.maxY - 14), [.right, .top])
+        ]
+
+        for (point, expected) in cases {
+            XCTAssertEqual(
+                AtticPanelResizePolicy.cornerAcquisitionEdges(
+                    at: point,
+                    in: bounds,
+                    cornerRadius: radius
+                ),
+                expected
+            )
+        }
+    }
+
     func testEveryResizeEdgeAndCornerHasAGenerousVisibleTarget() {
         let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
         let radius: CGFloat = 140
@@ -368,6 +436,47 @@ final class PanelSquircleGeometryTests: XCTestCase {
                 XCTAssertEqual(resized.height, frame.height)
             }
         }
+    }
+
+    func testNativeResizeDelegateClampRejectsUndersizedProposal() {
+        XCTAssertEqual(
+            AtticPanelResizePolicy.clampedNativeSize(
+                CGSize(width: 33, height: 89),
+                minimumSize: PanelGeometry.minimumPanelSize,
+                maximumSize: CGSize(width: 1_000, height: 900)
+            ),
+            CGSize(width: 332, height: 480)
+        )
+    }
+
+    func testNativeResizeDelegateClampRejectsOversizedProposal() {
+        XCTAssertEqual(
+            AtticPanelResizePolicy.clampedNativeSize(
+                CGSize(width: 2_000, height: 1_600),
+                minimumSize: PanelGeometry.minimumPanelSize,
+                maximumSize: CGSize(width: 1_000, height: 900)
+            ),
+            CGSize(width: 1_000, height: 900)
+        )
+    }
+
+    func testNativeResizeDelegateClampTreatsAxesIndependently() {
+        XCTAssertEqual(
+            AtticPanelResizePolicy.clampedNativeSize(
+                CGSize(width: 700, height: 120),
+                minimumSize: PanelGeometry.minimumPanelSize,
+                maximumSize: CGSize(width: 1_000, height: 900)
+            ),
+            CGSize(width: 700, height: 480)
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.clampedNativeSize(
+                CGSize(width: 120, height: 700),
+                minimumSize: PanelGeometry.minimumPanelSize,
+                maximumSize: CGSize(width: 1_000, height: 900)
+            ),
+            CGSize(width: 332, height: 700)
+        )
     }
 
     func testTopDragRegionIsSeparateFromResizeAndControlAreas() {

@@ -87,6 +87,70 @@ final class PanelGeometryTests: XCTestCase {
         )
     }
 
+    func testFlickTowardAttachedCornerHidesForEveryCorner() {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1_600, height: 900)
+        let frame = CGRect(x: 500, y: 300, width: 332, height: 480)
+        let cases: [(ScreenCorner, CGPoint)] = [
+            (.topLeft, CGPoint(x: -900, y: 900)),
+            (.topRight, CGPoint(x: 900, y: 900)),
+            (.bottomLeft, CGPoint(x: -900, y: -900)),
+            (.bottomRight, CGPoint(x: 900, y: -900))
+        ]
+
+        for (corner, velocity) in cases {
+            let translation = CGPoint(
+                x: velocity.x > 0 ? 80 : -80,
+                y: velocity.y > 0 ? 80 : -80
+            )
+            XCTAssertEqual(
+                PanelDockingPolicy.releaseAction(
+                    velocity: velocity,
+                    translation: translation,
+                    attachedCorner: corner,
+                    panelFrame: frame,
+                    in: visibleFrame
+                ),
+                .hide
+            )
+        }
+    }
+
+    func testFlickTowardDifferentCornerMovesInsteadOfHiding() {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1_600, height: 900)
+        let frame = CGRect(x: 500, y: 300, width: 332, height: 480)
+
+        XCTAssertEqual(
+            PanelDockingPolicy.releaseAction(
+                velocity: CGPoint(x: -900, y: -900),
+                translation: CGPoint(x: -80, y: -80),
+                attachedCorner: .topRight,
+                panelFrame: frame,
+                in: visibleFrame
+            ),
+            .dock(.bottomLeft)
+        )
+    }
+
+    func testSlowReleaseStillDocksInsteadOfHiding() {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1_600, height: 900)
+        let frame = PanelGeometry.panelFrame(
+            in: visibleFrame,
+            size: CGSize(width: 332, height: 480),
+            corner: .topRight
+        )
+
+        XCTAssertEqual(
+            PanelDockingPolicy.releaseAction(
+                velocity: CGPoint(x: 120, y: 120),
+                translation: CGPoint(x: 80, y: 80),
+                attachedCorner: .topRight,
+                panelFrame: frame,
+                in: visibleFrame
+            ),
+            .dock(.topRight)
+        )
+    }
+
     func testPreferredHeightIsClamped() {
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 0, sectionCount: 0, isComposing: false), PanelGeometry.minimumHeight)
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 100, sectionCount: 3, isComposing: true), PanelGeometry.preferredHeightCeiling)

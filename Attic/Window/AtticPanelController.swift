@@ -24,6 +24,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var transitionGeneration = 0
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
+    var onInteractiveHideAccepted: (() -> Void)?
 
     init(
         store: TaskStore,
@@ -100,9 +101,26 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             return
         }
         let isInsideRectangularFrame = panel.isVisible && panel.frame.contains(point)
-        let shouldIgnoreMouseEvents = isInsideRectangularFrame && !containsScreenPoint(point)
+        let localPoint = CGPoint(
+            x: point.x - panel.frame.minX,
+            y: point.y - panel.frame.minY
+        )
+        let acquisitionEdges = isInsideRectangularFrame
+            ? AtticPanelResizePolicy.cornerAcquisitionEdges(
+                at: localPoint,
+                in: CGRect(origin: .zero, size: panel.frame.size),
+                cornerRadius: settings.panelCornerSize
+            )
+            : nil
+        let shouldIgnoreMouseEvents = isInsideRectangularFrame
+            && !containsScreenPoint(point)
+            && acquisitionEdges == nil
         if panel.ignoresMouseEvents != shouldIgnoreMouseEvents {
             panel.ignoresMouseEvents = shouldIgnoreMouseEvents
+            panel.invalidateCursorRects(for: hostingView)
+        }
+        if let acquisitionEdges {
+            hostingView.displayResizeCursor(for: acquisitionEdges)
         }
     }
 
@@ -168,16 +186,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    func hide() {
+    @discardableResult
+    func hide() -> Bool {
         canvasSession.cancelActiveInteraction()
         uiState.isCanvasConfirmationPresented = false
         uiState.dockingPreviewCorner = nil
         uiState.setWindowInteractionActive(false)
         guard panel.isVisible else {
             stopPointerPassthroughMonitoring()
-            return
+            return true
         }
-        guard noteDraft.flush() else { return }
+        guard noteDraft.flush() else { return false }
         transitionGeneration += 1
         let generation = transitionGeneration
         isShowing = false
@@ -196,6 +215,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.stopPointerPassthroughMonitoring()
             }
         }
+        return true
     }
 
     private func configurePanel() {
@@ -315,6 +335,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         beginLiveResize()
     }
 
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        AtticPanelResizePolicy.clampedNativeSize(
+            frameSize,
+            minimumSize: sender.minSize,
+            maximumSize: sender.maxSize
+        )
+    }
+
     func windowDidResize(_ notification: Notification) {
         guard let resizedPanel = notification.object as? NSWindow else { return }
         uiState.updatePanelSize(resizedPanel.frame.size)
@@ -387,12 +415,23 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
         currentScreen = screen
         updateResizeLimits(for: screen)
-        let corner = PanelDockingPolicy.flickCorner(
+        let releaseAction = PanelDockingPolicy.releaseAction(
             velocity: velocity,
             translation: translation,
+            attachedCorner: currentCorner,
             panelFrame: frame,
             in: screen.visibleFrame
-        ) ?? PanelDockingPolicy.nearestCorner(for: frame, in: screen.visibleFrame)
+        )
+        if releaseAction == .hide {
+            uiState.dockingPreviewCorner = nil
+            uiState.setWindowInteractionActive(false)
+            if hide() {
+                onInteractiveHideAccepted?()
+            }
+            return
+        }
+
+        guard case let .dock(corner) = releaseAction else { return }
         currentCorner = corner
         uiState.dockingPreviewCorner = corner
 

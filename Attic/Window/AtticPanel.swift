@@ -60,6 +60,11 @@ enum AtticPanelInteractionPolicy {
 enum AtticPanelResizePolicy {
     static let edgeGripThickness: CGFloat = 14
     static let cornerGripThickness: CGFloat = 28
+    /// The transparent corner remains click-through except for a thin band
+    /// immediately outside the visible superellipse. Expressing that band as
+    /// a power-sum limit keeps it proportional as the corner radius changes
+    /// and, unlike a rectangular halo, never claims the far corner pixel.
+    static let cornerAcquisitionPowerLimit: CGFloat = 1.35
 
     @MainActor
     static func configure(
@@ -87,12 +92,19 @@ enum AtticPanelResizePolicy {
         in bounds: CGRect,
         cornerRadius: CGFloat
     ) -> PanelResizeEdges? {
-        guard Squircle.contains(
+        let isInsideSquircle = Squircle.contains(
             point,
             in: bounds,
             cornerRadius: cornerRadius,
             exponent: AtticStyle.panelSquircleExponent
-        ) else { return nil }
+        )
+        if !isInsideSquircle {
+            return cornerAcquisitionEdges(
+                at: point,
+                in: bounds,
+                cornerRadius: cornerRadius
+            )
+        }
 
         let nearLeftCorner = point.x - bounds.minX <= cornerGripThickness
         let nearRightCorner = bounds.maxX - point.x <= cornerGripThickness
@@ -109,6 +121,42 @@ enum AtticPanelResizePolicy {
         if point.y - bounds.minY <= edgeGripThickness { return .bottom }
         if bounds.maxY - point.y <= edgeGripThickness { return .top }
         return nil
+    }
+
+    static func cornerAcquisitionEdges(
+        at point: CGPoint,
+        in bounds: CGRect,
+        cornerRadius: CGFloat
+    ) -> PanelResizeEdges? {
+        guard bounds.contains(point), !Squircle.contains(
+            point,
+            in: bounds,
+            cornerRadius: cornerRadius,
+            exponent: AtticStyle.panelSquircleExponent
+        ) else { return nil }
+
+        let nearLeft = point.x - bounds.minX <= cornerGripThickness
+        let nearRight = bounds.maxX - point.x <= cornerGripThickness
+        let nearBottom = point.y - bounds.minY <= cornerGripThickness
+        let nearTop = bounds.maxY - point.y <= cornerGripThickness
+        guard (nearLeft || nearRight), (nearBottom || nearTop) else { return nil }
+
+        let radius = min(cornerRadius, bounds.width / 2, bounds.height / 2)
+        guard radius > 0 else { return nil }
+        let centerX = nearLeft ? bounds.minX + radius : bounds.maxX - radius
+        let centerY = nearBottom ? bounds.minY + radius : bounds.maxY - radius
+        let normalizedX = abs(point.x - centerX) / radius
+        let normalizedY = abs(point.y - centerY) / radius
+        let exponent = max(1, AtticStyle.panelSquircleExponent)
+        let powerSum = pow(normalizedX, exponent) + pow(normalizedY, exponent)
+        guard powerSum <= cornerAcquisitionPowerLimit else { return nil }
+
+        switch (nearLeft, nearBottom) {
+        case (true, true): return [.left, .bottom]
+        case (true, false): return [.left, .top]
+        case (false, true): return [.right, .bottom]
+        case (false, false): return [.right, .top]
+        }
     }
 
     static func resizedFrame(
@@ -151,6 +199,25 @@ enum AtticPanelResizePolicy {
         if edges.contains(.left) { origin.x = initialFrame.maxX - width }
         if edges.contains(.bottom) { origin.y = initialFrame.maxY - height }
         return CGRect(origin: origin, size: CGSize(width: width, height: height))
+    }
+
+    static func clampedNativeSize(
+        _ proposedSize: CGSize,
+        minimumSize: CGSize,
+        maximumSize: CGSize
+    ) -> CGSize {
+        let maximumWidth = maximumSize.width.isFinite
+            ? max(minimumSize.width, maximumSize.width)
+            : .greatestFiniteMagnitude
+        let maximumHeight = maximumSize.height.isFinite
+            ? max(minimumSize.height, maximumSize.height)
+            : .greatestFiniteMagnitude
+        let width = proposedSize.width.isFinite ? proposedSize.width : minimumSize.width
+        let height = proposedSize.height.isFinite ? proposedSize.height : minimumSize.height
+        return CGSize(
+            width: min(max(width, minimumSize.width), maximumWidth),
+            height: min(max(height, minimumSize.height), maximumHeight)
+        )
     }
 }
 
@@ -252,19 +319,19 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             in: bounds,
             isFlipped: isFlipped
         )
-        guard Squircle.contains(
+        let isInsideSquircle = Squircle.contains(
             policyPoint,
             in: bounds,
             cornerRadius: panelCornerRadius,
             exponent: AtticStyle.panelSquircleExponent
-        ) else {
-            return nil
-        }
-        if AtticPanelResizePolicy.resizeEdges(
+        )
+        let resizeEdges = AtticPanelResizePolicy.resizeEdges(
             at: policyPoint,
             in: bounds,
             cornerRadius: panelCornerRadius
-        ) != nil {
+        )
+        guard isInsideSquircle || resizeEdges != nil else { return nil }
+        if resizeEdges != nil {
             return self
         }
         if AtticPanelDragPolicy.isTopDragPoint(
@@ -501,5 +568,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         default: position = .top
         }
         return NSCursor.frameResize(position: position, directions: .all)
+    }
+
+    func displayResizeCursor(for edges: PanelResizeEdges) {
+        resizeCursor(for: edges).set()
     }
 }

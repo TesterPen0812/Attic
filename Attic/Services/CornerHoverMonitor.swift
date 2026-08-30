@@ -34,6 +34,9 @@ final class CornerHoverMonitor {
         self.noteStore = noteStore
         self.canvasStore = canvasStore
         self.noteDraft = noteDraft
+        panelController.onInteractiveHideAccepted = { [weak self] in
+            self?.stateMachine.forceHidden()
+        }
     }
 
     func start() {
