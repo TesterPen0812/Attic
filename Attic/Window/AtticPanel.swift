@@ -95,6 +95,21 @@ enum AtticPanelResizePolicy {
         in bounds: CGRect,
         cornerRadius: CGFloat
     ) -> PanelResizeEdges? {
+        // NSView's local bounds are half-open, but an event on the visual
+        // right/top border can arrive exactly at maxX/maxY. Pull only those
+        // boundary coordinates one representable point inward so the visible
+        // edge belongs to the resize grip without expanding the window's hit
+        // region or claiming a transparent corner outside the squircle.
+        guard bounds.width > 0,
+              bounds.height > 0,
+              point.x >= bounds.minX,
+              point.x <= bounds.maxX,
+              point.y >= bounds.minY,
+              point.y <= bounds.maxY else { return nil }
+        let point = CGPoint(
+            x: min(point.x, bounds.maxX.nextDown),
+            y: min(point.y, bounds.maxY.nextDown)
+        )
         let isInsideSquircle = Squircle.contains(
             point,
             in: bounds,
@@ -222,11 +237,13 @@ enum AtticPanelDragPolicy {
             - insets.trailing
             - (AtticStyle.controlHitSize * CGFloat(PanelSection.allCases.count))
             - controlClearance
+        let bottom = bounds.maxY - insets.top - AtticStyle.controlHitSize
+        let top = bounds.maxY - AtticPanelResizePolicy.edgeGripThickness
         return CGRect(
             x: leading,
-            y: bounds.maxY - insets.top - AtticStyle.controlHitSize,
+            y: bottom,
             width: max(0, trailing - leading),
-            height: AtticStyle.controlHitSize
+            height: max(0, top - bottom)
         )
     }
 

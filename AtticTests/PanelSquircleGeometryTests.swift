@@ -283,7 +283,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
         XCTAssertEqual(
             AtticPanelResizePolicy.resizeEdges(
-                at: CGPoint(x: bounds.maxX.nextDown, y: bounds.midY),
+                at: CGPoint(x: bounds.maxX, y: bounds.midY),
                 in: bounds,
                 cornerRadius: 140
             ),
@@ -299,7 +299,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         )
         XCTAssertEqual(
             AtticPanelResizePolicy.resizeEdges(
-                at: CGPoint(x: bounds.midX, y: bounds.maxY.nextDown),
+                at: CGPoint(x: bounds.midX, y: bounds.maxY),
                 in: bounds,
                 cornerRadius: 140
             ),
@@ -486,6 +486,32 @@ final class PanelSquircleGeometryTests: XCTestCase {
         )
 
         XCTAssertGreaterThan(dragRegion.width, 0)
+        XCTAssertEqual(
+            dragRegion.maxY,
+            bounds.maxY - AtticPanelResizePolicy.edgeGripThickness
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: dragRegion.midX, y: bounds.maxY),
+                in: bounds,
+                cornerRadius: radius
+            ),
+            .top
+        )
+        XCTAssertFalse(
+            AtticPanelDragPolicy.isTopDragPoint(
+                CGPoint(x: dragRegion.midX, y: bounds.maxY),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
+        XCTAssertTrue(
+            AtticPanelDragPolicy.isTopDragPoint(
+                CGPoint(x: dragRegion.midX, y: dragRegion.maxY.nextDown),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
         XCTAssertTrue(
             AtticPanelDragPolicy.isTopDragPoint(
                 CGPoint(x: dragRegion.midX, y: dragRegion.midY),
