@@ -22,8 +22,8 @@ struct AtticApp: App {
     }
 
     private var menuBarTitle: String {
-        #if ATTIC_LIVE_STABLE_PREVIEW
-        "Attic Live Stable"
+        #if ATTIC_GLASSMORPHISM_PREVIEW
+        "Attic Glassmorphism"
         #elseif ATTIC_LOCAL_ONLY
         "Attic Notes Local"
         #else
@@ -32,7 +32,7 @@ struct AtticApp: App {
     }
 
     private var menuBarSystemImage: String {
-        #if ATTIC_LIVE_STABLE_PREVIEW
+        #if ATTIC_GLASSMORPHISM_PREVIEW
         "circle.lefthalf.filled"
         #elseif ATTIC_LOCAL_ONLY
         "note.text"

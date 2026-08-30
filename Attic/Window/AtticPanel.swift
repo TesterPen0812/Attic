@@ -6,6 +6,15 @@ final class AtticPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+enum AtticPanelInteractionPolicy {
+    @MainActor
+    static func configure(_ panel: NSPanel) {
+        // The panel remains non-activating, but its first eligible click must
+        // make it key so controls and glass do not need a second click.
+        panel.becomesKeyOnlyIfNeeded = false
+    }
+}
+
 /// The window server still treats a transparent borderless panel as a
 /// rectangle. Keep AppKit's responder hit test aligned with the visible
 /// squircle so transparent corner pixels cannot obstruct the app behind it.

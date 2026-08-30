@@ -2,6 +2,21 @@ import XCTest
 @testable import Attic
 
 final class PanelSquircleGeometryTests: XCTestCase {
+    @MainActor
+    func testPanelInteractionPolicyMakesFirstEligibleClickKey() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 332, height: 480),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.becomesKeyOnlyIfNeeded = true
+
+        AtticPanelInteractionPolicy.configure(panel)
+
+        XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
+    }
+
     func testRectangularSystemShadowIsDisabledForSquirclePanel() {
         XCTAssertFalse(AtticStyle.panelUsesSystemShadow)
     }

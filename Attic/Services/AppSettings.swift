@@ -29,10 +29,9 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
 enum PanelGlassStyle: String, CaseIterable, Identifiable {
     case clear
     case frosted
-    case liveStable
-    /// Keeps the earlier experimental `stable` preference compatible while
-    /// replacing its implementation with a capture-free acrylic surface.
-    case stableAcrylic = "stable"
+    /// Keeps the earlier `stable` preference compatible while restoring the
+    /// original live macOS material used by Attic.
+    case glassmorphism = "stable"
 
     var id: String { rawValue }
 
@@ -40,8 +39,7 @@ enum PanelGlassStyle: String, CaseIterable, Identifiable {
         switch self {
         case .clear: return "Clear"
         case .frosted: return "Frosted"
-        case .liveStable: return "Live Stable"
-        case .stableAcrylic: return "Stable Acrylic"
+        case .glassmorphism: return "Glassmorphism"
         }
     }
 
@@ -51,10 +49,8 @@ enum PanelGlassStyle: String, CaseIterable, Identifiable {
             return "Maximum live transparency and native refraction."
         case .frosted:
             return "Native blur with stronger contrast."
-        case .liveStable:
-            return "Live compositor blur pinned to one focus-independent appearance."
-        case .stableAcrylic:
-            return "Consistent, fast acrylic without live background transmission."
+        case .glassmorphism:
+            return "Classic live macOS blur and vibrancy, matching Attic's original surface."
         }
     }
 }
@@ -230,9 +226,13 @@ final class AppSettings: ObservableObject {
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
         isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
-        panelGlassStyle = PanelGlassStyle(
-            rawValue: defaults.string(forKey: Key.panelGlassStyle) ?? ""
-        ) ?? .clear
+        let storedGlassStyle = defaults.string(forKey: Key.panelGlassStyle) ?? ""
+        if storedGlassStyle == "liveStable" {
+            panelGlassStyle = .glassmorphism
+            defaults.set(PanelGlassStyle.glassmorphism.rawValue, forKey: Key.panelGlassStyle)
+        } else {
+            panelGlassStyle = PanelGlassStyle(rawValue: storedGlassStyle) ?? .clear
+        }
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.

@@ -21,23 +21,22 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(PanelGlassStyle.allCases.map(\.title), [
             "Clear",
             "Frosted",
-            "Live Stable",
-            "Stable Acrylic"
+            "Glassmorphism"
         ])
-        XCTAssertEqual(Set(PanelGlassStyle.allCases.map(\.rawValue)).count, 4)
-        XCTAssertEqual(PanelGlassStyle.stableAcrylic.rawValue, "stable")
+        XCTAssertEqual(Set(PanelGlassStyle.allCases.map(\.rawValue)).count, 3)
+        XCTAssertEqual(PanelGlassStyle.glassmorphism.rawValue, "stable")
     }
 
     @MainActor
-    func testLiveStableBackdropUsesForcedActiveBehindWindowMaterial() {
-        let view = NSVisualEffectView()
+    func testLegacyLiveStablePreferenceMigratesToGlassmorphism() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        LiveStablePanelBackdrop.configure(view)
+        defaults.set("liveStable", forKey: "panelGlassStyle")
+        let settings = AppSettings(defaults: defaults)
 
-        XCTAssertEqual(view.material, .underWindowBackground)
-        XCTAssertEqual(view.blendingMode, .behindWindow)
-        XCTAssertEqual(view.state, .active)
-        XCTAssertFalse(view.isEmphasized)
+        XCTAssertEqual(settings.panelGlassStyle, .glassmorphism)
+        XCTAssertEqual(defaults.string(forKey: "panelGlassStyle"), "stable")
     }
 
     @MainActor

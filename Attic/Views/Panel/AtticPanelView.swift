@@ -54,20 +54,15 @@ struct AtticPanelView: View {
         .padding(.top, contentInsets.top)
         .padding(.bottom, contentInsets.bottom)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .environment(
-            \.colorScheme,
-            uiState.selectedSection.isTaskBased ? .dark : systemColorScheme
-        )
+        .environment(\.colorScheme, systemColorScheme)
         .environment(\.atticPanelGlassStyle, settings.panelGlassStyle)
         .environment(\.controlActiveState, .key)
         .atticPanelSurface(
             translucent: settings.isTranslucent,
             glassStyle: settings.panelGlassStyle,
-            opaqueColor: uiState.selectedSection.isTaskBased
-                ? Color(red: 0.075, green: 0.075, blue: 0.082)
-                : Color(nsColor: .windowBackgroundColor),
+            opaqueColor: Color(nsColor: .windowBackgroundColor),
             cornerRadius: cornerRadius,
-            prefersDarkSurface: uiState.selectedSection.isTaskBased || systemColorScheme == .dark
+            prefersDarkSurface: systemColorScheme == .dark
         )
         .contextMenu {
             Button("Settings…", systemImage: "gearshape") {
@@ -78,9 +73,6 @@ struct AtticPanelView: View {
                 uiState.isPanelPinned.toggle()
             }
         }
-        .animation(reduceMotion ? nil : AtticMotion.spring, value: store.tasks.map(\.id))
-        .animation(reduceMotion ? nil : AtticMotion.spring, value: noteStore.notes.map(\.id))
-        .animation(reduceMotion ? nil : AtticMotion.quick, value: uiState.selectedSection)
         .onChange(of: uiState.selectedSection) { _, _ in
             openMostRecentNoteIfNeeded()
         }
@@ -99,6 +91,7 @@ struct AtticPanelView: View {
             Spacer(minLength: 12)
             modeDock
         }
+        .atticGlassEffectContainer(spacing: 12)
         .padding(.horizontal, chromeInset)
         .frame(maxWidth: .infinity)
     }
@@ -109,7 +102,7 @@ struct AtticPanelView: View {
         } label: {
             Image(systemName: uiState.isPanelPinned ? "pin.fill" : "pin")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.9))
+                .foregroundStyle(Color.primary.opacity(0.9))
                 .frame(width: 42, height: 42)
                 .contentShape(Circle())
                 .atticGlassControl(in: Circle())
@@ -134,7 +127,7 @@ struct AtticPanelView: View {
                         .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
                         .frame(width: 39, height: 39)
                         .foregroundStyle(
-                            Color.white.opacity(isSelected ? 0.96 : 0.68)
+                            Color.primary.opacity(isSelected ? 0.96 : 0.68)
                         )
                         .background(
                             Color.primary.opacity(isSelected ? 0.15 : 0),
@@ -277,7 +270,7 @@ struct AtticPanelView: View {
             TextField("Add a task, note, or idea", text: $quickEntryTitle)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.92))
+                .foregroundStyle(Color.primary.opacity(0.92))
                 .padding(.horizontal, 16)
                 .frame(maxWidth: .infinity, minHeight: 42)
                 .contentShape(Capsule(style: .continuous))
@@ -289,7 +282,7 @@ struct AtticPanelView: View {
             Button(action: saveQuickTask) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.9))
+                    .foregroundStyle(Color.primary.opacity(0.9))
                     .frame(width: 42, height: 42)
                     .contentShape(Circle())
                     .atticGlassControl(in: Circle())
@@ -299,6 +292,7 @@ struct AtticPanelView: View {
             .help("Add task")
             .accessibilityLabel("Add task")
         }
+        .atticGlassEffectContainer(spacing: 10)
         .padding(.horizontal, chromeInset)
         .frame(maxWidth: .infinity)
     }

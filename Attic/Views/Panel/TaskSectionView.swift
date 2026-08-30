@@ -14,7 +14,7 @@ struct TaskSectionView: View {
             HStack(spacing: 5) {
                 Text("\(status.title) · \(tasks.count)")
                     .font(.caption)
-                    .foregroundStyle(Color.white.opacity(0.58))
+                    .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
                     .accessibilityIdentifier("task-section-\(status.rawValue)")
                 Spacer()

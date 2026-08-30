@@ -166,7 +166,7 @@ final class AtticPanelController {
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isMovable = false
-        panel.becomesKeyOnlyIfNeeded = true
+        AtticPanelInteractionPolicy.configure(panel)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
     }
 

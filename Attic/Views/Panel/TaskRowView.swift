@@ -36,9 +36,7 @@ struct TaskRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .layoutPriority(1)
                         .strikethrough(task.status == .done, color: .secondary)
-                        .foregroundStyle(
-                            Color.white.opacity(task.status == .done ? 0.48 : 0.92)
-                        )
+                        .foregroundStyle(Color.primary.opacity(task.status == .done ? 0.48 : 0.92))
                         .accessibilityLabel(task.title)
                 }
             }
@@ -124,7 +122,7 @@ struct TaskRowView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.72))
+                    .foregroundStyle(Color.primary.opacity(0.72))
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }

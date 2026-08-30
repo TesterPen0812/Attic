@@ -2,18 +2,19 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-PROCESS_NAME="AtticLiveStable"
-DISPLAY_NAME="Attic Live Stable Preview"
-BUNDLE_ID="com.taha.Attic.LiveStablePreview"
+PROCESS_NAME="AtticGlassmorphism"
+DISPLAY_NAME="Attic Glassmorphism Preview"
+BUNDLE_ID="com.taha.Attic.GlassmorphismPreview"
 SIGNING_IDENTITY="12F1981F20A99BA8CC316439D7A04ACE14643BC0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DERIVED_DATA="$ROOT_DIR/.build/AtticLiveStablePreview"
+DERIVED_DATA="$ROOT_DIR/.build/AtticGlassmorphismPreview"
 BUILT_APP="$DERIVED_DATA/Build/Products/Local/$PROCESS_NAME.app"
 INSTALL_APP="/Applications/$DISPLAY_NAME.app"
 APP_BINARY="$INSTALL_APP/Contents/MacOS/$PROCESS_NAME"
 
 pkill -x "$PROCESS_NAME" >/dev/null 2>&1 || true
+pkill -x "AtticLiveStable" >/dev/null 2>&1 || true
 
 xcrun xcodebuild \
   -project "$ROOT_DIR/Attic.xcodeproj" \
@@ -25,14 +26,14 @@ xcrun xcodebuild \
   "PRODUCT_NAME=$PROCESS_NAME" \
   "ATTIC_DISPLAY_NAME=$DISPLAY_NAME" \
   "CODE_SIGNING_ALLOWED=NO" \
-  "OTHER_SWIFT_FLAGS=-DATTIC_LOCAL_ONLY -DATTIC_LIVE_STABLE_PREVIEW" \
+  "OTHER_SWIFT_FLAGS=-DATTIC_LOCAL_ONLY -DATTIC_GLASSMORPHISM_PREVIEW" \
   "ONLY_ACTIVE_ARCH=YES" \
   "ENABLE_DEBUG_DYLIB=NO" \
   build
 
 test -d "$BUILT_APP"
 security find-identity -v -p codesigning | grep -F "$SIGNING_IDENTITY" >/dev/null
-RUN_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/attic-live-stable.XXXXXX")"
+RUN_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/attic-glassmorphism.XXXXXX")"
 trap 'rm -rf "$RUN_TEMP_DIR"' EXIT
 STAGED_APP="$RUN_TEMP_DIR/$PROCESS_NAME.app"
 /usr/bin/ditto --norsrc "$BUILT_APP" "$STAGED_APP"
@@ -48,7 +49,7 @@ codesign --verify --deep --strict --verbose=2 "$STAGED_APP"
 /usr/bin/ditto --norsrc "$STAGED_APP" "$INSTALL_APP"
 
 if ! /usr/bin/defaults read "$BUNDLE_ID" panelGlassStyle >/dev/null 2>&1; then
-  /usr/bin/defaults write "$BUNDLE_ID" panelGlassStyle -string liveStable
+  /usr/bin/defaults write "$BUNDLE_ID" panelGlassStyle -string stable
 fi
 
 open_app() {
