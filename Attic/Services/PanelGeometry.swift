@@ -46,6 +46,22 @@ enum PanelGeometry {
         )
     }
 
+    /// Positions the first task section relative to the bottom of the top
+    /// controls. This keeps the perceived gap stable while the squircle's
+    /// radius moves the permanent chrome inward.
+    static func taskWorkspaceTopPadding(cornerSize: CGFloat, panelSize: CGSize) -> CGFloat {
+        let content = contentInsets(cornerSize: cornerSize, panelSize: panelSize)
+        let chrome = chromeInsets(cornerSize: cornerSize, panelSize: panelSize)
+        return max(
+            0,
+            chrome.top
+                + AtticStyle.controlHitSize
+                + AtticStyle.chromeWorkspaceSpacing
+                - content.top
+                - AtticStyle.taskScrollTopPadding
+        )
+    }
+
     /// The effective panel width for a given content size setting.
     static func panelWidth(for contentSize: CGFloat) -> CGFloat {
         contentSize

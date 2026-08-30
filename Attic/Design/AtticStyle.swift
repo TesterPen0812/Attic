@@ -28,6 +28,8 @@ enum AtticStyle {
     /// minimum rather than treating it as a fixed position.
     static let chromeMinimumInset: CGFloat = 22
     static let chromeCornerClearance: CGFloat = 8
+    static let chromeWorkspaceSpacing: CGFloat = 24
+    static let taskScrollTopPadding: CGFloat = 22
 }
 
 struct AtticPanelSurface: ViewModifier {

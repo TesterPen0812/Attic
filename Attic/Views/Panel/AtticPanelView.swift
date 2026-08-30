@@ -38,6 +38,12 @@ struct AtticPanelView: View {
     private var chromeBottomAdjustment: CGFloat {
         max(0, chromeInsets.bottom - contentInsets.bottom)
     }
+    private var taskWorkspaceTopPadding: CGFloat {
+        PanelGeometry.taskWorkspaceTopPadding(
+            cornerSize: cornerRadius,
+            panelSize: panelSize
+        )
+    }
 
     var body: some View {
         ZStack {
@@ -170,7 +176,7 @@ struct AtticPanelView: View {
     private var sectionWorkspace: some View {
         if uiState.selectedSection.isTaskBased {
             taskWorkspace
-                .padding(.top, 78)
+                .padding(.top, taskWorkspaceTopPadding)
                 .transition(.opacity)
         } else if uiState.selectedSection.isCanvas {
             CanvasPanelContent(
@@ -206,7 +212,7 @@ struct AtticPanelView: View {
                         }
                     }
                     .padding(.horizontal, horizontalInset + 2)
-                    .padding(.top, 22)
+                    .padding(.top, AtticStyle.taskScrollTopPadding)
                     .padding(.bottom, 96)
                 }
                 .scrollIndicators(.never)

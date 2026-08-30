@@ -9,8 +9,37 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(AtticStyle.controlHitSize, 42)
         XCTAssertEqual(AtticStyle.chromeMinimumInset, 22)
         XCTAssertEqual(AtticStyle.chromeCornerClearance, 8)
+        XCTAssertEqual(AtticStyle.chromeWorkspaceSpacing, 24)
+        XCTAssertEqual(AtticStyle.taskScrollTopPadding, 22)
         XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.actionControlSize)
         XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.modeControlSize)
+    }
+
+    func testTaskWorkspaceMaintainsDeliberateGapBelowChromeAtEveryRadiusAndWidth() {
+        for width in stride(from: PanelContentSize.min, through: PanelContentSize.max, by: 1) {
+            let panelSize = CGSize(
+                width: width,
+                height: PanelGeometry.preferredWorkspaceHeight(contentWidth: width)
+            )
+
+            for radius in stride(from: PanelCornerSize.min, through: PanelCornerSize.max, by: 1) {
+                let content = PanelGeometry.contentInsets(cornerSize: radius, panelSize: panelSize)
+                let chrome = PanelGeometry.chromeInsets(cornerSize: radius, panelSize: panelSize)
+                let workspace = PanelGeometry.taskWorkspaceTopPadding(
+                    cornerSize: radius,
+                    panelSize: panelSize
+                )
+                let firstSectionTop = content.top + workspace + AtticStyle.taskScrollTopPadding
+                let chromeBottom = chrome.top + AtticStyle.controlHitSize
+
+                XCTAssertEqual(
+                    firstSectionTop - chromeBottom,
+                    AtticStyle.chromeWorkspaceSpacing,
+                    accuracy: 0.0001,
+                    "Incorrect workspace gap at width \(width), radius \(radius)"
+                )
+            }
+        }
     }
 
     func testChromeInsetsAreSymmetricAndRadiusAware() {
