@@ -205,6 +205,48 @@ enum PanelGeometry {
     }
 }
 
+enum PanelDockingPolicy {
+    static let minimumFlickDistance: CGFloat = 36
+    static let minimumFlickSpeed: CGFloat = 650
+    static let minimumFlickAxisSpeed: CGFloat = 180
+
+    static func nearestCorner(for panelFrame: CGRect, in visibleFrame: CGRect) -> ScreenCorner {
+        corner(
+            right: panelFrame.midX >= visibleFrame.midX,
+            top: panelFrame.midY >= visibleFrame.midY
+        )
+    }
+
+    static func flickCorner(
+        velocity: CGPoint,
+        translation: CGPoint,
+        panelFrame: CGRect,
+        in visibleFrame: CGRect
+    ) -> ScreenCorner? {
+        guard hypot(translation.x, translation.y) >= minimumFlickDistance,
+              hypot(velocity.x, velocity.y) >= minimumFlickSpeed else {
+            return nil
+        }
+
+        let right = abs(velocity.x) >= minimumFlickAxisSpeed
+            ? velocity.x > 0
+            : panelFrame.midX >= visibleFrame.midX
+        let top = abs(velocity.y) >= minimumFlickAxisSpeed
+            ? velocity.y > 0
+            : panelFrame.midY >= visibleFrame.midY
+        return corner(right: right, top: top)
+    }
+
+    private static func corner(right: Bool, top: Bool) -> ScreenCorner {
+        switch (right, top) {
+        case (false, true): .topLeft
+        case (true, true): .topRight
+        case (false, false): .bottomLeft
+        case (true, false): .bottomRight
+        }
+    }
+}
+
 enum PanelModeDockLayout {
     static func width(isExpanded: Bool) -> CGFloat {
         let visibleSectionCount = isExpanded ? PanelSection.allCases.count : 1

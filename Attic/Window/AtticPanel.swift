@@ -25,8 +25,8 @@ enum AtticPanelInteractionPolicy {
 }
 
 enum AtticPanelResizePolicy {
-    static let edgeGripThickness: CGFloat = 8
-    static let cornerGripThickness: CGFloat = 24
+    static let edgeGripThickness: CGFloat = 14
+    static let cornerGripThickness: CGFloat = 28
 
     @MainActor
     static func configure(
@@ -111,6 +111,51 @@ enum AtticPanelResizePolicy {
     }
 }
 
+enum AtticPanelDragPolicy {
+    static let controlClearance: CGFloat = 10
+    static let maximumFlickReleaseDelay: TimeInterval = 0.14
+
+    static func topDragRegion(in bounds: CGRect, cornerRadius: CGFloat) -> CGRect {
+        let insets = PanelGeometry.chromeInsets(
+            cornerSize: cornerRadius,
+            panelSize: bounds.size
+        )
+        let leading = bounds.minX
+            + insets.leading
+            + AtticStyle.controlHitSize
+            + controlClearance
+        let trailing = bounds.maxX
+            - insets.trailing
+            - (AtticStyle.controlHitSize * CGFloat(PanelSection.allCases.count))
+            - controlClearance
+        return CGRect(
+            x: leading,
+            y: bounds.maxY - insets.top - AtticStyle.controlHitSize,
+            width: max(0, trailing - leading),
+            height: AtticStyle.controlHitSize
+        )
+    }
+
+    static func isTopDragPoint(
+        _ point: CGPoint,
+        in bounds: CGRect,
+        cornerRadius: CGFloat
+    ) -> Bool {
+        guard Squircle.contains(
+            point,
+            in: bounds,
+            cornerRadius: cornerRadius,
+            exponent: AtticStyle.panelSquircleExponent
+        ), AtticPanelResizePolicy.resizeEdges(
+            at: point,
+            in: bounds,
+            cornerRadius: cornerRadius
+        ) == nil else { return false }
+
+        return topDragRegion(in: bounds, cornerRadius: cornerRadius).contains(point)
+    }
+}
+
 /// The window server still treats a transparent borderless panel as a
 /// rectangle. Keep AppKit's responder hit test aligned with the visible
 /// squircle so transparent corner pixels cannot obstruct the app behind it.
@@ -121,6 +166,14 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         let initialMouseLocation: CGPoint
     }
 
+    private struct MoveSession {
+        let initialFrame: CGRect
+        let initialMouseLocation: CGPoint
+        var lastMouseLocation: CGPoint
+        var lastTimestamp: TimeInterval
+        var velocity: CGPoint = .zero
+    }
+
     var panelCornerRadius: CGFloat {
         didSet {
             if let window { window.invalidateCursorRects(for: self) }
@@ -129,7 +182,11 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     var onLiveResizeBegan: (() -> Void)?
     var onLiveResizeChanged: ((CGSize) -> Void)?
     var onLiveResizeEnded: ((CGSize) -> Void)?
+    var onWindowDragBegan: (() -> Void)?
+    var onWindowDragChanged: ((CGRect, CGPoint) -> Void)?
+    var onWindowDragEnded: ((CGRect, CGPoint, CGPoint, CGPoint) -> Void)?
     private var resizeSession: ResizeSession?
+    private var moveSession: MoveSession?
 
     init(rootView: AtticPanelView, panelCornerRadius: CGFloat) {
         self.panelCornerRadius = panelCornerRadius
@@ -162,6 +219,13 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         ) != nil {
             return self
         }
+        if AtticPanelDragPolicy.isTopDragPoint(
+            point,
+            in: bounds,
+            cornerRadius: panelCornerRadius
+        ) {
+            return self
+        }
         return super.hitTest(point)
     }
 
@@ -171,54 +235,121 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let window,
-              let edges = AtticPanelResizePolicy.resizeEdges(
+        guard let window else {
+            super.mouseDown(with: event)
+            return
+        }
+        if let edges = AtticPanelResizePolicy.resizeEdges(
                 at: point,
                 in: bounds,
                 cornerRadius: panelCornerRadius
-              ) else {
+              ) {
+            resizeSession = ResizeSession(
+                edges: edges,
+                initialFrame: window.frame,
+                initialMouseLocation: NSEvent.mouseLocation
+            )
+            window.makeKey()
+            onLiveResizeBegan?()
+            return
+        }
+        guard AtticPanelDragPolicy.isTopDragPoint(
+            point,
+            in: bounds,
+            cornerRadius: panelCornerRadius
+        ) else {
             super.mouseDown(with: event)
             return
         }
 
-        resizeSession = ResizeSession(
-            edges: edges,
+        let mouseLocation = NSEvent.mouseLocation
+        moveSession = MoveSession(
             initialFrame: window.frame,
-            initialMouseLocation: NSEvent.mouseLocation
+            initialMouseLocation: mouseLocation,
+            lastMouseLocation: mouseLocation,
+            lastTimestamp: event.timestamp
         )
         window.makeKey()
-        onLiveResizeBegan?()
+        NSCursor.closedHand.set()
+        onWindowDragBegan?()
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let session = resizeSession, let window else {
+        guard let window else {
             super.mouseDragged(with: event)
             return
         }
+        if let session = resizeSession {
+            let mouseLocation = NSEvent.mouseLocation
+            let delta = CGPoint(
+                x: mouseLocation.x - session.initialMouseLocation.x,
+                y: mouseLocation.y - session.initialMouseLocation.y
+            )
+            let frame = AtticPanelResizePolicy.resizedFrame(
+                from: session.initialFrame,
+                mouseDelta: delta,
+                edges: session.edges,
+                minimumSize: window.contentMinSize,
+                maximumSize: window.contentMaxSize,
+                visibleFrame: window.screen?.visibleFrame
+            )
+            window.setFrame(frame, display: true)
+            onLiveResizeChanged?(frame.size)
+            return
+        }
+        guard var session = moveSession else {
+            super.mouseDragged(with: event)
+            return
+        }
+
         let mouseLocation = NSEvent.mouseLocation
         let delta = CGPoint(
             x: mouseLocation.x - session.initialMouseLocation.x,
             y: mouseLocation.y - session.initialMouseLocation.y
         )
-        let frame = AtticPanelResizePolicy.resizedFrame(
-            from: session.initialFrame,
-            mouseDelta: delta,
-            edges: session.edges,
-            minimumSize: window.contentMinSize,
-            maximumSize: window.contentMaxSize,
-            visibleFrame: window.screen?.visibleFrame
-        )
+        let elapsed = event.timestamp - session.lastTimestamp
+        if elapsed > 0 {
+            session.velocity = CGPoint(
+                x: (mouseLocation.x - session.lastMouseLocation.x) / elapsed,
+                y: (mouseLocation.y - session.lastMouseLocation.y) / elapsed
+            )
+        }
+        session.lastMouseLocation = mouseLocation
+        session.lastTimestamp = event.timestamp
+        moveSession = session
+
+        var frame = session.initialFrame
+        frame.origin.x += delta.x
+        frame.origin.y += delta.y
         window.setFrame(frame, display: true)
-        onLiveResizeChanged?(frame.size)
+        onWindowDragChanged?(frame, mouseLocation)
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard resizeSession != nil, let window else {
+        guard let window else {
             super.mouseUp(with: event)
             return
         }
-        resizeSession = nil
-        onLiveResizeEnded?(window.frame.size)
+        if resizeSession != nil {
+            resizeSession = nil
+            onLiveResizeEnded?(window.frame.size)
+            return
+        }
+        guard let session = moveSession else {
+            super.mouseUp(with: event)
+            return
+        }
+        moveSession = nil
+        let mouseLocation = NSEvent.mouseLocation
+        let translation = CGPoint(
+            x: mouseLocation.x - session.initialMouseLocation.x,
+            y: mouseLocation.y - session.initialMouseLocation.y
+        )
+        let releaseVelocity = event.timestamp - session.lastTimestamp <= AtticPanelDragPolicy.maximumFlickReleaseDelay
+            ? session.velocity
+            : .zero
+        window.invalidateCursorRects(for: self)
+        onWindowDragEnded?(window.frame, mouseLocation, releaseVelocity, translation)
     }
 
     override func resetCursorRects() {
@@ -227,6 +358,14 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         let corner = AtticPanelResizePolicy.cornerGripThickness
         let middleWidth = max(0, bounds.width - (corner * 2))
         let middleHeight = max(0, bounds.height - (corner * 2))
+
+        addCursorRect(
+            AtticPanelDragPolicy.topDragRegion(
+                in: bounds,
+                cornerRadius: panelCornerRadius
+            ),
+            cursor: .openHand
+        )
 
         addCursorRect(
             CGRect(x: bounds.minX, y: bounds.minY, width: corner, height: corner),

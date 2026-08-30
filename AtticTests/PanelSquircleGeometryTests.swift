@@ -260,6 +260,146 @@ final class PanelSquircleGeometryTests: XCTestCase {
                 cornerRadius: 140
             )
         )
+
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: bounds.maxX - 12, y: bounds.midY),
+                in: bounds,
+                cornerRadius: 140
+            ),
+            .right
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: bounds.midX, y: 12),
+                in: bounds,
+                cornerRadius: 140
+            ),
+            .bottom
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: bounds.midX, y: bounds.maxY - 12),
+                in: bounds,
+                cornerRadius: 140
+            ),
+            .top
+        )
+    }
+
+    func testEveryResizeEdgeAndCornerHasAGenerousVisibleTarget() {
+        let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
+        let radius: CGFloat = 140
+        let cases: [(CGPoint, PanelResizeEdges)] = [
+            (CGPoint(x: 12, y: bounds.midY), .left),
+            (CGPoint(x: bounds.maxX - 12, y: bounds.midY), .right),
+            (CGPoint(x: bounds.midX, y: 12), .bottom),
+            (CGPoint(x: bounds.midX, y: bounds.maxY - 12), .top),
+            (CGPoint(x: 19, y: 19), [.left, .bottom]),
+            (CGPoint(x: bounds.maxX - 19, y: 19), [.right, .bottom]),
+            (CGPoint(x: 19, y: bounds.maxY - 19), [.left, .top]),
+            (CGPoint(x: bounds.maxX - 19, y: bounds.maxY - 19), [.right, .top])
+        ]
+
+        for (point, expectedEdges) in cases {
+            XCTAssertEqual(
+                AtticPanelResizePolicy.resizeEdges(
+                    at: point,
+                    in: bounds,
+                    cornerRadius: radius
+                ),
+                expectedEdges,
+                "Unexpected resize ownership at \(point)"
+            )
+        }
+    }
+
+    func testEveryResizeDirectionPreservesItsOppositeEdges() {
+        let frame = CGRect(x: 500, y: 200, width: 400, height: 520)
+        let cases: [(PanelResizeEdges, CGPoint)] = [
+            (.left, CGPoint(x: -80, y: 60)),
+            (.right, CGPoint(x: 80, y: 60)),
+            (.bottom, CGPoint(x: 80, y: -60)),
+            (.top, CGPoint(x: 80, y: 60)),
+            ([.left, .bottom], CGPoint(x: -80, y: -60)),
+            ([.right, .bottom], CGPoint(x: 80, y: -60)),
+            ([.left, .top], CGPoint(x: -80, y: 60)),
+            ([.right, .top], CGPoint(x: 80, y: 60))
+        ]
+
+        for (edges, delta) in cases {
+            let resized = AtticPanelResizePolicy.resizedFrame(
+                from: frame,
+                mouseDelta: delta,
+                edges: edges,
+                minimumSize: PanelGeometry.minimumPanelSize,
+                maximumSize: CGSize(width: 1_200, height: 1_000)
+            )
+            if edges.contains(.left) { XCTAssertEqual(resized.maxX, frame.maxX) }
+            if edges.contains(.right) { XCTAssertEqual(resized.minX, frame.minX) }
+            if edges.contains(.bottom) { XCTAssertEqual(resized.maxY, frame.maxY) }
+            if edges.contains(.top) { XCTAssertEqual(resized.minY, frame.minY) }
+            if !edges.contains(.left), !edges.contains(.right) {
+                XCTAssertEqual(resized.minX, frame.minX)
+                XCTAssertEqual(resized.width, frame.width)
+            }
+            if !edges.contains(.bottom), !edges.contains(.top) {
+                XCTAssertEqual(resized.minY, frame.minY)
+                XCTAssertEqual(resized.height, frame.height)
+            }
+        }
+    }
+
+    func testTopDragRegionIsSeparateFromResizeAndControlAreas() {
+        let bounds = CGRect(x: 0, y: 0, width: 380, height: 560)
+        let radius: CGFloat = 80
+        let dragRegion = AtticPanelDragPolicy.topDragRegion(
+            in: bounds,
+            cornerRadius: radius
+        )
+
+        XCTAssertGreaterThan(dragRegion.width, 0)
+        XCTAssertTrue(
+            AtticPanelDragPolicy.isTopDragPoint(
+                CGPoint(x: dragRegion.midX, y: dragRegion.midY),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
+        XCTAssertFalse(
+            AtticPanelDragPolicy.isTopDragPoint(
+                CGPoint(x: bounds.minX + 12, y: bounds.maxY - 60),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
+        XCTAssertFalse(
+            AtticPanelDragPolicy.isTopDragPoint(
+                CGPoint(x: bounds.midX, y: bounds.midY),
+                in: bounds,
+                cornerRadius: radius
+            )
+        )
+    }
+
+    func testTopDragRegionRemainsUsableAtMinimumMediumAndLargeSizes() {
+        for size in [
+            PanelGeometry.minimumPanelSize,
+            CGSize(width: 480, height: 620),
+            CGSize(width: 760, height: 820)
+        ] {
+            for radius in [PanelCornerSize.min, PanelCornerSize.defaultValue, PanelCornerSize.max] {
+                let region = AtticPanelDragPolicy.topDragRegion(
+                    in: CGRect(origin: .zero, size: size),
+                    cornerRadius: radius
+                )
+                XCTAssertGreaterThanOrEqual(
+                    region.width,
+                    40,
+                    "Top drag lane too narrow at \(size) with radius \(radius)"
+                )
+            }
+        }
     }
 
     func testResizeFramePreservesOppositeEdgesAndClampsDimensionsIndependently() {

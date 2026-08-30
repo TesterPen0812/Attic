@@ -18,6 +18,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var needsResizeAfterShowing = false
     private var isLiveResizing = false
     private var isPersistingManualSize = false
+    private var isApplyingInteractiveCorner = false
     private var transitionGeneration = 0
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
@@ -155,6 +156,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     func hide() {
         canvasSession.cancelActiveInteraction()
         uiState.isCanvasConfirmationPresented = false
+        uiState.dockingPreviewCorner = nil
+        uiState.setWindowInteractionActive(false)
         guard panel.isVisible else { return }
         guard noteDraft.flush() else { return }
         transitionGeneration += 1
@@ -195,6 +198,20 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         hostingView.onLiveResizeEnded = { [weak self] size in
             self?.endLiveResize(at: size)
         }
+        hostingView.onWindowDragBegan = { [weak self] in
+            self?.beginWindowDrag()
+        }
+        hostingView.onWindowDragChanged = { [weak self] frame, pointer in
+            self?.updateWindowDrag(frame: frame, pointer: pointer)
+        }
+        hostingView.onWindowDragEnded = { [weak self] frame, pointer, velocity, translation in
+            self?.endWindowDrag(
+                frame: frame,
+                pointer: pointer,
+                velocity: velocity,
+                translation: translation
+            )
+        }
         panel.delegate = self
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
     }
@@ -204,6 +221,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             .sink { [weak self] corner in
                 guard let self else { return }
                 self.currentCorner = corner
+                guard !self.isApplyingInteractiveCorner else { return }
                 self.resizeAndReanchor()
             }
             .store(in: &cancellables)
@@ -294,6 +312,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isShowing = false
         needsResizeAfterShowing = false
         isLiveResizing = true
+        uiState.dockingPreviewCorner = nil
+        uiState.setWindowInteractionActive(true)
         panel.ignoresMouseEvents = false
     }
 
@@ -311,5 +331,76 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isPersistingManualSize = true
         settings.persistPanelSize(finalSize)
         isPersistingManualSize = false
+        uiState.setWindowInteractionActive(false)
+    }
+
+    private func beginWindowDrag() {
+        transitionGeneration += 1
+        isShowing = false
+        needsResizeAfterShowing = false
+        uiState.setWindowInteractionActive(true)
+        panel.ignoresMouseEvents = false
+    }
+
+    private func updateWindowDrag(frame: CGRect, pointer: CGPoint) {
+        guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else { return }
+        currentScreen = screen
+        uiState.dockingPreviewCorner = PanelDockingPolicy.nearestCorner(
+            for: frame,
+            in: screen.visibleFrame
+        )
+    }
+
+    private func endWindowDrag(
+        frame: CGRect,
+        pointer: CGPoint,
+        velocity: CGPoint,
+        translation: CGPoint
+    ) {
+        guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
+            uiState.dockingPreviewCorner = nil
+            uiState.setWindowInteractionActive(false)
+            return
+        }
+
+        currentScreen = screen
+        updateResizeLimits(for: screen)
+        let corner = PanelDockingPolicy.flickCorner(
+            velocity: velocity,
+            translation: translation,
+            panelFrame: frame,
+            in: screen.visibleFrame
+        ) ?? PanelDockingPolicy.nearestCorner(for: frame, in: screen.visibleFrame)
+        currentCorner = corner
+        uiState.dockingPreviewCorner = corner
+
+        isApplyingInteractiveCorner = true
+        settings.corner = corner
+        isApplyingInteractiveCorner = false
+
+        let targetFrame = PanelGeometry.panelFrame(
+            in: screen.visibleFrame,
+            size: PanelGeometry.clampedPanelSize(frame.size, in: screen.visibleFrame),
+            corner: corner
+        )
+        transitionGeneration += 1
+        let generation = transitionGeneration
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.18
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
+            panel.animator().setFrame(targetFrame, display: true)
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, generation == self.transitionGeneration else { return }
+                self.uiState.updatePanelSize(self.panel.frame.size)
+                self.uiState.dockingPreviewCorner = nil
+                self.uiState.setWindowInteractionActive(false)
+            }
+        }
+    }
+
+    private func screen(containing point: CGPoint) -> NSScreen? {
+        NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+            ?? NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
     }
 }

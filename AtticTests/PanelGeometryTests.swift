@@ -24,6 +24,69 @@ final class PanelGeometryTests: XCTestCase {
         )
     }
 
+    func testDockingSelectsNearestCornerForEveryQuadrant() {
+        let visibleFrame = CGRect(x: -800, y: 25, width: 1_600, height: 900)
+        let size = CGSize(width: 332, height: 480)
+
+        for corner in ScreenCorner.allCases {
+            let frame = PanelGeometry.panelFrame(
+                in: visibleFrame,
+                size: size,
+                corner: corner
+            )
+            XCTAssertEqual(
+                PanelDockingPolicy.nearestCorner(for: frame, in: visibleFrame),
+                corner
+            )
+        }
+    }
+
+    func testDeliberateFlickChoosesDirectionWithoutRequiringBothAxes() {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1_600, height: 900)
+        let frame = CGRect(x: 400, y: 520, width: 332, height: 480)
+
+        XCTAssertEqual(
+            PanelDockingPolicy.flickCorner(
+                velocity: CGPoint(x: 900, y: -800),
+                translation: CGPoint(x: 80, y: -70),
+                panelFrame: frame,
+                in: visibleFrame
+            ),
+            .bottomRight
+        )
+        XCTAssertEqual(
+            PanelDockingPolicy.flickCorner(
+                velocity: CGPoint(x: -900, y: 40),
+                translation: CGPoint(x: -80, y: 4),
+                panelFrame: frame,
+                in: visibleFrame
+            ),
+            .topLeft
+        )
+    }
+
+    func testShortOrSlowHeaderMovementDoesNotCountAsFlick() {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1_600, height: 900)
+        let frame = CGRect(x: 400, y: 300, width: 332, height: 480)
+
+        XCTAssertNil(
+            PanelDockingPolicy.flickCorner(
+                velocity: CGPoint(x: 900, y: 900),
+                translation: CGPoint(x: 12, y: 12),
+                panelFrame: frame,
+                in: visibleFrame
+            )
+        )
+        XCTAssertNil(
+            PanelDockingPolicy.flickCorner(
+                velocity: CGPoint(x: 120, y: 120),
+                translation: CGPoint(x: 80, y: 80),
+                panelFrame: frame,
+                in: visibleFrame
+            )
+        )
+    }
+
     func testPreferredHeightIsClamped() {
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 0, sectionCount: 0, isComposing: false), PanelGeometry.minimumHeight)
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 100, sectionCount: 3, isComposing: true), PanelGeometry.preferredHeightCeiling)
@@ -79,6 +142,21 @@ final class PanelGeometryTests: XCTestCase {
             uiState.selectSection(section)
             XCTAssertEqual(uiState.panelSize, manuallySelectedSize)
         }
+    }
+
+    @MainActor
+    func testWindowInteractionLocksAutoHideWithoutChangingPinState() {
+        let uiState = PanelUIState()
+        XCTAssertFalse(uiState.isPanelPinned)
+        XCTAssertFalse(uiState.isInteractionLocked)
+
+        uiState.setWindowInteractionActive(true)
+        XCTAssertTrue(uiState.isInteractionLocked)
+        XCTAssertFalse(uiState.isPanelPinned)
+
+        uiState.setWindowInteractionActive(false)
+        XCTAssertFalse(uiState.isInteractionLocked)
+        XCTAssertFalse(uiState.isPanelPinned)
     }
 
     func testWorkspaceHeightIsStableAndResponsiveToConfiguredWidth() {

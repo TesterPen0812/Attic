@@ -9,6 +9,7 @@ final class PanelUIState: ObservableObject {
     @Published var isMenuTracking = false
     @Published var isCanvasConfirmationPresented = false
     @Published var isPanelPinned = false
+    @Published var dockingPreviewCorner: ScreenCorner?
     @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
     @Published private(set) var selectedSection: PanelSection = .tasks
     private(set) var draggedTaskID: UUID?
@@ -24,6 +25,13 @@ final class PanelUIState: ObservableObject {
             || editingTaskID != nil
             || isMenuTracking
             || isCanvasConfirmationPresented
+            || isWindowInteractionActive
+    }
+
+    private(set) var isWindowInteractionActive = false
+
+    func setWindowInteractionActive(_ isActive: Bool) {
+        isWindowInteractionActive = isActive
     }
 
     func updatePanelSize(_ size: CGSize) {

@@ -88,6 +88,9 @@ struct AtticPanelView: View {
             cornerRadius: cornerRadius,
             prefersDarkSurface: systemColorScheme == .dark
         )
+        .overlay {
+            dockingPreview
+        }
         .contextMenu {
             Button("Settings…", systemImage: "gearshape") {
                 AppCoordinator.shared.openSettings()
@@ -106,6 +109,25 @@ struct AtticPanelView: View {
         .onChange(of: noteStore.revision) { _, _ in
             reconcileNoteDraft()
             openMostRecentNoteIfNeeded()
+        }
+    }
+
+    @ViewBuilder
+    private var dockingPreview: some View {
+        if let corner = uiState.dockingPreviewCorner {
+            ZStack(alignment: dockingAlignment(for: corner)) {
+                Color.clear
+                Image(systemName: dockingSymbol(for: corner))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.primary.opacity(0.72))
+                    .frame(width: 28, height: 28)
+                    .atticGlassControl(in: Circle(), interactive: false)
+                    .padding(14)
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : AtticMotion.quick, value: corner)
+            .accessibilityHidden(true)
         }
     }
 
@@ -516,6 +538,24 @@ struct AtticPanelView: View {
         case .backlog: "2"
         case .notes: "3"
         case .canvas: "4"
+        }
+    }
+
+    private func dockingAlignment(for corner: ScreenCorner) -> Alignment {
+        switch corner {
+        case .topLeft: .topLeading
+        case .topRight: .topTrailing
+        case .bottomLeft: .bottomLeading
+        case .bottomRight: .bottomTrailing
+        }
+    }
+
+    private func dockingSymbol(for corner: ScreenCorner) -> String {
+        switch corner {
+        case .topLeft: "arrow.up.left"
+        case .topRight: "arrow.up.right"
+        case .bottomLeft: "arrow.down.left"
+        case .bottomRight: "arrow.down.right"
         }
     }
 }
