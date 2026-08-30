@@ -34,6 +34,7 @@ struct CanvasPanelContent: View {
                     Text(pendingPlacement.instruction)
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
+                        .atticClearGlassForegroundReadability()
                         .padding(.horizontal, 10)
                         .frame(height: 27)
                         .background(.thinMaterial, in: Capsule(style: .continuous))
@@ -164,11 +165,14 @@ struct CanvasPanelContent: View {
             Text(session.selectedCanvas.name)
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .lineLimit(1)
+                .atticClearGlassForegroundReadability()
             Text("·")
                 .foregroundStyle(.tertiary)
+                .atticClearGlassForegroundReadability()
             Text(contentCountLabel)
                 .font(.system(size: 9, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
+                .atticClearGlassForegroundReadability()
                 .contentTransition(.numericText())
                 .accessibilityIdentifier("canvas-content-count")
         }
@@ -276,6 +280,7 @@ struct CanvasPanelContent: View {
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: compact ? 15 : 17, weight: .medium))
+                .atticClearGlassForegroundReadability()
                 .frame(width: compact ? 36 : 42, height: compact ? 36 : 42)
                 .contentShape(Circle())
         }
@@ -394,6 +399,7 @@ struct CanvasPanelContent: View {
             Image(systemName: pendingShape?.symbolName ?? "square")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(pendingShape == nil ? Color.primary : Color.white)
+                .atticClearGlassForegroundReadability()
                 .frame(width: 32, height: 32)
                 .background {
                     Circle()
@@ -504,6 +510,7 @@ struct CanvasPanelContent: View {
                 )
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .atticClearGlassForegroundReadability()
                 .padding(.trailing, 8)
                 .accessibilityLabel("Selected image size")
             }

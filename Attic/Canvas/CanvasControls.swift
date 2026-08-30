@@ -48,6 +48,7 @@ struct CanvasWidthControl: View {
             Image(systemName: "lineweight")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .atticClearGlassForegroundReadability()
                 .accessibilityHidden(true)
 
             Slider(
@@ -64,6 +65,7 @@ struct CanvasWidthControl: View {
             Text(widthLabel)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .atticClearGlassForegroundReadability()
                 .frame(width: compact ? 22 : 28, alignment: .trailing)
                 .accessibilityHidden(true)
         }
@@ -97,6 +99,7 @@ struct CanvasCommandButton: View {
                         ? Color.white
                         : symbolColor ?? Color.primary
                 )
+                .atticClearGlassForegroundReadability()
                 .frame(width: 32, height: 32)
                 .background {
                     Circle()
@@ -126,6 +129,7 @@ struct CanvasStrokeCountLabel: View {
         Text(label)
             .font(.system(size: 9, weight: .medium, design: .rounded))
             .foregroundStyle(.secondary)
+            .atticClearGlassForegroundReadability()
             .contentTransition(.numericText())
             .accessibilityIdentifier("canvas-stroke-count")
     }
@@ -189,6 +193,7 @@ private struct CanvasColorButton: View {
                         .font(.system(size: 8, weight: .bold))
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(Color.white, Color.accentColor)
+                        .atticClearGlassForegroundReadability()
                         .offset(x: 2, y: -2)
                         .accessibilityHidden(true)
                 }

@@ -30,8 +30,10 @@ struct NotesPanelContent: View {
                 Image(systemName: "note.text")
                     .font(.system(size: 22, weight: .light))
                     .foregroundStyle(Color.primary.opacity(0.55))
+                    .atticClearGlassForegroundReadability()
                 Text("A quiet place for the next thought.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .atticClearGlassForegroundReadability()
                 Button("New Note", action: beginNew)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -217,6 +219,7 @@ struct NoteComposerView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 21, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.primary.opacity(0.96))
+                .atticClearGlassForegroundReadability()
                 .focused($isTitleFocused)
                 .onChange(of: isTitleFocused) { _, focused in
                     if focused { isBodyFocused = false }
@@ -233,9 +236,11 @@ struct NoteComposerView: View {
                 Circle()
                     .fill(saveStatusColor)
                     .frame(width: 4, height: 4)
+                    .atticClearGlassForegroundReadability()
                 Text(saveStatus)
                     .font(.system(size: 9.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .atticClearGlassForegroundReadability()
                     .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
@@ -251,6 +256,7 @@ struct NoteComposerView: View {
             Button(action: beginNewNote) {
                 Image(systemName: "plus")
                     .font(.system(size: 13, weight: .medium))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
                     .contentShape(Circle())
@@ -265,6 +271,7 @@ struct NoteComposerView: View {
             } label: {
                 Image(systemName: "paperclip")
                     .font(.system(size: 12, weight: .medium))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
                     .contentShape(Circle())
@@ -284,6 +291,7 @@ struct NoteComposerView: View {
                         .lineLimit(1)
                 }
                 .foregroundStyle(Color.primary.opacity(0.74))
+                .atticClearGlassForegroundReadability()
                 .frame(maxWidth: .infinity)
                 .frame(height: AtticStyle.entryControlHeight)
                 .contentShape(Capsule(style: .continuous))
@@ -297,6 +305,7 @@ struct NoteComposerView: View {
                 Image(systemName: noteDraft.isDirty ? "arrow.up" : "checkmark")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.primary.opacity(noteDraft.canPersist ? 0.92 : 0.34))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .background(
                         Color.primary.opacity(noteDraft.canPersist ? 0.08 : 0.035),
@@ -475,6 +484,7 @@ struct NoteComposerView: View {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(.orange)
+                .atticClearGlassForegroundReadability()
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
@@ -538,15 +548,18 @@ private struct SavedNotesDrawer: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Saved Notes")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .atticClearGlassForegroundReadability()
                     Text(summary)
                         .font(.system(size: 9.5, design: .rounded))
                         .foregroundStyle(.secondary)
+                        .atticClearGlassForegroundReadability()
                 }
 
                 Spacer()
 
                 Button(action: onNew) {
                     Image(systemName: "square.and.pencil")
+                        .atticClearGlassForegroundReadability()
                         .frame(width: 28, height: 28)
                         .contentShape(Circle())
                 }
@@ -556,6 +569,7 @@ private struct SavedNotesDrawer: View {
 
                 Button(action: onClose) {
                     Image(systemName: "xmark")
+                        .atticClearGlassForegroundReadability()
                         .frame(width: 28, height: 28)
                         .contentShape(Circle())
                 }
@@ -575,8 +589,10 @@ private struct SavedNotesDrawer: View {
                     Image(systemName: "note.text")
                         .font(.system(size: 20, weight: .light))
                         .foregroundStyle(.secondary)
+                        .atticClearGlassForegroundReadability()
                     Text("No saved notes yet")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .atticClearGlassForegroundReadability()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -599,6 +615,7 @@ private struct SavedNotesDrawer: View {
             Button(action: onClose) {
                 Label("Return to writing", systemImage: "arrow.left")
                     .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .atticClearGlassForegroundReadability()
                     .frame(maxWidth: .infinity)
                     .frame(height: 32)
             }
@@ -639,6 +656,7 @@ private struct SavedNoteRow: View {
                     Text(displayTitle)
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                         .lineLimit(1)
+                        .atticClearGlassForegroundReadability()
                     HStack(spacing: 5) {
                         Text(preview)
                             .lineLimit(1)
@@ -649,6 +667,7 @@ private struct SavedNoteRow: View {
                     }
                     .font(.system(size: 9.5, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .atticClearGlassForegroundReadability()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -665,6 +684,7 @@ private struct SavedNoteRow: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 10, weight: .semibold))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: 24, height: 24)
             }
             .menuStyle(.borderlessButton)
@@ -743,9 +763,11 @@ struct NoteRowView: View {
                     Text(displayTitle)
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .lineLimit(1)
+                        .atticClearGlassForegroundReadability()
                     Text(preview)
                         .font(.system(size: 10.5, design: .rounded))
                         .foregroundStyle(.secondary)
+                        .atticClearGlassForegroundReadability()
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                 }
@@ -766,6 +788,7 @@ struct NoteRowView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 11, weight: .semibold))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: 24, height: 24)
             }
             .menuStyle(.borderlessButton)

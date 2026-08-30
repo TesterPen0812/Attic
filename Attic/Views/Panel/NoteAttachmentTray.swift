@@ -91,12 +91,16 @@ struct NoteAttachmentTray: View {
                 Text(importProgressLabel(completed: completed, total: total))
                     .font(.system(size: 9.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .atticClearGlassForegroundReadability()
                 Spacer(minLength: 4)
-                Button("Cancel import", systemImage: "xmark.circle", action: onCancelImport)
-                    .buttonStyle(.borderless)
-                    .labelStyle(.iconOnly)
-                    .help("Cancel attachment import")
-                    .accessibilityIdentifier("cancel-note-attachment-import")
+                Button(action: onCancelImport) {
+                    Image(systemName: "xmark.circle")
+                        .atticClearGlassForegroundReadability()
+                }
+                .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
+                .help("Cancel attachment import")
+                .accessibilityIdentifier("cancel-note-attachment-import")
             }
             .padding(.horizontal, 9)
             .frame(minHeight: 30)
@@ -110,6 +114,7 @@ struct NoteAttachmentTray: View {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 9.5, weight: .medium, design: .rounded))
                 .foregroundStyle(.red)
+                .atticClearGlassForegroundReadability()
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 7)
@@ -160,14 +165,17 @@ private struct NoteImageAttachmentCard: View {
                 Image(systemName: "photo")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .atticClearGlassForegroundReadability()
                 Text(attachment.originalFilename)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .atticClearGlassForegroundReadability()
                 Spacer(minLength: 4)
                 Text(fileSize)
                     .font(.system(size: 9, design: .rounded))
                     .foregroundStyle(.secondary)
+                    .atticClearGlassForegroundReadability()
                 actionsMenu
             }
             .padding(.leading, 9)
@@ -214,6 +222,7 @@ private struct NoteImageAttachmentCard: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 10, weight: .semibold))
+                .atticClearGlassForegroundReadability()
                 .frame(width: 26, height: 26)
         }
         .menuStyle(.borderlessButton)
@@ -293,10 +302,12 @@ private struct NoteFileAttachmentCard: View {
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .atticClearGlassForegroundReadability()
                     Text(metadata)
                         .font(.system(size: 9.5, design: .rounded))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .atticClearGlassForegroundReadability()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -354,6 +365,7 @@ private struct NoteFileAttachmentCard: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 10, weight: .semibold))
+                .atticClearGlassForegroundReadability()
                 .frame(width: 26, height: 26)
         }
         .menuStyle(.borderlessButton)
@@ -433,6 +445,7 @@ private struct AttachmentPreviewImage: View {
                 Image(systemName: fallbackSymbol)
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .atticClearGlassForegroundReadability()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(
                         Color.primary.opacity(0.055),
