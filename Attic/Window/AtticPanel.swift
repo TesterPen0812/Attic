@@ -71,13 +71,16 @@ enum AtticPanelResizePolicy {
         _ panel: NSPanel,
         maximumSize: CGSize? = nil
     ) {
-        panel.styleMask.insert(.resizable)
+        // A borderless NSPanel still exposes a window-server resize border
+        // when `.resizable` is present. That path wins before the hosting view
+        // sees the mouse event and, for this SwiftUI-hosted panel, has proven
+        // capable of ignoring AppKit's min/max properties and delegate clamp.
+        // Keep one resize authority: the generous custom grips below.
+        panel.styleMask.remove(.resizable)
         let minimumSize = PanelGeometry.minimumPanelSize
 
-        // AppKit owns a thin native resize border outside the hosting view's
-        // generous custom grips. A borderless panel therefore needs limits
-        // on both its frame and content sizes: content-only limits do not
-        // constrain a drag that begins in that native border.
+        // Retain explicit limits for accessibility and programmatic callers.
+        // Custom live resizing clamps independently before setting the frame.
         panel.minSize = minimumSize
         panel.contentMinSize = minimumSize
         if let maximumSize {
@@ -199,25 +202,6 @@ enum AtticPanelResizePolicy {
         if edges.contains(.left) { origin.x = initialFrame.maxX - width }
         if edges.contains(.bottom) { origin.y = initialFrame.maxY - height }
         return CGRect(origin: origin, size: CGSize(width: width, height: height))
-    }
-
-    static func clampedNativeSize(
-        _ proposedSize: CGSize,
-        minimumSize: CGSize,
-        maximumSize: CGSize
-    ) -> CGSize {
-        let maximumWidth = maximumSize.width.isFinite
-            ? max(minimumSize.width, maximumSize.width)
-            : .greatestFiniteMagnitude
-        let maximumHeight = maximumSize.height.isFinite
-            ? max(minimumSize.height, maximumSize.height)
-            : .greatestFiniteMagnitude
-        let width = proposedSize.width.isFinite ? proposedSize.width : minimumSize.width
-        let height = proposedSize.height.isFinite ? proposedSize.height : minimumSize.height
-        return CGSize(
-            width: min(max(width, minimumSize.width), maximumWidth),
-            height: min(max(height, minimumSize.height), maximumHeight)
-        )
     }
 }
 
@@ -405,13 +389,16 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 x: mouseLocation.x - session.initialMouseLocation.x,
                 y: mouseLocation.y - session.initialMouseLocation.y
             )
+            let visibleFrame = window.screen?.visibleFrame
+            let maximumSize = visibleFrame.map(PanelGeometry.resizeMaximumSize)
+                ?? window.contentMaxSize
             let frame = AtticPanelResizePolicy.resizedFrame(
                 from: session.initialFrame,
                 mouseDelta: delta,
                 edges: session.edges,
-                minimumSize: window.contentMinSize,
-                maximumSize: window.contentMaxSize,
-                visibleFrame: window.screen?.visibleFrame
+                minimumSize: PanelGeometry.minimumPanelSize,
+                maximumSize: maximumSize,
+                visibleFrame: visibleFrame
             )
             window.setFrame(frame, display: true)
             onLiveResizeChanged?(frame.size)

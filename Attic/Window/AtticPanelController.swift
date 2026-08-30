@@ -47,7 +47,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.updatePanelSize(initialSize)
         panel = AtticPanel(
             contentRect: CGRect(origin: .zero, size: initialSize),
-            styleMask: [.borderless, .nonactivatingPanel, .resizable],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
         )
@@ -333,14 +333,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     func windowWillStartLiveResize(_ notification: Notification) {
         beginLiveResize()
-    }
-
-    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        AtticPanelResizePolicy.clampedNativeSize(
-            frameSize,
-            minimumSize: sender.minSize,
-            maximumSize: sender.maxSize
-        )
     }
 
     func windowDidResize(_ notification: Notification) {

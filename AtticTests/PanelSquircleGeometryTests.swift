@@ -213,24 +213,24 @@ final class PanelSquircleGeometryTests: XCTestCase {
     }
 
     @MainActor
-    func testPanelResizePolicyUsesNativeResizableWindowWithExplicitLimits() {
+    func testPanelResizePolicyDisablesWindowServerResizeAndUsesExplicitLimits() {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 332, height: 480),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
 
         AtticPanelResizePolicy.configure(panel)
 
-        XCTAssertTrue(panel.styleMask.contains(.resizable))
+        XCTAssertFalse(panel.styleMask.contains(.resizable))
         XCTAssertEqual(panel.minSize, PanelGeometry.minimumPanelSize)
         XCTAssertEqual(panel.contentMinSize, PanelGeometry.minimumPanelSize)
         XCTAssertTrue(panel.preservesContentDuringLiveResize)
     }
 
     @MainActor
-    func testPanelResizePolicyAppliesDisplayLimitsToNativeAndContentResizePaths() {
+    func testPanelResizePolicyAppliesDisplayLimitsToFrameAndContent() {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 600),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -260,7 +260,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         )
         XCTAssertEqual(
             AtticPanelResizePolicy.resizeEdges(
-                at: CGPoint(x: 4, y: bounds.midY),
+                at: CGPoint(x: bounds.minX, y: bounds.midY),
                 in: bounds,
                 cornerRadius: 140
             ),
@@ -283,7 +283,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
         XCTAssertEqual(
             AtticPanelResizePolicy.resizeEdges(
-                at: CGPoint(x: bounds.maxX - 12, y: bounds.midY),
+                at: CGPoint(x: bounds.maxX.nextDown, y: bounds.midY),
                 in: bounds,
                 cornerRadius: 140
             ),
@@ -291,7 +291,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         )
         XCTAssertEqual(
             AtticPanelResizePolicy.resizeEdges(
-                at: CGPoint(x: bounds.midX, y: 12),
+                at: CGPoint(x: bounds.midX, y: bounds.minY),
                 in: bounds,
                 cornerRadius: 140
             ),
@@ -299,7 +299,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         )
         XCTAssertEqual(
             AtticPanelResizePolicy.resizeEdges(
-                at: CGPoint(x: bounds.midX, y: bounds.maxY - 12),
+                at: CGPoint(x: bounds.midX, y: bounds.maxY.nextDown),
                 in: bounds,
                 cornerRadius: 140
             ),
@@ -438,45 +438,43 @@ final class PanelSquircleGeometryTests: XCTestCase {
         }
     }
 
-    func testNativeResizeDelegateClampRejectsUndersizedProposal() {
-        XCTAssertEqual(
-            AtticPanelResizePolicy.clampedNativeSize(
-                CGSize(width: 33, height: 89),
-                minimumSize: PanelGeometry.minimumPanelSize,
-                maximumSize: CGSize(width: 1_000, height: 900)
-            ),
-            CGSize(width: 332, height: 480)
-        )
-    }
+    func testCustomResizeCannotCrossMinimumAtAnyEdgeOrCorner() {
+        let frame = CGRect(x: 500, y: 200, width: 581, height: 700)
+        let cases: [(PanelResizeEdges, CGPoint)] = [
+            (.left, CGPoint(x: 900, y: 0)),
+            (.right, CGPoint(x: -900, y: 0)),
+            (.bottom, CGPoint(x: 0, y: 900)),
+            (.top, CGPoint(x: 0, y: -900)),
+            ([.left, .bottom], CGPoint(x: 900, y: 900)),
+            ([.right, .bottom], CGPoint(x: -900, y: 900)),
+            ([.left, .top], CGPoint(x: 900, y: -900)),
+            ([.right, .top], CGPoint(x: -900, y: -900))
+        ]
 
-    func testNativeResizeDelegateClampRejectsOversizedProposal() {
-        XCTAssertEqual(
-            AtticPanelResizePolicy.clampedNativeSize(
-                CGSize(width: 2_000, height: 1_600),
+        for (edges, delta) in cases {
+            let resized = AtticPanelResizePolicy.resizedFrame(
+                from: frame,
+                mouseDelta: delta,
+                edges: edges,
                 minimumSize: PanelGeometry.minimumPanelSize,
-                maximumSize: CGSize(width: 1_000, height: 900)
-            ),
-            CGSize(width: 1_000, height: 900)
-        )
-    }
+                maximumSize: CGSize(width: 1_200, height: 1_000)
+            )
 
-    func testNativeResizeDelegateClampTreatsAxesIndependently() {
-        XCTAssertEqual(
-            AtticPanelResizePolicy.clampedNativeSize(
-                CGSize(width: 700, height: 120),
-                minimumSize: PanelGeometry.minimumPanelSize,
-                maximumSize: CGSize(width: 1_000, height: 900)
-            ),
-            CGSize(width: 700, height: 480)
-        )
-        XCTAssertEqual(
-            AtticPanelResizePolicy.clampedNativeSize(
-                CGSize(width: 120, height: 700),
-                minimumSize: PanelGeometry.minimumPanelSize,
-                maximumSize: CGSize(width: 1_000, height: 900)
-            ),
-            CGSize(width: 332, height: 700)
-        )
+            if edges.contains(.left) || edges.contains(.right) {
+                XCTAssertEqual(resized.width, PanelGeometry.minimumPanelSize.width)
+            } else {
+                XCTAssertEqual(resized.width, frame.width)
+            }
+            if edges.contains(.bottom) || edges.contains(.top) {
+                XCTAssertEqual(resized.height, PanelGeometry.minimumPanelSize.height)
+            } else {
+                XCTAssertEqual(resized.height, frame.height)
+            }
+            if edges.contains(.left) { XCTAssertEqual(resized.maxX, frame.maxX) }
+            if edges.contains(.right) { XCTAssertEqual(resized.minX, frame.minX) }
+            if edges.contains(.bottom) { XCTAssertEqual(resized.maxY, frame.maxY) }
+            if edges.contains(.top) { XCTAssertEqual(resized.minY, frame.minY) }
+        }
     }
 
     func testTopDragRegionIsSeparateFromResizeAndControlAreas() {
