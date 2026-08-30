@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 enum AgentSetupPrompt {
+    static let authorizationSummary = "Kept private and never shown in Settings."
+
     static func make(endpoint: String, bearerToken: String) -> String {
         """
         Set up the local Attic MCP server in the AI client you are currently running.
@@ -28,17 +30,23 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var agentServer: AgentServer
-    @ObservedObject var store: TaskStore
     let agentAccessToken: String
-    @State private var didCopyAgentSetupPrompt = false
+
+    @AppStorage(SettingsSection.selectionStorageKey)
+    private var selectedSectionRawValue = SettingsSection.general.rawValue
 
     var body: some View {
-        // Scrolls when the window is shorter than the content (small screens,
-        // extra sections like sync errors); the window caps its own height.
-        ScrollView {
-            content
+        NavigationSplitView {
+            SettingsSidebar(selection: sidebarSelection)
+                .navigationSplitViewColumnWidth(min: 156, ideal: 180, max: 210)
+        } detail: {
+            detail
         }
-        .frame(width: 520)
+        .navigationSplitViewStyle(.balanced)
+        .frame(
+            minWidth: SettingsWindowLayout.minimumContentSize.width,
+            minHeight: SettingsWindowLayout.minimumContentSize.height
+        )
         .onAppear {
             loginItemService.refresh()
         }
@@ -47,368 +55,79 @@ struct SettingsView: View {
         }
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            header
-
-            HStack(alignment: .top, spacing: 28) {
-                CornerPicker(selection: $settings.corner)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Hiding corner")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                    Text(settings.corner.title)
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    Text("The same corner works on every connected display.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("macOS Hot Corners may activate at the same time.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Hide delay", systemImage: "eye.slash")
-                        .font(.headline)
-                    Spacer()
-                    Text(settings.hideDelay, format: .number.precision(.fractionLength(1)))
-                        .monospacedDigit()
-                    Text("sec")
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $settings.hideDelay, in: 0.1...2.0, step: 0.1)
-                Text("Wait this long after the cursor leaves before Attic hides.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Reveal delay", systemImage: "timer")
-                        .font(.headline)
-                    Spacer()
-                    Text(settings.revealDelay, format: .number.precision(.fractionLength(1)))
-                        .monospacedDigit()
-                    Text("sec")
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $settings.revealDelay, in: 0.2...2.0, step: 0.1)
-                Text("Pause in the corner for this long before Attic appears.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Appearance", systemImage: "sun.max")
-                        .font(.headline)
-                    Spacer()
-                    Picker("Appearance", selection: $settings.appearance) {
-                        ForEach(AppearancePreference.allCases) { preference in
-                            Text(preference.title).tag(preference)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 180)
-                    .labelsHidden()
-                }
-                Text("Force light or dark for Attic, or follow your Mac's appearance.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: $settings.isTranslucent) {
-                    Label("Translucency", systemImage: "circle.lefthalf.filled")
-                        .font(.headline)
-                }
-
-                if settings.isTranslucent {
-                    Picker("Glass style", selection: $settings.panelGlassStyle) {
-                        ForEach(PanelGlassStyle.allCases) { style in
-                            Text(style.title).tag(style)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Text(settings.panelGlassStyle.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Use a solid, readable panel without glass or refraction.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Choose the glass character explicitly instead of tying it to task interactions.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Corner size", systemImage: "square.dashed")
-                        .font(.headline)
-                    Spacer()
-                    Text("\(Int(settings.panelCornerSize)) pt")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $settings.panelCornerSize, in: PanelCornerSize.min...PanelCornerSize.max, step: 1)
-                Text("Control how round the panel corners are. Larger corners curve more content inward.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label("Panel size", systemImage: "rectangle.expand.vertical")
-                        .font(.headline)
-                    Spacer()
-                    Text("\(Int(settings.panelContentSize)) pt")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $settings.panelContentSize, in: PanelContentSize.min...PanelContentSize.max, step: 1)
-                Text("Adjust the panel width. Content insets adapt automatically to keep everything inside the squircle.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: loginBinding) {
-                    Label("Launch at login", systemImage: "power")
-                        .font(.headline)
-                }
-
-                Text("Open Attic automatically when you log in to this Mac.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if loginItemService.requiresApproval {
-                    HStack {
-                        Text("Approval is required in System Settings.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                        Button("Open Login Items") { loginItemService.openSystemSettings() }
-                            .buttonStyle(.link)
-                    }
-                }
-
-                if let error = loginItemService.errorMessage {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-
-            Divider()
-
-            cloudSyncSection
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: $settings.isAgentAccessEnabled) {
-                    Label("Agent access", systemImage: "sparkles")
-                        .font(.headline)
-                }
-                .toggleStyle(.switch)
-
-                Text("Allow local AI agents to read, create, update and permanently delete tasks over MCP.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if settings.isAgentAccessEnabled {
-                    agentServerStatus
-
-                    Text(verbatim: "http://127.0.0.1:\(settings.agentServerPort)/mcp")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
-                        .textSelection(.enabled)
-
-                    Text("Authorization: Bearer \(agentAccessToken)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                        .help("Required authorization header for local MCP clients")
-
-                    HStack(spacing: 8) {
-                        Button(action: copyAgentSetupPrompt) {
-                            Label(
-                                didCopyAgentSetupPrompt ? "Copy setup prompt again" : "Copy setup prompt",
-                                systemImage: didCopyAgentSetupPrompt ? "checkmark" : "doc.on.doc"
-                            )
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-
-                        if didCopyAgentSetupPrompt {
-                            Text("Ready to paste")
-                                .font(.caption)
-                                .foregroundStyle(.green)
-                        }
-                    }
-
-                    Text("Paste into Codex, Synara, or Claude. The copied prompt includes your private access token.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            if let message = settings.cloudSyncStartupErrorMessage {
-                Divider()
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("iCloud sync unavailable", systemImage: "exclamationmark.icloud.fill")
-                        .font(.headline)
-                        .foregroundStyle(.orange)
-                    Text("Attic is using its local task store for this launch.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(3)
-                        .help(message)
-                }
-            }
-
-            aboutFooter
-        }
-        .padding(28)
-    }
-
-    private var header: some View {
-        HStack(spacing: 13) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(Color.primary)
-                    .frame(width: 48, height: 48)
-                Image(systemName: "eye.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: .windowBackgroundColor))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Attic")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text("A quiet list, right around the corner.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var loginBinding: Binding<Bool> {
+    private var sidebarSelection: Binding<SettingsSection?> {
         Binding(
-            get: { loginItemService.isEnabled },
-            set: { loginItemService.setEnabled($0) }
+            get: { selectedSection },
+            set: { newValue in
+                guard let newValue else { return }
+                selectedSectionRawValue = newValue.rawValue
+            }
         )
     }
 
-    private func copyAgentSetupPrompt() {
-        let endpoint = "http://127.0.0.1:\(settings.agentServerPort)/mcp"
-        let prompt = AgentSetupPrompt.make(
-            endpoint: endpoint,
-            bearerToken: agentAccessToken
-        )
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(prompt, forType: .string)
-        didCopyAgentSetupPrompt = true
-    }
-
-    private var cloudSyncSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(store.cloudSyncStatus.title, systemImage: store.cloudSyncStatus.symbolName)
-                .font(.headline)
-                .foregroundStyle(
-                    store.cloudSyncStatus.lastErrorMessage == nil ? Color.primary : Color.orange
-                )
-
-            if let lastSuccess = store.cloudSyncStatus.lastSuccessfulActivityAt {
-                Text("Last successful iCloud activity \(lastSuccess.formatted(date: .abbreviated, time: .standard)).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Attic is waiting for its first completed iCloud import or export.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let error = store.cloudSyncStatus.lastErrorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .lineLimit(3)
-                    .help(error)
-            }
-        }
+    private var selectedSection: SettingsSection {
+        SettingsSection.restored(from: selectedSectionRawValue)
     }
 
     @ViewBuilder
-    private var agentServerStatus: some View {
-        switch agentServer.state {
-        case .stopped:
-            Label("Server stopped", systemImage: "circle")
-                .foregroundStyle(.secondary)
-        case .starting:
-            Label("Starting local server…", systemImage: "circle.dotted")
-                .foregroundStyle(.secondary)
-        case .running:
-            Label("Listening on this Mac only", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-        case let .failed(message):
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Could not start the server", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Retry") { agentServer.start() }
-                    .buttonStyle(.link)
-            }
+    private var detail: some View {
+        switch selectedSection {
+        case .general:
+            GeneralSettingsView(loginItemService: loginItemService)
+        case .panel:
+            PanelSettingsView(settings: settings)
+        case .appearance:
+            AppearanceSettingsView(settings: settings)
+        case .agentAccess:
+            AgentAccessSettingsView(
+                settings: settings,
+                agentServer: agentServer,
+                agentAccessToken: agentAccessToken
+            )
+        case .about:
+            AboutSettingsView()
         }
     }
+}
 
-    private var aboutFooter: some View {
-        VStack(spacing: 7) {
-            Text("Made by Emanuele Di Pietro")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
+private struct SettingsSidebar: View {
+    @Binding var selection: SettingsSection?
 
-            Link(destination: URL(string: "https://github.com/Emanuele-web04/Attic")!) {
-                Label("Open source on GitHub", systemImage: "arrow.up.right")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Attic")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Settings")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.tertiary)
-            .help("Open the Attic repository")
+            .padding(.horizontal, 13)
+            .padding(.top, 13)
+            .padding(.bottom, 9)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Attic Settings")
+
+            List(SettingsSection.allCases, selection: $selection) { section in
+                Label(section.title, systemImage: section.systemImage)
+                    .font(.system(size: 13))
+                    .tag(section)
+                    .help(section.title)
+                    .accessibilityIdentifier(section.accessibilityIdentifier)
+            }
+            .listStyle(.sidebar)
+            .accessibilityLabel("Settings sections")
+            .accessibilityIdentifier("settings-sidebar")
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 2)
     }
 }
