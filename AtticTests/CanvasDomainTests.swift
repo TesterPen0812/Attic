@@ -815,6 +815,86 @@ final class CanvasDomainTests: XCTestCase {
     }
 
     @MainActor
+    func testInterruptedScrollMomentumCannotDiscardImagePointerPreview() throws {
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 380))
+        var deliveryCount = 0
+        view.onViewportChange = { _ in deliveryCount += 1 }
+        let id = UUID()
+        let original = CanvasImageTransform(
+            center: CanvasPoint(x: 100, y: 100), width: 160, height: 90, zIndex: 1
+        )
+        let preview = CanvasImageTransform(
+            center: CanvasPoint(x: 125, y: 115), width: 180, height: 101.25, zIndex: 1
+        )
+
+        for mode in [
+            CanvasNSView.ImagePointerMode.moving(
+                id: id, startWorldPoint: CanvasPoint(x: 90, y: 90), original: original
+            ),
+            .resizing(id: id, handle: .bottomRight, original: original)
+        ] {
+            view.scrollWheel(with: try canvasScrollEvent(deltaY: 8, command: true, phase: 1))
+            view.interruptViewportGestureForPointer()
+            view.imagePointerMode = mode
+            view.previewImageTransform = preview
+            let countBeforeTail = deliveryCount
+
+            view.scrollWheel(with: try canvasScrollEvent(deltaY: 4, command: false, phase: 4))
+            view.scrollWheel(with: try canvasScrollEvent(deltaY: 6, command: false, momentumPhase: 1))
+
+            XCTAssertEqual(view.previewImageTransform, preview)
+            XCTAssertEqual(deliveryCount, countBeforeTail)
+            if case .none = view.imagePointerMode { XCTFail("Image pointer preview was discarded") }
+
+            view.scrollWheel(with: try canvasScrollEvent(deltaY: 0, command: false, momentumPhase: 3))
+            view.imagePointerMode = .none
+            view.previewImageTransform = nil
+        }
+
+        let countBeforeFreshGesture = deliveryCount
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 5, command: true, phase: 1))
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 0, command: true, phase: 4))
+        XCTAssertEqual(deliveryCount, countBeforeFreshGesture + 1)
+    }
+
+    @MainActor
+    func testInterruptedScrollMomentumCannotDiscardShapePointerPreview() throws {
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 380))
+        var deliveryCount = 0
+        view.onViewportChange = { _ in deliveryCount += 1 }
+        let preview = CanvasStrokeGeometry(
+            color: .blue,
+            width: 3,
+            points: [CanvasPoint(x: 20, y: 30), CanvasPoint(x: 90, y: 110)]
+        )
+
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 8, command: true, phase: 1))
+        view.interruptViewportGestureForPointer()
+        view.shapePointerMode = CanvasNSView.ShapePointerMode(
+            kind: .rectangle,
+            startViewPoint: CGPoint(x: 20, y: 30),
+            startWorldPoint: CanvasPoint(x: 20, y: 30),
+            endWorldPoint: CanvasPoint(x: 90, y: 110)
+        )
+        view.shapePreview = preview
+        let countBeforeTail = deliveryCount
+
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 4, command: false, phase: 4))
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 6, command: false, momentumPhase: 1))
+
+        XCTAssertNotNil(view.shapePointerMode)
+        XCTAssertEqual(view.shapePreview, preview)
+        XCTAssertEqual(deliveryCount, countBeforeTail)
+
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 0, command: false, momentumPhase: 3))
+        view.shapePointerMode = nil
+        view.shapePreview = nil
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 5, command: true, phase: 1))
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 0, command: true, phase: 4))
+        XCTAssertEqual(deliveryCount, countBeforeTail + 1)
+    }
+
+    @MainActor
     func testCancelledMagnificationTailCannotRestartUntilNewBegan() throws {
         let view = CanvasNSView(
             frame: CGRect(x: 0, y: 0, width: 300, height: 380)

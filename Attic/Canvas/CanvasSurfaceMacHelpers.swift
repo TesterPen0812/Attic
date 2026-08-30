@@ -55,6 +55,15 @@ private enum CanvasToolCursors {
 }
 
 extension CanvasNSView {
+    var hasActivePointerInteraction: Bool {
+        if panLastPoint != nil || shapePointerMode != nil { return true }
+        switch imagePointerMode {
+        case .moving, .resizing: return true
+        case .none: break
+        }
+        return interaction.machine.state != .idle
+    }
+
     var selectedImage: CanvasPlacedImage? {
         guard let selectedImageID else { return nil }
         return imagesForDisplay.first { $0.id == selectedImageID }

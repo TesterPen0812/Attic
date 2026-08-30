@@ -627,12 +627,14 @@ final class CanvasNSView: NSView {
             )
         } else if suppressesScrollSequence {
             if isStandalone {
-                guard interaction.machine.state == .idle else { return }
+                guard !hasActivePointerInteraction else { return }
                 suppressesScrollSequence = false
                 pendingScrollMomentumMode = nil
             } else {
-                if directEnded || momentumEnded {
+                if momentumEnded {
                     suppressesScrollSequence = false
+                    pendingScrollMomentumMode = nil
+                } else if directEnded {
                     pendingScrollMomentumMode = nil
                 }
                 return
