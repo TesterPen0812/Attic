@@ -224,8 +224,27 @@ final class PanelSquircleGeometryTests: XCTestCase {
         AtticPanelResizePolicy.configure(panel)
 
         XCTAssertTrue(panel.styleMask.contains(.resizable))
+        XCTAssertEqual(panel.minSize, PanelGeometry.minimumPanelSize)
         XCTAssertEqual(panel.contentMinSize, PanelGeometry.minimumPanelSize)
         XCTAssertTrue(panel.preservesContentDuringLiveResize)
+    }
+
+    @MainActor
+    func testPanelResizePolicyAppliesDisplayLimitsToNativeAndContentResizePaths() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 600),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        let maximumSize = CGSize(width: 1_000, height: 900)
+
+        AtticPanelResizePolicy.configure(panel, maximumSize: maximumSize)
+
+        XCTAssertEqual(panel.minSize, PanelGeometry.minimumPanelSize)
+        XCTAssertEqual(panel.contentMinSize, PanelGeometry.minimumPanelSize)
+        XCTAssertEqual(panel.maxSize, maximumSize)
+        XCTAssertEqual(panel.contentMaxSize, maximumSize)
     }
 
     func testResizeHitTestingFindsVisibleEdgesAndCornersButNotTransparentPixels() {

@@ -67,8 +67,18 @@ enum AtticPanelResizePolicy {
         maximumSize: CGSize? = nil
     ) {
         panel.styleMask.insert(.resizable)
-        panel.contentMinSize = PanelGeometry.minimumPanelSize
-        if let maximumSize { panel.contentMaxSize = maximumSize }
+        let minimumSize = PanelGeometry.minimumPanelSize
+
+        // AppKit owns a thin native resize border outside the hosting view's
+        // generous custom grips. A borderless panel therefore needs limits
+        // on both its frame and content sizes: content-only limits do not
+        // constrain a drag that begins in that native border.
+        panel.minSize = minimumSize
+        panel.contentMinSize = minimumSize
+        if let maximumSize {
+            panel.maxSize = maximumSize
+            panel.contentMaxSize = maximumSize
+        }
         panel.preservesContentDuringLiveResize = true
     }
 
