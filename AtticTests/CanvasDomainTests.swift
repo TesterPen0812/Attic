@@ -388,11 +388,18 @@ final class CanvasDomainTests: XCTestCase {
             at: CGPoint(x: 40, y: 50),
             in: view.bounds.size
         ))
-        view.prepareForViewportEvent(at: CGPoint(x: 120, y: 160))
-        _ = view.interaction.zoom(
+        XCTAssertTrue(view.beginViewportGestureSequence(
+            source: .magnification,
+            mode: .zoom
+        ))
+        view.applyViewportZoom(
             by: 1.2,
             anchoredAt: CGPoint(x: 120, y: 160),
             in: view.bounds.size
+        )
+        view.finishViewportGestureSequence(
+            source: .magnification,
+            at: CGPoint(x: 120, y: 160)
         )
 
         XCTAssertEqual(view.interaction.machine.state, .idle)
@@ -403,7 +410,7 @@ final class CanvasDomainTests: XCTestCase {
     }
 
     @MainActor
-    func testCancelledViewportPanRestoresSpaceHeldCursor() {
+    func testTrackpadDoesNotStealSpaceHeldPointerPan() {
         let view = CanvasNSView(
             frame: CGRect(x: 0, y: 0, width: 300, height: 380)
         )
@@ -414,15 +421,19 @@ final class CanvasDomainTests: XCTestCase {
         view.beginPan(at: viewPoint)
         XCTAssertTrue(NSCursor.current === NSCursor.closedHand)
 
-        view.prepareForViewportEvent(at: viewPoint)
+        XCTAssertFalse(view.beginViewportGestureSequence(
+            source: .magnification,
+            mode: .zoom
+        ))
 
+        XCTAssertEqual(view.interaction.machine.state, .panning)
+        XCTAssertTrue(NSCursor.current === NSCursor.closedHand)
+        view.finishPointerInteraction(finalInkPoint: nil)
         XCTAssertEqual(view.interaction.machine.state, .idle)
-        XCTAssertEqual(view.cursorRole(at: viewPoint), .openHand)
-        XCTAssertTrue(NSCursor.current === NSCursor.openHand)
     }
 
     @MainActor
-    func testCancelledViewportPanRestoresCurrentHoverCursor() {
+    func testTrackpadDoesNotStealRightOrOtherPointerPan() {
         let view = CanvasNSView(
             frame: CGRect(x: 0, y: 0, width: 300, height: 380)
         )
@@ -439,11 +450,15 @@ final class CanvasDomainTests: XCTestCase {
         view.beginPan(at: viewPoint)
         XCTAssertTrue(NSCursor.current === NSCursor.closedHand)
 
-        view.prepareForViewportEvent(at: viewPoint)
+        XCTAssertFalse(view.beginViewportGestureSequence(
+            source: .scroll,
+            mode: .pan
+        ))
 
+        XCTAssertEqual(view.interaction.machine.state, .panning)
+        view.finishPointerInteraction(finalInkPoint: nil)
         XCTAssertEqual(view.interaction.machine.state, .idle)
         XCTAssertEqual(view.cursorRole(at: viewPoint), .arrow)
-        XCTAssertTrue(NSCursor.current === NSCursor.arrow)
     }
 
     @MainActor
@@ -595,6 +610,189 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertEqual(view.interaction.machine.state, .idle)
         XCTAssertGreaterThan(view.interaction.viewport.scale, 1)
         XCTAssertEqual(deliveredViewport, view.interaction.viewport)
+    }
+
+    @MainActor
+    func testScrollSequenceLatchesModeThroughMomentumAndModifierChanges() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+        var deliveredViewports: [CanvasViewport] = []
+        view.onViewportChange = { deliveredViewports.append($0) }
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 8,
+            command: true,
+            phase: 1
+        ))
+        let scaleAfterBegin = view.interaction.viewport.scale
+        XCTAssertEqual(view.interaction.machine.state, .panning)
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 6,
+            command: false,
+            phase: 2
+        ))
+        let scaleAfterChanged = view.interaction.viewport.scale
+        XCTAssertGreaterThan(scaleAfterChanged, scaleAfterBegin)
+        XCTAssertEqual(view.interaction.machine.state, .panning)
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 0,
+            command: false,
+            phase: 4
+        ))
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 4,
+            command: false,
+            momentumPhase: 1
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 3,
+            command: true,
+            momentumPhase: 2
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 0,
+            command: false,
+            momentumPhase: 3
+        ))
+        XCTAssertGreaterThan(view.interaction.viewport.scale, scaleAfterChanged)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+
+        let scaleBeforePan = view.interaction.viewport.scale
+        let centerBeforePan = view.interaction.viewport.center
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 7,
+            command: false,
+            phase: 1
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 5,
+            command: true,
+            phase: 2
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 0,
+            command: true,
+            phase: 4
+        ))
+
+        XCTAssertEqual(view.interaction.viewport.scale, scaleBeforePan)
+        XCTAssertNotEqual(view.interaction.viewport.center, centerBeforePan)
+        XCTAssertEqual(deliveredViewports.count, 6)
+    }
+
+    @MainActor
+    func testLateZeroAndMomentumTailCannotCancelNewInk() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+        var deliveryCount = 0
+        view.onViewportChange = { _ in deliveryCount += 1 }
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 8,
+            command: true,
+            phase: 1
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 0,
+            command: false,
+            phase: 4
+        ))
+        XCTAssertEqual(deliveryCount, 1)
+
+        XCTAssertTrue(view.interaction.beginInk(
+            at: CGPoint(x: 40, y: 50),
+            in: view.bounds.size
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 5,
+            command: false,
+            momentumPhase: 1
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 0,
+            command: false,
+            momentumPhase: 3
+        ))
+
+        XCTAssertEqual(view.interaction.machine.state, .drawing)
+        XCTAssertEqual(deliveryCount, 1)
+        XCTAssertNotNil(view.interaction.finishInk())
+    }
+
+    @MainActor
+    func testDetachedCanvasRecognizerCannotPublishViewportTail() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        var deliveredViewports: [CanvasViewport] = []
+        view.onViewportChange = { deliveredViewports.append($0) }
+        let recognizer = try XCTUnwrap(
+            view.gestureRecognizers.compactMap {
+                $0 as? NSMagnificationGestureRecognizer
+            }.first
+        )
+        let action = try XCTUnwrap(recognizer.action)
+
+        CanvasNSViewRepresentable.dismantleNSView(view, coordinator: ())
+        recognizer.magnification = 0.2
+        XCTAssertTrue(NSApplication.shared.sendAction(
+            action,
+            to: recognizer.target,
+            from: recognizer
+        ))
+
+        XCTAssertFalse(view.isRepresentationActive)
+        XCTAssertFalse(recognizer.isEnabled)
+        XCTAssertTrue(deliveredViewports.isEmpty)
+        XCTAssertEqual(view.interaction.viewport, CanvasViewport())
+    }
+
+    private func canvasScrollEvent(
+        deltaX: Int32 = 0,
+        deltaY: Int32,
+        command: Bool,
+        phase: Int64 = 0,
+        momentumPhase: Int64 = 0
+    ) throws -> NSEvent {
+        let event = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: deltaY,
+            wheel2: deltaX,
+            wheel3: 0
+        ))
+        if command { event.flags = .maskCommand }
+        event.location = CGPoint(x: 120, y: 160)
+        event.setIntegerValueField(
+            .scrollWheelEventScrollPhase,
+            value: phase
+        )
+        event.setIntegerValueField(
+            .scrollWheelEventMomentumPhase,
+            value: momentumPhase
+        )
+        return try XCTUnwrap(NSEvent(cgEvent: event))
     }
 
     func testSelectToolNeverStartsAnInkOperation() {

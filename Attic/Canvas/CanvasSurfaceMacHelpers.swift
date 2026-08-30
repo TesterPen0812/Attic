@@ -174,6 +174,7 @@ extension CanvasNSView {
     }
 
     func beginPan(at point: CGPoint) {
+        interruptViewportGestureForPointer()
         discardImagePreview()
         discardShapePreview()
         _ = interaction.beginViewportGesture()
@@ -215,18 +216,67 @@ extension CanvasNSView {
         needsDisplay = true
     }
 
-    func prepareForViewportEvent(at viewPoint: CGPoint) {
-        // AppKit may interrupt a phase-based trackpad sequence when the view
-        // changes page, leaves its window, or is resized. Each delivered
-        // scroll/magnify delta must therefore be self-contained rather than
-        // borrowing the long-lived state used by explicit mouse panning.
-        let cancelledPan = interaction.machine.state == .panning
-        _ = interaction.cancel()
-        panLastPoint = nil
-        guard cancelledPan else { return }
+    @discardableResult
+    func beginViewportGestureSequence(
+        source: ViewportGestureSource,
+        mode: ViewportGestureMode
+    ) -> Bool {
+        let requested = ViewportGestureSequence(source: source, mode: mode)
+        if let activeViewportGesture {
+            return activeViewportGesture == requested
+        }
+        guard panLastPoint == nil else { return false }
 
+        discardImagePreview()
+        discardShapePreview()
+        _ = interaction.beginViewportGesture()
+        activeViewportGesture = requested
+        return true
+    }
+
+    func finishViewportGestureSequence(
+        source: ViewportGestureSource,
+        at viewPoint: CGPoint
+    ) {
+        guard activeViewportGesture?.source == source else { return }
+        interaction.finishViewportGesture()
+        activeViewportGesture = nil
         window?.invalidateCursorRects(for: self)
         cursor(at: viewPoint).set()
+    }
+
+    func interruptViewportGestureForPointer() {
+        let interruptedScroll = activeViewportGesture?.source == .scroll
+            || pendingScrollMomentumMode != nil
+        let interruptedMagnification = activeViewportGesture?.source == .magnification
+
+        if activeViewportGesture != nil {
+            interaction.finishViewportGesture()
+            activeViewportGesture = nil
+        }
+        pendingScrollMomentumMode = nil
+        if interruptedScroll { suppressesScrollMomentum = true }
+        if interruptedMagnification { suppressesMagnification = true }
+    }
+
+    func resetViewportGestureRouting() {
+        activeViewportGesture = nil
+        pendingScrollMomentumMode = nil
+        suppressesScrollMomentum = false
+        suppressesMagnification = false
+    }
+
+    func applyViewportPan(by translation: CGSize) {
+        guard translation.width.isFinite,
+              translation.height.isFinite,
+              translation.width != 0 || translation.height != 0 else {
+            return
+        }
+        let previous = interaction.viewport
+        let viewport = interaction.pan(byViewTranslation: translation)
+        guard viewport != previous else { return }
+        onViewportChange(viewport)
+        needsDisplay = true
     }
 
     func applyViewportZoom(
@@ -234,14 +284,14 @@ extension CanvasNSView {
         anchoredAt viewPoint: CGPoint,
         in viewportSize: CGSize
     ) {
-        discardImagePreview()
-        discardShapePreview()
-        prepareForViewportEvent(at: viewPoint)
+        guard factor.isFinite, factor > 0, factor != 1 else { return }
+        let previous = interaction.viewport
         let viewport = interaction.zoom(
             by: factor,
             anchoredAt: viewPoint,
             in: viewportSize
         )
+        guard viewport != previous else { return }
         onViewportChange(viewport)
         needsDisplay = true
     }

@@ -9,6 +9,7 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> CanvasNSView {
         let view = CanvasNSView()
+        view.activateRepresentation()
         configure(view)
         return view
     }
@@ -24,7 +25,7 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         _ nsView: CanvasNSView,
         coordinator: ()
     ) {
-        nsView.cancelInteraction()
+        nsView.deactivateRepresentation()
     }
 
     func configure(_ view: CanvasNSView) {
@@ -38,7 +39,8 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         view.onErase = { [weak session] ids in
             _ = session?.erase(strokeIDs: ids)
         }
-        view.onViewportChange = { [weak session] viewport in
+        view.onViewportChange = { [weak session, weak view] viewport in
+            guard view?.isRepresentationActive == true else { return }
             session?.setViewport(viewport)
         }
         view.onSelectImage = { [weak session] id in
@@ -103,6 +105,21 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
 
 @MainActor
 final class CanvasNSView: NSView {
+    enum ViewportGestureMode: Equatable {
+        case pan
+        case zoom
+    }
+
+    enum ViewportGestureSource: Equatable {
+        case scroll
+        case magnification
+    }
+
+    struct ViewportGestureSequence: Equatable {
+        let source: ViewportGestureSource
+        let mode: ViewportGestureMode
+    }
+
     var onCompleteStroke: (
         _ points: [CanvasPoint],
         _ color: CanvasInkColor,
@@ -178,6 +195,11 @@ final class CanvasNSView: NSView {
     var clearReadabilityEnabled = false
     var panLastPoint: CGPoint?
     var spacePressed = false
+    var activeViewportGesture: ViewportGestureSequence?
+    var pendingScrollMomentumMode: ViewportGestureMode?
+    var suppressesScrollMomentum = false
+    var suppressesMagnification = false
+    private(set) var isRepresentationActive = true
     var trackingAreaReference: NSTrackingArea?
     nonisolated(unsafe) var appResignObservation: NSObjectProtocol?
     nonisolated(unsafe) var windowResignObservation: NSObjectProtocol?
@@ -393,6 +415,7 @@ final class CanvasNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        interruptViewportGestureForPointer()
         window?.makeFirstResponder(self)
         let viewPoint = convert(event.locationInWindow, from: nil)
         if spacePressed {
@@ -574,39 +597,154 @@ final class CanvasNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if event.modifierFlags.contains(.command) {
-            let factor = exp(Double(event.scrollingDeltaY) * 0.025)
-            applyViewportZoom(
-                by: factor,
-                anchoredAt: point,
-                in: bounds.size
-            )
-            return
-        }
-
-        discardImagePreview()
-        discardShapePreview()
-        prepareForViewportEvent(at: point)
-        let viewport = interaction.pan(byViewTranslation: CGSize(
+        let requestedMode: ViewportGestureMode = event.modifierFlags.contains(.command)
+            ? .zoom
+            : .pan
+        let directPhase = event.phase
+        let momentumPhase = event.momentumPhase
+        let directBegan = directPhase.contains(.began)
+        let directCancelled = directPhase.contains(.cancelled)
+        let directEnded = directPhase.contains(.ended) || directCancelled
+        let momentumBegan = momentumPhase.contains(.began)
+        let momentumEnded = momentumPhase.contains(.ended)
+            || momentumPhase.contains(.cancelled)
+        let isStandalone = directPhase.isEmpty && momentumPhase.isEmpty
+        let delta = CGSize(
             width: event.scrollingDeltaX,
             height: event.scrollingDeltaY
-        ))
-        onViewportChange(viewport)
-        needsDisplay = true
+        )
+        let hasDelta = delta.width.isFinite
+            && delta.height.isFinite
+            && (delta.width != 0 || delta.height != 0)
+
+        if directBegan {
+            finishViewportGestureSequence(source: .scroll, at: point)
+            pendingScrollMomentumMode = nil
+            suppressesScrollMomentum = false
+            _ = beginViewportGestureSequence(
+                source: .scroll,
+                mode: requestedMode
+            )
+        }
+
+        if momentumBegan, activeViewportGesture?.source != .scroll {
+            guard !suppressesScrollMomentum else {
+                if momentumEnded { suppressesScrollMomentum = false }
+                return
+            }
+            guard interaction.machine.state == .idle else {
+                pendingScrollMomentumMode = nil
+                suppressesScrollMomentum = true
+                return
+            }
+            _ = beginViewportGestureSequence(
+                source: .scroll,
+                mode: pendingScrollMomentumMode ?? requestedMode
+            )
+        }
+
+        if activeViewportGesture == nil,
+           hasDelta,
+           !directCancelled,
+           !momentumEnded {
+            if !momentumPhase.isEmpty, suppressesScrollMomentum { return }
+            _ = beginViewportGestureSequence(
+                source: .scroll,
+                mode: !momentumPhase.isEmpty
+                    ? pendingScrollMomentumMode ?? requestedMode
+                    : requestedMode
+            )
+        }
+
+        if hasDelta,
+           let sequence = activeViewportGesture,
+           sequence.source == .scroll {
+            switch sequence.mode {
+            case .pan:
+                applyViewportPan(by: delta)
+            case .zoom:
+                applyViewportZoom(
+                    by: exp(Double(delta.height) * 0.025),
+                    anchoredAt: point,
+                    in: bounds.size
+                )
+            }
+        }
+
+        if isStandalone {
+            finishViewportGestureSequence(source: .scroll, at: point)
+            pendingScrollMomentumMode = nil
+        } else if directEnded {
+            let completedMode = activeViewportGesture?.source == .scroll
+                ? activeViewportGesture?.mode
+                : nil
+            finishViewportGestureSequence(source: .scroll, at: point)
+            pendingScrollMomentumMode = directCancelled ? nil : completedMode
+        }
+
+        if momentumEnded {
+            finishViewportGestureSequence(source: .scroll, at: point)
+            pendingScrollMomentumMode = nil
+            suppressesScrollMomentum = false
+        }
     }
 
     @objc private func handleMagnification(
         _ recognizer: NSMagnificationGestureRecognizer
     ) {
+        guard isRepresentationActive else { return }
         let magnification = recognizer.magnification
-        guard magnification.isFinite, magnification != 0 else { return }
-
-        // NSMagnificationGestureRecognizer reports the current change. Consume
-        // it incrementally so repeated callbacks do not compound old deltas.
         recognizer.magnification = 0
+        let point = recognizer.location(in: self)
+
+        switch recognizer.state {
+        case .began:
+            suppressesMagnification = false
+            _ = beginViewportGestureSequence(
+                source: .magnification,
+                mode: .zoom
+            )
+        case .changed:
+            guard !suppressesMagnification else { return }
+            if activeViewportGesture == nil {
+                _ = beginViewportGestureSequence(
+                    source: .magnification,
+                    mode: .zoom
+                )
+            }
+        case .ended, .cancelled, .failed:
+            finishViewportGestureSequence(source: .magnification, at: point)
+            suppressesMagnification = false
+            return
+        case .possible:
+            // AppKit does not dispatch actions while possible. Keeping this
+            // path self-contained makes direct action tests deterministic.
+            guard magnification.isFinite, magnification != 0 else { return }
+            guard beginViewportGestureSequence(
+                source: .magnification,
+                mode: .zoom
+            ) else { return }
+            applyViewportZoom(
+                by: max(1 + Double(magnification), 0.01),
+                anchoredAt: point,
+                in: bounds.size
+            )
+            finishViewportGestureSequence(source: .magnification, at: point)
+            return
+        @unknown default:
+            finishViewportGestureSequence(source: .magnification, at: point)
+            suppressesMagnification = false
+            return
+        }
+
+        guard magnification.isFinite, magnification != 0,
+              activeViewportGesture == ViewportGestureSequence(
+                source: .magnification,
+                mode: .zoom
+              ) else { return }
         applyViewportZoom(
             by: max(1 + Double(magnification), 0.01),
-            anchoredAt: recognizer.location(in: self),
+            anchoredAt: point,
             in: bounds.size
         )
     }
@@ -716,7 +854,20 @@ final class CanvasNSView: NSView {
         discardShapePreview()
         panLastPoint = nil
         spacePressed = false
+        resetViewportGestureRouting()
         window?.invalidateCursorRects(for: self)
+    }
+
+    func activateRepresentation() {
+        isRepresentationActive = true
+        gestureRecognizers.forEach { $0.isEnabled = true }
+    }
+
+    func deactivateRepresentation() {
+        isRepresentationActive = false
+        gestureRecognizers.forEach { $0.isEnabled = false }
+        cancelInteraction()
+        onViewportChange = { _ in }
     }
 
 }
