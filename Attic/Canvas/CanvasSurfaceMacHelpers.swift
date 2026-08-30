@@ -255,15 +255,18 @@ extension CanvasNSView {
             activeViewportGesture = nil
         }
         pendingScrollMomentumMode = nil
-        if interruptedScroll { suppressesScrollMomentum = true }
+        if interruptedScroll { suppressesScrollSequence = true }
         if interruptedMagnification { suppressesMagnification = true }
     }
 
-    func resetViewportGestureRouting() {
+    func resetViewportGestureRouting(
+        suppressScroll: Bool = false,
+        suppressMagnification: Bool = false
+    ) {
         activeViewportGesture = nil
         pendingScrollMomentumMode = nil
-        suppressesScrollMomentum = false
-        suppressesMagnification = false
+        suppressesScrollSequence = suppressScroll
+        suppressesMagnification = suppressMagnification
     }
 
     func applyViewportPan(by translation: CGSize) {

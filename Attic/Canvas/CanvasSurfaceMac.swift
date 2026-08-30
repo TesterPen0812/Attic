@@ -197,7 +197,7 @@ final class CanvasNSView: NSView {
     var spacePressed = false
     var activeViewportGesture: ViewportGestureSequence?
     var pendingScrollMomentumMode: ViewportGestureMode?
-    var suppressesScrollMomentum = false
+    var suppressesScrollSequence = false
     var suppressesMagnification = false
     private(set) var isRepresentationActive = true
     var trackingAreaReference: NSTrackingArea?
@@ -620,21 +620,29 @@ final class CanvasNSView: NSView {
         if directBegan {
             finishViewportGestureSequence(source: .scroll, at: point)
             pendingScrollMomentumMode = nil
-            suppressesScrollMomentum = false
+            suppressesScrollSequence = false
             _ = beginViewportGestureSequence(
                 source: .scroll,
                 mode: requestedMode
             )
+        } else if suppressesScrollSequence {
+            if isStandalone {
+                guard interaction.machine.state == .idle else { return }
+                suppressesScrollSequence = false
+                pendingScrollMomentumMode = nil
+            } else {
+                if directEnded || momentumEnded {
+                    suppressesScrollSequence = false
+                    pendingScrollMomentumMode = nil
+                }
+                return
+            }
         }
 
         if momentumBegan, activeViewportGesture?.source != .scroll {
-            guard !suppressesScrollMomentum else {
-                if momentumEnded { suppressesScrollMomentum = false }
-                return
-            }
             guard interaction.machine.state == .idle else {
                 pendingScrollMomentumMode = nil
-                suppressesScrollMomentum = true
+                suppressesScrollSequence = true
                 return
             }
             _ = beginViewportGestureSequence(
@@ -647,7 +655,6 @@ final class CanvasNSView: NSView {
            hasDelta,
            !directCancelled,
            !momentumEnded {
-            if !momentumPhase.isEmpty, suppressesScrollMomentum { return }
             _ = beginViewportGestureSequence(
                 source: .scroll,
                 mode: !momentumPhase.isEmpty
@@ -685,7 +692,7 @@ final class CanvasNSView: NSView {
         if momentumEnded {
             finishViewportGestureSequence(source: .scroll, at: point)
             pendingScrollMomentumMode = nil
-            suppressesScrollMomentum = false
+            suppressesScrollSequence = false
         }
     }
 
@@ -719,7 +726,9 @@ final class CanvasNSView: NSView {
         case .possible:
             // AppKit does not dispatch actions while possible. Keeping this
             // path self-contained makes direct action tests deterministic.
-            guard magnification.isFinite, magnification != 0 else { return }
+            guard !suppressesMagnification,
+                  magnification.isFinite,
+                  magnification != 0 else { return }
             guard beginViewportGestureSequence(
                 source: .magnification,
                 mode: .zoom
@@ -847,6 +856,9 @@ final class CanvasNSView: NSView {
     }
 
     func cancelInteraction() {
+        let interruptedScroll = activeViewportGesture?.source == .scroll
+            || pendingScrollMomentumMode != nil
+        let interruptedMagnification = activeViewportGesture?.source == .magnification
         if interaction.cancel() {
             needsDisplay = true
         }
@@ -854,7 +866,10 @@ final class CanvasNSView: NSView {
         discardShapePreview()
         panLastPoint = nil
         spacePressed = false
-        resetViewportGestureRouting()
+        resetViewportGestureRouting(
+            suppressScroll: interruptedScroll,
+            suppressMagnification: interruptedMagnification
+        )
         window?.invalidateCursorRects(for: self)
     }
 

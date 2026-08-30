@@ -4,6 +4,25 @@ import SwiftData
 import XCTest
 @testable import Attic
 
+@MainActor
+private final class DrivenMagnificationGestureRecognizer:
+    NSMagnificationGestureRecognizer {
+    private var drivenState: NSGestureRecognizer.State = .possible
+
+    override var state: NSGestureRecognizer.State {
+        get { drivenState }
+        set { drivenState = newValue }
+    }
+
+    func drive(
+        _ state: NSGestureRecognizer.State,
+        magnification: CGFloat
+    ) {
+        self.magnification = magnification
+        self.state = state
+    }
+}
+
 final class CanvasDomainTests: XCTestCase {
     func testStrokeCodecRoundTripsVersionedPlatformNeutralArchive() throws {
         let points = [
@@ -737,6 +756,114 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertEqual(view.interaction.machine.state, .drawing)
         XCTAssertEqual(deliveryCount, 1)
         XCTAssertNotNil(view.interaction.finishInk())
+    }
+
+    @MainActor
+    func testInterruptedDirectScrollTailCannotReacquireNewInk() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+        var deliveryCount = 0
+        view.onViewportChange = { _ in deliveryCount += 1 }
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 8,
+            command: true,
+            phase: 1
+        ))
+        XCTAssertEqual(deliveryCount, 1)
+        view.interruptViewportGestureForPointer()
+        XCTAssertTrue(view.interaction.beginInk(
+            at: CGPoint(x: 40, y: 50),
+            in: view.bounds.size
+        ))
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 6,
+            command: false,
+            phase: 2
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 4,
+            command: false,
+            phase: 4
+        ))
+
+        XCTAssertEqual(view.interaction.machine.state, .drawing)
+        XCTAssertEqual(deliveryCount, 1)
+        XCTAssertNotNil(view.interaction.finishInk())
+
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 5,
+            command: true,
+            phase: 1
+        ))
+        view.scrollWheel(with: try canvasScrollEvent(
+            deltaY: 0,
+            command: true,
+            phase: 4
+        ))
+        XCTAssertEqual(deliveryCount, 2)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+    }
+
+    @MainActor
+    func testCancelledMagnificationTailCannotRestartUntilNewBegan() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        let installed = try XCTUnwrap(
+            view.gestureRecognizers.compactMap {
+                $0 as? NSMagnificationGestureRecognizer
+            }.first
+        )
+        let action = try XCTUnwrap(installed.action)
+        let recognizer = DrivenMagnificationGestureRecognizer(
+            target: installed.target,
+            action: action
+        )
+        view.removeGestureRecognizer(installed)
+        view.addGestureRecognizer(recognizer)
+        var deliveredViewports: [CanvasViewport] = []
+        view.onViewportChange = { deliveredViewports.append($0) }
+
+        func drive(
+            _ state: NSGestureRecognizer.State,
+            magnification: CGFloat
+        ) {
+            recognizer.drive(state, magnification: magnification)
+            XCTAssertTrue(NSApplication.shared.sendAction(
+                action,
+                to: recognizer.target,
+                from: recognizer
+            ))
+        }
+
+        drive(.began, magnification: 0)
+        drive(.changed, magnification: 0.20)
+        XCTAssertEqual(deliveredViewports.count, 1)
+        let viewportBeforeCancellation = view.interaction.viewport
+
+        view.cancelInteraction()
+        drive(.changed, magnification: 0.15)
+        drive(.ended, magnification: 0.10)
+        XCTAssertEqual(view.interaction.viewport, viewportBeforeCancellation)
+        XCTAssertEqual(deliveredViewports.count, 1)
+
+        recognizer.drive(.possible, magnification: 0)
+        drive(.began, magnification: 0)
+        drive(.changed, magnification: -0.10)
+        drive(.ended, magnification: 0.05)
+        XCTAssertEqual(deliveredViewports.count, 2)
+        XCTAssertNotEqual(view.interaction.viewport, viewportBeforeCancellation)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
     }
 
     @MainActor
