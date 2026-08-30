@@ -67,6 +67,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         bindContentSize()
     }
 
+    deinit {
+        if let localPointerMonitor {
+            NSEvent.removeMonitor(localPointerMonitor)
+        }
+        if let globalPointerMonitor {
+            NSEvent.removeMonitor(globalPointerMonitor)
+        }
+    }
+
     var visibleFrame: CGRect? {
         panel.isVisible ? panel.frame : nil
     }
