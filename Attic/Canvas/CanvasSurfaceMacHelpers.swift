@@ -229,6 +229,23 @@ extension CanvasNSView {
         cursor(at: viewPoint).set()
     }
 
+    func applyViewportZoom(
+        by factor: Double,
+        anchoredAt viewPoint: CGPoint,
+        in viewportSize: CGSize
+    ) {
+        discardImagePreview()
+        discardShapePreview()
+        prepareForViewportEvent(at: viewPoint)
+        let viewport = interaction.zoom(
+            by: factor,
+            anchoredAt: viewPoint,
+            in: viewportSize
+        )
+        onViewportChange(viewport)
+        needsDisplay = true
+    }
+
     func continuePan(to point: CGPoint) {
         guard let panLastPoint else { return }
         let translation = CGSize(

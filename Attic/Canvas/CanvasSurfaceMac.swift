@@ -196,6 +196,18 @@ final class CanvasNSView: NSView {
             self?.needsDisplay = true
         }
 
+        // Own pinch recognition at the native Canvas boundary. Depending on
+        // responder-chain magnify delivery alone lets a SwiftUI ancestor take
+        // the stream after focus or native-view lifecycle changes. AppKit
+        // gives this recognizer first access to events hit-tested to the
+        // Canvas, and delays propagation so the zoom is applied exactly once.
+        let magnificationRecognizer = NSMagnificationGestureRecognizer(
+            target: self,
+            action: #selector(handleMagnification(_:))
+        )
+        magnificationRecognizer.delaysMagnificationEvents = true
+        addGestureRecognizer(magnificationRecognizer)
+
         appResignObservation = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,
             object: nil,
@@ -561,40 +573,42 @@ final class CanvasNSView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        discardImagePreview()
-        discardShapePreview()
         let point = convert(event.locationInWindow, from: nil)
-        prepareForViewportEvent(at: point)
-        let viewport: CanvasViewport
         if event.modifierFlags.contains(.command) {
             let factor = exp(Double(event.scrollingDeltaY) * 0.025)
-            viewport = interaction.zoom(
+            applyViewportZoom(
                 by: factor,
                 anchoredAt: point,
                 in: bounds.size
             )
-        } else {
-            viewport = interaction.pan(byViewTranslation: CGSize(
-                width: event.scrollingDeltaX,
-                height: event.scrollingDeltaY
-            ))
+            return
         }
+
+        discardImagePreview()
+        discardShapePreview()
+        prepareForViewportEvent(at: point)
+        let viewport = interaction.pan(byViewTranslation: CGSize(
+            width: event.scrollingDeltaX,
+            height: event.scrollingDeltaY
+        ))
         onViewportChange(viewport)
         needsDisplay = true
     }
 
-    override func magnify(with event: NSEvent) {
-        discardImagePreview()
-        discardShapePreview()
-        let point = convert(event.locationInWindow, from: nil)
-        prepareForViewportEvent(at: point)
-        let viewport = interaction.zoom(
-            by: max(1 + Double(event.magnification), 0.01),
-            anchoredAt: point,
+    @objc private func handleMagnification(
+        _ recognizer: NSMagnificationGestureRecognizer
+    ) {
+        let magnification = recognizer.magnification
+        guard magnification.isFinite, magnification != 0 else { return }
+
+        // NSMagnificationGestureRecognizer reports the current change. Consume
+        // it incrementally so repeated callbacks do not compound old deltas.
+        recognizer.magnification = 0
+        applyViewportZoom(
+            by: max(1 + Double(magnification), 0.01),
+            anchoredAt: recognizer.location(in: self),
             in: bounds.size
         )
-        onViewportChange(viewport)
-        needsDisplay = true
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

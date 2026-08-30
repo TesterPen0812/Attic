@@ -446,6 +446,157 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertTrue(NSCursor.current === NSCursor.arrow)
     }
 
+    @MainActor
+    func testCanvasOwnsReentrantPinchRecognitionAcrossInteractionLifecycle() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        let firstCanvasID = UUID()
+        view.configure(
+            canvasID: firstCanvasID,
+            strokes: [],
+            images: [],
+            selectedImageID: nil,
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport(),
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+        var deliveredViewports: [CanvasViewport] = []
+        view.onViewportChange = { deliveredViewports.append($0) }
+
+        let recognizer = try XCTUnwrap(
+            view.gestureRecognizers.compactMap {
+                $0 as? NSMagnificationGestureRecognizer
+            }.first
+        )
+        XCTAssertTrue(recognizer.view === view)
+        XCTAssertTrue(recognizer.target === view)
+        XCTAssertTrue(recognizer.delaysMagnificationEvents)
+        XCTAssertFalse(recognizer.delaysPrimaryMouseButtonEvents)
+
+        func applyPinch(
+            _ magnification: CGFloat,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws {
+            let previousScale = view.interaction.viewport.scale
+            recognizer.magnification = magnification
+            let action = try XCTUnwrap(
+                recognizer.action,
+                file: file,
+                line: line
+            )
+            XCTAssertTrue(
+                NSApplication.shared.sendAction(
+                    action,
+                    to: recognizer.target,
+                    from: recognizer
+                ),
+                file: file,
+                line: line
+            )
+            XCTAssertNotEqual(
+                view.interaction.viewport.scale,
+                previousScale,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(recognizer.magnification, 0, file: file, line: line)
+            XCTAssertEqual(
+                view.interaction.machine.state,
+                .idle,
+                file: file,
+                line: line
+            )
+        }
+
+        XCTAssertTrue(view.interaction.beginInk(
+            at: CGPoint(x: 40, y: 50),
+            in: view.bounds.size
+        ))
+        XCTAssertTrue(view.interaction.appendInk(
+            at: CGPoint(x: 80, y: 90),
+            in: view.bounds.size
+        ))
+        XCTAssertNotNil(view.interaction.finishInk())
+        try applyPinch(0.20)
+
+        view.configure(
+            canvasID: firstCanvasID,
+            strokes: [],
+            images: [],
+            selectedImageID: nil,
+            tool: .select,
+            color: .ink,
+            width: 3,
+            viewport: view.interaction.viewport,
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+        view.beginPan(at: CGPoint(x: 120, y: 160))
+        view.continuePan(to: CGPoint(x: 135, y: 170))
+        view.finishPointerInteraction(finalInkPoint: nil)
+        try applyPinch(-0.10)
+
+        view.cancelInteraction()
+        view.setFrameSize(CGSize(width: 520, height: 640))
+        view.configure(
+            canvasID: UUID(),
+            strokes: [],
+            images: [],
+            selectedImageID: nil,
+            tool: .eraser,
+            color: .blue,
+            width: 8,
+            viewport: view.interaction.viewport,
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+        try applyPinch(0.15)
+
+        // Three pinch callbacks plus the explicit space-pan delta above.
+        XCTAssertEqual(deliveredViewports.count, 4)
+    }
+
+    @MainActor
+    func testCommandScrollUsesReentrantCanvasZoomPath() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+        var deliveredViewport: CanvasViewport?
+        view.onViewportChange = { deliveredViewport = $0 }
+        XCTAssertTrue(view.interaction.beginInk(
+            at: CGPoint(x: 40, y: 50),
+            in: view.bounds.size
+        ))
+
+        let event = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 1,
+            wheel1: 12,
+            wheel2: 0,
+            wheel3: 0
+        ))
+        event.flags = .maskCommand
+        event.location = CGPoint(x: 120, y: 160)
+        view.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: event)))
+
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+        XCTAssertGreaterThan(view.interaction.viewport.scale, 1)
+        XCTAssertEqual(deliveredViewport, view.interaction.viewport)
+    }
+
     func testSelectToolNeverStartsAnInkOperation() {
         var machine = CanvasInputStateMachine()
 
