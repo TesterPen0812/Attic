@@ -285,6 +285,32 @@ final class PanelGeometryTests: XCTestCase {
         }
     }
 
+    func testMatchingFrameRevealInvalidatesPendingHideCompletion() {
+        var state = PanelVisibilityTransitionState()
+        let hideGeneration = state.beginTransition()
+
+        // `show` invalidates before it can take the matching-frame path.
+        state.invalidatePendingTransition()
+        let revealGeneration = state.beginTransition()
+
+        XCTAssertFalse(state.ownsCompletion(hideGeneration))
+        XCTAssertTrue(state.ownsCompletion(revealGeneration))
+    }
+
+    func testDifferingFrameRevealInvalidatesPendingHideCompletion() {
+        var state = PanelVisibilityTransitionState()
+        let hideGeneration = state.beginTransition()
+
+        // The frame animation receives a fresh owner after reveal invalidates
+        // the hide, so only the new reveal may complete window state changes.
+        state.invalidatePendingTransition()
+        let revealGeneration = state.beginTransition()
+
+        XCTAssertFalse(state.ownsCompletion(hideGeneration))
+        XCTAssertTrue(state.ownsCompletion(revealGeneration))
+        XCTAssertGreaterThan(revealGeneration, hideGeneration)
+    }
+
     func testTaskScrollMaskUsesPointSizedFadesAcrossPanelHeights() {
         let compact = TaskScrollMaskLayout.stops(panelHeight: 480)
         let tall = TaskScrollMaskLayout.stops(panelHeight: 900)

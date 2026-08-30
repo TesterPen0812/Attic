@@ -3,6 +3,23 @@ import Combine
 import QuartzCore
 import SwiftUI
 
+struct PanelVisibilityTransitionState {
+    private(set) var generation = 0
+
+    mutating func invalidatePendingTransition() {
+        generation += 1
+    }
+
+    mutating func beginTransition() -> Int {
+        generation += 1
+        return generation
+    }
+
+    func ownsCompletion(_ candidate: Int) -> Bool {
+        candidate == generation
+    }
+}
+
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
@@ -23,7 +40,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isWindowDragging = false
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
-    private var transitionGeneration = 0
+    private var visibilityTransition = PanelVisibilityTransitionState()
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
     var onInteractiveHideAccepted: (() -> Void)?
@@ -135,6 +152,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
+        // A reveal always supersedes an in-flight hide, even when its frame
+        // already matches. This prevents that hide's completion from ordering
+        // out a panel the user has just asked to see again.
+        visibilityTransition.invalidatePendingTransition()
         let priorFrame = panel.frame
         currentScreen = screen
         currentCorner = corner
@@ -145,6 +166,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if isLiveResizing {
             if makeKey { panel.makeKey() }
             panel.orderFrontRegardless()
+            animateShow(to: panel.frame)
             return
         }
 
@@ -170,11 +192,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 panel.orderFrontRegardless()
             }
 
-            guard !framesMatch(panel.frame, finalFrame) else {
-                panel.alphaValue = 1
-                return
-            }
-            animateShow(to: finalFrame, fadeIn: mustEstablishOnTargetDisplay)
+            animateShow(to: finalFrame)
             return
         }
 
@@ -192,22 +210,21 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             panel.orderFrontRegardless()
         }
 
-        animateShow(to: finalFrame, fadeIn: true)
+        animateShow(to: finalFrame)
     }
 
-    private func animateShow(to finalFrame: CGRect, fadeIn: Bool) {
-        transitionGeneration += 1
-        let generation = transitionGeneration
+    private func animateShow(to finalFrame: CGRect) {
+        let generation = visibilityTransition.beginTransition()
         isShowing = true
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.16
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
             panel.animator().setFrame(finalFrame, display: true)
-            if fadeIn { panel.animator().alphaValue = 1 }
+            panel.animator().alphaValue = 1
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                guard generation == self.transitionGeneration else { return }
+                guard self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.isShowing = false
                 if self.needsResizeAfterShowing {
                     self.needsResizeAfterShowing = false
@@ -228,8 +245,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             return true
         }
         guard noteDraft.flush() else { return false }
-        transitionGeneration += 1
-        let generation = transitionGeneration
+        let generation = visibilityTransition.beginTransition()
         isShowing = false
         needsResizeAfterShowing = false
         guard let screen = panel.screen ?? currentScreen else { return false }
@@ -249,7 +265,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, generation == self.transitionGeneration else { return }
+                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
@@ -434,7 +450,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func beginLiveResize() {
         guard !isLiveResizing else { return }
-        transitionGeneration += 1
+        visibilityTransition.invalidatePendingTransition()
         isShowing = false
         needsResizeAfterShowing = false
         isLiveResizing = true
@@ -461,7 +477,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func beginWindowDrag() {
-        transitionGeneration += 1
+        visibilityTransition.invalidatePendingTransition()
         isShowing = false
         needsResizeAfterShowing = false
         isWindowDragging = true
@@ -563,15 +579,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             size: PanelGeometry.clampedPanelSize(frame.size, in: screen.visibleFrame),
             corner: corner
         )
-        transitionGeneration += 1
-        let generation = transitionGeneration
+        let generation = visibilityTransition.beginTransition()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.18
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
             panel.animator().setFrame(targetFrame, display: true)
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, generation == self.transitionGeneration else { return }
+                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.uiState.updatePanelSize(self.panel.frame.size)
                 self.uiState.dockingPreviewCorner = nil
                 self.uiState.setWindowInteractionActive(false)
