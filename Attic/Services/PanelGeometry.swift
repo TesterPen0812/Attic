@@ -23,6 +23,29 @@ enum PanelGeometry {
         return EdgeInsets(top: top, leading: horizontal, bottom: bottom, trailing: horizontal)
     }
 
+    /// Insets for controls attached to the panel shell rather than its
+    /// section content. The corner curve's maximum inward deviation is the
+    /// diagonal of the local superellipse, so adding a fixed optical clearance
+    /// to that value keeps the outer corner of every hit region inside the
+    /// visible squircle as the user changes radius or panel size.
+    static func chromeInsets(cornerSize: CGFloat, panelSize: CGSize) -> EdgeInsets {
+        let effectiveRadius = max(
+            0,
+            min(cornerSize, panelSize.width / 2, panelSize.height / 2)
+        )
+        let curveInset = effectiveRadius * Squircle.cornerInsetFactor(exponent: squircleExponent)
+        let edgeInset = max(
+            AtticStyle.chromeMinimumInset,
+            curveInset + AtticStyle.chromeCornerClearance
+        )
+        return EdgeInsets(
+            top: edgeInset,
+            leading: edgeInset,
+            bottom: edgeInset,
+            trailing: edgeInset
+        )
+    }
+
     /// The effective panel width for a given content size setting.
     static func panelWidth(for contentSize: CGFloat) -> CGFloat {
         contentSize

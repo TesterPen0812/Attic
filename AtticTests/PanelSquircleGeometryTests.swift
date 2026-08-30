@@ -7,8 +7,105 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(AtticStyle.modeControlSize, 34)
         XCTAssertEqual(AtticStyle.entryControlHeight, 38)
         XCTAssertEqual(AtticStyle.controlHitSize, 42)
+        XCTAssertEqual(AtticStyle.chromeMinimumInset, 22)
+        XCTAssertEqual(AtticStyle.chromeCornerClearance, 8)
         XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.actionControlSize)
         XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.modeControlSize)
+    }
+
+    func testChromeInsetsAreSymmetricAndRadiusAware() {
+        let panelSize = CGSize(width: PanelContentSize.min, height: 480)
+        var previousInset: CGFloat = 0
+
+        for radius in stride(from: PanelCornerSize.min, through: PanelCornerSize.max, by: 1) {
+            let insets = PanelGeometry.chromeInsets(cornerSize: radius, panelSize: panelSize)
+
+            XCTAssertEqual(insets.top, insets.leading, accuracy: 0.0001)
+            XCTAssertEqual(insets.top, insets.bottom, accuracy: 0.0001)
+            XCTAssertEqual(insets.top, insets.trailing, accuracy: 0.0001)
+            XCTAssertGreaterThanOrEqual(insets.top, AtticStyle.chromeMinimumInset)
+            XCTAssertGreaterThanOrEqual(insets.top, previousInset)
+            previousInset = insets.top
+        }
+
+        XCTAssertGreaterThan(
+            PanelGeometry.chromeInsets(cornerSize: PanelCornerSize.max, panelSize: panelSize).top,
+            PanelGeometry.chromeInsets(cornerSize: PanelCornerSize.defaultValue, panelSize: panelSize).top
+        )
+    }
+
+    func testPermanentChromeHitRegionsStayInsideEverySupportedSquircle() {
+        let hitSize = AtticStyle.controlHitSize
+        let modeDockWidth = hitSize * CGFloat(PanelSection.allCases.count)
+
+        for width in stride(from: PanelContentSize.min, through: PanelContentSize.max, by: 1) {
+            let height = PanelGeometry.preferredWorkspaceHeight(contentWidth: width)
+            let panelSize = CGSize(width: width, height: height)
+            let panelRect = CGRect(origin: .zero, size: panelSize)
+
+            for radius in stride(from: PanelCornerSize.min, through: PanelCornerSize.max, by: 1) {
+                let insets = PanelGeometry.chromeInsets(cornerSize: radius, panelSize: panelSize)
+                let regions = [
+                    CGRect(x: insets.leading, y: insets.top, width: hitSize, height: hitSize),
+                    CGRect(
+                        x: width - insets.trailing - modeDockWidth,
+                        y: insets.top,
+                        width: modeDockWidth,
+                        height: hitSize
+                    ),
+                    CGRect(
+                        x: insets.leading,
+                        y: height - insets.bottom - hitSize,
+                        width: hitSize,
+                        height: hitSize
+                    ),
+                    CGRect(
+                        x: width - insets.trailing - hitSize,
+                        y: height - insets.bottom - hitSize,
+                        width: hitSize,
+                        height: hitSize
+                    )
+                ]
+
+                for region in regions {
+                    for point in region.corners {
+                        XCTAssertTrue(
+                            Squircle.contains(
+                                point,
+                                in: panelRect,
+                                cornerRadius: radius,
+                                exponent: PanelGeometry.squircleExponent
+                            ),
+                            "Chrome point \(point) escaped at width \(width), radius \(radius)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    func testPermanentChromeStillFitsAtCompactWidthAndMaximumRadius() {
+        let width = PanelContentSize.min
+        let height = PanelGeometry.preferredWorkspaceHeight(contentWidth: width)
+        let insets = PanelGeometry.chromeInsets(
+            cornerSize: PanelCornerSize.max,
+            panelSize: CGSize(width: width, height: height)
+        )
+        let hitSize = AtticStyle.controlHitSize
+        let modeDockWidth = hitSize * CGFloat(PanelSection.allCases.count)
+        let topGroupSpacing = width
+            - insets.leading
+            - hitSize
+            - modeDockWidth
+            - insets.trailing
+        let quickEntryWidth = width
+            - insets.leading
+            - insets.trailing
+            - (2 * hitSize)
+            - 20
+
+        XCTAssertGreaterThanOrEqual(topGroupSpacing, 12)
+        XCTAssertGreaterThanOrEqual(quickEntryWidth, 120)
     }
 
     @MainActor
@@ -357,5 +454,15 @@ final class PanelSquircleGeometryTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(insets.top, cornerInset + 2, "top at width \(panelWidth)")
             XCTAssertGreaterThanOrEqual(insets.bottom, cornerInset + 4, "bottom at width \(panelWidth)")
         }
+    }
+}
+private extension CGRect {
+    var corners: [CGPoint] {
+        [
+            CGPoint(x: minX, y: minY),
+            CGPoint(x: maxX, y: minY),
+            CGPoint(x: maxX, y: maxY),
+            CGPoint(x: minX, y: maxY)
+        ]
     }
 }

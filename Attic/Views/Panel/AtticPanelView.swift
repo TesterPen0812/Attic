@@ -26,8 +26,18 @@ struct AtticPanelView: View {
         PanelGeometry.contentInsets(cornerSize: cornerRadius, panelSize: panelSize)
     }
 
+    private var chromeInsets: EdgeInsets {
+        PanelGeometry.chromeInsets(cornerSize: cornerRadius, panelSize: panelSize)
+    }
+
     private var horizontalInset: CGFloat { contentInsets.leading }
-    private var chromeInset: CGFloat { max(horizontalInset, 22) }
+    private var chromeInset: CGFloat { chromeInsets.leading }
+    private var chromeTopAdjustment: CGFloat {
+        max(0, chromeInsets.top - contentInsets.top)
+    }
+    private var chromeBottomAdjustment: CGFloat {
+        max(0, chromeInsets.bottom - contentInsets.bottom)
+    }
 
     var body: some View {
         ZStack {
@@ -93,6 +103,7 @@ struct AtticPanelView: View {
         }
         .atticGlassEffectContainer(spacing: 12)
         .padding(.horizontal, chromeInset)
+        .padding(.top, chromeTopAdjustment)
         .frame(maxWidth: .infinity)
     }
 
@@ -298,6 +309,7 @@ struct AtticPanelView: View {
         }
         .atticGlassEffectContainer(spacing: 10)
         .padding(.horizontal, chromeInset)
+        .padding(.bottom, chromeBottomAdjustment)
         .frame(maxWidth: .infinity)
     }
 

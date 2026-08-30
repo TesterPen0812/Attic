@@ -21,6 +21,13 @@ enum AtticStyle {
     static let controlHitSize: CGFloat = 42
     static let entryControlHeight: CGFloat = 38
     static let controlSymbolSize: CGFloat = 14
+
+    /// Permanent chrome keeps a calm, even optical margin from every panel
+    /// edge. Larger squircles can require more room where the corner curve
+    /// moves inward, so PanelGeometry adds curve-aware clearance to this
+    /// minimum rather than treating it as a fixed position.
+    static let chromeMinimumInset: CGFloat = 22
+    static let chromeCornerClearance: CGFloat = 8
 }
 
 struct AtticPanelSurface: ViewModifier {
