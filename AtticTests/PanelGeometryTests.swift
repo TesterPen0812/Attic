@@ -186,6 +186,25 @@ final class PanelGeometryTests: XCTestCase {
         )
     }
 
+    func testConstrainedFrameStaysAboveDockAndInsideMenuBarWorkArea() {
+        let visibleFrame = CGRect(x: 0, y: 70, width: 1_440, height: 800)
+
+        XCTAssertEqual(
+            PanelGeometry.constrainedFrame(
+                CGRect(x: 200, y: -180, width: 520, height: 620),
+                to: visibleFrame
+            ),
+            CGRect(x: 200, y: 82, width: 520, height: 620)
+        )
+        XCTAssertEqual(
+            PanelGeometry.constrainedFrame(
+                CGRect(x: -400, y: 500, width: 2_000, height: 900),
+                to: visibleFrame
+            ),
+            CGRect(x: 12, y: 82, width: 1_416, height: 776)
+        )
+    }
+
     func testTaskScrollMaskUsesPointSizedFadesAcrossPanelHeights() {
         let compact = TaskScrollMaskLayout.stops(panelHeight: 480)
         let tall = TaskScrollMaskLayout.stops(panelHeight: 900)

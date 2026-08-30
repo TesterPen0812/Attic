@@ -5,6 +5,7 @@ struct AtticPanelView: View {
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var canvasSession: CanvasSession
     let noteDraft: NoteDraftController
+    let chromeInteractionState: PanelChromeInteractionState
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
 
@@ -118,6 +119,12 @@ struct AtticPanelView: View {
         .onChange(of: noteStore.revision) { _, _ in
             reconcileNoteDraft()
             openMostRecentNoteIfNeeded()
+        }
+        .onAppear {
+            syncModeDockInteractionWidth()
+        }
+        .onChange(of: isModeDockExpanded) { _, _ in
+            syncModeDockInteractionWidth()
         }
     }
 
@@ -252,6 +259,12 @@ struct AtticPanelView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Panel sections")
         .accessibilityIdentifier("panel-section-picker")
+    }
+
+    private func syncModeDockInteractionWidth() {
+        chromeInteractionState.modeDockWidth = PanelModeDockLayout.width(
+            isExpanded: isModeDockExpanded
+        )
     }
 
     @ViewBuilder

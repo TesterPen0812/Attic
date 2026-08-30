@@ -11,6 +11,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let noteStore: NoteStore
     private let canvasSession: CanvasSession
     private let noteDraft: NoteDraftController
+    private let chromeInteractionState: PanelChromeInteractionState
     private let settings: AppSettings
     private let uiState: PanelUIState
     private var cancellables: Set<AnyCancellable> = []
@@ -19,6 +20,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isLiveResizing = false
     private var isPersistingManualSize = false
     private var isApplyingInteractiveCorner = false
+    private var isWindowDragging = false
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
     private var transitionGeneration = 0
@@ -45,6 +47,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             CGSize(width: settings.panelContentSize, height: settings.panelHeight)
         )
         uiState.updatePanelSize(initialSize)
+        let chromeInteractionState = PanelChromeInteractionState()
+        self.chromeInteractionState = chromeInteractionState
         panel = AtticPanel(
             contentRect: CGRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -57,11 +61,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 noteStore: noteStore,
                 canvasSession: canvasSession,
                 noteDraft: noteDraft,
+                chromeInteractionState: chromeInteractionState,
                 uiState: uiState,
                 settings: settings
             ),
             panelCornerRadius: settings.panelCornerSize,
-            dockedCorner: settings.corner
+            dockedCorner: settings.corner,
+            chromeInteractionState: chromeInteractionState
         )
 
         super.init()
@@ -236,6 +242,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.onAccessibilityResizeRequest = { [weak self] requestedSize in
             self?.applyAccessibilityResizeRequest(requestedSize)
         }
+        panel.onAccessibilityMoveRequest = { [weak self] requestedFrame in
+            self?.applyAccessibilityMoveRequest(requestedFrame)
+        }
         hostingView.onLiveResizeBegan = { [weak self] in
             self?.beginLiveResize()
         }
@@ -249,7 +258,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self?.beginWindowDrag()
         }
         hostingView.onWindowDragChanged = { [weak self] frame, pointer in
-            self?.updateWindowDrag(frame: frame, pointer: pointer)
+            self?.updateWindowDrag(frame: frame, pointer: pointer) ?? frame
         }
         hostingView.onWindowDragEnded = { [weak self] frame, pointer, velocity, translation in
             self?.endWindowDrag(
@@ -271,6 +280,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.hostingView.dockedCorner = corner
                 guard !self.isApplyingInteractiveCorner else { return }
                 self.resizeAndReanchor()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(
+            for: NSApplication.didChangeScreenParametersNotification
+        )
+            .sink { [weak self] _ in
+                self?.recoverPanelInsideUsableArea()
             }
             .store(in: &cancellables)
 
@@ -357,6 +374,21 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isPersistingManualSize = false
     }
 
+    private func applyAccessibilityMoveRequest(_ requestedFrame: CGRect) {
+        guard let screen = bestScreen(for: requestedFrame) ?? panel.screen ?? currentScreen else {
+            return
+        }
+        if currentScreen !== screen {
+            currentScreen = screen
+            updateResizeLimits(for: screen)
+        }
+        let targetFrame = PanelGeometry.constrainedFrame(
+            requestedFrame,
+            to: screen.visibleFrame
+        )
+        panel.setFrame(targetFrame, display: panel.isVisible)
+    }
+
     func windowWillStartLiveResize(_ notification: Notification) {
         beginLiveResize()
     }
@@ -403,20 +435,31 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         transitionGeneration += 1
         isShowing = false
         needsResizeAfterShowing = false
+        isWindowDragging = true
         uiState.setWindowInteractionActive(true)
         panel.ignoresMouseEvents = false
     }
 
-    private func updateWindowDrag(frame: CGRect, pointer: CGPoint) {
-        guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else { return }
-        currentScreen = screen
+    private func updateWindowDrag(frame: CGRect, pointer: CGPoint) -> CGRect {
+        guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
+            return frame
+        }
+        if currentScreen !== screen {
+            currentScreen = screen
+            updateResizeLimits(for: screen)
+        }
+        let constrainedFrame = PanelGeometry.constrainedFrame(
+            frame,
+            to: screen.visibleFrame
+        )
         let previewCorner = PanelDockingPolicy.nearestCorner(
-            for: frame,
+            for: constrainedFrame,
             in: screen.visibleFrame
         )
         if uiState.dockingPreviewCorner != previewCorner {
             uiState.dockingPreviewCorner = previewCorner
         }
+        return constrainedFrame
     }
 
     private func endWindowDrag(
@@ -425,6 +468,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         velocity: CGPoint,
         translation: CGPoint
     ) {
+        isWindowDragging = false
         guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
             uiState.dockingPreviewCorner = nil
             uiState.setWindowInteractionActive(false)
@@ -509,6 +553,54 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func screen(containing point: CGPoint) -> NSScreen? {
         NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
             ?? NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(point) }
+    }
+
+    private func bestScreen(for frame: CGRect) -> NSScreen? {
+        let screens = NSScreen.screens
+        let overlapCandidate = screens
+            .map { screen in
+                let overlap = screen.frame.intersection(frame)
+                return (screen, max(0, overlap.width) * max(0, overlap.height))
+            }
+            .max { $0.1 < $1.1 }
+        if let overlapCandidate, overlapCandidate.1 > 0 {
+            return overlapCandidate.0
+        }
+        let frameCenter = CGPoint(x: frame.midX, y: frame.midY)
+        return screens.min {
+            squaredDistance(from: frameCenter, to: $0.frame) < squaredDistance(from: frameCenter, to: $1.frame)
+        }
+    }
+
+    private func squaredDistance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let nearestX = min(max(point.x, rect.minX), rect.maxX)
+        let nearestY = min(max(point.y, rect.minY), rect.maxY)
+        let dx = point.x - nearestX
+        let dy = point.y - nearestY
+        return (dx * dx) + (dy * dy)
+    }
+
+    private func recoverPanelInsideUsableArea() {
+        guard let screen = bestScreen(for: panel.frame) ?? panel.screen ?? currentScreen else {
+            return
+        }
+        currentScreen = screen
+        updateResizeLimits(for: screen)
+
+        let targetFrame: CGRect
+        if isWindowDragging || isLiveResizing {
+            targetFrame = PanelGeometry.constrainedFrame(panel.frame, to: screen.visibleFrame)
+        } else {
+            targetFrame = frame(on: screen, corner: currentCorner)
+        }
+        if !framesMatch(panel.frame, targetFrame) {
+            panel.setFrame(targetFrame, display: panel.isVisible)
+        }
+        uiState.updatePanelSize(targetFrame.size)
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        recoverPanelInsideUsableArea()
     }
 
     private func startPointerPassthroughMonitoring() {

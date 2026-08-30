@@ -3,6 +3,7 @@ import SwiftUI
 
 final class AtticPanel: NSPanel {
     var onAccessibilityResizeRequest: ((CGSize) -> Void)?
+    var onAccessibilityMoveRequest: ((CGRect) -> Void)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -16,8 +17,10 @@ final class AtticPanel: NSPanel {
 
     override func setAccessibilityFrame(_ accessibilityFrame: NSRect) {
         guard accessibilityFrame.size != frame.size else {
-            // Preserve AppKit's standard accessible movement when this is an
-            // origin-only request. Dock anchoring applies only to size changes.
+            if let onAccessibilityMoveRequest {
+                onAccessibilityMoveRequest(accessibilityFrame)
+                return
+            }
             super.setAccessibilityFrame(accessibilityFrame)
             return
         }
@@ -261,7 +264,13 @@ enum AtticPanelResizePolicy {
         var origin = initialFrame.origin
         if edges.contains(.left) { origin.x = initialFrame.maxX - width }
         if edges.contains(.bottom) { origin.y = initialFrame.maxY - height }
-        return CGRect(origin: origin, size: CGSize(width: width, height: height))
+        let resizedFrame = CGRect(origin: origin, size: CGSize(width: width, height: height))
+        guard let visibleFrame else { return resizedFrame }
+        return PanelGeometry.constrainedFrame(
+            resizedFrame,
+            to: visibleFrame,
+            inset: screenInset
+        )
     }
 }
 
@@ -269,7 +278,12 @@ enum AtticPanelDragPolicy {
     static let controlClearance: CGFloat = 10
     static let maximumFlickReleaseDelay: TimeInterval = 0.14
 
-    static func topDragRegion(in bounds: CGRect, cornerRadius: CGFloat) -> CGRect {
+    static func topDragRegion(
+        in bounds: CGRect,
+        cornerRadius: CGFloat,
+        modeDockWidth: CGFloat = PanelModeDockLayout.width(isExpanded: true),
+        dockedAt corner: ScreenCorner? = nil
+    ) -> CGRect {
         let insets = PanelGeometry.chromeInsets(
             cornerSize: cornerRadius,
             panelSize: bounds.size
@@ -280,10 +294,13 @@ enum AtticPanelDragPolicy {
             + controlClearance
         let trailing = bounds.maxX
             - insets.trailing
-            - (AtticStyle.controlHitSize * CGFloat(PanelSection.allCases.count))
+            - max(AtticStyle.controlHitSize, modeDockWidth)
             - controlClearance
         let bottom = bounds.maxY - insets.top - AtticStyle.controlHitSize
-        let top = bounds.maxY - AtticPanelResizePolicy.edgeGripThickness
+        let topEdgeIsLocked = corner.map {
+            AtticPanelResizePolicy.allowedResizeEdges(.top, dockedAt: $0) == nil
+        } ?? false
+        let top = bounds.maxY - (topEdgeIsLocked ? 0 : AtticPanelResizePolicy.edgeGripThickness)
         return CGRect(
             x: leading,
             y: bottom,
@@ -295,8 +312,20 @@ enum AtticPanelDragPolicy {
     static func isTopDragPoint(
         _ point: CGPoint,
         in bounds: CGRect,
-        cornerRadius: CGFloat
+        cornerRadius: CGFloat,
+        modeDockWidth: CGFloat = PanelModeDockLayout.width(isExpanded: true),
+        dockedAt corner: ScreenCorner? = nil
     ) -> Bool {
+        guard bounds.width > 0,
+              bounds.height > 0,
+              point.x >= bounds.minX,
+              point.x <= bounds.maxX,
+              point.y >= bounds.minY,
+              point.y <= bounds.maxY else { return false }
+        let point = CGPoint(
+            x: min(point.x, bounds.maxX.nextDown),
+            y: min(point.y, bounds.maxY.nextDown)
+        )
         guard Squircle.contains(
             point,
             in: bounds,
@@ -305,10 +334,35 @@ enum AtticPanelDragPolicy {
         ), AtticPanelResizePolicy.resizeEdges(
             at: point,
             in: bounds,
-            cornerRadius: cornerRadius
+            cornerRadius: cornerRadius,
+            dockedAt: corner
         ) == nil else { return false }
 
-        return topDragRegion(in: bounds, cornerRadius: cornerRadius).contains(point)
+        let region = topDragRegion(
+            in: bounds,
+            cornerRadius: cornerRadius,
+            modeDockWidth: modeDockWidth,
+            dockedAt: corner
+        )
+        return point.x >= region.minX
+            && point.x < region.maxX
+            && point.y >= region.minY
+            && point.y <= region.maxY
+    }
+}
+
+/// A narrow bridge between SwiftUI's transient section-dock expansion state
+/// and AppKit's window hit testing. It is deliberately not observable: the
+/// shell already redraws for hover/focus, and AppKit only needs the current
+/// control footprint when classifying the next pointer event.
+@MainActor
+final class PanelChromeInteractionState {
+    var onModeDockWidthChanged: (() -> Void)?
+    var modeDockWidth = PanelModeDockLayout.width(isExpanded: false) {
+        didSet {
+            guard modeDockWidth != oldValue else { return }
+            onModeDockWidthChanged?()
+        }
     }
 }
 
@@ -344,15 +398,26 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     var onLiveResizeChanged: ((CGSize) -> Void)?
     var onLiveResizeEnded: ((CGSize) -> Void)?
     var onWindowDragBegan: (() -> Void)?
-    var onWindowDragChanged: ((CGRect, CGPoint) -> Void)?
+    var onWindowDragChanged: ((CGRect, CGPoint) -> CGRect)?
     var onWindowDragEnded: ((CGRect, CGPoint, CGPoint, CGPoint) -> Void)?
+    private let chromeInteractionState: PanelChromeInteractionState
     private var resizeSession: ResizeSession?
     private var moveSession: MoveSession?
 
-    init(rootView: AtticPanelView, panelCornerRadius: CGFloat, dockedCorner: ScreenCorner) {
+    init(
+        rootView: AtticPanelView,
+        panelCornerRadius: CGFloat,
+        dockedCorner: ScreenCorner,
+        chromeInteractionState: PanelChromeInteractionState
+    ) {
         self.panelCornerRadius = panelCornerRadius
         self.dockedCorner = dockedCorner
+        self.chromeInteractionState = chromeInteractionState
         super.init(rootView: rootView)
+        chromeInteractionState.onModeDockWidthChanged = { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.invalidateCursorRects(for: self)
+        }
     }
 
     @available(*, unavailable)
@@ -390,7 +455,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         if AtticPanelDragPolicy.isTopDragPoint(
             policyPoint,
             in: bounds,
-            cornerRadius: panelCornerRadius
+            cornerRadius: panelCornerRadius,
+            modeDockWidth: chromeInteractionState.modeDockWidth,
+            dockedAt: dockedCorner
         ) {
             return self
         }
@@ -430,7 +497,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         guard AtticPanelDragPolicy.isTopDragPoint(
             policyPoint,
             in: bounds,
-            cornerRadius: panelCornerRadius
+            cornerRadius: panelCornerRadius,
+            modeDockWidth: chromeInteractionState.modeDockWidth,
+            dockedAt: dockedCorner
         ) else {
             super.mouseDown(with: event)
             return
@@ -495,11 +564,11 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         session.lastTimestamp = event.timestamp
         moveSession = session
 
-        var frame = session.initialFrame
-        frame.origin.x += delta.x
-        frame.origin.y += delta.y
+        var proposedFrame = session.initialFrame
+        proposedFrame.origin.x += delta.x
+        proposedFrame.origin.y += delta.y
+        let frame = onWindowDragChanged?(proposedFrame, mouseLocation) ?? proposedFrame
         window.setFrame(frame, display: true)
-        onWindowDragChanged?(frame, mouseLocation)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -540,7 +609,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             AtticPanelCoordinateSpace.hostingRect(
                 fromPolicyRect: AtticPanelDragPolicy.topDragRegion(
                     in: bounds,
-                    cornerRadius: panelCornerRadius
+                    cornerRadius: panelCornerRadius,
+                    modeDockWidth: chromeInteractionState.modeDockWidth,
+                    dockedAt: dockedCorner
                 ),
                 in: bounds,
                 isFlipped: isFlipped

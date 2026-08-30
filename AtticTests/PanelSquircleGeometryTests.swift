@@ -290,6 +290,25 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(panel.frame.origin, movedFrame.origin)
     }
 
+    @MainActor
+    func testPanelRoutesAccessibilityMovementForUsableAreaConfinement() {
+        let initialFrame = NSRect(x: 200, y: 150, width: 500, height: 600)
+        let panel = AtticPanel(
+            contentRect: initialFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        var requestedFrame: CGRect?
+        panel.onAccessibilityMoveRequest = { requestedFrame = $0 }
+        let movedFrame = NSRect(origin: CGPoint(x: 260, y: -900), size: initialFrame.size)
+
+        panel.setAccessibilityFrame(movedFrame)
+
+        XCTAssertEqual(requestedFrame, movedFrame)
+        XCTAssertEqual(panel.frame, initialFrame)
+    }
+
     func testResizeHitTestingFindsVisibleEdgesAndCornersButNotTransparentPixels() {
         let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
 
@@ -759,6 +778,83 @@ final class PanelSquircleGeometryTests: XCTestCase {
         }
     }
 
+    func testCollapsedModeDockExposesBroadTopDragLaneWithoutClaimingExpandedControls() {
+        let bounds = CGRect(origin: .zero, size: PanelGeometry.minimumPanelSize)
+        let radius = PanelCornerSize.defaultValue
+        let collapsedWidth = PanelModeDockLayout.width(isExpanded: false)
+        let expandedWidth = PanelModeDockLayout.width(isExpanded: true)
+        let collapsedRegion = AtticPanelDragPolicy.topDragRegion(
+            in: bounds,
+            cornerRadius: radius,
+            modeDockWidth: collapsedWidth,
+            dockedAt: .topRight
+        )
+        let expandedRegion = AtticPanelDragPolicy.topDragRegion(
+            in: bounds,
+            cornerRadius: radius,
+            modeDockWidth: expandedWidth,
+            dockedAt: .topRight
+        )
+
+        XCTAssertGreaterThan(collapsedRegion.width, expandedRegion.width + 100)
+        let newlyAvailablePoint = CGPoint(
+            x: (expandedRegion.maxX + collapsedRegion.maxX) / 2,
+            y: collapsedRegion.midY
+        )
+        XCTAssertTrue(
+            AtticPanelDragPolicy.isTopDragPoint(
+                newlyAvailablePoint,
+                in: bounds,
+                cornerRadius: radius,
+                modeDockWidth: collapsedWidth,
+                dockedAt: .topRight
+            )
+        )
+        XCTAssertFalse(
+            AtticPanelDragPolicy.isTopDragPoint(
+                newlyAvailablePoint,
+                in: bounds,
+                cornerRadius: radius,
+                modeDockWidth: expandedWidth,
+                dockedAt: .topRight
+            )
+        )
+    }
+
+    func testAttachedTopEdgeBecomesDragSurfaceButInwardTopResizeRemainsOwned() {
+        let bounds = CGRect(x: 0, y: 0, width: 480, height: 620)
+        let radius: CGFloat = 80
+        let point = CGPoint(x: bounds.midX, y: bounds.maxY)
+
+        XCTAssertTrue(
+            AtticPanelDragPolicy.isTopDragPoint(
+                point,
+                in: bounds,
+                cornerRadius: radius,
+                modeDockWidth: PanelModeDockLayout.width(isExpanded: false),
+                dockedAt: .topRight
+            )
+        )
+        XCTAssertFalse(
+            AtticPanelDragPolicy.isTopDragPoint(
+                point,
+                in: bounds,
+                cornerRadius: radius,
+                modeDockWidth: PanelModeDockLayout.width(isExpanded: false),
+                dockedAt: .bottomRight
+            )
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: point,
+                in: bounds,
+                cornerRadius: radius,
+                dockedAt: .bottomRight
+            ),
+            .top
+        )
+    }
+
     @MainActor
     func testFlippedHostingCoordinatesMapVisualTopBottomCornersAndDragLane() {
         let hostingView = NSHostingView(rootView: EmptyView())
@@ -883,6 +979,23 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(clamped.height, 522)
         XCTAssertEqual(clamped.maxX, frame.maxX)
         XCTAssertEqual(clamped.maxY, frame.maxY)
+    }
+
+    func testCustomResizeRecoversAFrameThatWasPreviouslyBelowTheDock() {
+        let visibleFrame = CGRect(x: 0, y: 70, width: 1_440, height: 800)
+        let recovered = AtticPanelResizePolicy.resizedFrame(
+            from: CGRect(x: 900, y: -100, width: 400, height: 600),
+            mouseDelta: CGPoint(x: -40, y: 0),
+            edges: .left,
+            minimumSize: PanelGeometry.minimumPanelSize,
+            maximumSize: PanelGeometry.resizeMaximumSize(in: visibleFrame),
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(recovered.minY, visibleFrame.minY + PanelGeometry.screenInset)
+        XCTAssertGreaterThanOrEqual(recovered.minX, visibleFrame.minX + PanelGeometry.screenInset)
+        XCTAssertLessThanOrEqual(recovered.maxX, visibleFrame.maxX - PanelGeometry.screenInset)
+        XCTAssertLessThanOrEqual(recovered.maxY, visibleFrame.maxY - PanelGeometry.screenInset)
     }
 
     func testResizeFrameStopsDraggedEdgesAtTheVisibleScreenInset() {

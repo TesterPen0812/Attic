@@ -107,6 +107,31 @@ enum PanelGeometry {
         )
     }
 
+    /// Keeps an already-sized panel wholly inside the display's usable work
+    /// area. This is intentionally separate from `clampedPanelSize`: moving a
+    /// panel must not unexpectedly enlarge it, while resize and restore paths
+    /// continue to own minimum-size enforcement.
+    static func constrainedFrame(
+        _ frame: CGRect,
+        to visibleFrame: CGRect,
+        inset: CGFloat = screenInset
+    ) -> CGRect {
+        let horizontalInset = min(max(0, inset), max(0, visibleFrame.width / 2))
+        let verticalInset = min(max(0, inset), max(0, visibleFrame.height / 2))
+        let safeFrame = visibleFrame.insetBy(dx: horizontalInset, dy: verticalInset)
+        let size = CGSize(
+            width: min(max(0, frame.width), max(0, safeFrame.width)),
+            height: min(max(0, frame.height), max(0, safeFrame.height))
+        )
+        let maximumOriginX = max(safeFrame.minX, safeFrame.maxX - size.width)
+        let maximumOriginY = max(safeFrame.minY, safeFrame.maxY - size.height)
+        let origin = CGPoint(
+            x: min(max(frame.minX, safeFrame.minX), maximumOriginX),
+            y: min(max(frame.minY, safeFrame.minY), maximumOriginY)
+        )
+        return CGRect(origin: origin, size: size)
+    }
+
     static func hotspot(in screenFrame: CGRect, corner: ScreenCorner, size: CGFloat = triggerSize) -> CGRect {
         let origin: CGPoint
         switch corner {
