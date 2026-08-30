@@ -2,6 +2,29 @@ import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    func testClearGlassReadabilityUsesEffectiveSurfaceState() {
+        XCTAssertTrue(AtticClearGlassReadabilityPolicy.isEnabled(
+            isTranslucent: true,
+            isClearStyle: true,
+            reduceTransparency: false
+        ))
+        XCTAssertFalse(AtticClearGlassReadabilityPolicy.isEnabled(
+            isTranslucent: false,
+            isClearStyle: true,
+            reduceTransparency: false
+        ))
+        XCTAssertFalse(AtticClearGlassReadabilityPolicy.isEnabled(
+            isTranslucent: true,
+            isClearStyle: false,
+            reduceTransparency: false
+        ))
+        XCTAssertFalse(AtticClearGlassReadabilityPolicy.isEnabled(
+            isTranslucent: true,
+            isClearStyle: true,
+            reduceTransparency: true
+        ))
+    }
+
     @MainActor
     func testGlassStyleDefaultsToClearAndPersists() {
         let (defaults, suiteName) = makeDefaults()

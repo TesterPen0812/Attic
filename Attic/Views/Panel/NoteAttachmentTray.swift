@@ -560,6 +560,8 @@ enum NoteAttachmentPasteboardRouter {
 /// A Cocoa text editor keeps selection, marked text, undo, links, and keyboard
 /// behavior native while taking ownership of file drag/paste classification.
 struct AttachmentAwareTextEditor: NSViewRepresentable {
+    @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var text: String
     @Binding var isFileTargeted: Bool
     let isFocused: Bool
@@ -615,6 +617,11 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             NoteAttachmentPasteboardRouter.legacyFilePromiseType
         ])
         textView.setAccessibilityIdentifier("note-body")
+        Self.applyReadability(
+            to: textView,
+            enabled: clearReadabilityEnabled,
+            colorScheme: colorScheme
+        )
 
         textView.onImportFiles = { [weak coordinator = context.coordinator] urls, cleanup in
             coordinator?.parent.onImportFiles(urls, cleanup)
@@ -649,6 +656,14 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             context.coordinator.isApplyingExternalText = false
         }
 
+        if !textView.hasMarkedText() {
+            Self.applyReadability(
+                to: textView,
+                enabled: clearReadabilityEnabled,
+                colorScheme: colorScheme
+            )
+        }
+
         if isFocused, textView.window?.firstResponder !== textView {
             DispatchQueue.main.async { [weak textView] in
                 guard let textView, textView.window != nil else { return }
@@ -678,6 +693,39 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         return clamped.isEmpty
             ? [NSValue(range: NSRange(location: length, length: 0))]
             : clamped
+    }
+
+    static func applyReadability(
+        to textView: NSTextView,
+        enabled: Bool,
+        colorScheme: ColorScheme
+    ) {
+        let key = NSAttributedString.Key.shadow
+        let fullRange = NSRange(location: 0, length: textView.textStorage?.length ?? 0)
+        let selectedRanges = textView.selectedRanges
+        textView.undoManager?.disableUndoRegistration()
+        defer {
+            textView.undoManager?.enableUndoRegistration()
+            textView.selectedRanges = selectedRanges
+        }
+
+        if enabled {
+            let shadow = NSShadow()
+            shadow.shadowColor = colorScheme == .dark
+                ? NSColor.black.withAlphaComponent(0.56)
+                : NSColor.white.withAlphaComponent(0.62)
+            shadow.shadowBlurRadius = 0.7
+            shadow.shadowOffset = NSSize(width: 0, height: -0.35)
+            if fullRange.length > 0 {
+                textView.textStorage?.addAttribute(key, value: shadow, range: fullRange)
+            }
+            textView.typingAttributes[key] = shadow
+        } else {
+            if fullRange.length > 0 {
+                textView.textStorage?.removeAttribute(key, range: fullRange)
+            }
+            textView.typingAttributes.removeValue(forKey: key)
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

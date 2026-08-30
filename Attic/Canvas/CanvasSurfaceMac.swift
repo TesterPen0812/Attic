@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct CanvasNSViewRepresentable: NSViewRepresentable {
     @ObservedObject var session: CanvasSession
+    let clearReadabilityEnabled: Bool
 
     func makeNSView(context: Context) -> CanvasNSView {
         let view = CanvasNSView()
@@ -94,7 +95,8 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             color: session.color,
             width: session.width,
             viewport: session.viewport,
-            pendingPlacement: session.pendingPlacement
+            pendingPlacement: session.pendingPlacement,
+            clearReadabilityEnabled: clearReadabilityEnabled
         )
     }
 }
@@ -173,6 +175,7 @@ final class CanvasNSView: NSView {
     var imagePointerMode: ImagePointerMode = .none
     var shapePointerMode: ShapePointerMode?
     var shapePreview: CanvasStrokeGeometry?
+    var clearReadabilityEnabled = false
     var panLastPoint: CGPoint?
     var spacePressed = false
     var trackingAreaReference: NSTrackingArea?
@@ -234,7 +237,8 @@ final class CanvasNSView: NSView {
         color: CanvasInkColor,
         width: Double,
         viewport: CanvasViewport,
-        pendingPlacement: CanvasPendingPlacement?
+        pendingPlacement: CanvasPendingPlacement?,
+        clearReadabilityEnabled: Bool
     ) {
         var changed = false
         if self.canvasID != canvasID {
@@ -266,6 +270,10 @@ final class CanvasNSView: NSView {
             self.pendingPlacement = pendingPlacement
             shapePointerMode = nil
             shapePreview = nil
+            changed = true
+        }
+        if self.clearReadabilityEnabled != clearReadabilityEnabled {
+            self.clearReadabilityEnabled = clearReadabilityEnabled
             changed = true
         }
         if interaction.configure(
@@ -358,8 +366,18 @@ final class CanvasNSView: NSView {
                 imageCache.image(for: image)
             },
             imageSelectionColor: NSColor.controlAccentColor.cgColor,
-            shapePreview: shapePreview
+            shapePreview: shapePreview,
+            strokeReadabilityShadowColor: clearReadabilityEnabled
+                ? readabilityShadowColor
+                : nil
         )
+    }
+
+    private var readabilityShadowColor: CGColor {
+        let match = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        return (match == .darkAqua
+            ? NSColor.black.withAlphaComponent(0.56)
+            : NSColor.white.withAlphaComponent(0.62)).cgColor
     }
 
     override func mouseDown(with event: NSEvent) {

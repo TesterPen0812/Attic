@@ -181,7 +181,8 @@ func drawCanvas(
     selectedImageID: UUID? = nil,
     imageProvider: (CanvasPlacedImage) -> CGImage? = { _ in nil },
     imageSelectionColor: CGColor? = nil,
-    shapePreview: CanvasStrokeGeometry? = nil
+    shapePreview: CanvasStrokeGeometry? = nil,
+    strokeReadabilityShadowColor: CGColor? = nil
 ) {
     context.saveGState()
     context.clear(bounds)
@@ -234,27 +235,40 @@ func drawCanvas(
 
     context.setLineCap(.round)
     context.setLineJoin(.round)
+    func strokePath(color: CGColor, width: CGFloat) {
+        if let strokeReadabilityShadowColor {
+            context.setShadow(
+                offset: CGSize(width: 0, height: 0.35),
+                blur: 0.7,
+                color: strokeReadabilityShadowColor
+            )
+        }
+        context.setStrokeColor(color)
+        context.setLineWidth(width)
+        context.strokePath()
+        context.setShadow(offset: .zero, blur: 0, color: nil)
+    }
     for stroke in interaction.strokes {
         guard stroke.bounds?.intersects(cullingRect) != false else {
             continue
         }
         context.addPath(pathCache.path(for: stroke))
-        context.setStrokeColor(strokeColor(stroke.color))
-        context.setLineWidth(CGFloat(stroke.width))
-        context.strokePath()
+        strokePath(color: strokeColor(stroke.color), width: CGFloat(stroke.width))
     }
 
     if let activePath = interaction.activePath {
         context.addPath(activePath)
-        context.setStrokeColor(strokeColor(interaction.activeStrokeColor))
-        context.setLineWidth(CGFloat(interaction.activeStrokeWidth))
-        context.strokePath()
+        strokePath(
+            color: strokeColor(interaction.activeStrokeColor),
+            width: CGFloat(interaction.activeStrokeWidth)
+        )
     }
     if let shapePreview, !shapePreview.points.isEmpty {
         context.addPath(canvasPath(points: shapePreview.points))
-        context.setStrokeColor(strokeColor(shapePreview.color))
-        context.setLineWidth(CGFloat(shapePreview.width))
-        context.strokePath()
+        strokePath(
+            color: strokeColor(shapePreview.color),
+            width: CGFloat(shapePreview.width)
+        )
     }
     context.restoreGState()
 

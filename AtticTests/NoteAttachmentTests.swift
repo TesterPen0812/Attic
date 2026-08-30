@@ -6,6 +6,42 @@ import XCTest
 @testable import Attic
 
 final class NoteAttachmentTests: XCTestCase {
+    @MainActor
+    func testEditorReadabilityChangesGlyphAttributesWithoutChangingTextOrSelection() {
+        let textView = NSTextView()
+        textView.string = "Draft body"
+        textView.selectedRange = NSRange(location: 5, length: 0)
+
+        AttachmentAwareTextEditor.applyReadability(
+            to: textView,
+            enabled: true,
+            colorScheme: .dark
+        )
+
+        XCTAssertEqual(textView.string, "Draft body")
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 5, length: 0))
+        XCTAssertNotNil(textView.textStorage?.attribute(
+            .shadow,
+            at: 0,
+            effectiveRange: nil
+        ))
+        XCTAssertNotNil(textView.typingAttributes[.shadow])
+
+        AttachmentAwareTextEditor.applyReadability(
+            to: textView,
+            enabled: false,
+            colorScheme: .dark
+        )
+
+        XCTAssertEqual(textView.string, "Draft body")
+        XCTAssertNil(textView.textStorage?.attribute(
+            .shadow,
+            at: 0,
+            effectiveRange: nil
+        ))
+        XCTAssertNil(textView.typingAttributes[.shadow])
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticAttachmentTests-\(UUID().uuidString)", isDirectory: true)

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CanvasSurface: View {
     @ObservedObject var session: CanvasSession
+    @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
 
     var body: some View {
         platformSurface
@@ -21,7 +22,10 @@ struct CanvasSurface: View {
     @ViewBuilder
     private var platformSurface: some View {
 #if os(macOS)
-        CanvasNSViewRepresentable(session: session)
+        CanvasNSViewRepresentable(
+            session: session,
+            clearReadabilityEnabled: clearReadabilityEnabled
+        )
 #elseif os(iOS)
         CanvasUIViewRepresentable(session: session)
 #endif

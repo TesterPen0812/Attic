@@ -66,13 +66,34 @@ struct TaskStatusMark: View {
 /// similarly coloured desktop underneath. The treatment is deliberately
 /// local to the rendered foreground: it does not add a fill, scrim, material,
 /// or any background sampling work to the panel surface.
+private struct ClearGlassForegroundReadabilityEnabledKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var atticClearGlassForegroundReadabilityEnabled: Bool {
+        get { self[ClearGlassForegroundReadabilityEnabledKey.self] }
+        set { self[ClearGlassForegroundReadabilityEnabledKey.self] = newValue }
+    }
+}
+
+enum AtticClearGlassReadabilityPolicy {
+    static func isEnabled(
+        isTranslucent: Bool,
+        isClearStyle: Bool,
+        reduceTransparency: Bool
+    ) -> Bool {
+        isTranslucent && isClearStyle && !reduceTransparency
+    }
+}
+
 private struct ClearGlassForegroundReadabilityModifier: ViewModifier {
-    @Environment(\.atticPanelGlassStyle) private var glassStyle
+    @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if glassStyle == .clear {
+        if isEnabled {
             content.shadow(
                 color: colorScheme == .dark
                     ? Color.black.opacity(0.56)

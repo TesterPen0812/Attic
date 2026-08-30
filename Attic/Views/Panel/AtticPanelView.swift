@@ -9,6 +9,7 @@ struct AtticPanelView: View {
     @ObservedObject var settings: AppSettings
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var quickEntryTitle = ""
     @State private var isModeDockHovered = false
@@ -80,6 +81,14 @@ struct AtticPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.colorScheme, systemColorScheme)
         .environment(\.atticPanelGlassStyle, settings.panelGlassStyle)
+        .environment(
+            \.atticClearGlassForegroundReadabilityEnabled,
+            AtticClearGlassReadabilityPolicy.isEnabled(
+                isTranslucent: settings.isTranslucent,
+                isClearStyle: settings.panelGlassStyle == .clear,
+                reduceTransparency: reduceTransparency
+            )
+        )
         .environment(\.controlActiveState, .key)
         .atticPanelSurface(
             translucent: settings.isTranslucent,
