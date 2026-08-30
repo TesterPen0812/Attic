@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import ImageIO
+import CoreText
 import UniformTypeIdentifiers
 
 enum CanvasImageImportError: LocalizedError, Equatable {
@@ -243,5 +244,139 @@ enum CanvasImageImporter {
         @unknown default:
             true
         }
+    }
+}
+
+enum CanvasTextRenderError: LocalizedError, Equatable {
+    case emptyText
+    case unableToRender
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyText:
+            "Enter some text before adding it to the canvas."
+        case .unableToRender:
+            "Attic could not render that text on the canvas."
+        }
+    }
+}
+
+enum CanvasTextRenderer {
+    static func prepare(
+        text: String,
+        color: CanvasInkColor,
+        prefersDarkSurface: Bool
+    ) async throws -> CanvasPreparedImage {
+        let trimmed = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(160)
+        guard !trimmed.isEmpty else {
+            throw CanvasTextRenderError.emptyText
+        }
+        let value = String(trimmed)
+        return try await Task.detached(priority: .userInitiated) {
+            try render(
+                text: value,
+                color: color,
+                prefersDarkSurface: prefersDarkSurface
+            )
+        }.value
+    }
+
+    nonisolated private static func render(
+        text: String,
+        color: CanvasInkColor,
+        prefersDarkSurface: Bool
+    ) throws -> CanvasPreparedImage {
+        let font = CTFontCreateWithName("SF Pro Rounded" as CFString, 30, nil)
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [
+                kCTFontAttributeName as NSAttributedString.Key: font,
+                kCTForegroundColorAttributeName as NSAttributedString.Key:
+                    cgColor(for: color, prefersDarkSurface: prefersDarkSurface)
+            ]
+        )
+        let line = CTLineCreateWithAttributedString(attributed)
+        var ascent = CGFloat.zero
+        var descent = CGFloat.zero
+        var leading = CGFloat.zero
+        let typographicWidth = CGFloat(
+            CTLineGetTypographicBounds(
+                line,
+                &ascent,
+                &descent,
+                &leading
+            )
+        )
+        let padding = CGFloat(12)
+        let pixelWidth = max(Int(ceil(typographicWidth + padding * 2)), 1)
+        let pixelHeight = max(Int(ceil(ascent + descent + leading + padding * 2)), 1)
+
+        guard pixelWidth <= 4_096,
+              pixelHeight <= 4_096,
+              let context = CGContext(
+                  data: nil,
+                  width: pixelWidth,
+                  height: pixelHeight,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            throw CanvasTextRenderError.unableToRender
+        }
+
+        context.textMatrix = .identity
+        context.textPosition = CGPoint(x: padding, y: padding + descent)
+        CTLineDraw(line, context)
+        guard let image = context.makeImage() else {
+            throw CanvasTextRenderError.unableToRender
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw CanvasTextRenderError.unableToRender
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw CanvasTextRenderError.unableToRender
+        }
+        return CanvasPreparedImage(
+            encodedData: output as Data,
+            contentType: UTType.png.identifier,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
+        )
+    }
+
+    nonisolated private static func cgColor(
+        for color: CanvasInkColor,
+        prefersDarkSurface: Bool
+    ) -> CGColor {
+        let components: [CGFloat]
+        switch color {
+        case .ink:
+            components = prefersDarkSurface
+                ? [0.96, 0.96, 0.98, 1]
+                : [0.08, 0.08, 0.10, 1]
+        case .blue:
+            components = [0.02, 0.48, 1.0, 1]
+        case .red:
+            components = [0.94, 0.18, 0.23, 1]
+        case .green:
+            components = [0.16, 0.70, 0.32, 1]
+        case .orange:
+            components = [1.0, 0.50, 0.08, 1]
+        }
+        return CGColor(
+            colorSpace: CGColorSpaceCreateDeviceRGB(),
+            components: components
+        ) ?? CGColor(gray: prefersDarkSurface ? 0.96 : 0.08, alpha: 1)
     }
 }

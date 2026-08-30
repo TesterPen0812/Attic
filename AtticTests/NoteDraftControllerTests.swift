@@ -1,8 +1,60 @@
+import AppKit
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import Attic
 
 final class NoteDraftControllerTests: XCTestCase {
+    // NSHostingView can still have focus reconciliation scheduled after the
+    // assertion. Retain the harness window for the short life of the test
+    // process so XCTest's autorelease checker does not tear its AppKit graph
+    // down while those main-queue callbacks are draining.
+    private static var retainedHarnessWindows: [NSWindow] = []
+
+    @MainActor
+    func testBodyEditorKeepsFirstResponderAcrossDraftUpdates() throws {
+        let store = try makeTestNoteStore()
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        let uiState = PanelUIState()
+        XCTAssertTrue(draft.beginNew())
+        uiState.beginAdding()
+
+        let host = NSHostingView(
+            rootView: NoteComposerView(noteDraft: draft, uiState: uiState)
+                .frame(width: 420, height: 560)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 420, height: 560)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        window.orderBack(nil)
+        Self.retainedHarnessWindows.append(window)
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+
+        let textView = try XCTUnwrap(
+            firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" }
+        )
+        XCTAssertTrue(window.makeFirstResponder(textView))
+
+        textView.insertText("a", replacementRange: textView.selectedRange())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+
+        XCTAssertTrue(
+            window.firstResponder === textView,
+            "A draft publication must not make the body editor surrender first responder"
+        )
+        textView.insertText("b", replacementRange: textView.selectedRange())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+
+        XCTAssertEqual(textView.string, "ab")
+        XCTAssertEqual(draft.body, "ab")
+    }
+
     @MainActor
     func testSwitchingNotesFlushesThePreviousDraftToItsOwnRecord() throws {
         let store = try makeTestNoteStore()
@@ -266,4 +318,20 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertEqual(draft.title, "")
         XCTAssertEqual(draft.body, "")
     }
+}
+
+@MainActor
+private func firstTextView(
+    in view: NSView,
+    matching predicate: (NSTextView) -> Bool
+) -> NSTextView? {
+    if let textView = view as? NSTextView, predicate(textView) {
+        return textView
+    }
+    for subview in view.subviews {
+        if let match = firstTextView(in: subview, matching: predicate) {
+            return match
+        }
+    }
+    return nil
 }

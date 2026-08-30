@@ -180,11 +180,15 @@ func drawCanvas(
     images: [CanvasPlacedImage] = [],
     selectedImageID: UUID? = nil,
     imageProvider: (CanvasPlacedImage) -> CGImage? = { _ in nil },
-    imageSelectionColor: CGColor? = nil
+    imageSelectionColor: CGColor? = nil,
+    shapePreview: CanvasStrokeGeometry? = nil
 ) {
     context.saveGState()
-    context.setFillColor(backgroundColor)
-    context.fill(bounds)
+    context.clear(bounds)
+    if backgroundColor.alpha > 0 {
+        context.setFillColor(backgroundColor)
+        context.fill(bounds)
+    }
     context.clip(to: bounds)
 
     pathCache.prepare(for: interaction.strokes)
@@ -246,6 +250,12 @@ func drawCanvas(
         context.setLineWidth(CGFloat(interaction.activeStrokeWidth))
         context.strokePath()
     }
+    if let shapePreview, !shapePreview.points.isEmpty {
+        context.addPath(canvasPath(points: shapePreview.points))
+        context.setStrokeColor(strokeColor(shapePreview.color))
+        context.setLineWidth(CGFloat(shapePreview.width))
+        context.strokePath()
+    }
     context.restoreGState()
 
     if let selectedImageID,
@@ -278,6 +288,16 @@ func drawCanvas(
     }
 
     context.restoreGState()
+}
+
+private func canvasPath(points: [CanvasPoint]) -> CGPath {
+    let path = CGMutablePath()
+    guard let first = points.first else { return path }
+    path.move(to: first.cgPoint)
+    for point in points.dropFirst() {
+        path.addLine(to: point.cgPoint)
+    }
+    return path
 }
 
 private func imageComesBefore(

@@ -22,8 +22,8 @@ final class AgentServer: ObservableObject {
     private let port: UInt16
     private let bearerToken: String
     private let handler: MCPRequestHandler
-    private let queue = DispatchQueue(label: "com.emanueledipietro.Attic.AgentServer")
-    private let logger = Logger(subsystem: "com.emanueledipietro.Attic", category: "AgentServer")
+    private let queue = DispatchQueue(label: "com.taha.Attic.AgentServer")
+    private let logger = Logger(subsystem: "com.taha.Attic", category: "AgentServer")
     private var listener: NWListener?
 
     init(port: UInt16, bearerToken: String, handler: MCPRequestHandler) {

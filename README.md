@@ -1,8 +1,8 @@
 # Attic
 
-A tiny native task list for Mac and iPhone that stays out of the way until you need it.
+A tiny native task and notes app for Mac that stays out of the way until you need it.
 
-On Mac, Attic lives in the menu bar and reveals a lightweight panel when the pointer rests in a chosen screen corner. Its iPhone companion uses the same SwiftData model and synchronizes tasks through the user's private CloudKit database.
+Attic lives in the menu bar and reveals a lightweight panel when the pointer rests in a chosen screen corner. Current development is macOS-first and local-first; the iPhone companion and CloudKit synchronization are deferred.
 
 ## Demo
 
@@ -14,8 +14,7 @@ On Mac, Attic lives in the menu bar and reveals a lightweight panel when the poi
 - Global `Control–Option–Space` shortcut for creating a task
 - Separate Tasks and Backlog scopes, with To do, In Progress and Done states
 - None, Low, Medium and High priorities
-- Local-first SwiftData persistence with private CloudKit sync
-- Native iPhone companion for viewing and editing the same Tasks and Backlog
+- Local-first SwiftData persistence
 - Automatic cleanup of completed tasks after the day changes
 - Multi-display and full-screen Space support
 - Configurable reveal and hide delays
@@ -28,52 +27,25 @@ On Mac, Attic lives in the menu bar and reveals a lightweight panel when the poi
 ## Requirements
 
 - macOS 14 or newer
-- iOS 17 or newer for the iPhone companion
 - Xcode 16 or newer
 
 ## Build and run
 
 1. Clone the repository.
 2. Open `Attic.xcodeproj` in Xcode.
-3. Select both the `Attic` and `AtticMobile` targets and choose your development team under Signing & Capabilities.
-4. Change the bundle identifier if your Apple developer account does not own `com.emanueledipietro.Attic`.
-5. Run the `Attic` scheme for Mac or `AtticMobile` for iPhone.
+3. Select the `Attic` target and choose your development team under Signing & Capabilities.
+4. Run the `Attic` scheme for Mac. The official bundle identifier is `com.taha.Attic`.
 
 Choose a corner and reveal delay in Settings. Press `Control–Option–Space` from anywhere in macOS to reveal Attic with the new-task field focused.
 Press `Command–,` while Attic is focused to open Settings.
 
-## iCloud and iPhone setup
+## Deferred iPhone and CloudKit support
 
-Both app targets use the explicit CloudKit container `iCloud.com.emanueledipietro.Attic`. Before running a device build:
-
-1. In Xcode, confirm that both targets use the same Apple development team and have iCloud/CloudKit plus remote-notification capabilities.
-2. Create or select `iCloud.com.emanueledipietro.Attic` for both targets. If you change the container identifier, also update `PersistenceController.cloudKitContainerIdentifier` and both entitlement files.
-3. Sign in to the same iCloud account on the Mac and iPhone. Each app keeps a local SwiftData replica, so edits remain available offline and synchronize when CloudKit becomes available.
-4. After the first Development sync, inspect the generated `CD_TaskItem` type in CloudKit Console. Deploy the schema to Production before TestFlight, App Store or production distribution.
-
-The Mac app makes a one-time `default.store.pre-cloudkit*` backup before first attaching the existing local store to CloudKit. Completed tasks keep the existing cleanup behavior: tasks completed before the current day are deleted, and that deletion synchronizes to every device.
-
-CloudKit pushes are unreliable in Simulator, so the app also refreshes whenever it becomes active and supports pull-to-refresh on iPhone. Final sync validation still requires two real, unlocked devices on the same iCloud account. A directly distributed Mac build needs a Developer ID provisioning profile that contains the iCloud entitlement; ad-hoc signing cannot access the CloudKit container.
-
-### Mac App Store sandbox note
-
-The Release target retains narrowly scoped temporary sandbox exceptions for
-`com.apple.cloudd` and `com.apple.duetactivityscheduler`. They are required for
-`NSPersistentCloudKitContainer` imports and scheduled exports in the sandboxed
-Mac build.
-
-Before App Store submission, add the following under **App Sandbox Entitlement
-Usage Information** in App Store Connect:
-
-- Entitlement: `com.apple.security.temporary-exception.mach-lookup.global-name`
-- Values: `com.apple.cloudd`, `com.apple.duetactivityscheduler`
-- Usage: “Allows Attic's sandboxed macOS app to access the system CloudKit
-  daemon and background activity scheduler used by
-  `NSPersistentCloudKitContainer`, so private task changes can be imported from
-  and exported to the user's iCloud account. Reviewers can assess it by editing
-  a task on the iPhone companion and confirming that the change appears in the
-  Mac app, then editing it on Mac and confirming the reverse sync.”
-- Include the Feedback Assistant ID associated with the macOS sandbox issue.
+Current builds compile with `ATTIC_LOCAL_ONLY` and do not request CloudKit or
+APNs entitlements. Existing synchronization code remains available for a future,
+explicitly planned activation using a CloudKit container owned by Taha's Apple
+developer account. Until that work is completed, local builds and tests are not
+evidence of cross-device synchronization.
 
 ## Interactions
 
@@ -90,7 +62,7 @@ Usage Information** in App Store Connect:
 
 ## Agent access (MCP)
 
-When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and every request must include the random bearer token shown under Settings → Agent access. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.emanueledipietro.Attic agentServerPort <port>`.
+When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and every request must include the random bearer token shown under Settings → Agent access. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.taha.Attic agentServerPort <port>`.
 
 Settings also provides **Copy setup prompt**, which creates a client-aware prompt containing the local endpoint and private bearer token. Paste it into Codex, Synara, or Claude to have that client configure or repair only its `attic` MCP entry and verify the connection.
 

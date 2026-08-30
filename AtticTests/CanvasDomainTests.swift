@@ -146,6 +146,91 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertEqual(viewport.scale, CanvasViewport.minimumScale)
     }
 
+    func testShapeGeometryUsesTheChosenDragInsteadOfViewportCentre() {
+        let start = CanvasPoint(x: 70, y: 40)
+        let end = CanvasPoint(x: -10, y: 130)
+
+        XCTAssertEqual(
+            CanvasShapeKind.rectangle.points(from: start, to: end),
+            [
+                CanvasPoint(x: -10, y: 40),
+                CanvasPoint(x: 70, y: 40),
+                CanvasPoint(x: 70, y: 130),
+                CanvasPoint(x: -10, y: 130),
+                CanvasPoint(x: -10, y: 40)
+            ]
+        )
+        XCTAssertEqual(
+            CanvasShapeKind.line.points(from: start, to: end),
+            [start, end]
+        )
+        XCTAssertTrue(CanvasShapeKind.ellipse.points(
+            from: start,
+            to: end
+        ).allSatisfy {
+            (-10...70).contains($0.x) && (40...130).contains($0.y)
+        })
+    }
+
+    func testArrowGeometryPreservesUserChosenDirection() throws {
+        let start = CanvasPoint(x: 10, y: 15)
+        let end = CanvasPoint(x: -40, y: -25)
+        let points = CanvasShapeKind.arrow.points(from: start, to: end)
+
+        XCTAssertEqual(points.first, start)
+        XCTAssertEqual(points.dropFirst().first, end)
+        XCTAssertEqual(points.count, 5)
+        XCTAssertTrue(points.allSatisfy(\.isFinite))
+    }
+
+    func testShapeGeometryRejectsClickWithoutDrag() {
+        let point = CanvasPoint(x: 4, y: 8)
+
+        for shape in CanvasShapeKind.allCases {
+            XCTAssertTrue(shape.points(from: point, to: point).isEmpty)
+        }
+    }
+
+    @MainActor
+    func testCanvasCursorRoleFollowsToolAndPlacementMode() {
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .select,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+        XCTAssertEqual(view.baseCursorRole, .arrow)
+
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+        XCTAssertEqual(view.baseCursorRole, .pen)
+
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .eraser,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+        XCTAssertEqual(view.baseCursorRole, .eraser)
+
+        view.pendingPlacement = .text(CanvasTextPlacement(
+            text: "Here",
+            prefersDarkSurface: false
+        ))
+        XCTAssertEqual(view.baseCursorRole, .textPlacement)
+        view.pendingPlacement = .shape(.ellipse)
+        XCTAssertEqual(view.baseCursorRole, .shapePlacement)
+    }
+
     func testZoomOverflowClampsToMaximumInsteadOfResettingToOne() {
         var viewport = CanvasViewport(
             center: CanvasPoint(x: 30, y: -20),
@@ -284,6 +369,18 @@ final class CanvasDomainTests: XCTestCase {
 
         machine.finishPan()
         XCTAssertEqual(machine.state, .idle)
+    }
+
+    func testSelectToolNeverStartsAnInkOperation() {
+        var machine = CanvasInputStateMachine()
+
+        XCTAssertFalse(machine.beginInk(
+            tool: .select,
+            at: CanvasPoint(x: 1, y: 2)
+        ))
+        XCTAssertEqual(machine.state, .idle)
+        XCTAssertEqual(machine.bufferedPointCount, 0)
+        XCTAssertNil(machine.finishInk())
     }
 
     func testInterruptedEraseIsDiscardedDeterministically() {

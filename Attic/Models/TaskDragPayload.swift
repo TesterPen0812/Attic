@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 struct TaskDragPayload: Codable, Sendable, Transferable {
     static let internalTaskType = UTType(
-        exportedAs: "com.emanueledipietro.attic.task-id"
+        exportedAs: "com.taha.attic.task-id"
     )
 
     let taskID: UUID?

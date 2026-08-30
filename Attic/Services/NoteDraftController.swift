@@ -30,7 +30,10 @@ final class NoteDraftController: ObservableObject {
     @Published private(set) var isDirty = false
     @Published private(set) var conflict: Conflict?
 
-    private let noteStore: NoteStore
+    /// Exposed within the Notes feature so its composer can observe attachment
+    /// and library changes without threading a second store through the shared
+    /// panel shell.
+    let noteStore: NoteStore
     private let autosaveDelay: Duration
     private var autosaveTask: Task<Void, Never>?
     private var isApplyingSnapshot = false
@@ -85,6 +88,20 @@ final class NoteDraftController: ObservableObject {
             isActive: true
         )
         return true
+    }
+
+    /// Promotes a blank attachment-only draft to the note created by the
+    /// attachment transaction without changing the editor's identity or
+    /// stealing focus from the text fields.
+    func adoptAttachmentOnlyNote(_ noteID: UUID) {
+        guard activeNoteID == nil,
+              let note = noteStore.notes.first(where: { $0.id == noteID }) else { return }
+        applySnapshot(
+            noteID: note.id,
+            title: note.title,
+            body: note.body,
+            isActive: true
+        )
     }
 
     /// Persists pending text without closing the editor. The current store

@@ -27,7 +27,7 @@ final class CanvasUITests: XCTestCase {
         app.buttons["canvas-undo"].click()
         assertStrokeCount(0)
 
-        app.buttons["canvas-redo"].click()
+        app.typeKey("z", modifierFlags: [.command, .shift])
         assertStrokeCount(1)
 
         app.buttons["canvas-tool-eraser"].click()
@@ -37,7 +37,7 @@ final class CanvasUITests: XCTestCase {
         app.buttons["canvas-undo"].click()
         assertStrokeCount(1)
 
-        app.buttons["canvas-clear"].click()
+        app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [.command, .shift])
         let clearConfirmation = app.buttons["Confirm Clear Canvas"]
         XCTAssertTrue(clearConfirmation.waitForExistence(timeout: 2))
         clearConfirmation.click()

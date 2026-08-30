@@ -20,6 +20,7 @@ final class CanvasSession: ObservableObject {
     @Published private(set) var canRedo = false
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var interactionCancellationEpoch: UInt64 = 0
+    @Published private(set) var pendingPlacement: CanvasPendingPlacement?
 
     private enum HistoryCommand {
         case addStroke(CanvasStroke)
@@ -155,12 +156,38 @@ final class CanvasSession: ObservableObject {
     }
 
     func selectTool(_ tool: CanvasTool) {
+        cancelPendingPlacement()
         self.tool = tool
     }
 
     func selectColor(_ color: CanvasInkColor) {
+        cancelPendingPlacement()
         self.color = color
         tool = .pen
+    }
+
+    @discardableResult
+    func prepareTextPlacement(
+        _ text: String,
+        prefersDarkSurface: Bool
+    ) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return false }
+        pendingPlacement = .text(CanvasTextPlacement(
+            text: normalized,
+            prefersDarkSurface: prefersDarkSurface
+        ))
+        selectedImageID = nil
+        return true
+    }
+
+    func prepareShapePlacement(_ shape: CanvasShapeKind) {
+        pendingPlacement = .shape(shape)
+        selectedImageID = nil
+    }
+
+    func cancelPendingPlacement() {
+        pendingPlacement = nil
     }
 
     func setWidth(_ width: Double) {
@@ -171,6 +198,7 @@ final class CanvasSession: ObservableObject {
     @discardableResult
     func selectCanvas(_ id: UUID) -> Bool {
         guard id != selectedCanvasID else { return true }
+        cancelPendingPlacement()
         cancelActiveInteraction()
         selectedImageID = nil
         isApplyingLocalMutation = true
@@ -182,6 +210,7 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func createCanvas(name: String? = nil) -> CanvasBoard? {
+        cancelPendingPlacement()
         cancelActiveInteraction()
         selectedImageID = nil
         isApplyingLocalMutation = true
@@ -204,6 +233,7 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func deleteSelectedCanvas() -> Bool {
+        cancelPendingPlacement()
         cancelActiveInteraction()
         selectedImageID = nil
         let id = selectedCanvasID
@@ -245,6 +275,76 @@ final class CanvasSession: ObservableObject {
 
         recordNewCommand(.addStroke(persistedStroke))
         return true
+    }
+
+    @discardableResult
+    func insertShape(
+        _ shape: CanvasShapeKind,
+        from start: CanvasPoint,
+        to end: CanvasPoint
+    ) -> Bool {
+        let points = shape.points(from: start, to: end)
+        guard !points.isEmpty else {
+            lastErrorMessage = "The shape could not be placed on the canvas."
+            return false
+        }
+        return completeStroke(points: points)
+    }
+
+    @discardableResult
+    func completePendingShape(
+        _ shape: CanvasShapeKind,
+        from start: CanvasPoint,
+        to end: CanvasPoint
+    ) -> Bool {
+        guard pendingPlacement == .shape(shape) else { return false }
+        let succeeded = insertShape(shape, from: start, to: end)
+        if succeeded {
+            pendingPlacement = nil
+        }
+        return succeeded
+    }
+
+    @discardableResult
+    func completePendingText(
+        _ placement: CanvasTextPlacement,
+        at point: CanvasPoint
+    ) async -> Bool {
+        guard pendingPlacement == .text(placement) else { return false }
+        pendingPlacement = nil
+        return await insertText(
+            placement.text,
+            at: point,
+            prefersDarkSurface: placement.prefersDarkSurface
+        )
+    }
+
+    @discardableResult
+    func insertText(
+        _ text: String,
+        at point: CanvasPoint,
+        prefersDarkSurface: Bool
+    ) async -> Bool {
+        let targetCanvasID = selectedCanvasID
+        let targetGeneration = boardGeneration
+        do {
+            let prepared = try await CanvasTextRenderer.prepare(
+                text: text,
+                color: color,
+                prefersDarkSurface: prefersDarkSurface
+            )
+            try Task.checkCancellation()
+            guard selectedCanvasID == targetCanvasID,
+                  boardGeneration == targetGeneration else {
+                return false
+            }
+            return importPreparedImage(prepared, at: point)
+        } catch is CancellationError {
+            return false
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
     }
 
     @discardableResult
@@ -397,6 +497,7 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func clear() -> Bool {
+        cancelPendingPlacement()
         let capturedStrokes = strokes
         let capturedImages = images
         guard !capturedStrokes.isEmpty || !capturedImages.isEmpty else { return false }
@@ -597,6 +698,8 @@ final class CanvasSession: ObservableObject {
         )
 
         if clearHistory {
+            cancelPendingPlacement()
+            cancelActiveInteraction()
             self.clearHistory()
         }
     }

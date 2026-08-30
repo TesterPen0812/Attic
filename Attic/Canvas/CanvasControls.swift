@@ -83,47 +83,35 @@ struct CanvasCommandButton: View {
     var isSelected = false
     var isDisabled = false
     var isDestructive = false
+    var symbolColor: Color? = nil
     let action: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(isDestructive ? Color.red : Color.primary)
-                    .frame(width: 27, height: 27)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(
-                                isSelected
-                                    ? Color.accentColor.opacity(0.16)
-                                    : Color.primary.opacity(0.045)
-                            )
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(
-                                isSelected
-                                    ? Color.accentColor
-                                    : Color.primary.opacity(0.11),
-                                lineWidth: isSelected ? 1.5 : 0.75
-                            )
-                    }
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 8, weight: .bold))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(Color.white, Color.accentColor)
-                        .offset(x: 3, y: -3)
-                        .accessibilityHidden(true)
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(
+                    isSelected
+                        ? Color.white
+                        : symbolColor ?? Color.primary
+                )
+                .frame(width: 32, height: 32)
+                .background {
+                    Circle()
+                        .fill(
+                            isSelected
+                                ? Color.accentColor
+                                : Color.primary.opacity(isHovered ? 0.08 : 0)
+                        )
                 }
-            }
-            .contentShape(Rectangle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.42 : 1)
+        .onHover { isHovered = $0 }
         .help(title)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -165,6 +153,7 @@ private struct CanvasToolButton: View {
 
     private var shortcut: KeyEquivalent {
         switch tool {
+        case .select: "v"
         case .pen: "p"
         case .eraser: "e"
         }

@@ -3,6 +3,57 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum CanvasCursorRole: Equatable {
+    case arrow
+    case pen
+    case eraser
+    case textPlacement
+    case shapePlacement
+    case openHand
+    case closedHand
+    case resizeTopLeftBottomRight
+    case resizeTopRightBottomLeft
+}
+
+@MainActor
+private enum CanvasToolCursors {
+    static let pen = symbolCursor(
+        primaryName: "pencil.tip",
+        fallbackName: "pencil",
+        hotSpot: CGPoint(x: 5, y: 19)
+    )
+    static let eraser = symbolCursor(
+        primaryName: "eraser.fill",
+        fallbackName: "eraser",
+        hotSpot: CGPoint(x: 12, y: 12)
+    )
+
+    private static func symbolCursor(
+        primaryName: String,
+        fallbackName: String,
+        hotSpot: CGPoint
+    ) -> NSCursor {
+        let symbol = NSImage(systemSymbolName: primaryName, accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: fallbackName, accessibilityDescription: nil)
+        guard let configured = symbol?.withSymbolConfiguration(
+            .init(pointSize: 16, weight: .semibold)
+        ) else {
+            return .crosshair
+        }
+
+        let image = NSImage(size: NSSize(width: 24, height: 24))
+        image.lockFocus()
+        configured.draw(
+            in: NSRect(x: 3, y: 3, width: 18, height: 18),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        image.unlockFocus()
+        return NSCursor(image: image, hotSpot: hotSpot)
+    }
+}
+
 extension CanvasNSView {
     var selectedImage: CanvasPlacedImage? {
         guard let selectedImageID else { return nil }
@@ -22,30 +73,51 @@ extension CanvasNSView {
     }
 
     var baseCursor: NSCursor {
+        cursor(for: baseCursorRole)
+    }
+
+    var baseCursorRole: CanvasCursorRole {
         if spacePressed { return .openHand }
         switch imagePointerMode {
         case .moving: return .closedHand
-        case .resizing: return .crosshair
-        case .none: return .crosshair
+        case let .resizing(_, handle, _): return resizeCursorRole(for: handle)
+        case .none: break
+        }
+        if shapePointerMode != nil { return .shapePlacement }
+        switch pendingPlacement {
+        case .text: return .textPlacement
+        case .shape: return .shapePlacement
+        case nil: return toolCursorRole
         }
     }
 
     func cursor(at viewPoint: CGPoint) -> NSCursor {
+        cursor(for: cursorRole(at: viewPoint))
+    }
+
+    func cursorRole(at viewPoint: CGPoint) -> CanvasCursorRole {
         if spacePressed { return .openHand }
         switch imagePointerMode {
         case .moving: return .closedHand
-        case .resizing: return .crosshair
+        case let .resizing(_, handle, _): return resizeCursorRole(for: handle)
         case .none: break
         }
+        if shapePointerMode != nil { return .shapePlacement }
+        switch pendingPlacement {
+        case .text: return .textPlacement
+        case .shape: return .shapePlacement
+        case nil: break
+        }
+        guard interaction.tool == .select else { return toolCursorRole }
         if let selectedImage,
-           CanvasImagePlacement.resizeHandle(
+           let handle = CanvasImagePlacement.resizeHandle(
                 at: viewPoint,
                 image: selectedImage,
                 viewport: interaction.viewport,
                 viewportSize: bounds.size,
                 radius: 9
-           ) != nil {
-            return .crosshair
+           ) {
+            return resizeCursorRole(for: handle)
         }
         let worldPoint = interaction.viewport.worldPoint(
             for: viewPoint,
@@ -57,15 +129,105 @@ extension CanvasNSView {
         ) != nil {
             return .openHand
         }
-        return .crosshair
+        return .arrow
+    }
+
+    var toolCursorRole: CanvasCursorRole {
+        switch interaction.tool {
+        case .select: .arrow
+        case .pen: .pen
+        case .eraser: .eraser
+        }
+    }
+
+    func cursor(for role: CanvasCursorRole) -> NSCursor {
+        switch role {
+        case .arrow: .arrow
+        case .pen: CanvasToolCursors.pen
+        case .eraser: CanvasToolCursors.eraser
+        case .textPlacement: .iBeam
+        case .shapePlacement: .crosshair
+        case .openHand: .openHand
+        case .closedHand: .closedHand
+        case .resizeTopLeftBottomRight:
+            if #available(macOS 15.0, *) {
+                .frameResize(position: .topLeft, directions: .all)
+            } else {
+                .crosshair
+            }
+        case .resizeTopRightBottomLeft:
+            if #available(macOS 15.0, *) {
+                .frameResize(position: .topRight, directions: .all)
+            } else {
+                .crosshair
+            }
+        }
+    }
+
+    func resizeCursorRole(
+        for handle: CanvasImageResizeHandle
+    ) -> CanvasCursorRole {
+        switch handle {
+        case .topLeft, .bottomRight: .resizeTopLeftBottomRight
+        case .topRight, .bottomLeft: .resizeTopRightBottomLeft
+        }
     }
 
     func beginPan(at point: CGPoint) {
         discardImagePreview()
+        discardShapePreview()
         _ = interaction.beginViewportGesture()
         panLastPoint = point
         needsDisplay = true
         NSCursor.closedHand.set()
+    }
+
+    @discardableResult
+    func finishShapeInteraction(at viewPoint: CGPoint) -> Bool {
+        guard let shapePointerMode else { return false }
+        let endWorldPoint = interaction.viewport.worldPoint(
+            for: viewPoint,
+            in: bounds.size
+        )
+        let dragDistance = hypot(
+            viewPoint.x - shapePointerMode.startViewPoint.x,
+            viewPoint.y - shapePointerMode.startViewPoint.y
+        )
+        self.shapePointerMode = nil
+        shapePreview = nil
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+
+        guard dragDistance >= 4, endWorldPoint.isFinite else {
+            return true
+        }
+        onCompleteShape(
+            shapePointerMode.kind,
+            shapePointerMode.startWorldPoint,
+            endWorldPoint
+        )
+        return true
+    }
+
+    func discardShapePreview() {
+        shapePointerMode = nil
+        shapePreview = nil
+        needsDisplay = true
+    }
+
+    func beginViewportEventIfNeeded() {
+        guard interaction.machine.state != .panning else { return }
+        _ = interaction.beginViewportGesture()
+    }
+
+    func finishViewportEventIfNeeded(_ event: NSEvent) {
+        let phaseDriven = !event.phase.isEmpty || !event.momentumPhase.isEmpty
+        let didEnd = event.phase.contains(.ended)
+            || event.phase.contains(.cancelled)
+            || event.momentumPhase.contains(.ended)
+            || event.momentumPhase.contains(.cancelled)
+        guard !phaseDriven || didEnd else { return }
+        interaction.finishViewportGesture()
     }
 
     func continuePan(to point: CGPoint) {

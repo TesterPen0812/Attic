@@ -105,6 +105,71 @@ final class AtticUITests: XCTestCase {
         XCTAssertGreaterThan(second.frame.minY, first.frame.minY)
     }
 
+    func testNotesEditorKeepsDraftWhileBrowsingSavedNotes() throws {
+        app.typeKey("3", modifierFlags: .command)
+
+        let newNote = app.buttons["new-note-empty-state"]
+        XCTAssertTrue(newNote.waitForExistence(timeout: 3))
+        newNote.click()
+
+        let title = app.textFields["note-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 2))
+        title.typeText("Live Notes UI")
+        title.typeKey(.return, modifierFlags: [])
+
+        let body = app.textViews["note-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 2))
+        body.typeText("The active draft stays mounted while the library is open.")
+        body.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(body.exists)
+
+        let save = app.buttons["save-note"]
+        XCTAssertTrue(save.waitForExistence(timeout: 2))
+        save.click()
+        XCTAssertTrue(body.exists, "Saving in place must keep the focused workspace open")
+
+        let browse = app.buttons["browse-saved-notes"]
+        XCTAssertTrue(browse.waitForExistence(timeout: 2))
+        browse.click()
+
+        let drawer = app.descendants(matching: .any)["saved-notes-drawer"]
+        XCTAssertTrue(drawer.waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Live Notes UI"].exists)
+
+        let returnToWriting = app.buttons["return-to-writing"]
+        XCTAssertTrue(returnToWriting.waitForExistence(timeout: 2))
+        returnToWriting.click()
+
+        XCTAssertTrue(body.waitForExistence(timeout: 2))
+        XCTAssertEqual(
+            body.value as? String,
+            "The active draft stays mounted while the library is open."
+        )
+        XCTAssertTrue(app.buttons["add-note-attachment"].exists)
+        XCTAssertFalse(app.staticTexts["Drop files here"].exists)
+    }
+
+    func testNotesBodyPreservesFocusAcrossIncrementalTyping() throws {
+        app.typeKey("3", modifierFlags: .command)
+
+        let newNote = app.buttons["new-note-empty-state"]
+        XCTAssertTrue(newNote.waitForExistence(timeout: 3))
+        newNote.click()
+
+        let body = app.textViews["note-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 2))
+        body.click()
+
+        // Send separate key events instead of one `typeText` batch. This
+        // catches focus bridges that surrender first responder after the
+        // SwiftUI update caused by each character.
+        app.typeText("a")
+        app.typeText("b")
+        app.typeText("c")
+
+        XCTAssertEqual(body.value as? String, "abc")
+    }
+
     private func addTask(named title: String) {
         let addButton = app.buttons["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 2))
@@ -115,4 +180,5 @@ final class AtticUITests: XCTestCase {
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
     }
+
 }

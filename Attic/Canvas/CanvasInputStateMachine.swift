@@ -28,11 +28,14 @@ struct CanvasInputStateMachine {
         guard state == .idle, point.isFinite else { return false }
 
         bufferedPoints.removeAll(keepingCapacity: true)
-        bufferedPoints.append(point)
         switch tool {
+        case .select:
+            return false
         case .pen:
+            bufferedPoints.append(point)
             state = .drawing
         case .eraser:
+            bufferedPoints.append(point)
             state = .erasing
         }
         return true

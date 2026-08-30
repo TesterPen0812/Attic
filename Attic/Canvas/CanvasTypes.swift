@@ -1,6 +1,7 @@
 import Foundation
 
-enum CanvasTool: String, CaseIterable, Codable, Identifiable {
+enum CanvasTool: String, CaseIterable, Codable, Identifiable, Sendable {
+    case select
     case pen
     case eraser
 
@@ -8,6 +9,7 @@ enum CanvasTool: String, CaseIterable, Codable, Identifiable {
 
     var title: String {
         switch self {
+        case .select: "Select"
         case .pen: "Pen"
         case .eraser: "Eraser"
         }
@@ -15,13 +17,133 @@ enum CanvasTool: String, CaseIterable, Codable, Identifiable {
 
     var symbolName: String {
         switch self {
+        case .select: "arrow.up.left"
         case .pen: "pencil.tip"
         case .eraser: "eraser"
         }
     }
 }
 
-enum CanvasInkColor: String, CaseIterable, Codable, Identifiable {
+enum CanvasShapeKind: String, CaseIterable, Identifiable, Sendable {
+    case rectangle
+    case ellipse
+    case line
+    case arrow
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .rectangle: "Rectangle"
+        case .ellipse: "Ellipse"
+        case .line: "Line"
+        case .arrow: "Arrow"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .rectangle: "rectangle"
+        case .ellipse: "circle"
+        case .line: "line.diagonal"
+        case .arrow: "arrow.right"
+        }
+    }
+
+    func points(
+        from start: CanvasPoint,
+        to end: CanvasPoint
+    ) -> [CanvasPoint] {
+        guard start.isFinite, end.isFinite, start != end else { return [] }
+        let left = min(start.x, end.x)
+        let right = max(start.x, end.x)
+        let top = min(start.y, end.y)
+        let bottom = max(start.y, end.y)
+        let width = right - left
+        let height = bottom - top
+        let center = CanvasPoint(
+            x: left + width / 2,
+            y: top + height / 2
+        )
+
+        switch self {
+        case .rectangle:
+            return [
+                CanvasPoint(x: left, y: top),
+                CanvasPoint(x: right, y: top),
+                CanvasPoint(x: right, y: bottom),
+                CanvasPoint(x: left, y: bottom),
+                CanvasPoint(x: left, y: top)
+            ]
+        case .ellipse:
+            return (0...64).map { index in
+                let angle = Double(index) / 64 * .pi * 2
+                return CanvasPoint(
+                    x: center.x + cos(angle) * width / 2,
+                    y: center.y + sin(angle) * height / 2
+                )
+            }
+        case .line:
+            return [start, end]
+        case .arrow:
+            let deltaX = end.x - start.x
+            let deltaY = end.y - start.y
+            let length = hypot(deltaX, deltaY)
+            guard length.isFinite, length > 0 else { return [] }
+            let unitX = deltaX / length
+            let unitY = deltaY / length
+            let perpendicularX = -unitY
+            let perpendicularY = unitX
+            let headDepth = length * 0.24
+            let headHalfWidth = length * 0.13
+            let headBase = CanvasPoint(
+                x: end.x - unitX * headDepth,
+                y: end.y - unitY * headDepth
+            )
+            return [
+                start,
+                end,
+                CanvasPoint(
+                    x: headBase.x + perpendicularX * headHalfWidth,
+                    y: headBase.y + perpendicularY * headHalfWidth
+                ),
+                end,
+                CanvasPoint(
+                    x: headBase.x - perpendicularX * headHalfWidth,
+                    y: headBase.y - perpendicularY * headHalfWidth
+                )
+            ]
+        }
+    }
+}
+
+struct CanvasTextPlacement: Equatable, Sendable {
+    let text: String
+    let prefersDarkSurface: Bool
+}
+
+enum CanvasPendingPlacement: Equatable, Sendable {
+    case text(CanvasTextPlacement)
+    case shape(CanvasShapeKind)
+
+    var instruction: String {
+        switch self {
+        case .text:
+            "Click the canvas to place text"
+        case let .shape(shape):
+            "Drag on the canvas to draw a \(shape.title.lowercased())"
+        }
+    }
+
+    var accessibilityTitle: String {
+        switch self {
+        case .text: "Text placement"
+        case let .shape(shape): "\(shape.title) placement"
+        }
+    }
+}
+
+enum CanvasInkColor: String, CaseIterable, Codable, Identifiable, Sendable {
     case ink
     case blue
     case red

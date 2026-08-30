@@ -13,16 +13,15 @@ struct AtticPanelView: View {
     @State private var quickEntryTitle = ""
     @State private var isModeDockHovered = false
     @State private var hoveredModeSection: PanelSection?
+    @State private var isQuickSubmitHovered = false
     @FocusState private var isQuickEntryFocused: Bool
     @FocusState private var focusedModeSection: PanelSection?
+    @FocusState private var isQuickSubmitFocused: Bool
 
     private var cornerRadius: CGFloat { settings.panelCornerSize }
 
     private var panelSize: CGSize {
-        CGSize(
-            width: settings.panelContentSize,
-            height: PanelGeometry.preferredWorkspaceHeight(contentWidth: settings.panelContentSize)
-        )
+        uiState.panelSize
     }
 
     private var contentInsets: EdgeInsets {
@@ -237,7 +236,7 @@ struct AtticPanelView: View {
             .padding(.top, 62)
             .transition(.opacity)
         } else {
-            legacyNotesWorkspace
+            notesWorkspace
                 .padding(.top, 64)
                 .transition(.opacity)
         }
@@ -272,11 +271,12 @@ struct AtticPanelView: View {
     }
 
     private var taskScrollMask: some View {
-        LinearGradient(
+        let stops = TaskScrollMaskLayout.stops(panelHeight: panelSize.height)
+        return LinearGradient(
             stops: [
                 .init(color: .clear, location: 0),
-                .init(color: .black, location: 0.055),
-                .init(color: .black, location: 0.80),
+                .init(color: .black, location: stops.topFadeEnd),
+                .init(color: .black, location: stops.bottomFadeStart),
                 .init(color: .clear, location: 1)
             ],
             startPoint: .top,
@@ -284,32 +284,18 @@ struct AtticPanelView: View {
         )
     }
 
-    private var legacyNotesWorkspace: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button(action: toggleNoteComposer) {
-                    Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
-                        .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                        .atticGlassControl(in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(uiState.isComposerPresented ? "Close note" : "New note")
-            }
-            .padding(.horizontal, horizontalInset)
-            .padding(.bottom, 8)
-
+    private var notesWorkspace: some View {
+        Group {
             if uiState.isComposerPresented {
                 NoteComposerView(noteDraft: noteDraft, uiState: uiState)
                     .padding(.horizontal, horizontalInset)
+            } else {
+                NotesPanelContent(
+                    noteStore: noteStore,
+                    noteDraft: noteDraft,
+                    uiState: uiState
+                )
             }
-
-            NotesPanelContent(
-                noteStore: noteStore,
-                noteDraft: noteDraft,
-                uiState: uiState
-            )
         }
     }
 
@@ -356,20 +342,24 @@ struct AtticPanelView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(
                         canSaveQuickTask
-                            ? Color.white
+                            ? Color.primary.opacity(0.94)
                             : Color.primary.opacity(0.34)
                     )
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .background(
-                        canSaveQuickTask
-                            ? Color.accentColor
-                            : Color.primary.opacity(0.055),
+                        Color.primary.opacity(
+                            canSaveQuickTask
+                                ? ((isQuickSubmitHovered || isQuickSubmitFocused) ? 0.16 : 0.10)
+                                : 0.045
+                        ),
                         in: Circle()
                     )
                     .overlay {
                         Circle().stroke(
-                            Color.primary.opacity(canSaveQuickTask ? 0.08 : 0.06),
-                            lineWidth: 0.75
+                            Color.primary.opacity(
+                                isQuickSubmitFocused ? 0.30 : (canSaveQuickTask ? 0.12 : 0.06)
+                            ),
+                            lineWidth: isQuickSubmitFocused ? 1 : 0.75
                         )
                     }
                     .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
@@ -377,6 +367,8 @@ struct AtticPanelView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSaveQuickTask)
+            .focused($isQuickSubmitFocused)
+            .onHover { isQuickSubmitHovered = $0 }
             .help("Add task")
             .accessibilityLabel("Add task")
             .accessibilityIdentifier("quick-entry-submit")
@@ -470,16 +462,6 @@ struct AtticPanelView: View {
             selection()
         } else {
             withAnimation(AtticMotion.quick) { selection() }
-        }
-    }
-
-    private func toggleNoteComposer() {
-        if uiState.isComposerPresented {
-            guard noteDraft.close() else { return }
-            uiState.endAdding()
-        } else {
-            guard noteDraft.beginNew() else { return }
-            uiState.beginAdding()
         }
     }
 

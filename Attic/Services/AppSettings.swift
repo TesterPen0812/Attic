@@ -84,9 +84,8 @@ enum PanelCornerSize: Double, CaseIterable, Identifiable {
     static let defaultValue = PanelCornerSize.huge.rawValue
 }
 
-/// User-adjustable content width of the panel, in points.
+/// User-adjustable and live-resizable width of the panel, in points.
 enum PanelContentSize: Double, CaseIterable, Identifiable {
-    case compact = 300
     case standard = 332
     case large = 360
     case extraLarge = 380
@@ -95,15 +94,18 @@ enum PanelContentSize: Double, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .compact: return "Compact"
         case .standard: return "Default"
         case .large: return "Large"
         case .extraLarge: return "Extra Large"
         }
     }
 
-    static let min = PanelContentSize.compact.rawValue
-    static let max = PanelContentSize.extraLarge.rawValue
+    static let min = PanelContentSize.standard.rawValue
+    static var max: Double {
+        NSScreen.screens
+            .map { Swift.max(min, $0.visibleFrame.width - (PanelGeometry.screenInset * 2)) }
+            .max() ?? min
+    }
     static let defaultValue = PanelContentSize.standard.rawValue
 }
 
@@ -125,6 +127,7 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
         static let panelCornerSize = "panelCornerSize"
         static let panelContentSize = "panelContentSize"
+        static let panelHeight = "panelHeight"
     }
 
     @Published var corner: ScreenCorner {
@@ -160,11 +163,30 @@ final class AppSettings: ObservableObject {
 
     @Published var panelContentSize: Double {
         didSet {
-            let clamped = Self.clamp(panelContentSize, to: PanelContentSize.min...PanelContentSize.max, fallback: PanelContentSize.defaultValue)
+            let clamped = Self.clampMinimum(
+                panelContentSize,
+                minimum: PanelContentSize.min,
+                fallback: PanelContentSize.defaultValue
+            )
             if panelContentSize != clamped {
                 panelContentSize = clamped
             } else {
                 defaults.set(panelContentSize, forKey: Key.panelContentSize)
+            }
+        }
+    }
+
+    @Published private(set) var panelHeight: Double {
+        didSet {
+            let clamped = Self.clampMinimum(
+                panelHeight,
+                minimum: PanelGeometry.minimumHeight,
+                fallback: PanelGeometry.defaultPanelSize.height
+            )
+            if panelHeight != clamped {
+                panelHeight = clamped
+            } else {
+                defaults.set(panelHeight, forKey: Key.panelHeight)
             }
         }
     }
@@ -246,10 +268,17 @@ final class AppSettings: ObservableObject {
             to: PanelCornerSize.min...PanelCornerSize.max,
             fallback: PanelCornerSize.defaultValue
         )
-        panelContentSize = Self.clamp(
+        let resolvedPanelWidth = Self.clampMinimum(
             defaults.object(forKey: Key.panelContentSize) as? Double ?? PanelContentSize.defaultValue,
-            to: PanelContentSize.min...PanelContentSize.max,
+            minimum: PanelContentSize.min,
             fallback: PanelContentSize.defaultValue
+        )
+        panelContentSize = resolvedPanelWidth
+        panelHeight = Self.clampMinimum(
+            defaults.object(forKey: Key.panelHeight) as? Double
+                ?? PanelGeometry.preferredWorkspaceHeight(contentWidth: resolvedPanelWidth),
+            minimum: PanelGeometry.minimumHeight,
+            fallback: PanelGeometry.defaultPanelSize.height
         )
     }
 
@@ -273,6 +302,19 @@ final class AppSettings: ObservableObject {
         cloudSyncStartupErrorMessage = message
     }
 
+    /// Called once after AppKit finishes a manual live resize. Keeping this
+    /// separate from live layout updates avoids continuously writing defaults
+    /// while the pointer is moving.
+    func persistPanelSize(_ size: CGSize) {
+        let clamped = PanelGeometry.clampedPanelSize(size)
+        if panelContentSize != clamped.width {
+            panelContentSize = clamped.width
+        }
+        if panelHeight != clamped.height {
+            panelHeight = clamped.height
+        }
+    }
+
     private static func clamp(
         _ value: Double,
         to range: ClosedRange<Double>,
@@ -280,5 +322,14 @@ final class AppSettings: ObservableObject {
     ) -> Double {
         guard value.isFinite else { return fallback }
         return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private static func clampMinimum(
+        _ value: Double,
+        minimum: Double,
+        fallback: Double
+    ) -> Double {
+        guard value.isFinite else { return fallback }
+        return max(value, minimum)
     }
 }

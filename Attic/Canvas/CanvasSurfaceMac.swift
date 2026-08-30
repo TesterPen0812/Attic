@@ -74,6 +74,17 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
                 }
             }
         }
+        view.onPlaceText = { [weak session] placement, point in
+            Task { @MainActor [weak session] in
+                _ = await session?.completePendingText(placement, at: point)
+            }
+        }
+        view.onCompleteShape = { [weak session] shape, start, end in
+            _ = session?.completePendingShape(shape, from: start, to: end)
+        }
+        view.onCancelPlacement = { [weak session] in
+            session?.cancelPendingPlacement()
+        }
         view.configure(
             canvasID: session.selectedCanvasID,
             strokes: session.strokes,
@@ -82,7 +93,8 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             tool: session.tool,
             color: session.color,
             width: session.width,
-            viewport: session.viewport
+            viewport: session.viewport,
+            pendingPlacement: session.pendingPlacement
         )
     }
 }
@@ -104,6 +116,13 @@ final class CanvasNSView: NSView {
     var onSendSelectedImageBackward: () -> Void = {}
     var onImportImageData: (Data, CanvasPoint) -> Void = { _, _ in }
     var onImportImageURL: (URL, CanvasPoint, Bool) -> Void = { _, _, _ in }
+    var onPlaceText: (CanvasTextPlacement, CanvasPoint) -> Void = { _, _ in }
+    var onCompleteShape: (
+        CanvasShapeKind,
+        CanvasPoint,
+        CanvasPoint
+    ) -> Void = { _, _, _ in }
+    var onCancelPlacement: () -> Void = {}
 
     enum ImagePointerMode {
         case none
@@ -117,6 +136,13 @@ final class CanvasNSView: NSView {
             handle: CanvasImageResizeHandle,
             original: CanvasImageTransform
         )
+    }
+
+    struct ShapePointerMode {
+        let kind: CanvasShapeKind
+        let startViewPoint: CGPoint
+        let startWorldPoint: CanvasPoint
+        var endWorldPoint: CanvasPoint
     }
 
     static let directImagePasteboardTypes: [NSPasteboard.PasteboardType] = [
@@ -142,8 +168,11 @@ final class CanvasNSView: NSView {
     var images: [CanvasPlacedImage] = []
     var imageSignatures: [CanvasImageDisplaySignature] = []
     var selectedImageID: UUID?
+    var pendingPlacement: CanvasPendingPlacement?
     var previewImageTransform: CanvasImageTransform?
     var imagePointerMode: ImagePointerMode = .none
+    var shapePointerMode: ShapePointerMode?
+    var shapePreview: CanvasStrokeGeometry?
     var panLastPoint: CGPoint?
     var spacePressed = false
     var trackingAreaReference: NSTrackingArea?
@@ -189,7 +218,7 @@ final class CanvasNSView: NSView {
     }
 
     override var isFlipped: Bool { true }
-    override var isOpaque: Bool { true }
+    override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -204,7 +233,8 @@ final class CanvasNSView: NSView {
         tool: CanvasTool,
         color: CanvasInkColor,
         width: Double,
-        viewport: CanvasViewport
+        viewport: CanvasViewport,
+        pendingPlacement: CanvasPendingPlacement?
     ) {
         var changed = false
         if self.canvasID != canvasID {
@@ -230,6 +260,12 @@ final class CanvasNSView: NSView {
             self.selectedImageID = selectedImageID
             imagePointerMode = .none
             previewImageTransform = nil
+            changed = true
+        }
+        if self.pendingPlacement != pendingPlacement {
+            self.pendingPlacement = pendingPlacement
+            shapePointerMode = nil
+            shapePreview = nil
             changed = true
         }
         if interaction.configure(
@@ -313,7 +349,7 @@ final class CanvasNSView: NSView {
             bounds: bounds,
             interaction: interaction,
             pathCache: pathCache,
-            backgroundColor: NSColor.controlBackgroundColor.cgColor,
+            backgroundColor: NSColor.clear.cgColor,
             strokeColor: { $0.nsColor.cgColor },
             eraserOutlineColor: NSColor.controlAccentColor.cgColor,
             images: displayImages,
@@ -321,7 +357,8 @@ final class CanvasNSView: NSView {
             imageProvider: { [imageCache] image in
                 imageCache.image(for: image)
             },
-            imageSelectionColor: NSColor.controlAccentColor.cgColor
+            imageSelectionColor: NSColor.controlAccentColor.cgColor,
+            shapePreview: shapePreview
         )
     }
 
@@ -337,7 +374,32 @@ final class CanvasNSView: NSView {
             for: viewPoint,
             in: bounds.size
         )
-        if let selectedImage,
+        guard worldPoint.isFinite else { return }
+
+        switch pendingPlacement {
+        case let .text(placement):
+            onPlaceText(placement, worldPoint)
+            return
+        case let .shape(shape):
+            _ = interaction.cancel()
+            discardImagePreview()
+            onSelectImage(nil)
+            selectedImageID = nil
+            shapePointerMode = ShapePointerMode(
+                kind: shape,
+                startViewPoint: viewPoint,
+                startWorldPoint: worldPoint,
+                endWorldPoint: worldPoint
+            )
+            shapePreview = nil
+            needsDisplay = true
+            return
+        case nil:
+            break
+        }
+
+        if interaction.tool == .select,
+           let selectedImage,
            let handle = CanvasImagePlacement.resizeHandle(
                 at: viewPoint,
                 image: selectedImage,
@@ -353,11 +415,12 @@ final class CanvasNSView: NSView {
             )
             previewImageTransform = selectedImage.transform
             needsDisplay = true
-            NSCursor.crosshair.set()
+            cursor(for: resizeCursorRole(for: handle)).set()
             return
         }
 
-        if let hit = CanvasImagePlacement.topmostImage(
+        if interaction.tool == .select,
+           let hit = CanvasImagePlacement.topmostImage(
             at: worldPoint,
             images: imagesForDisplay
         ) {
@@ -390,6 +453,22 @@ final class CanvasNSView: NSView {
             for: viewPoint,
             in: bounds.size
         )
+        if var shapePointerMode {
+            guard worldPoint.isFinite else { return }
+            shapePointerMode.endWorldPoint = worldPoint
+            self.shapePointerMode = shapePointerMode
+            let points = shapePointerMode.kind.points(
+                from: shapePointerMode.startWorldPoint,
+                to: worldPoint
+            )
+            shapePreview = points.isEmpty ? nil : CanvasStrokeGeometry(
+                color: interaction.color,
+                width: interaction.width,
+                points: points
+            )
+            needsDisplay = true
+            return
+        }
         switch imagePointerMode {
         case .none:
             break
@@ -428,6 +507,9 @@ final class CanvasNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if finishShapeInteraction(
+            at: convert(event.locationInWindow, from: nil)
+        ) { return }
         if finishImageInteraction() { return }
         finishPointerInteraction(
             finalInkPoint: convert(event.locationInWindow, from: nil)
@@ -462,18 +544,32 @@ final class CanvasNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         discardImagePreview()
-        _ = interaction.cancel()
-        let viewport = interaction.pan(byViewTranslation: CGSize(
-            width: event.scrollingDeltaX,
-            height: event.scrollingDeltaY
-        ))
+        discardShapePreview()
+        beginViewportEventIfNeeded()
+        let viewport: CanvasViewport
+        if event.modifierFlags.contains(.command) {
+            let point = convert(event.locationInWindow, from: nil)
+            let factor = exp(Double(event.scrollingDeltaY) * 0.025)
+            viewport = interaction.zoom(
+                by: factor,
+                anchoredAt: point,
+                in: bounds.size
+            )
+        } else {
+            viewport = interaction.pan(byViewTranslation: CGSize(
+                width: event.scrollingDeltaX,
+                height: event.scrollingDeltaY
+            ))
+        }
         onViewportChange(viewport)
         needsDisplay = true
+        finishViewportEventIfNeeded(event)
     }
 
     override func magnify(with event: NSEvent) {
         discardImagePreview()
-        _ = interaction.cancel()
+        discardShapePreview()
+        beginViewportEventIfNeeded()
         let point = convert(event.locationInWindow, from: nil)
         let viewport = interaction.zoom(
             by: max(1 + Double(event.magnification), 0.01),
@@ -482,6 +578,7 @@ final class CanvasNSView: NSView {
         )
         onViewportChange(viewport)
         needsDisplay = true
+        finishViewportEventIfNeeded(event)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -516,6 +613,7 @@ final class CanvasNSView: NSView {
             }
         case 53:
             cancelInteraction()
+            onCancelPlacement()
             onSelectImage(nil)
             selectedImageID = nil
             needsDisplay = true
@@ -585,6 +683,7 @@ final class CanvasNSView: NSView {
             needsDisplay = true
         }
         discardImagePreview()
+        discardShapePreview()
         panLastPoint = nil
         spacePressed = false
         window?.invalidateCursorRects(for: self)

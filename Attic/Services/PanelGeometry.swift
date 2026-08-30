@@ -4,9 +4,18 @@ import SwiftUI
 enum PanelGeometry {
     static let triggerSize: CGFloat = 16
     static let panelWidth: CGFloat = 332
-    static let minimumHeight: CGFloat = 380
-    static let maximumHeight: CGFloat = 700
+    static let minimumHeight: CGFloat = 480
+    static let preferredHeightCeiling: CGFloat = 700
     static let screenInset: CGFloat = 12
+
+    static let minimumPanelSize = CGSize(
+        width: PanelContentSize.min,
+        height: minimumHeight
+    )
+    static let defaultPanelSize = CGSize(
+        width: PanelContentSize.defaultValue,
+        height: preferredWorkspaceHeight(contentWidth: PanelContentSize.defaultValue)
+    )
 
     /// Superellipse exponent used for the squircle corners.
     static let squircleExponent: CGFloat = 5
@@ -16,7 +25,11 @@ enum PanelGeometry {
     /// inward deviation of the corner superellipse plus a safety margin.
     static func contentInsets(cornerSize: CGFloat, panelSize: CGSize) -> EdgeInsets {
         let insetFactor = Squircle.cornerInsetFactor(exponent: squircleExponent)
-        let cornerInset = cornerSize * insetFactor
+        let effectiveRadius = max(
+            0,
+            min(cornerSize, panelSize.width / 2, panelSize.height / 2)
+        )
+        let cornerInset = effectiveRadius * insetFactor
         let horizontal = max(AtticStyle.horizontalPadding, cornerInset + 6)
         let top = max(8, cornerInset + 4)
         let bottom = max(10, cornerInset + 6)
@@ -65,6 +78,33 @@ enum PanelGeometry {
     /// The effective panel width for a given content size setting.
     static func panelWidth(for contentSize: CGFloat) -> CGFloat {
         contentSize
+    }
+
+    /// Native live resize limits for a particular display. There is no
+    /// product-defined maximum; the visible work area is the only upper bound.
+    static func resizeMaximumSize(in visibleFrame: CGRect) -> CGSize {
+        CGSize(
+            width: max(minimumPanelSize.width, visibleFrame.width - (screenInset * 2)),
+            height: max(minimumPanelSize.height, visibleFrame.height - (screenInset * 2))
+        )
+    }
+
+    static func clampedPanelSize(
+        _ size: CGSize,
+        in visibleFrame: CGRect? = nil
+    ) -> CGSize {
+        let width = size.width.isFinite ? size.width : defaultPanelSize.width
+        let height = size.height.isFinite ? size.height : defaultPanelSize.height
+        let minimumClamped = CGSize(
+            width: max(width, minimumPanelSize.width),
+            height: max(height, minimumPanelSize.height)
+        )
+        guard let visibleFrame else { return minimumClamped }
+        let upperBound = resizeMaximumSize(in: visibleFrame)
+        return CGSize(
+            width: min(minimumClamped.width, upperBound.width),
+            height: min(minimumClamped.height, upperBound.height)
+        )
     }
 
     static func hotspot(in screenFrame: CGRect, corner: ScreenCorner, size: CGFloat = triggerSize) -> CGRect {
@@ -138,7 +178,7 @@ enum PanelGeometry {
                 + CGFloat(taskGaps) * AtticStyle.taskSpacing
                 + CGFloat(sectionCount) * 24
                 + 10
-        return min(max(header + composer + content + 16, minimumHeight), maximumHeight)
+        return min(max(header + composer + content + 16, minimumHeight), preferredHeightCeiling)
     }
 
     static func preferredHeight(
@@ -150,18 +190,18 @@ enum PanelGeometry {
         let composer: CGFloat = isComposing ? (hasConflict ? 196 : 128) : 0
         let rowHeight: CGFloat = 52
         let content: CGFloat = noteCount == 0 ? 90 : CGFloat(noteCount) * rowHeight + 12
-        return min(max(header + composer + content + 16, minimumHeight), maximumHeight)
+        return min(max(header + composer + content + 16, minimumHeight), preferredHeightCeiling)
     }
 
     static func preferredCanvasHeight() -> CGFloat {
-        min(max(560, minimumHeight), maximumHeight)
+        min(max(560, minimumHeight), preferredHeightCeiling)
     }
 
     /// The redesigned panel is a stable workspace rather than a card that
     /// repeatedly changes size as content comes and goes. Keeping one frame
     /// also preserves the user's spatial memory when switching sections.
     static func preferredWorkspaceHeight(contentWidth: CGFloat) -> CGFloat {
-        min(max(contentWidth * 1.45, 480), maximumHeight)
+        min(max(contentWidth * 1.45, minimumHeight), preferredHeightCeiling)
     }
 }
 
@@ -192,5 +232,16 @@ enum TaskEntryBarLayout {
                 - (2 * AtticStyle.controlHitSize)
                 - 4
         )
+    }
+}
+
+enum TaskScrollMaskLayout {
+    /// Preserve short, optical fades as the panel grows rather than scaling
+    /// them into large translucent bands at taller user-selected sizes.
+    static func stops(panelHeight: CGFloat) -> (topFadeEnd: CGFloat, bottomFadeStart: CGFloat) {
+        let height = max(panelHeight, 1)
+        let topFadeEnd = min(0.12, 18 / height)
+        let bottomFadeStart = max(topFadeEnd + 0.25, 1 - (76 / height))
+        return (topFadeEnd, min(bottomFadeStart, 0.96))
     }
 }

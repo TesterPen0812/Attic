@@ -84,6 +84,8 @@ final class CanvasInteractionController {
         erasedStrokeIDs.removeAll(keepingCapacity: true)
 
         switch tool {
+        case .select:
+            return false
         case .pen:
             let path = CGMutablePath()
             path.move(to: worldPoint.cgPoint)

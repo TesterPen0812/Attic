@@ -9,6 +9,7 @@ final class PanelUIState: ObservableObject {
     @Published var isMenuTracking = false
     @Published var isCanvasConfirmationPresented = false
     @Published var isPanelPinned = false
+    @Published private(set) var panelSize = PanelGeometry.defaultPanelSize
     @Published private(set) var selectedSection: PanelSection = .tasks
     private(set) var draggedTaskID: UUID?
 
@@ -23,6 +24,13 @@ final class PanelUIState: ObservableObject {
             || editingTaskID != nil
             || isMenuTracking
             || isCanvasConfirmationPresented
+    }
+
+    func updatePanelSize(_ size: CGSize) {
+        let clamped = PanelGeometry.clampedPanelSize(size)
+        guard abs(panelSize.width - clamped.width) >= 0.25
+                || abs(panelSize.height - clamped.height) >= 0.25 else { return }
+        panelSize = clamped
     }
 
     func beginAdding() {

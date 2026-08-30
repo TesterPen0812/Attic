@@ -6,6 +6,15 @@ final class AtticPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+struct PanelResizeEdges: OptionSet, Equatable {
+    let rawValue: Int
+
+    static let left = PanelResizeEdges(rawValue: 1 << 0)
+    static let right = PanelResizeEdges(rawValue: 1 << 1)
+    static let bottom = PanelResizeEdges(rawValue: 1 << 2)
+    static let top = PanelResizeEdges(rawValue: 1 << 3)
+}
+
 enum AtticPanelInteractionPolicy {
     @MainActor
     static func configure(_ panel: NSPanel) {
@@ -15,11 +24,112 @@ enum AtticPanelInteractionPolicy {
     }
 }
 
+enum AtticPanelResizePolicy {
+    static let edgeGripThickness: CGFloat = 8
+    static let cornerGripThickness: CGFloat = 24
+
+    @MainActor
+    static func configure(
+        _ panel: NSPanel,
+        maximumSize: CGSize? = nil
+    ) {
+        panel.styleMask.insert(.resizable)
+        panel.contentMinSize = PanelGeometry.minimumPanelSize
+        if let maximumSize { panel.contentMaxSize = maximumSize }
+        panel.preservesContentDuringLiveResize = true
+    }
+
+    static func resizeEdges(
+        at point: CGPoint,
+        in bounds: CGRect,
+        cornerRadius: CGFloat
+    ) -> PanelResizeEdges? {
+        guard Squircle.contains(
+            point,
+            in: bounds,
+            cornerRadius: cornerRadius,
+            exponent: AtticStyle.panelSquircleExponent
+        ) else { return nil }
+
+        let nearLeftCorner = point.x - bounds.minX <= cornerGripThickness
+        let nearRightCorner = bounds.maxX - point.x <= cornerGripThickness
+        let nearBottomCorner = point.y - bounds.minY <= cornerGripThickness
+        let nearTopCorner = bounds.maxY - point.y <= cornerGripThickness
+
+        if nearLeftCorner && nearBottomCorner { return [.left, .bottom] }
+        if nearLeftCorner && nearTopCorner { return [.left, .top] }
+        if nearRightCorner && nearBottomCorner { return [.right, .bottom] }
+        if nearRightCorner && nearTopCorner { return [.right, .top] }
+
+        if point.x - bounds.minX <= edgeGripThickness { return .left }
+        if bounds.maxX - point.x <= edgeGripThickness { return .right }
+        if point.y - bounds.minY <= edgeGripThickness { return .bottom }
+        if bounds.maxY - point.y <= edgeGripThickness { return .top }
+        return nil
+    }
+
+    static func resizedFrame(
+        from initialFrame: CGRect,
+        mouseDelta: CGPoint,
+        edges: PanelResizeEdges,
+        minimumSize: CGSize,
+        maximumSize: CGSize,
+        visibleFrame: CGRect? = nil,
+        screenInset: CGFloat = PanelGeometry.screenInset
+    ) -> CGRect {
+        var width = initialFrame.width
+        var height = initialFrame.height
+
+        if edges.contains(.left) { width -= mouseDelta.x }
+        if edges.contains(.right) { width += mouseDelta.x }
+        if edges.contains(.bottom) { height -= mouseDelta.y }
+        if edges.contains(.top) { height += mouseDelta.y }
+
+        var availableWidth = maximumSize.width
+        var availableHeight = maximumSize.height
+        if let visibleFrame {
+            let safeFrame = visibleFrame.insetBy(dx: screenInset, dy: screenInset)
+            if edges.contains(.left) {
+                availableWidth = min(availableWidth, initialFrame.maxX - safeFrame.minX)
+            } else if edges.contains(.right) {
+                availableWidth = min(availableWidth, safeFrame.maxX - initialFrame.minX)
+            }
+            if edges.contains(.bottom) {
+                availableHeight = min(availableHeight, initialFrame.maxY - safeFrame.minY)
+            } else if edges.contains(.top) {
+                availableHeight = min(availableHeight, safeFrame.maxY - initialFrame.minY)
+            }
+        }
+
+        width = min(max(width, minimumSize.width), max(minimumSize.width, availableWidth))
+        height = min(max(height, minimumSize.height), max(minimumSize.height, availableHeight))
+
+        var origin = initialFrame.origin
+        if edges.contains(.left) { origin.x = initialFrame.maxX - width }
+        if edges.contains(.bottom) { origin.y = initialFrame.maxY - height }
+        return CGRect(origin: origin, size: CGSize(width: width, height: height))
+    }
+}
+
 /// The window server still treats a transparent borderless panel as a
 /// rectangle. Keep AppKit's responder hit test aligned with the visible
 /// squircle so transparent corner pixels cannot obstruct the app behind it.
 final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
-    var panelCornerRadius: CGFloat
+    private struct ResizeSession {
+        let edges: PanelResizeEdges
+        let initialFrame: CGRect
+        let initialMouseLocation: CGPoint
+    }
+
+    var panelCornerRadius: CGFloat {
+        didSet {
+            if let window { window.invalidateCursorRects(for: self) }
+        }
+    }
+    var onLiveResizeBegan: (() -> Void)?
+    var onLiveResizeChanged: ((CGSize) -> Void)?
+    var onLiveResizeEnded: ((CGSize) -> Void)?
+    private var resizeSession: ResizeSession?
 
     init(rootView: AtticPanelView, panelCornerRadius: CGFloat) {
         self.panelCornerRadius = panelCornerRadius
@@ -45,10 +155,131 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         ) else {
             return nil
         }
+        if AtticPanelResizePolicy.resizeEdges(
+            at: point,
+            in: bounds,
+            cornerRadius: panelCornerRadius
+        ) != nil {
+            return self
+        }
         return super.hitTest(point)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let window,
+              let edges = AtticPanelResizePolicy.resizeEdges(
+                at: point,
+                in: bounds,
+                cornerRadius: panelCornerRadius
+              ) else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        resizeSession = ResizeSession(
+            edges: edges,
+            initialFrame: window.frame,
+            initialMouseLocation: NSEvent.mouseLocation
+        )
+        window.makeKey()
+        onLiveResizeBegan?()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let session = resizeSession, let window else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let mouseLocation = NSEvent.mouseLocation
+        let delta = CGPoint(
+            x: mouseLocation.x - session.initialMouseLocation.x,
+            y: mouseLocation.y - session.initialMouseLocation.y
+        )
+        let frame = AtticPanelResizePolicy.resizedFrame(
+            from: session.initialFrame,
+            mouseDelta: delta,
+            edges: session.edges,
+            minimumSize: window.contentMinSize,
+            maximumSize: window.contentMaxSize,
+            visibleFrame: window.screen?.visibleFrame
+        )
+        window.setFrame(frame, display: true)
+        onLiveResizeChanged?(frame.size)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard resizeSession != nil, let window else {
+            super.mouseUp(with: event)
+            return
+        }
+        resizeSession = nil
+        onLiveResizeEnded?(window.frame.size)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        let edge = AtticPanelResizePolicy.edgeGripThickness
+        let corner = AtticPanelResizePolicy.cornerGripThickness
+        let middleWidth = max(0, bounds.width - (corner * 2))
+        let middleHeight = max(0, bounds.height - (corner * 2))
+
+        addCursorRect(
+            CGRect(x: bounds.minX, y: bounds.minY, width: corner, height: corner),
+            cursor: resizeCursor(for: [.left, .bottom])
+        )
+        addCursorRect(
+            CGRect(x: bounds.maxX - corner, y: bounds.minY, width: corner, height: corner),
+            cursor: resizeCursor(for: [.right, .bottom])
+        )
+        addCursorRect(
+            CGRect(x: bounds.minX, y: bounds.maxY - corner, width: corner, height: corner),
+            cursor: resizeCursor(for: [.left, .top])
+        )
+        addCursorRect(
+            CGRect(x: bounds.maxX - corner, y: bounds.maxY - corner, width: corner, height: corner),
+            cursor: resizeCursor(for: [.right, .top])
+        )
+        addCursorRect(
+            CGRect(x: bounds.minX, y: bounds.minY + corner, width: edge, height: middleHeight),
+            cursor: resizeCursor(for: .left)
+        )
+        addCursorRect(
+            CGRect(x: bounds.maxX - edge, y: bounds.minY + corner, width: edge, height: middleHeight),
+            cursor: resizeCursor(for: .right)
+        )
+        addCursorRect(
+            CGRect(x: bounds.minX + corner, y: bounds.minY, width: middleWidth, height: edge),
+            cursor: resizeCursor(for: .bottom)
+        )
+        addCursorRect(
+            CGRect(x: bounds.minX + corner, y: bounds.maxY - edge, width: middleWidth, height: edge),
+            cursor: resizeCursor(for: .top)
+        )
+    }
+
+    private func resizeCursor(for edges: PanelResizeEdges) -> NSCursor {
+        guard #available(macOS 15.0, *) else {
+            if edges == .left || edges == .right { return .resizeLeftRight }
+            if edges == .top || edges == .bottom { return .resizeUpDown }
+            return .crosshair
+        }
+
+        let position: NSCursor.FrameResizePosition
+        switch edges {
+        case [.left, .bottom]: position = .bottomLeft
+        case [.right, .bottom]: position = .bottomRight
+        case [.left, .top]: position = .topLeft
+        case [.right, .top]: position = .topRight
+        case .left: position = .left
+        case .right: position = .right
+        case .bottom: position = .bottom
+        default: position = .top
+        }
+        return NSCursor.frameResize(position: position, directions: .all)
     }
 }

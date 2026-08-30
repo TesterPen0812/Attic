@@ -4,7 +4,7 @@ import QuartzCore
 import SwiftUI
 
 @MainActor
-final class AtticPanelController {
+final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
     private let hostingView: AtticPanelHostingView
     private let store: TaskStore
@@ -16,6 +16,8 @@ final class AtticPanelController {
     private var cancellables: Set<AnyCancellable> = []
     private var isShowing = false
     private var needsResizeAfterShowing = false
+    private var isLiveResizing = false
+    private var isPersistingManualSize = false
     private var transitionGeneration = 0
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
@@ -35,9 +37,13 @@ final class AtticPanelController {
         self.settings = settings
         self.uiState = uiState
 
+        let initialSize = PanelGeometry.clampedPanelSize(
+            CGSize(width: settings.panelContentSize, height: settings.panelHeight)
+        )
+        uiState.updatePanelSize(initialSize)
         panel = AtticPanel(
-            contentRect: CGRect(x: 0, y: 0, width: settings.panelContentSize, height: PanelGeometry.minimumHeight),
-            styleMask: [.borderless, .nonactivatingPanel],
+            contentRect: CGRect(origin: .zero, size: initialSize),
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: true
         )
@@ -53,6 +59,7 @@ final class AtticPanelController {
             panelCornerRadius: settings.panelCornerSize
         )
 
+        super.init()
         configurePanel()
         bindContentSize()
     }
@@ -76,6 +83,10 @@ final class AtticPanelController {
     }
 
     func updateMousePassthrough(at point: CGPoint) {
+        guard !isLiveResizing else {
+            panel.ignoresMouseEvents = false
+            return
+        }
         let isInsideRectangularFrame = panel.isVisible && panel.frame.contains(point)
         panel.ignoresMouseEvents = isInsideRectangularFrame && !containsScreenPoint(point)
     }
@@ -83,6 +94,13 @@ final class AtticPanelController {
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
         currentScreen = screen
         currentCorner = corner
+        updateResizeLimits(for: screen)
+
+        if isLiveResizing {
+            if makeKey { panel.makeKey() }
+            panel.orderFrontRegardless()
+            return
+        }
 
         let finalFrame = frame(on: screen, corner: corner)
 
@@ -167,33 +185,22 @@ final class AtticPanelController {
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         AtticPanelInteractionPolicy.configure(panel)
+        AtticPanelResizePolicy.configure(panel)
+        hostingView.onLiveResizeBegan = { [weak self] in
+            self?.beginLiveResize()
+        }
+        hostingView.onLiveResizeChanged = { [weak self] size in
+            self?.uiState.updatePanelSize(size)
+        }
+        hostingView.onLiveResizeEnded = { [weak self] size in
+            self?.endLiveResize(at: size)
+        }
+        panel.delegate = self
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
     }
 
     private func bindContentSize() {
-        Publishers.CombineLatest4(
-            store.$revision,
-            uiState.$isComposerPresented,
-            uiState.$selectedSection,
-            noteStore.$revision
-        )
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _, _, _, _ in
-                guard let self else { return }
-                self.resizeAndReanchor()
-            }
-            .store(in: &cancellables)
-
-        noteDraft.$conflict
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.resizeAndReanchor()
-            }
-            .store(in: &cancellables)
-
         settings.$corner
-            .receive(on: RunLoop.main)
             .sink { [weak self] corner in
                 guard let self else { return }
                 self.currentCorner = corner
@@ -202,38 +209,38 @@ final class AtticPanelController {
             .store(in: &cancellables)
 
         settings.$panelCornerSize
-            .receive(on: RunLoop.main)
             .sink { [weak self] cornerRadius in
                 self?.hostingView.panelCornerRadius = cornerRadius
-                self?.resizeAndReanchor()
             }
             .store(in: &cancellables)
 
-        settings.$panelContentSize
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.resizeAndReanchor()
+        Publishers.CombineLatest(
+            settings.$panelContentSize.removeDuplicates(),
+            settings.$panelHeight.removeDuplicates()
+        )
+            .sink { [weak self] width, height in
+                guard let self, !self.isPersistingManualSize else { return }
+                self.resizeAndReanchor(
+                    to: CGSize(width: width, height: height)
+                )
             }
             .store(in: &cancellables)
     }
 
-    private func resizeAndReanchor() {
+    private func resizeAndReanchor(to configuredSize: CGSize? = nil) {
         guard let screen = currentScreen else { return }
+        guard !isLiveResizing, !panel.inLiveResize else { return }
         if isShowing {
             needsResizeAfterShowing = true
             return
         }
-        let targetFrame = frame(on: screen, corner: currentCorner)
+        let targetFrame = frame(
+            on: screen,
+            corner: currentCorner,
+            configuredSize: configuredSize
+        )
         guard !framesMatch(panel.frame, targetFrame) else { return }
-        if panel.isVisible {
-            panel.setFrame(
-                targetFrame,
-                display: true,
-                animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            )
-        } else {
-            panel.setFrame(targetFrame, display: false)
-        }
+        panel.setFrame(targetFrame, display: panel.isVisible)
     }
 
     private func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
@@ -243,25 +250,66 @@ final class AtticPanelController {
             && abs(lhs.height - rhs.height) < 0.5
     }
 
-    private func frame(on screen: NSScreen, corner: ScreenCorner) -> CGRect {
-        let height: CGFloat
-        if uiState.selectedSection.isCanvas {
-            height = PanelGeometry.preferredCanvasHeight()
-        } else if uiState.selectedSection.isNotes {
-            height = PanelGeometry.preferredHeight(
-                noteCount: noteStore.notes.count,
-                isComposing: uiState.isComposerPresented,
-                hasConflict: noteDraft.hasConflict
-            )
-        } else {
-            height = PanelGeometry.preferredWorkspaceHeight(
-                contentWidth: settings.panelContentSize
-            )
-        }
+    private func frame(
+        on screen: NSScreen,
+        corner: ScreenCorner,
+        configuredSize: CGSize? = nil
+    ) -> CGRect {
+        let size = PanelGeometry.clampedPanelSize(
+            configuredSize
+                ?? CGSize(width: settings.panelContentSize, height: settings.panelHeight),
+            in: screen.visibleFrame
+        )
         return PanelGeometry.panelFrame(
             in: screen.visibleFrame,
-            size: CGSize(width: settings.panelContentSize, height: height),
+            size: size,
             corner: corner
         )
+    }
+
+    private func updateResizeLimits(for screen: NSScreen) {
+        AtticPanelResizePolicy.configure(
+            panel,
+            maximumSize: PanelGeometry.resizeMaximumSize(in: screen.visibleFrame)
+        )
+    }
+
+    func windowWillStartLiveResize(_ notification: Notification) {
+        beginLiveResize()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let resizedPanel = notification.object as? NSWindow else { return }
+        uiState.updatePanelSize(resizedPanel.frame.size)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        guard let resizedPanel = notification.object as? NSWindow else { return }
+        endLiveResize(at: resizedPanel.frame.size)
+    }
+
+    private func beginLiveResize() {
+        guard !isLiveResizing else { return }
+        transitionGeneration += 1
+        isShowing = false
+        needsResizeAfterShowing = false
+        isLiveResizing = true
+        panel.ignoresMouseEvents = false
+    }
+
+    private func endLiveResize(at finalSize: CGSize) {
+        guard isLiveResizing else { return }
+        isLiveResizing = false
+        if let screen = panel.screen {
+            currentScreen = screen
+            updateResizeLimits(for: screen)
+        }
+        uiState.updatePanelSize(finalSize)
+
+        // These publications are intentionally suppressed as frame commands:
+        // AppKit has already reached this exact size and remains authoritative.
+        isPersistingManualSize = true
+        settings.persistPanelSize(finalSize)
+        isPersistingManualSize = false
     }
 }

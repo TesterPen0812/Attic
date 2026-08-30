@@ -125,18 +125,14 @@ end
 
 app.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Attic'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.Attic'
   settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
   settings['ATTIC_DISPLAY_NAME'] = 'Attic'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
   settings['INFOPLIST_FILE'] = 'Attic/Info.plist'
-  settings['CODE_SIGN_ENTITLEMENTS'] = case config.name
-                                       when 'Debug' then 'Attic/AtticDebug.entitlements'
-                                       when 'Local' then 'Attic/AtticLocal.entitlements'
-                                       else 'Attic/Attic.entitlements'
-                                       end
+  settings['CODE_SIGN_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['ENABLE_APP_SANDBOX'] = 'YES'
   settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
   settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
@@ -144,35 +140,31 @@ app.build_configurations.each do |config|
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['SWIFT_EMIT_LOC_STRINGS'] = 'YES'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
   settings['MARKETING_VERSION'] = '1.1'
   settings['CURRENT_PROJECT_VERSION'] = '11'
-  settings['ICLOUD_CONTAINER_ENVIRONMENT'] = config.name == 'Release' ? 'Production' : 'Development'
-  settings['APS_ENVIRONMENT'] = config.name == 'Release' ? 'production' : 'development'
-  abort "Mismatched Attic CloudKit/APNs environment for #{config.name}" unless
-    (settings['ICLOUD_CONTAINER_ENVIRONMENT'] == 'Production') ==
-      (settings['APS_ENVIRONMENT'] == 'production')
 end
 
 unit_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticTests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.AtticTests'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 
 ui_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticUITests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.AtticUITests'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['TEST_TARGET_NAME'] = 'Attic'
 end
 
@@ -257,12 +249,6 @@ proxy_targets.each do |proxy, target|
 end
 
 target_attributes = project.root_object.attributes['TargetAttributes'] ||= {}
-target_attributes[app.uuid] = {
-  'SystemCapabilities' => {
-    'com.apple.iCloud' => { 'enabled' => 1 },
-    'com.apple.Push' => { 'enabled' => 1 }
-  }
-}
 target_attributes[mobile_app.uuid] = {
   'SystemCapabilities' => {
     'com.apple.BackgroundModes' => { 'enabled' => 1 },

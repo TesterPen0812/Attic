@@ -28,6 +28,84 @@ final class CanvasSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testInsertedShapeUsesStrokeHistoryAndCurrentStyle() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        session.selectColor(.blue)
+        session.setWidth(6.5)
+
+        XCTAssertTrue(session.insertShape(
+            .ellipse,
+            from: CanvasPoint(x: -20, y: -60),
+            to: CanvasPoint(x: 100, y: 20)
+        ))
+        let stroke = try XCTUnwrap(session.strokes.first)
+        XCTAssertEqual(stroke.color, .blue)
+        XCTAssertEqual(stroke.width, 6.5)
+        XCTAssertEqual(stroke.points.count, 65)
+        XCTAssertTrue(session.canUndo)
+
+        XCTAssertTrue(session.undo())
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.redo())
+        XCTAssertEqual(session.strokes.map(\.id), [stroke.id])
+    }
+
+    @MainActor
+    func testShapePlacementMustBeArmedAndUsesDraggedEndpoints() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let start = CanvasPoint(x: 18, y: -12)
+        let end = CanvasPoint(x: -42, y: 75)
+
+        XCTAssertFalse(session.completePendingShape(
+            .rectangle,
+            from: start,
+            to: end
+        ))
+        XCTAssertTrue(session.strokes.isEmpty)
+
+        session.prepareShapePlacement(.rectangle)
+        XCTAssertEqual(session.pendingPlacement, .shape(.rectangle))
+        XCTAssertTrue(session.completePendingShape(
+            .rectangle,
+            from: start,
+            to: end
+        ))
+        XCTAssertNil(session.pendingPlacement)
+        XCTAssertEqual(
+            try XCTUnwrap(session.strokes.first).points,
+            [
+                CanvasPoint(x: -42, y: -12),
+                CanvasPoint(x: 18, y: -12),
+                CanvasPoint(x: 18, y: 75),
+                CanvasPoint(x: -42, y: 75),
+                CanvasPoint(x: -42, y: -12)
+            ]
+        )
+    }
+
+    @MainActor
+    func testPreparingTextDefersInsertionAndToolSelectionCancelsPlacement() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+
+        XCTAssertTrue(session.prepareTextPlacement(
+            "  Place me here  ",
+            prefersDarkSurface: true
+        ))
+        XCTAssertEqual(
+            session.pendingPlacement,
+            .text(CanvasTextPlacement(
+                text: "Place me here",
+                prefersDarkSurface: true
+            ))
+        )
+        XCTAssertTrue(session.images.isEmpty)
+
+        session.selectTool(.eraser)
+        XCTAssertNil(session.pendingPlacement)
+        XCTAssertEqual(session.tool, .eraser)
+    }
+
+    @MainActor
     func testOneEraseGestureIsOneHistoryCommandForEveryHitStroke() throws {
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(

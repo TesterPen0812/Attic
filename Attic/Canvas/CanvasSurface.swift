@@ -13,7 +13,7 @@ struct CanvasSurface: View {
             .accessibilityLabel("Canvas drawing board")
             .accessibilityValue(accessibilityValue)
             .accessibilityHint(
-                "Draw with the selected tool. Click an image to select it. Use the trackpad or two fingers to move and zoom."
+                accessibilityHint
             )
             .accessibilityIdentifier("canvas-surface")
     }
@@ -37,6 +37,15 @@ struct CanvasSurface: View {
         let selectedSummary = session.selectedImageID == nil
             ? "no image selected"
             : "image selected"
-        return "\(strokeSummary), \(imageSummary), \(selectedSummary), \(session.tool.title) selected"
+        let activeMode = session.pendingPlacement?.accessibilityTitle
+            ?? "\(session.tool.title) selected"
+        return "\(strokeSummary), \(imageSummary), \(selectedSummary), \(activeMode)"
+    }
+
+    private var accessibilityHint: String {
+        if let pendingPlacement = session.pendingPlacement {
+            return "\(pendingPlacement.instruction). Press Escape to cancel."
+        }
+        return "Draw with the selected tool. Select images with the Select tool. Scroll or drag with Space to pan; pinch or Command-scroll to zoom."
     }
 }

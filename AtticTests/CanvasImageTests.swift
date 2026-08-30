@@ -7,6 +7,36 @@ import XCTest
 @testable import Attic
 
 final class CanvasImageImportTests: XCTestCase {
+    func testTextRendererProducesAReusableTransparentPNG() async throws {
+        let prepared = try await CanvasTextRenderer.prepare(
+            text: "Capture and organise",
+            color: .blue,
+            prefersDarkSurface: true
+        )
+
+        XCTAssertEqual(prepared.contentType, UTType.png.identifier)
+        XCTAssertGreaterThan(prepared.pixelWidth, prepared.pixelHeight)
+        XCTAssertGreaterThan(prepared.encodedData.count, 0)
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(
+            prepared.encodedData as CFData,
+            nil
+        ))
+        XCTAssertEqual(CGImageSourceGetCount(source), 1)
+    }
+
+    func testTextRendererRejectsWhitespaceOnlyContent() async {
+        do {
+            _ = try await CanvasTextRenderer.prepare(
+                text: "  \n ",
+                color: .ink,
+                prefersDarkSurface: false
+            )
+            XCTFail("Expected whitespace-only text to be rejected")
+        } catch {
+            XCTAssertEqual(error as? CanvasTextRenderError, .emptyText)
+        }
+    }
+
     func testFileImportStoresCanonicalBytesRatherThanSourcePath() async throws {
         let sourceData = try makeTestImageData(width: 120, height: 60)
         let sourceURL = FileManager.default.temporaryDirectory

@@ -62,6 +62,17 @@ enum PersistenceController {
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
+        #if os(macOS)
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            NoteAttachment.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            configurations: configuration
+        )
+        #else
         return try ModelContainer(
             for: TaskItem.self,
             NoteItem.self,
@@ -70,6 +81,7 @@ enum PersistenceController {
             CanvasImageItem.self,
             configurations: configuration
         )
+        #endif
     }
 
     /// A durable, CloudKit-free store used only by controlled UI tests that
@@ -104,6 +116,17 @@ enum PersistenceController {
             url: storeURL,
             cloudKitDatabase: .none
         )
+        #if os(macOS)
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            NoteAttachment.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            configurations: configuration
+        )
+        #else
         return try ModelContainer(
             for: TaskItem.self,
             NoteItem.self,
@@ -112,6 +135,7 @@ enum PersistenceController {
             CanvasImageItem.self,
             configurations: configuration
         )
+        #endif
     }
 
     #if DEBUG

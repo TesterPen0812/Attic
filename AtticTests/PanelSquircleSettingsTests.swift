@@ -11,6 +11,7 @@ final class PanelSquircleSettingsTests: XCTestCase {
 
         XCTAssertEqual(settings.panelCornerSize, PanelCornerSize.huge.rawValue)
         XCTAssertEqual(settings.panelContentSize, PanelContentSize.standard.rawValue)
+        XCTAssertEqual(settings.panelHeight, PanelGeometry.defaultPanelSize.height, accuracy: 0.001)
     }
 
     @MainActor
@@ -55,8 +56,8 @@ final class PanelSquircleSettingsTests: XCTestCase {
         settings.panelContentSize = 200
         XCTAssertEqual(settings.panelContentSize, PanelContentSize.min)
 
-        settings.panelContentSize = 500
-        XCTAssertEqual(settings.panelContentSize, PanelContentSize.max)
+        settings.panelContentSize = 900
+        XCTAssertEqual(settings.panelContentSize, 900)
     }
 
     @MainActor
@@ -81,6 +82,34 @@ final class PanelSquircleSettingsTests: XCTestCase {
 
         let settings2 = AppSettings(defaults: defaults)
         XCTAssertEqual(settings2.panelContentSize, 360)
+    }
+
+    @MainActor
+    func testManuallyResizedPanelSizePersistsAcrossInstances() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings1 = AppSettings(defaults: defaults)
+        settings1.persistPanelSize(CGSize(width: 612, height: 644))
+
+        let settings2 = AppSettings(defaults: defaults)
+        XCTAssertEqual(settings2.panelContentSize, 612)
+        XCTAssertEqual(settings2.panelHeight, 644)
+    }
+
+    @MainActor
+    func testPersistedPanelSizeClampsEachDimensionIndependently() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = AppSettings(defaults: defaults)
+        settings.persistPanelSize(CGSize(width: 200, height: 640))
+        XCTAssertEqual(settings.panelContentSize, PanelGeometry.minimumPanelSize.width)
+        XCTAssertEqual(settings.panelHeight, 640)
+
+        settings.persistPanelSize(CGSize(width: 680, height: 900))
+        XCTAssertEqual(settings.panelContentSize, 680)
+        XCTAssertEqual(settings.panelHeight, 900)
     }
 
     @MainActor

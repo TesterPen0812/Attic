@@ -211,6 +211,117 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
     }
 
+    @MainActor
+    func testPanelResizePolicyUsesNativeResizableWindowWithExplicitLimits() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 332, height: 480),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        AtticPanelResizePolicy.configure(panel)
+
+        XCTAssertTrue(panel.styleMask.contains(.resizable))
+        XCTAssertEqual(panel.contentMinSize, PanelGeometry.minimumPanelSize)
+        XCTAssertTrue(panel.preservesContentDuringLiveResize)
+    }
+
+    func testResizeHitTestingFindsVisibleEdgesAndCornersButNotTransparentPixels() {
+        let bounds = CGRect(x: 0, y: 0, width: 300, height: 380)
+
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: 19, y: 19),
+                in: bounds,
+                cornerRadius: 140
+            ),
+            [.left, .bottom]
+        )
+        XCTAssertEqual(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: 4, y: bounds.midY),
+                in: bounds,
+                cornerRadius: 140
+            ),
+            .left
+        )
+        XCTAssertNil(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: 0, y: 0),
+                in: bounds,
+                cornerRadius: 140
+            )
+        )
+        XCTAssertNil(
+            AtticPanelResizePolicy.resizeEdges(
+                at: CGPoint(x: bounds.midX, y: bounds.midY),
+                in: bounds,
+                cornerRadius: 140
+            )
+        )
+    }
+
+    func testResizeFramePreservesOppositeEdgesAndClampsDimensionsIndependently() {
+        let frame = CGRect(x: 1_000, y: 200, width: 332, height: 482)
+
+        let enlarged = AtticPanelResizePolicy.resizedFrame(
+            from: frame,
+            mouseDelta: CGPoint(x: -108, y: -118),
+            edges: [.left, .bottom],
+            minimumSize: PanelGeometry.minimumPanelSize,
+            maximumSize: CGSize(width: 1_000, height: 900)
+        )
+        XCTAssertEqual(enlarged, CGRect(x: 892, y: 82, width: 440, height: 600))
+        XCTAssertEqual(enlarged.maxX, frame.maxX)
+        XCTAssertEqual(enlarged.maxY, frame.maxY)
+
+        let clamped = AtticPanelResizePolicy.resizedFrame(
+            from: frame,
+            mouseDelta: CGPoint(x: 200, y: -40),
+            edges: [.left, .bottom],
+            minimumSize: PanelGeometry.minimumPanelSize,
+            maximumSize: CGSize(width: 1_000, height: 900)
+        )
+        XCTAssertEqual(clamped.width, PanelGeometry.minimumPanelSize.width)
+        XCTAssertEqual(clamped.height, 522)
+        XCTAssertEqual(clamped.maxX, frame.maxX)
+        XCTAssertEqual(clamped.maxY, frame.maxY)
+    }
+
+    func testResizeFrameStopsDraggedEdgesAtTheVisibleScreenInset() {
+        let visibleFrame = CGRect(x: 0, y: 25, width: 1_200, height: 800)
+        let frame = CGRect(x: 700, y: 225, width: 332, height: 480)
+
+        let rightAndTop = AtticPanelResizePolicy.resizedFrame(
+            from: frame,
+            mouseDelta: CGPoint(x: 900, y: 900),
+            edges: [.right, .top],
+            minimumSize: PanelGeometry.minimumPanelSize,
+            maximumSize: PanelGeometry.resizeMaximumSize(in: visibleFrame),
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(rightAndTop.maxX, visibleFrame.maxX - PanelGeometry.screenInset)
+        XCTAssertEqual(rightAndTop.maxY, visibleFrame.maxY - PanelGeometry.screenInset)
+        XCTAssertEqual(rightAndTop.minX, frame.minX)
+        XCTAssertEqual(rightAndTop.minY, frame.minY)
+
+        let leftAndBottom = AtticPanelResizePolicy.resizedFrame(
+            from: frame,
+            mouseDelta: CGPoint(x: -900, y: -900),
+            edges: [.left, .bottom],
+            minimumSize: PanelGeometry.minimumPanelSize,
+            maximumSize: PanelGeometry.resizeMaximumSize(in: visibleFrame),
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(leftAndBottom.minX, visibleFrame.minX + PanelGeometry.screenInset)
+        XCTAssertEqual(leftAndBottom.minY, visibleFrame.minY + PanelGeometry.screenInset)
+        XCTAssertEqual(leftAndBottom.maxX, frame.maxX)
+        XCTAssertEqual(leftAndBottom.maxY, frame.maxY)
+    }
+
     func testRectangularSystemShadowIsDisabledForSquirclePanel() {
         XCTAssertFalse(AtticStyle.panelUsesSystemShadow)
     }

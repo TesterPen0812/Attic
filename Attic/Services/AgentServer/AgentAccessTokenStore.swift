@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 struct AgentAccessTokenStore {
-    private let service = "com.emanueledipietro.Attic.agent-access"
+    private let service = "com.taha.Attic.agent-access"
     private let account = "mcp-bearer-token"
 
     func loadOrCreate() -> String {
