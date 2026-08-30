@@ -42,6 +42,30 @@ final class NoteAttachmentTests: XCTestCase {
         XCTAssertNil(textView.typingAttributes[.shadow])
     }
 
+    func testEditorReadabilitySkipsFullRangeWorkForUnchangedTypingState() {
+        XCTAssertFalse(AttachmentAwareTextEditor.needsReadabilityApplication(
+            lastEnabled: true,
+            lastColorScheme: .dark,
+            enabled: true,
+            colorScheme: .dark,
+            externalTextWasReplaced: false
+        ))
+        XCTAssertTrue(AttachmentAwareTextEditor.needsReadabilityApplication(
+            lastEnabled: true,
+            lastColorScheme: .dark,
+            enabled: true,
+            colorScheme: .dark,
+            externalTextWasReplaced: true
+        ))
+        XCTAssertTrue(AttachmentAwareTextEditor.needsReadabilityApplication(
+            lastEnabled: true,
+            lastColorScheme: .dark,
+            enabled: false,
+            colorScheme: .dark,
+            externalTextWasReplaced: false
+        ))
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticAttachmentTests-\(UUID().uuidString)", isDirectory: true)

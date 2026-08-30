@@ -622,6 +622,10 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             enabled: clearReadabilityEnabled,
             colorScheme: colorScheme
         )
+        context.coordinator.recordAppliedReadability(
+            enabled: clearReadabilityEnabled,
+            colorScheme: colorScheme
+        )
 
         textView.onImportFiles = { [weak coordinator = context.coordinator] urls, cleanup in
             coordinator?.parent.onImportFiles(urls, cleanup)
@@ -645,6 +649,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             return
         }
 
+        var replacedExternalText = false
         if textView.string != text, !textView.hasMarkedText() {
             let selectedRanges = textView.selectedRanges
             context.coordinator.isApplyingExternalText = true
@@ -654,11 +659,24 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
                 length: (text as NSString).length
             )
             context.coordinator.isApplyingExternalText = false
+            replacedExternalText = true
         }
 
-        if !textView.hasMarkedText() {
+        if !textView.hasMarkedText(), Self.needsReadabilityApplication(
+            lastEnabled: context.coordinator.appliedReadabilityEnabled,
+            lastColorScheme: context.coordinator.appliedReadabilityColorScheme,
+            enabled: clearReadabilityEnabled,
+            colorScheme: colorScheme,
+            externalTextWasReplaced: replacedExternalText
+        ) {
+            context.coordinator.isApplyingExternalText = true
             Self.applyReadability(
                 to: textView,
+                enabled: clearReadabilityEnabled,
+                colorScheme: colorScheme
+            )
+            context.coordinator.isApplyingExternalText = false
+            context.coordinator.recordAppliedReadability(
                 enabled: clearReadabilityEnabled,
                 colorScheme: colorScheme
             )
@@ -728,13 +746,32 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         }
     }
 
+    static func needsReadabilityApplication(
+        lastEnabled: Bool?,
+        lastColorScheme: ColorScheme?,
+        enabled: Bool,
+        colorScheme: ColorScheme,
+        externalTextWasReplaced: Bool
+    ) -> Bool {
+        externalTextWasReplaced
+            || lastEnabled != enabled
+            || lastColorScheme != colorScheme
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: AttachmentAwareTextEditor
         weak var textView: NSTextView?
         var isApplyingExternalText = false
+        var appliedReadabilityEnabled: Bool?
+        var appliedReadabilityColorScheme: ColorScheme?
 
         init(parent: AttachmentAwareTextEditor) {
             self.parent = parent
+        }
+
+        func recordAppliedReadability(enabled: Bool, colorScheme: ColorScheme) {
+            appliedReadabilityEnabled = enabled
+            appliedReadabilityColorScheme = colorScheme
         }
 
         func textDidChange(_ notification: Notification) {
