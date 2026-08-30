@@ -545,7 +545,7 @@ final class CanvasNSView: NSView {
     override func scrollWheel(with event: NSEvent) {
         discardImagePreview()
         discardShapePreview()
-        beginViewportEventIfNeeded()
+        prepareForViewportEvent()
         let viewport: CanvasViewport
         if event.modifierFlags.contains(.command) {
             let point = convert(event.locationInWindow, from: nil)
@@ -563,13 +563,12 @@ final class CanvasNSView: NSView {
         }
         onViewportChange(viewport)
         needsDisplay = true
-        finishViewportEventIfNeeded(event)
     }
 
     override func magnify(with event: NSEvent) {
         discardImagePreview()
         discardShapePreview()
-        beginViewportEventIfNeeded()
+        prepareForViewportEvent()
         let point = convert(event.locationInWindow, from: nil)
         let viewport = interaction.zoom(
             by: max(1 + Double(event.magnification), 0.01),
@@ -578,7 +577,6 @@ final class CanvasNSView: NSView {
         )
         onViewportChange(viewport)
         needsDisplay = true
-        finishViewportEventIfNeeded(event)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

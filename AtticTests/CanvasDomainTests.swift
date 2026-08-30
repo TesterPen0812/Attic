@@ -371,6 +371,37 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertEqual(machine.state, .idle)
     }
 
+    @MainActor
+    func testTrackpadViewportDeltaCannotLeaveCanvasInputCaptured() {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+
+        XCTAssertTrue(view.interaction.beginInk(
+            at: CGPoint(x: 40, y: 50),
+            in: view.bounds.size
+        ))
+        view.prepareForViewportEvent()
+        _ = view.interaction.zoom(
+            by: 1.2,
+            anchoredAt: CGPoint(x: 120, y: 160),
+            in: view.bounds.size
+        )
+
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+        XCTAssertTrue(view.interaction.beginInk(
+            at: CGPoint(x: 80, y: 90),
+            in: view.bounds.size
+        ))
+    }
+
     func testSelectToolNeverStartsAnInkOperation() {
         var machine = CanvasInputStateMachine()
 
