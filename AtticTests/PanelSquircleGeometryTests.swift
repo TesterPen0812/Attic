@@ -2,6 +2,15 @@ import XCTest
 @testable import Attic
 
 final class PanelSquircleGeometryTests: XCTestCase {
+    func testCompactControlMetricsKeepLargerPointerTargets() {
+        XCTAssertEqual(AtticStyle.actionControlSize, 36)
+        XCTAssertEqual(AtticStyle.modeControlSize, 34)
+        XCTAssertEqual(AtticStyle.entryControlHeight, 38)
+        XCTAssertEqual(AtticStyle.controlHitSize, 42)
+        XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.actionControlSize)
+        XCTAssertGreaterThan(AtticStyle.controlHitSize, AtticStyle.modeControlSize)
+    }
+
     @MainActor
     func testPanelInteractionPolicyMakesFirstEligibleClickKey() {
         let panel = NSPanel(

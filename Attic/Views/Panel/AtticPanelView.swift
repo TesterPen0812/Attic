@@ -101,11 +101,12 @@ struct AtticPanelView: View {
             uiState.isPanelPinned.toggle()
         } label: {
             Image(systemName: uiState.isPanelPinned ? "pin.fill" : "pin")
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: AtticStyle.controlSymbolSize, weight: .medium))
                 .foregroundStyle(Color.primary.opacity(0.9))
-                .frame(width: 42, height: 42)
-                .contentShape(Circle())
+                .frame(width: AtticStyle.actionControlSize, height: AtticStyle.actionControlSize)
                 .atticGlassControl(in: Circle())
+                .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .keyboardShortcut("p", modifiers: [.command, .shift])
@@ -116,7 +117,7 @@ struct AtticPanelView: View {
     }
 
     private var modeDock: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ForEach(PanelSection.allCases) { section in
                 let isSelected = uiState.selectedSection == section
 
@@ -124,8 +125,8 @@ struct AtticPanelView: View {
                     selectSection(section)
                 } label: {
                     Image(systemName: symbol(for: section))
-                        .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
-                        .frame(width: 39, height: 39)
+                        .font(.system(size: AtticStyle.controlSymbolSize, weight: isSelected ? .semibold : .regular))
+                        .frame(width: AtticStyle.modeControlSize, height: AtticStyle.modeControlSize)
                         .foregroundStyle(
                             Color.primary.opacity(isSelected ? 0.96 : 0.68)
                         )
@@ -138,6 +139,7 @@ struct AtticPanelView: View {
                                 Circle().stroke(Color.primary.opacity(0.16), lineWidth: 0.75)
                             }
                         }
+                        .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -148,7 +150,6 @@ struct AtticPanelView: View {
                 .accessibilityIdentifier("panel-section-\(section.rawValue)")
             }
         }
-        .padding(4)
         .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("panel-section-picker")
@@ -257,10 +258,11 @@ struct AtticPanelView: View {
                 }
             } label: {
                 Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 42, height: 42)
-                    .contentShape(Circle())
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(width: AtticStyle.actionControlSize, height: AtticStyle.actionControlSize)
                     .atticGlassControl(in: Circle())
+                    .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .help(uiState.isComposerPresented ? "Close task options" : "Task options")
@@ -271,8 +273,9 @@ struct AtticPanelView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .rounded))
                 .foregroundStyle(Color.primary.opacity(0.92))
-                .padding(.horizontal, 16)
-                .frame(maxWidth: .infinity, minHeight: 42)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity)
+                .frame(height: AtticStyle.entryControlHeight)
                 .contentShape(Capsule(style: .continuous))
                 .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
                 .focused($isQuickEntryFocused)
@@ -281,11 +284,12 @@ struct AtticPanelView: View {
 
             Button(action: saveQuickTask) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.primary.opacity(0.9))
-                    .frame(width: 42, height: 42)
-                    .contentShape(Circle())
+                    .frame(width: AtticStyle.actionControlSize, height: AtticStyle.actionControlSize)
                     .atticGlassControl(in: Circle())
+                    .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .disabled(quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

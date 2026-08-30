@@ -13,6 +13,14 @@ enum AtticStyle {
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4
+
+    // Keep the compact workboard visually light while preserving forgiving
+    // pointer targets around the smaller rendered controls.
+    static let actionControlSize: CGFloat = 36
+    static let modeControlSize: CGFloat = 34
+    static let controlHitSize: CGFloat = 42
+    static let entryControlHeight: CGFloat = 38
+    static let controlSymbolSize: CGFloat = 14
 }
 
 struct AtticPanelSurface: ViewModifier {
