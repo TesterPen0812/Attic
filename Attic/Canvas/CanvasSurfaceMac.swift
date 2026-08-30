@@ -545,10 +545,10 @@ final class CanvasNSView: NSView {
     override func scrollWheel(with event: NSEvent) {
         discardImagePreview()
         discardShapePreview()
-        prepareForViewportEvent()
+        let point = convert(event.locationInWindow, from: nil)
+        prepareForViewportEvent(at: point)
         let viewport: CanvasViewport
         if event.modifierFlags.contains(.command) {
-            let point = convert(event.locationInWindow, from: nil)
             let factor = exp(Double(event.scrollingDeltaY) * 0.025)
             viewport = interaction.zoom(
                 by: factor,
@@ -568,8 +568,8 @@ final class CanvasNSView: NSView {
     override func magnify(with event: NSEvent) {
         discardImagePreview()
         discardShapePreview()
-        prepareForViewportEvent()
         let point = convert(event.locationInWindow, from: nil)
+        prepareForViewportEvent(at: point)
         let viewport = interaction.zoom(
             by: max(1 + Double(event.magnification), 0.01),
             anchoredAt: point,

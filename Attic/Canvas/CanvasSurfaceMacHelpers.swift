@@ -215,13 +215,18 @@ extension CanvasNSView {
         needsDisplay = true
     }
 
-    func prepareForViewportEvent() {
+    func prepareForViewportEvent(at viewPoint: CGPoint) {
         // AppKit may interrupt a phase-based trackpad sequence when the view
         // changes page, leaves its window, or is resized. Each delivered
         // scroll/magnify delta must therefore be self-contained rather than
         // borrowing the long-lived state used by explicit mouse panning.
+        let cancelledPan = interaction.machine.state == .panning
         _ = interaction.cancel()
         panLastPoint = nil
+        guard cancelledPan else { return }
+
+        window?.invalidateCursorRects(for: self)
+        cursor(at: viewPoint).set()
     }
 
     func continuePan(to point: CGPoint) {

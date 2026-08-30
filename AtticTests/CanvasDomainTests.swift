@@ -388,7 +388,7 @@ final class CanvasDomainTests: XCTestCase {
             at: CGPoint(x: 40, y: 50),
             in: view.bounds.size
         ))
-        view.prepareForViewportEvent()
+        view.prepareForViewportEvent(at: CGPoint(x: 120, y: 160))
         _ = view.interaction.zoom(
             by: 1.2,
             anchoredAt: CGPoint(x: 120, y: 160),
@@ -400,6 +400,50 @@ final class CanvasDomainTests: XCTestCase {
             at: CGPoint(x: 80, y: 90),
             in: view.bounds.size
         ))
+    }
+
+    @MainActor
+    func testCancelledViewportPanRestoresSpaceHeldCursor() {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        let viewPoint = CGPoint(x: 120, y: 160)
+        defer { NSCursor.arrow.set() }
+
+        view.spacePressed = true
+        view.beginPan(at: viewPoint)
+        XCTAssertTrue(NSCursor.current === NSCursor.closedHand)
+
+        view.prepareForViewportEvent(at: viewPoint)
+
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+        XCTAssertEqual(view.cursorRole(at: viewPoint), .openHand)
+        XCTAssertTrue(NSCursor.current === NSCursor.openHand)
+    }
+
+    @MainActor
+    func testCancelledViewportPanRestoresCurrentHoverCursor() {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        let viewPoint = CGPoint(x: 120, y: 160)
+        defer { NSCursor.arrow.set() }
+        _ = view.interaction.configure(
+            strokes: [],
+            tool: .select,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport()
+        )
+
+        view.beginPan(at: viewPoint)
+        XCTAssertTrue(NSCursor.current === NSCursor.closedHand)
+
+        view.prepareForViewportEvent(at: viewPoint)
+
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+        XCTAssertEqual(view.cursorRole(at: viewPoint), .arrow)
+        XCTAssertTrue(NSCursor.current === NSCursor.arrow)
     }
 
     func testSelectToolNeverStartsAnInkOperation() {
