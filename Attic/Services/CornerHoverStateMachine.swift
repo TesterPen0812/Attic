@@ -13,6 +13,7 @@ struct CornerHoverStateMachine {
     private var revealGrace: TimeInterval = 0.8
     private var panelHasBeenEntered = false
     private var leaveBeganAt: TimeInterval?
+    private var requiresHotspotExitBeforeReveal = false
 
     mutating func update(
         at timestamp: TimeInterval,
@@ -24,6 +25,13 @@ struct CornerHoverStateMachine {
         hideDelay: TimeInterval = 0.3
     ) -> Transition {
         if !isVisible {
+            if requiresHotspotExitBeforeReveal {
+                guard !isInHotspot else {
+                    hotspotEnteredAt = nil
+                    return .none
+                }
+                requiresHotspotExitBeforeReveal = false
+            }
             guard isInHotspot else {
                 hotspotEnteredAt = nil
                 return .none
@@ -75,10 +83,12 @@ struct CornerHoverStateMachine {
         panelHasBeenEntered = false
         leaveBeganAt = nil
         hotspotEnteredAt = nil
+        requiresHotspotExitBeforeReveal = false
     }
 
-    mutating func forceHidden() {
+    mutating func forceHidden(untilHotspotExit: Bool = false) {
         reset()
+        requiresHotspotExitBeforeReveal = untilHotspotExit
     }
 
     private mutating func reset() {
@@ -87,5 +97,6 @@ struct CornerHoverStateMachine {
         revealedAt = nil
         panelHasBeenEntered = false
         leaveBeganAt = nil
+        requiresHotspotExitBeforeReveal = false
     }
 }

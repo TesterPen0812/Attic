@@ -427,17 +427,44 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             uiState.setWindowInteractionActive(false)
             if hide() {
                 onInteractiveHideAccepted?()
+            } else {
+                animateDock(
+                    from: frame,
+                    on: screen,
+                    to: currentCorner,
+                    persistsCorner: false,
+                    showsPreview: false
+                )
             }
             return
         }
 
         guard case let .dock(corner) = releaseAction else { return }
-        currentCorner = corner
-        uiState.dockingPreviewCorner = corner
+        animateDock(
+            from: frame,
+            on: screen,
+            to: corner,
+            persistsCorner: true,
+            showsPreview: true
+        )
+    }
 
-        isApplyingInteractiveCorner = true
-        settings.corner = corner
-        isApplyingInteractiveCorner = false
+    private func animateDock(
+        from frame: CGRect,
+        on screen: NSScreen,
+        to corner: ScreenCorner,
+        persistsCorner: Bool,
+        showsPreview: Bool
+    ) {
+        uiState.setWindowInteractionActive(true)
+        uiState.dockingPreviewCorner = showsPreview ? corner : nil
+
+        if persistsCorner {
+            currentCorner = corner
+            isApplyingInteractiveCorner = true
+            settings.corner = corner
+            isApplyingInteractiveCorner = false
+        }
 
         let targetFrame = PanelGeometry.panelFrame(
             in: screen.visibleFrame,
@@ -480,7 +507,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             return event
         }
         globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            // AppKit invokes global event-monitor handlers on the main thread.
+            // Keep acquisition synchronous so a fast outside-in move cannot
+            // outrun the corner halo before the next mouse event arrives.
+            MainActor.assumeIsolated {
                 self?.updateMousePassthrough(at: NSEvent.mouseLocation)
             }
         }

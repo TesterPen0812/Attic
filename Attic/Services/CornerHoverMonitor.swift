@@ -35,7 +35,7 @@ final class CornerHoverMonitor {
         self.canvasStore = canvasStore
         self.noteDraft = noteDraft
         panelController.onInteractiveHideAccepted = { [weak self] in
-            self?.stateMachine.forceHidden()
+            self?.stateMachine.forceHidden(untilHotspotExit: true)
         }
     }
 
