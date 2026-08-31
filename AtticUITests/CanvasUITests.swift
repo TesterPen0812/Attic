@@ -199,7 +199,9 @@ final class CanvasUITests: XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 2))
         assertExactlyOneSelected(in: modes, expected: tasks)
 
-        backlog.click()
+        backlog.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).click()
         assertExactlyOneSelected(in: modes, expected: backlog)
 
         app.typeKey("3", modifierFlags: .command)
