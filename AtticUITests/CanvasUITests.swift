@@ -190,7 +190,21 @@ final class CanvasUITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TEST_CANVAS_RESET"] =
             resetCanvasStore ? "1" : "0"
         app.launch()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
+        let running = NSPredicate { object, _ in
+            guard let application = object as? XCUIApplication else {
+                return false
+            }
+            return application.state == .runningBackground
+                || application.state == .runningForeground
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: running, object: app)],
+                timeout: 5
+            ),
+            .completed,
+            "The LSUIElement host must finish launching in either AppKit running state"
+        )
     }
 
     private func openCanvas() {
