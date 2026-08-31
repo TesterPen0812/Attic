@@ -22,7 +22,7 @@ extension CanvasStore {
     }
 
     @discardableResult
-    func save() -> Bool {
+    func save() -> CanvasSaveOutcome {
         do {
             try persist(context)
             if CanvasCloudInfrastructurePolicy.isEnabled {
@@ -31,12 +31,29 @@ extension CanvasStore {
             }
 
             do {
-                lastErrorMessage = try reloadCanvas()
+                let warning = try reloadCanvas()
+                lastErrorMessage = warning
+                return .persisted(warning: warning)
             } catch {
-                lastErrorMessage = "Canvas saved, but refresh failed: \(error.localizedDescription)"
-                revision &+= 1
+                let refreshFailure = "Canvas saved, but refresh failed: \(error.localizedDescription)"
+                do {
+                    let fallbackWarning = try reloadCanvas(
+                        using: context,
+                        replacingContext: false
+                    )
+                    let message = fallbackWarning.map {
+                        "\(refreshFailure) · \($0)"
+                    } ?? refreshFailure
+                    lastErrorMessage = message
+                    return .persistedButRefreshFailed(message)
+                } catch {
+                    let message = "\(refreshFailure) · Saved-context reconciliation failed: "
+                        + error.localizedDescription
+                    lastErrorMessage = message
+                    revision &+= 1
+                    return .persistedButRefreshFailed(message)
+                }
             }
-            return true
         } catch {
             let saveError = error.localizedDescription
             context.rollback()
@@ -46,15 +63,24 @@ extension CanvasStore {
             } catch {
                 lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
             }
-            return false
+            return .failed(lastErrorMessage ?? saveError)
         }
     }
 
     func reloadCanvas() throws -> String? {
-        let refreshedContext = ModelContext(container)
-        let boardReplicas = try refreshedContext.fetch(FetchDescriptor<CanvasBoardItem>())
-        let strokeReplicas = try refreshedContext.fetch(FetchDescriptor<CanvasStrokeItem>())
-        let imageReplicas = try refreshedContext.fetch(FetchDescriptor<CanvasImageItem>())
+        try reloadCanvas(
+            using: makeFreshContext(),
+            replacingContext: true
+        )
+    }
+
+    private func reloadCanvas(
+        using sourceContext: ModelContext,
+        replacingContext: Bool
+    ) throws -> String? {
+        let boardReplicas = try sourceContext.fetch(FetchDescriptor<CanvasBoardItem>())
+        let strokeReplicas = try sourceContext.fetch(FetchDescriptor<CanvasStrokeItem>())
+        let imageReplicas = try sourceContext.fetch(FetchDescriptor<CanvasImageItem>())
 
         var warnings: [String] = []
         var omittedWarningCount = 0
@@ -260,7 +286,9 @@ extension CanvasStore {
             warnings.append("\(omittedWarningCount) additional canvas warning(s) were omitted.")
         }
 
-        context = refreshedContext
+        if replacingContext {
+            context = sourceContext
+        }
         canvases = resolvedBoards
         boardGeneration = resolvedGeneration
         visibleStrokeCache = nextStrokeCache

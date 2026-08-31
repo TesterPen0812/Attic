@@ -232,6 +232,72 @@ final class CanvasStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testClearReportsPersistedWhenFreshContextReloadFailsWithoutRetry() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let freshContexts = CanvasFreshContextGate()
+        let store = CanvasStore(
+            container: container,
+            persist: persistence.save,
+            makeFreshContext: {
+                try freshContexts.makeContext(container: container)
+            }
+        )
+        XCTAssertNotNil(store.addStroke(
+            color: .blue,
+            width: 4,
+            points: [CanvasPoint(x: 2, y: 6)]
+        ))
+        XCTAssertNotNil(store.addImage(
+            CanvasPreparedImage(
+                encodedData: Data([0x89, 0x50, 0x4E, 0x47]),
+                contentType: "public.png",
+                pixelWidth: 96,
+                pixelHeight: 48
+            ),
+            center: CanvasPoint(x: 30, y: 40)
+        ))
+        let generationBeforeClear = store.boardGeneration
+        let saveCountBeforeClear = persistence.saveCount
+        freshContexts.failNextContextCreation()
+
+        let outcome = store.clearBoardOutcome()
+
+        guard case let .persistedButRefreshFailed(message) = outcome else {
+            return XCTFail("Expected a persisted-but-refresh-failed outcome, got \(outcome)")
+        }
+        XCTAssertTrue(outcome.didPersist)
+        XCTAssertTrue(outcome.succeeded)
+        XCTAssertEqual(persistence.saveCount, saveCountBeforeClear + 1)
+        XCTAssertEqual(store.boardGeneration, generationBeforeClear + 1)
+        XCTAssertTrue(store.strokes.isEmpty)
+        XCTAssertTrue(store.images.isEmpty)
+        XCTAssertEqual(store.lastErrorMessage, message)
+        XCTAssertTrue(message.contains("saved"))
+        XCTAssertTrue(message.contains("refresh failed"))
+
+        let verificationContext = ModelContext(container)
+        let boardRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasBoardItem>()
+        )
+        let strokeRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasStrokeItem>()
+        )
+        let imageRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasImageItem>()
+        )
+        XCTAssertTrue(boardRows.allSatisfy {
+            $0.clearGeneration == generationBeforeClear + 1
+        })
+        XCTAssertTrue(strokeRows.allSatisfy {
+            $0.boardGeneration == generationBeforeClear
+        })
+        XCTAssertTrue(imageRows.allSatisfy {
+            $0.boardGeneration == generationBeforeClear
+        })
+    }
+
+    @MainActor
     func testFailedMultiStrokeRestoreRollsBackEarlierInserts() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
@@ -393,5 +459,28 @@ final class CanvasStoreTests: XCTestCase {
             updatedAt: updatedAt,
             deletedAt: tombstoned ? updatedAt : nil
         )
+    }
+}
+
+@MainActor
+private final class CanvasFreshContextGate {
+    struct Failure: LocalizedError {
+        var errorDescription: String? {
+            "Injected fresh-context reload failure."
+        }
+    }
+
+    private var shouldFailNextCreation = false
+
+    func failNextContextCreation() {
+        shouldFailNextCreation = true
+    }
+
+    func makeContext(container: ModelContainer) throws -> ModelContext {
+        if shouldFailNextCreation {
+            shouldFailNextCreation = false
+            throw Failure()
+        }
+        return ModelContext(container)
     }
 }

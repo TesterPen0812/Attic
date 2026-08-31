@@ -42,7 +42,7 @@ extension CanvasStore {
             updatedAt: timestamp
         ))
         selectedCanvasID = id
-        guard save() else { return nil }
+        guard save().succeeded else { return nil }
         return canvases.first { $0.id == id }
     }
 
@@ -96,7 +96,7 @@ extension CanvasStore {
             lastErrorMessage = error.localizedDescription
             return false
         }
-        return save()
+        return save().succeeded
     }
 
     @discardableResult
@@ -158,7 +158,7 @@ extension CanvasStore {
             discardPendingChanges(after: error)
             return false
         }
-        return save()
+        return save().succeeded
     }
 
 }

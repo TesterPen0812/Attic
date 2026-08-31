@@ -62,7 +62,7 @@ extension CanvasStore {
             return nil
         }
 
-        guard save() else { return nil }
+        guard save().succeeded else { return nil }
         return strokes.first { $0.id == id }
     }
 
@@ -112,12 +112,23 @@ extension CanvasStore {
             return false
         }
 
-        return save()
+        return save().succeeded
     }
 
     @discardableResult
     func restore(_ snapshots: [CanvasStroke]) -> Bool {
         guard !snapshots.isEmpty else { return true }
+        return restoreBoardContents(
+            strokes: snapshots,
+            images: []
+        ).succeeded
+    }
+
+    func stageStrokeRestore(
+        _ snapshots: [CanvasStroke],
+        at timestamp: Date
+    ) throws {
+        guard !snapshots.isEmpty else { return }
         let uniqueSnapshots = Dictionary(
             snapshots.map { ($0.id, $0) },
             uniquingKeysWith: { existing, candidate in
@@ -128,57 +139,49 @@ extension CanvasStore {
         )
         let ids = Set(uniqueSnapshots.keys)
 
-        do {
-            let timestamp = now()
-            try ensureSelectedBoardReplicaExists(at: timestamp)
-            let grouped = try storedStrokeReplicas(matching: ids)
-            for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
-                guard let snapshot = uniqueSnapshots[id] else { continue }
-                let payload = try CanvasStrokeCodec.encode(
-                    color: snapshot.color,
-                    width: snapshot.width,
-                    points: snapshot.points
-                )
-                let replicas = grouped[id] ?? []
-                let baseline = max(
-                    replicas.map(\.mutationVersion).max() ?? 0,
-                    snapshot.mutationVersion
-                )
-                let nextVersion = try Self.nextMutationVersion(
-                    after: baseline,
-                    objectID: id
-                )
-                if replicas.isEmpty {
-                    context.insert(CanvasStrokeItem(
-                        id: id,
-                        canvasID: selectedCanvasID,
-                        payloadVersion: CanvasStrokeCodec.currentVersion,
-                        payload: payload,
-                        boardGeneration: boardGeneration,
-                        mutationVersion: nextVersion,
-                        tombstoned: false,
-                        createdAt: snapshot.createdAt,
-                        updatedAt: timestamp
-                    ))
-                } else {
-                    for replica in replicas {
-                        replica.canvasID = selectedCanvasID
-                        replica.payloadVersion = CanvasStrokeCodec.currentVersion
-                        replica.payload = payload
-                        replica.boardGeneration = boardGeneration
-                        replica.mutationVersion = nextVersion
-                        replica.tombstoned = false
-                        replica.createdAt = snapshot.createdAt
-                        replica.updatedAt = timestamp
-                        replica.deletedAt = nil
-                    }
+        let grouped = try storedStrokeReplicas(matching: ids)
+        for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let snapshot = uniqueSnapshots[id] else { continue }
+            let payload = try CanvasStrokeCodec.encode(
+                color: snapshot.color,
+                width: snapshot.width,
+                points: snapshot.points
+            )
+            let replicas = grouped[id] ?? []
+            let baseline = max(
+                replicas.map(\.mutationVersion).max() ?? 0,
+                snapshot.mutationVersion
+            )
+            let nextVersion = try Self.nextMutationVersion(
+                after: baseline,
+                objectID: id
+            )
+            if replicas.isEmpty {
+                context.insert(CanvasStrokeItem(
+                    id: id,
+                    canvasID: selectedCanvasID,
+                    payloadVersion: CanvasStrokeCodec.currentVersion,
+                    payload: payload,
+                    boardGeneration: boardGeneration,
+                    mutationVersion: nextVersion,
+                    tombstoned: false,
+                    createdAt: snapshot.createdAt,
+                    updatedAt: timestamp
+                ))
+            } else {
+                for replica in replicas {
+                    replica.canvasID = selectedCanvasID
+                    replica.payloadVersion = CanvasStrokeCodec.currentVersion
+                    replica.payload = payload
+                    replica.boardGeneration = boardGeneration
+                    replica.mutationVersion = nextVersion
+                    replica.tombstoned = false
+                    replica.createdAt = snapshot.createdAt
+                    replica.updatedAt = timestamp
+                    replica.deletedAt = nil
                 }
             }
-        } catch {
-            discardPendingChanges(after: error)
-            return false
         }
-        return save()
     }
 
 }

@@ -779,7 +779,10 @@ final class CanvasSession: ObservableObject {
             case let .deleteImage(image):
                 return store.restoreImages([image])
             case let .clear(strokes, images):
-                return store.restore(strokes) && store.restoreImages(images)
+                return store.restoreBoardContents(
+                    strokes: strokes,
+                    images: images
+                ).succeeded
             }
         }
         guard succeeded else { return false }

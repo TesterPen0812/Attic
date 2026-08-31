@@ -189,6 +189,104 @@ final class CanvasSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testMixedClearUndoRestoresStrokeAndImageWithOnePersistenceSave() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = PersistenceGate()
+        let store = CanvasStore(container: container, persist: gate.save)
+        let session = CanvasSession(store: store)
+        XCTAssertTrue(session.completeStroke(
+            points: [CanvasPoint(x: -12, y: 8)]
+        ))
+        XCTAssertTrue(session.importPreparedImage(
+            CanvasPreparedImage(
+                encodedData: Data([0x89, 0x50, 0x4E, 0x47]),
+                contentType: "public.png",
+                pixelWidth: 120,
+                pixelHeight: 80
+            ),
+            at: CanvasPoint(x: 40, y: 20)
+        ))
+        let strokeID = try XCTUnwrap(session.strokes.first?.id)
+        let imageID = try XCTUnwrap(session.images.first?.id)
+
+        XCTAssertTrue(session.clear())
+        let generationAfterClear = session.boardGeneration
+        let saveCountAfterClear = gate.saveCount
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.images.isEmpty)
+
+        XCTAssertTrue(session.undo())
+
+        XCTAssertEqual(gate.saveCount, saveCountAfterClear + 1)
+        XCTAssertEqual(session.strokes.map(\.id), [strokeID])
+        XCTAssertEqual(session.images.map(\.id), [imageID])
+        XCTAssertTrue(session.strokes.allSatisfy {
+            $0.boardGeneration == generationAfterClear
+        })
+        XCTAssertTrue(session.images.allSatisfy {
+            $0.boardGeneration == generationAfterClear
+        })
+
+        let verificationContext = ModelContext(container)
+        let strokeRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasStrokeItem>()
+        )
+        let imageRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasImageItem>()
+        )
+        XCTAssertTrue(strokeRows.allSatisfy {
+            !$0.tombstoned && $0.boardGeneration == generationAfterClear
+        })
+        XCTAssertTrue(imageRows.allSatisfy {
+            !$0.tombstoned && $0.boardGeneration == generationAfterClear
+        })
+    }
+
+    @MainActor
+    func testMixedClearUndoRollsBackStrokeWhenImageRestoreStageFails() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = CanvasStore(container: container)
+        let session = CanvasSession(store: store)
+        XCTAssertTrue(session.completeStroke(
+            points: [CanvasPoint(x: 3, y: 7)]
+        ))
+        XCTAssertTrue(session.importPreparedImage(
+            CanvasPreparedImage(
+                encodedData: Data([0x89, 0x50, 0x4E, 0x47]),
+                contentType: "public.png",
+                pixelWidth: 64,
+                pixelHeight: 64
+            ),
+            at: CanvasPoint(x: 16, y: 24)
+        ))
+        XCTAssertTrue(session.clear())
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.images.isEmpty)
+
+        let storedImages = try store.context.fetch(
+            FetchDescriptor<CanvasImageItem>()
+        )
+        XCTAssertEqual(storedImages.count, 1)
+        storedImages[0].mutationVersion = Int64.max
+        try store.context.save()
+
+        XCTAssertFalse(session.undo())
+
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.images.isEmpty)
+        XCTAssertTrue(session.canUndo)
+        let verificationContext = ModelContext(container)
+        let strokeRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasStrokeItem>()
+        )
+        XCTAssertEqual(strokeRows.count, 1)
+        XCTAssertNotEqual(
+            strokeRows[0].boardGeneration,
+            session.boardGeneration
+        )
+    }
+
+    @MainActor
     func testFailedPersistenceDoesNotCreateUndoHistory() throws {
         let gate = PersistenceGate()
         gate.shouldFail = true
