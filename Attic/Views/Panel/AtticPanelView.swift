@@ -199,6 +199,7 @@ struct AtticPanelView: View {
         .help(uiState.isPanelPinned ? "Unpin panel" : "Keep panel visible")
         .accessibilityLabel(uiState.isPanelPinned ? "Unpin Attic panel" : "Pin Attic panel")
         .accessibilityAddTraits(uiState.isPanelPinned ? .isSelected : [])
+        .accessibilityRemoveTraits(uiState.isPanelPinned ? [] : .isSelected)
         .accessibilityIdentifier("panel-pin-button")
     }
 
@@ -246,6 +247,7 @@ struct AtticPanelView: View {
                 .help(section.title)
                 .accessibilityLabel(section.title)
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
                 .accessibilityIdentifier("panel-section-\(section.rawValue)")
                 .frame(
                     width: isVisible ? AtticStyle.controlHitSize : 0,
