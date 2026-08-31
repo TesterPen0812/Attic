@@ -29,8 +29,24 @@ struct NoteAttachmentTray: View {
         return noteStore.attachments(for: noteID)
     }
 
+    private var importPresentation: NoteAttachmentImportPresentation {
+        noteStore.attachmentImportPresentation(for: noteDraft.editorSession)
+    }
+
     private var importState: AttachmentImportState {
-        noteStore.attachmentImportState(for: noteDraft.editorSession)
+        switch importPresentation {
+        case .idle:
+            return .idle
+        case let .current(state), let .background(_, state):
+            return state
+        }
+    }
+
+    private var importOwnerLabel: String? {
+        guard case let .background(ownerLabel, _) = importPresentation else {
+            return nil
+        }
+        return ownerLabel
     }
 
     var body: some View {
@@ -78,7 +94,7 @@ struct NoteAttachmentTray: View {
             }
         }
         .animation(AtticMotion.quick, value: attachments.map(\.id))
-        .animation(AtticMotion.quick, value: importState)
+        .animation(AtticMotion.quick, value: importPresentation)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Note attachments")
     }
@@ -89,10 +105,15 @@ struct NoteAttachmentTray: View {
         case .idle:
             EmptyView()
         case let .importing(completed, total):
+            let progressLabel = importProgressLabel(
+                completed: completed,
+                total: total,
+                ownerLabel: importOwnerLabel
+            )
             HStack(spacing: 7) {
                 ProgressView()
                     .controlSize(.mini)
-                Text(importProgressLabel(completed: completed, total: total))
+                Text(progressLabel)
                     .font(.system(size: 9.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .atticClearGlassForegroundReadability()
@@ -103,7 +124,7 @@ struct NoteAttachmentTray: View {
                 }
                 .buttonStyle(.borderless)
                 .labelStyle(.iconOnly)
-                .help("Cancel attachment import")
+                .help(cancelImportHelp)
                 .accessibilityIdentifier("cancel-note-attachment-import")
             }
             .padding(.horizontal, 9)
@@ -113,9 +134,9 @@ struct NoteAttachmentTray: View {
                 in: RoundedRectangle(cornerRadius: 9, style: .continuous)
             )
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(importProgressLabel(completed: completed, total: total))
+            .accessibilityLabel(progressLabel)
         case let .failed(message):
-            Label(message, systemImage: "exclamationmark.triangle.fill")
+            Label(importFailureLabel(message), systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 9.5, weight: .medium, design: .rounded))
                 .foregroundStyle(.red)
                 .atticClearGlassForegroundReadability()
@@ -130,10 +151,27 @@ struct NoteAttachmentTray: View {
         }
     }
 
-    private func importProgressLabel(completed: Int, total: Int) -> String {
+    private func importProgressLabel(
+        completed: Int,
+        total: Int,
+        ownerLabel: String?
+    ) -> String {
         let count = max(total, 1)
-        if count == 1 { return "Importing attachment" }
-        return "Importing attachments \(min(completed, count)) of \(count)"
+        let progress = count == 1
+            ? "Importing attachment"
+            : "Importing attachments \(min(completed, count)) of \(count)"
+        guard let ownerLabel else { return progress }
+        return "\(progress) for \(ownerLabel)"
+    }
+
+    private var cancelImportHelp: String {
+        guard let importOwnerLabel else { return "Cancel attachment import" }
+        return "Cancel attachment import for \(importOwnerLabel)"
+    }
+
+    private func importFailureLabel(_ message: String) -> String {
+        guard let importOwnerLabel else { return message }
+        return "Attachment import for \(importOwnerLabel) failed: \(message)"
     }
 }
 
@@ -1007,6 +1045,12 @@ final class PromisedFileBatch: @unchecked Sendable {
         case failure(String)
     }
 
+    private enum TerminalState: Equatable {
+        case active
+        case succeeded
+        case failed
+    }
+
     private let lock = NSLock()
     private let expectedCount: Int
     private let destination: URL
@@ -1014,7 +1058,7 @@ final class PromisedFileBatch: @unchecked Sendable {
     private var completedIndices = Set<Int>()
     private var delivered: [(Int, URL)] = []
     private var errors: [String] = []
-    private var isFinished = false
+    private var terminalState = TerminalState.active
     private var timeoutWorkItem: DispatchWorkItem?
 
     init(
@@ -1042,7 +1086,15 @@ final class PromisedFileBatch: @unchecked Sendable {
     func record(index: Int, url: URL, error: Error?) {
         let result: Result?
         lock.lock()
-        if isFinished || completedIndices.contains(index) {
+        guard terminalState == .active else {
+            let shouldCleanLateDelivery = terminalState == .failed
+            lock.unlock()
+            if shouldCleanLateDelivery {
+                removeFailedBatchDestination()
+            }
+            return
+        }
+        if completedIndices.contains(index) {
             lock.unlock()
             return
         }
@@ -1054,10 +1106,11 @@ final class PromisedFileBatch: @unchecked Sendable {
         }
 
         if completedIndices.count == expectedCount {
-            isFinished = true
             if errors.isEmpty, delivered.count == expectedCount {
+                terminalState = .succeeded
                 result = .success(delivered.sorted { $0.0 < $1.0 }.map(\.1))
             } else {
+                terminalState = .failed
                 let detail = errors.first ?? "No file was delivered."
                 result = .failure("Unable to receive a promised file: \(detail)")
             }
@@ -1069,7 +1122,7 @@ final class PromisedFileBatch: @unchecked Sendable {
         if let result {
             timeoutWorkItem?.cancel()
             if case .failure = result {
-                try? FileManager.default.removeItem(at: destination)
+                removeFailedBatchDestination()
             }
             completion(result)
         }
@@ -1081,15 +1134,22 @@ final class PromisedFileBatch: @unchecked Sendable {
 
     private func finishWithFailure(_ message: String) {
         lock.lock()
-        guard !isFinished else {
+        guard terminalState == .active else {
             lock.unlock()
             return
         }
-        isFinished = true
+        terminalState = .failed
         lock.unlock()
 
         timeoutWorkItem?.cancel()
-        try? FileManager.default.removeItem(at: destination)
+        removeFailedBatchDestination()
         completion(.failure(message))
+    }
+
+    private func removeFailedBatchDestination() {
+        // The destination is a unique temporary directory owned by this batch.
+        // Providers may recreate it after timeout/cancellation, so every late
+        // callback repeats the idempotent cleanup.
+        try? FileManager.default.removeItem(at: destination)
     }
 }

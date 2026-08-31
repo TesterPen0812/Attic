@@ -431,8 +431,48 @@ final class NoteAttachmentTests: XCTestCase {
         }
         XCTAssertTrue(message.localizedCaseInsensitiveContains("timed out"))
 
-        batch.record(index: 0, url: directory.appendingPathComponent("late.txt"), error: nil)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let lateFile = try write(Data("late".utf8), named: "late.txt", in: directory)
+        batch.record(index: 0, url: lateFile, error: nil)
         XCTAssertEqual(results.completionCount, 1)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: directory.path),
+            "A provider that finishes after the timeout must not leave its late delivery behind"
+        )
+    }
+
+    func testPromisedFileBatchCancellationRemovesLateDeliveredDirectory() throws {
+        let directory = try makeDirectory()
+        let completion = expectation(description: "promise batch cancels")
+        let results = PromisedFileResultRecorder()
+        let batch = PromisedFileBatch(
+            expectedCount: 1,
+            destination: directory,
+            timeout: 60
+        ) { result in
+            results.record(result)
+            completion.fulfill()
+        }
+
+        batch.cancel()
+        wait(for: [completion], timeout: 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let lateFile = try write(Data("late".utf8), named: "late.txt", in: directory)
+        batch.record(index: 0, url: lateFile, error: nil)
+
+        XCTAssertEqual(results.completionCount, 1)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: directory.path),
+            "A provider that finishes after cancellation must not leave its late delivery behind"
+        )
     }
 
     func testSourceCanDisappearAfterImportAndMissingMaterializationIsRebuilt() async throws {
@@ -701,6 +741,163 @@ final class NoteAttachmentTests: XCTestCase {
     }
 
     @MainActor
+    func testExternalDeletionOfAutosavedBlankOriginWinsOverSuspendedImport() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("attachment".utf8), named: "deleted.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        guard case let .blankDraft(reservedNoteID) = request.origin else {
+            return XCTFail("A blank import must reserve an immutable origin identity")
+        }
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+
+        draft.body = "Autosaved before external deletion"
+        XCTAssertTrue(draft.flush())
+
+        let externalContext = ModelContext(container)
+        let storedNotes = try externalContext.fetch(FetchDescriptor<NoteItem>())
+        let reservedReplicas = storedNotes.filter { $0.id == reservedNoteID }
+        XCTAssertEqual(reservedReplicas.count, 1)
+        reservedReplicas.forEach(externalContext.delete)
+        try externalContext.save()
+
+        await importer.succeed()
+        let outcome = await importTask.value
+
+        XCTAssertEqual(outcome, .originUnavailable)
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .originUnavailable
+        )
+        let verificationContext = ModelContext(container)
+        XCTAssertTrue(try verificationContext.fetch(FetchDescriptor<NoteItem>()).isEmpty)
+        XCTAssertTrue(try verificationContext.fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
+    }
+
+    @MainActor
+    func testSuspendedImportRevalidatesExternalAttachmentsBeforeAssigningSortOrder() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("incoming".utf8), named: "incoming.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        let origin = try XCTUnwrap(store.create(body: "Origin"))
+
+        XCTAssertTrue(draft.beginEditing(origin))
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+
+        let externalPayload = Data("external".utf8)
+        let externalContext = ModelContext(container)
+        externalContext.insert(NoteAttachment(
+            noteID: origin.id,
+            originalFilename: "external.txt",
+            byteCount: Int64(externalPayload.count),
+            sortIndex: 7,
+            contentDigest: SHA256.hash(data: externalPayload)
+                .map { String(format: "%02x", $0) }
+                .joined(),
+            payload: externalPayload
+        ))
+        try externalContext.save()
+
+        await importer.succeed()
+        let outcome = await importTask.value
+
+        XCTAssertEqual(outcome, .imported(noteID: origin.id))
+        let verificationContext = ModelContext(container)
+        let attachments = try verificationContext.fetch(FetchDescriptor<NoteAttachment>())
+            .filter { $0.noteID == origin.id }
+            .sorted { $0.sortIndex < $1.sortIndex }
+        XCTAssertEqual(attachments.map(\.originalFilename), ["external.txt", "incoming.txt"])
+        XCTAssertEqual(attachments.map(\.sortIndex), [7, 8])
+    }
+
+    @MainActor
+    func testPersistedImportRefreshFailureKeepsReservedDraftAndAttachmentVisible() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("attachment".utf8), named: "saved.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let freshContexts = FreshNoteContextGate(container: container)
+        let store = NoteStore(
+            container: container,
+            persist: persistence.save,
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer,
+            makeFreshContext: freshContexts.makeContext
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+        draft.body = "Typing must converge with the saved attachment"
+
+        // The post-suspension transaction context succeeds. Only the fresh
+        // presentation reload after the durable save fails.
+        freshContexts.failAfterSuccessfulContexts(1)
+        await importer.succeed()
+        let outcome = await importTask.value
+        let reservedNoteID = request.origin.noteID
+
+        XCTAssertEqual(outcome, .imported(noteID: reservedNoteID))
+        XCTAssertEqual(store.notes.map(\.id), [reservedNoteID])
+        XCTAssertEqual(store.attachments(for: reservedNoteID).map(\.originalFilename), [
+            "saved.txt"
+        ])
+        XCTAssertTrue(store.lastErrorMessage?.localizedCaseInsensitiveContains("saved") == true)
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .adopted(noteID: reservedNoteID)
+        )
+        XCTAssertTrue(draft.flush())
+
+        let verificationContext = ModelContext(container)
+        let physicalNotes = try verificationContext.fetch(FetchDescriptor<NoteItem>())
+            .filter { $0.id == reservedNoteID }
+        let physicalAttachments = try verificationContext.fetch(FetchDescriptor<NoteAttachment>())
+            .filter { $0.noteID == reservedNoteID }
+        XCTAssertEqual(physicalNotes.count, 1)
+        XCTAssertEqual(physicalNotes.first?.body, "Typing must converge with the saved attachment")
+        XCTAssertEqual(physicalAttachments.count, 1)
+        XCTAssertEqual(persistence.saveCount, 2)
+    }
+
+    @MainActor
     func testAutosaveAfterBlankImportPersistsBeforeDraftCompletionReusesReservedOrigin() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -837,6 +1034,61 @@ final class NoteAttachmentTests: XCTestCase {
             "first.txt",
             "second.txt"
         ])
+    }
+
+    @MainActor
+    func testSwitchedEditorKeepsSessionLabelledImportCancellationVisible() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceA = try write(Data("first".utf8), named: "first.txt", in: directory)
+        let sourceB = try write(Data("second".utf8), named: "second.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        let otherNote = try XCTUnwrap(store.create(body: "Other note"))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(
+            draft.prepareAttachmentImport(from: [sourceA, sourceB])
+        )
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+
+        XCTAssertTrue(draft.beginEditing(otherNote))
+        let switchedSession = draft.editorSession
+        await importer.reportProgress(completed: 1, total: 2)
+
+        XCTAssertEqual(store.attachmentImportState(for: switchedSession), .idle)
+        XCTAssertEqual(
+            store.attachmentImportState(for: request.editorSession),
+            .importing(completed: 1, total: 2)
+        )
+        XCTAssertEqual(
+            store.attachmentImportPresentation(for: switchedSession),
+            .background(
+                ownerLabel: "previous draft",
+                state: .importing(completed: 1, total: 2)
+            )
+        )
+        XCTAssertEqual(
+            store.attachmentImportPresentation(for: request.editorSession),
+            .current(.importing(completed: 1, total: 2))
+        )
+
+        importTask.cancel()
+        let cancelledOutcome = await importTask.value
+        XCTAssertEqual(cancelledOutcome, .cancelled)
+        XCTAssertEqual(
+            store.attachmentImportPresentation(for: switchedSession),
+            .idle
+        )
     }
 
     @MainActor
@@ -1183,6 +1435,31 @@ private final class PromisedFileResultRecorder: @unchecked Sendable {
 
     func record(_ result: PromisedFileBatch.Result) {
         lock.withLock { results.append(result) }
+    }
+}
+
+private final class FreshNoteContextGate {
+    struct Failure: LocalizedError {
+        var errorDescription: String? { "Injected fresh-context failure" }
+    }
+
+    private let container: ModelContainer
+    private var successfulContextsRemainingBeforeFailure: Int?
+
+    init(container: ModelContainer) {
+        self.container = container
+    }
+
+    func failAfterSuccessfulContexts(_ count: Int) {
+        successfulContextsRemainingBeforeFailure = max(count, 0)
+    }
+
+    func makeContext() throws -> ModelContext {
+        if let remaining = successfulContextsRemainingBeforeFailure {
+            guard remaining > 0 else { throw Failure() }
+            successfulContextsRemainingBeforeFailure = remaining - 1
+        }
+        return ModelContext(container)
     }
 }
 
