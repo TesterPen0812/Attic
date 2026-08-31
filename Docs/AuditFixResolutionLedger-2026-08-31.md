@@ -45,9 +45,9 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | --- | --- | --- | --- | --- | --- | --- |
 | N-001 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit reproduction captured draft text loss | Draft-session attachment race remains. |
 | N-002 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit reproduction captured `NSRangeException` | Cross-note Undo/Redo can still crash. |
-| N-003 | In progress | — | Panel lock/hide regression development on `codex/attic-comprehensive-panel` | — | — | Notes-owned focus/dirty/import signals still need integration. |
+| N-003 | In progress | `507e13c`, `51377e2` | `CornerHoverStateMachineTests`, `PanelUIStateTests`, and `PanelGeometryTests`: 40/40 passed in Local | Awaiting clean-unfocused/focused/dirty/import installed matrix | Explicit lock composition is integrated; no added polling | Dirty/conflict and quick-entry producers are wired, but Notes editor focus, import, popover, and blocking-save producers still need integration. |
 | N-004 | Planned | — | — | — | — | Note/cursor/selection/scroll session restoration remains. |
-| N-005 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit sentinel showed default-root deletion | Tests can still reconcile the default attachment root. |
+| N-005 | Fixed | `3957a27`, `69fafe6` | `NoteStoreTests`, `NoteDraftControllerTests`, `NoteAttachmentTests`, and `MCPRequestHandlerTests`: 82/82 passed in Local; every helper call requires an explicit injected root | Not applicable: test-harness isolation only | A separate default-shaped sentinel root remained byte-identical while reconciliation created state only under the unique injected root; no real app root was accessed | Automated isolation is verified; temporary test-root reclamation remains ordinary `/tmp` housekeeping rather than app-data risk. |
 | N-006 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit continuous-typing probe captured unbounded trailing debounce window | Maximum durability checkpoint remains undefined. |
 | N-007 | Planned | — | — | — | Audit attachment lifecycle probe captured stale recency/empty note | Lifecycle invariants remain decentralized. |
 | N-008 | Planned | — | — | — | — | Broad scroll monitor and non-directional swipe remain. |
@@ -58,15 +58,15 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | N-013 | Planned | — | — | — | — | Editor labels, announcements, tab order, hit targets, contrast, and Reduce Motion remain. |
 | N-014 | Planned | — | — | — | — | Compact long-text/mixed-attachment scroll handoff unverified. |
 | N-015 | Planned | — | — | — | — | Deterministic focus teardown and recursion-warning failure policy remain. |
-| N-016 | In progress | — | Transactional hide regression development on `codex/attic-comprehensive-panel` | — | Audit hide latency baseline 927–1435 ms | Notes draft acceptance hook still needs workstream integration. |
+| N-016 | In progress | `507e13c`, `51377e2` | 40/40 panel state/geometry tests passed; accepted hide remains model-visible until owned native completion and a superseding reveal cancels it | Awaiting installed failed-save/retry and reveal-during-hide UAT | Audit hide latency baseline 927–1435 ms; final latency remeasurement pending | The controller now checks `NoteDraftController.flush()` before destructive state and commits hidden state only after `orderOut`; a direct hosted flush-failure regression and retry affordance verification are still required. |
 
 ## Panel and shell
 
 | Finding | Status | Owning commit | Focused tests | Installed UAT | Performance evidence | Residual risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| PANEL-01 | In progress | — | Regression development on `codex/attic-comprehensive-panel` | — | — | Shared explicit interaction locks not integrated. |
-| PANEL-02 | In progress | — | Regression development on `codex/attic-comprehensive-panel` | — | Audit hide latency baseline 927–1435 ms | Shared transactional hide handshake not integrated. |
-| PANEL-03 | Planned | — | — | — | — | Dynamic Dock/work-area recovery and preferred-size separation remain. |
+| PANEL-01 | In progress | `507e13c`, `51377e2` | `CornerHoverStateMachineTests`, `PanelUIStateTests`, and `PanelGeometryTests`: 40/40 passed in Local, including nested menu and independent-reason composition | Awaiting all-mode installed interaction-lock matrix | Set-based locks add no polling or timers | Shell reasons and quick-entry/dirty/conflict producers are integrated; remaining Notes focus/import/popover/blocking-save producers keep this item open. |
+| PANEL-02 | Fixed | `507e13c`, `51377e2` | 40/40 panel state/geometry tests passed, including rejection, owned native completion, reveal supersession, and nested locks | Awaiting installed native animation and failed-flush UAT | Audit hide latency baseline 927–1435 ms; final latency remeasurement pending | Source transaction is integrated, but the real `NSPanel` completion path and visible retry error still require installed verification. |
+| PANEL-03 | In progress | — | Regression development on `codex/attic-comprehensive-panel` | — | — | Dynamic Dock/work-area recovery and preferred-size separation remain until the next panel checkpoint is integrated. |
 | PANEL-04 | Planned | — | — | — | — | Clear-mode foreground matrix requires installed visual judgment; transmission must remain unchanged. |
 | PANEL-05 | Planned | — | — | Physical trackpad required after automation | Baseline fast edge pass: 0/5 reveals; dismissal intent metrics pending | Phase-aware chrome flick and robust mouse throw remain. |
 | PANEL-06 | Planned | — | — | — | — | Move/resize cancellation and passthrough safety remain incomplete. |
@@ -74,7 +74,7 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | PANEL-08 | Planned | — | — | — | Baseline hidden sample: 3478 voluntary and 6370 involuntary context switches over 6.2 s; 20 Hz activity remains | Adaptive idle sampling/reveal-latency balance not integrated. |
 | PANEL-09 | Planned | — | — | — | Baseline UI runner exited before connection | Signed unique real-host UI suite remains broken. |
 | PANEL-10 | Planned | — | — | — | — | Cursor/drag/resize acquisition matrix remains. |
-| PANEL-11 | In progress | — | Local-only reveal regression development on `codex/attic-comprehensive-panel` | — | Baseline reveal 249–339 ms stable; local reveal still schedules 900 ms second refresh | Local-only reveal still carries deferred-sync work. |
+| PANEL-11 | Fixed | `507e13c` | Local-only refresh-policy regression included in the 40/40 panel pass; asserts one immediate pass, no retry delay, and maximum pass count 1 | Awaiting installed reveal-latency remeasurement | Baseline reveal 249–339 ms; Local policy now schedules no 900 ms retry or second all-store refresh | Installed timing remains to measure; deferred non-Local sync source remains feature-gated and was not removed. |
 | PANEL-12 | Planned | — | — | — | — | Broad stale launcher still hard-codes process, bundle, signing, `/Applications`, and appearance. |
 | PANEL-13 | Planned | — | — | — | — | Deprecated AX size override remains. |
 
@@ -89,3 +89,5 @@ Before any command that drives the installed app, cursor, keyboard, trackpad eve
 | `4b246f6` | Initial ledger and verified clean baseline | 333/333 Local Attic unit tests passed at `87c2062a536c42badac78a5ce2b21bbad7315d12`. |
 | `e6946fb` | Marked the first isolated fix streams active | Workstream branches and focused regression ownership recorded. |
 | `bb762ea` | C-13 true Canvas layer-boundary no-ops and disabled unavailable controls | `CanvasImageSessionTests` 4/4 passed; zero additional persistence/revision/history/z-index mutations asserted. |
+| `507e13c`, `51377e2` | Explicit interaction-lock vocabulary, local-only single reveal refresh, and native-completion-aware transactional hide | Central Local run passed 40/40 `CornerHoverStateMachineTests`, `PanelUIStateTests`, and `PanelGeometryTests`; affected Local build succeeded. |
+| `3957a27`, `69fafe6` | N-005 unique explicit attachment roots for every Notes/MCP test initializer plus a default-shaped sentinel regression | Central Local run passed 82/82 Notes/MCP tests; affected Local build succeeded. |
