@@ -3,14 +3,10 @@ import XCTest
 @testable import Attic
 
 final class CornerHoverStateMachineTests: XCTestCase {
-    func testPointerMonitoringUsesOneScopeMatchingAppActivation() {
+    func testPointerMonitoringCoversOwnAppAndOtherApplicationDomains() {
         XCTAssertEqual(
-            CornerHoverPointerMonitorScope.required(isApplicationActive: true),
-            .local
-        )
-        XCTAssertEqual(
-            CornerHoverPointerMonitorScope.required(isApplicationActive: false),
-            .global
+            CornerHoverPointerMonitorDomains.required,
+            [.local, .global]
         )
     }
 

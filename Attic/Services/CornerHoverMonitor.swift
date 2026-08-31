@@ -44,7 +44,6 @@ final class CornerHoverMonitor {
     private var cachedScreenFrames: [CGRect] = []
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
-    private var appActivationTokens: [NSObjectProtocol] = []
     private var screenChangeToken: NSObjectProtocol?
     private var cornerObservation: AnyCancellable?
     private var responsivenessActivity: NSObjectProtocol?
@@ -319,69 +318,31 @@ final class CornerHoverMonitor {
     }
 
     private func startPointerActivityMonitoring() {
-        guard appActivationTokens.isEmpty else { return }
-        installPointerActivityMonitor(
-            scope: .required(isApplicationActive: NSApp.isActive)
-        )
-        let center = NotificationCenter.default
-        appActivationTokens = [
-            center.addObserver(
-                forName: NSApplication.didBecomeActiveNotification,
-                object: NSApp,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.installPointerActivityMonitor(scope: .local)
-                }
-            },
-            center.addObserver(
-                forName: NSApplication.didResignActiveNotification,
-                object: NSApp,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.installPointerActivityMonitor(scope: .global)
-                }
-            }
-        ]
-    }
-
-    private func installPointerActivityMonitor(
-        scope: CornerHoverPointerMonitorScope
-    ) {
-        if let localPointerMonitor {
-            NSEvent.removeMonitor(localPointerMonitor)
-            self.localPointerMonitor = nil
-        }
-        if let globalPointerMonitor {
-            NSEvent.removeMonitor(globalPointerMonitor)
-            self.globalPointerMonitor = nil
-        }
-
+        guard localPointerMonitor == nil, globalPointerMonitor == nil else { return }
         let mask: NSEvent.EventTypeMask = [
             .mouseMoved,
             .leftMouseDragged,
             .rightMouseDragged,
             .otherMouseDragged
         ]
-        switch scope {
-        case .local:
-            localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
-                [weak self] event in
-                MainActor.assumeIsolated {
-                    self?.pointerActivityObserved(at: NSEvent.mouseLocation)
-                }
-                return event
+        // AppKit's monitor domains are complementary, not interchangeable:
+        // local monitors cover Attic (including its tracking loops), while
+        // global monitors cover pointer movement over other applications.
+        // A hidden LSUIElement needs both regardless of activation state.
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
+            [weak self] event in
+            MainActor.assumeIsolated {
+                self?.pointerActivityObserved(at: NSEvent.mouseLocation)
             }
-        case .global:
-            globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
-                [weak self] _ in
-                // AppKit delivers global event-monitor callbacks on the main thread.
-                // The handler only runs the cheap cadence state until a boundary
-                // crossing requests one immediate full sample.
-                MainActor.assumeIsolated {
-                    self?.pointerActivityObserved(at: NSEvent.mouseLocation)
-                }
+            return event
+        }
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
+            [weak self] _ in
+            // AppKit delivers global event-monitor callbacks on the main thread.
+            // The handler only runs the cheap cadence state until a boundary
+            // crossing requests one immediate full sample.
+            MainActor.assumeIsolated {
+                self?.pointerActivityObserved(at: NSEvent.mouseLocation)
             }
         }
     }
@@ -395,8 +356,6 @@ final class CornerHoverMonitor {
             NSEvent.removeMonitor(globalPointerMonitor)
             self.globalPointerMonitor = nil
         }
-        appActivationTokens.forEach(NotificationCenter.default.removeObserver)
-        appActivationTokens.removeAll()
     }
 
     private func screen(containing point: CGPoint) -> NSScreen? {

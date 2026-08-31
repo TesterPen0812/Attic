@@ -1,12 +1,11 @@
 import Foundation
 
-enum CornerHoverPointerMonitorScope: Equatable {
-    case local
-    case global
+struct CornerHoverPointerMonitorDomains: OptionSet, Equatable {
+    let rawValue: Int
 
-    static func required(isApplicationActive: Bool) -> Self {
-        isApplicationActive ? .local : .global
-    }
+    static let local = Self(rawValue: 1 << 0)
+    static let global = Self(rawValue: 1 << 1)
+    static let required: Self = [.local, .global]
 }
 
 enum CornerHoverSamplingCadence: Equatable {
