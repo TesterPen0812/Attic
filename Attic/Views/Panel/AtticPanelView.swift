@@ -16,6 +16,7 @@ struct AtticPanelView: View {
     @State private var isModeDockHovered = false
     @State private var hoveredModeSection: PanelSection?
     @State private var isQuickSubmitHovered = false
+    @State private var errorBannerHeight: CGFloat = 0
     @FocusState private var isQuickEntryFocused: Bool
     @FocusState private var focusedModeSection: PanelSection?
     @FocusState private var isQuickSubmitFocused: Bool
@@ -135,6 +136,14 @@ struct AtticPanelView: View {
         }
         .onChange(of: noteDraft.hasConflict) { _, _ in
             syncNoteDraftInteractionLocks()
+        }
+        .onPreferenceChange(PanelErrorBannerHeightPreferenceKey.self) { measuredHeight in
+            let resolvedHeight = currentErrorMessage == nil
+                ? 0
+                : max(0, measuredHeight.isFinite ? measuredHeight : 0)
+            if abs(errorBannerHeight - resolvedHeight) >= 0.5 {
+                errorBannerHeight = resolvedHeight
+            }
         }
     }
 
@@ -287,7 +296,10 @@ struct AtticPanelView: View {
             CanvasPanelContent(
                 session: canvasSession,
                 horizontalInset: horizontalInset,
-                isClearConfirmationPresented: $uiState.isCanvasConfirmationPresented
+                isClearConfirmationPresented: $uiState.isCanvasConfirmationPresented,
+                bottomOverlayInset: PanelGeometry.canvasErrorBannerOffset(
+                    measuredHeight: errorBannerHeight
+                )
             )
             .padding(.top, 62)
             .transition(.opacity)
@@ -484,6 +496,14 @@ struct AtticPanelView: View {
             .atticGlassControl(in: Capsule(), interactive: false)
             .padding(.horizontal, chromeInset)
             .padding(.bottom, uiState.selectedSection.isTaskBased ? 118 : 20)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: PanelErrorBannerHeightPreferenceKey.self,
+                        value: proxy.size.height
+                    )
+                }
+            }
             .accessibilityIdentifier("panel-error-message")
     }
 
@@ -604,6 +624,14 @@ struct AtticPanelView: View {
         case .bottomLeft: "arrow.down.left"
         case .bottomRight: "arrow.down.right"
         }
+    }
+}
+
+private struct PanelErrorBannerHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

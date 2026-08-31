@@ -5,6 +5,7 @@ struct CanvasPanelContent: View {
     @ObservedObject var session: CanvasSession
     let horizontalInset: CGFloat
     @Binding var isClearConfirmationPresented: Bool
+    var bottomOverlayInset: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -56,14 +57,14 @@ struct CanvasPanelContent: View {
                 if session.selectedImage != nil {
                     imageSelectionDock
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 60)
+                        .padding(.bottom, 60 + bottomOverlayInset)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 bottomChrome(compact: proxy.size.width < 350)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 10 + bottomOverlayInset)
             }
             .onAppear {
                 surfaceSize = proxy.size

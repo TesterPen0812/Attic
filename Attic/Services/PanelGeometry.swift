@@ -18,6 +18,13 @@ enum PanelGeometry {
     static let preferredHeightCeiling: CGFloat = 700
     static let screenInset: CGFloat = 12
 
+    /// Moves Canvas controls above the actual rendered error banner instead of
+    /// assuming a fixed one- or two-line height at compact widths.
+    static func canvasErrorBannerOffset(measuredHeight: CGFloat) -> CGFloat {
+        guard measuredHeight.isFinite, measuredHeight > 0 else { return 0 }
+        return measuredHeight + 4
+    }
+
     static let minimumPanelSize = CGSize(
         width: PanelContentSize.min,
         height: minimumHeight

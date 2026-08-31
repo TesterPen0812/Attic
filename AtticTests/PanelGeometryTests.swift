@@ -4,6 +4,29 @@ import XCTest
 @testable import Attic
 
 final class PanelGeometryTests: XCTestCase {
+    func testCanvasControlsReserveMeasuredErrorBannerFootprint() {
+        XCTAssertEqual(
+            PanelGeometry.canvasErrorBannerOffset(measuredHeight: 0),
+            0
+        )
+        XCTAssertEqual(
+            PanelGeometry.canvasErrorBannerOffset(measuredHeight: -20),
+            0
+        )
+        XCTAssertEqual(
+            PanelGeometry.canvasErrorBannerOffset(measuredHeight: .infinity),
+            0
+        )
+
+        let measuredBannerHeight: CGFloat = 46
+        let offset = PanelGeometry.canvasErrorBannerOffset(
+            measuredHeight: measuredBannerHeight
+        )
+        XCTAssertEqual(offset, 50)
+        XCTAssertGreaterThanOrEqual(10 + offset, measuredBannerHeight + 4)
+        XCTAssertEqual(60 + offset, 110)
+    }
+
     func testHotspotsOccupyExactScreenCorners() {
         let frame = CGRect(x: -1_440, y: 0, width: 1_440, height: 900)
         XCTAssertEqual(PanelGeometry.hotspot(in: frame, corner: .topLeft), CGRect(x: -1_440, y: 884, width: 16, height: 16))
