@@ -37,7 +37,7 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             )
         }
         view.onErase = { [weak session] ids in
-            _ = session?.erase(strokeIDs: ids)
+            session?.erase(strokeIDs: ids) ?? false
         }
         view.onViewportChange = { [weak session, weak view] viewport in
             guard view?.isRepresentationActive == true else { return }
@@ -50,19 +50,19 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             _ = session?.transformImage(id, to: transform)
         }
         view.onDeleteSelectedImage = { [weak session] in
-            _ = session?.deleteSelectedImage()
+            session?.deleteSelectedImage() ?? false
         }
         view.onNudgeSelectedImage = { [weak session] delta in
-            _ = session?.nudgeSelectedImage(viewDelta: delta)
+            session?.nudgeSelectedImage(viewDelta: delta) ?? false
         }
         view.onResizeSelectedImage = { [weak session] factor in
-            _ = session?.resizeSelectedImage(by: factor)
+            session?.resizeSelectedImage(by: factor) ?? false
         }
         view.onBringSelectedImageForward = { [weak session] in
-            _ = session?.bringSelectedImageForward()
+            session?.bringSelectedImageForward() ?? false
         }
         view.onSendSelectedImageBackward = { [weak session] in
-            _ = session?.sendSelectedImageBackward()
+            session?.sendSelectedImageBackward() ?? false
         }
         view.onCaptureImageImportTarget = { [weak session] in
             session?.captureImageImportTarget()
@@ -121,15 +121,15 @@ final class CanvasNSView: NSView {
         _ color: CanvasInkColor,
         _ width: Double
     ) -> Void = { _, _, _ in }
-    var onErase: (Set<UUID>) -> Void = { _ in }
+    var onErase: (Set<UUID>) -> Bool = { _ in false }
     var onViewportChange: (CanvasViewport) -> Void = { _ in }
     var onSelectImage: (UUID?) -> Void = { _ in }
     var onTransformImage: (UUID, CanvasImageTransform) -> Void = { _, _ in }
-    var onDeleteSelectedImage: () -> Void = {}
-    var onNudgeSelectedImage: (CGSize) -> Void = { _ in }
-    var onResizeSelectedImage: (Double) -> Void = { _ in }
-    var onBringSelectedImageForward: () -> Void = {}
-    var onSendSelectedImageBackward: () -> Void = {}
+    var onDeleteSelectedImage: () -> Bool = { false }
+    var onNudgeSelectedImage: (CGSize) -> Bool = { _ in false }
+    var onResizeSelectedImage: (Double) -> Bool = { _ in false }
+    var onBringSelectedImageForward: () -> Bool = { false }
+    var onSendSelectedImageBackward: () -> Bool = { false }
     var onCaptureImageImportTarget: () -> CanvasImportTarget? = { nil }
     var onImportImageBatch: (CanvasImageImportBatch) -> Void = { _ in }
     var onCancelImageImportBatches: () -> Void = {}
@@ -816,12 +816,10 @@ final class CanvasNSView: NSView {
             return importPasteboard(.general, at: defaultPasteViewPoint)
         case "]":
             guard selectedImageID != nil else { return false }
-            onBringSelectedImageForward()
-            return true
+            return onBringSelectedImageForward()
         case "[":
             guard selectedImageID != nil else { return false }
-            onSendSelectedImageBackward()
-            return true
+            return onSendSelectedImageBackward()
         default:
             return super.performKeyEquivalent(with: event)
         }
@@ -830,9 +828,15 @@ final class CanvasNSView: NSView {
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 48:
-            _ = focusNextCanvasObject(
-                backward: event.modifierFlags.contains(.shift)
-            )
+            let backward = event.modifierFlags.contains(.shift)
+            guard focusNextCanvasObject(backward: backward) == nil else { return }
+            accessibilityFocusedObjectKey = nil
+            refreshCanvasAccessibilityElements(postLayoutNotification: false)
+            if backward {
+                window?.selectPreviousKeyView(self)
+            } else {
+                window?.selectNextKeyView(self)
+            }
         case 49:
             if !spacePressed {
                 cancelInteraction()

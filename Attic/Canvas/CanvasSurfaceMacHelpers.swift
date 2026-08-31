@@ -207,10 +207,11 @@ extension CanvasNSView {
         let nextIndex: Int
         if let focused = accessibilityFocusedObjectKey,
            let index = canvasAccessibilityNavigationOrder.firstIndex(of: focused) {
-            nextIndex = backward
-                ? (index - 1 + canvasAccessibilityNavigationOrder.count)
-                    % canvasAccessibilityNavigationOrder.count
-                : (index + 1) % canvasAccessibilityNavigationOrder.count
+            let candidate = backward ? index - 1 : index + 1
+            guard canvasAccessibilityNavigationOrder.indices.contains(candidate) else {
+                return nil
+            }
+            nextIndex = candidate
         } else {
             nextIndex = backward ? canvasAccessibilityNavigationOrder.count - 1 : 0
         }
@@ -230,11 +231,10 @@ extension CanvasNSView {
         case .delete:
             guard focusCanvasAccessibilityObject(key) else { return false }
             if key.kind == .stroke {
-                onErase([key.id])
+                return onErase([key.id])
             } else {
-                onDeleteSelectedImage()
+                return onDeleteSelectedImage()
             }
-            return true
         case .moveLeft, .moveRight, .moveUp, .moveDown:
             guard key.kind == .image,
                   focusCanvasAccessibilityObject(key) else { return false }
@@ -246,23 +246,19 @@ extension CanvasNSView {
             case .moveDown: delta = CGSize(width: 0, height: 1)
             default: return false
             }
-            onNudgeSelectedImage(delta)
-            return true
+            return onNudgeSelectedImage(delta)
         case .makeSmaller, .makeLarger:
             guard key.kind == .image,
                   focusCanvasAccessibilityObject(key) else { return false }
-            onResizeSelectedImage(action == .makeLarger ? 1.1 : 0.9)
-            return true
+            return onResizeSelectedImage(action == .makeLarger ? 1.1 : 0.9)
         case .sendBackward:
             guard key.kind == .image,
                   focusCanvasAccessibilityObject(key) else { return false }
-            onSendSelectedImageBackward()
-            return true
+            return onSendSelectedImageBackward()
         case .bringForward:
             guard key.kind == .image,
                   focusCanvasAccessibilityObject(key) else { return false }
-            onBringSelectedImageForward()
-            return true
+            return onBringSelectedImageForward()
         }
     }
 

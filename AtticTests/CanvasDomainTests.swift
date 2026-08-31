@@ -191,11 +191,11 @@ final class CanvasAccessibilityTests: XCTestCase {
         var forwardCount = 0
         var deleteCount = 0
         view.onSelectImage = { selectedIDs.append($0) }
-        view.onErase = { erasedIDs.append($0) }
-        view.onNudgeSelectedImage = { nudgeDeltas.append($0) }
-        view.onResizeSelectedImage = { resizeFactors.append($0) }
-        view.onBringSelectedImageForward = { forwardCount += 1 }
-        view.onDeleteSelectedImage = { deleteCount += 1 }
+        view.onErase = { erasedIDs.append($0); return true }
+        view.onNudgeSelectedImage = { nudgeDeltas.append($0); return true }
+        view.onResizeSelectedImage = { resizeFactors.append($0); return true }
+        view.onBringSelectedImageForward = { forwardCount += 1; return true }
+        view.onDeleteSelectedImage = { deleteCount += 1; return true }
         view.configure(
             canvasID: CanvasBoardItem.logicalBoardID,
             strokes: [CanvasStroke(
@@ -218,8 +218,8 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertEqual(view.focusNextCanvasObject(backward: false), imageID)
         XCTAssertEqual(selectedIDs.last!, imageID)
         XCTAssertEqual(view.focusNextCanvasObject(backward: false), frontImageID)
-        XCTAssertEqual(view.focusNextCanvasObject(backward: false), strokeID)
-        XCTAssertEqual(view.focusNextCanvasObject(backward: true), frontImageID)
+        XCTAssertNil(view.focusNextCanvasObject(backward: false))
+        XCTAssertEqual(view.focusNextCanvasObject(backward: true), imageID)
 
         let children = try XCTUnwrap(
             view.accessibilityChildren() as? [CanvasAccessibilityObjectElement]
@@ -238,6 +238,11 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertTrue(imageElement.accessibilityPerformDelete())
         XCTAssertEqual(selectedIDs.last!, imageID)
         XCTAssertEqual(deleteCount, 1)
+
+        view.onNudgeSelectedImage = { _ in false }
+        XCTAssertFalse(imageElement.perform(.moveRight))
+        view.onDeleteSelectedImage = { false }
+        XCTAssertFalse(imageElement.perform(.delete))
     }
 
     @MainActor
@@ -251,9 +256,9 @@ final class CanvasAccessibilityTests: XCTestCase {
         var resizeFactors: [Double] = []
         var deleteCount = 0
         view.onSelectImage = { selectedIDs.append($0) }
-        view.onNudgeSelectedImage = { nudgeDeltas.append($0) }
-        view.onResizeSelectedImage = { resizeFactors.append($0) }
-        view.onDeleteSelectedImage = { deleteCount += 1 }
+        view.onNudgeSelectedImage = { nudgeDeltas.append($0); return true }
+        view.onResizeSelectedImage = { resizeFactors.append($0); return true }
+        view.onDeleteSelectedImage = { deleteCount += 1; return true }
         view.configure(
             canvasID: CanvasBoardItem.logicalBoardID,
             strokes: [],
@@ -298,6 +303,72 @@ final class CanvasAccessibilityTests: XCTestCase {
             characters: "\u{8}"
         ))
         XCTAssertEqual(deleteCount, 1)
+    }
+
+    @MainActor
+    func testHostedCanvasTabTraversalExitsInBothDirections() throws {
+        let panel = NSPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 360, height: 260),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: panel.contentView?.bounds ?? .zero)
+        let previous = CanvasFocusProbeView(frame: CGRect(x: 0, y: 0, width: 20, height: 20))
+        let canvas = CanvasNSView(frame: CGRect(x: 20, y: 0, width: 320, height: 240))
+        let next = CanvasFocusProbeView(frame: CGRect(x: 340, y: 0, width: 20, height: 20))
+        container.addSubview(previous)
+        container.addSubview(canvas)
+        container.addSubview(next)
+        panel.contentView = container
+        previous.nextKeyView = canvas
+        canvas.nextKeyView = next
+        next.nextKeyView = previous
+
+        let imageID = UUID()
+        canvas.configure(
+            canvasID: CanvasBoardItem.logicalBoardID,
+            strokes: [],
+            images: [makeAccessibilityImage(
+                id: imageID,
+                center: .zero,
+                width: 80,
+                height: 60,
+                zIndex: 0,
+                createdAt: Date(timeIntervalSince1970: 400)
+            )],
+            selectedImageID: nil,
+            tool: .select,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport(),
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+
+        XCTAssertTrue(panel.makeFirstResponder(canvas))
+        canvas.keyDown(with: try canvasKeyEvent(keyCode: 48, characters: "\t"))
+        XCTAssertEqual(canvas.accessibilityFocusedObjectKey?.id, imageID)
+        XCTAssertTrue(panel.firstResponder === canvas)
+
+        canvas.keyDown(with: try canvasKeyEvent(keyCode: 48, characters: "\t"))
+        XCTAssertNil(canvas.accessibilityFocusedObjectKey)
+        XCTAssertTrue(panel.firstResponder === next)
+
+        XCTAssertTrue(panel.makeFirstResponder(canvas))
+        canvas.keyDown(with: try canvasKeyEvent(
+            keyCode: 48,
+            characters: "\t",
+            modifiers: .shift
+        ))
+        XCTAssertEqual(canvas.accessibilityFocusedObjectKey?.id, imageID)
+        canvas.keyDown(with: try canvasKeyEvent(
+            keyCode: 48,
+            characters: "\t",
+            modifiers: .shift
+        ))
+        XCTAssertNil(canvas.accessibilityFocusedObjectKey)
+        XCTAssertTrue(panel.firstResponder === previous)
     }
 
     @MainActor
@@ -346,6 +417,11 @@ final class CanvasAccessibilityTests: XCTestCase {
             keyCode: keyCode
         ))
     }
+}
+
+@MainActor
+private final class CanvasFocusProbeView: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }
 
 final class CanvasImageDropBatchTests: XCTestCase {
