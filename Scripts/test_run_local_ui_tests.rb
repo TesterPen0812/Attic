@@ -1,0 +1,86 @@
+#!/usr/bin/env ruby
+
+require "minitest/autorun"
+require "open3"
+
+class RunLocalUITestsTest < Minitest::Test
+  ROOT = File.expand_path("..", __dir__)
+  SCRIPT = File.join(__dir__, "run_local_ui_tests.zsh")
+
+  def dry_run(*arguments)
+    Open3.capture3(SCRIPT, "--dry-run", *arguments, chdir: ROOT)
+  end
+
+  def test_defaults_use_three_distinct_local_identities_and_signed_two_stage_run
+    stdout, stderr, status = dry_run
+
+    assert status.success?, stderr
+    app_id = stdout[/^app_bundle_id=(.+)$/, 1]
+    ui_id = stdout[/^ui_test_bundle_id=(.+)$/, 1]
+    unit_id = stdout[/^unit_test_bundle_id=(.+)$/, 1]
+    assert_match(/^com\.taha\.Attic\./, app_id)
+    assert_match(/^com\.taha\.Attic\./, ui_id)
+    assert_match(/^com\.taha\.Attic\./, unit_id)
+    assert_equal 3, [app_id, ui_id, unit_id].uniq.count
+    assert_includes stdout, "build-for-testing"
+    assert_includes stdout, "test-without-building"
+    assert_includes stdout, "CODE_SIGNING_ALLOWED=YES"
+    assert_includes stdout, "CODE_SIGNING_REQUIRED=YES"
+    assert_includes stdout, "-DATTIC_LOCAL_ONLY"
+    assert_includes stdout, "ui_lock=/tmp/attic-exclusive-ui.lock"
+    refute_match(/(?:^|\s)PRODUCT_BUNDLE_IDENTIFIER=/, stdout)
+  end
+
+  def test_explicit_identities_and_selection_are_target_specific
+    stdout, stderr, status = dry_run(
+      "--app-bundle-id", "com.taha.Attic.ui.host",
+      "--ui-test-bundle-id", "com.taha.Attic.ui.tests",
+      "--unit-test-bundle-id", "com.taha.Attic.unit.tests",
+      "--product-name", "AtticUIHost",
+      "--display-name", "Attic UI Host",
+      "--derived-data", "/tmp/attic-ui-host-derived",
+      "--result-bundle", "/tmp/attic-ui-host.xcresult",
+      "--only-testing", "AtticUITests/CanvasUITests/testModeDockExpandsOnHoverAndCollapsesAfterPointerLeaves"
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.ui.host"
+    assert_includes stdout, "ATTIC_MACOS_UI_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.ui.tests"
+    assert_includes stdout, "ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.unit.tests"
+    assert_includes stdout, "ATTIC_MACOS_PRODUCT_NAME=AtticUIHost"
+    assert_includes stdout, "-only-testing:AtticUITests/CanvasUITests/testModeDockExpandsOnHoverAndCollapsesAfterPointerLeaves"
+  end
+
+  def test_official_or_duplicate_identifiers_are_rejected
+    _stdout, stderr, status = dry_run("--app-bundle-id", "com.taha.Attic")
+    refute status.success?
+    assert_includes stderr, "unique com.taha.Attic.*"
+
+    _stdout, stderr, status = dry_run(
+      "--app-bundle-id", "com.taha.Attic.same",
+      "--ui-test-bundle-id", "com.taha.Attic.same"
+    )
+    refute status.success?
+    assert_includes stderr, "must all be distinct"
+  end
+
+  def test_source_requires_atomic_ui_lock_and_never_disables_signing
+    source = File.read(SCRIPT)
+
+    assert_includes source, "if ! /bin/mkdir \"$ui_lock_path\""
+    assert_includes source, "trap release_ui_lock EXIT"
+    assert_includes source, "CODE_SIGNING_ALLOWED=YES"
+    refute_includes source, "CODE_SIGNING_ALLOWED=NO"
+    assert_operator source.index("build-for-testing"), :<, source.index("/bin/mkdir \"$ui_lock_path\"")
+    assert_operator source.index("/bin/mkdir \"$ui_lock_path\""), :<, source.rindex("test-without-building")
+  end
+
+  def test_build_only_is_explicit_and_stops_before_live_lock
+    stdout, stderr, status = dry_run("--build-only")
+
+    assert status.success?, stderr
+    assert_includes stdout, "build_only=true"
+    source = File.read(SCRIPT)
+    assert_operator source.index("$build_only && exit 0"), :<, source.index("lock_owner=")
+  end
+end

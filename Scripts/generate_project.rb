@@ -125,8 +125,16 @@ end
 
 app.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.Attic'
-  settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
+  # Keep the official defaults while giving isolated UI hosts target-specific
+  # override points. A global PRODUCT_BUNDLE_IDENTIFIER override also changes
+  # the UI-test bundle and can make XCTest's runner unlaunchable.
+  settings['ATTIC_MACOS_BUNDLE_IDENTIFIER'] = 'com.taha.Attic'
+  settings['ATTIC_MACOS_PRODUCT_NAME'] = 'Attic'
+  settings['ATTIC_MACOS_EXECUTABLE_NAME'] = 'Attic'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_BUNDLE_IDENTIFIER)'
+  settings['PRODUCT_NAME'] = '$(ATTIC_MACOS_PRODUCT_NAME)'
+  settings['EXECUTABLE_NAME'] = '$(ATTIC_MACOS_EXECUTABLE_NAME)'
+  settings['PRODUCT_MODULE_NAME'] = 'Attic'
   settings['ATTIC_DISPLAY_NAME'] = 'Attic'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
   settings['INFOPLIST_FILE'] = 'Attic/Info.plist'
@@ -147,19 +155,21 @@ end
 
 unit_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.AtticTests'
+  settings['ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticTests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER)'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
-  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic'
+  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/$(ATTIC_MACOS_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_EXECUTABLE_NAME)'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 
 ui_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.AtticUITests'
+  settings['ATTIC_MACOS_UI_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticUITests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UI_TEST_BUNDLE_IDENTIFIER)'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
