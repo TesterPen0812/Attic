@@ -29,6 +29,10 @@ struct NoteAttachmentTray: View {
         return noteStore.attachments(for: noteID)
     }
 
+    private var importState: AttachmentImportState {
+        noteStore.attachmentImportState(for: noteDraft.editorSession)
+    }
+
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 9) {
             ForEach(attachments) { attachment in
@@ -74,14 +78,14 @@ struct NoteAttachmentTray: View {
             }
         }
         .animation(AtticMotion.quick, value: attachments.map(\.id))
-        .animation(AtticMotion.quick, value: noteStore.attachmentImportState)
+        .animation(AtticMotion.quick, value: importState)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Note attachments")
     }
 
     @ViewBuilder
     private var importStatus: some View {
-        switch noteStore.attachmentImportState {
+        switch importState {
         case .idle:
             EmptyView()
         case let .importing(completed, total):
