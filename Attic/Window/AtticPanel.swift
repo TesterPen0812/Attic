@@ -277,7 +277,6 @@ enum AtticPanelResizePolicy {
 
 enum AtticPanelDragPolicy {
     static let controlClearance: CGFloat = 10
-    static let maximumFlickReleaseDelay: TimeInterval = 0.14
 
     static func topDragRegion(
         in bounds: CGRect,
@@ -352,6 +351,80 @@ enum AtticPanelDragPolicy {
     }
 }
 
+struct PanelDragReleaseIntent: Equatable {
+    let velocity: CGPoint
+    let translation: CGPoint
+}
+
+/// Retains deliberate mouse-throw intent across the stationary samples that
+/// occur when the physical pointer reaches a screen edge. Direction comes from
+/// the cumulative gesture, while speed is the strongest meaningful rolling
+/// segment rather than the often-zero final event.
+struct PanelDragIntentTracker {
+    static let minimumMeaningfulSegmentDistance: CGFloat = 8
+    static let maximumReleaseTail: TimeInterval = 0.4
+
+    private let initialLocation: CGPoint
+    private let initialTimestamp: TimeInterval
+    private var velocityAnchorLocation: CGPoint
+    private var velocityAnchorTimestamp: TimeInterval
+    private var peakSpeed: CGFloat = 0
+    private var lastMeaningfulTimestamp: TimeInterval?
+
+    init(location: CGPoint, timestamp: TimeInterval) {
+        initialLocation = location
+        initialTimestamp = timestamp
+        velocityAnchorLocation = location
+        velocityAnchorTimestamp = timestamp
+    }
+
+    mutating func record(location: CGPoint, timestamp: TimeInterval) {
+        let segment = CGPoint(
+            x: location.x - velocityAnchorLocation.x,
+            y: location.y - velocityAnchorLocation.y
+        )
+        let distance = hypot(segment.x, segment.y)
+        let elapsed = timestamp - velocityAnchorTimestamp
+        guard distance >= Self.minimumMeaningfulSegmentDistance,
+              elapsed > 0 else { return }
+
+        peakSpeed = max(peakSpeed, distance / elapsed)
+        lastMeaningfulTimestamp = timestamp
+        velocityAnchorLocation = location
+        velocityAnchorTimestamp = timestamp
+    }
+
+    func release(
+        location: CGPoint,
+        timestamp: TimeInterval
+    ) -> PanelDragReleaseIntent {
+        let translation = CGPoint(
+            x: location.x - initialLocation.x,
+            y: location.y - initialLocation.y
+        )
+        let distance = hypot(translation.x, translation.y)
+        guard distance > 0,
+              let lastMeaningfulTimestamp,
+              timestamp - lastMeaningfulTimestamp <= Self.maximumReleaseTail else {
+            return PanelDragReleaseIntent(
+                velocity: .zero,
+                translation: translation
+            )
+        }
+
+        let elapsed = max(timestamp - initialTimestamp, .leastNonzeroMagnitude)
+        let displacementSpeed = distance / elapsed
+        let intentSpeed = max(peakSpeed, displacementSpeed)
+        return PanelDragReleaseIntent(
+            velocity: CGPoint(
+                x: translation.x / distance * intentSpeed,
+                y: translation.y / distance * intentSpeed
+            ),
+            translation: translation
+        )
+    }
+}
+
 /// A narrow bridge between SwiftUI's transient section-dock expansion state
 /// and AppKit's window hit testing. It is deliberately not observable: the
 /// shell already redraws for hover/focus, and AppKit only needs the current
@@ -380,9 +453,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     private struct MoveSession {
         let initialFrame: CGRect
         let initialMouseLocation: CGPoint
-        var lastMouseLocation: CGPoint
-        var lastTimestamp: TimeInterval
-        var velocity: CGPoint = .zero
+        var intent: PanelDragIntentTracker
     }
 
     var panelCornerRadius: CGFloat {
@@ -510,8 +581,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         moveSession = MoveSession(
             initialFrame: window.frame,
             initialMouseLocation: mouseLocation,
-            lastMouseLocation: mouseLocation,
-            lastTimestamp: event.timestamp
+            intent: PanelDragIntentTracker(
+                location: mouseLocation,
+                timestamp: event.timestamp
+            )
         )
         window.makeKey()
         NSCursor.closedHand.set()
@@ -554,15 +627,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             x: mouseLocation.x - session.initialMouseLocation.x,
             y: mouseLocation.y - session.initialMouseLocation.y
         )
-        let elapsed = event.timestamp - session.lastTimestamp
-        if elapsed > 0 {
-            session.velocity = CGPoint(
-                x: (mouseLocation.x - session.lastMouseLocation.x) / elapsed,
-                y: (mouseLocation.y - session.lastMouseLocation.y) / elapsed
-            )
-        }
-        session.lastMouseLocation = mouseLocation
-        session.lastTimestamp = event.timestamp
+        session.intent.record(
+            location: mouseLocation,
+            timestamp: event.timestamp
+        )
         moveSession = session
 
         var proposedFrame = session.initialFrame
@@ -588,15 +656,17 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         }
         moveSession = nil
         let mouseLocation = NSEvent.mouseLocation
-        let translation = CGPoint(
-            x: mouseLocation.x - session.initialMouseLocation.x,
-            y: mouseLocation.y - session.initialMouseLocation.y
+        let release = session.intent.release(
+            location: mouseLocation,
+            timestamp: event.timestamp
         )
-        let releaseVelocity = event.timestamp - session.lastTimestamp <= AtticPanelDragPolicy.maximumFlickReleaseDelay
-            ? session.velocity
-            : .zero
         window.invalidateCursorRects(for: self)
-        onWindowDragEnded?(window.frame, mouseLocation, releaseVelocity, translation)
+        onWindowDragEnded?(
+            window.frame,
+            mouseLocation,
+            release.velocity,
+            release.translation
+        )
     }
 
     override func resetCursorRects() {

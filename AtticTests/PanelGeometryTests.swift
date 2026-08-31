@@ -176,6 +176,92 @@ final class PanelGeometryTests: XCTestCase {
         )
     }
 
+    func testDragIntentRetainsFastThrowAcrossEdgeStallAndReleasePause() {
+        var intent = PanelDragIntentTracker(
+            location: CGPoint(x: 800, y: 500),
+            timestamp: 10
+        )
+        intent.record(
+            location: CGPoint(x: 860, y: 560),
+            timestamp: 10.05
+        )
+        intent.record(
+            location: CGPoint(x: 900, y: 600),
+            timestamp: 10.09
+        )
+        // Window/screen clamping can leave several physical pointer events at
+        // the same coordinate before mouse-up. Those stationary tail samples
+        // must not erase the deliberate throw.
+        intent.record(
+            location: CGPoint(x: 900, y: 600),
+            timestamp: 10.20
+        )
+
+        let release = intent.release(
+            location: CGPoint(x: 900, y: 600),
+            timestamp: 10.34
+        )
+
+        XCTAssertEqual(release.translation, CGPoint(x: 100, y: 100))
+        XCTAssertGreaterThan(hypot(release.velocity.x, release.velocity.y), 650)
+        XCTAssertGreaterThan(release.velocity.x, 0)
+        XCTAssertGreaterThan(release.velocity.y, 0)
+    }
+
+    func testDragIntentUsesCumulativeDirectionInsteadOfOpposingFinalSample() {
+        var intent = PanelDragIntentTracker(
+            location: CGPoint(x: 600, y: 600),
+            timestamp: 20
+        )
+        intent.record(
+            location: CGPoint(x: 510, y: 690),
+            timestamp: 20.08
+        )
+        // A tiny corrective sample immediately before release must not flip
+        // the corner classification back to the final-sample direction.
+        intent.record(
+            location: CGPoint(x: 514, y: 686),
+            timestamp: 20.09
+        )
+
+        let release = intent.release(
+            location: CGPoint(x: 514, y: 686),
+            timestamp: 20.12
+        )
+
+        XCTAssertEqual(release.translation, CGPoint(x: -86, y: 86))
+        XCTAssertLessThan(release.velocity.x, 0)
+        XCTAssertGreaterThan(release.velocity.y, 0)
+        XCTAssertEqual(
+            PanelDockingPolicy.flickCorner(
+                velocity: release.velocity,
+                translation: release.translation,
+                panelFrame: CGRect(x: 500, y: 300, width: 332, height: 480),
+                in: CGRect(x: 0, y: 25, width: 1_600, height: 900)
+            ),
+            .topLeft
+        )
+    }
+
+    func testDragIntentExpiresAfterAnAbandonedGestureTail() {
+        var intent = PanelDragIntentTracker(
+            location: CGPoint(x: 100, y: 100),
+            timestamp: 30
+        )
+        intent.record(
+            location: CGPoint(x: 180, y: 180),
+            timestamp: 30.06
+        )
+
+        let release = intent.release(
+            location: CGPoint(x: 180, y: 180),
+            timestamp: 31
+        )
+
+        XCTAssertEqual(release.translation, CGPoint(x: 80, y: 80))
+        XCTAssertEqual(release.velocity, .zero)
+    }
+
     func testPreferredHeightIsClamped() {
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 0, sectionCount: 0, isComposing: false), PanelGeometry.minimumHeight)
         XCTAssertEqual(PanelGeometry.preferredHeight(taskCount: 100, sectionCount: 3, isComposing: true), PanelGeometry.preferredHeightCeiling)
