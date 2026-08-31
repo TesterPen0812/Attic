@@ -183,6 +183,43 @@ final class CanvasUITests: XCTestCase {
         XCTAssertTrue(tasks.exists)
     }
 
+    func testModeDockExposesExactlyOneAccessibilitySelectionAcrossTransitions() {
+        let dock = app.descendants(matching: .any)
+            .matching(identifier: "panel-section-picker")
+            .firstMatch
+        let tasks = app.buttons["panel-section-tasks"]
+        let backlog = app.buttons["panel-section-backlog"]
+        let notes = app.buttons["panel-section-notes"]
+        let canvas = app.buttons["panel-section-canvas"]
+        let pin = app.buttons["panel-pin-button"]
+        let modes = [tasks, backlog, notes, canvas]
+
+        XCTAssertTrue(dock.waitForExistence(timeout: 3))
+        dock.hover()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 2))
+        assertExactlyOneSelected(in: modes, expected: tasks)
+
+        backlog.click()
+        assertExactlyOneSelected(in: modes, expected: backlog)
+
+        app.typeKey("3", modifierFlags: .command)
+        assertExactlyOneSelected(in: modes, expected: notes)
+
+        app.typeKey("4", modifierFlags: .command)
+        assertExactlyOneSelected(in: modes, expected: canvas)
+
+        pin.hover()
+        XCTAssertTrue(tasks.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(notes.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(canvas.exists)
+        XCTAssertTrue(canvas.isSelected)
+
+        dock.hover()
+        XCTAssertTrue(tasks.waitForExistence(timeout: 2))
+        assertExactlyOneSelected(in: modes, expected: canvas)
+    }
+
     private func launch(resetCanvasStore: Bool) {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
@@ -212,6 +249,17 @@ final class CanvasUITests: XCTestCase {
         XCTAssertTrue(
             app.otherElements["canvas-surface"].waitForExistence(timeout: 3)
         )
+    }
+
+    private func assertExactlyOneSelected(
+        in modes: [XCUIElement],
+        expected: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let selected = modes.filter(\.isSelected)
+        XCTAssertEqual(selected.count, 1, file: file, line: line)
+        XCTAssertEqual(selected.first?.identifier, expected.identifier, file: file, line: line)
     }
 
     private func drawStroke(on surface: XCUIElement) {
