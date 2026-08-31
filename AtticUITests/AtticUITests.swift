@@ -7,12 +7,27 @@ final class AtticUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        forwardOwnedAttachmentRoot(to: app)
         app.launch()
         app.activate()
         XCTAssertTrue(
             app.descendants(matching: .any)["panel-section-picker"]
                 .waitForExistence(timeout: 5)
         )
+    }
+
+    private func forwardOwnedAttachmentRoot(to application: XCUIApplication) {
+        let environment = ProcessInfo.processInfo.environment
+        guard let root = environment["ATTIC_TEST_ATTACHMENT_ROOT"],
+              let token = environment[
+                "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN"
+              ] else {
+            return
+        }
+        application.launchEnvironment["ATTIC_TEST_ATTACHMENT_ROOT"] = root
+        application.launchEnvironment[
+            "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN"
+        ] = token
     }
 
     override func tearDownWithError() throws {

@@ -3,6 +3,8 @@ import Combine
 import SwiftData
 
 struct AppRuntimeEnvironment {
+    static let testAttachmentRootOwnerMarkerName = ".attic-test-root-owner"
+
     let environment: [String: String]
     let processIdentifier: Int32
     let testRunIdentifier: String
@@ -51,12 +53,7 @@ struct AppRuntimeEnvironment {
         fileManager: FileManager = .default
     ) -> URL? {
         guard isRunningTests else { return nil }
-        if let explicitRoot = environment["ATTIC_TEST_ATTACHMENT_ROOT"],
-           !explicitRoot.isEmpty {
-            return URL(fileURLWithPath: explicitRoot, isDirectory: true)
-                .standardizedFileURL
-        }
-        return fileManager.temporaryDirectory
+        let fallback = fileManager.temporaryDirectory
             .appendingPathComponent("AtticTestHosts", isDirectory: true)
             .appendingPathComponent(
                 "\(processIdentifier)-\(testRunIdentifier)",
@@ -65,6 +62,46 @@ struct AppRuntimeEnvironment {
             .appendingPathComponent("Attachments", isDirectory: true)
             .appendingPathComponent("v1", isDirectory: true)
             .standardizedFileURL
+        if let explicitRoot = environment["ATTIC_TEST_ATTACHMENT_ROOT"],
+           !explicitRoot.isEmpty {
+            return validatedExplicitAttachmentRootURL(
+                explicitRoot,
+                fileManager: fileManager
+            ) ?? fallback
+        }
+        return fallback
+    }
+
+    private func validatedExplicitAttachmentRootURL(
+        _ path: String,
+        fileManager: FileManager
+    ) -> URL? {
+        guard let ownerToken = environment[
+            "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN"
+        ], !ownerToken.isEmpty else {
+            return nil
+        }
+        let temporaryRoot = fileManager.temporaryDirectory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let candidate = URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard candidate.path != temporaryRoot.path,
+              candidate.path.hasPrefix(temporaryRoot.path + "/") else {
+            return nil
+        }
+        let marker = candidate.appendingPathComponent(
+            Self.testAttachmentRootOwnerMarkerName,
+            isDirectory: false
+        )
+        guard let markerData = try? Data(contentsOf: marker),
+              let markerValue = String(data: markerData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              markerValue == ownerToken else {
+            return nil
+        }
+        return candidate
     }
 
     func makeAttachmentFileStore(

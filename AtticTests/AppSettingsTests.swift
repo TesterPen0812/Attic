@@ -58,6 +58,7 @@ final class AppSettingsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: parent) }
         let outsideRoot = parent.appendingPathComponent("outside", isDirectory: true)
         let isolatedRoot = parent.appendingPathComponent("isolated", isDirectory: true)
+        let ownerToken = UUID().uuidString
         let sentinel = outsideRoot
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("deadbeef", isDirectory: true)
@@ -68,11 +69,21 @@ final class AppSettingsTests: XCTestCase {
         )
         let sentinelData = Data("must survive hosted unit startup".utf8)
         try sentinelData.write(to: sentinel)
+        try FileManager.default.createDirectory(
+            at: isolatedRoot,
+            withIntermediateDirectories: true
+        )
+        try Data(ownerToken.utf8).write(
+            to: isolatedRoot.appendingPathComponent(
+                AppRuntimeEnvironment.testAttachmentRootOwnerMarkerName
+            )
+        )
 
         let runtime = AppRuntimeEnvironment(
             environment: [
                 "ATTIC_TESTING": "1",
-                "ATTIC_TEST_ATTACHMENT_ROOT": isolatedRoot.path
+                "ATTIC_TEST_ATTACHMENT_ROOT": isolatedRoot.path,
+                "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN": ownerToken
             ],
             processIdentifier: 44,
             testRunIdentifier: "sentinel"
@@ -103,6 +114,43 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: outsideRoot.appendingPathComponent("Thumbnails").path
         ))
+    }
+
+    func testTestHostRejectsUnownedExplicitAttachmentRoot() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "AppRuntimeUnownedAttachmentTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createDirectory(
+            at: parent,
+            withIntermediateDirectories: true
+        )
+        let unowned = parent.appendingPathComponent("unowned", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: unowned,
+            withIntermediateDirectories: true
+        )
+
+        let runtime = AppRuntimeEnvironment(
+            environment: [
+                "ATTIC_TESTING": "1",
+                "ATTIC_TEST_ATTACHMENT_ROOT": unowned.path,
+                "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN": "missing-marker"
+            ],
+            processIdentifier: 45,
+            testRunIdentifier: "fallback"
+        )
+        let resolved = try XCTUnwrap(runtime.attachmentRootURL())
+
+        XCTAssertNotEqual(resolved, unowned.standardizedFileURL)
+        XCTAssertTrue(resolved.path.contains("AtticTestHosts/45-fallback"))
+        XCTAssertTrue(
+            resolved.path.hasPrefix(
+                FileManager.default.temporaryDirectory.standardizedFileURL.path + "/"
+            )
+        )
     }
 
     func testClearGlassReadabilityUsesEffectiveSurfaceState() {

@@ -20,6 +20,7 @@ final class CanvasUITests: XCTestCase {
         let surface = app.otherElements["canvas-surface"]
         XCTAssertTrue(surface.waitForExistence(timeout: 3))
 
+        prepareSurfaceForInkInput(surface)
         drawStroke(on: surface)
         assertStrokeCount(1)
 
@@ -63,6 +64,7 @@ final class CanvasUITests: XCTestCase {
         openCanvas()
         let surface = app.otherElements["canvas-surface"]
         XCTAssertTrue(surface.waitForExistence(timeout: 3))
+        prepareSurfaceForInkInput(surface)
         drawStroke(on: surface)
         assertStrokeCount(1)
 
@@ -111,7 +113,9 @@ final class CanvasUITests: XCTestCase {
 
         app.buttons["canvas-image-delete"].click()
         assertContentCount("0 items")
-        app.buttons["canvas-undo"].click()
+        let undo = app.buttons["canvas-undo"]
+        waitForEnabled(undo)
+        undo.click()
         assertContentCount("1 item")
     }
 
@@ -219,6 +223,16 @@ final class CanvasUITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] = "1"
         app.launchEnvironment["ATTIC_UI_TEST_CANVAS_RESET"] =
             resetCanvasStore ? "1" : "0"
+        let environment = ProcessInfo.processInfo.environment
+        if let root = environment["ATTIC_TEST_ATTACHMENT_ROOT"],
+           let token = environment[
+            "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN"
+           ] {
+            app.launchEnvironment["ATTIC_TEST_ATTACHMENT_ROOT"] = root
+            app.launchEnvironment[
+                "ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN"
+            ] = token
+        }
         app.launch()
         app.activate()
         XCTAssertTrue(
@@ -304,6 +318,21 @@ final class CanvasUITests: XCTestCase {
         )
     }
 
+    private func prepareSurfaceForInkInput(_ surface: XCUIElement) {
+        let select = app.buttons["canvas-tool-select"]
+        XCTAssertTrue(select.waitForExistence(timeout: 2))
+        app.typeKey("v", modifierFlags: [])
+        waitForSelection(true, on: select)
+        surface.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).click()
+
+        let pen = app.buttons["canvas-tool-pen"]
+        XCTAssertTrue(pen.waitForExistence(timeout: 2))
+        app.typeKey("p", modifierFlags: [])
+        waitForSelection(true, on: pen)
+    }
+
     private func eraseStroke(on surface: XCUIElement) {
         let start = surface.coordinate(
             withNormalizedOffset: CGVector(dx: 0.20, dy: 0.34)
@@ -381,6 +410,28 @@ final class CanvasUITests: XCTestCase {
            )
         XCTAssertEqual(
             XCTWaiter.wait(for: [expectation], timeout: 4),
+            .completed,
+            file: file,
+            line: line
+        )
+    }
+
+    private func waitForEnabled(
+        _ element: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let predicate = NSPredicate(format: "enabled == true")
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [
+                    XCTNSPredicateExpectation(
+                        predicate: predicate,
+                        object: element
+                    )
+                ],
+                timeout: 4
+            ),
             .completed,
             file: file,
             line: line

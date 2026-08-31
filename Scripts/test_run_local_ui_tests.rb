@@ -71,8 +71,11 @@ class RunLocalUITestsTest < Minitest::Test
     source = File.read(SCRIPT)
 
     assert_includes source, "if ! /bin/mkdir \"$ui_lock_path\""
-    assert_includes source, "trap release_ui_lock EXIT"
+    assert_includes source, "trap cleanup_on_exit EXIT"
     assert_includes source, "CODE_SIGNING_ALLOWED=YES"
+    assert_includes source, "ATTIC_TEST_ATTACHMENT_ROOT=\"$owned_attachment_root\""
+    assert_includes source, ".attic-test-root-owner"
+    assert_includes source, "attachment_root_cleaned="
     refute_includes source, "CODE_SIGNING_ALLOWED=NO"
     assert_operator source.index("build-for-testing"), :<, source.index("/bin/mkdir \"$ui_lock_path\"")
     assert_operator source.index("/bin/mkdir \"$ui_lock_path\""), :<, source.rindex("test-without-building")
@@ -84,7 +87,8 @@ class RunLocalUITestsTest < Minitest::Test
     assert status.success?, stderr
     assert_includes stdout, "build_only=true"
     source = File.read(SCRIPT)
-    assert_operator source.index("$build_only && exit 0"), :<, source.index("lock_owner=")
+    assert_operator source.index("$build_only && exit 0"), :<,
+      source.index('if ! /bin/mkdir "$ui_lock_path"')
   end
 
   def test_ordinary_unit_tests_use_dedicated_no_ui_host

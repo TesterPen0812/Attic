@@ -175,6 +175,51 @@ readonly app_entitlements="$state_dir/app-entitlements.plist"
 readonly app_signature="$state_dir/app-signature.txt"
 readonly runner_signature="$state_dir/runner-signature.txt"
 readonly manifest="$state_dir/manifest.txt"
+readonly attachment_owner_marker_name=.attic-test-root-owner
+
+owned_attachment_parent=""
+owned_attachment_root=""
+owned_attachment_owner_token=""
+owns_ui_lock=false
+lock_owner=""
+
+cleanup_test_attachment_root() {
+    [[ -n "$owned_attachment_parent" && -n "$owned_attachment_root" ]] || return 0
+    local marker="$owned_attachment_root/$attachment_owner_marker_name"
+    local temporary_base=${TMPDIR:-/tmp}
+    temporary_base=${temporary_base:A}
+    local resolved_parent=${owned_attachment_parent:A}
+    if [[ "$resolved_parent" == "$temporary_base"/* \
+        && "${resolved_parent:t}" == attic-ui-attachments-${short_sha}.* \
+        && "$owned_attachment_root" == "$owned_attachment_parent"/* \
+        && -f "$marker" \
+        && "$(<"$marker")" == "$owned_attachment_owner_token" ]]; then
+        /usr/bin/find "$owned_attachment_parent" -depth -delete
+        print -- "attachment_root_cleaned=$owned_attachment_root"
+    else
+        print -u2 -- "run_local_ui_tests: refused to clean unverified attachment root: $owned_attachment_root"
+    fi
+    owned_attachment_parent=""
+    owned_attachment_root=""
+    owned_attachment_owner_token=""
+}
+
+release_ui_lock() {
+    if $owns_ui_lock && [[ -f "$ui_lock_path/owner" ]] && [[ "$(<"$ui_lock_path/owner")" == "$lock_owner" ]]; then
+        /bin/rm "$ui_lock_path/owner"
+        /bin/rmdir "$ui_lock_path"
+    fi
+    owns_ui_lock=false
+}
+
+cleanup_on_exit() {
+    release_ui_lock
+    cleanup_test_attachment_root
+}
+
+trap cleanup_on_exit EXIT
+trap 'cleanup_on_exit; trap - EXIT; exit 130' INT
+trap 'cleanup_on_exit; trap - EXIT; exit 143' TERM
 
 typeset -a common_arguments selection_arguments
 common_arguments=(
@@ -218,6 +263,10 @@ print_configuration() {
     print -- "runner=$runner_app"
     print -- "ui_lock=$ui_lock_path"
     print -- "build_only=$build_only"
+    if [[ -n "$owned_attachment_root" ]]; then
+        print -- "attachment_root=$owned_attachment_root"
+        print -- "attachment_root_owner_marker=$owned_attachment_root/$attachment_owner_marker_name"
+    fi
 }
 
 if $dry_run; then
@@ -255,6 +304,15 @@ fi
 
 app_hash=$(/usr/bin/shasum -a 256 "$built_app/Contents/MacOS/$product_name" | /usr/bin/awk '{print $1}')
 runner_hash=$(/usr/bin/shasum -a 256 "$runner_app/Contents/MacOS/AtticUITests-Runner" | /usr/bin/awk '{print $1}')
+if ! $build_only; then
+    attachment_temporary_base=${TMPDIR:-/tmp}
+    [[ "$attachment_temporary_base" == /* && "$attachment_temporary_base" != / ]] || fail "temporary attachment base is unsafe"
+    owned_attachment_parent=$(/usr/bin/mktemp -d "${attachment_temporary_base%/}/attic-ui-attachments-${short_sha}.XXXXXX")
+    owned_attachment_root="$owned_attachment_parent/owned-attachments"
+    owned_attachment_owner_token="attic-ui-tests:${short_sha}:${$}:$RANDOM"
+    /bin/mkdir "$owned_attachment_root"
+    print -r -- "$owned_attachment_owner_token" >"$owned_attachment_root/$attachment_owner_marker_name"
+fi
 {
     print_configuration
     print -- "app_executable_sha256=$app_hash"
@@ -268,16 +326,6 @@ runner_hash=$(/usr/bin/shasum -a 256 "$runner_app/Contents/MacOS/AtticUITests-Ru
 $build_only && exit 0
 
 lock_owner="attic-ui-tests:${$}.$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)"
-owns_ui_lock=false
-release_ui_lock() {
-    if $owns_ui_lock && [[ -f "$ui_lock_path/owner" ]] && [[ "$(<"$ui_lock_path/owner")" == "$lock_owner" ]]; then
-        /bin/rm "$ui_lock_path/owner"
-        /bin/rmdir "$ui_lock_path"
-    fi
-}
-trap release_ui_lock EXIT
-trap 'release_ui_lock; exit 130' INT
-trap 'release_ui_lock; exit 143' TERM
 
 if ! /bin/mkdir "$ui_lock_path" 2>/dev/null; then
     fail "live UI lock is owned by another task: $ui_lock_path"
@@ -285,4 +333,6 @@ fi
 print -r -- "$lock_owner" >"$ui_lock_path/owner"
 owns_ui_lock=true
 
-/usr/bin/xcodebuild "${common_arguments[@]}" "${selection_arguments[@]}" -resultBundlePath "$result_bundle" test-without-building
+ATTIC_TEST_ATTACHMENT_ROOT="$owned_attachment_root" \
+ATTIC_TEST_ATTACHMENT_ROOT_OWNER_TOKEN="$owned_attachment_owner_token" \
+    /usr/bin/xcodebuild "${common_arguments[@]}" "${selection_arguments[@]}" -resultBundlePath "$result_bundle" test-without-building
