@@ -297,7 +297,7 @@ struct CanvasPanelContent: View {
     private func toolDock(compact: Bool) -> some View {
         HStack(spacing: compact ? 0 : 2) {
             CanvasCommandButton(
-                title: "Select",
+                title: CanvasLegacyObjectAffordance.selectImageTitle,
                 systemImage: "arrow.up.left",
                 identifier: "canvas-tool-select",
                 isSelected: session.pendingPlacement == nil && session.tool == .select
@@ -327,7 +327,7 @@ struct CanvasPanelContent: View {
             .keyboardShortcut("e", modifiers: [])
 
             CanvasCommandButton(
-                title: "Add Text",
+                title: CanvasLegacyObjectAffordance.addTextTitle,
                 systemImage: "textformat",
                 identifier: "canvas-add-text",
                 isSelected: isTextPlacementActive
@@ -409,14 +409,14 @@ struct CanvasPanelContent: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .help("Add Shape")
-        .accessibilityLabel("Add Shape")
+        .help(CanvasLegacyObjectAffordance.addShapeTitle)
+        .accessibilityLabel(CanvasLegacyObjectAffordance.addShapeTitle)
         .accessibilityIdentifier("canvas-add-shape")
     }
 
     private var textPlacementPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Add text")
+            Text("Add text image")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
 
             TextField("Type something", text: $textEntry)
@@ -425,7 +425,7 @@ struct CanvasPanelContent: View {
                 .onSubmit(beginTextPlacement)
 
             HStack(spacing: 8) {
-                Text("Then click its position on the canvas.")
+                Text("Then click its position on the canvas. \(CanvasLegacyObjectAffordance.textDisclosure)")
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

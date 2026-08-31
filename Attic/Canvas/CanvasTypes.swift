@@ -1,5 +1,12 @@
 import Foundation
 
+enum CanvasLegacyObjectAffordance {
+    static let selectImageTitle = "Select Image"
+    static let addTextTitle = "Add Text Image"
+    static let addShapeTitle = "Draw Shape as Ink"
+    static let textDisclosure = "Placed text becomes an image and is not editable as text."
+}
+
 enum CanvasTool: String, CaseIterable, Codable, Identifiable, Sendable {
     case select
     case pen
@@ -9,7 +16,7 @@ enum CanvasTool: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .select: "Select"
+        case .select: CanvasLegacyObjectAffordance.selectImageTitle
         case .pen: "Pen"
         case .eraser: "Eraser"
         }
@@ -129,16 +136,16 @@ enum CanvasPendingPlacement: Equatable, Sendable {
     var instruction: String {
         switch self {
         case .text:
-            "Click the canvas to place text"
+            "Click the canvas to place a non-editable text image"
         case let .shape(shape):
-            "Drag on the canvas to draw a \(shape.title.lowercased())"
+            "Drag on the canvas to draw a \(shape.title.lowercased()) as ink"
         }
     }
 
     var accessibilityTitle: String {
         switch self {
-        case .text: "Text placement"
-        case let .shape(shape): "\(shape.title) placement"
+        case .text: "Text image placement"
+        case let .shape(shape): "\(shape.title) ink placement"
         }
     }
 }

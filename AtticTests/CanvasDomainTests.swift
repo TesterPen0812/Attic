@@ -49,6 +49,32 @@ private final class CanvasTestFilePromiseDelegate: NSObject, NSFilePromiseProvid
     }
 }
 
+final class CanvasAffordanceTruthTests: XCTestCase {
+    func testLegacyObjectAffordancesNameTheActuallyEditableRepresentation() {
+        XCTAssertEqual(CanvasTool.select.title, "Select Image")
+        XCTAssertEqual(
+            CanvasLegacyObjectAffordance.addTextTitle,
+            "Add Text Image"
+        )
+        XCTAssertEqual(
+            CanvasLegacyObjectAffordance.addShapeTitle,
+            "Draw Shape as Ink"
+        )
+        XCTAssertTrue(
+            CanvasPendingPlacement.text(CanvasTextPlacement(
+                text: "Legacy",
+                prefersDarkSurface: false
+            )).instruction.contains("non-editable text image")
+        )
+        XCTAssertTrue(
+            CanvasPendingPlacement.shape(.rectangle).instruction.contains("as ink")
+        )
+        XCTAssertTrue(
+            CanvasLegacyObjectAffordance.textDisclosure.contains("not editable")
+        )
+    }
+}
+
 final class CanvasImageDropBatchTests: XCTestCase {
     @MainActor
     func testFileURLDropAdvertisesCopyAndImportsOnlySupportedImages() throws {
