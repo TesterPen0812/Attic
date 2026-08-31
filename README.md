@@ -112,6 +112,10 @@ xcodebuild test \
   -scheme Attic \
   -destination 'platform=macOS'
 
+# Signed, isolated macOS UI tests. This runner acquires
+# /tmp/attic-exclusive-ui.lock before driving the installed host.
+Scripts/run_local_ui_tests.zsh
+
 xcodebuild test \
   -project Attic.xcodeproj \
   -scheme AtticMobile \

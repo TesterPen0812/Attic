@@ -26,7 +26,7 @@ Options:
   --signing-identity IDENTITY     Codesigning identity; default is ad hoc (-).
   --development-team TEAM        Optional local signing-team override.
   --project PATH                  Xcode project; default Attic.xcodeproj.
-  --scheme NAME                   Scheme; default Attic.
+  --scheme NAME                   Scheme; default AtticUI.
   --configuration NAME            Configuration; default Local.
   --build-only                    Build, sign, validate, and emit provenance without UI.
   --dry-run                       Print resolved identities and commands only.
@@ -53,7 +53,7 @@ result_bundle="/tmp/attic-ui-tests-${short_sha}-${$}.xcresult"
 signing_identity="-"
 development_team=""
 project_path="$repository_root/Attic.xcodeproj"
-scheme="Attic"
+scheme="AtticUI"
 configuration="Local"
 dry_run=false
 build_only=false
@@ -182,7 +182,7 @@ common_arguments=(
     -project "$project_path"
     -scheme "$scheme"
     -configuration "$configuration"
-    -destination "platform=macOS,arch=arm64"
+    -destination "platform=macOS"
     -derivedDataPath "$derived_data"
     "ATTIC_MACOS_BUNDLE_IDENTIFIER=$app_bundle_id"
     "ATTIC_MACOS_PRODUCT_NAME=$product_name"
@@ -211,6 +211,7 @@ print_configuration() {
     print -- "ui_test_bundle_id=$ui_test_bundle_id"
     print -- "unit_test_bundle_id=$unit_test_bundle_id"
     print -- "product_name=$product_name"
+    print -- "scheme=$scheme"
     print -- "derived_data=$derived_data"
     print -- "result_bundle=$result_bundle"
     print -- "app=$built_app"

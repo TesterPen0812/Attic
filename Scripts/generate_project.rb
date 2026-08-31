@@ -278,11 +278,20 @@ scheme.add_build_target(app)
 scheme.set_launch_target(app)
 scheme.launch_action.build_configuration = 'Local'
 scheme.add_test_target(unit_tests)
-scheme.add_test_target(ui_tests)
 scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
   { key: 'ATTIC_TESTING', value: '1', enabled: true }
 ])
 scheme.save_as(staged_project_path, 'Attic', true)
+
+ui_scheme = Xcodeproj::XCScheme.new
+ui_scheme.add_build_target(app)
+ui_scheme.set_launch_target(app)
+ui_scheme.launch_action.build_configuration = 'Local'
+ui_scheme.add_test_target(ui_tests)
+ui_scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
+  { key: 'ATTIC_TESTING', value: '1', enabled: true }
+])
+ui_scheme.save_as(staged_project_path, 'AtticUI', true)
 
 mobile_scheme = Xcodeproj::XCScheme.new
 mobile_scheme.add_build_target(mobile_app)
@@ -319,7 +328,7 @@ project_contents.gsub!(/^\s*minimizedProjectReferenceProxies = 0;\n/, '')
 project_contents.gsub!(/^\s*preferredProjectObjectVersion = 77;\n/, '')
 File.write(project_file, project_contents)
 
-['Attic', 'AtticMobile'].each do |scheme_name|
+['Attic', 'AtticUI', 'AtticMobile'].each do |scheme_name|
   scheme_file = File.join(
     staged_project_path,
     'xcshareddata',

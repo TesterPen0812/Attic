@@ -27,8 +27,11 @@ class RunLocalUITestsTest < Minitest::Test
     assert_includes stdout, "CODE_SIGNING_ALLOWED=YES"
     assert_includes stdout, "CODE_SIGNING_REQUIRED=YES"
     assert_includes stdout, "-DATTIC_LOCAL_ONLY"
+    assert_includes stdout, "scheme=AtticUI"
     assert_includes stdout, "ui_lock=/tmp/attic-exclusive-ui.lock"
     refute_match(/(?:^|\s)PRODUCT_BUNDLE_IDENTIFIER=/, stdout)
+    refute_includes stdout, "platform=macOS,arch=arm64"
+    refute_includes File.read(SCRIPT), "arch=arm64"
   end
 
   def test_explicit_identities_and_selection_are_target_specific
@@ -95,5 +98,18 @@ class RunLocalUITestsTest < Minitest::Test
       "settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'"
     assert_includes unit_settings,
       "$(ATTIC_MACOS_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_EXECUTABLE_NAME)"
+  end
+
+  def test_default_scheme_is_unit_only_and_ui_runner_uses_dedicated_scheme
+    generator = File.read(File.join(__dir__, "generate_project.rb"))
+    unit_scheme = generator[/scheme = Xcodeproj::XCScheme\.new.*?scheme\.save_as\(staged_project_path, 'Attic', true\)/m]
+    ui_scheme = generator[/ui_scheme = Xcodeproj::XCScheme\.new.*?ui_scheme\.save_as\(staged_project_path, 'AtticUI', true\)/m]
+
+    refute_nil unit_scheme
+    assert_includes unit_scheme, "scheme.add_test_target(unit_tests)"
+    refute_includes unit_scheme, "scheme.add_test_target(ui_tests)"
+    refute_nil ui_scheme
+    assert_includes ui_scheme, "ui_scheme.add_test_target(ui_tests)"
+    assert_includes File.read(SCRIPT), 'scheme="AtticUI"'
   end
 end

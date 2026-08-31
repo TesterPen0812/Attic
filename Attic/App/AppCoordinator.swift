@@ -2,6 +2,49 @@ import AppKit
 import Combine
 import SwiftData
 
+struct AppRuntimeEnvironment {
+    let environment: [String: String]
+    let processIdentifier: Int32
+
+    init(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier
+    ) {
+        self.environment = environment
+        self.processIdentifier = processIdentifier
+    }
+
+    var isUITesting: Bool {
+        environment["ATTIC_UI_TESTING"] == "1"
+    }
+
+    var isRunningTests: Bool {
+        environment["ATTIC_TESTING"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+    }
+
+    var isUnitTestHost: Bool {
+        isRunningTests && !isUITesting
+    }
+
+    var shouldStartInteractiveShellServices: Bool {
+        !isUnitTestHost
+    }
+
+    func makeSettingsDefaults(
+        standard: UserDefaults = .standard
+    ) -> UserDefaults {
+        guard isUnitTestHost else { return standard }
+        let suiteName = environment["ATTIC_TEST_DEFAULTS_SUITE"]
+            ?? "com.taha.Attic.unit-tests.\(processIdentifier)"
+        guard let isolatedDefaults = UserDefaults(suiteName: suiteName) else {
+            preconditionFailure("Unable to create isolated test defaults: \(suiteName)")
+        }
+        return isolatedDefaults
+    }
+}
+
 struct PanelMenuTrackingState {
     private(set) var depth = 0
 
@@ -36,6 +79,7 @@ final class AppCoordinator {
     private let agentServer: AgentServer
     private let isUITesting: Bool
     private let isRunningTests: Bool
+    private let shouldStartInteractiveShellServices: Bool
     private var menuNotificationTokens: [NSObjectProtocol] = []
     private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
@@ -47,14 +91,14 @@ final class AppCoordinator {
 
     private init() {
         let environment = ProcessInfo.processInfo.environment
-        isUITesting = environment["ATTIC_UI_TESTING"] == "1"
-        isRunningTests = environment["ATTIC_TESTING"] == "1"
-            || environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestBundlePath"] != nil
+        let runtime = AppRuntimeEnvironment(environment: environment)
+        isUITesting = runtime.isUITesting
+        isRunningTests = runtime.isRunningTests
+        shouldStartInteractiveShellServices = runtime.shouldStartInteractiveShellServices
         let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
             && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
 
-        let settings = AppSettings()
+        let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
         #if DEBUG && !ATTIC_LOCAL_ONLY
         if !isUITesting && !isRunningTests {
             do {
@@ -175,6 +219,7 @@ final class AppCoordinator {
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
+        guard shouldStartInteractiveShellServices else { return }
         NSApp.appearance = settings.appearance.nsAppearance
 
         observeMenuTracking()
@@ -209,6 +254,10 @@ final class AppCoordinator {
     }
 
     func stop() {
+        if isRunningTests && !isUITesting {
+            hasStarted = false
+            return
+        }
         canvasSession.cancelActiveInteraction()
         _ = noteDraft.flush()
         cleanupService.stop()

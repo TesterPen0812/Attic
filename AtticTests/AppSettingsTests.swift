@@ -2,6 +2,55 @@ import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    @MainActor
+    func testUnitTestRuntimeUsesIsolatedDefaultsAndDisablesInteractiveShell() {
+        let isolatedSuite = "AppRuntimeTests.\(UUID().uuidString)"
+        let standardSuite = "AppRuntimeStandardSentinel.\(UUID().uuidString)"
+        let simulatedStandard = UserDefaults(suiteName: standardSuite)!
+        defer {
+            simulatedStandard.removePersistentDomain(forName: standardSuite)
+            UserDefaults(suiteName: isolatedSuite)?
+                .removePersistentDomain(forName: isolatedSuite)
+        }
+        simulatedStandard.set("untouched", forKey: "sentinel")
+        let runtime = AppRuntimeEnvironment(
+            environment: [
+                "ATTIC_TESTING": "1",
+                "ATTIC_TEST_DEFAULTS_SUITE": isolatedSuite
+            ],
+            processIdentifier: 42
+        )
+
+        XCTAssertTrue(runtime.isRunningTests)
+        XCTAssertTrue(runtime.isUnitTestHost)
+        XCTAssertFalse(runtime.shouldStartInteractiveShellServices)
+        let resolved = runtime.makeSettingsDefaults(standard: simulatedStandard)
+        XCTAssertFalse(resolved === simulatedStandard)
+        _ = AppSettings(defaults: resolved)
+
+        XCTAssertEqual(simulatedStandard.string(forKey: "sentinel"), "untouched")
+        XCTAssertNil(simulatedStandard.object(forKey: "hasAdoptedInstantRevealV3"))
+        XCTAssertTrue(resolved.bool(forKey: "hasAdoptedInstantRevealV3"))
+    }
+
+    func testUIRuntimeKeepsInteractiveServicesAndItsBundleDefaults() {
+        let standardSuite = "AppRuntimeUI.\(UUID().uuidString)"
+        let simulatedStandard = UserDefaults(suiteName: standardSuite)!
+        defer { simulatedStandard.removePersistentDomain(forName: standardSuite) }
+        let runtime = AppRuntimeEnvironment(
+            environment: [
+                "ATTIC_TESTING": "1",
+                "ATTIC_UI_TESTING": "1"
+            ],
+            processIdentifier: 43
+        )
+
+        XCTAssertTrue(runtime.isUITesting)
+        XCTAssertFalse(runtime.isUnitTestHost)
+        XCTAssertTrue(runtime.shouldStartInteractiveShellServices)
+        XCTAssertTrue(runtime.makeSettingsDefaults(standard: simulatedStandard) === simulatedStandard)
+    }
+
     func testClearGlassReadabilityUsesEffectiveSurfaceState() {
         XCTAssertTrue(AtticClearGlassReadabilityPolicy.isEnabled(
             isTranslucent: true,

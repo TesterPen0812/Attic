@@ -41,9 +41,9 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6276F3101BBBD6791E37F0DC63F158C3"
-               BuildableName = "AtticTests.xctest"
-               BlueprintName = "AtticTests"
+               BlueprintIdentifier = "29D42C445B39133F6CE8ED3394F0BD54"
+               BuildableName = "AtticUITests.xctest"
+               BlueprintName = "AtticUITests"
                ReferencedContainer = "container:Attic.xcodeproj">
             </BuildableReference>
          </TestableReference>
