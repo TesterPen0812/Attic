@@ -1,6 +1,16 @@
 import CoreGraphics
 import SwiftUI
 
+struct PanelWorkAreaPlacement: Equatable {
+    let frame: CGRect
+    let preferredSize: CGSize
+
+    var isTemporarilyClamped: Bool {
+        abs(frame.width - preferredSize.width) >= 0.5
+            || abs(frame.height - preferredSize.height) >= 0.5
+    }
+}
+
 enum PanelGeometry {
     static let triggerSize: CGFloat = 16
     static let panelWidth: CGFloat = 332
@@ -104,6 +114,29 @@ enum PanelGeometry {
         return CGSize(
             width: min(minimumClamped.width, upperBound.width),
             height: min(minimumClamped.height, upperBound.height)
+        )
+    }
+
+    /// Resolves the currently displayable frame without mutating the user's
+    /// preferred size. A temporary Dock, menu-bar, or destination-display
+    /// clamp can therefore be reversed when a roomier work area returns.
+    static func workAreaPlacement(
+        preferredSize: CGSize,
+        in visibleFrame: CGRect,
+        corner: ScreenCorner
+    ) -> PanelWorkAreaPlacement {
+        let normalizedPreference = clampedPanelSize(preferredSize)
+        let displayedSize = clampedPanelSize(
+            normalizedPreference,
+            in: visibleFrame
+        )
+        return PanelWorkAreaPlacement(
+            frame: panelFrame(
+                in: visibleFrame,
+                size: displayedSize,
+                corner: corner
+            ),
+            preferredSize: normalizedPreference
         )
     }
 
