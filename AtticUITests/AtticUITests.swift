@@ -43,7 +43,9 @@ final class AtticUITests: XCTestCase {
 
         let markDone = app.buttons.matching(NSPredicate(format: "label == %@", "Mark done")).firstMatch
         XCTAssertTrue(markDone.waitForExistence(timeout: 2))
-        markDone.click()
+        markDone.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).click()
         let doneSection = app.staticTexts["task-section-done"]
         XCTAssertTrue(doneSection.waitForExistence(timeout: 2))
 
