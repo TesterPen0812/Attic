@@ -3,6 +3,39 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum CanvasImageDecodeCandidatePolicy {
+    /// Keep the next short pan already decoded without allowing a large board
+    /// to continuously cycle every offscreen image through the bounded cache.
+    static let prefetchMarginInViewPoints: CGFloat = 192
+
+    static func candidates(
+        in images: [CanvasPlacedImage],
+        viewport: CanvasViewport,
+        viewportSize: CGSize
+    ) -> [CanvasPlacedImage] {
+        guard viewportSize.width.isFinite,
+              viewportSize.height.isFinite,
+              viewportSize.width > 0,
+              viewportSize.height > 0 else {
+            return []
+        }
+        let viewportRect = CGRect(origin: .zero, size: viewportSize)
+        let worldViewport = viewport.worldRect(
+            for: viewportRect,
+            in: viewportSize
+        )
+        guard !worldViewport.isNull,
+              !worldViewport.isInfinite,
+              viewport.scale.isFinite,
+              viewport.scale > 0 else {
+            return []
+        }
+        let margin = prefetchMarginInViewPoints / CGFloat(viewport.scale)
+        let decodeRect = worldViewport.insetBy(dx: -margin, dy: -margin)
+        return images.filter { $0.worldRect.intersects(decodeRect) }
+    }
+}
+
 enum CanvasAccessibilityObjectKind: Hashable {
     case stroke
     case image

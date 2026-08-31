@@ -255,6 +255,51 @@ final class CanvasRenderCacheTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testMacViewportCandidatesPreventOffscreenRedecodeChurn() async {
+        let decoded = makeCGImage()
+        let probe = DelayedCanvasDecoderProbe(image: decoded)
+        let images = (0..<96).map { identifier in
+            CanvasPlacedImage(
+                encodedData: Data([UInt8(identifier)]),
+                contentType: "application/octet-stream",
+                pixelWidth: 1,
+                pixelHeight: 1,
+                transform: CanvasImageTransform(
+                    center: CanvasPoint(x: Double(identifier) * 400, y: 0),
+                    width: 40,
+                    height: 40,
+                    zIndex: Int64(identifier)
+                )
+            )
+        }
+        let candidates = CanvasImageDecodeCandidatePolicy.candidates(
+            in: images,
+            viewport: CanvasViewport(),
+            viewportSize: CGSize(width: 332, height: 332)
+        )
+        XCTAssertEqual(candidates.map(\.id), [images[0].id])
+
+        let ready = expectation(description: "visible candidate decodes")
+        let cache = CanvasImageDecodeCache(
+            countLimit: 1,
+            maximumConcurrentDecodes: 1,
+            decode: { data in await probe.decode(data) }
+        )
+        cache.onImageReady = { ready.fulfill() }
+        cache.prepare(for: candidates)
+        await fulfillment(of: [ready], timeout: 2)
+
+        for _ in 0..<20 {
+            cache.prepare(for: candidates)
+            await Task.yield()
+        }
+        let snapshot = await probe.snapshot()
+        XCTAssertEqual(snapshot.attempts, 1)
+        XCTAssertEqual(cache.state(for: images[0]), .ready)
+        XCTAssertEqual(cache.state(for: images[1]), .idle)
+    }
+
     private func makePlacedImage(_ identifier: Int) -> CanvasPlacedImage {
         CanvasPlacedImage(
             encodedData: Data([UInt8(identifier)]),

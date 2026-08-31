@@ -358,7 +358,13 @@ final class CanvasNSView: NSView {
         ) {
             changed = true
         }
-        imageCache.prepare(for: images)
+        imageCache.prepare(
+            for: CanvasImageDecodeCandidatePolicy.candidates(
+                in: imagesForDisplay,
+                viewport: interaction.viewport,
+                viewportSize: bounds.size
+            )
+        )
         refreshCanvasAccessibilityElements(postLayoutNotification: changed)
         if changed { needsDisplay = true }
         window?.invalidateCursorRects(for: self)
@@ -425,7 +431,13 @@ final class CanvasNSView: NSView {
             return
         }
         let displayImages = imagesForDisplay
-        imageCache.prepare(for: displayImages)
+        imageCache.prepare(
+            for: CanvasImageDecodeCandidatePolicy.candidates(
+                in: displayImages,
+                viewport: interaction.viewport,
+                viewportSize: bounds.size
+            )
+        )
         drawCanvas(
             in: context,
             bounds: bounds,
