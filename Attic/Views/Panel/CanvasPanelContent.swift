@@ -481,6 +481,7 @@ struct CanvasPanelContent: View {
             ) {
                 _ = session.sendSelectedImageBackward()
             }
+            .disabled(!session.canSendSelectedImageBackward)
             .keyboardShortcut("[", modifiers: .command)
 
             CanvasCommandButton(
@@ -490,6 +491,7 @@ struct CanvasPanelContent: View {
             ) {
                 _ = session.bringSelectedImageForward()
             }
+            .disabled(!session.canBringSelectedImageForward)
             .keyboardShortcut("]", modifiers: .command)
 
             CanvasCommandButton(

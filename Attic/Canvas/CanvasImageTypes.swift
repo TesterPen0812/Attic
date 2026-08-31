@@ -396,7 +396,7 @@ enum CanvasImagePlacement {
         }
     }
 
-    private static func imageIsInFront(
+    static func imageIsInFront(
         _ lhs: CanvasPlacedImage,
         _ rhs: CanvasPlacedImage
     ) -> Bool {

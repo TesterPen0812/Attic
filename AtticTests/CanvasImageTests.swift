@@ -480,6 +480,73 @@ final class CanvasImageStoreTests: XCTestCase {
 
 final class CanvasImageSessionTests: XCTestCase {
     @MainActor
+    func testTopmostImageCannotMoveForwardOrCreatePersistenceOrHistory() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = PersistenceGate()
+        let store = CanvasStore(container: container, persist: gate.save)
+        let session = CanvasSession(store: store)
+        let prepared = CanvasPreparedImage(
+            encodedData: Data([1]),
+            contentType: UTType.png.identifier,
+            pixelWidth: 40,
+            pixelHeight: 20
+        )
+
+        XCTAssertTrue(session.importPreparedImage(prepared, at: .zero))
+        let bottom = try XCTUnwrap(session.images.first)
+        XCTAssertTrue(session.importPreparedImage(
+            prepared,
+            at: CanvasPoint(x: 20, y: 20)
+        ))
+        let top = try XCTUnwrap(session.images.max { $0.zIndex < $1.zIndex })
+        session.selectImage(top.id)
+        let saveCount = gate.saveCount
+        let revision = store.revision
+
+        XCTAssertFalse(session.canBringSelectedImageForward)
+        XCTAssertFalse(session.bringSelectedImageForward())
+        XCTAssertEqual(gate.saveCount, saveCount)
+        XCTAssertEqual(store.revision, revision)
+        XCTAssertEqual(session.selectedImage?.zIndex, top.zIndex)
+
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.images.map(\.id), [bottom.id])
+    }
+
+    @MainActor
+    func testBottommostImageCannotMoveBackwardOrCreatePersistenceOrHistory() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = PersistenceGate()
+        let store = CanvasStore(container: container, persist: gate.save)
+        let session = CanvasSession(store: store)
+        let prepared = CanvasPreparedImage(
+            encodedData: Data([2]),
+            contentType: UTType.png.identifier,
+            pixelWidth: 40,
+            pixelHeight: 20
+        )
+
+        XCTAssertTrue(session.importPreparedImage(prepared, at: .zero))
+        let bottom = try XCTUnwrap(session.images.first)
+        XCTAssertTrue(session.importPreparedImage(
+            prepared,
+            at: CanvasPoint(x: 20, y: 20)
+        ))
+        session.selectImage(bottom.id)
+        let saveCount = gate.saveCount
+        let revision = store.revision
+
+        XCTAssertFalse(session.canSendSelectedImageBackward)
+        XCTAssertFalse(session.sendSelectedImageBackward())
+        XCTAssertEqual(gate.saveCount, saveCount)
+        XCTAssertEqual(store.revision, revision)
+        XCTAssertEqual(session.selectedImage?.zIndex, bottom.zIndex)
+
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.images.map(\.id), [bottom.id])
+    }
+
+    @MainActor
     func testImportMoveResizeDeleteUndoRedo() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = CanvasStore(container: container)

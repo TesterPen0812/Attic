@@ -155,6 +155,20 @@ final class CanvasSession: ObservableObject {
         return images.first { $0.id == selectedImageID }
     }
 
+    var canBringSelectedImageForward: Bool {
+        guard let selectedImage else { return false }
+        return images.contains {
+            CanvasImagePlacement.imageIsInFront($0, selectedImage)
+        }
+    }
+
+    var canSendSelectedImageBackward: Bool {
+        guard let selectedImage else { return false }
+        return images.contains {
+            CanvasImagePlacement.imageIsInFront(selectedImage, $0)
+        }
+    }
+
     func selectTool(_ tool: CanvasTool) {
         cancelPendingPlacement()
         self.tool = tool
@@ -473,7 +487,8 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func bringSelectedImageForward() -> Bool {
-        guard let image = selectedImage,
+        guard canBringSelectedImageForward,
+              let image = selectedImage,
               let highest = images.map(\.zIndex).max(),
               highest < Int64.max else {
             return false
@@ -485,7 +500,8 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func sendSelectedImageBackward() -> Bool {
-        guard let image = selectedImage,
+        guard canSendSelectedImageBackward,
+              let image = selectedImage,
               let lowest = images.map(\.zIndex).min(),
               lowest > Int64.min else {
             return false
