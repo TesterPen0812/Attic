@@ -58,7 +58,7 @@ final class CornerHoverMonitor {
         self.noteStore = noteStore
         self.canvasStore = canvasStore
         self.noteDraft = noteDraft
-        panelController.onInteractiveHideAccepted = { [weak self] in
+        panelController.onInteractiveHideCompleted = { [weak self] in
             self?.stateMachine.forceHidden(untilHotspotExit: true)
         }
     }
@@ -106,9 +106,16 @@ final class CornerHoverMonitor {
             ProcessInfo.processInfo.endActivity(responsivenessActivity)
             self.responsivenessActivity = nil
         }
-        let hideResult = panelController.requestHide()
-        if hideResult.isAccepted {
-            stateMachine.forceHidden()
+        let hideResult = panelController.requestHide { [weak self] completion in
+            guard let self else { return }
+            if completion == .hidden {
+                stateMachine.forceHidden()
+            } else {
+                stateMachine.resolveHideCompletion(didOrderOut: false)
+            }
+        }
+        if !hideResult.isAccepted {
+            stateMachine.resolveHideCompletion(didOrderOut: false)
         }
     }
 
@@ -207,8 +214,14 @@ final class CornerHoverMonitor {
             refreshStoreForReveal()
             panelController.show(on: activeScreen, corner: settings.corner)
         case .requestHide:
-            let result = panelController.requestHide()
-            stateMachine.resolveHideRequest(accepted: result.isAccepted)
+            let result = panelController.requestHide { [weak self] completion in
+                self?.stateMachine.resolveHideCompletion(
+                    didOrderOut: completion == .hidden
+                )
+            }
+            if !result.isAccepted {
+                stateMachine.resolveHideCompletion(didOrderOut: false)
+            }
         }
     }
 

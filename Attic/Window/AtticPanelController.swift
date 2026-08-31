@@ -3,20 +3,54 @@ import Combine
 import QuartzCore
 import SwiftUI
 
+enum PanelHideCompletion: Equatable {
+    case hidden
+    case superseded
+}
+
 struct PanelVisibilityTransitionState {
     private(set) var generation = 0
+    private var pendingHide: (
+        generation: Int,
+        completion: (PanelHideCompletion) -> Void
+    )?
 
     mutating func invalidatePendingTransition() {
         generation += 1
+        resolvePendingHide(.superseded)
     }
 
     mutating func beginTransition() -> Int {
         generation += 1
+        resolvePendingHide(.superseded)
         return generation
+    }
+
+    mutating func beginHideTransition(
+        completion: @escaping (PanelHideCompletion) -> Void
+    ) -> Int {
+        let generation = beginTransition()
+        pendingHide = (generation, completion)
+        return generation
+    }
+
+    @discardableResult
+    mutating func completeHideTransition(_ candidate: Int) -> Bool {
+        guard ownsCompletion(candidate), pendingHide?.generation == candidate else {
+            return false
+        }
+        resolvePendingHide(.hidden)
+        return true
     }
 
     func ownsCompletion(_ candidate: Int) -> Bool {
         candidate == generation
+    }
+
+    private mutating func resolvePendingHide(_ completion: PanelHideCompletion) {
+        guard let pendingHide else { return }
+        self.pendingHide = nil
+        pendingHide.completion(completion)
     }
 }
 
@@ -58,7 +92,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var visibilityTransition = PanelVisibilityTransitionState()
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
-    var onInteractiveHideAccepted: (() -> Void)?
+    var onInteractiveHideCompleted: (() -> Void)?
 
     init(
         store: TaskStore,
@@ -250,9 +284,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     @discardableResult
-    func requestHide() -> PanelHideRequestResult {
+    func requestHide(
+        completion: @escaping (PanelHideCompletion) -> Void
+    ) -> PanelHideRequestResult {
         guard panel.isVisible else {
             stopPointerPassthroughMonitoring()
+            completion(.hidden)
             return .accepted
         }
         guard let screen = panel.screen ?? currentScreen else {
@@ -269,7 +306,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.dockingPreviewCorner = nil
         uiState.setInteractionLock(.windowMove, isActive: false)
         uiState.setInteractionLock(.windowResize, isActive: false)
-        let generation = visibilityTransition.beginTransition()
+        let generation = visibilityTransition.beginHideTransition(completion: completion)
         isShowing = false
         needsResizeAfterShowing = false
         let safeFrame = PanelGeometry.constrainedFrame(panel.frame, to: screen.visibleFrame)
@@ -292,6 +329,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.panel.orderOut(nil)
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
+                self.visibilityTransition.completeHideTransition(generation)
             }
         }
         return .accepted
@@ -555,9 +593,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if releaseAction == .hide {
             uiState.dockingPreviewCorner = nil
             uiState.setInteractionLock(.windowMove, isActive: false)
-            if requestHide().isAccepted {
-                onInteractiveHideAccepted?()
-            } else {
+            let result = requestHide { [weak self] completion in
+                guard completion == .hidden else { return }
+                self?.onInteractiveHideCompleted?()
+            }
+            if !result.isAccepted {
                 animateDock(
                     from: frame,
                     on: screen,

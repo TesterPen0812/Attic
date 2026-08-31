@@ -114,7 +114,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertTrue(machine.isVisible)
     }
 
-    func testHideRequestCommitsOnlyAfterControllerAcceptance() {
+    func testRejectedHideRequestKeepsPanelVisibleAndRestartsDelay() {
         var machine = CornerHoverStateMachine()
         machine.forceVisible(at: 0, grace: 0)
 
@@ -137,7 +137,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertTrue(machine.isVisible)
         XCTAssertTrue(machine.isHidePending)
 
-        machine.resolveHideRequest(accepted: false)
+        machine.resolveHideCompletion(didOrderOut: false)
 
         XCTAssertTrue(machine.isVisible)
         XCTAssertFalse(machine.isHidePending)
@@ -150,9 +150,52 @@ final class CornerHoverStateMachineTests: XCTestCase {
             hideDelay: 0.3
         ), .none)
         XCTAssertTrue(machine.isVisible)
+    }
 
+    func testAcceptedHideRemainsVisibleUntilOwnedAnimationCompletion() {
+        var machine = pendingHideStateMachine()
+        var outcomes: [PanelHideCompletion] = []
+        var transition = PanelVisibilityTransitionState()
+        let generation = transition.beginHideTransition { outcome in
+            outcomes.append(outcome)
+            machine.resolveHideCompletion(didOrderOut: outcome == .hidden)
+        }
+
+        XCTAssertEqual(outcomes, [])
+        XCTAssertTrue(machine.isVisible)
+        XCTAssertTrue(machine.isHidePending)
+
+        XCTAssertTrue(transition.completeHideTransition(generation))
+
+        XCTAssertEqual(outcomes, [.hidden])
+        XCTAssertFalse(machine.isVisible)
+        XCTAssertFalse(machine.isHidePending)
+    }
+
+    func testRevealSupersedesAcceptedHideAndKeepsModelVisible() {
+        var machine = pendingHideStateMachine()
+        var outcomes: [PanelHideCompletion] = []
+        var transition = PanelVisibilityTransitionState()
+        let hideGeneration = transition.beginHideTransition { outcome in
+            outcomes.append(outcome)
+            machine.resolveHideCompletion(didOrderOut: outcome == .hidden)
+        }
+
+        transition.invalidatePendingTransition()
+
+        XCTAssertEqual(outcomes, [.superseded])
+        XCTAssertTrue(machine.isVisible)
+        XCTAssertFalse(machine.isHidePending)
+        XCTAssertFalse(transition.completeHideTransition(hideGeneration))
+        XCTAssertEqual(outcomes, [.superseded])
+        XCTAssertTrue(machine.isVisible)
+    }
+
+    private func pendingHideStateMachine() -> CornerHoverStateMachine {
+        var machine = CornerHoverStateMachine()
+        machine.forceVisible(at: 0, grace: 0)
         XCTAssertEqual(machine.update(
-            at: 2,
+            at: 1,
             isInHotspot: false,
             isInPanel: false,
             isInteractionLocked: false,
@@ -160,7 +203,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
             hideDelay: 0.3
         ), .none)
         XCTAssertEqual(machine.update(
-            at: 2.31,
+            at: 1.3,
             isInHotspot: false,
             isInPanel: false,
             isInteractionLocked: false,
@@ -168,10 +211,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
             hideDelay: 0.3
         ), .requestHide)
 
-        machine.resolveHideRequest(accepted: true)
-
-        XCTAssertFalse(machine.isVisible)
-        XCTAssertFalse(machine.isHidePending)
+        return machine
     }
 
     func testLocalOnlyRevealRefreshUsesOneImmediatePassWithoutCloudRetry() throws {
@@ -240,6 +280,30 @@ final class CornerHoverStateMachineTests: XCTestCase {
 }
 
 final class PanelUIStateTests: XCTestCase {
+    @MainActor
+    func testNestedMenuTrackingKeepsLockUntilEverySessionEnds() {
+        var tracking = PanelMenuTrackingState()
+        let state = PanelUIState()
+
+        tracking.begin()
+        tracking.begin()
+        state.setInteractionLock(.menuTracking, isActive: tracking.isTracking)
+
+        tracking.end()
+        state.setInteractionLock(.menuTracking, isActive: tracking.isTracking)
+        XCTAssertTrue(state.isInteractionLocked)
+        XCTAssertEqual(tracking.depth, 1)
+
+        tracking.end()
+        state.setInteractionLock(.menuTracking, isActive: tracking.isTracking)
+        XCTAssertFalse(state.isInteractionLocked)
+        XCTAssertEqual(tracking.depth, 0)
+
+        tracking.end()
+        XCTAssertFalse(tracking.isTracking)
+        XCTAssertEqual(tracking.depth, 0)
+    }
+
     @MainActor
     func testManagedInteractionLockChangesPublish() {
         let state = PanelUIState()

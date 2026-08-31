@@ -81,12 +81,12 @@ struct CornerHoverStateMachine {
         return .requestHide
     }
 
-    /// Commits the model transition only after the panel controller accepts
-    /// the request (including a successful draft flush). Rejection leaves the
-    /// panel visible and starts a fresh hide-delay window.
-    mutating func resolveHideRequest(accepted: Bool) {
+    /// Commits the model transition only after the native panel has actually
+    /// ordered out. Rejection or a superseding reveal leaves the model visible
+    /// and starts a fresh hide-delay window.
+    mutating func resolveHideCompletion(didOrderOut: Bool) {
         guard isHidePending else { return }
-        if accepted {
+        if didOrderOut {
             reset()
         } else {
             isHidePending = false

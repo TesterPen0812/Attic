@@ -2,6 +2,20 @@ import AppKit
 import Combine
 import SwiftData
 
+struct PanelMenuTrackingState {
+    private(set) var depth = 0
+
+    var isTracking: Bool { depth > 0 }
+
+    mutating func begin() {
+        depth += 1
+    }
+
+    mutating func end() {
+        depth = max(0, depth - 1)
+    }
+}
+
 @MainActor
 final class AppCoordinator {
     static let shared = AppCoordinator()
@@ -23,6 +37,7 @@ final class AppCoordinator {
     private let isUITesting: Bool
     private let isRunningTests: Bool
     private var menuNotificationTokens: [NSObjectProtocol] = []
+    private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
@@ -204,6 +219,8 @@ final class AppCoordinator {
         agentServer.stop()
         menuNotificationTokens.forEach(NotificationCenter.default.removeObserver)
         menuNotificationTokens.removeAll()
+        menuTrackingState = PanelMenuTrackingState()
+        uiState.setInteractionLock(.menuTracking, isActive: false)
         hasStarted = false
     }
 
@@ -236,13 +253,18 @@ final class AppCoordinator {
         let center = NotificationCenter.default
         menuNotificationTokens = [
             center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in
+                MainActor.assumeIsolated {
+                    self?.menuTrackingState.begin()
                     self?.uiState.setInteractionLock(.menuTracking, isActive: true)
                 }
             },
             center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in
-                    self?.uiState.setInteractionLock(.menuTracking, isActive: false)
+                MainActor.assumeIsolated {
+                    self?.menuTrackingState.end()
+                    self?.uiState.setInteractionLock(
+                        .menuTracking,
+                        isActive: self?.menuTrackingState.isTracking == true
+                    )
                 }
             }
         ]
