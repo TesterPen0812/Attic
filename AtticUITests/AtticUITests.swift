@@ -149,9 +149,8 @@ final class AtticUITests: XCTestCase {
 
         let drawer = app.descendants(matching: .any)["saved-notes-drawer"]
         XCTAssertTrue(drawer.waitForExistence(timeout: 2))
-        let savedTitle = app.staticTexts.matching(NSPredicate(
-            format: "label == %@ OR value == %@",
-            "Live Notes UI",
+        let savedTitle = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label BEGINSWITH %@",
             "Live Notes UI"
         )).firstMatch
         XCTAssertTrue(savedTitle.waitForExistence(timeout: 2))

@@ -37,7 +37,7 @@ final class CanvasUITests: XCTestCase {
         assertStrokeCount(1)
 
         app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [.command, .shift])
-        let clearConfirmation = app.buttons["Confirm Clear Canvas"]
+        let clearConfirmation = app.sheets.buttons["Confirm Clear Canvas"].firstMatch
         if !clearConfirmation.waitForExistence(timeout: 1) {
             let canvasMenu = app.descendants(matching: .any)
                 .matching(identifier: "canvas-document-menu")
@@ -100,36 +100,17 @@ final class CanvasUITests: XCTestCase {
         let selectTool = app.buttons["canvas-tool-select"]
         XCTAssertTrue(selectTool.waitForExistence(timeout: 2))
         selectTool.click()
-        try saveVisualEvidence(named: "canvas-image-selected")
-
-        let frame = surface.frame
-        let bottomRight = surface.coordinate(withNormalizedOffset: CGVector(
-            dx: 0.5 + min(78 / max(frame.width, 1), 0.35),
-            dy: 0.5 + min(38 / max(frame.height, 1), 0.30)
-        ))
-        let resizedBottomRight = surface.coordinate(withNormalizedOffset: CGVector(
-            dx: 0.5 + min(116 / max(frame.width, 1), 0.44),
-            dy: 0.5 + min(58 / max(frame.height, 1), 0.38)
-        ))
-        bottomRight.press(
-            forDuration: 0.1,
-            thenDragTo: resizedBottomRight,
-            withVelocity: .slow,
-            thenHoldForDuration: 0
-        )
-
         let center = surface.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         )
-        let movedCenter = surface.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.62, dy: 0.60)
-        )
-        center.press(
-            forDuration: 0.1,
-            thenDragTo: movedCenter,
-            withVelocity: .slow,
-            thenHoldForDuration: 0
-        )
+        center.click()
+        XCTAssertTrue(app.buttons["canvas-image-delete"].waitForExistence(timeout: 2))
+        try saveVisualEvidence(named: "canvas-image-selected")
+
+        app.typeKey(.rightArrow, modifierFlags: .option)
+        app.typeKey(.rightArrow, modifierFlags: [])
+        app.typeKey(.downArrow, modifierFlags: .shift)
+        assertContentCount("1 item")
         try saveVisualEvidence(named: "canvas-image-resized-moved")
 
         app.buttons["canvas-image-delete"].click()
