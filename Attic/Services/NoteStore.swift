@@ -5,8 +5,30 @@ import SwiftData
 
 #if os(macOS)
 typealias NoteAttachmentFileStore = AttachmentFileStore
+
+protocol NoteAttachmentFileImporting: Sendable {
+    func importFiles(
+        _ urls: [URL],
+        baseSortIndex: Int64,
+        existingCount: Int,
+        existingBytes: Int64,
+        progress: (@Sendable (Int, Int) async -> Void)?
+    ) async throws -> [ImportedAttachment]
+}
+
+extension AttachmentFileStore: NoteAttachmentFileImporting {}
+
+typealias NoteAttachmentImporter = any NoteAttachmentFileImporting
+
+struct NoteAttachmentImportActivity: Equatable {
+    let requestID: UUID
+    let editorSession: NoteEditorSession
+    let origin: NoteAttachmentImportOrigin
+    var state: AttachmentImportState
+}
 #else
 typealias NoteAttachmentFileStore = Any
+typealias NoteAttachmentImporter = Any
 #endif
 
 private struct NoteReplicaSnapshot: Equatable {
@@ -50,12 +72,17 @@ final class NoteStore: ObservableObject {
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 #if os(macOS)
     @Published private(set) var attachmentsByNoteID: [UUID: [NoteAttachment]] = [:]
-    @Published private(set) var attachmentImportState: AttachmentImportState = .idle
+    @Published private(set) var attachmentImportActivity: NoteAttachmentImportActivity?
+
+    var attachmentImportState: AttachmentImportState {
+        attachmentImportActivity?.state ?? .idle
+    }
 #endif
 
     private let container: ModelContainer
 #if os(macOS)
     private let attachmentFileStore: AttachmentFileStore
+    private let attachmentImporter: any NoteAttachmentFileImporting
 #endif
     private var context: ModelContext
     private let now: () -> Date
@@ -70,6 +97,7 @@ final class NoteStore: ObservableObject {
     private var exportActivityTimeoutTask: Task<Void, Never>?
     private var importActivityTimeoutTask: Task<Void, Never>?
     private var attachmentImportInFlight = false
+    private var invalidatedAttachmentImportIDs = Set<UUID>()
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
 
@@ -77,11 +105,14 @@ final class NoteStore: ObservableObject {
         container: ModelContainer,
         now: @escaping () -> Date = Date.init,
         persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        attachmentFileStore: NoteAttachmentFileStore? = nil
+        attachmentFileStore: NoteAttachmentFileStore? = nil,
+        attachmentImporter: NoteAttachmentImporter? = nil
     ) {
         self.container = container
 #if os(macOS)
-        self.attachmentFileStore = attachmentFileStore ?? AttachmentFileStore()
+        let resolvedAttachmentFileStore = attachmentFileStore ?? AttachmentFileStore()
+        self.attachmentFileStore = resolvedAttachmentFileStore
+        self.attachmentImporter = attachmentImporter ?? resolvedAttachmentFileStore
 #endif
         context = ModelContext(container)
         self.now = now
@@ -92,12 +123,13 @@ final class NoteStore: ObservableObject {
     }
 
     @discardableResult
-    func create(title: String = "", body: String = "") -> NoteItem? {
+    func create(id: UUID = UUID(), title: String = "", body: String = "") -> NoteItem? {
         let normalizedTitle = Self.normalizedTitle(title)
         guard !normalizedTitle.isEmpty || Self.hasMeaningfulBody(body) else { return nil }
 
         let timestamp = now()
         let note = NoteItem(
+            id: id,
             title: normalizedTitle,
             body: body,
             createdAt: timestamp,
@@ -162,6 +194,10 @@ final class NoteStore: ObservableObject {
             return false
         }
         let references = attachmentReplicas.map { AttachmentFileReference($0) }
+        let attachmentImportIDToInvalidate = attachmentImportInFlight
+            && attachmentImportActivity?.origin.noteID == note.id
+            ? attachmentImportActivity?.requestID
+            : nil
 #endif
         replicas.forEach(context.delete)
 #if os(macOS)
@@ -173,6 +209,9 @@ final class NoteStore: ObservableObject {
 #endif
         guard save() else { return false }
 #if os(macOS)
+        if let attachmentImportIDToInvalidate {
+            invalidatedAttachmentImportIDs.insert(attachmentImportIDToInvalidate)
+        }
         removeMaterializationsAfterSuccessfulSave(references)
 #endif
         return true
@@ -183,68 +222,76 @@ final class NoteStore: ObservableObject {
         attachmentsByNoteID[noteID] ?? []
     }
 
-    /// Imports a batch into an existing note, or creates an attachment-only
-    /// note when noteID is nil. The filesystem transaction completes before
-    /// the single SwiftData save; every created byte is removed on failure.
+    func attachmentImportState(for editorSession: NoteEditorSession) -> AttachmentImportState {
+        guard attachmentImportActivity?.editorSession == editorSession else { return .idle }
+        return attachmentImportState
+    }
+
+    /// Imports a batch into the immutable origin captured by the draft before
+    /// this async transaction starts. A blank origin owns a reserved logical
+    /// note ID that a concurrent autosave may create while file work is in
+    /// flight; either completion order converges on that one ID.
     @discardableResult
     func importAttachments(
-        from urls: [URL],
-        noteID: UUID? = nil
-    ) async -> UUID? {
-        guard !urls.isEmpty else {
-            attachmentImportState = .idle
-            return noteID
+        _ request: NoteAttachmentImportRequest
+    ) async -> NoteAttachmentImportOutcome {
+        guard !request.urls.isEmpty else {
+            let message = "Choose at least one file to attach."
+            lastErrorMessage = message
+            return .failed(message)
         }
         guard !attachmentImportInFlight else {
             lastErrorMessage = "Finish or cancel the current attachment import before adding more files."
-            return nil
+            return .busy
         }
         attachmentImportInFlight = true
-        defer { attachmentImportInFlight = false }
-        attachmentImportState = .importing(completed: 0, total: urls.count)
+        attachmentImportActivity = NoteAttachmentImportActivity(
+            requestID: request.id,
+            editorSession: request.editorSession,
+            origin: request.origin,
+            state: .importing(completed: 0, total: request.urls.count)
+        )
+        defer {
+            attachmentImportInFlight = false
+            invalidatedAttachmentImportIDs.remove(request.id)
+        }
         var imported: [ImportedAttachment] = []
 
         do {
-            let targetNoteID: UUID
-            if let noteID {
-                let noteReplicas = try storedNotes(matching: noteID)
-                guard !noteReplicas.isEmpty else {
-                    throw AttachmentFileStoreError.inaccessible(
-                        URL(fileURLWithPath: noteID.uuidString),
-                        "The note is no longer available."
-                    )
-                }
-                targetNoteID = noteID
-            } else {
-                targetNoteID = UUID()
+            let targetNoteID = request.origin.noteID
+            let originWasPersistedAtStart: Bool
+            switch request.origin {
+            case .note:
+                _ = try storedNotes(matching: targetNoteID)
+                originWasPersistedAtStart = true
+            case .blankDraft:
+                originWasPersistedAtStart = try !storedNotesIfPresent(
+                    matching: targetNoteID
+                ).isEmpty
             }
 
             let existing = try visibleAttachments(forNoteID: targetNoteID)
             let baseSortIndex = existing.map(\.sortIndex).max().map { $0 + 1 } ?? 0
             let existingBytes = totalAttachmentBytes(existing)
-            imported = try await attachmentFileStore.importFiles(
-                urls,
+            imported = try await attachmentImporter.importFiles(
+                request.urls,
                 baseSortIndex: baseSortIndex,
                 existingCount: existing.count,
                 existingBytes: existingBytes
             ) { [weak self] completed, total in
                 await self?.updateAttachmentImportProgress(
+                    requestID: request.id,
                     completed: completed,
                     total: total
                 )
             }
             try Task.checkCancellation()
 
-            if noteID == nil {
-                let timestamp = now()
-                context.insert(NoteItem(
-                    id: targetNoteID,
-                    title: "",
-                    body: "",
-                    createdAt: timestamp,
-                    updatedAt: timestamp
-                ))
-            } else {
+            guard !invalidatedAttachmentImportIDs.contains(request.id) else {
+                throw NoteReplicaMutationError.missingReplica(targetNoteID)
+            }
+            switch request.origin {
+            case .note:
                 // The file copy can yield to CloudKit refresh notifications.
                 // Recheck the logical note before committing attachments so a
                 // note deleted remotely during the copy cannot gain orphaned
@@ -252,6 +299,23 @@ final class NoteStore: ObservableObject {
                 // insert during the copy must not let this batch exceed the
                 // per-note limit or reuse stale sort indexes.
                 _ = try storedNotes(matching: targetNoteID)
+            case .blankDraft:
+                let noteReplicas = try storedNotesIfPresent(matching: targetNoteID)
+                if noteReplicas.isEmpty {
+                    // If this reserved origin had already become durable and is
+                    // now absent, deletion wins over the attachment completion.
+                    guard !originWasPersistedAtStart else {
+                        throw NoteReplicaMutationError.missingReplica(targetNoteID)
+                    }
+                    let timestamp = now()
+                    context.insert(NoteItem(
+                        id: targetNoteID,
+                        title: "",
+                        body: "",
+                        createdAt: timestamp,
+                        updatedAt: timestamp
+                    ))
+                }
             }
 
             try Task.checkCancellation()
@@ -282,24 +346,35 @@ final class NoteStore: ObservableObject {
             references.forEach(context.insert)
             guard save() else {
                 try? await removeImportedMaterializations(imported)
-                attachmentImportState = .failed(lastErrorMessage ?? "Unable to save attachments.")
-                return nil
+                let message = lastErrorMessage ?? "Unable to save attachments."
+                updateAttachmentImportState(.failed(message), requestID: request.id)
+                return .failed(message)
             }
 
             refresh()
-            attachmentImportState = .idle
-            return targetNoteID
+            clearAttachmentImportActivity(requestID: request.id)
+            return .imported(noteID: targetNoteID)
         } catch is CancellationError {
             context.rollback()
             try? await removeImportedMaterializations(imported)
-            attachmentImportState = .idle
-            return nil
+            clearAttachmentImportActivity(requestID: request.id)
+            return .cancelled
+        } catch NoteReplicaMutationError.missingReplica {
+            context.rollback()
+            try? await removeImportedMaterializations(imported)
+            let message = "The note is no longer available."
+            updateAttachmentImportState(.failed(message), requestID: request.id)
+            lastErrorMessage = message
+            return .originUnavailable
         } catch {
             context.rollback()
             try? await removeImportedMaterializations(imported)
-            attachmentImportState = .failed(error.localizedDescription)
+            updateAttachmentImportState(
+                .failed(error.localizedDescription),
+                requestID: request.id
+            )
             lastErrorMessage = error.localizedDescription
-            return nil
+            return .failed(error.localizedDescription)
         }
     }
 
@@ -479,12 +554,16 @@ final class NoteStore: ObservableObject {
     }
 
     private func storedNotes(matching id: UUID) throws -> [NoteItem] {
-        let stored = try context.fetch(FetchDescriptor<NoteItem>())
-        let replicas = stored.filter { $0.id == id }
+        let replicas = try storedNotesIfPresent(matching: id)
         guard !replicas.isEmpty else {
             throw NoteReplicaMutationError.missingReplica(id)
         }
         return replicas
+    }
+
+    private func storedNotesIfPresent(matching id: UUID) throws -> [NoteItem] {
+        let stored = try context.fetch(FetchDescriptor<NoteItem>())
+        return stored.filter { $0.id == id }
     }
 
 #if os(macOS)
@@ -586,8 +665,30 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    private func updateAttachmentImportProgress(completed: Int, total: Int) {
-        attachmentImportState = .importing(completed: completed, total: total)
+    private func updateAttachmentImportProgress(
+        requestID: UUID,
+        completed: Int,
+        total: Int
+    ) {
+        updateAttachmentImportState(
+            .importing(completed: completed, total: total),
+            requestID: requestID
+        )
+    }
+
+    private func updateAttachmentImportState(
+        _ state: AttachmentImportState,
+        requestID: UUID
+    ) {
+        guard var activity = attachmentImportActivity,
+              activity.requestID == requestID else { return }
+        activity.state = state
+        attachmentImportActivity = activity
+    }
+
+    private func clearAttachmentImportActivity(requestID: UUID) {
+        guard attachmentImportActivity?.requestID == requestID else { return }
+        attachmentImportActivity = nil
     }
 
     private func removeMaterializationsAfterSuccessfulSave(

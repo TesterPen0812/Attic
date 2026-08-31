@@ -21,14 +21,16 @@ func makeTestAttachmentFileStore(rootURL: URL? = nil) -> AttachmentFileStore {
 func makeTestNoteStore(
     now: @escaping () -> Date = Date.init,
     persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
-    attachmentFileStore: AttachmentFileStore
+    attachmentFileStore: AttachmentFileStore,
+    attachmentImporter: (any NoteAttachmentFileImporting)? = nil
 ) throws -> NoteStore {
     let container = try PersistenceController.makeContainer(inMemory: true)
     return NoteStore(
         container: container,
         now: now,
         persist: persist,
-        attachmentFileStore: attachmentFileStore
+        attachmentFileStore: attachmentFileStore,
+        attachmentImporter: attachmentImporter
     )
 }
 

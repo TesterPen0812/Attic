@@ -442,26 +442,22 @@ struct NoteComposerView: View {
             )
             return
         }
-        guard noteDraft.flush() else {
+        guard let request = noteDraft.prepareAttachmentImport(from: urls) else {
             removeTemporaryDirectories(cleanupDirectories)
             return
         }
 
-        let previousNoteID = noteDraft.activeNoteID
         attachmentImportTask = Task { @MainActor in
             defer {
                 removeTemporaryDirectories(cleanupDirectories)
                 attachmentImportTask = nil
             }
-            let noteID = await noteStore.importAttachments(
-                from: urls,
-                noteID: previousNoteID
+            let outcome = await noteStore.importAttachments(request)
+            let completion = noteDraft.completeAttachmentImport(
+                outcome,
+                for: request
             )
-            guard !Task.isCancelled else { return }
-            if previousNoteID == nil,
-               noteDraft.isActive,
-               let noteID {
-                noteDraft.adoptAttachmentOnlyNote(noteID)
+            if case let .adopted(noteID) = completion {
                 uiState.editingNoteID = noteID
             }
         }

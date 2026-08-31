@@ -1,9 +1,57 @@
 import Combine
 import Foundation
 
-struct NoteEditorSession: Equatable {
+struct NoteEditorSession: Equatable, Hashable, Sendable {
     let noteID: UUID?
     let generation: UInt64
+}
+
+enum NoteAttachmentImportOrigin: Equatable, Hashable, Sendable {
+    case note(UUID)
+    case blankDraft(UUID)
+
+    var noteID: UUID {
+        switch self {
+        case let .note(noteID), let .blankDraft(noteID):
+            noteID
+        }
+    }
+}
+
+struct NoteAttachmentImportRequest: Equatable, Sendable, Identifiable {
+    let id: UUID
+    let editorSession: NoteEditorSession
+    let origin: NoteAttachmentImportOrigin
+    let urls: [URL]
+
+    init(
+        id: UUID = UUID(),
+        editorSession: NoteEditorSession,
+        origin: NoteAttachmentImportOrigin,
+        urls: [URL]
+    ) {
+        self.id = id
+        self.editorSession = editorSession
+        self.origin = origin
+        self.urls = urls
+    }
+}
+
+enum NoteAttachmentImportOutcome: Equatable, Sendable {
+    case imported(noteID: UUID)
+    case cancelled
+    case originUnavailable
+    case busy
+    case failed(String)
+}
+
+enum NoteAttachmentImportCompletion: Equatable {
+    case adopted(noteID: UUID)
+    case persisted(noteID: UUID)
+    case cancelled
+    case originUnavailable
+    case busy
+    case failed(String)
 }
 
 /// Owns note text independently of SwiftUI view lifetime and SwiftData model
@@ -49,6 +97,7 @@ final class NoteDraftController: ObservableObject {
     private var persistedSnapshot: PersistedSnapshot?
     private var generation: UInt64 = 0
     private var nextEditorSessionGeneration: UInt64 = 0
+    private var attachmentImportOrigin = NoteAttachmentImportOrigin.blankDraft(UUID())
 
     init(
         noteStore: NoteStore,
@@ -100,19 +149,58 @@ final class NoteDraftController: ObservableObject {
         return true
     }
 
-    /// Promotes a blank attachment-only draft to the note created by the
-    /// attachment transaction without changing the editor's identity or
-    /// stealing focus from the text fields.
-    func adoptAttachmentOnlyNote(_ noteID: UUID) {
-        guard activeNoteID == nil,
-              let note = noteStore.notes.first(where: { $0.id == noteID }) else { return }
-        applySnapshot(
-            noteID: note.id,
-            title: note.title,
-            body: note.body,
-            isActive: true,
-            startsNewEditorSession: false
+    /// Captures attachment ownership synchronously, before file work can yield.
+    /// A blank editor receives a reserved logical note ID shared by any
+    /// concurrent autosave and the eventual attachment transaction.
+    func prepareAttachmentImport(from urls: [URL]) -> NoteAttachmentImportRequest? {
+        guard !urls.isEmpty, isActive, flush() else { return nil }
+        return NoteAttachmentImportRequest(
+            editorSession: editorSession,
+            origin: attachmentImportOrigin,
+            urls: urls
         )
+    }
+
+    /// Reconciles a typed store outcome with the immutable initiating session.
+    /// Only that exact blank session may adopt its reserved note. Adoption
+    /// merges identity into the live draft and never replaces concurrent text.
+    func completeAttachmentImport(
+        _ outcome: NoteAttachmentImportOutcome,
+        for request: NoteAttachmentImportRequest
+    ) -> NoteAttachmentImportCompletion {
+        switch outcome {
+        case let .imported(noteID):
+            guard noteID == request.origin.noteID else {
+                return .failed("The attachment import completed for an unexpected note.")
+            }
+            guard case let .blankDraft(blankNoteID) = request.origin else {
+                return .persisted(noteID: noteID)
+            }
+            guard isActive,
+                  editorSession == request.editorSession,
+                  blankNoteID == noteID,
+                  attachmentImportOrigin == request.origin || activeNoteID == noteID,
+                  let note = noteStore.notes.first(where: { $0.id == noteID }) else {
+                return .persisted(noteID: noteID)
+            }
+
+            if activeNoteID == nil {
+                activeNoteID = noteID
+                persistedSnapshot = Self.snapshot(for: note)
+                conflict = nil
+            }
+            attachmentImportOrigin = .note(noteID)
+            scheduleAutosaveIfNeeded()
+            return .adopted(noteID: noteID)
+        case .cancelled:
+            return .cancelled
+        case .originUnavailable:
+            return .originUnavailable
+        case .busy:
+            return .busy
+        case let .failed(message):
+            return .failed(message)
+        }
     }
 
     /// Persists pending text without closing the editor. The current store
@@ -164,11 +252,29 @@ final class NoteDraftController: ObservableObject {
             return true
         }
 
-        guard let created = noteStore.create(title: title, body: body) else {
-            return false
+        let reservedNoteID = attachmentImportOrigin.noteID
+        let persistedNote: NoteItem
+        if let attachmentOnlyNote = noteStore.notes.first(where: { $0.id == reservedNoteID }) {
+            // The attachment transaction may have committed the reserved blank
+            // note immediately before this autosave runs. Merge text into that
+            // logical origin instead of inserting a duplicate physical row.
+            guard noteStore.update(attachmentOnlyNote, title: title, body: body) else {
+                return false
+            }
+            persistedNote = attachmentOnlyNote
+        } else {
+            guard let created = noteStore.create(
+                id: reservedNoteID,
+                title: title,
+                body: body
+            ) else {
+                return false
+            }
+            persistedNote = created
         }
-        activeNoteID = created.id
-        persistedSnapshot = Self.snapshot(for: created)
+        activeNoteID = persistedNote.id
+        attachmentImportOrigin = .note(persistedNote.id)
+        persistedSnapshot = Self.snapshot(for: persistedNote)
         isDirty = false
         return true
     }
@@ -263,6 +369,7 @@ final class NoteDraftController: ObservableObject {
             return false
         }
         activeNoteID = created.id
+        attachmentImportOrigin = .note(created.id)
         persistedSnapshot = Self.snapshot(for: created)
         conflict = nil
         isDirty = false
@@ -333,6 +440,10 @@ final class NoteDraftController: ObservableObject {
                 noteID: noteID,
                 generation: nextEditorSessionGeneration
             )
+            attachmentImportOrigin = noteID.map(NoteAttachmentImportOrigin.note)
+                ?? .blankDraft(UUID())
+        } else if let noteID {
+            attachmentImportOrigin = .note(noteID)
         }
         isApplyingSnapshot = true
         activeNoteID = noteID

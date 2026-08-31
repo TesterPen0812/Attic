@@ -79,6 +79,28 @@ final class NoteAttachmentTests: XCTestCase {
         return url
     }
 
+    private func makeStoreImportRequest(
+        from urls: [URL],
+        noteID: UUID? = nil,
+        blankNoteID: UUID = UUID(),
+        generation: UInt64 = 1
+    ) -> NoteAttachmentImportRequest {
+        NoteAttachmentImportRequest(
+            editorSession: NoteEditorSession(
+                noteID: noteID,
+                generation: generation
+            ),
+            origin: noteID.map(NoteAttachmentImportOrigin.note)
+                ?? .blankDraft(blankNoteID),
+            urls: urls
+        )
+    }
+
+    private func importedNoteID(from outcome: NoteAttachmentImportOutcome) -> UUID? {
+        guard case let .imported(noteID) = outcome else { return nil }
+        return noteID
+    }
+
     func testImportPreservesFinderOrderAndDuplicateFilenames() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -511,8 +533,10 @@ final class NoteAttachmentTests: XCTestCase {
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let store = try makeTestNoteStore(attachmentFileStore: fileStore)
 
-        let noteID = await store.importAttachments(from: [sourceA, sourceB])
-        let noteIDValue = try XCTUnwrap(noteID)
+        let outcome = await store.importAttachments(
+            makeStoreImportRequest(from: [sourceA, sourceB])
+        )
+        let noteIDValue = try XCTUnwrap(importedNoteID(from: outcome))
         XCTAssertEqual(store.notes.count, 1)
         XCTAssertEqual(store.notes.first?.id, noteIDValue)
         XCTAssertEqual(store.attachments(for: noteIDValue).map(\.originalFilename), ["a.txt", "b.txt"])
@@ -529,15 +553,364 @@ final class NoteAttachmentTests: XCTestCase {
         let draft = NoteDraftController(noteStore: store)
 
         XCTAssertTrue(draft.beginNew())
-        let importedNoteID = await store.importAttachments(from: [source])
-        let noteID = try XCTUnwrap(importedNoteID)
-        draft.adoptAttachmentOnlyNote(noteID)
+        let initiatingSession = draft.editorSession
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let outcome = await store.importAttachments(request)
+        let noteID = try XCTUnwrap(importedNoteID(from: outcome))
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .adopted(noteID: noteID)
+        )
 
         XCTAssertTrue(draft.isActive)
+        XCTAssertEqual(draft.editorSession, initiatingSession)
         XCTAssertEqual(draft.activeNoteID, noteID)
         XCTAssertFalse(draft.isDirty)
         XCTAssertTrue(draft.canPersist)
         XCTAssertEqual(store.attachments(for: noteID).count, 1)
+
+        draft.body = "Typed after attachment completion"
+        XCTAssertTrue(draft.flush())
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.body, "Typed after attachment completion")
+    }
+
+    @MainActor
+    func testBlankDraftAttachmentCompletionPreservesTypingMadeAfterImportInitiation() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(
+            Data("slow-import".utf8),
+            named: "reference.txt",
+            in: directory
+        )
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            )
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let initiatingSession = draft.editorSession
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+
+        draft.body = "Typing while the attachment is importing"
+        let outcome = await importTask.value
+        let importedNoteID = try XCTUnwrap(importedNoteID(from: outcome))
+        XCTAssertEqual(draft.editorSession, initiatingSession)
+
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .adopted(noteID: importedNoteID)
+        )
+
+        XCTAssertEqual(draft.body, "Typing while the attachment is importing")
+        XCTAssertTrue(draft.isDirty)
+        XCTAssertEqual(draft.activeNoteID, importedNoteID)
+        XCTAssertTrue(draft.flush())
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.body, "Typing while the attachment is importing")
+        XCTAssertEqual(store.attachments(for: importedNoteID).map(\.originalFilename), [
+            "reference.txt"
+        ])
+    }
+
+    @MainActor
+    func testBlankDraftAttachmentCompletionUsesAutosavedOriginInsteadOfSplittingNote() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("attachment".utf8), named: "autosave.txt", in: directory)
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            )
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+
+        draft.body = "Autosaved while importing"
+        XCTAssertTrue(draft.flush())
+        let autosavedNoteID = try XCTUnwrap(draft.activeNoteID)
+        let outcome = await importTask.value
+        let importedNoteID = try XCTUnwrap(importedNoteID(from: outcome))
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .adopted(noteID: importedNoteID)
+        )
+
+        XCTAssertEqual(importedNoteID, autosavedNoteID)
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.body, "Autosaved while importing")
+        XCTAssertEqual(store.attachments(for: autosavedNoteID).map(\.originalFilename), [
+            "autosave.txt"
+        ])
+    }
+
+    @MainActor
+    func testAutosaveWhileBlankImportIsSuspendedUsesReservedOrigin() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("attachment".utf8), named: "autosave.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        guard case let .blankDraft(reservedNoteID) = request.origin else {
+            return XCTFail("A blank import must reserve an immutable origin identity")
+        }
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+
+        draft.body = "Autosaved while the import is suspended"
+        XCTAssertTrue(draft.flush())
+        XCTAssertEqual(draft.activeNoteID, reservedNoteID)
+        XCTAssertEqual(store.notes.map(\.id), [reservedNoteID])
+
+        await importer.succeed()
+        let outcome = await importTask.value
+        XCTAssertEqual(outcome, .imported(noteID: reservedNoteID))
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .adopted(noteID: reservedNoteID)
+        )
+
+        XCTAssertEqual(draft.body, "Autosaved while the import is suspended")
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.body, "Autosaved while the import is suspended")
+        XCTAssertEqual(store.attachments(for: reservedNoteID).map(\.originalFilename), [
+            "autosave.txt"
+        ])
+    }
+
+    @MainActor
+    func testAutosaveAfterBlankImportPersistsBeforeDraftCompletionReusesReservedOrigin() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("attachment".utf8), named: "completed.txt", in: directory)
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            )
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let outcome = await store.importAttachments(request)
+        let reservedNoteID = request.origin.noteID
+        XCTAssertEqual(outcome, .imported(noteID: reservedNoteID))
+        XCTAssertNil(draft.activeNoteID)
+
+        draft.body = "Autosaved after attachment persistence"
+        XCTAssertTrue(draft.flush())
+        XCTAssertEqual(draft.activeNoteID, reservedNoteID)
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.body, "Autosaved after attachment persistence")
+        XCTAssertEqual(store.attachments(for: reservedNoteID).map(\.originalFilename), [
+            "completed.txt"
+        ])
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .adopted(noteID: reservedNoteID)
+        )
+    }
+
+    @MainActor
+    func testBlankDraftAttachmentCompletionCannotStealNewerBlankSession() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("attachment".utf8), named: "origin.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+
+        XCTAssertTrue(draft.beginNew())
+        let newerSession = draft.editorSession
+        draft.body = "Newer blank draft"
+        XCTAssertEqual(store.attachmentImportState(for: newerSession), .idle)
+        XCTAssertEqual(
+            store.attachmentImportState(for: request.editorSession),
+            .importing(completed: 0, total: 1)
+        )
+        await importer.succeed()
+        let outcome = await importTask.value
+        let importedNoteID = try XCTUnwrap(importedNoteID(from: outcome))
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .persisted(noteID: importedNoteID)
+        )
+
+        XCTAssertEqual(draft.editorSession, newerSession)
+        XCTAssertNil(draft.activeNoteID)
+        XCTAssertEqual(draft.body, "Newer blank draft")
+        XCTAssertTrue(draft.isDirty)
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.id, importedNoteID)
+        XCTAssertEqual(store.attachments(for: importedNoteID).map(\.originalFilename), [
+            "origin.txt"
+        ])
+    }
+
+    @MainActor
+    func testInFlightBlankImportPersistsToOriginAfterSwitchAndKeepsProgressSessionBound() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceA = try write(Data("first".utf8), named: "first.txt", in: directory)
+        let sourceB = try write(Data("second".utf8), named: "second.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        let otherNote = try XCTUnwrap(store.create(body: "Other note"))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(
+            draft.prepareAttachmentImport(from: [sourceA, sourceB])
+        )
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        let invocation = await importer.waitUntilStarted()
+        XCTAssertEqual(invocation.urls, [sourceA, sourceB])
+        XCTAssertEqual(
+            store.attachmentImportState(for: request.editorSession),
+            .importing(completed: 0, total: 2)
+        )
+
+        XCTAssertTrue(draft.beginEditing(otherNote))
+        let switchedSession = draft.editorSession
+        await importer.reportProgress(completed: 1, total: 2)
+        XCTAssertEqual(store.attachmentImportState(for: switchedSession), .idle)
+        XCTAssertEqual(
+            store.attachmentImportState(for: request.editorSession),
+            .importing(completed: 1, total: 2)
+        )
+
+        await importer.succeed()
+        let outcome = await importTask.value
+        let originNoteID = try XCTUnwrap(importedNoteID(from: outcome))
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .persisted(noteID: originNoteID)
+        )
+
+        XCTAssertEqual(draft.editorSession, switchedSession)
+        XCTAssertEqual(draft.activeNoteID, otherNote.id)
+        XCTAssertEqual(draft.body, "Other note")
+        XCTAssertEqual(store.notes.count, 2)
+        XCTAssertTrue(store.attachments(for: otherNote.id).isEmpty)
+        XCTAssertEqual(store.attachments(for: originNoteID).map(\.originalFilename), [
+            "first.txt",
+            "second.txt"
+        ])
+    }
+
+    @MainActor
+    func testDeletingOriginWhileImportIsInFlightReturnsOriginUnavailable() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("deleted".utf8), named: "deleted.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        let origin = try XCTUnwrap(store.create(body: "Delete me"))
+
+        XCTAssertTrue(draft.beginEditing(origin))
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+
+        XCTAssertTrue(store.delete(origin))
+        draft.discardDeletedNote(origin.id)
+        await importer.succeed()
+        let outcome = await importTask.value
+
+        XCTAssertEqual(outcome, .originUnavailable)
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .originUnavailable
+        )
+        XCTAssertTrue(store.notes.isEmpty)
+        XCTAssertTrue(store.attachmentsByNoteID.isEmpty)
+        XCTAssertFalse(draft.isActive)
+        XCTAssertEqual(store.attachmentImportState(for: draft.editorSession), .idle)
+    }
+
+    @MainActor
+    func testCancellingInFlightBlankImportReturnsCancelledWithoutRows() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("cancel".utf8), named: "cancel.txt", in: directory)
+        let importer = ControlledNoteAttachmentImporter()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: AttachmentFileStore(
+                rootURL: directory.appendingPathComponent("owned")
+            ),
+            attachmentImporter: importer
+        )
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginNew())
+        let request = try XCTUnwrap(draft.prepareAttachmentImport(from: [source]))
+        let importTask = Task { @MainActor in
+            await store.importAttachments(request)
+        }
+        _ = await importer.waitUntilStarted()
+
+        importTask.cancel()
+        let outcome = await importTask.value
+
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertEqual(
+            draft.completeAttachmentImport(outcome, for: request),
+            .cancelled
+        )
+        XCTAssertTrue(store.notes.isEmpty)
+        XCTAssertTrue(store.attachmentsByNoteID.isEmpty)
+        XCTAssertEqual(store.attachmentImportState, .idle)
+        XCTAssertTrue(draft.isActive)
+        XCTAssertNil(draft.activeNoteID)
     }
 
     @MainActor
@@ -549,8 +922,10 @@ final class NoteAttachmentTests: XCTestCase {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let firstStore = NoteStore(container: container, attachmentFileStore: fileStore)
 
-        let importedNoteID = await firstStore.importAttachments(from: [source])
-        let noteID = try XCTUnwrap(importedNoteID)
+        let outcome = await firstStore.importAttachments(
+            makeStoreImportRequest(from: [source])
+        )
+        let noteID = try XCTUnwrap(importedNoteID(from: outcome))
         let firstAttachment = try XCTUnwrap(firstStore.attachments(for: noteID).first)
         let firstURLValue = await firstStore.materializedURL(for: firstAttachment)
         let firstURL = try XCTUnwrap(firstURLValue)
@@ -573,8 +948,12 @@ final class NoteAttachmentTests: XCTestCase {
         gate.shouldFail = true
         let store = try makeTestNoteStore(persist: gate.save, attachmentFileStore: fileStore)
 
-        let importedNoteID = await store.importAttachments(from: [source])
-        XCTAssertNil(importedNoteID)
+        let outcome = await store.importAttachments(
+            makeStoreImportRequest(from: [source])
+        )
+        guard case .failed = outcome else {
+            return XCTFail("A failed save must return a typed failure outcome")
+        }
         XCTAssertTrue(store.notes.isEmpty)
         XCTAssertTrue(store.attachmentsByNoteID.isEmpty)
         let rootContents = try? await fileStore.rootURLContentsForTests()
@@ -614,8 +993,10 @@ final class NoteAttachmentTests: XCTestCase {
         let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
         let store = try makeTestNoteStore(attachmentFileStore: fileStore)
 
-        let importedNoteID = await store.importAttachments(from: [source])
-        let noteID = try XCTUnwrap(importedNoteID)
+        let outcome = await store.importAttachments(
+            makeStoreImportRequest(from: [source])
+        )
+        let noteID = try XCTUnwrap(importedNoteID(from: outcome))
         let attachment = try XCTUnwrap(store.attachments(for: noteID).first)
         let materializedValue = await store.materializedURL(for: attachment)
         let materialized = try XCTUnwrap(materializedValue)
@@ -686,6 +1067,92 @@ final class NoteAttachmentTests: XCTestCase {
         XCTAssertTrue(store.delete(note))
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).isEmpty)
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
+    }
+}
+
+private actor ControlledNoteAttachmentImporter: NoteAttachmentFileImporting {
+    struct Invocation: Equatable, Sendable {
+        let urls: [URL]
+        let baseSortIndex: Int64
+        let existingCount: Int
+        let existingBytes: Int64
+    }
+
+    private var invocation: Invocation?
+    private var progress: (@Sendable (Int, Int) async -> Void)?
+    private var continuation: CheckedContinuation<[ImportedAttachment], Error>?
+    private var startWaiters: [CheckedContinuation<Invocation, Never>] = []
+
+    func importFiles(
+        _ urls: [URL],
+        baseSortIndex: Int64,
+        existingCount: Int,
+        existingBytes: Int64,
+        progress: (@Sendable (Int, Int) async -> Void)?
+    ) async throws -> [ImportedAttachment] {
+        try Task.checkCancellation()
+        let invocation = Invocation(
+            urls: urls,
+            baseSortIndex: baseSortIndex,
+            existingCount: existingCount,
+            existingBytes: existingBytes
+        )
+        self.invocation = invocation
+        self.progress = progress
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: invocation) }
+
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+            }
+        } onCancel: {
+            Task { await self.cancelPendingImport() }
+        }
+    }
+
+    func waitUntilStarted() async -> Invocation {
+        if let invocation { return invocation }
+        return await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func reportProgress(completed: Int, total: Int) async {
+        await progress?(completed, total)
+    }
+
+    func succeed() {
+        guard let invocation, let continuation else { return }
+        self.continuation = nil
+        do {
+            let attachments = try invocation.urls.enumerated().map { offset, url in
+                let payload = try Data(contentsOf: url)
+                return ImportedAttachment(
+                    id: UUID(),
+                    filename: url.lastPathComponent,
+                    contentTypeIdentifier: "public.data",
+                    byteCount: Int64(payload.count),
+                    sortIndex: invocation.baseSortIndex + Int64(offset),
+                    digest: SHA256.hash(data: payload)
+                        .map { String(format: "%02x", $0) }
+                        .joined(),
+                    createdAt: Date(timeIntervalSince1970: TimeInterval(offset + 1)),
+                    payload: payload
+                )
+            }
+            continuation.resume(returning: attachments)
+        } catch {
+            continuation.resume(throwing: error)
+        }
+    }
+
+    private func cancelPendingImport() {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(throwing: CancellationError())
     }
 }
 
