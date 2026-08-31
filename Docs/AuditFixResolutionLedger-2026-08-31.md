@@ -32,7 +32,7 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | C-10 | Planned | — | — | — | Baseline corrupt-decode retry count pending capture | Corrupt assets lack complete recovery/memoization. |
 | C-11 | Planned | — | — | — | — | Import fit/reachability matrix unverified. |
 | C-12 | Planned | — | — | — | — | Hosted content-versus-shell resize hit matrix unverified. |
-| C-13 | In progress | — | Regression development on `codex/attic-comprehensive-canvas` | — | Baseline no-op persistence counts pending capture | Layer boundary operations may save/history on no-op. |
+| C-13 | Fixed | `bb762ea` | `CanvasImageSessionTests`: 4/4 passed in Local; includes 2 boundary regressions | Awaiting installed keyboard/button UAT | Boundary regressions prove zero additional save, revision, history command, or z-index change | Automated source behavior is verified; installed disabled-state and shortcuts remain to UAT. |
 | C-14 | Planned | — | — | — | Baseline rapid-input sample fidelity pending capture | Coalesced sample handling remains incomplete. |
 | C-15 | Planned | — | — | — | — | Real hosted input suite and test-only production path removal remain. |
 | C-16 | In progress | — | Regression development on `codex/attic-comprehensive-canvas` | — | Baseline batch resource evidence pending capture | Drag/drop batch target, progress, cleanup, and concurrency remain. |
@@ -87,3 +87,5 @@ Before any command that drives the installed app, cursor, keyboard, trackpad eve
 | Integration commit | Contents | Verification |
 | --- | --- | --- |
 | `4b246f6` | Initial ledger and verified clean baseline | 333/333 Local Attic unit tests passed at `87c2062a536c42badac78a5ce2b21bbad7315d12`. |
+| `e6946fb` | Marked the first isolated fix streams active | Workstream branches and focused regression ownership recorded. |
+| `bb762ea` | C-13 true Canvas layer-boundary no-ops and disabled unavailable controls | `CanvasImageSessionTests` 4/4 passed; zero additional persistence/revision/history/z-index mutations asserted. |
