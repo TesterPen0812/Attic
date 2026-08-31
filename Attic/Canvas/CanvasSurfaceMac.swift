@@ -856,9 +856,9 @@ final class CanvasNSView: NSView {
         case 51, 117:
             if let key = accessibilityFocusedObjectKey,
                key.kind == .stroke {
-                onErase([key.id])
+                _ = onErase([key.id])
             } else if selectedImageID != nil {
-                onDeleteSelectedImage()
+                _ = onDeleteSelectedImage()
             } else {
                 super.keyDown(with: event)
             }
@@ -869,7 +869,7 @@ final class CanvasNSView: NSView {
             }
             if event.modifierFlags.contains(.option) {
                 let grows = event.keyCode == 124 || event.keyCode == 126
-                onResizeSelectedImage(grows ? 1.1 : 0.9)
+                _ = onResizeSelectedImage(grows ? 1.1 : 0.9)
                 return
             }
             let distance: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
@@ -880,7 +880,7 @@ final class CanvasNSView: NSView {
             case 125: delta = CGSize(width: 0, height: distance)
             default: delta = CGSize(width: 0, height: -distance)
             }
-            onNudgeSelectedImage(delta)
+            _ = onNudgeSelectedImage(delta)
         default:
             super.keyDown(with: event)
         }
