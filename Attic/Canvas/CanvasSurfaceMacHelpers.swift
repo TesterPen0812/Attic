@@ -771,7 +771,7 @@ extension CanvasNSView {
         case let .stroke(points, color, width):
             onCompleteStroke(points, color, width)
         case let .erase(ids):
-            onErase(ids)
+            _ = onErase(ids)
         case nil:
             break
         }
