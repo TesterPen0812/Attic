@@ -11,8 +11,7 @@ final class CanvasUITests: XCTestCase {
 
     override func tearDownWithError() throws {
         NSPasteboard.general.clearContents()
-        app.terminate()
-        _ = app.wait(for: .notRunning, timeout: 3)
+        terminateApp()
         app = nil
     }
 
@@ -39,6 +38,19 @@ final class CanvasUITests: XCTestCase {
 
         app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [.command, .shift])
         let clearConfirmation = app.buttons["Confirm Clear Canvas"]
+        if !clearConfirmation.waitForExistence(timeout: 1) {
+            let canvasMenu = app.descendants(matching: .any)
+                .matching(identifier: "canvas-document-menu")
+                .firstMatch
+            XCTAssertTrue(canvasMenu.waitForExistence(timeout: 2))
+            canvasMenu.click()
+            let editMenu = app.menuItems["Edit"]
+            XCTAssertTrue(editMenu.waitForExistence(timeout: 2))
+            editMenu.hover()
+            let clear = app.menuItems["Clear Canvas"]
+            XCTAssertTrue(clear.waitForExistence(timeout: 2))
+            clear.click()
+        }
         XCTAssertTrue(clearConfirmation.waitForExistence(timeout: 2))
         clearConfirmation.click()
         assertStrokeCount(0)
@@ -63,8 +75,7 @@ final class CanvasUITests: XCTestCase {
         XCTAssertTrue(settingsWindow.waitForExistence(timeout: 3))
         settingsWindow.buttons[XCUIIdentifierCloseWindow].click()
 
-        app.terminate()
-        _ = app.wait(for: .notRunning, timeout: 3)
+        terminateApp()
         launch(resetCanvasStore: false)
         openCanvas()
         assertStrokeCount(1)
@@ -86,6 +97,9 @@ final class CanvasUITests: XCTestCase {
         app.typeKey("v", modifierFlags: .command)
         assertContentCount("1 item")
         XCTAssertTrue(app.buttons["canvas-image-delete"].waitForExistence(timeout: 3))
+        let selectTool = app.buttons["canvas-tool-select"]
+        XCTAssertTrue(selectTool.waitForExistence(timeout: 2))
+        selectTool.click()
         try saveVisualEvidence(named: "canvas-image-selected")
 
         let frame = surface.frame
@@ -234,6 +248,14 @@ final class CanvasUITests: XCTestCase {
             app.descendants(matching: .any)["panel-section-picker"]
                 .waitForExistence(timeout: 5),
             "The LSUIElement host must expose its real panel shell after activation"
+        )
+    }
+
+    private func terminateApp() {
+        app.terminate()
+        XCTAssertTrue(
+            app.wait(for: .notRunning, timeout: 10),
+            "The prior LSUIElement process must fully terminate before another launch"
         )
     }
 

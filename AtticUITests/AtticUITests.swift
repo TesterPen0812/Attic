@@ -17,7 +17,7 @@ final class AtticUITests: XCTestCase {
 
     override func tearDownWithError() throws {
         app.terminate()
-        _ = app.wait(for: .notRunning, timeout: 3)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
         app = nil
     }
 
@@ -53,16 +53,9 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(actions.waitForExistence(timeout: 2))
         actions.click()
 
-        XCTAssertTrue(
-            app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", "Copy"))
-                .firstMatch
-                .waitForExistence(timeout: 2)
-        )
+        XCTAssertTrue(app.menuItems["Copy"].waitForExistence(timeout: 2))
 
-        let editTitle = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Edit title…"))
-            .firstMatch
+        let editTitle = app.menuItems["Edit title…"]
         XCTAssertTrue(editTitle.waitForExistence(timeout: 2))
         editTitle.click()
 
@@ -156,7 +149,12 @@ final class AtticUITests: XCTestCase {
 
         let drawer = app.descendants(matching: .any)["saved-notes-drawer"]
         XCTAssertTrue(drawer.waitForExistence(timeout: 2))
-        XCTAssertTrue(app.staticTexts["Live Notes UI"].exists)
+        let savedTitle = app.staticTexts.matching(NSPredicate(
+            format: "label == %@ OR value == %@",
+            "Live Notes UI",
+            "Live Notes UI"
+        )).firstMatch
+        XCTAssertTrue(savedTitle.waitForExistence(timeout: 2))
 
         let returnToWriting = app.buttons["return-to-writing"]
         XCTAssertTrue(returnToWriting.waitForExistence(timeout: 2))
@@ -195,7 +193,9 @@ final class AtticUITests: XCTestCase {
     private func addTask(named title: String) {
         let addButton = app.buttons["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 2))
-        addButton.click()
+        addButton.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).click()
 
         let titleField = app.textFields["new-task-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
