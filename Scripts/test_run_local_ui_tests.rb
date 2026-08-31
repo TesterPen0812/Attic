@@ -83,4 +83,17 @@ class RunLocalUITestsTest < Minitest::Test
     source = File.read(SCRIPT)
     assert_operator source.index("$build_only && exit 0"), :<, source.index("lock_owner=")
   end
+
+  def test_ordinary_unit_test_host_keeps_official_product_defaults
+    generator = File.read(File.join(__dir__, "generate_project.rb"))
+    unit_settings = generator[/unit_tests\.build_configurations\.each.*?^end$/m]
+
+    refute_nil unit_settings
+    assert_includes unit_settings, "settings['ATTIC_MACOS_PRODUCT_NAME'] = 'Attic'"
+    assert_includes unit_settings, "settings['ATTIC_MACOS_EXECUTABLE_NAME'] = 'Attic'"
+    assert_includes unit_settings,
+      "settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'"
+    assert_includes unit_settings,
+      "$(ATTIC_MACOS_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_EXECUTABLE_NAME)"
+  end
 end

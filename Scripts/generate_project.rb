@@ -155,11 +155,17 @@ end
 
 unit_tests.build_configurations.each do |config|
   settings = config.build_settings
+  # TEST_HOST is evaluated in the unit-test target's build-setting scope, so
+  # keep ordinary Local/Debug runs usable when no isolated-host overrides are
+  # supplied on the xcodebuild command line.
+  settings['ATTIC_MACOS_PRODUCT_NAME'] = 'Attic'
+  settings['ATTIC_MACOS_EXECUTABLE_NAME'] = 'Attic'
   settings['ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticTests'
   settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER)'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/$(ATTIC_MACOS_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_EXECUTABLE_NAME)'
