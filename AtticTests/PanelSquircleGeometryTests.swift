@@ -261,7 +261,9 @@ final class PanelSquircleGeometryTests: XCTestCase {
         panel.onAccessibilityResizeRequest = { requestedSize = $0 }
 
         XCTAssertFalse(panel.styleMask.contains(.resizable))
-        XCTAssertTrue(panel.accessibilityIsAttributeSettable(.size))
+        XCTAssertTrue(panel.isAccessibilitySelectorAllowed(
+            #selector(AtticPanel.setAccessibilityFrame(_:))
+        ))
 
         panel.setAccessibilityFrame(
             NSRect(x: 9_000, y: 9_000, width: 280, height: 320)

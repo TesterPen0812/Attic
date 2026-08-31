@@ -8,11 +8,12 @@ final class AtticPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    override func accessibilityIsAttributeSettable(
-        _ attribute: NSAccessibility.Attribute
-    ) -> Bool {
-        if attribute == .size, onAccessibilityResizeRequest != nil { return true }
-        return super.accessibilityIsAttributeSettable(attribute)
+    override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+        if selector == #selector(setAccessibilityFrame(_:)),
+           onAccessibilityResizeRequest != nil || onAccessibilityMoveRequest != nil {
+            return true
+        }
+        return super.isAccessibilitySelectorAllowed(selector)
     }
 
     override func setAccessibilityFrame(_ accessibilityFrame: NSRect) {
