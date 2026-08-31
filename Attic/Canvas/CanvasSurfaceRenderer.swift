@@ -101,6 +101,7 @@ final class CanvasImageDecodeCache {
     private let maximumConcurrentDecodes: Int
     private let decodeOperation: DecodeOperation
     private let failedDecodeLimit: Int
+    private let cancelsActiveDecodesWhenRemoved: Bool
     private var visibleKeys: Set<UUID> = []
     private var queued: [UUID: DecodeRequest] = [:]
     private var queuedOrder: [UUID] = []
@@ -114,12 +115,14 @@ final class CanvasImageDecodeCache {
         countLimit: Int = 48,
         maximumConcurrentDecodes: Int = 3,
         failedDecodeLimit: Int = 512,
+        cancelsActiveDecodesWhenRemoved: Bool = true,
         decode: DecodeOperation? = nil
     ) {
         cache.totalCostLimit = totalCostLimit
         cache.countLimit = countLimit
         self.maximumConcurrentDecodes = max(maximumConcurrentDecodes, 1)
         self.failedDecodeLimit = max(failedDecodeLimit, 1)
+        self.cancelsActiveDecodesWhenRemoved = cancelsActiveDecodesWhenRemoved
         decodeOperation = decode ?? { data in
             await CanvasImageDecodeCache.decodeOffMain(data)
         }
@@ -134,8 +137,10 @@ final class CanvasImageDecodeCache {
         trimFailureHistory()
 
         queued = queued.filter { visibleKeys.contains($0.key) }
-        for (key, decode) in active where !visibleKeys.contains(key) {
-            decode.task.cancel()
+        if cancelsActiveDecodesWhenRemoved {
+            for (key, decode) in active where !visibleKeys.contains(key) {
+                decode.task.cancel()
+            }
         }
 
         rebuildQueueOrder(prioritizing: images)
@@ -271,7 +276,16 @@ final class CanvasImageDecodeCache {
         active[key] = nil
         defer { startQueuedDecodesIfPossible() }
 
-        guard !Task.isCancelled, visibleKeys.contains(key) else { return }
+        // macOS candidate-set changes prune queued work but can let bounded
+        // active ImageIO work finish. ImageIO cannot be preempted once its C
+        // decode begins; keeping that result avoids wasting CPU and decoding
+        // the same bytes again when a quick pan returns to the region. Other
+        // clients retain the existing cancellation default, and removeAll()
+        // always cancels active work for page/lifecycle teardown.
+        guard !Task.isCancelled,
+              visibleKeys.contains(key) || !cancelsActiveDecodesWhenRemoved else {
+            return
+        }
         guard let decodedImage = decoded.image else {
             rememberFailure(key)
             onImageReady?()

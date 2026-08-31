@@ -142,15 +142,7 @@ final class AppSettingsTests: XCTestCase {
             processIdentifier: 45,
             testRunIdentifier: "fallback"
         )
-        let resolved = try XCTUnwrap(runtime.attachmentRootURL())
-
-        XCTAssertNotEqual(resolved, unowned.standardizedFileURL)
-        XCTAssertTrue(resolved.path.contains("AtticTestHosts/45-fallback"))
-        XCTAssertTrue(
-            resolved.path.hasPrefix(
-                FileManager.default.temporaryDirectory.standardizedFileURL.path + "/"
-            )
-        )
+        XCTAssertNil(runtime.attachmentRootURL())
     }
 
     func testClearGlassReadabilityUsesEffectiveSurfaceState() {

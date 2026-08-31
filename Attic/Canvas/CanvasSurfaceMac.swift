@@ -172,7 +172,9 @@ final class CanvasNSView: NSView {
 
     let interaction = CanvasInteractionController()
     let pathCache = CanvasPathCache()
-    let imageCache = CanvasImageDecodeCache()
+    let imageCache = CanvasImageDecodeCache(
+        cancelsActiveDecodesWhenRemoved: false
+    )
     let filePromiseQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "Attic Canvas File Promises"

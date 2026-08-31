@@ -68,11 +68,12 @@ final class CanvasRenderCacheTests: XCTestCase {
     }
 
     @MainActor
-    func testPreparingNewVisibleSetCancelsActiveAndQueuedDecodes() async {
+    func testPreparingNewVisibleSetPrunesQueuedAndRetainsActiveResults() async {
         let probe = HeldCanvasDecoderProbe(image: makeCGImage())
         let images = (0..<4).map(makePlacedImage)
         let cache = CanvasImageDecodeCache(
             maximumConcurrentDecodes: 2,
+            cancelsActiveDecodesWhenRemoved: false,
             decode: { data in await probe.decode(data) }
         )
 
@@ -82,33 +83,35 @@ final class CanvasRenderCacheTests: XCTestCase {
 
         cache.prepare(for: [images[2]])
 
+        await probe.release(0)
         let replacementStarted = await waitUntil {
-            let snapshot = await probe.snapshot()
-            return snapshot.cancelled == Set([0, 1])
-                && snapshot.started.contains(2)
+            await probe.startedCount == 3
         }
         XCTAssertTrue(replacementStarted)
         var snapshot = await probe.snapshot()
         XCTAssertEqual(snapshot.started, [0, 1, 2])
+        XCTAssertTrue(snapshot.cancelled.isEmpty)
         XCTAssertFalse(snapshot.started.contains(3))
         XCTAssertLessThanOrEqual(snapshot.maximumActive, 2)
 
+        await probe.release(1)
         await probe.release(2)
-        let replacementReady = await waitUntil { cache.state(for: images[2]) == .ready }
-        XCTAssertTrue(replacementReady)
+        let completed = await waitUntil {
+            images[0...2].allSatisfy { cache.state(for: $0) == .ready }
+        }
+        XCTAssertTrue(completed)
         snapshot = await probe.snapshot()
         XCTAssertEqual(snapshot.active, 0)
-        XCTAssertEqual(cache.state(for: images[0]), .idle)
-        XCTAssertEqual(cache.state(for: images[1]), .idle)
         XCTAssertEqual(cache.state(for: images[3]), .idle)
     }
 
     @MainActor
-    func testReappearingCancelledTokenWaitsForNonCooperativeDecodeSlot() async {
+    func testReappearingTokenReusesNonCooperativeDecodeResult() async {
         let probe = NonCooperativeCanvasDecoderProbe(image: makeCGImage())
         let images = (10..<13).map(makePlacedImage)
         let cache = CanvasImageDecodeCache(
             maximumConcurrentDecodes: 3,
+            cancelsActiveDecodesWhenRemoved: false,
             decode: { data in await probe.decode(data) }
         )
 
@@ -132,7 +135,39 @@ final class CanvasRenderCacheTests: XCTestCase {
         XCTAssertTrue(replacementsFinished)
         snapshot = await probe.snapshot()
         XCTAssertEqual(snapshot.active, 0)
-        XCTAssertEqual(snapshot.started.filter { $0 == 10 }.count, 2)
+        XCTAssertEqual(snapshot.started.filter { $0 == 10 }.count, 1)
+    }
+
+    @MainActor
+    func testDefaultPolicyStillCancelsRemovedActiveAndQueuedDecodes() async {
+        let probe = HeldCanvasDecoderProbe(image: makeCGImage())
+        let images = (20..<24).map(makePlacedImage)
+        let cache = CanvasImageDecodeCache(
+            maximumConcurrentDecodes: 2,
+            decode: { data in await probe.decode(data) }
+        )
+
+        cache.prepare(for: images)
+        let initialWorkersStarted = await waitUntil {
+            await probe.startedCount == 2
+        }
+        XCTAssertTrue(initialWorkersStarted)
+        cache.prepare(for: [images[2]])
+
+        let replacementStarted = await waitUntil {
+            let snapshot = await probe.snapshot()
+            return snapshot.cancelled == Set([20, 21])
+                && snapshot.started.contains(22)
+        }
+        XCTAssertTrue(replacementStarted)
+        await probe.release(22)
+        let replacementReady = await waitUntil {
+            cache.state(for: images[2]) == .ready
+        }
+        XCTAssertTrue(replacementReady)
+        let snapshot = await probe.snapshot()
+        XCTAssertFalse(snapshot.started.contains(23))
+        XCTAssertLessThanOrEqual(snapshot.maximumActive, 2)
     }
 
     @MainActor
@@ -279,6 +314,42 @@ final class CanvasRenderCacheTests: XCTestCase {
             viewportSize: CGSize(width: 332, height: 332)
         )
         XCTAssertEqual(candidates.map(\.id), [images[0].id])
+
+        let prefetchFirst = [
+            CanvasPlacedImage(
+                encodedData: Data([101]),
+                contentType: "application/octet-stream",
+                pixelWidth: 1,
+                pixelHeight: 1,
+                transform: CanvasImageTransform(
+                    center: CanvasPoint(x: 300, y: 0),
+                    width: 40,
+                    height: 40,
+                    zIndex: 0
+                )
+            ),
+            CanvasPlacedImage(
+                encodedData: Data([102]),
+                contentType: "application/octet-stream",
+                pixelWidth: 1,
+                pixelHeight: 1,
+                transform: CanvasImageTransform(
+                    center: .zero,
+                    width: 40,
+                    height: 40,
+                    zIndex: 1
+                )
+            )
+        ]
+        let visibleFirst = CanvasImageDecodeCandidatePolicy.candidates(
+            in: prefetchFirst,
+            viewport: CanvasViewport(),
+            viewportSize: CGSize(width: 332, height: 332)
+        )
+        XCTAssertEqual(visibleFirst.map(\.id), [
+            prefetchFirst[1].id,
+            prefetchFirst[0].id
+        ])
 
         let ready = expectation(description: "visible candidate decodes")
         let cache = CanvasImageDecodeCache(

@@ -185,6 +185,7 @@ lock_owner=""
 
 cleanup_test_attachment_root() {
     [[ -n "$owned_attachment_parent" && -n "$owned_attachment_root" ]] || return 0
+    local cleanup_status=0
     local marker="$owned_attachment_root/$attachment_owner_marker_name"
     local temporary_base=${TMPDIR:-/tmp}
     temporary_base=${temporary_base:A}
@@ -194,27 +195,40 @@ cleanup_test_attachment_root() {
         && "$owned_attachment_root" == "$owned_attachment_parent"/* \
         && -f "$marker" \
         && "$(<"$marker")" == "$owned_attachment_owner_token" ]]; then
-        /usr/bin/find "$owned_attachment_parent" -depth -delete
-        print -- "attachment_root_cleaned=$owned_attachment_root"
+        /usr/bin/find "$owned_attachment_parent" -depth -delete || cleanup_status=$?
+        if (( cleanup_status == 0 )); then
+            print -- "attachment_root_cleaned=$owned_attachment_root"
+        fi
     else
         print -u2 -- "run_local_ui_tests: refused to clean unverified attachment root: $owned_attachment_root"
+        cleanup_status=1
     fi
     owned_attachment_parent=""
     owned_attachment_root=""
     owned_attachment_owner_token=""
+    return $cleanup_status
 }
 
 release_ui_lock() {
+    local cleanup_status=0
     if $owns_ui_lock && [[ -f "$ui_lock_path/owner" ]] && [[ "$(<"$ui_lock_path/owner")" == "$lock_owner" ]]; then
-        /bin/rm "$ui_lock_path/owner"
-        /bin/rmdir "$ui_lock_path"
+        /bin/rm "$ui_lock_path/owner" || cleanup_status=$?
+        /bin/rmdir "$ui_lock_path" || cleanup_status=$?
     fi
     owns_ui_lock=false
+    return $cleanup_status
 }
 
 cleanup_on_exit() {
-    release_ui_lock
-    cleanup_test_attachment_root
+    set +e
+    local lock_cleanup_status=0
+    local attachment_cleanup_status=0
+    release_ui_lock || lock_cleanup_status=$?
+    cleanup_test_attachment_root || attachment_cleanup_status=$?
+    (( lock_cleanup_status == 0 )) || print -u2 -- "run_local_ui_tests: UI lock cleanup failed with status $lock_cleanup_status"
+    (( attachment_cleanup_status == 0 )) || print -u2 -- "run_local_ui_tests: attachment cleanup failed with status $attachment_cleanup_status"
+    set -e
+    return 0
 }
 
 trap cleanup_on_exit EXIT

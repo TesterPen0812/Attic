@@ -76,6 +76,10 @@ class RunLocalUITestsTest < Minitest::Test
     assert_includes source, "ATTIC_TEST_ATTACHMENT_ROOT=\"$owned_attachment_root\""
     assert_includes source, ".attic-test-root-owner"
     assert_includes source, "attachment_root_cleaned="
+    assert_includes source, "local lock_cleanup_status=0"
+    assert_includes source, "local attachment_cleanup_status=0"
+    assert_includes source, "release_ui_lock || lock_cleanup_status=$?"
+    assert_includes source, "cleanup_test_attachment_root || attachment_cleanup_status=$?"
     refute_includes source, "CODE_SIGNING_ALLOWED=NO"
     assert_operator source.index("build-for-testing"), :<, source.index("/bin/mkdir \"$ui_lock_path\"")
     assert_operator source.index("/bin/mkdir \"$ui_lock_path\""), :<, source.rindex("test-without-building")

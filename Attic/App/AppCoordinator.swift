@@ -67,7 +67,7 @@ struct AppRuntimeEnvironment {
             return validatedExplicitAttachmentRootURL(
                 explicitRoot,
                 fileManager: fileManager
-            ) ?? fallback
+            )
         }
         return fallback
     }
@@ -107,9 +107,14 @@ struct AppRuntimeEnvironment {
     func makeAttachmentFileStore(
         fileManager: FileManager = .default
     ) -> AttachmentFileStore? {
-        attachmentRootURL(fileManager: fileManager).map {
-            AttachmentFileStore(rootURL: $0, fileManager: fileManager)
+        guard isRunningTests else { return nil }
+        guard let rootURL = attachmentRootURL(fileManager: fileManager) else {
+            preconditionFailure(
+                "ATTIC_TEST_ATTACHMENT_ROOT was supplied without valid "
+                    + "temporary containment and ownership proof"
+            )
         }
+        return AttachmentFileStore(rootURL: rootURL, fileManager: fileManager)
     }
 }
 

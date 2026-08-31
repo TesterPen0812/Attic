@@ -32,7 +32,12 @@ enum CanvasImageDecodeCandidatePolicy {
         }
         let margin = prefetchMarginInViewPoints / CGFloat(viewport.scale)
         let decodeRect = worldViewport.insetBy(dx: -margin, dy: -margin)
-        return images.filter { $0.worldRect.intersects(decodeRect) }
+        let visible = images.filter { $0.worldRect.intersects(worldViewport) }
+        let prefetchOnly = images.filter {
+            !$0.worldRect.intersects(worldViewport)
+                && $0.worldRect.intersects(decodeRect)
+        }
+        return visible + prefetchOnly
     }
 }
 
