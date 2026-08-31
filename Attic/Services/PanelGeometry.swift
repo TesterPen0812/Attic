@@ -466,9 +466,9 @@ struct PanelTrackpadDismissTracker {
     private static func horizontalEdgeDirection(for corner: ScreenCorner) -> CGFloat {
         switch corner {
         case .topLeft, .bottomLeft:
-            -1
-        case .topRight, .bottomRight:
             1
+        case .topRight, .bottomRight:
+            -1
         }
     }
 }

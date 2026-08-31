@@ -142,10 +142,10 @@ final class PanelGeometryTests: XCTestCase {
 
     func testPreciseTrackpadSwipeTowardDockedSideRequestsHideForEveryCorner() {
         let cases: [(ScreenCorner, CGFloat)] = [
-            (.topLeft, -1),
-            (.bottomLeft, -1),
-            (.topRight, 1),
-            (.bottomRight, 1)
+            (.topLeft, 1),
+            (.bottomLeft, 1),
+            (.topRight, -1),
+            (.bottomRight, -1)
         ]
 
         for (corner, direction) in cases {
@@ -199,7 +199,7 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual(
             tracker.update(
                 sample: PanelTrackpadSwipeSample(
-                    deltaX: -20,
+                    deltaX: 20,
                     deltaY: 1,
                     phase: .began,
                     isPrecise: true,
@@ -212,7 +212,7 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual(
             tracker.update(
                 sample: PanelTrackpadSwipeSample(
-                    deltaX: 80,
+                    deltaX: -80,
                     deltaY: 0,
                     phase: .changed,
                     isPrecise: true,
@@ -240,7 +240,7 @@ final class PanelGeometryTests: XCTestCase {
     func testTrackpadDirectionNormalizationReservesPhysicalDockSide() {
         XCTAssertTrue(
             PanelTrackpadDismissTracker.isTowardDockedSide(
-                deltaX: -12,
+                deltaX: 12,
                 deltaY: -1,
                 isDirectionInvertedFromDevice: true,
                 dockedCorner: .topRight
@@ -248,7 +248,7 @@ final class PanelGeometryTests: XCTestCase {
         )
         XCTAssertFalse(
             PanelTrackpadDismissTracker.isTowardDockedSide(
-                deltaX: 12,
+                deltaX: -12,
                 deltaY: 1,
                 isDirectionInvertedFromDevice: true,
                 dockedCorner: .topRight
@@ -256,7 +256,7 @@ final class PanelGeometryTests: XCTestCase {
         )
         XCTAssertTrue(
             PanelTrackpadDismissTracker.isTowardDockedSide(
-                deltaX: -12,
+                deltaX: 12,
                 deltaY: 1,
                 isDirectionInvertedFromDevice: false,
                 dockedCorner: .bottomLeft
@@ -278,8 +278,8 @@ final class PanelGeometryTests: XCTestCase {
             hideRequestCount += 1
         }
 
-        panel.sendEvent(try panelScrollEvent(deltaX: 18, deltaY: 2, phase: .began))
-        panel.sendEvent(try panelScrollEvent(deltaX: 34, deltaY: 1, phase: .changed))
+        panel.sendEvent(try panelScrollEvent(deltaX: -18, deltaY: 2, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: -34, deltaY: 1, phase: .changed))
         panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
 
         XCTAssertEqual(hideRequestCount, 1)
@@ -299,7 +299,7 @@ final class PanelGeometryTests: XCTestCase {
             hideRequestCount += 1
         }
 
-        panel.sendEvent(try panelScrollEvent(deltaX: 52, deltaY: 1, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: -52, deltaY: 1, phase: .began))
         panel.sendEvent(try panelScrollEvent(
             deltaX: 4,
             deltaY: 0,
