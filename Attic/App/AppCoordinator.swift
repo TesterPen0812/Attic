@@ -236,10 +236,14 @@ final class AppCoordinator {
         let center = NotificationCenter.default
         menuNotificationTokens = [
             center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.uiState.isMenuTracking = true }
+                Task { @MainActor in
+                    self?.uiState.setInteractionLock(.menuTracking, isActive: true)
+                }
             },
             center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.uiState.isMenuTracking = false }
+                Task { @MainActor in
+                    self?.uiState.setInteractionLock(.menuTracking, isActive: false)
+                }
             }
         ]
     }

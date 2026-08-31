@@ -4,7 +4,7 @@ struct AtticPanelView: View {
     @ObservedObject var store: TaskStore
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var canvasSession: CanvasSession
-    let noteDraft: NoteDraftController
+    @ObservedObject var noteDraft: NoteDraftController
     let chromeInteractionState: PanelChromeInteractionState
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
@@ -122,9 +122,19 @@ struct AtticPanelView: View {
         }
         .onAppear {
             syncModeDockInteractionWidth()
+            syncNoteDraftInteractionLocks()
         }
         .onChange(of: isModeDockExpanded) { _, _ in
             syncModeDockInteractionWidth()
+        }
+        .onChange(of: isQuickEntryFocused) { _, isFocused in
+            uiState.setInteractionLock(.quickEntryFocus, isActive: isFocused)
+        }
+        .onChange(of: noteDraft.isDirty) { _, _ in
+            syncNoteDraftInteractionLocks()
+        }
+        .onChange(of: noteDraft.hasConflict) { _, _ in
+            syncNoteDraftInteractionLocks()
         }
     }
 
@@ -499,6 +509,8 @@ struct AtticPanelView: View {
             focusedModeSection = nil
         }
         guard uiState.selectedSection != section else { return }
+        isQuickEntryFocused = false
+        uiState.setInteractionLock(.quickEntryFocus, isActive: false)
         if uiState.selectedSection.isNotes, noteDraft.isActive {
             guard noteDraft.close() else { return }
         }
@@ -544,6 +556,11 @@ struct AtticPanelView: View {
         if uiState.editingNoteID != noteDraft.activeNoteID {
             uiState.editingNoteID = noteDraft.activeNoteID
         }
+    }
+
+    private func syncNoteDraftInteractionLocks() {
+        uiState.setInteractionLock(.notesDirty, isActive: noteDraft.isDirty)
+        uiState.setInteractionLock(.notesConflict, isActive: noteDraft.hasConflict)
     }
 
     private func allSections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {

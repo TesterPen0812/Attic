@@ -339,11 +339,11 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertFalse(uiState.isPanelPinned)
         XCTAssertFalse(uiState.isInteractionLocked)
 
-        uiState.setWindowInteractionActive(true)
+        uiState.setInteractionLock(.windowResize, isActive: true)
         XCTAssertTrue(uiState.isInteractionLocked)
         XCTAssertFalse(uiState.isPanelPinned)
 
-        uiState.setWindowInteractionActive(false)
+        uiState.setInteractionLock(.windowResize, isActive: false)
         XCTAssertFalse(uiState.isInteractionLocked)
         XCTAssertFalse(uiState.isPanelPinned)
     }

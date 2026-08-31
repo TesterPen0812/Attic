@@ -1,6 +1,30 @@
 import AppKit
 import SwiftUI
 
+enum RevealRefreshPolicy: Equatable {
+    case singleEventDrivenPass
+    case eventDrivenPassWithRetry(after: Duration)
+
+    static var current: Self {
+        #if ATTIC_LOCAL_ONLY
+        .singleEventDrivenPass
+        #else
+        .eventDrivenPassWithRetry(after: .milliseconds(900))
+        #endif
+    }
+
+    var retryDelay: Duration? {
+        switch self {
+        case .singleEventDrivenPass:
+            nil
+        case let .eventDrivenPassWithRetry(delay):
+            delay
+        }
+    }
+
+    var maximumPassCount: Int { retryDelay == nil ? 1 : 2 }
+}
+
 @MainActor
 final class CornerHoverMonitor {
     private let settings: AppSettings
@@ -82,8 +106,10 @@ final class CornerHoverMonitor {
             ProcessInfo.processInfo.endActivity(responsivenessActivity)
             self.responsivenessActivity = nil
         }
-        stateMachine.forceHidden()
-        panelController.hide()
+        let hideResult = panelController.requestHide()
+        if hideResult.isAccepted {
+            stateMachine.forceHidden()
+        }
     }
 
     func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
@@ -180,8 +206,9 @@ final class CornerHoverMonitor {
             // the 20 Hz pointer sampling path.
             refreshStoreForReveal()
             panelController.show(on: activeScreen, corner: settings.corner)
-        case .hide:
-            panelController.hide()
+        case .requestHide:
+            let result = panelController.requestHide()
+            stateMachine.resolveHideRequest(accepted: result.isAccepted)
         }
     }
 
@@ -193,12 +220,17 @@ final class CornerHoverMonitor {
     }
 
     private func refreshStoreForReveal() {
+        revealRefreshTask?.cancel()
+        revealRefreshTask = nil
         store.refresh()
         noteStore.refresh()
         canvasStore.refresh()
-        revealRefreshTask?.cancel()
+
+        guard let retryDelay = RevealRefreshPolicy.current.retryDelay else {
+            return
+        }
         revealRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: retryDelay)
             guard let self, !Task.isCancelled else { return }
             self.store.refresh()
             self.noteStore.refresh()

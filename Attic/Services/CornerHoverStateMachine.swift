@@ -4,10 +4,11 @@ struct CornerHoverStateMachine {
     enum Transition: Equatable {
         case none
         case reveal
-        case hide
+        case requestHide
     }
 
     private(set) var isVisible = false
+    private(set) var isHidePending = false
     private var hotspotEnteredAt: TimeInterval?
     private var revealedAt: TimeInterval?
     private var revealGrace: TimeInterval = 0.8
@@ -49,6 +50,10 @@ struct CornerHoverStateMachine {
             return .reveal
         }
 
+        if isHidePending {
+            return .none
+        }
+
         if isPinned || isInteractionLocked || isInHotspot {
             leaveBeganAt = nil
             return .none
@@ -72,8 +77,21 @@ struct CornerHoverStateMachine {
         }
 
         guard timestamp - (leaveBeganAt ?? timestamp) >= max(0, hideDelay) else { return .none }
-        reset()
-        return .hide
+        isHidePending = true
+        return .requestHide
+    }
+
+    /// Commits the model transition only after the panel controller accepts
+    /// the request (including a successful draft flush). Rejection leaves the
+    /// panel visible and starts a fresh hide-delay window.
+    mutating func resolveHideRequest(accepted: Bool) {
+        guard isHidePending else { return }
+        if accepted {
+            reset()
+        } else {
+            isHidePending = false
+            leaveBeganAt = nil
+        }
     }
 
     mutating func forceVisible(at timestamp: TimeInterval, grace: TimeInterval = 3) {
@@ -84,6 +102,7 @@ struct CornerHoverStateMachine {
         leaveBeganAt = nil
         hotspotEnteredAt = nil
         requiresHotspotExitBeforeReveal = false
+        isHidePending = false
     }
 
     mutating func forceHidden(untilHotspotExit: Bool = false) {
@@ -98,5 +117,6 @@ struct CornerHoverStateMachine {
         panelHasBeenEntered = false
         leaveBeganAt = nil
         requiresHotspotExitBeforeReveal = false
+        isHidePending = false
     }
 }

@@ -20,6 +20,21 @@ struct PanelVisibilityTransitionState {
     }
 }
 
+enum PanelHideRejection: Equatable {
+    case draftFlushFailed
+    case missingUsableScreen
+}
+
+enum PanelHideRequestResult: Equatable {
+    case accepted
+    case rejected(PanelHideRejection)
+
+    var isAccepted: Bool {
+        if case .accepted = self { return true }
+        return false
+    }
+}
+
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
@@ -235,20 +250,28 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     @discardableResult
-    func hide() -> Bool {
+    func requestHide() -> PanelHideRequestResult {
+        guard panel.isVisible else {
+            stopPointerPassthroughMonitoring()
+            return .accepted
+        }
+        guard let screen = panel.screen ?? currentScreen else {
+            return .rejected(.missingUsableScreen)
+        }
+        guard noteDraft.flush() else {
+            return .rejected(.draftFlushFailed)
+        }
+
+        // Destructive/transient presentation state changes only after the
+        // persistence boundary accepts the hide transaction.
         canvasSession.cancelActiveInteraction()
         uiState.isCanvasConfirmationPresented = false
         uiState.dockingPreviewCorner = nil
-        uiState.setWindowInteractionActive(false)
-        guard panel.isVisible else {
-            stopPointerPassthroughMonitoring()
-            return true
-        }
-        guard noteDraft.flush() else { return false }
+        uiState.setInteractionLock(.windowMove, isActive: false)
+        uiState.setInteractionLock(.windowResize, isActive: false)
         let generation = visibilityTransition.beginTransition()
         isShowing = false
         needsResizeAfterShowing = false
-        guard let screen = panel.screen ?? currentScreen else { return false }
         let safeFrame = PanelGeometry.constrainedFrame(panel.frame, to: screen.visibleFrame)
         if !framesMatch(panel.frame, safeFrame) {
             panel.setFrame(safeFrame, display: true)
@@ -271,7 +294,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.stopPointerPassthroughMonitoring()
             }
         }
-        return true
+        return .accepted
     }
 
     private func configurePanel() {
@@ -455,7 +478,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         needsResizeAfterShowing = false
         isLiveResizing = true
         uiState.dockingPreviewCorner = nil
-        uiState.setWindowInteractionActive(true)
+        uiState.setInteractionLock(.windowResize, isActive: true)
         panel.ignoresMouseEvents = false
     }
 
@@ -473,7 +496,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isPersistingManualSize = true
         settings.persistPanelSize(finalSize)
         isPersistingManualSize = false
-        uiState.setWindowInteractionActive(false)
+        uiState.setInteractionLock(.windowResize, isActive: false)
     }
 
     private func beginWindowDrag() {
@@ -481,7 +504,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isShowing = false
         needsResizeAfterShowing = false
         isWindowDragging = true
-        uiState.setWindowInteractionActive(true)
+        uiState.setInteractionLock(.windowMove, isActive: true)
         panel.ignoresMouseEvents = false
     }
 
@@ -516,7 +539,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isWindowDragging = false
         guard let screen = screen(containing: pointer) ?? panel.screen ?? currentScreen else {
             uiState.dockingPreviewCorner = nil
-            uiState.setWindowInteractionActive(false)
+            uiState.setInteractionLock(.windowMove, isActive: false)
             return
         }
 
@@ -531,8 +554,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
         if releaseAction == .hide {
             uiState.dockingPreviewCorner = nil
-            uiState.setWindowInteractionActive(false)
-            if hide() {
+            uiState.setInteractionLock(.windowMove, isActive: false)
+            if requestHide().isAccepted {
                 onInteractiveHideAccepted?()
             } else {
                 animateDock(
@@ -563,7 +586,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         persistsCorner: Bool,
         showsPreview: Bool
     ) {
-        uiState.setWindowInteractionActive(true)
+        uiState.setInteractionLock(.windowMove, isActive: true)
         uiState.dockingPreviewCorner = showsPreview ? corner : nil
 
         if persistsCorner {
@@ -589,7 +612,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.uiState.updatePanelSize(self.panel.frame.size)
                 self.uiState.dockingPreviewCorner = nil
-                self.uiState.setWindowInteractionActive(false)
+                self.uiState.setInteractionLock(.windowMove, isActive: false)
             }
         }
     }
