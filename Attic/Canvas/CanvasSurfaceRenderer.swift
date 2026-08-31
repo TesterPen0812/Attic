@@ -67,8 +67,16 @@ private final class CanvasCGImageBox: NSObject {
     }
 }
 
-private struct CanvasDecodedImage: @unchecked Sendable {
+struct CanvasDecodedImage: @unchecked Sendable {
     let image: CGImage?
+}
+
+enum CanvasImageDecodeState: Equatable {
+    case idle
+    case queued
+    case decoding
+    case ready
+    case failed
 }
 
 /// Decodes canonical Canvas image bytes away from the main actor. The bounded
@@ -76,39 +84,101 @@ private struct CanvasDecodedImage: @unchecked Sendable {
 /// every decompressed bitmap simultaneously.
 @MainActor
 final class CanvasImageDecodeCache {
+    typealias DecodeOperation = @Sendable (Data) async -> CanvasDecodedImage
+
+    private struct DecodeRequest {
+        let data: Data
+    }
+
+    private struct ActiveDecode {
+        let attemptID: UUID
+        let task: Task<Void, Never>
+    }
+
     var onImageReady: (() -> Void)?
 
     private let cache = NSCache<NSString, CanvasCGImageBox>()
-    private var pending: [UUID: Task<Void, Never>] = [:]
+    private let maximumConcurrentDecodes: Int
+    private let decodeOperation: DecodeOperation
+    private let failedDecodeLimit: Int
+    private var visibleKeys: Set<UUID> = []
+    private var queued: [UUID: DecodeRequest] = [:]
+    private var queuedOrder: [UUID] = []
+    private var queueHead = 0
+    private var active: [UUID: ActiveDecode] = [:]
+    private var failed: Set<UUID> = []
+    private var failedOrder: [UUID] = []
 
-    init(totalCostLimit: Int = 256 * 1_024 * 1_024, countLimit: Int = 48) {
+    init(
+        totalCostLimit: Int = 256 * 1_024 * 1_024,
+        countLimit: Int = 48,
+        maximumConcurrentDecodes: Int = 3,
+        failedDecodeLimit: Int = 512,
+        decode: DecodeOperation? = nil
+    ) {
         cache.totalCostLimit = totalCostLimit
         cache.countLimit = countLimit
+        self.maximumConcurrentDecodes = max(maximumConcurrentDecodes, 1)
+        self.failedDecodeLimit = max(failedDecodeLimit, 1)
+        decodeOperation = decode ?? { data in
+            await CanvasImageDecodeCache.decodeOffMain(data)
+        }
     }
 
     deinit {
-        pending.values.forEach { $0.cancel() }
+        active.values.forEach { $0.task.cancel() }
     }
 
     func prepare(for images: [CanvasPlacedImage]) {
-        let visibleKeys = Set(images.map(\.contentToken))
-        for (key, task) in pending where !visibleKeys.contains(key) {
-            task.cancel()
-            pending[key] = nil
+        visibleKeys = Set(images.map(\.contentToken))
+        trimFailureHistory()
+
+        queued = queued.filter { visibleKeys.contains($0.key) }
+        for (key, decode) in active where !visibleKeys.contains(key) {
+            decode.task.cancel()
         }
 
-        for image in images where cachedImage(for: image) == nil {
-            requestDecode(for: image)
+        rebuildQueueOrder(prioritizing: images)
+        for image in images {
+            enqueueIfNeeded(image)
         }
+        rebuildQueueOrder(prioritizing: images)
+        startQueuedDecodesIfPossible()
     }
 
     func image(for image: CanvasPlacedImage) -> CGImage? {
-        cachedImage(for: image)
+        if let cached = cachedImage(for: image) {
+            return cached
+        }
+        guard failed.contains(image.contentToken) else { return nil }
+        return Self.failedDecodePlaceholder?.image
+    }
+
+    func state(for image: CanvasPlacedImage) -> CanvasImageDecodeState {
+        let key = image.contentToken
+        if cachedImage(for: image) != nil { return .ready }
+        if failed.contains(key) { return .failed }
+        if queued[key] != nil { return .queued }
+        if let active = active[key], !active.task.isCancelled { return .decoding }
+        return .idle
+    }
+
+    func retryDecode(for image: CanvasPlacedImage) {
+        let key = image.contentToken
+        guard visibleKeys.contains(key), failed.remove(key) != nil else { return }
+        failedOrder.removeAll { $0 == key }
+        enqueueIfNeeded(image)
+        startQueuedDecodesIfPossible()
     }
 
     func removeAll() {
-        pending.values.forEach { $0.cancel() }
-        pending.removeAll()
+        visibleKeys.removeAll()
+        queued.removeAll()
+        queuedOrder.removeAll()
+        queueHead = 0
+        active.values.forEach { $0.task.cancel() }
+        failed.removeAll()
+        failedOrder.removeAll()
         cache.removeAllObjects()
     }
 
@@ -116,28 +186,130 @@ final class CanvasImageDecodeCache {
         cache.object(forKey: cacheKey(image.contentToken))?.image
     }
 
-    private func requestDecode(for image: CanvasPlacedImage) {
+    private func enqueueIfNeeded(_ image: CanvasPlacedImage) {
         let key = image.contentToken
-        guard pending[key] == nil else { return }
-        let data = image.encodedData
-        let cacheIdentifier = cacheKey(key)
+        guard cachedImage(for: image) == nil,
+              !failed.contains(key),
+              queued[key] == nil else {
+            return
+        }
 
-        pending[key] = Task { @MainActor [weak self] in
-            let decoded = await Task.detached(priority: .utility) {
-                CanvasDecodedImage(image: Self.decode(data))
-            }.value
-            guard let self, !Task.isCancelled else { return }
-            pending[key] = nil
-            guard let decodedImage = decoded.image else { return }
-            cache.setObject(
-                CanvasCGImageBox(decodedImage),
-                forKey: cacheIdentifier,
-                cost: Self.decodedCost(decodedImage)
-            )
-            onImageReady?()
+        if let active = active[key], !active.task.isCancelled { return }
+        queued[key] = DecodeRequest(data: image.encodedData)
+        queuedOrder.append(key)
+    }
+
+    private func rebuildQueueOrder(prioritizing images: [CanvasPlacedImage]) {
+        var ordered: [UUID] = []
+        ordered.reserveCapacity(queued.count)
+        var inserted: Set<UUID> = []
+        inserted.reserveCapacity(queued.count)
+
+        for image in images {
+            let key = image.contentToken
+            guard queued[key] != nil, inserted.insert(key).inserted else { continue }
+            ordered.append(key)
+        }
+        for key in queuedOrder.dropFirst(min(queueHead, queuedOrder.count)) {
+            guard queued[key] != nil, inserted.insert(key).inserted else { continue }
+            ordered.append(key)
+        }
+        queuedOrder = ordered
+        queueHead = 0
+    }
+
+    private func startQueuedDecodesIfPossible() {
+        while active.count < maximumConcurrentDecodes,
+              let (key, request) = dequeueNext() {
+            let attemptID = UUID()
+            let operation = decodeOperation
+            let task = Task { @MainActor [weak self] in
+                let decoded = await operation(request.data)
+                guard let self else { return }
+                finishDecode(key: key, attemptID: attemptID, decoded: decoded)
+            }
+            active[key] = ActiveDecode(attemptID: attemptID, task: task)
         }
     }
 
+    private func dequeueNext() -> (UUID, DecodeRequest)? {
+        let candidateCount = queuedOrder.count - queueHead
+        var examined = 0
+        while examined < candidateCount, queueHead < queuedOrder.count {
+            let key = queuedOrder[queueHead]
+            queueHead += 1
+            examined += 1
+            guard let request = queued[key] else { continue }
+            guard active[key] == nil else {
+                queuedOrder.append(key)
+                continue
+            }
+            queued[key] = nil
+            compactQueueIfNeeded()
+            return (key, request)
+        }
+        compactQueueIfNeeded(force: true)
+        return nil
+    }
+
+    private func compactQueueIfNeeded(force: Bool = false) {
+        if queueHead >= queuedOrder.count {
+            queuedOrder.removeAll(keepingCapacity: true)
+            queueHead = 0
+        } else if force || (queueHead > 64 && queueHead * 2 >= queuedOrder.count) {
+            queuedOrder = Array(queuedOrder[queueHead...])
+            queueHead = 0
+        }
+    }
+
+    private func finishDecode(
+        key: UUID,
+        attemptID: UUID,
+        decoded: CanvasDecodedImage
+    ) {
+        guard active[key]?.attemptID == attemptID else { return }
+        active[key] = nil
+        defer { startQueuedDecodesIfPossible() }
+
+        guard !Task.isCancelled, visibleKeys.contains(key) else { return }
+        guard let decodedImage = decoded.image else {
+            rememberFailure(key)
+            onImageReady?()
+            return
+        }
+
+        clearFailure(key)
+        cache.setObject(
+            CanvasCGImageBox(decodedImage),
+            forKey: cacheKey(key),
+            cost: Self.decodedCost(decodedImage)
+        )
+        onImageReady?()
+    }
+
+    private func rememberFailure(_ key: UUID) {
+        guard failed.insert(key).inserted else { return }
+        failedOrder.append(key)
+        trimFailureHistory()
+    }
+
+    private func trimFailureHistory() {
+        var index = 0
+        while failedOrder.count > failedDecodeLimit, index < failedOrder.count {
+            let key = failedOrder[index]
+            if visibleKeys.contains(key) {
+                index += 1
+            } else {
+                failedOrder.remove(at: index)
+                failed.remove(key)
+            }
+        }
+    }
+
+    private func clearFailure(_ key: UUID) {
+        guard failed.remove(key) != nil else { return }
+        failedOrder.removeAll { $0 == key }
+    }
 
     private static func decodedCost(_ image: CGImage) -> Int {
         let rawCost = image.bytesPerRow.multipliedReportingOverflow(
@@ -145,6 +317,22 @@ final class CanvasImageDecodeCache {
         )
         let cost = rawCost.overflow ? Int.max : rawCost.partialValue
         return max(cost, 1)
+    }
+
+    nonisolated private static func decodeOffMain(
+        _ data: Data
+    ) async -> CanvasDecodedImage {
+        let task = Task.detached(priority: .utility) {
+            guard !Task.isCancelled else { return CanvasDecodedImage(image: nil) }
+            let decoded = decode(data)
+            guard !Task.isCancelled else { return CanvasDecodedImage(image: nil) }
+            return CanvasDecodedImage(image: decoded)
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     nonisolated private static func decode(_ data: Data) -> CGImage? {
@@ -167,6 +355,49 @@ final class CanvasImageDecodeCache {
     private func cacheKey(_ key: UUID) -> NSString {
         key.uuidString as NSString
     }
+
+    private static let failedDecodePlaceholder: CanvasCGImageBox? = {
+        let size = 64
+        guard let context = CGContext(
+            data: nil,
+            width: size,
+            height: size,
+            bitsPerComponent: 8,
+            bytesPerRow: size * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.setFillColor(CGColor(gray: 0.78, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        context.setFillColor(CGColor(gray: 0.68, alpha: 1))
+        let tile = CGFloat(size / 4)
+        for row in 0..<4 {
+            for column in 0..<4 where (row + column).isMultiple(of: 2) {
+                context.fill(
+                    CGRect(
+                        x: CGFloat(column) * tile,
+                        y: CGFloat(row) * tile,
+                        width: tile,
+                        height: tile
+                    )
+                )
+            }
+        }
+        context.setStrokeColor(CGColor(gray: 0.25, alpha: 0.9))
+        context.setLineWidth(5)
+        context.setLineCap(.round)
+        context.move(to: CGPoint(x: 17, y: 17))
+        context.addLine(to: CGPoint(x: 47, y: 47))
+        context.move(to: CGPoint(x: 47, y: 17))
+        context.addLine(to: CGPoint(x: 17, y: 47))
+        context.strokePath()
+
+        guard let image = context.makeImage() else { return nil }
+        return CanvasCGImageBox(image)
+    }()
 }
 
 func drawCanvas(
