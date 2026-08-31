@@ -324,7 +324,9 @@ final class MCPRequestHandlerTests: XCTestCase {
     }
 
     private func makeNoteHandler() throws -> (NoteStore, MCPRequestHandler) {
-        let noteStore = try makeTestNoteStore()
+        let noteStore = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let handler = MCPRequestHandler(
             tools: AgentTaskTools(store: store, noteStore: noteStore),
             serverVersion: "test"
