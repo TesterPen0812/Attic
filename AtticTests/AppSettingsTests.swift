@@ -51,6 +51,60 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(runtime.makeSettingsDefaults(standard: simulatedStandard) === simulatedStandard)
     }
 
+    @MainActor
+    func testTestHostAttachmentEnvironmentCannotReconcileOutsideItsTempRoot() async throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppRuntimeAttachmentTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let outsideRoot = parent.appendingPathComponent("outside", isDirectory: true)
+        let isolatedRoot = parent.appendingPathComponent("isolated", isDirectory: true)
+        let sentinel = outsideRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("deadbeef", isDirectory: true)
+            .appendingPathComponent("sentinel.txt")
+        try FileManager.default.createDirectory(
+            at: sentinel.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let sentinelData = Data("must survive hosted unit startup".utf8)
+        try sentinelData.write(to: sentinel)
+
+        let runtime = AppRuntimeEnvironment(
+            environment: [
+                "ATTIC_TESTING": "1",
+                "ATTIC_TEST_ATTACHMENT_ROOT": isolatedRoot.path
+            ],
+            processIdentifier: 44,
+            testRunIdentifier: "sentinel"
+        )
+        XCTAssertEqual(runtime.attachmentRootURL(), isolatedRoot.standardizedFileURL)
+        let container = try PersistenceController.makeContainer(
+            inMemory: true,
+            cloudSyncEnabled: false
+        )
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: try XCTUnwrap(runtime.makeAttachmentFileStore())
+        )
+        XCTAssertTrue(store.notes.isEmpty)
+
+        let stagingRoot = isolatedRoot.appendingPathComponent(".staging", isDirectory: true)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !FileManager.default.fileExists(atPath: stagingRoot.path),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stagingRoot.path))
+        XCTAssertEqual(try Data(contentsOf: sentinel), sentinelData)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: outsideRoot.appendingPathComponent(".staging").path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: outsideRoot.appendingPathComponent("Thumbnails").path
+        ))
+    }
+
     func testClearGlassReadabilityUsesEffectiveSurfaceState() {
         XCTAssertTrue(AtticClearGlassReadabilityPolicy.isEnabled(
             isTranslucent: true,

@@ -5,13 +5,16 @@ import SwiftData
 struct AppRuntimeEnvironment {
     let environment: [String: String]
     let processIdentifier: Int32
+    let testRunIdentifier: String
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier
+        processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
+        testRunIdentifier: String = UUID().uuidString
     ) {
         self.environment = environment
         self.processIdentifier = processIdentifier
+        self.testRunIdentifier = testRunIdentifier
     }
 
     var isUITesting: Bool {
@@ -42,6 +45,34 @@ struct AppRuntimeEnvironment {
             preconditionFailure("Unable to create isolated test defaults: \(suiteName)")
         }
         return isolatedDefaults
+    }
+
+    func attachmentRootURL(
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard isRunningTests else { return nil }
+        if let explicitRoot = environment["ATTIC_TEST_ATTACHMENT_ROOT"],
+           !explicitRoot.isEmpty {
+            return URL(fileURLWithPath: explicitRoot, isDirectory: true)
+                .standardizedFileURL
+        }
+        return fileManager.temporaryDirectory
+            .appendingPathComponent("AtticTestHosts", isDirectory: true)
+            .appendingPathComponent(
+                "\(processIdentifier)-\(testRunIdentifier)",
+                isDirectory: true
+            )
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent("v1", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    func makeAttachmentFileStore(
+        fileManager: FileManager = .default
+    ) -> AttachmentFileStore? {
+        attachmentRootURL(fileManager: fileManager).map {
+            AttachmentFileStore(rootURL: $0, fileManager: fileManager)
+        }
     }
 }
 
@@ -153,7 +184,10 @@ final class AppCoordinator {
         }
 
         let store = TaskStore(container: container)
-        let noteStore = NoteStore(container: container)
+        let noteStore = NoteStore(
+            container: container,
+            attachmentFileStore: runtime.makeAttachmentFileStore()
+        )
         let canvasStore = CanvasStore(container: container)
         let canvasSession = CanvasSession(store: canvasStore)
         let noteDraft = NoteDraftController(noteStore: noteStore)
