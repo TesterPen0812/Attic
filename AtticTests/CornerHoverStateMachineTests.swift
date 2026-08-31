@@ -3,6 +3,163 @@ import XCTest
 @testable import Attic
 
 final class CornerHoverStateMachineTests: XCTestCase {
+    func testSamplingCadenceDefinesDeterministicTimerSchedule() {
+        XCTAssertEqual(CornerHoverSamplingCadence.idle.intervalMilliseconds, 1_000)
+        XCTAssertEqual(CornerHoverSamplingCadence.idle.leewayMilliseconds, 250)
+        XCTAssertEqual(CornerHoverSamplingCadence.idle.nominalSamplesPerMinute, 60)
+        XCTAssertFalse(CornerHoverSamplingCadence.idle.holdsResponsivenessActivity)
+
+        XCTAssertEqual(CornerHoverSamplingCadence.responsive.intervalMilliseconds, 50)
+        XCTAssertEqual(CornerHoverSamplingCadence.responsive.leewayMilliseconds, 15)
+        XCTAssertEqual(CornerHoverSamplingCadence.responsive.nominalSamplesPerMinute, 1_200)
+        XCTAssertTrue(CornerHoverSamplingCadence.responsive.holdsResponsivenessActivity)
+    }
+
+    func testHiddenFarSamplingIsIdleAndDoesNotHoldResponsivenessActivity() {
+        var sampling = CornerHoverSamplingState()
+        let decision = sampling.update(
+            pointer: CGPoint(x: 960, y: 540),
+            screenFrames: [CGRect(x: 0, y: 0, width: 1_920, height: 1_080)],
+            corner: .topRight,
+            isPanelVisible: false
+        )
+
+        XCTAssertEqual(decision.cadence, .idle)
+        XCTAssertFalse(decision.shouldSampleImmediately)
+        XCTAssertFalse(decision.cadence.holdsResponsivenessActivity)
+        XCTAssertLessThanOrEqual(decision.cadence.nominalSamplesPerMinute, 60)
+        XCTAssertGreaterThanOrEqual(
+            CornerHoverSamplingCadence.responsive.nominalSamplesPerMinute,
+            decision.cadence.nominalSamplesPerMinute * 10
+        )
+    }
+
+    func testPointerApproachImmediatelyPromotesToResponsiveSampling() {
+        var sampling = CornerHoverSamplingState()
+        let screen = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        _ = sampling.update(
+            pointer: CGPoint(x: 960, y: 540),
+            screenFrames: [screen],
+            corner: .topRight,
+            isPanelVisible: false
+        )
+
+        let decision = sampling.update(
+            pointer: CGPoint(x: 1_900, y: 1_060),
+            screenFrames: [screen],
+            corner: .topRight,
+            isPanelVisible: false
+        )
+
+        XCTAssertEqual(decision.cadence, .responsive)
+        XCTAssertTrue(decision.shouldSampleImmediately)
+        XCTAssertTrue(decision.cadence.holdsResponsivenessActivity)
+        XCTAssertLessThanOrEqual(decision.cadence.intervalMilliseconds, 50)
+    }
+
+    func testFarPointerMovementDoesNotRequestFullMainThreadSample() {
+        var sampling = CornerHoverSamplingState()
+        let screen = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        _ = sampling.update(
+            pointer: CGPoint(x: 500, y: 500),
+            screenFrames: [screen],
+            corner: .topRight,
+            isPanelVisible: false
+        )
+
+        let decision = sampling.update(
+            pointer: CGPoint(x: 700, y: 600),
+            screenFrames: [screen],
+            corner: .topRight,
+            isPanelVisible: false
+        )
+
+        XCTAssertEqual(decision.cadence, .idle)
+        XCTAssertFalse(decision.shouldSampleImmediately)
+    }
+
+    func testNearCornerHysteresisAvoidsCadenceThrashAndSamplesOnExit() {
+        var sampling = CornerHoverSamplingState()
+        let screen = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+
+        XCTAssertEqual(
+            sampling.update(
+                pointer: CGPoint(x: 1_840, y: 1_000),
+                screenFrames: [screen],
+                corner: .topRight,
+                isPanelVisible: false
+            ).cadence,
+            .responsive
+        )
+        let hysteresisDecision = sampling.update(
+            pointer: CGPoint(x: 1_800, y: 960),
+            screenFrames: [screen],
+            corner: .topRight,
+            isPanelVisible: false
+        )
+        XCTAssertEqual(hysteresisDecision.cadence, .responsive)
+        XCTAssertFalse(hysteresisDecision.shouldSampleImmediately)
+
+        let exitDecision = sampling.update(
+            pointer: CGPoint(x: 1_760, y: 900),
+            screenFrames: [screen],
+            corner: .topRight,
+            isPanelVisible: false
+        )
+        XCTAssertEqual(exitDecision.cadence, .idle)
+        XCTAssertTrue(exitDecision.shouldSampleImmediately)
+    }
+
+    func testVisiblePanelKeepsResponsiveCadenceAwayFromCorner() {
+        var sampling = CornerHoverSamplingState()
+        let screen = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        let visibleDecision = sampling.update(
+            pointer: CGPoint(x: 960, y: 540),
+            screenFrames: [screen],
+            corner: .bottomLeft,
+            isPanelVisible: true
+        )
+
+        XCTAssertEqual(visibleDecision.cadence, .responsive)
+        XCTAssertTrue(visibleDecision.shouldSampleImmediately)
+
+        let hiddenDecision = sampling.update(
+            pointer: CGPoint(x: 960, y: 540),
+            screenFrames: [screen],
+            corner: .bottomLeft,
+            isPanelVisible: false
+        )
+        XCTAssertEqual(hiddenDecision.cadence, .idle)
+        XCTAssertTrue(hiddenDecision.shouldSampleImmediately)
+    }
+
+    func testConfiguredCornerProximityWorksAcrossOffsetDisplays() {
+        let screens = [
+            CGRect(x: -1_440, y: -900, width: 1_440, height: 900),
+            CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        ]
+        let cases: [(ScreenCorner, CGPoint)] = [
+            (.topLeft, CGPoint(x: -1_430, y: -10)),
+            (.topRight, CGPoint(x: -10, y: -10)),
+            (.bottomLeft, CGPoint(x: 10, y: 10)),
+            (.bottomRight, CGPoint(x: 1_910, y: 10))
+        ]
+
+        for (corner, pointer) in cases {
+            var sampling = CornerHoverSamplingState()
+            XCTAssertEqual(
+                sampling.update(
+                    pointer: pointer,
+                    screenFrames: screens,
+                    corner: corner,
+                    isPanelVisible: false
+                ).cadence,
+                .responsive,
+                "Expected \(corner) to promote near \(pointer)"
+            )
+        }
+    }
+
     func testRevealsOnlyAfterConfiguredDwell() {
         var machine = CornerHoverStateMachine()
 
