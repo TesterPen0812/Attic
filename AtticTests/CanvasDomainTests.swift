@@ -1,6 +1,8 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import SwiftData
+import UniformTypeIdentifiers
 import XCTest
 @testable import Attic
 
@@ -20,6 +22,164 @@ private final class DrivenMagnificationGestureRecognizer:
     ) {
         self.magnification = magnification
         self.state = state
+    }
+}
+
+@MainActor
+private final class CanvasTestFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
+    private let fileName: String
+
+    init(fileName: String) {
+        self.fileName = fileName
+    }
+
+    func filePromiseProvider(
+        _ filePromiseProvider: NSFilePromiseProvider,
+        fileNameForType fileType: String
+    ) -> String {
+        fileName
+    }
+
+    nonisolated func filePromiseProvider(
+        _ filePromiseProvider: NSFilePromiseProvider,
+        writePromiseTo url: URL,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
+final class CanvasImageDropBatchTests: XCTestCase {
+    @MainActor
+    func testFileURLDropAdvertisesCopyAndImportsOnlySupportedImages() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticCanvasDropTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let imageURL = root.appendingPathComponent("image.png")
+        let textURL = root.appendingPathComponent("notes.txt")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: imageURL)
+        try Data("not an image".utf8).write(to: textURL)
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([textURL as NSURL]))
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+        XCTAssertFalse(view.hasSupportedImagePayload(pasteboard))
+
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([textURL as NSURL, imageURL as NSURL]))
+        XCTAssertTrue(view.hasSupportedImagePayload(pasteboard))
+        let target = CanvasImportTarget(canvasID: UUID(), boardGeneration: 7)
+        var deliveredBatch: CanvasImageImportBatch?
+        view.onCaptureImageImportTarget = { target }
+        view.onImportImageBatch = { deliveredBatch = $0 }
+
+        XCTAssertTrue(view.importPasteboard(
+            pasteboard,
+            at: CGPoint(x: 150, y: 150)
+        ))
+
+        let batch = try XCTUnwrap(deliveredBatch)
+        XCTAssertEqual(batch.target, target)
+        XCTAssertEqual(batch.items.count, 1)
+        XCTAssertEqual(batch.items.first?.source, .file(imageURL))
+    }
+
+    @MainActor
+    func testPromisedFileTypeIsFilteredBeforeAdvertisingCopy() {
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+        let textDelegate = CanvasTestFilePromiseDelegate(fileName: "notes.txt")
+        let textPromise = NSFilePromiseProvider(
+            fileType: UTType.plainText.identifier,
+            delegate: textDelegate
+        )
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([textPromise]))
+        XCTAssertFalse(view.hasSupportedImagePayload(pasteboard))
+
+        let imageDelegate = CanvasTestFilePromiseDelegate(fileName: "image.png")
+        let imagePromise = NSFilePromiseProvider(
+            fileType: UTType.png.identifier,
+            delegate: imageDelegate
+        )
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([imagePromise]))
+        XCTAssertTrue(view.hasSupportedImagePayload(pasteboard))
+
+        withExtendedLifetime([textDelegate, imageDelegate]) {}
+    }
+
+    @MainActor
+    func testFilePromiseCoordinatorKeepsSlotOrderAndRejectsLateDelivery() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticCanvasPromiseTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let firstRoot = root.appendingPathComponent("first", isDirectory: true)
+        let secondRoot = root.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(at: firstRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstURL = firstRoot.appendingPathComponent("first.png")
+        let lateURL = secondRoot.appendingPathComponent("late.png")
+        try Data([1]).write(to: firstURL)
+        try Data([2]).write(to: lateURL)
+        let target = CanvasImportTarget(canvasID: UUID(), boardGeneration: 4)
+        let firstID = UUID()
+        let secondID = UUID()
+        let coordinator = CanvasFilePromiseBatchCoordinator(
+            batchID: UUID(),
+            target: target,
+            slots: [
+                .init(
+                    requestID: firstID,
+                    receiverIndex: 0,
+                    center: .zero,
+                    cleanupURL: firstRoot
+                ),
+                .init(
+                    requestID: secondID,
+                    receiverIndex: 1,
+                    center: CanvasPoint(x: 12, y: 12),
+                    cleanupURL: secondRoot
+                )
+            ]
+        )
+
+        XCTAssertEqual(
+            coordinator.record(
+                receiverIndex: 1,
+                source: .deliveryFailure("Provider failed.")
+            ),
+            .waiting
+        )
+        let completion = coordinator.record(
+            receiverIndex: 0,
+            source: .file(firstURL)
+        )
+        guard case let .ready(batch) = completion else {
+            return XCTFail("Expected the completed promise batch")
+        }
+        XCTAssertEqual(batch.target, target)
+        XCTAssertEqual(batch.items.map(\.id), [firstID, secondID])
+        XCTAssertEqual(
+            batch.items.map(\.source),
+            [.file(firstURL), .deliveryFailure("Provider failed.")]
+        )
+        XCTAssertEqual(
+            coordinator.record(receiverIndex: 1, source: .file(lateURL)),
+            .late
+        )
+
+        CanvasTemporaryImportCleanup.removeLateDelivery(
+            at: lateURL,
+            from: secondRoot
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lateURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: secondRoot.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstURL.path))
     }
 }
 

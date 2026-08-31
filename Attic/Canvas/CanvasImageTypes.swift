@@ -19,6 +19,171 @@ struct CanvasPreparedImage: Equatable, Sendable {
     }
 }
 
+struct CanvasImportTarget: Equatable, Sendable {
+    let canvasID: UUID
+    let boardGeneration: Int64
+}
+
+enum CanvasImageImportSource: Equatable, Sendable {
+    case data(Data)
+    case file(URL)
+    case deliveryFailure(String)
+}
+
+struct CanvasImageImportRequest: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let source: CanvasImageImportSource
+    let center: CanvasPoint
+    /// A uniquely owned temporary directory, normally created for a file
+    /// promise. The batch owns its cleanup after success, failure, or
+    /// cancellation.
+    let cleanupURL: URL?
+
+    init(
+        id: UUID = UUID(),
+        source: CanvasImageImportSource,
+        center: CanvasPoint,
+        cleanupURL: URL? = nil
+    ) {
+        self.id = id
+        self.source = source
+        self.center = center
+        self.cleanupURL = cleanupURL
+    }
+}
+
+struct CanvasImageImportBatch: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let target: CanvasImportTarget
+    let items: [CanvasImageImportRequest]
+
+    init(
+        id: UUID = UUID(),
+        target: CanvasImportTarget,
+        items: [CanvasImageImportRequest]
+    ) {
+        self.id = id
+        self.target = target
+        self.items = items
+    }
+}
+
+enum CanvasImageImportFailure: Equatable, Sendable {
+    case deliveryFailed(String)
+    case preparationFailed(String)
+    case targetUnavailable
+    case targetGenerationChanged
+    case persistenceFailed(String)
+    case cancelled
+
+    var message: String {
+        switch self {
+        case let .deliveryFailed(message),
+             let .preparationFailed(message),
+             let .persistenceFailed(message):
+            message
+        case .targetUnavailable:
+            "The destination canvas no longer exists."
+        case .targetGenerationChanged:
+            "The destination canvas was cleared before the import completed."
+        case .cancelled:
+            "The image import was cancelled."
+        }
+    }
+}
+
+enum CanvasImageImportOutcome: Equatable, Sendable {
+    case imported(imageID: UUID)
+    case failed(CanvasImageImportFailure)
+
+    var importedImageID: UUID? {
+        guard case let .imported(imageID) = self else { return nil }
+        return imageID
+    }
+}
+
+struct CanvasImageImportItemResult: Equatable, Sendable {
+    let requestID: UUID
+    let outcome: CanvasImageImportOutcome
+}
+
+struct CanvasImageImportBatchResult: Equatable, Sendable {
+    let batchID: UUID
+    let target: CanvasImportTarget
+    let items: [CanvasImageImportItemResult]
+}
+
+enum CanvasImageImportProgressState: Equatable, Sendable {
+    case pending
+    case preparing
+    case finished(CanvasImageImportOutcome)
+
+    var isFinished: Bool {
+        if case .finished = self { return true }
+        return false
+    }
+}
+
+struct CanvasImageImportProgressItem: Equatable, Sendable {
+    let requestID: UUID
+    var state: CanvasImageImportProgressState
+}
+
+struct CanvasImageImportBatchProgress: Equatable, Sendable {
+    let batchID: UUID
+    let target: CanvasImportTarget
+    var items: [CanvasImageImportProgressItem]
+
+    var completedCount: Int {
+        items.reduce(into: 0) { count, item in
+            if item.state.isFinished { count += 1 }
+        }
+    }
+}
+
+struct CanvasPreparedImageImport: Sendable {
+    let requestID: UUID
+    let prepared: CanvasPreparedImage
+    let center: CanvasPoint
+}
+
+enum CanvasStoreImageImportOutcome {
+    case imported([CanvasPlacedImage])
+    case rejected(CanvasImageImportFailure)
+}
+
+enum CanvasTemporaryImportCleanup {
+    static func removeOwnedDirectories(_ urls: [URL]) {
+        for url in Set(urls.map(\.standardizedFileURL)) where isOwnedTemporaryURL(url) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    static func removeLateDelivery(at fileURL: URL, from destination: URL) {
+        let root = destination.standardizedFileURL
+        let file = fileURL.standardizedFileURL
+        guard isOwnedTemporaryURL(root),
+              file.path == root.path || file.path.hasPrefix(root.path + "/") else {
+            return
+        }
+        try? FileManager.default.removeItem(at: file)
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil
+        ), contents.isEmpty else {
+            return
+        }
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private static func isOwnedTemporaryURL(_ url: URL) -> Bool {
+        let temporaryRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        return url.isFileURL
+            && url.path != temporaryRoot
+            && url.path.hasPrefix(temporaryRoot + "/")
+    }
+}
+
 struct CanvasImageTransform: Equatable, Sendable {
     var center: CanvasPoint
     var width: Double

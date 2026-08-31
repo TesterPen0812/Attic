@@ -29,6 +29,16 @@ enum CanvasImageImportError: LocalizedError, Equatable {
     }
 }
 
+enum CanvasImageImportSourceError: LocalizedError {
+    case deliveryFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .deliveryFailed(message): message
+        }
+    }
+}
+
 struct CanvasImageImportPolicy: Equatable, Sendable {
     let maximumInputBytes: Int
     let maximumEncodedBytes: Int
@@ -68,16 +78,22 @@ enum CanvasImageImporter {
             throw CanvasImageImportError.inputTooLarge
         }
 
-        return try await Task.detached(priority: .userInitiated) {
+        let processingTask = Task.detached(priority: .userInitiated) {
             try process(data: data, policy: policy)
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            try await processingTask.value
+        } onCancel: {
+            processingTask.cancel()
+        }
     }
 
     private static func readBytes(
         url: URL,
         policy: CanvasImageImportPolicy
     ) async throws -> Data {
-        try await Task.detached(priority: .userInitiated) {
+        let readingTask = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
             let accessedScope = url.startAccessingSecurityScopedResource()
             defer {
                 if accessedScope {
@@ -97,7 +113,9 @@ enum CanvasImageImporter {
                    fileSize > policy.maximumInputBytes {
                     throw CanvasImageImportError.inputTooLarge
                 }
+                try Task.checkCancellation()
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                try Task.checkCancellation()
                 guard data.count <= policy.maximumInputBytes else {
                     throw CanvasImageImportError.inputTooLarge
                 }
@@ -107,13 +125,19 @@ enum CanvasImageImporter {
             } catch {
                 throw CanvasImageImportError.unableToReadFile
             }
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            try await readingTask.value
+        } onCancel: {
+            readingTask.cancel()
+        }
     }
 
     private static func process(
         data: Data,
         policy: CanvasImageImportPolicy
     ) throws -> CanvasPreparedImage {
+        try Task.checkCancellation()
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 0 else {
             throw CanvasImageImportError.unsupportedOrCorrupt
@@ -141,6 +165,7 @@ enum CanvasImageImporter {
         var lastPrepared: CanvasPreparedImage?
 
         while true {
+            try Task.checkCancellation()
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
@@ -162,6 +187,7 @@ enum CanvasImageImporter {
                 thumbnail,
                 contentType: contentType
             )
+            try Task.checkCancellation()
             let prepared = CanvasPreparedImage(
                 encodedData: encoded,
                 contentType: contentType,

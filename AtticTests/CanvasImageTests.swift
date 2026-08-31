@@ -616,3 +616,349 @@ final class CanvasImageSessionTests: XCTestCase {
         XCTAssertEqual(session.images.first?.boardGeneration, session.boardGeneration)
     }
 }
+
+private actor ControlledCanvasImagePreparer {
+    struct PreparationFailure: LocalizedError {
+        let index: Int
+
+        var errorDescription: String? {
+            "Preparation failed for item \(index)."
+        }
+    }
+
+    private var continuations: [Int: CheckedContinuation<CanvasPreparedImage, Error>] = [:]
+    private var startedIndices: Set<Int> = []
+    private var startWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var cancelledIndices: Set<Int> = []
+    private var activeCount = 0
+    private(set) var maximumActiveCount = 0
+
+    func prepare(_ source: CanvasImageImportSource) async throws -> CanvasPreparedImage {
+        let index: Int
+        switch source {
+        case let .data(data):
+            guard let byte = data.first else {
+                throw PreparationFailure(index: -1)
+            }
+            index = Int(byte)
+        case .file, .deliveryFailure:
+            throw PreparationFailure(index: -1)
+        }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                register(continuation, for: index)
+            }
+        } onCancel: {
+            Task { await self.cancel(index) }
+        }
+    }
+
+    func waitUntilStarted(count: Int) async {
+        guard startedIndices.count < count else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append((count, continuation))
+        }
+    }
+
+    func release(_ index: Int) {
+        guard let continuation = continuations.removeValue(forKey: index) else {
+            return
+        }
+        activeCount -= 1
+        continuation.resume(returning: CanvasPreparedImage(
+            encodedData: Data([UInt8(index), 0x50, 0x4E, 0x47]),
+            contentType: UTType.png.identifier,
+            pixelWidth: 100 + index,
+            pixelHeight: 50 + index
+        ))
+    }
+
+    func activePreparationCount() -> Int {
+        activeCount
+    }
+
+    func cancellationCount() -> Int {
+        cancelledIndices.count
+    }
+
+    func maximumActivePreparationCount() -> Int {
+        maximumActiveCount
+    }
+
+    private func register(
+        _ continuation: CheckedContinuation<CanvasPreparedImage, Error>,
+        for index: Int
+    ) {
+        continuations[index] = continuation
+        startedIndices.insert(index)
+        activeCount += 1
+        maximumActiveCount = max(maximumActiveCount, activeCount)
+
+        let ready = startWaiters.filter { startedIndices.count >= $0.count }
+        startWaiters.removeAll { startedIndices.count >= $0.count }
+        ready.forEach { $0.continuation.resume() }
+    }
+
+    private func cancel(_ index: Int) {
+        guard let continuation = continuations.removeValue(forKey: index) else {
+            return
+        }
+        cancelledIndices.insert(index)
+        activeCount -= 1
+        continuation.resume(throwing: CancellationError())
+    }
+}
+
+final class CanvasImageImportBatchTests: XCTestCase {
+    @MainActor
+    func testDecodeCompletionAfterPageSwitchPersistsOnlyToCapturedTarget() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(container: container, gate: gate)
+        _ = try XCTUnwrap(session.createCanvas(name: "Target"))
+        let target = session.captureImageImportTarget()
+        let batch = makeBatch(target: target, indices: [0])
+
+        let importTask = Task { await session.importImageBatch(batch) }
+        await gate.waitUntilStarted(count: 1)
+        let second = try XCTUnwrap(session.createCanvas(name: "Second"))
+        await gate.release(0)
+
+        let result = await importTask.value
+
+        XCTAssertEqual(result.items.map(\.requestID), batch.items.map(\.id))
+        XCTAssertEqual(result.items.first?.outcome.importedImageID, batch.items.first?.id)
+        XCTAssertEqual(session.selectedCanvasID, second.id)
+        XCTAssertTrue(session.images.isEmpty)
+        XCTAssertTrue(session.selectCanvas(target.canvasID))
+        XCTAssertEqual(session.images.map(\.id), batch.items.map(\.id))
+        XCTAssertTrue(session.images.allSatisfy {
+            $0.canvasID == target.canvasID && $0.boardGeneration == target.boardGeneration
+        })
+    }
+
+    @MainActor
+    func testDecodeCompletionAfterTargetPageDeletionDoesNotPersist() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(container: container, gate: gate)
+        _ = try XCTUnwrap(session.createCanvas(name: "Survivor"))
+        _ = try XCTUnwrap(session.createCanvas(name: "Delete me"))
+        let target = session.captureImageImportTarget()
+        let batch = makeBatch(target: target, indices: [0])
+
+        let importTask = Task { await session.importImageBatch(batch) }
+        await gate.waitUntilStarted(count: 1)
+        XCTAssertTrue(session.deleteSelectedCanvas())
+        await gate.release(0)
+
+        let result = await importTask.value
+
+        XCTAssertEqual(result.items.first?.outcome, .failed(.targetUnavailable))
+        let rows = try ModelContext(container).fetch(FetchDescriptor<CanvasImageItem>())
+        XCTAssertTrue(rows.isEmpty)
+        XCTAssertFalse(session.canvases.contains { $0.id == target.canvasID })
+    }
+
+    @MainActor
+    func testDecodeCompletionAfterClearRejectsStaleGeneration() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(container: container, gate: gate)
+        XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: 1, y: 2)]))
+        let target = session.captureImageImportTarget()
+        let batch = makeBatch(target: target, indices: [0])
+
+        let importTask = Task { await session.importImageBatch(batch) }
+        await gate.waitUntilStarted(count: 1)
+        XCTAssertTrue(session.clear())
+        XCTAssertEqual(session.boardGeneration, target.boardGeneration + 1)
+        await gate.release(0)
+
+        let result = await importTask.value
+
+        XCTAssertEqual(result.items.first?.outcome, .failed(.targetGenerationChanged))
+        let rows = try ModelContext(container).fetch(FetchDescriptor<CanvasImageItem>())
+        XCTAssertTrue(rows.isEmpty)
+    }
+
+    @MainActor
+    func testCancellationStopsInFlightPreparationCleansTemporaryFilesAndDoesNotSave() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(
+            container: container,
+            gate: gate,
+            persist: persistence.save
+        )
+        let cleanupRoot = try makeCleanupRoot()
+        let target = session.captureImageImportTarget()
+        let batch = makeBatch(
+            target: target,
+            indices: [0, 1],
+            cleanupURL: cleanupRoot
+        )
+
+        let importTask = Task { await session.importImageBatch(batch) }
+        await gate.waitUntilStarted(count: 2)
+        importTask.cancel()
+        let result = await importTask.value
+        let cancellationCount = await gate.cancellationCount()
+        let activePreparationCount = await gate.activePreparationCount()
+
+        XCTAssertEqual(
+            result.items.map(\.outcome),
+            [.failed(.cancelled), .failed(.cancelled)]
+        )
+        XCTAssertEqual(cancellationCount, 2)
+        XCTAssertEqual(activePreparationCount, 0)
+        XCTAssertEqual(persistence.saveCount, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cleanupRoot.path))
+        XCTAssertEqual(
+            try ModelContext(container).fetchCount(FetchDescriptor<CanvasImageItem>()),
+            0
+        )
+    }
+
+    @MainActor
+    func testOutOfOrderCompletionIsBoundedStableAndPersistsSuccessfulItemsOnce() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(
+            container: container,
+            gate: gate,
+            maximumConcurrency: 2,
+            persist: persistence.save
+        )
+        let target = session.captureImageImportTarget()
+        let batch = makeBatch(target: target, indices: [0, 1, 2, 3])
+
+        let importTask = Task { await session.importImageBatch(batch) }
+        await gate.waitUntilStarted(count: 2)
+        let initialMaximumActiveCount = await gate.maximumActivePreparationCount()
+        XCTAssertEqual(initialMaximumActiveCount, 2)
+        await gate.release(1)
+        await gate.waitUntilStarted(count: 3)
+        await gate.release(0)
+        await gate.waitUntilStarted(count: 4)
+        await gate.release(3)
+        await gate.release(2)
+
+        let result = await importTask.value
+        let maximumActiveCount = await gate.maximumActivePreparationCount()
+
+        XCTAssertEqual(maximumActiveCount, 2)
+        XCTAssertEqual(result.items.map(\.requestID), batch.items.map(\.id))
+        XCTAssertEqual(
+            result.items.compactMap { $0.outcome.importedImageID },
+            batch.items.map(\.id)
+        )
+        XCTAssertEqual(session.images.map(\.id), batch.items.map(\.id))
+        XCTAssertEqual(session.images.map(\.zIndex), [0, 1, 2, 3])
+        XCTAssertEqual(persistence.saveCount, 1)
+        XCTAssertEqual(session.imageImportProgress?.completedCount, 4)
+        XCTAssertEqual(
+            session.imageImportProgress?.items.map(\.requestID),
+            batch.items.map(\.id)
+        )
+    }
+
+    @MainActor
+    func testDeliveryFailureKeepsStablePerItemResultAndCleansBatchResources() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(
+            container: container,
+            gate: gate,
+            persist: persistence.save
+        )
+        let cleanupRoot = try makeCleanupRoot()
+        let target = session.captureImageImportTarget()
+        let baseBatch = makeBatch(
+            target: target,
+            indices: [0, 1, 2],
+            cleanupURL: cleanupRoot
+        )
+        let batch = CanvasImageImportBatch(
+            id: baseBatch.id,
+            target: target,
+            items: [
+                baseBatch.items[0],
+                CanvasImageImportRequest(
+                    id: baseBatch.items[1].id,
+                    source: .deliveryFailure("Provider stopped responding."),
+                    center: baseBatch.items[1].center,
+                    cleanupURL: cleanupRoot
+                ),
+                baseBatch.items[2]
+            ]
+        )
+
+        let importTask = Task { await session.importImageBatch(batch) }
+        await gate.waitUntilStarted(count: 2)
+        await gate.release(2)
+        await gate.release(0)
+        let result = await importTask.value
+
+        XCTAssertEqual(result.items.map(\.requestID), batch.items.map(\.id))
+        XCTAssertEqual(result.items[0].outcome.importedImageID, batch.items[0].id)
+        XCTAssertEqual(
+            result.items[1].outcome,
+            .failed(.deliveryFailed("Provider stopped responding."))
+        )
+        XCTAssertEqual(result.items[2].outcome.importedImageID, batch.items[2].id)
+        XCTAssertEqual(session.images.map(\.id), [batch.items[0].id, batch.items[2].id])
+        XCTAssertEqual(persistence.saveCount, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cleanupRoot.path))
+    }
+
+    @MainActor
+    private func makeSession(
+        container: ModelContainer,
+        gate: ControlledCanvasImagePreparer,
+        maximumConcurrency: Int = 2,
+        persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) -> CanvasSession {
+        CanvasSession(
+            store: CanvasStore(container: container, persist: persist),
+            maximumConcurrentImageImports: maximumConcurrency,
+            prepareImage: { source in
+                try await gate.prepare(source)
+            }
+        )
+    }
+
+    private func makeBatch(
+        target: CanvasImportTarget,
+        indices: [Int],
+        cleanupURL: URL? = nil
+    ) -> CanvasImageImportBatch {
+        CanvasImageImportBatch(
+            target: target,
+            items: indices.map { index in
+                CanvasImageImportRequest(
+                    id: UUID(),
+                    source: .data(Data([UInt8(index)])),
+                    center: CanvasPoint(x: Double(index) * 12, y: Double(index) * 12),
+                    cleanupURL: cleanupURL
+                )
+            }
+        )
+    }
+
+    private func makeCleanupRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticCanvasImportTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        try Data([1, 2, 3]).write(to: root.appendingPathComponent("payload.tmp"))
+        return root
+    }
+}

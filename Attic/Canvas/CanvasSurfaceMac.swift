@@ -61,21 +61,14 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         view.onSendSelectedImageBackward = { [weak session] in
             _ = session?.sendSelectedImageBackward()
         }
-        view.onImportImageData = { [weak session] data, point in
-            Task { @MainActor [weak session] in
-                _ = await session?.importImage(data: data, at: point)
-            }
+        view.onCaptureImageImportTarget = { [weak session] in
+            session?.captureImageImportTarget()
         }
-        view.onImportImageURL = { [weak session] url, point, removeAfterImport in
-            Task { @MainActor [weak session] in
-                _ = await session?.importImage(url: url, at: point)
-                if removeAfterImport {
-                    try? FileManager.default.removeItem(at: url)
-                    try? FileManager.default.removeItem(
-                        at: url.deletingLastPathComponent()
-                    )
-                }
-            }
+        view.onImportImageBatch = { [weak session] batch in
+            session?.startImageImportBatch(batch)
+        }
+        view.onCancelImageImportBatches = { [weak session] in
+            session?.cancelAllImageImportBatches()
         }
         view.onPlaceText = { [weak session] placement, point in
             Task { @MainActor [weak session] in
@@ -133,8 +126,9 @@ final class CanvasNSView: NSView {
     var onNudgeSelectedImage: (CGSize) -> Void = { _ in }
     var onBringSelectedImageForward: () -> Void = {}
     var onSendSelectedImageBackward: () -> Void = {}
-    var onImportImageData: (Data, CanvasPoint) -> Void = { _, _ in }
-    var onImportImageURL: (URL, CanvasPoint, Bool) -> Void = { _, _, _ in }
+    var onCaptureImageImportTarget: () -> CanvasImportTarget? = { nil }
+    var onImportImageBatch: (CanvasImageImportBatch) -> Void = { _ in }
+    var onCancelImageImportBatches: () -> Void = {}
     var onPlaceText: (CanvasTextPlacement, CanvasPoint) -> Void = { _, _ in }
     var onCompleteShape: (
         CanvasShapeKind,
@@ -182,6 +176,7 @@ final class CanvasNSView: NSView {
         queue.maxConcurrentOperationCount = 2
         return queue
     }()
+    var filePromiseBatches: [UUID: CanvasFilePromiseBatchCoordinator] = [:]
 
     var canvasID = CanvasBoardItem.logicalBoardID
     var images: [CanvasPlacedImage] = []
@@ -792,6 +787,8 @@ final class CanvasNSView: NSView {
             }
         case 53:
             cancelInteraction()
+            cancelFilePromiseBatches()
+            onCancelImageImportBatches()
             onCancelPlacement()
             onSelectImage(nil)
             selectedImageID = nil
@@ -884,6 +881,8 @@ final class CanvasNSView: NSView {
         isRepresentationActive = false
         gestureRecognizers.forEach { $0.isEnabled = false }
         cancelInteraction()
+        cancelFilePromiseBatches()
+        onCancelImageImportBatches()
         onViewportChange = { _ in }
     }
 

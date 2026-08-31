@@ -3,6 +3,105 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum CanvasImageDropFilter {
+    static func supportedFileURLs(_ urls: [URL]) -> [URL] {
+        urls.filter(isSupportedFileURL)
+    }
+
+    static func isSupportedFileURL(_ url: URL) -> Bool {
+        guard url.isFileURL else { return false }
+        if let values = try? url.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .contentTypeKey
+        ]), values.isRegularFile != false {
+            if let contentType = values.contentType,
+               contentType.conforms(to: .image) {
+                return true
+            }
+        }
+        guard let type = UTType(filenameExtension: url.pathExtension) else {
+            return false
+        }
+        return type.conforms(to: .image)
+    }
+
+    static func supports(typeIdentifiers: [String]) -> Bool {
+        typeIdentifiers.contains { identifier in
+            guard let type = UTType(identifier) else { return false }
+            return type.conforms(to: .image)
+        }
+    }
+}
+
+@MainActor
+final class CanvasFilePromiseBatchCoordinator {
+    struct Slot: Equatable {
+        let requestID: UUID
+        let receiverIndex: Int
+        let center: CanvasPoint
+        let cleanupURL: URL
+    }
+
+    enum Delivery: Equatable {
+        case waiting
+        case ready(CanvasImageImportBatch)
+        case late
+    }
+
+    let batchID: UUID
+    let target: CanvasImportTarget
+    let slots: [Slot]
+    private var sources: [CanvasImageImportSource?]
+    private(set) var isFinished = false
+
+    init(
+        batchID: UUID,
+        target: CanvasImportTarget,
+        slots: [Slot]
+    ) {
+        self.batchID = batchID
+        self.target = target
+        self.slots = slots
+        sources = Array(repeating: nil, count: slots.count)
+    }
+
+    var cleanupURLs: [URL] {
+        slots.map(\.cleanupURL)
+    }
+
+    func record(
+        receiverIndex: Int,
+        source: CanvasImageImportSource
+    ) -> Delivery {
+        guard !isFinished,
+              let slotIndex = slots.indices.first(where: {
+                  slots[$0].receiverIndex == receiverIndex && sources[$0] == nil
+              }) else {
+            return .late
+        }
+        sources[slotIndex] = source
+        guard sources.allSatisfy({ $0 != nil }) else { return .waiting }
+        isFinished = true
+        return .ready(CanvasImageImportBatch(
+            id: batchID,
+            target: target,
+            items: zip(slots, sources).compactMap { slot, source in
+                guard let source else { return nil }
+                return CanvasImageImportRequest(
+                    id: slot.requestID,
+                    source: source,
+                    center: slot.center,
+                    cleanupURL: slot.cleanupURL
+                )
+            }
+        ))
+    }
+
+    func cancel() {
+        isFinished = true
+    }
+}
+
 enum CanvasCursorRole: Equatable {
     case arrow
     case pen
@@ -396,7 +495,6 @@ extension CanvasNSView {
         guard worldPoint.isFinite else {
             return false
         }
-        var accepted = false
         var offsetIndex = 0
         func importPoint() -> CanvasPoint {
             defer { offsetIndex += 1 }
@@ -404,83 +502,207 @@ extension CanvasNSView {
             return CanvasPoint(x: worldPoint.x + offset, y: worldPoint.y + offset)
         }
 
-        let urls = (pasteboard.readObjects(
+        let urls = ((pasteboard.readObjects(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
-        ) as? [NSURL]) ?? []
-        if !urls.isEmpty {
-            for nsURL in urls {
-                onImportImageURL(nsURL as URL, importPoint(), false)
-            }
+        ) as? [NSURL]) ?? []).map { $0 as URL }
+        let supportedURLs = CanvasImageDropFilter.supportedFileURLs(urls)
+        if !supportedURLs.isEmpty {
+            guard let target = onCaptureImageImportTarget() else { return false }
+            onImportImageBatch(CanvasImageImportBatch(
+                target: target,
+                items: supportedURLs.map { url in
+                    CanvasImageImportRequest(
+                        source: .file(url),
+                        center: importPoint()
+                    )
+                }
+            ))
             return true
         }
 
-        let receivers = (pasteboard.readObjects(
+        let receivers = ((pasteboard.readObjects(
             forClasses: [NSFilePromiseReceiver.self],
             options: nil
-        ) as? [NSFilePromiseReceiver]) ?? []
+        ) as? [NSFilePromiseReceiver]) ?? []).filter {
+            CanvasImageDropFilter.supports(typeIdentifiers: $0.fileTypes)
+        }
         if !receivers.isEmpty {
-            for receiver in receivers {
+            guard let target = onCaptureImageImportTarget() else { return false }
+            let batchID = UUID()
+            var slots: [CanvasFilePromiseBatchCoordinator.Slot] = []
+            var destinations: [URL] = []
+            for (receiverIndex, receiver) in receivers.enumerated() {
+                let expectedCount = max(receiver.fileTypes.count, 1)
                 let destination = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("AtticCanvasPromise", isDirectory: true)
-                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                    .appendingPathComponent(
+                        "AtticCanvasPromise-\(batchID.uuidString)-\(receiverIndex)",
+                        isDirectory: true
+                    )
+                destinations.append(destination)
+                for _ in 0..<expectedCount {
+                    slots.append(.init(
+                        requestID: UUID(),
+                        receiverIndex: receiverIndex,
+                        center: importPoint(),
+                        cleanupURL: destination
+                    ))
+                }
+            }
+            let coordinator = CanvasFilePromiseBatchCoordinator(
+                batchID: batchID,
+                target: target,
+                slots: slots
+            )
+            filePromiseBatches[batchID] = coordinator
+
+            for (receiverIndex, receiver) in receivers.enumerated() {
+                let destination = destinations[receiverIndex]
                 do {
                     try FileManager.default.createDirectory(
                         at: destination,
                         withIntermediateDirectories: true
                     )
                 } catch {
+                    let expectedCount = max(receiver.fileTypes.count, 1)
+                    for _ in 0..<expectedCount {
+                        finishFilePromiseDelivery(
+                            batchID: batchID,
+                            receiverIndex: receiverIndex,
+                            destination: destination,
+                            url: nil,
+                            errorMessage: error.localizedDescription
+                        )
+                    }
                     continue
                 }
-                let point = importPoint()
                 receiver.receivePromisedFiles(
                     atDestination: destination,
                     options: [:],
                     operationQueue: filePromiseQueue
                 ) { [weak self] url, error in
-                    if error != nil {
-                        try? FileManager.default.removeItem(at: destination)
-                        return
-                    }
                     Task { @MainActor [weak self] in
-                        self?.onImportImageURL(url, point, true)
+                        guard let self else {
+                            if error == nil {
+                                CanvasTemporaryImportCleanup.removeLateDelivery(
+                                    at: url,
+                                    from: destination
+                                )
+                            }
+                            return
+                        }
+                        self.finishFilePromiseDelivery(
+                            batchID: batchID,
+                            receiverIndex: receiverIndex,
+                            destination: destination,
+                            url: error == nil ? url : nil,
+                            errorMessage: error?.localizedDescription
+                        )
                     }
                 }
-                accepted = true
             }
-            return accepted
+            return true
         }
 
         if let png = pasteboard.data(forType: .png) {
-            onImportImageData(png, importPoint())
-            return true
+            return importDirectImageData(png, at: importPoint())
         }
         if let tiff = pasteboard.data(forType: .tiff) {
-            onImportImageData(tiff, importPoint())
-            return true
+            return importDirectImageData(tiff, at: importPoint())
         }
         if let image = NSImage(pasteboard: pasteboard),
            let tiff = image.tiffRepresentation {
-            onImportImageData(tiff, importPoint())
-            return true
+            return importDirectImageData(tiff, at: importPoint())
         }
         return false
     }
 
     func hasSupportedImagePayload(_ pasteboard: NSPasteboard) -> Bool {
-        if pasteboard.canReadObject(
+        let urls = ((pasteboard.readObjects(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
-        ) {
+        ) as? [NSURL]) ?? []).map { $0 as URL }
+        if !CanvasImageDropFilter.supportedFileURLs(urls).isEmpty {
             return true
         }
         if pasteboard.availableType(from: Self.directImagePasteboardTypes) != nil {
             return true
         }
-        return pasteboard.canReadObject(
+        let receivers = (pasteboard.readObjects(
             forClasses: [NSFilePromiseReceiver.self],
             options: nil
-        )
+        ) as? [NSFilePromiseReceiver]) ?? []
+        return receivers.contains {
+            CanvasImageDropFilter.supports(typeIdentifiers: $0.fileTypes)
+        }
+    }
+
+    func importDirectImageData(_ data: Data, at point: CanvasPoint) -> Bool {
+        guard let target = onCaptureImageImportTarget() else { return false }
+        onImportImageBatch(CanvasImageImportBatch(
+            target: target,
+            items: [CanvasImageImportRequest(source: .data(data), center: point)]
+        ))
+        return true
+    }
+
+    func finishFilePromiseDelivery(
+        batchID: UUID,
+        receiverIndex: Int,
+        destination: URL,
+        url: URL?,
+        errorMessage: String?
+    ) {
+        guard let coordinator = filePromiseBatches[batchID] else {
+            if let url {
+                CanvasTemporaryImportCleanup.removeLateDelivery(
+                    at: url,
+                    from: destination
+                )
+            }
+            return
+        }
+
+        let source: CanvasImageImportSource
+        if let errorMessage {
+            source = .deliveryFailure(errorMessage)
+        } else if let url, CanvasImageDropFilter.isSupportedFileURL(url) {
+            source = .file(url)
+        } else {
+            if let url {
+                try? FileManager.default.removeItem(at: url)
+            }
+            source = .deliveryFailure(
+                "The promised file is not a supported image."
+            )
+        }
+
+        switch coordinator.record(receiverIndex: receiverIndex, source: source) {
+        case .waiting:
+            break
+        case let .ready(batch):
+            filePromiseBatches[batchID] = nil
+            onImportImageBatch(batch)
+        case .late:
+            if let url {
+                CanvasTemporaryImportCleanup.removeLateDelivery(
+                    at: url,
+                    from: destination
+                )
+            }
+        }
+    }
+
+    func cancelFilePromiseBatches() {
+        let coordinators = Array(filePromiseBatches.values)
+        filePromiseBatches.removeAll(keepingCapacity: true)
+        filePromiseQueue.cancelAllOperations()
+        for coordinator in coordinators {
+            coordinator.cancel()
+            CanvasTemporaryImportCleanup.removeOwnedDirectories(
+                coordinator.cleanupURLs
+            )
+        }
     }
 
 }
