@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import XCTest
 @testable import Attic
 
@@ -183,6 +185,130 @@ final class PanelGeometryTests: XCTestCase {
                 in: compactVisibleFrame
             ),
             CGSize(width: 576, height: 576)
+        )
+    }
+
+    func testMaximumWorkAreaPlacementFitsEveryDockLayoutAndCorner() {
+        let cases: [(visibleFrame: CGRect, expectedSize: CGSize)] = [
+            (
+                CGRect(x: 0, y: 70, width: 1_440, height: 800),
+                CGSize(width: 1_416, height: 776)
+            ),
+            (
+                CGRect(x: 80, y: 25, width: 1_360, height: 875),
+                CGSize(width: 1_336, height: 851)
+            ),
+            (
+                CGRect(x: -1_440, y: -850, width: 1_320, height: 825),
+                CGSize(width: 1_296, height: 801)
+            )
+        ]
+
+        for testCase in cases {
+            let safeFrame = testCase.visibleFrame.insetBy(
+                dx: PanelGeometry.screenInset,
+                dy: PanelGeometry.screenInset
+            )
+            for corner in ScreenCorner.allCases {
+                let placement = PanelGeometry.workAreaPlacement(
+                    preferredSize: CGSize(width: 4_000, height: 4_000),
+                    in: testCase.visibleFrame,
+                    corner: corner
+                )
+
+                XCTAssertEqual(placement.frame.size, testCase.expectedSize)
+                XCTAssertTrue(
+                    safeFrame.contains(placement.frame),
+                    "Maximum frame escaped for \(corner) in \(testCase.visibleFrame)"
+                )
+                XCTAssertTrue(placement.isTemporarilyClamped)
+            }
+        }
+    }
+
+    func testDockRelocationClampDoesNotReplacePreferredSize() {
+        let preferredSize = CGSize(width: 1_200, height: 760)
+        let sideDockVisibleFrame = CGRect(x: 100, y: 25, width: 1_000, height: 900)
+        let roomyVisibleFrame = CGRect(x: 0, y: 25, width: 1_440, height: 900)
+
+        let temporarilyClamped = PanelGeometry.workAreaPlacement(
+            preferredSize: preferredSize,
+            in: sideDockVisibleFrame,
+            corner: .bottomRight
+        )
+        XCTAssertEqual(
+            temporarilyClamped.frame,
+            CGRect(x: 112, y: 37, width: 976, height: 760)
+        )
+        XCTAssertEqual(temporarilyClamped.preferredSize, preferredSize)
+        XCTAssertTrue(temporarilyClamped.isTemporarilyClamped)
+
+        let restored = PanelGeometry.workAreaPlacement(
+            preferredSize: temporarilyClamped.preferredSize,
+            in: roomyVisibleFrame,
+            corner: .topRight
+        )
+        XCTAssertEqual(
+            restored.frame,
+            CGRect(x: 228, y: 153, width: 1_200, height: 760)
+        )
+        XCTAssertFalse(restored.isTemporarilyClamped)
+    }
+
+    func testScreenTransitionUsesDestinationVisibleFrameAndRestoresItsCornerAnchor() {
+        let preferredSize = CGSize(width: 1_000, height: 760)
+        let sourceVisibleFrame = CGRect(x: 0, y: 25, width: 1_920, height: 1_055)
+        let destinationVisibleFrame = CGRect(x: -1_440, y: -900, width: 1_280, height: 720)
+        let source = PanelGeometry.workAreaPlacement(
+            preferredSize: preferredSize,
+            in: sourceVisibleFrame,
+            corner: .bottomLeft
+        )
+
+        let destination = PanelGeometry.workAreaPlacement(
+            preferredSize: source.preferredSize,
+            in: destinationVisibleFrame,
+            corner: .bottomLeft
+        )
+
+        XCTAssertEqual(
+            destination.frame,
+            CGRect(x: -1_428, y: -888, width: 1_000, height: 696)
+        )
+        XCTAssertNotEqual(destination.frame.origin, source.frame.origin)
+        XCTAssertTrue(destination.isTemporarilyClamped)
+    }
+
+    func testWorkAreaEventsIncludeScreenParametersAndApplicationActivation() {
+        let center = NotificationCenter()
+        var received: [PanelWorkAreaEvent] = []
+        let observation = PanelWorkAreaEvents.publisher(center: center)
+            .sink { received.append($0) }
+
+        center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+
+        XCTAssertEqual(received, [.screenParametersChanged, .applicationActivated])
+        withExtendedLifetime(observation) {}
+    }
+
+    func testTemporaryWorkAreaClampDuringResizeDoesNotBecomePreferredSize() {
+        var state = PanelResizePersistenceState()
+        state.beginUserResize()
+        state.recordTemporaryWorkAreaClamp()
+
+        XCTAssertNil(
+            state.finishUserResize(at: CGSize(width: 976, height: 760))
+        )
+    }
+
+    func testOrdinaryUserResizeStillProducesPreferredSize() {
+        var state = PanelResizePersistenceState()
+        state.beginUserResize()
+
+        XCTAssertEqual(
+            state.finishUserResize(at: CGSize(width: 680, height: 640)),
+            CGSize(width: 680, height: 640)
         )
     }
 
