@@ -184,6 +184,7 @@ struct NoteComposerView: View {
                         text: $noteDraft.body,
                         isFileTargeted: $isFileTargeted,
                         isFocused: isBodyFocused,
+                        session: noteDraft.editorSession,
                         onFocusChange: updateBodyFocus,
                         onImportFiles: importURLs,
                         onImportError: noteStore.setAttachmentError

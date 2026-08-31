@@ -58,6 +58,160 @@ final class NoteDraftControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testSwitchingToShorterNoteInvalidatesPreviousUndoAndRedoRanges() throws {
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
+        let originalA = "This is note A with a deliberately long body"
+        let noteA = try XCTUnwrap(store.create(title: "A", body: originalA))
+        let noteB = try XCTUnwrap(store.create(title: "B", body: "B"))
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginEditing(noteA))
+        let editorA = makeTestBodyEditor(draft: draft)
+        let coordinator = editorA.makeCoordinator()
+        let (textView, window) = makeUndoTextView(coordinator: coordinator)
+        Self.retainedHarnessWindows.append(window)
+        XCTAssertEqual(
+            coordinator.synchronize(parent: editorA, textView: textView),
+            .replacedText
+        )
+        XCTAssertTrue(window.makeFirstResponder(textView))
+
+        textView.setSelectedRange(NSRange(location: (originalA as NSString).length, length: 0))
+        textView.insertText("!", replacementRange: textView.selectedRange())
+        XCTAssertEqual(draft.body, originalA + "!")
+        XCTAssertEqual(window.firstResponder as? NSTextView, textView)
+        XCTAssertTrue(textView.undoManager?.canUndo == true)
+
+        XCTAssertTrue(draft.beginEditing(noteB))
+        let editorB = makeTestBodyEditor(draft: draft)
+        XCTAssertEqual(
+            coordinator.synchronize(parent: editorB, textView: textView),
+            .replacedText
+        )
+        XCTAssertEqual(textView.string, "B")
+        XCTAssertFalse(textView.undoManager?.canUndo == true)
+        XCTAssertFalse(textView.undoManager?.canRedo == true)
+
+        textView.undoManager?.undo()
+        textView.undoManager?.redo()
+
+        XCTAssertEqual(textView.string, "B")
+        XCTAssertEqual(draft.activeNoteID, noteB.id)
+        XCTAssertEqual(draft.body, "B")
+        XCTAssertEqual(
+            store.notes.first(where: { $0.id == noteA.id })?.body,
+            originalA + "!"
+        )
+        XCTAssertEqual(store.notes.first(where: { $0.id == noteB.id })?.body, "B")
+        XCTAssertEqual(window.firstResponder as? NSTextView, textView)
+
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        textView.insertText("2", replacementRange: textView.selectedRange())
+        XCTAssertEqual(draft.body, "B2")
+        textView.undoManager?.undo()
+        XCTAssertEqual(textView.string, "B")
+        coordinator.textDidChange(Notification(
+            name: NSText.didChangeNotification,
+            object: textView
+        ))
+        XCTAssertEqual(draft.body, "B")
+        textView.undoManager?.redo()
+        XCTAssertEqual(textView.string, "B2")
+        coordinator.textDidChange(Notification(
+            name: NSText.didChangeNotification,
+            object: textView
+        ))
+        XCTAssertEqual(draft.body, "B2")
+        XCTAssertEqual(store.notes.first(where: { $0.id == noteA.id })?.body, originalA + "!")
+    }
+
+    @MainActor
+    func testRapidSwitchRejectsStaleQueuedExternalReplacement() throws {
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
+        let noteA = try XCTUnwrap(store.create(body: "Long note A"))
+        let noteB = try XCTUnwrap(store.create(body: "B"))
+        let noteC = try XCTUnwrap(store.create(body: "Current C"))
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginEditing(noteA))
+        let sessionA = draft.editorSession
+        let boxA = EditorTextBox("Long note A")
+        let editorA = makeTestBodyEditor(text: boxA, session: sessionA)
+        let coordinator = editorA.makeCoordinator()
+        let (textView, window) = makeUndoTextView(coordinator: coordinator)
+        Self.retainedHarnessWindows.append(window)
+        XCTAssertEqual(
+            coordinator.synchronize(parent: editorA, textView: textView),
+            .replacedText
+        )
+        XCTAssertTrue(window.makeFirstResponder(textView))
+
+        XCTAssertTrue(draft.beginEditing(noteB))
+        let sessionB = draft.editorSession
+        let boxB = EditorTextBox("B")
+        let editorB = makeTestBodyEditor(text: boxB, session: sessionB)
+        XCTAssertEqual(
+            coordinator.synchronize(parent: editorB, textView: textView),
+            .replacedText
+        )
+
+        XCTAssertTrue(draft.beginEditing(noteC))
+        let sessionC = draft.editorSession
+        let boxC = EditorTextBox("Current C")
+        let editorC = makeTestBodyEditor(text: boxC, session: sessionC)
+        XCTAssertEqual(
+            coordinator.synchronize(parent: editorC, textView: textView),
+            .replacedText
+        )
+
+        boxA.value = "Queued stale replacement from A"
+        boxB.value = "Queued stale replacement from B"
+        XCTAssertEqual(
+            coordinator.synchronize(parent: editorA, textView: textView),
+            .staleSession
+        )
+        XCTAssertEqual(
+            coordinator.synchronize(parent: editorB, textView: textView),
+            .staleSession
+        )
+        XCTAssertEqual(textView.string, "Current C")
+        XCTAssertEqual(window.firstResponder as? NSTextView, textView)
+
+        textView.setSelectedRange(NSRange(location: 9, length: 0))
+        textView.insertText("!", replacementRange: textView.selectedRange())
+        XCTAssertEqual(boxC.value, "Current C!")
+        XCTAssertEqual(boxA.value, "Queued stale replacement from A")
+        XCTAssertEqual(boxB.value, "Queued stale replacement from B")
+    }
+
+    @MainActor
+    func testEditorSessionIsStableWhileTypingAndAdvancesOnReplacement() throws {
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
+        let noteA = try XCTUnwrap(store.create(body: "A"))
+        let noteB = try XCTUnwrap(store.create(body: "B"))
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+
+        XCTAssertTrue(draft.beginEditing(noteA))
+        let sessionA = draft.editorSession
+        draft.body = "A typed"
+        XCTAssertEqual(draft.editorSession, sessionA)
+
+        XCTAssertTrue(draft.beginEditing(noteB))
+        let sessionB = draft.editorSession
+        XCTAssertEqual(sessionB.noteID, noteB.id)
+        XCTAssertGreaterThan(sessionB.generation, sessionA.generation)
+
+        XCTAssertTrue(draft.beginEditing(noteB))
+        XCTAssertEqual(draft.editorSession, sessionB)
+    }
+
+    @MainActor
     func testSwitchingNotesFlushesThePreviousDraftToItsOwnRecord() throws {
         let store = try makeTestNoteStore(
             attachmentFileStore: makeTestAttachmentFileStore()
@@ -371,4 +525,69 @@ private func firstTextView(
         }
     }
     return nil
+}
+
+@MainActor
+private func makeTestBodyEditor(
+    draft: NoteDraftController,
+    isFocused: Bool = true
+) -> AttachmentAwareTextEditor {
+    AttachmentAwareTextEditor(
+        text: Binding(
+            get: { draft.body },
+            set: { draft.body = $0 }
+        ),
+        isFileTargeted: .constant(false),
+        isFocused: isFocused,
+        session: draft.editorSession,
+        onFocusChange: { _ in },
+        onImportFiles: { _, _ in },
+        onImportError: { _ in }
+    )
+}
+
+@MainActor
+private func makeTestBodyEditor(
+    text: EditorTextBox,
+    session: NoteEditorSession,
+    isFocused: Bool = true
+) -> AttachmentAwareTextEditor {
+    AttachmentAwareTextEditor(
+        text: Binding(
+            get: { text.value },
+            set: { text.value = $0 }
+        ),
+        isFileTargeted: .constant(false),
+        isFocused: isFocused,
+        session: session,
+        onFocusChange: { _ in },
+        onImportFiles: { _, _ in },
+        onImportError: { _ in }
+    )
+}
+
+@MainActor
+private func makeUndoTextView(
+    coordinator: AttachmentAwareTextEditor.Coordinator
+) -> (NSTextView, NSWindow) {
+    let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
+    textView.delegate = coordinator
+    textView.allowsUndo = true
+    coordinator.textView = textView
+    let window = NSWindow(
+        contentRect: textView.frame,
+        styleMask: [.borderless],
+        backing: .buffered,
+        defer: false
+    )
+    window.contentView = textView
+    return (textView, window)
+}
+
+private final class EditorTextBox {
+    var value: String
+
+    init(_ value: String) {
+        self.value = value
+    }
 }

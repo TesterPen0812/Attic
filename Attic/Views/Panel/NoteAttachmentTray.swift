@@ -565,6 +565,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFileTargeted: Bool
     let isFocused: Bool
+    let session: NoteEditorSession
     let onFocusChange: (Bool) -> Void
     let onImportFiles: ([URL], [URL]) -> Void
     let onImportError: (String) -> Void
@@ -582,7 +583,6 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
 
         let textView = AttachmentAcceptingTextView()
         textView.delegate = context.coordinator
-        textView.string = text
         textView.font = .systemFont(ofSize: 12)
         textView.textColor = .labelColor
         textView.drawsBackground = false
@@ -617,6 +617,8 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             NoteAttachmentPasteboardRouter.legacyFilePromiseType
         ])
         textView.setAccessibilityIdentifier("note-body")
+        context.coordinator.textView = textView
+        _ = context.coordinator.synchronize(parent: self, textView: textView)
         Self.applyReadability(
             to: textView,
             enabled: clearReadabilityEnabled,
@@ -639,28 +641,20 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         }
 
         scrollView.documentView = textView
-        context.coordinator.textView = textView
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.parent = self
         guard let textView = scrollView.documentView as? AttachmentAcceptingTextView else {
             return
         }
 
-        var replacedExternalText = false
-        if textView.string != text, !textView.hasMarkedText() {
-            let selectedRanges = textView.selectedRanges
-            context.coordinator.isApplyingExternalText = true
-            textView.string = text
-            textView.selectedRanges = Self.clamped(
-                selectedRanges,
-                length: (text as NSString).length
-            )
-            context.coordinator.isApplyingExternalText = false
-            replacedExternalText = true
-        }
+        let synchronization = context.coordinator.synchronize(
+            parent: self,
+            textView: textView
+        )
+        guard synchronization != .staleSession else { return }
+        let replacedExternalText = synchronization == .replacedText
 
         if !textView.hasMarkedText(), Self.needsReadabilityApplication(
             lastEnabled: context.coordinator.appliedReadabilityEnabled,
@@ -682,15 +676,21 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             )
         }
 
+        let expectedSession = session
         if isFocused, textView.window?.firstResponder !== textView {
-            DispatchQueue.main.async { [weak textView] in
-                guard let textView, textView.window != nil else { return }
+            DispatchQueue.main.async {
+                [weak textView, weak coordinator = context.coordinator] in
+                guard let textView,
+                      textView.window != nil,
+                      coordinator?.isCurrent(expectedSession) == true else { return }
                 textView.window?.makeFirstResponder(textView)
             }
         } else if !isFocused, textView.window?.firstResponder === textView {
-            DispatchQueue.main.async { [weak textView] in
+            DispatchQueue.main.async {
+                [weak textView, weak coordinator = context.coordinator] in
                 guard let textView,
                       let window = textView.window,
+                      coordinator?.isCurrent(expectedSession) == true,
                       window.firstResponder === textView else { return }
                 window.makeFirstResponder(nil)
             }
@@ -759,11 +759,18 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+        enum SynchronizationResult: Equatable {
+            case staleSession
+            case unchanged
+            case replacedText
+        }
+
         var parent: AttachmentAwareTextEditor
         weak var textView: NSTextView?
         var isApplyingExternalText = false
         var appliedReadabilityEnabled: Bool?
         var appliedReadabilityColorScheme: ColorScheme?
+        private var appliedSession: NoteEditorSession?
 
         init(parent: AttachmentAwareTextEditor) {
             self.parent = parent
@@ -772,6 +779,58 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         func recordAppliedReadability(enabled: Bool, colorScheme: ColorScheme) {
             appliedReadabilityEnabled = enabled
             appliedReadabilityColorScheme = colorScheme
+        }
+
+        @discardableResult
+        func synchronize(
+            parent newParent: AttachmentAwareTextEditor,
+            textView: NSTextView
+        ) -> SynchronizationResult {
+            if let appliedSession {
+                guard newParent.session.generation > appliedSession.generation
+                        || newParent.session == appliedSession else {
+                    return .staleSession
+                }
+            }
+
+            let startsNewSession = newParent.session != appliedSession
+            if startsNewSession {
+                isApplyingExternalText = true
+                if textView.hasMarkedText() {
+                    textView.unmarkText()
+                }
+                textView.breakUndoCoalescing()
+                textView.undoManager?.removeAllActions()
+            }
+
+            parent = newParent
+            appliedSession = newParent.session
+
+            guard textView.string != newParent.text,
+                  startsNewSession || !textView.hasMarkedText() else {
+                isApplyingExternalText = false
+                return .unchanged
+            }
+
+            let selectedRanges = textView.selectedRanges
+            isApplyingExternalText = true
+            textView.undoManager?.disableUndoRegistration()
+            textView.string = newParent.text
+            textView.selectedRanges = AttachmentAwareTextEditor.clamped(
+                selectedRanges,
+                length: (newParent.text as NSString).length
+            )
+            textView.undoManager?.enableUndoRegistration()
+            if startsNewSession {
+                textView.breakUndoCoalescing()
+                textView.undoManager?.removeAllActions()
+            }
+            isApplyingExternalText = false
+            return .replacedText
+        }
+
+        func isCurrent(_ session: NoteEditorSession) -> Bool {
+            appliedSession == session
         }
 
         func textDidChange(_ notification: Notification) {
