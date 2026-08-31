@@ -99,12 +99,8 @@ final class CanvasUITests: XCTestCase {
         XCTAssertTrue(app.buttons["canvas-image-delete"].waitForExistence(timeout: 3))
         let selectTool = app.buttons["canvas-tool-select"]
         XCTAssertTrue(selectTool.waitForExistence(timeout: 2))
-        selectTool.click()
-        let center = surface.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        )
-        center.click()
-        XCTAssertTrue(app.buttons["canvas-image-delete"].waitForExistence(timeout: 2))
+        app.typeKey("v", modifierFlags: [])
+        waitForSelection(true, on: selectTool)
         try saveVisualEvidence(named: "canvas-image-selected")
 
         app.typeKey(.rightArrow, modifierFlags: .option)
