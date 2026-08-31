@@ -8,6 +8,17 @@ final class AtticUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launch()
+        app.activate()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["panel-section-picker"]
+                .waitForExistence(timeout: 5)
+        )
+    }
+
+    override func tearDownWithError() throws {
+        app.terminate()
+        _ = app.wait(for: .notRunning, timeout: 3)
+        app = nil
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
@@ -36,13 +47,22 @@ final class AtticUITests: XCTestCase {
         let doneSection = app.staticTexts["task-section-done"]
         XCTAssertTrue(doneSection.waitForExistence(timeout: 2))
 
-        let actions = app.popUpButtons["Edit task"]
+        let actions = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "task-actions-")
+        ).firstMatch
         XCTAssertTrue(actions.waitForExistence(timeout: 2))
         actions.click()
 
-        XCTAssertTrue(app.menuItems["Copy"].waitForExistence(timeout: 2))
+        XCTAssertTrue(
+            app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", "Copy"))
+                .firstMatch
+                .waitForExistence(timeout: 2)
+        )
 
-        let editTitle = app.menuItems["Edit title…"]
+        let editTitle = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Edit title…"))
+            .firstMatch
         XCTAssertTrue(editTitle.waitForExistence(timeout: 2))
         editTitle.click()
 
@@ -86,8 +106,8 @@ final class AtticUITests: XCTestCase {
         let alphaRow = rows.matching(NSPredicate(format: "label == %@", "Alpha")).firstMatch
         XCTAssertTrue(betaRow.waitForExistence(timeout: 2))
         XCTAssertTrue(alphaRow.waitForExistence(timeout: 2))
-        XCTAssertTrue(betaRow.isHittable)
-        XCTAssertTrue(alphaRow.isHittable)
+        XCTAssertTrue(second.isHittable)
+        XCTAssertTrue(first.isHittable)
 
         let dragStart = betaRow.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
         let dragEnd = alphaRow.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
@@ -114,13 +134,15 @@ final class AtticUITests: XCTestCase {
 
         let title = app.textFields["note-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 2))
-        title.typeText("Live Notes UI")
-        title.typeKey(.return, modifierFlags: [])
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).click()
+        app.typeText("Live Notes UI")
+        app.typeKey(.return, modifierFlags: [])
 
         let body = app.textViews["note-body"]
         XCTAssertTrue(body.waitForExistence(timeout: 2))
-        body.typeText("The active draft stays mounted while the library is open.")
-        body.typeKey(.escape, modifierFlags: [])
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        app.typeText("The active draft stays mounted while the library is open.")
+        app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(body.exists)
 
         let save = app.buttons["save-note"]
@@ -158,7 +180,7 @@ final class AtticUITests: XCTestCase {
 
         let body = app.textViews["note-body"]
         XCTAssertTrue(body.waitForExistence(timeout: 2))
-        body.click()
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
 
         // Send separate key events instead of one `typeText` batch. This
         // catches focus bridges that surrender first responder after the

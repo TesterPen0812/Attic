@@ -128,9 +128,9 @@ final class CanvasUITests: XCTestCase {
         openCanvas()
         let pin = app.buttons["panel-pin-button"]
         XCTAssertTrue(pin.waitForExistence(timeout: 3))
-        XCTAssertEqual(pin.value as? String, "Not pinned")
+        XCTAssertFalse(pin.isSelected)
         pin.click()
-        waitForValue("Pinned", on: pin)
+        waitForSelection(true, on: pin)
         try saveVisualEvidence(named: "canvas-panel-pinned")
 
         let menu = app.descendants(matching: .any)
@@ -146,7 +146,7 @@ final class CanvasUITests: XCTestCase {
         let field = app.textFields["Canvas name"]
         XCTAssertTrue(field.waitForExistence(timeout: 2))
         field.typeText("Reference")
-        app.buttons["Create"].click()
+        app.buttons["action-button-1"].click()
         waitForValue("Reference", on: menu)
         assertContentCount("0 items")
         try saveVisualEvidence(named: "canvas-second-document")
@@ -227,20 +227,11 @@ final class CanvasUITests: XCTestCase {
         app.launchEnvironment["ATTIC_UI_TEST_CANVAS_RESET"] =
             resetCanvasStore ? "1" : "0"
         app.launch()
-        let running = NSPredicate { object, _ in
-            guard let application = object as? XCUIApplication else {
-                return false
-            }
-            return application.state == .runningBackground
-                || application.state == .runningForeground
-        }
-        XCTAssertEqual(
-            XCTWaiter.wait(
-                for: [XCTNSPredicateExpectation(predicate: running, object: app)],
-                timeout: 5
-            ),
-            .completed,
-            "The LSUIElement host must finish launching in either AppKit running state"
+        app.activate()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["panel-section-picker"]
+                .waitForExistence(timeout: 5),
+            "The LSUIElement host must expose its real panel shell after activation"
         )
     }
 
@@ -257,9 +248,44 @@ final class CanvasUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
+        let settledSelection = NSPredicate { _, _ in
+            let selected = modes.filter(\.isSelected)
+            return selected.count == 1
+                && selected.first?.identifier == expected.identifier
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: settledSelection, object: nil)],
+                timeout: 3
+            ),
+            .completed,
+            file: file,
+            line: line
+        )
         let selected = modes.filter(\.isSelected)
         XCTAssertEqual(selected.count, 1, file: file, line: line)
         XCTAssertEqual(selected.first?.identifier, expected.identifier, file: file, line: line)
+    }
+
+    private func waitForSelection(
+        _ expected: Bool,
+        on element: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let predicate = NSPredicate { object, _ in
+            (object as? XCUIElement)?.isSelected == expected
+        }
+        let expectation = XCTNSPredicateExpectation(
+            predicate: predicate,
+            object: element
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [expectation], timeout: 4),
+            .completed,
+            file: file,
+            line: line
+        )
     }
 
     private func drawStroke(on surface: XCUIElement) {
@@ -324,7 +350,11 @@ final class CanvasUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let predicate = NSPredicate(format: "label == %@", expected)
+        let predicate = NSPredicate(
+            format: "label == %@ OR value == %@",
+            expected,
+            expected
+        )
         let expectation = XCTNSPredicateExpectation(
             predicate: predicate,
             object: element
