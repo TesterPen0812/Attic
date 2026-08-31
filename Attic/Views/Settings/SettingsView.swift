@@ -34,6 +34,8 @@ struct SettingsView: View {
 
     @AppStorage(SettingsSection.selectionStorageKey)
     private var selectedSectionRawValue = SettingsSection.general.rawValue
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
         NavigationSplitView {
@@ -46,6 +48,12 @@ struct SettingsView: View {
         .frame(
             minWidth: SettingsWindowLayout.minimumContentSize.width,
             minHeight: SettingsWindowLayout.minimumContentSize.height
+        )
+        .tint(settingsAccentColor)
+        .accentColor(settingsAccentColor)
+        .environment(
+            \.atticPanelUsesSystemAccent,
+            settings.panelTheme.usesSystemAccent
         )
         .onAppear {
             loginItemService.refresh()
@@ -67,6 +75,15 @@ struct SettingsView: View {
 
     private var selectedSection: SettingsSection {
         SettingsSection.restored(from: selectedSectionRawValue)
+    }
+
+    private var settingsAccentColor: Color {
+        settings.panelTheme.usesSystemAccent
+            ? Color.accentColor
+            : settings.panelTheme.palette(
+                for: colorScheme,
+                contrast: colorSchemeContrast
+            ).accentColor
     }
 
     @ViewBuilder

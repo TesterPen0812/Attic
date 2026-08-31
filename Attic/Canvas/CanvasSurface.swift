@@ -1,8 +1,15 @@
+#if os(macOS)
+@preconcurrency import AppKit
+#endif
 import SwiftUI
 
 struct CanvasSurface: View {
     @ObservedObject var session: CanvasSession
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
+#if os(macOS)
+    @Environment(\.atticPanelThemePalette) private var panelThemePalette
+    @Environment(\.atticPanelUsesSystemAccent) private var panelUsesSystemAccent
+#endif
 
     var body: some View {
         platformSurface
@@ -24,12 +31,21 @@ struct CanvasSurface: View {
 #if os(macOS)
         CanvasNSViewRepresentable(
             session: session,
+            selectionAccentColor: canvasSelectionAccentColor,
             clearReadabilityEnabled: clearReadabilityEnabled
         )
 #elseif os(iOS)
         CanvasUIViewRepresentable(session: session)
 #endif
     }
+
+#if os(macOS)
+    private var canvasSelectionAccentColor: NSColor {
+        panelUsesSystemAccent
+            ? .controlAccentColor
+            : NSColor(panelThemePalette.accentColor)
+    }
+#endif
 
     private var accessibilityValue: String {
         let strokeSummary = session.strokes.count == 1

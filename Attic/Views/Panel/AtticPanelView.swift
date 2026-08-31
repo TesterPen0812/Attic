@@ -9,6 +9,7 @@ struct AtticPanelView: View {
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
 
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var systemColorScheme
@@ -55,6 +56,32 @@ struct AtticPanelView: View {
     private var canSaveQuickTask: Bool {
         !quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+    private var panelThemePalette: AtticPanelThemePalette {
+        settings.panelTheme.palette(
+            for: systemColorScheme,
+            contrast: colorSchemeContrast
+        )
+    }
+    private var panelSurfaceTreatment: AtticPanelSurfaceTreatment {
+        settings.panelTheme.surfaceTreatment(
+            colorScheme: systemColorScheme,
+            contrast: colorSchemeContrast,
+            glassStyle: settings.panelGlassStyle,
+            isTranslucent: settings.isTranslucent,
+            reduceTransparency: reduceTransparency
+        )
+    }
+    private var panelAccentColor: Color {
+        settings.panelTheme.usesSystemAccent
+            ? Color.accentColor
+            : panelThemePalette.accentColor
+    }
+    private var usesOriginalTheme: Bool {
+        settings.panelTheme == .original
+    }
+    private var hasIncreasedContrast: Bool {
+        colorSchemeContrast == .increased
+    }
 
     var body: some View {
         ZStack {
@@ -93,7 +120,7 @@ struct AtticPanelView: View {
         )
         .environment(\.controlActiveState, .key)
         .atticPanelSurface(
-            translucent: settings.isTranslucent,
+            treatment: panelSurfaceTreatment,
             glassStyle: settings.panelGlassStyle,
             opaqueColor: Color(nsColor: .windowBackgroundColor),
             cornerRadius: cornerRadius,
@@ -148,6 +175,17 @@ struct AtticPanelView: View {
                 errorBannerHeight = resolvedHeight
             }
         }
+        .environment(\.atticPanelThemePalette, panelThemePalette)
+        .environment(
+            \.atticPanelUsesSystemAccent,
+            settings.panelTheme.usesSystemAccent
+        )
+        .environment(
+            \.atticPanelUsesSystemOpaqueSurface,
+            panelSurfaceTreatment.usesSystemOpaqueSurface
+        )
+        .tint(panelAccentColor)
+        .accentColor(panelAccentColor)
     }
 
     @ViewBuilder
@@ -215,6 +253,7 @@ struct AtticPanelView: View {
                 let isEmphasized = isSelected
                     || hoveredModeSection == section
                     || focusedModeSection == section
+                let isFocused = focusedModeSection == section
 
                 Button {
                     selectSection(section)
@@ -223,18 +262,26 @@ struct AtticPanelView: View {
                         .font(.system(size: AtticStyle.controlSymbolSize, weight: isSelected ? .semibold : .regular))
                         .frame(width: AtticStyle.modeControlSize, height: AtticStyle.modeControlSize)
                         .foregroundStyle(
-                            Color.primary.opacity(isSelected ? 0.96 : (isEmphasized ? 0.86 : 0.68))
+                            modeForegroundColor(
+                                isSelected: isSelected,
+                                isEmphasized: isEmphasized,
+                                isFocused: isFocused
+                            )
                         )
                         .atticClearGlassForegroundReadability()
                         .background(
-                            Color.primary.opacity(isSelected ? 0.15 : (isEmphasized ? 0.08 : 0)),
+                            modeBackgroundColor(
+                                isSelected: isSelected,
+                                isEmphasized: isEmphasized,
+                                isFocused: isFocused
+                            ),
                             in: Circle()
                         )
                         .overlay {
-                            if isSelected || focusedModeSection == section {
+                            if isSelected || isFocused {
                                 Circle().stroke(
-                                    Color.primary.opacity(isSelected ? 0.16 : 0.12),
-                                    lineWidth: 0.75
+                                    modeStrokeColor(isSelected: isSelected),
+                                    lineWidth: hasIncreasedContrast ? 1 : 0.75
                                 )
                             }
                         }
@@ -416,26 +463,18 @@ struct AtticPanelView: View {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(
-                        canSaveQuickTask
-                            ? Color.primary.opacity(0.94)
-                            : Color.primary.opacity(0.34)
+                        quickSubmitForegroundColor
                     )
                     .atticClearGlassForegroundReadability()
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .background(
-                        Color.primary.opacity(
-                            canSaveQuickTask
-                                ? ((isQuickSubmitHovered || isQuickSubmitFocused) ? 0.16 : 0.10)
-                                : 0.045
-                        ),
+                        quickSubmitBackgroundColor,
                         in: Circle()
                     )
                     .overlay {
                         Circle().stroke(
-                            Color.primary.opacity(
-                                isQuickSubmitFocused ? 0.30 : (canSaveQuickTask ? 0.12 : 0.06)
-                            ),
-                            lineWidth: isQuickSubmitFocused ? 1 : 0.75
+                            quickSubmitStrokeColor,
+                            lineWidth: (isQuickSubmitFocused || hasIncreasedContrast) ? 1 : 0.75
                         )
                     }
                     .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
@@ -593,6 +632,84 @@ struct AtticPanelView: View {
             isImporting = false
         }
         uiState.setInteractionLock(.notesImport, isActive: isImporting)
+    }
+
+    private func modeForegroundColor(
+        isSelected: Bool,
+        isEmphasized: Bool,
+        isFocused: Bool
+    ) -> Color {
+        if usesOriginalTheme {
+            return Color.primary.opacity(isSelected ? 0.96 : (isEmphasized ? 0.86 : 0.68))
+        }
+        if isSelected || isFocused {
+            return panelThemePalette.accentColor.opacity(isSelected ? 0.98 : 0.92)
+        }
+        return Color.primary.opacity(isEmphasized ? 0.86 : 0.68)
+    }
+
+    private func modeBackgroundColor(
+        isSelected: Bool,
+        isEmphasized: Bool,
+        isFocused: Bool
+    ) -> Color {
+        if usesOriginalTheme {
+            return Color.primary.opacity(isSelected ? 0.15 : (isEmphasized ? 0.08 : 0))
+        }
+        if isSelected {
+            return panelThemePalette.accentColor.opacity(panelThemePalette.selectedFillOpacity)
+        }
+        if isFocused {
+            return panelThemePalette.accentColor.opacity(
+                min(panelThemePalette.selectedFillOpacity * 0.72, 0.13)
+            )
+        }
+        return Color.primary.opacity(isEmphasized ? 0.08 : 0)
+    }
+
+    private func modeStrokeColor(isSelected: Bool) -> Color {
+        if usesOriginalTheme {
+            let opacity = isSelected ? 0.16 : 0.12
+            return Color.primary.opacity(hasIncreasedContrast ? opacity + 0.12 : opacity)
+        }
+        let opacity = panelThemePalette.selectedStrokeOpacity
+            + (hasIncreasedContrast ? 0.14 : 0)
+        return panelThemePalette.accentColor.opacity(min(opacity, 1))
+    }
+
+    private var quickSubmitForegroundColor: Color {
+        guard canSaveQuickTask else { return Color.primary.opacity(0.34) }
+        return usesOriginalTheme
+            ? Color.primary.opacity(0.94)
+            : panelThemePalette.accentColor.opacity(0.98)
+    }
+
+    private var quickSubmitBackgroundColor: Color {
+        guard canSaveQuickTask else { return Color.primary.opacity(0.045) }
+        let isEmphasized = isQuickSubmitHovered || isQuickSubmitFocused
+        if usesOriginalTheme {
+            return Color.primary.opacity(isEmphasized ? 0.16 : 0.10)
+        }
+        let opacity = isEmphasized
+            ? min(panelThemePalette.selectedFillOpacity + 0.06, 0.24)
+            : max(panelThemePalette.selectedFillOpacity * 0.72, 0.08)
+        return panelThemePalette.accentColor.opacity(opacity)
+    }
+
+    private var quickSubmitStrokeColor: Color {
+        if usesOriginalTheme {
+            let opacity = isQuickSubmitFocused ? 0.30 : (canSaveQuickTask ? 0.12 : 0.06)
+            return Color.primary.opacity(hasIncreasedContrast ? min(opacity + 0.12, 1) : opacity)
+        }
+        guard canSaveQuickTask else {
+            return Color.primary.opacity(hasIncreasedContrast ? 0.16 : 0.06)
+        }
+        let baseOpacity = isQuickSubmitFocused
+            ? panelThemePalette.selectedStrokeOpacity
+            : panelThemePalette.selectedStrokeOpacity * 0.55
+        return panelThemePalette.accentColor.opacity(
+            min(baseOpacity + (hasIncreasedContrast ? 0.14 : 0), 1)
+        )
     }
 
     private func allSections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct CanvasNSViewRepresentable: NSViewRepresentable {
     @ObservedObject var session: CanvasSession
+    let selectionAccentColor: NSColor
     let clearReadabilityEnabled: Bool
 
     func makeNSView(context: Context) -> CanvasNSView {
@@ -94,7 +95,8 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             width: session.width,
             viewport: session.viewport,
             pendingPlacement: session.pendingPlacement,
-            clearReadabilityEnabled: clearReadabilityEnabled
+            clearReadabilityEnabled: clearReadabilityEnabled,
+            selectionAccentColor: selectionAccentColor
         )
     }
 }
@@ -194,6 +196,7 @@ final class CanvasNSView: NSView {
     var shapePointerMode: ShapePointerMode?
     var shapePreview: CanvasStrokeGeometry?
     var clearReadabilityEnabled = false
+    var selectionAccentColor = NSColor.controlAccentColor
     var panLastPoint: CGPoint?
     var spacePressed = false
     var activeViewportGesture: ViewportGestureSequence?
@@ -304,7 +307,8 @@ final class CanvasNSView: NSView {
         width: Double,
         viewport: CanvasViewport,
         pendingPlacement: CanvasPendingPlacement?,
-        clearReadabilityEnabled: Bool
+        clearReadabilityEnabled: Bool,
+        selectionAccentColor: NSColor = .controlAccentColor
     ) {
         var changed = false
         if self.canvasID != canvasID {
@@ -349,6 +353,10 @@ final class CanvasNSView: NSView {
         }
         if self.clearReadabilityEnabled != clearReadabilityEnabled {
             self.clearReadabilityEnabled = clearReadabilityEnabled
+            changed = true
+        }
+        if !self.selectionAccentColor.isEqual(selectionAccentColor) {
+            self.selectionAccentColor = selectionAccentColor
             changed = true
         }
         if interaction.configure(
@@ -447,13 +455,13 @@ final class CanvasNSView: NSView {
             pathCache: pathCache,
             backgroundColor: NSColor.clear.cgColor,
             strokeColor: { $0.nsColor.cgColor },
-            eraserOutlineColor: NSColor.controlAccentColor.cgColor,
+            eraserOutlineColor: selectionAccentColor.cgColor,
             images: displayImages,
             selectedImageID: selectedImageID,
             imageProvider: { [imageCache] image in
                 imageCache.image(for: image)
             },
-            imageSelectionColor: NSColor.controlAccentColor.cgColor,
+            imageSelectionColor: selectionAccentColor.cgColor,
             shapePreview: shapePreview,
             strokeReadabilityShadowColor: clearReadabilityEnabled
                 ? readabilityShadowColor

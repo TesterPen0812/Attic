@@ -1,8 +1,51 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
 final class SettingsPresentationTests: XCTestCase {
+    func testPanelThemeChooserHasStablePresentationOrderAndIdentifiers() {
+        XCTAssertEqual(
+            AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier,
+            "setting-panel-theme"
+        )
+        XCTAssertEqual(
+            AppearanceSettingsPresentation.orderedThemeAccessibilityIdentifiers,
+            [
+                "setting-panel-theme-original",
+                "setting-panel-theme-midnightCobalt",
+                "setting-panel-theme-porcelainVapor",
+                "setting-panel-theme-smokedUmber",
+                "setting-panel-theme-electricBlue",
+                "setting-panel-theme-seaGlass",
+                "setting-panel-theme-amethyst"
+            ]
+        )
+        XCTAssertEqual(
+            Set(AppearanceSettingsPresentation.orderedThemeAccessibilityIdentifiers).count,
+            AtticPanelTheme.allCases.count
+        )
+        XCTAssertTrue(AtticPanelTheme.allCases.allSatisfy { !$0.detail.isEmpty })
+    }
+
+    func testPanelThemeChooserReservesTwoLinesAndStrengthensHighContrastBoundaries() {
+        XCTAssertEqual(AppearanceSettingsPresentation.themeTitleLineLimit, 2)
+        XCTAssertGreaterThanOrEqual(AppearanceSettingsPresentation.themeChoiceHeight, 74)
+        XCTAssertGreaterThan(
+            AppearanceSettingsPresentation.nonselectedThemeBoundaryOpacity(for: .increased),
+            AppearanceSettingsPresentation.nonselectedThemeBoundaryOpacity(for: .standard)
+        )
+        XCTAssertGreaterThan(
+            AppearanceSettingsPresentation.nonselectedThemeBoundaryLineWidth(for: .increased),
+            AppearanceSettingsPresentation.nonselectedThemeBoundaryLineWidth(for: .standard)
+        )
+    }
+
+    @MainActor
+    func testSystemAccentEnvironmentDefaultsToOriginalBehavior() {
+        XCTAssertTrue(EnvironmentValues().atticPanelUsesSystemAccent)
+    }
+
     func testSettingsSectionsHaveStableLocalOnlyOrderAndIdentifiers() {
         XCTAssertEqual(
             SettingsSection.allCases,

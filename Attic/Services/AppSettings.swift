@@ -121,6 +121,7 @@ final class AppSettings: ObservableObject {
         static let hasShownWelcome = "hasShownWelcome"
         static let isTranslucent = "isTranslucent"
         static let panelGlassStyle = "panelGlassStyle"
+        static let panelTheme = "panelTheme"
         static let appearance = "appearancePreference"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
@@ -140,6 +141,10 @@ final class AppSettings: ObservableObject {
 
     @Published var panelGlassStyle: PanelGlassStyle {
         didSet { defaults.set(panelGlassStyle.rawValue, forKey: Key.panelGlassStyle) }
+    }
+
+    @Published var panelTheme: AtticPanelTheme {
+        didSet { defaults.set(panelTheme.rawValue, forKey: Key.panelTheme) }
     }
 
     @Published var appearance: AppearancePreference {
@@ -255,6 +260,9 @@ final class AppSettings: ObservableObject {
         } else {
             panelGlassStyle = PanelGlassStyle(rawValue: storedGlassStyle) ?? .clear
         }
+        panelTheme = AtticPanelTheme(
+            rawValue: defaults.string(forKey: Key.panelTheme) ?? ""
+        ) ?? .defaultTheme
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
