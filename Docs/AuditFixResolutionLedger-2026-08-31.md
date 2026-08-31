@@ -28,7 +28,7 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | C-06 | Planned | — | — | — | — | Page viewport/history/relaunch state remains unverified. |
 | C-07 | Planned | — | — | — | Baseline mutation/payload comparison evidence pending capture | Main-actor whole-table and payload work remains. |
 | C-08 | Planned | — | — | — | Baseline local-only activity evidence pending capture | Deferred Cloud activity may still wake in local-only saves. |
-| C-09 | Planned | — | — | — | — | Undo/Redo commands remain toolbar-visibility-dependent. |
+| C-09 | Fixed | `0055518` | `CanvasSessionTests`: 11/11 passed in Local; route is Canvas-scoped and exercises Undo/Redo without constructing the width-dependent toolbar | Awaiting installed Command-Z/Command-Shift-Z matrix at 332, 360, custom, and expanded widths | Stable Commands observation is event-driven and adds no polling or persistence | Automated route and affected Local build pass; menu key-equivalent precedence and every required width remain installed-UAT pending. |
 | C-10 | Planned | — | — | — | Baseline corrupt-decode retry count pending capture | Corrupt assets lack complete recovery/memoization. |
 | C-11 | Planned | — | — | — | — | Import fit/reachability matrix unverified. |
 | C-12 | Planned | — | — | — | — | Hosted content-versus-shell resize hit matrix unverified. |
@@ -93,3 +93,4 @@ Before any command that drives the installed app, cursor, keyboard, trackpad eve
 | `3957a27`, `69fafe6` | N-005 unique explicit attachment roots for every Notes/MCP test initializer plus a default-shaped sentinel regression | Central Local run passed 82/82 Notes/MCP tests; affected Local build succeeded. |
 | `4639220` | PANEL-13 modern `NSAccessibility` selector permission while retaining dock-corner-authoritative frame routing | `PanelSquircleGeometryTests` 54/54 passed; affected Local build succeeded without the deprecated attribute-settable warning. |
 | `d14ae77` | PANEL-12 parameterized local-only preview build/launch with exact PID+path ownership, `/tmp` defaults, optional appearance, provenance, signature, hash, and entitlement emission | Launcher tests passed 6/6 (43 assertions); a real build-only run produced `Attic Launcher Verification`, `com.taha.Attic.launcher.verification`, executable SHA-256 `c478b8d8758382c3fb2c3ef0ecee2a36208b4f4e4571b38c8db9db9306d604e2`, and only sandbox/get-task-allow/network entitlements. |
+| `0055518` | C-09 app-level Canvas Undo/Redo commands independent of compact toolbar rendering; removed button-owned key equivalents | `CanvasSessionTests` 11/11 passed; affected Local build succeeded. |
