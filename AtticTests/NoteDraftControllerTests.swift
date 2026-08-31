@@ -5,12 +5,6 @@ import XCTest
 @testable import Attic
 
 final class NoteDraftControllerTests: XCTestCase {
-    // NSHostingView can still have focus reconciliation scheduled after the
-    // assertion. Retain the harness window for the short life of the test
-    // process so XCTest's autorelease checker does not tear its AppKit graph
-    // down while those main-queue callbacks are draining.
-    private static var retainedHarnessWindows: [NSWindow] = []
-
     @MainActor
     func testBodyEditorKeepsFirstResponderAcrossDraftUpdates() throws {
         let store = try makeTestNoteStore(
@@ -32,11 +26,12 @@ final class NoteDraftControllerTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderBack(nil)
-        Self.retainedHarnessWindows.append(window)
+        defer { tearDownHarnessWindow(window) }
 
-        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        drainMainRunLoop()
 
         let textView = try XCTUnwrap(
             firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" }
@@ -44,14 +39,14 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(textView))
 
         textView.insertText("a", replacementRange: textView.selectedRange())
-        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        drainMainRunLoop()
 
         XCTAssertTrue(
             window.firstResponder === textView,
             "A draft publication must not make the body editor surrender first responder"
         )
         textView.insertText("b", replacementRange: textView.selectedRange())
-        RunLoop.main.run(until: Date().addingTimeInterval(0.08))
+        drainMainRunLoop()
 
         XCTAssertEqual(textView.string, "ab")
         XCTAssertEqual(draft.body, "ab")
@@ -71,7 +66,7 @@ final class NoteDraftControllerTests: XCTestCase {
         let editorA = makeTestBodyEditor(draft: draft)
         let coordinator = editorA.makeCoordinator()
         let (textView, window) = makeUndoTextView(coordinator: coordinator)
-        Self.retainedHarnessWindows.append(window)
+        defer { tearDownHarnessWindow(window) }
         XCTAssertEqual(
             coordinator.synchronize(parent: editorA, textView: textView),
             .replacedText
@@ -144,7 +139,7 @@ final class NoteDraftControllerTests: XCTestCase {
         let editorA = makeTestBodyEditor(text: boxA, session: sessionA)
         let coordinator = editorA.makeCoordinator()
         let (textView, window) = makeUndoTextView(coordinator: coordinator)
-        Self.retainedHarnessWindows.append(window)
+        defer { tearDownHarnessWindow(window) }
         XCTAssertEqual(
             coordinator.synchronize(parent: editorA, textView: textView),
             .replacedText
@@ -581,8 +576,32 @@ private func makeUndoTextView(
         backing: .buffered,
         defer: false
     )
+    window.isReleasedWhenClosed = false
     window.contentView = textView
     return (textView, window)
+}
+
+@MainActor
+private func drainMainRunLoop(maximumPasses: Int = 16) {
+    for _ in 0..<maximumPasses {
+        let handledSource = RunLoop.main.run(
+            mode: .default,
+            before: Date(timeIntervalSinceNow: 0.001)
+        )
+        if !handledSource { break }
+    }
+}
+
+@MainActor
+private func tearDownHarnessWindow(_ window: NSWindow) {
+    _ = window.makeFirstResponder(nil)
+    if let contentView = window.contentView,
+       let textView = firstTextView(in: contentView, matching: { _ in true }) {
+        textView.delegate = nil
+    }
+    window.orderOut(nil)
+    window.close()
+    drainMainRunLoop()
 }
 
 private final class EditorTextBox {

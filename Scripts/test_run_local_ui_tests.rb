@@ -87,17 +87,19 @@ class RunLocalUITestsTest < Minitest::Test
     assert_operator source.index("$build_only && exit 0"), :<, source.index("lock_owner=")
   end
 
-  def test_ordinary_unit_test_host_keeps_official_product_defaults
+  def test_ordinary_unit_tests_use_dedicated_no_ui_host
     generator = File.read(File.join(__dir__, "generate_project.rb"))
+    host_settings = generator[/unit_host\.build_configurations\.each.*?^end$/m]
     unit_settings = generator[/unit_tests\.build_configurations\.each.*?^end$/m]
 
+    refute_nil host_settings
+    assert_includes host_settings, "settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'"
+    assert_includes host_settings, "settings['INFOPLIST_KEY_LSUIElement'] = 'YES'"
     refute_nil unit_settings
-    assert_includes unit_settings, "settings['ATTIC_MACOS_PRODUCT_NAME'] = 'Attic'"
-    assert_includes unit_settings, "settings['ATTIC_MACOS_EXECUTABLE_NAME'] = 'Attic'"
     assert_includes unit_settings,
-      "settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'"
+      "settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -module-alias Attic=AtticUnitTestHost'"
     assert_includes unit_settings,
-      "$(ATTIC_MACOS_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_EXECUTABLE_NAME)"
+      "AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost"
   end
 
   def test_default_scheme_is_unit_only_and_ui_runner_uses_dedicated_scheme
@@ -106,6 +108,8 @@ class RunLocalUITestsTest < Minitest::Test
     ui_scheme = generator[/ui_scheme = Xcodeproj::XCScheme\.new.*?ui_scheme\.save_as\(staged_project_path, 'AtticUI', true\)/m]
 
     refute_nil unit_scheme
+    assert_includes unit_scheme, "scheme.build_action.entries.last.build_for_testing = false"
+    assert_includes unit_scheme, "scheme.add_build_target(unit_host, false)"
     assert_includes unit_scheme, "scheme.add_test_target(unit_tests)"
     refute_includes unit_scheme, "scheme.add_test_target(ui_tests)"
     refute_nil ui_scheme

@@ -7,7 +7,7 @@
       buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry
-            buildForTesting = "YES"
+            buildForTesting = "NO"
             buildForRunning = "YES"
             buildForProfiling = "YES"
             buildForArchiving = "YES"
@@ -17,6 +17,20 @@
                BlueprintIdentifier = "A7714C2169D9DBD5A01DC94837E1C051"
                BuildableName = "Attic.app"
                BlueprintName = "Attic"
+               ReferencedContainer = "container:Attic.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "91B51DB0FF2546EAAA06E2521BC7D6A8"
+               BuildableName = "AtticUnitTestHost.app"
+               BlueprintName = "AtticUnitTestHost"
                ReferencedContainer = "container:Attic.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>

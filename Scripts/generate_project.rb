@@ -36,12 +36,13 @@ project.root_object.attributes['LastUpgradeCheck'] = '2660'
 project.add_build_configuration('Local', :debug)
 
 app = project.new_target(:application, 'Attic', :osx, '14.0')
+unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '14.0')
 unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '14.0')
 ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '14.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
-unit_tests.add_dependency(app)
+unit_tests.add_dependency(unit_host)
 ui_tests.add_dependency(app)
 mobile_tests.add_dependency(mobile_app)
 mobile_ui_tests.add_dependency(mobile_app)
@@ -57,6 +58,17 @@ def add_swift_sources(project, target, group_name, directory)
 end
 
 app_group = add_swift_sources(project, app, 'Attic', 'Attic')
+add_swift_sources(
+  project,
+  unit_host,
+  'AtticUnitTestHost',
+  'AtticUnitTestHost'
+)
+app_group.files.each do |reference|
+  next if reference.path == 'App/AtticApp.swift'
+
+  unit_host.source_build_phase.add_file_reference(reference)
+end
 add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
 add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
@@ -153,22 +165,37 @@ app.build_configurations.each do |config|
   settings['CURRENT_PROJECT_VERSION'] = '11'
 end
 
+unit_host.build_configurations.each do |config|
+  settings = config.build_settings
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'
+  settings['PRODUCT_NAME'] = 'AtticUnitTestHost'
+  settings['EXECUTABLE_NAME'] = 'AtticUnitTestHost'
+  settings['PRODUCT_MODULE_NAME'] = 'AtticUnitTestHost'
+  settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+  settings['INFOPLIST_KEY_LSUIElement'] = 'YES'
+  settings['CODE_SIGN_STYLE'] = 'Automatic'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
+  settings['ENABLE_APP_SANDBOX'] = 'YES'
+  settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
+  settings['SWIFT_VERSION'] = '5.0'
+  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+end
+
 unit_tests.build_configurations.each do |config|
   settings = config.build_settings
   # TEST_HOST is evaluated in the unit-test target's build-setting scope, so
   # keep ordinary Local/Debug runs usable when no isolated-host overrides are
   # supplied on the xcodebuild command line.
-  settings['ATTIC_MACOS_PRODUCT_NAME'] = 'Attic'
-  settings['ATTIC_MACOS_EXECUTABLE_NAME'] = 'Attic'
   settings['ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticTests'
   settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER)'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -module-alias Attic=AtticUnitTestHost'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
-  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/$(ATTIC_MACOS_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_EXECUTABLE_NAME)'
+  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 
@@ -275,6 +302,8 @@ target_attributes[mobile_app.uuid] = {
 
 scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)
+scheme.build_action.entries.last.build_for_testing = false
+scheme.add_build_target(unit_host, false)
 scheme.set_launch_target(app)
 scheme.launch_action.build_configuration = 'Local'
 scheme.add_test_target(unit_tests)
@@ -309,6 +338,7 @@ mobile_scheme.save_as(staged_project_path, 'AtticMobile', true)
 # macOS target's source list must not churn their buildable references.
 stable_target_uuids = {
   app => 'A7714C2169D9DBD5A01DC94837E1C051',
+  unit_host => '91B51DB0FF2546EAAA06E2521BC7D6A8',
   unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
   ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',
   mobile_app => '6A9C0775F09BF19B3C70496EEC4AF237',
