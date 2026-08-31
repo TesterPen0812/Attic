@@ -4,9 +4,57 @@ import SwiftUI
 final class AtticPanel: NSPanel {
     var onAccessibilityResizeRequest: ((CGSize) -> Void)?
     var onAccessibilityMoveRequest: ((CGRect) -> Void)?
+    var onTrackpadDismissRequest: (() -> Void)?
+    var trackpadDismissCorner: ScreenCorner = .topRight
+    private var trackpadDismissTracker = PanelTrackpadDismissTracker()
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        guard event.type == .scrollWheel else {
+            super.sendEvent(event)
+            return
+        }
+        guard event.momentumPhase.isEmpty,
+              event.modifierFlags.intersection([
+                .command,
+                .control,
+                .option,
+                .shift
+              ]).isEmpty else {
+            trackpadDismissTracker.cancel()
+            super.sendEvent(event)
+            return
+        }
+
+        let update = trackpadDismissTracker.update(
+            sample: PanelTrackpadSwipeSample(
+                deltaX: event.scrollingDeltaX,
+                deltaY: event.scrollingDeltaY,
+                phase: trackpadSwipePhase(for: event.phase),
+                isPrecise: event.hasPreciseScrollingDeltas,
+                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice
+            ),
+            dockedCorner: trackpadDismissCorner
+        )
+        switch update {
+        case .passThrough:
+            super.sendEvent(event)
+        case .tracking:
+            break
+        case .requestHide:
+            onTrackpadDismissRequest?()
+        }
+    }
+
+    private func trackpadSwipePhase(for phase: NSEvent.Phase) -> PanelTrackpadSwipePhase {
+        if phase.contains(.cancelled) { return .cancelled }
+        if phase.contains(.ended) { return .ended }
+        if phase.contains(.began) { return .began }
+        if phase.contains(.changed) || phase.contains(.stationary) { return .changed }
+        return .none
+    }
 
     override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
         if selector == #selector(setAccessibilityFrame(_:)),

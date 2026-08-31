@@ -349,6 +349,130 @@ enum PanelDockingPolicy {
     }
 }
 
+enum PanelTrackpadSwipePhase: Equatable {
+    case began
+    case changed
+    case ended
+    case cancelled
+    case none
+}
+
+struct PanelTrackpadSwipeSample: Equatable {
+    let deltaX: CGFloat
+    let deltaY: CGFloat
+    let phase: PanelTrackpadSwipePhase
+    let isPrecise: Bool
+    let isDirectionInvertedFromDevice: Bool
+}
+
+enum PanelTrackpadDismissUpdate: Equatable {
+    case passThrough
+    case tracking
+    case requestHide
+}
+
+/// Recognizes a phase-aware, precise horizontal swipe toward the screen edge
+/// that owns the panel. Mouse wheels and ordinary content scrolling remain on
+/// their existing paths.
+struct PanelTrackpadDismissTracker {
+    static let minimumDistance: CGFloat = 48
+    static let horizontalDominance: CGFloat = 1.25
+    static let minimumIntentDelta: CGFloat = 0.5
+
+    private enum State {
+        case undecided
+        case tracking
+        case rejected
+    }
+
+    private var state = State.undecided
+    private var progress: CGFloat = 0
+
+    static func isTowardDockedSide(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        isDirectionInvertedFromDevice: Bool,
+        dockedCorner: ScreenCorner
+    ) -> Bool {
+        let inversion: CGFloat = isDirectionInvertedFromDevice ? -1 : 1
+        let physicalX = deltaX * inversion
+        let physicalY = deltaY * inversion
+        let edgeDirection = horizontalEdgeDirection(for: dockedCorner)
+        return physicalX * edgeDirection > 0
+            && abs(physicalX) > abs(physicalY) * horizontalDominance
+    }
+
+    mutating func update(
+        sample: PanelTrackpadSwipeSample,
+        dockedCorner: ScreenCorner
+    ) -> PanelTrackpadDismissUpdate {
+        guard sample.isPrecise, sample.phase != .none else {
+            reset()
+            return .passThrough
+        }
+
+        if sample.phase == .began {
+            reset()
+        }
+        if sample.phase == .cancelled {
+            let wasTracking = state == .tracking
+            reset()
+            return wasTracking ? .tracking : .passThrough
+        }
+        if sample.phase == .ended {
+            let shouldHide = state == .tracking && progress >= Self.minimumDistance
+            reset()
+            return shouldHide ? .requestHide : .passThrough
+        }
+
+        let inversion: CGFloat = sample.isDirectionInvertedFromDevice ? -1 : 1
+        let physicalX = sample.deltaX * inversion
+        let physicalY = sample.deltaY * inversion
+        let edgeDirection = Self.horizontalEdgeDirection(for: dockedCorner)
+        let edgeProgress = physicalX * edgeDirection
+
+        if state == .rejected {
+            return .passThrough
+        }
+        if state == .undecided {
+            guard hypot(physicalX, physicalY) >= Self.minimumIntentDelta else {
+                return .passThrough
+            }
+            guard Self.isTowardDockedSide(
+                deltaX: sample.deltaX,
+                deltaY: sample.deltaY,
+                isDirectionInvertedFromDevice: sample.isDirectionInvertedFromDevice,
+                dockedCorner: dockedCorner
+            ) else {
+                state = .rejected
+                return .passThrough
+            }
+            state = .tracking
+        }
+
+        progress = max(0, progress + edgeProgress)
+        return .tracking
+    }
+
+    mutating func cancel() {
+        reset()
+    }
+
+    private mutating func reset() {
+        state = .undecided
+        progress = 0
+    }
+
+    private static func horizontalEdgeDirection(for corner: ScreenCorner) -> CGFloat {
+        switch corner {
+        case .topLeft, .bottomLeft:
+            -1
+        case .topRight, .bottomRight:
+            1
+        }
+    }
+}
+
 enum PanelModeDockLayout {
     static func width(isExpanded: Bool) -> CGFloat {
         let visibleSectionCount = isExpanded ? PanelSection.allCases.count : 1

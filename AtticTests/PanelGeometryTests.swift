@@ -140,6 +140,177 @@ final class PanelGeometryTests: XCTestCase {
         }
     }
 
+    func testPreciseTrackpadSwipeTowardDockedSideRequestsHideForEveryCorner() {
+        let cases: [(ScreenCorner, CGFloat)] = [
+            (.topLeft, -1),
+            (.bottomLeft, -1),
+            (.topRight, 1),
+            (.bottomRight, 1)
+        ]
+
+        for (corner, direction) in cases {
+            var tracker = PanelTrackpadDismissTracker()
+
+            XCTAssertEqual(
+                tracker.update(
+                    sample: PanelTrackpadSwipeSample(
+                        deltaX: 18 * direction,
+                        deltaY: 2,
+                        phase: .began,
+                        isPrecise: true,
+                        isDirectionInvertedFromDevice: false
+                    ),
+                    dockedCorner: corner
+                ),
+                .tracking
+            )
+            XCTAssertEqual(
+                tracker.update(
+                    sample: PanelTrackpadSwipeSample(
+                        deltaX: 34 * direction,
+                        deltaY: 1,
+                        phase: .changed,
+                        isPrecise: true,
+                        isDirectionInvertedFromDevice: false
+                    ),
+                    dockedCorner: corner
+                ),
+                .tracking
+            )
+            XCTAssertEqual(
+                tracker.update(
+                    sample: PanelTrackpadSwipeSample(
+                        deltaX: 0,
+                        deltaY: 0,
+                        phase: .ended,
+                        isPrecise: true,
+                        isDirectionInvertedFromDevice: false
+                    ),
+                    dockedCorner: corner
+                ),
+                .requestHide
+            )
+        }
+    }
+
+    func testTrackpadDismissDoesNotClaimGestureThatStartedAwayFromDockedSide() {
+        var tracker = PanelTrackpadDismissTracker()
+
+        XCTAssertEqual(
+            tracker.update(
+                sample: PanelTrackpadSwipeSample(
+                    deltaX: -20,
+                    deltaY: 1,
+                    phase: .began,
+                    isPrecise: true,
+                    isDirectionInvertedFromDevice: false
+                ),
+                dockedCorner: .topRight
+            ),
+            .passThrough
+        )
+        XCTAssertEqual(
+            tracker.update(
+                sample: PanelTrackpadSwipeSample(
+                    deltaX: 80,
+                    deltaY: 0,
+                    phase: .changed,
+                    isPrecise: true,
+                    isDirectionInvertedFromDevice: false
+                ),
+                dockedCorner: .topRight
+            ),
+            .passThrough
+        )
+        XCTAssertEqual(
+            tracker.update(
+                sample: PanelTrackpadSwipeSample(
+                    deltaX: 0,
+                    deltaY: 0,
+                    phase: .ended,
+                    isPrecise: true,
+                    isDirectionInvertedFromDevice: false
+                ),
+                dockedCorner: .topRight
+            ),
+            .passThrough
+        )
+    }
+
+    func testTrackpadDirectionNormalizationReservesPhysicalDockSide() {
+        XCTAssertTrue(
+            PanelTrackpadDismissTracker.isTowardDockedSide(
+                deltaX: -12,
+                deltaY: -1,
+                isDirectionInvertedFromDevice: true,
+                dockedCorner: .topRight
+            )
+        )
+        XCTAssertFalse(
+            PanelTrackpadDismissTracker.isTowardDockedSide(
+                deltaX: 12,
+                deltaY: 1,
+                isDirectionInvertedFromDevice: true,
+                dockedCorner: .topRight
+            )
+        )
+        XCTAssertTrue(
+            PanelTrackpadDismissTracker.isTowardDockedSide(
+                deltaX: -12,
+                deltaY: 1,
+                isDirectionInvertedFromDevice: false,
+                dockedCorner: .bottomLeft
+            )
+        )
+    }
+
+    @MainActor
+    func testPanelRoutesPreciseTrackpadSwipeToInteractiveHideCallback() throws {
+        let panel = AtticPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.trackpadDismissCorner = .topRight
+        var hideRequestCount = 0
+        panel.onTrackpadDismissRequest = {
+            hideRequestCount += 1
+        }
+
+        panel.sendEvent(try panelScrollEvent(deltaX: 18, deltaY: 2, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 34, deltaY: 1, phase: .changed))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+
+        XCTAssertEqual(hideRequestCount, 1)
+    }
+
+    @MainActor
+    func testModifiedScrollCancelsPendingPanelDismissGesture() throws {
+        let panel = AtticPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.trackpadDismissCorner = .topRight
+        var hideRequestCount = 0
+        panel.onTrackpadDismissRequest = {
+            hideRequestCount += 1
+        }
+
+        panel.sendEvent(try panelScrollEvent(deltaX: 52, deltaY: 1, phase: .began))
+        panel.sendEvent(try panelScrollEvent(
+            deltaX: 4,
+            deltaY: 0,
+            phase: .changed,
+            modifiers: .maskCommand
+        ))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+
+        XCTAssertEqual(hideRequestCount, 0)
+    }
+
     func testFlickTowardDifferentCornerMovesInsteadOfHiding() {
         let visibleFrame = CGRect(x: 0, y: 25, width: 1_600, height: 900)
         let frame = CGRect(x: 500, y: 300, width: 332, height: 480)
@@ -654,5 +825,40 @@ final class PanelGeometryTests: XCTestCase {
             PanelGeometry.preferredWorkspaceHeight(contentWidth: 1_000),
             PanelGeometry.preferredHeightCeiling
         )
+    }
+
+    private func panelScrollEvent(
+        deltaX: Int32,
+        deltaY: Int32,
+        phase: NSEvent.Phase,
+        modifiers: CGEventFlags = []
+    ) throws -> NSEvent {
+        let event = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: deltaY,
+            wheel2: deltaX,
+            wheel3: 0
+        ))
+        event.flags = modifiers
+        event.location = CGPoint(x: 120, y: 160)
+        let cgPhase: Int64
+        if phase == .began {
+            cgPhase = 1
+        } else if phase == .changed || phase == .stationary {
+            cgPhase = 2
+        } else if phase == .ended {
+            cgPhase = 4
+        } else if phase == .cancelled {
+            cgPhase = 8
+        } else {
+            cgPhase = 0
+        }
+        event.setIntegerValueField(
+            .scrollWheelEventScrollPhase,
+            value: cgPhase
+        )
+        return try XCTUnwrap(NSEvent(cgEvent: event))
     }
 }

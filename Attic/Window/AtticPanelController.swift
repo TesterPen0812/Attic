@@ -257,6 +257,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let visibleFrame = workArea.visibleFrame
         let priorFrame = panel.frame
         currentCorner = corner
+        panel.trackpadDismissCorner = corner
         hostingView.dockedCorner = corner
         startPointerPassthroughMonitoring()
 
@@ -412,6 +413,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.onAccessibilityMoveRequest = { [weak self] requestedFrame in
             self?.applyAccessibilityMoveRequest(requestedFrame)
         }
+        panel.onTrackpadDismissRequest = { [weak self] in
+            _ = self?.requestInteractiveHide()
+        }
         hostingView.onLiveResizeBegan = { [weak self] in
             self?.beginLiveResize()
         }
@@ -447,6 +451,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             .sink { [weak self] corner in
                 guard let self else { return }
                 self.currentCorner = corner
+                self.panel.trackpadDismissCorner = corner
                 self.hostingView.dockedCorner = corner
                 guard !self.isApplyingInteractiveCorner else { return }
                 self.resizeAndReanchor()
@@ -680,10 +685,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if releaseAction == .hide {
             uiState.dockingPreviewCorner = nil
             uiState.setInteractionLock(.windowMove, isActive: false)
-            let result = requestHide { [weak self] completion in
-                guard completion == .hidden else { return }
-                self?.onInteractiveHideCompleted?()
-            }
+            let result = requestInteractiveHide()
             if !result.isAccepted {
                 animateDock(
                     on: screen,
@@ -704,6 +706,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
     }
 
+    private func requestInteractiveHide() -> PanelHideRequestResult {
+        requestHide { [weak self] completion in
+            guard completion == .hidden else { return }
+            self?.onInteractiveHideCompleted?()
+        }
+    }
+
     private func animateDock(
         on screen: NSScreen,
         to corner: ScreenCorner,
@@ -715,6 +724,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
         if persistsCorner {
             currentCorner = corner
+            panel.trackpadDismissCorner = corner
             hostingView.dockedCorner = corner
             isApplyingInteractiveCorner = true
             settings.corner = corner

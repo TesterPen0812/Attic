@@ -1004,6 +1004,20 @@ private final class NotesHorizontalSwipeView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         guard bounds.contains(point) else { return }
 
+        if event.hasPreciseScrollingDeltas,
+           !event.phase.isEmpty,
+           let panel = event.window as? AtticPanel,
+           PanelTrackpadDismissTracker.isTowardDockedSide(
+                deltaX: event.scrollingDeltaX,
+                deltaY: event.scrollingDeltaY,
+                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice,
+                dockedCorner: panel.trackpadDismissCorner
+           ) {
+            accumulatedX = 0
+            hasTriggered = false
+            return
+        }
+
         if event.phase == .began {
             accumulatedX = 0
             hasTriggered = false
