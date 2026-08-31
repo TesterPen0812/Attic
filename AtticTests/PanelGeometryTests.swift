@@ -401,6 +401,46 @@ final class PanelGeometryTests: XCTestCase {
         withExtendedLifetime(observation) {}
     }
 
+    func testWorkAreaEventsAlsoCancelInteractionsWhenApplicationDeactivates() {
+        let center = NotificationCenter()
+        var received: [PanelWorkAreaEvent] = []
+        let observation = PanelWorkAreaEvents.publisher(center: center)
+            .sink { received.append($0) }
+
+        center.post(name: NSApplication.didResignActiveNotification, object: nil)
+
+        XCTAssertEqual(received, [.applicationDeactivated])
+        withExtendedLifetime(observation) {}
+    }
+
+    func testInteractionLifecycleCancelsEveryInterruptionExactlyOnce() {
+        for reason in PanelInteractionCancellationReason.allCases {
+            var lifecycle = PanelInteractionLifecycle()
+            lifecycle.begin(.windowMove)
+
+            XCTAssertEqual(
+                lifecycle.cancel(reason: reason),
+                PanelInteractionCancellation(
+                    interaction: .windowMove,
+                    reason: reason
+                )
+            )
+            XCTAssertNil(lifecycle.cancel(reason: reason))
+            XCTAssertNil(lifecycle.activeInteraction)
+        }
+    }
+
+    func testNormalMouseUpFinishesOnlyItsOwnedInteraction() {
+        var lifecycle = PanelInteractionLifecycle()
+        lifecycle.begin(.windowResize)
+
+        XCTAssertFalse(lifecycle.finish(.windowMove))
+        XCTAssertEqual(lifecycle.activeInteraction, .windowResize)
+        XCTAssertTrue(lifecycle.finish(.windowResize))
+        XCTAssertNil(lifecycle.activeInteraction)
+        XCTAssertNil(lifecycle.cancel(reason: .interruptedEventDelivery))
+    }
+
     func testTemporaryWorkAreaClampDuringResizeDoesNotBecomePreferredSize() {
         var state = PanelResizePersistenceState()
         state.beginUserResize()

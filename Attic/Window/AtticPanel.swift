@@ -356,6 +356,51 @@ struct PanelDragReleaseIntent: Equatable {
     let translation: CGPoint
 }
 
+enum PanelInteraction: Equatable {
+    case windowMove
+    case windowResize
+}
+
+enum PanelInteractionCancellationReason: CaseIterable, Equatable {
+    case escape
+    case applicationDeactivated
+    case windowDeactivated
+    case screenChanged
+    case explicitHide
+    case lostWindow
+    case interruptedEventDelivery
+}
+
+struct PanelInteractionCancellation: Equatable {
+    let interaction: PanelInteraction
+    let reason: PanelInteractionCancellationReason
+}
+
+struct PanelInteractionLifecycle {
+    private(set) var activeInteraction: PanelInteraction?
+
+    mutating func begin(_ interaction: PanelInteraction) {
+        activeInteraction = interaction
+    }
+
+    mutating func finish(_ interaction: PanelInteraction) -> Bool {
+        guard activeInteraction == interaction else { return false }
+        activeInteraction = nil
+        return true
+    }
+
+    mutating func cancel(
+        reason: PanelInteractionCancellationReason
+    ) -> PanelInteractionCancellation? {
+        guard let activeInteraction else { return nil }
+        self.activeInteraction = nil
+        return PanelInteractionCancellation(
+            interaction: activeInteraction,
+            reason: reason
+        )
+    }
+}
+
 /// Retains deliberate mouse-throw intent across the stationary samples that
 /// occur when the physical pointer reaches a screen edge. Direction comes from
 /// the cumulative gesture, while speed is the strongest meaningful rolling
@@ -472,9 +517,12 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     var onWindowDragBegan: (() -> Void)?
     var onWindowDragChanged: ((CGRect, CGPoint) -> CGRect)?
     var onWindowDragEnded: ((CGRect, CGPoint, CGPoint, CGPoint) -> Void)?
+    var onInteractionCancelled: ((PanelInteractionCancellation, CGRect?) -> Void)?
     private let chromeInteractionState: PanelChromeInteractionState
     private var resizeSession: ResizeSession?
     private var moveSession: MoveSession?
+    private var interactionLifecycle = PanelInteractionLifecycle()
+    private var escapeKeyMonitor: Any?
 
     init(
         rootView: AtticPanelView,
@@ -500,6 +548,19 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let escapeKeyMonitor {
+            NSEvent.removeMonitor(escapeKeyMonitor)
+        }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            cancelActiveInteraction(reason: .lostWindow)
+        }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -548,8 +609,12 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             isFlipped: isFlipped
         )
         guard let window else {
+            cancelActiveInteraction(reason: .lostWindow)
             super.mouseDown(with: event)
             return
+        }
+        if interactionLifecycle.activeInteraction != nil {
+            cancelActiveInteraction(reason: .interruptedEventDelivery)
         }
         if let edges = AtticPanelResizePolicy.resizeEdges(
                 at: policyPoint,
@@ -562,6 +627,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 initialFrame: window.frame,
                 initialMouseLocation: NSEvent.mouseLocation
             )
+            interactionLifecycle.begin(.windowResize)
+            startEscapeMonitoring()
             window.makeKey()
             onLiveResizeBegan?()
             return
@@ -586,6 +653,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 timestamp: event.timestamp
             )
         )
+        interactionLifecycle.begin(.windowMove)
+        startEscapeMonitoring()
         window.makeKey()
         NSCursor.closedHand.set()
         onWindowDragBegan?()
@@ -593,6 +662,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func mouseDragged(with event: NSEvent) {
         guard let window else {
+            cancelActiveInteraction(reason: .lostWindow)
             super.mouseDragged(with: event)
             return
         }
@@ -642,11 +712,14 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func mouseUp(with event: NSEvent) {
         guard let window else {
+            cancelActiveInteraction(reason: .lostWindow)
             super.mouseUp(with: event)
             return
         }
         if resizeSession != nil {
             resizeSession = nil
+            _ = interactionLifecycle.finish(.windowResize)
+            stopEscapeMonitoring()
             onLiveResizeEnded?(window.frame.size)
             return
         }
@@ -655,6 +728,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return
         }
         moveSession = nil
+        _ = interactionLifecycle.finish(.windowMove)
+        stopEscapeMonitoring()
         let mouseLocation = NSEvent.mouseLocation
         let release = session.intent.release(
             location: mouseLocation,
@@ -667,6 +742,47 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             release.velocity,
             release.translation
         )
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard interactionLifecycle.activeInteraction != nil else {
+            super.cancelOperation(sender)
+            return
+        }
+        cancelActiveInteraction(reason: .escape)
+    }
+
+    func cancelActiveInteraction(
+        reason: PanelInteractionCancellationReason
+    ) {
+        guard let cancellation = interactionLifecycle.cancel(reason: reason) else {
+            return
+        }
+        resizeSession = nil
+        moveSession = nil
+        stopEscapeMonitoring()
+        window?.ignoresMouseEvents = false
+        window?.invalidateCursorRects(for: self)
+        NSCursor.arrow.set()
+        onInteractionCancelled?(cancellation, window?.frame)
+    }
+
+    private func startEscapeMonitoring() {
+        guard escapeKeyMonitor == nil else { return }
+        escapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+            [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            MainActor.assumeIsolated {
+                self?.cancelActiveInteraction(reason: .escape)
+            }
+            return nil
+        }
+    }
+
+    private func stopEscapeMonitoring() {
+        guard let escapeKeyMonitor else { return }
+        NSEvent.removeMonitor(escapeKeyMonitor)
+        self.escapeKeyMonitor = nil
     }
 
     override func resetCursorRects() {

@@ -6,17 +6,20 @@ import SwiftUI
 enum PanelWorkAreaEvent: Equatable {
     case screenParametersChanged
     case applicationActivated
+    case applicationDeactivated
 }
 
 enum PanelWorkAreaEvents {
     static func publisher(
         center: NotificationCenter = .default
     ) -> AnyPublisher<PanelWorkAreaEvent, Never> {
-        Publishers.Merge(
+        Publishers.Merge3(
             center.publisher(for: NSApplication.didChangeScreenParametersNotification)
                 .map { _ in PanelWorkAreaEvent.screenParametersChanged },
             center.publisher(for: NSApplication.didBecomeActiveNotification)
-                .map { _ in PanelWorkAreaEvent.applicationActivated }
+                .map { _ in PanelWorkAreaEvent.applicationActivated },
+            center.publisher(for: NSApplication.didResignActiveNotification)
+                .map { _ in PanelWorkAreaEvent.applicationDeactivated }
         )
         .eraseToAnyPublisher()
     }
@@ -358,6 +361,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
         // Destructive/transient presentation state changes only after the
         // persistence boundary accepts the hide transaction.
+        hostingView.cancelActiveInteraction(reason: .explicitHide)
         canvasSession.cancelActiveInteraction()
         uiState.isCanvasConfirmationPresented = false
         uiState.dockingPreviewCorner = nil
@@ -431,6 +435,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 translation: translation
             )
         }
+        hostingView.onInteractionCancelled = { [weak self] cancellation, frame in
+            self?.handleInteractionCancellation(cancellation, frame: frame)
+        }
         panel.delegate = self
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
     }
@@ -447,8 +454,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             .store(in: &cancellables)
 
         PanelWorkAreaEvents.publisher()
-            .sink { [weak self] _ in
-                self?.recoverPanelInsideUsableArea()
+            .sink { [weak self] event in
+                guard let self else { return }
+                switch event {
+                case .screenParametersChanged:
+                    hostingView.cancelActiveInteraction(reason: .screenChanged)
+                    recoverPanelInsideUsableArea()
+                case .applicationActivated:
+                    recoverPanelInsideUsableArea()
+                case .applicationDeactivated:
+                    hostingView.cancelActiveInteraction(reason: .applicationDeactivated)
+                }
             }
             .store(in: &cancellables)
 
@@ -595,6 +611,24 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         isWindowDragging = true
         uiState.setInteractionLock(.windowMove, isActive: true)
         panel.ignoresMouseEvents = false
+    }
+
+    private func handleInteractionCancellation(
+        _ cancellation: PanelInteractionCancellation,
+        frame: CGRect?
+    ) {
+        panel.ignoresMouseEvents = false
+        switch cancellation.interaction {
+        case .windowResize:
+            endLiveResize(at: (frame ?? panel.frame).size)
+        case .windowMove:
+            isWindowDragging = false
+            uiState.dockingPreviewCorner = nil
+            uiState.setInteractionLock(.windowMove, isActive: false)
+            guard cancellation.reason != .explicitHide,
+                  cancellation.reason != .lostWindow else { return }
+            recoverPanelInsideUsableArea(preferredScreen: panel.screen ?? currentScreen)
+        }
     }
 
     private func updateWindowDrag(frame: CGRect, pointer: CGPoint) -> CGRect {
@@ -794,8 +828,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidChangeScreen(_ notification: Notification) {
+        hostingView.cancelActiveInteraction(reason: .screenChanged)
         let destinationScreen = (notification.object as? NSWindow)?.screen ?? panel.screen
         recoverPanelInsideUsableArea(preferredScreen: destinationScreen)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        hostingView.cancelActiveInteraction(reason: .windowDeactivated)
     }
 
     private func startPointerPassthroughMonitoring() {
