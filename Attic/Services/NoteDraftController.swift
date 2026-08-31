@@ -1,6 +1,11 @@
 import Combine
 import Foundation
 
+struct NoteEditorSession: Equatable {
+    let noteID: UUID?
+    let generation: UInt64
+}
+
 /// Owns note text independently of SwiftUI view lifetime and SwiftData model
 /// instances. Drafts are debounced while typing and flushed before transitions
 /// that could otherwise discard the editor.
@@ -29,6 +34,10 @@ final class NoteDraftController: ObservableObject {
     @Published private(set) var isActive = false
     @Published private(set) var isDirty = false
     @Published private(set) var conflict: Conflict?
+    @Published private(set) var editorSession = NoteEditorSession(
+        noteID: nil,
+        generation: 0
+    )
 
     /// Exposed within the Notes feature so its composer can observe attachment
     /// and library changes without threading a second store through the shared
@@ -39,6 +48,7 @@ final class NoteDraftController: ObservableObject {
     private var isApplyingSnapshot = false
     private var persistedSnapshot: PersistedSnapshot?
     private var generation: UInt64 = 0
+    private var nextEditorSessionGeneration: UInt64 = 0
 
     init(
         noteStore: NoteStore,
@@ -100,7 +110,8 @@ final class NoteDraftController: ObservableObject {
             noteID: note.id,
             title: note.title,
             body: note.body,
-            isActive: true
+            isActive: true,
+            startsNewEditorSession: false
         )
     }
 
@@ -311,10 +322,18 @@ final class NoteDraftController: ObservableObject {
         noteID: UUID?,
         title: String,
         body: String,
-        isActive: Bool
+        isActive: Bool,
+        startsNewEditorSession: Bool = true
     ) {
         cancelAutosave()
         generation &+= 1
+        if startsNewEditorSession {
+            nextEditorSessionGeneration &+= 1
+            editorSession = NoteEditorSession(
+                noteID: noteID,
+                generation: nextEditorSessionGeneration
+            )
+        }
         isApplyingSnapshot = true
         activeNoteID = noteID
         self.title = title
