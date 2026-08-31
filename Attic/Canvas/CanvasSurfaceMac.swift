@@ -55,6 +55,9 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         view.onNudgeSelectedImage = { [weak session] delta in
             _ = session?.nudgeSelectedImage(viewDelta: delta)
         }
+        view.onResizeSelectedImage = { [weak session] factor in
+            _ = session?.resizeSelectedImage(by: factor)
+        }
         view.onBringSelectedImageForward = { [weak session] in
             _ = session?.bringSelectedImageForward()
         }
@@ -124,6 +127,7 @@ final class CanvasNSView: NSView {
     var onTransformImage: (UUID, CanvasImageTransform) -> Void = { _, _ in }
     var onDeleteSelectedImage: () -> Void = {}
     var onNudgeSelectedImage: (CGSize) -> Void = { _ in }
+    var onResizeSelectedImage: (Double) -> Void = { _ in }
     var onBringSelectedImageForward: () -> Void = {}
     var onSendSelectedImageBackward: () -> Void = {}
     var onCaptureImageImportTarget: () -> CanvasImportTarget? = { nil }
@@ -196,6 +200,11 @@ final class CanvasNSView: NSView {
     var suppressesMagnification = false
     private(set) var isRepresentationActive = true
     var trackingAreaReference: NSTrackingArea?
+    var canvasAccessibilityElements: [
+        CanvasAccessibilityObjectKey: CanvasAccessibilityObjectElement
+    ] = [:]
+    var canvasAccessibilityNavigationOrder: [CanvasAccessibilityObjectKey] = []
+    var accessibilityFocusedObjectKey: CanvasAccessibilityObjectKey?
     nonisolated(unsafe) var appResignObservation: NSObjectProtocol?
     nonisolated(unsafe) var windowResignObservation: NSObjectProtocol?
 
@@ -253,6 +262,32 @@ final class CanvasNSView: NSView {
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
+    override func isAccessibilityElement() -> Bool { true }
+
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+
+    override func accessibilityLabel() -> String? { "Canvas objects" }
+
+    override func accessibilityHelp() -> String? {
+        "Use Tab and Shift-Tab to move between canvas objects. Arrow keys move an image; Option-arrow keys resize it."
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        refreshCanvasAccessibilityElements(postLayoutNotification: false)
+        return canvasAccessibilityNavigationOrder.compactMap {
+            canvasAccessibilityElements[$0]
+        }
+    }
+
+    override func accessibilitySelectedChildren() -> [Any]? {
+        refreshCanvasAccessibilityElements(postLayoutNotification: false)
+        return canvasAccessibilityNavigationOrder.compactMap { key in
+            guard let element = canvasAccessibilityElements[key],
+                  element.isAccessibilitySelected() else { return nil }
+            return element
+        }
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
     }
@@ -275,6 +310,9 @@ final class CanvasNSView: NSView {
             previewImageTransform = nil
             imagePointerMode = .none
             imageCache.removeAll()
+            canvasAccessibilityElements.removeAll()
+            canvasAccessibilityNavigationOrder.removeAll()
+            accessibilityFocusedObjectKey = nil
             changed = true
         }
         let nextImageSignatures = images.map(CanvasImageDisplaySignature.init)
@@ -291,6 +329,12 @@ final class CanvasNSView: NSView {
         }
         if self.selectedImageID != selectedImageID {
             self.selectedImageID = selectedImageID
+            if let selectedImageID {
+                accessibilityFocusedObjectKey = CanvasAccessibilityObjectKey(
+                    kind: .image,
+                    id: selectedImageID
+                )
+            }
             imagePointerMode = .none
             previewImageTransform = nil
             changed = true
@@ -315,6 +359,7 @@ final class CanvasNSView: NSView {
             changed = true
         }
         imageCache.prepare(for: images)
+        refreshCanvasAccessibilityElements(postLayoutNotification: changed)
         if changed { needsDisplay = true }
         window?.invalidateCursorRects(for: self)
     }
@@ -475,6 +520,10 @@ final class CanvasNSView: NSView {
             _ = interaction.cancel()
             onSelectImage(hit.id)
             selectedImageID = hit.id
+            accessibilityFocusedObjectKey = CanvasAccessibilityObjectKey(
+                kind: .image,
+                id: hit.id
+            )
             imagePointerMode = .moving(
                 id: hit.id,
                 startWorldPoint: worldPoint,
@@ -488,6 +537,7 @@ final class CanvasNSView: NSView {
 
         onSelectImage(nil)
         selectedImageID = nil
+        accessibilityFocusedObjectKey = nil
         previewImageTransform = nil
         imagePointerMode = .none
         if interaction.beginInk(at: viewPoint, in: bounds.size) {
@@ -779,6 +829,10 @@ final class CanvasNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
+        case 48:
+            _ = focusNextCanvasObject(
+                backward: event.modifierFlags.contains(.shift)
+            )
         case 49:
             if !spacePressed {
                 cancelInteraction()
@@ -792,9 +846,14 @@ final class CanvasNSView: NSView {
             onCancelPlacement()
             onSelectImage(nil)
             selectedImageID = nil
+            accessibilityFocusedObjectKey = nil
+            refreshCanvasAccessibilityElements(postLayoutNotification: false)
             needsDisplay = true
         case 51, 117:
-            if selectedImageID != nil {
+            if let key = accessibilityFocusedObjectKey,
+               key.kind == .stroke {
+                onErase([key.id])
+            } else if selectedImageID != nil {
                 onDeleteSelectedImage()
             } else {
                 super.keyDown(with: event)
@@ -802,6 +861,11 @@ final class CanvasNSView: NSView {
         case 123, 124, 125, 126:
             guard selectedImageID != nil else {
                 super.keyDown(with: event)
+                return
+            }
+            if event.modifierFlags.contains(.option) {
+                let grows = event.keyCode == 124 || event.keyCode == 126
+                onResizeSelectedImage(grows ? 1.1 : 0.9)
                 return
             }
             let distance: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1

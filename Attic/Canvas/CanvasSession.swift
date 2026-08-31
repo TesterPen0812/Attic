@@ -715,6 +715,32 @@ final class CanvasSession: ObservableObject {
     }
 
     @discardableResult
+    func resizeSelectedImage(by factor: Double) -> Bool {
+        guard let image = selectedImage,
+              factor.isFinite,
+              factor > 0 else {
+            return false
+        }
+        let minimumScale = max(
+            CanvasImagePlacement.minimumDimension / image.width,
+            CanvasImagePlacement.minimumDimension / image.height
+        )
+        let appliedFactor = max(factor, minimumScale)
+        let width = image.width * appliedFactor
+        let height = image.height * appliedFactor
+        guard width.isFinite,
+              height.isFinite,
+              width > 0,
+              height > 0 else {
+            return false
+        }
+        var transform = image.transform
+        transform.width = width
+        transform.height = height
+        return transformImage(image.id, to: transform)
+    }
+
+    @discardableResult
     func bringSelectedImageForward() -> Bool {
         guard canBringSelectedImageForward,
               let image = selectedImage,

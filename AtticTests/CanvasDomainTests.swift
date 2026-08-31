@@ -75,6 +75,279 @@ final class CanvasAffordanceTruthTests: XCTestCase {
     }
 }
 
+final class CanvasAccessibilityTests: XCTestCase {
+    @MainActor
+    func testCanvasVendsDeterministicObjectChildrenWithMeaningfulState() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 240)
+        )
+        let olderStrokeID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let newerStrokeID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let backImageID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+        let frontImageID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
+        let baseDate = Date(timeIntervalSince1970: 100)
+        let strokes = [
+            CanvasStroke(
+                id: newerStrokeID,
+                color: .blue,
+                width: 4,
+                points: [CanvasPoint(x: 20, y: 30), CanvasPoint(x: 40, y: 50)],
+                createdAt: baseDate.addingTimeInterval(1)
+            ),
+            CanvasStroke(
+                id: olderStrokeID,
+                color: .ink,
+                width: 3,
+                points: [CanvasPoint(x: -20, y: -10), CanvasPoint(x: 0, y: 10)],
+                createdAt: baseDate
+            )
+        ]
+        let images = [
+            makeAccessibilityImage(
+                id: frontImageID,
+                center: CanvasPoint(x: 80, y: 70),
+                width: 100,
+                height: 50,
+                zIndex: 9,
+                createdAt: baseDate
+            ),
+            makeAccessibilityImage(
+                id: backImageID,
+                center: CanvasPoint(x: 0, y: 0),
+                width: 60,
+                height: 90,
+                zIndex: 2,
+                createdAt: baseDate
+            )
+        ]
+
+        view.configure(
+            canvasID: CanvasBoardItem.logicalBoardID,
+            strokes: strokes,
+            images: images,
+            selectedImageID: frontImageID,
+            tool: .select,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport(),
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+
+        let children = try XCTUnwrap(
+            view.accessibilityChildren() as? [CanvasAccessibilityObjectElement]
+        )
+        XCTAssertEqual(
+            children.map(\.objectID),
+            [olderStrokeID, newerStrokeID, backImageID, frontImageID]
+        )
+        XCTAssertEqual(children.map(\.objectKind), [.stroke, .stroke, .image, .image])
+        XCTAssertEqual(children[0].accessibilityLabel(), "Ink stroke 1 of 2")
+        XCTAssertTrue(children[0].accessibilityValueDescription()?.contains("center") == true)
+        XCTAssertEqual(children[2].accessibilityLabel(), "Image 1 of 2")
+        XCTAssertFalse(children[2].isAccessibilitySelected())
+        XCTAssertTrue(children[3].isAccessibilitySelected())
+        XCTAssertTrue(children[3].accessibilityValueDescription()?.contains("100 by 50") == true)
+        XCTAssertEqual(
+            children[3].availableActionNames,
+            [
+                "Select", "Move left", "Move right", "Move up", "Move down",
+                "Make smaller", "Make larger", "Send backward", "Delete"
+            ]
+        )
+        XCTAssertTrue(children.allSatisfy {
+            !$0.accessibilityFrameInParentSpace().isNull
+        })
+    }
+
+    @MainActor
+    func testAccessibilityTraversalAndActionsOperateOnTheOwnedObject() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 240)
+        )
+        let strokeID = UUID()
+        let imageID = UUID()
+        let frontImageID = UUID()
+        let image = makeAccessibilityImage(
+            id: imageID,
+            center: CanvasPoint(x: 20, y: 30),
+            width: 80,
+            height: 60,
+            zIndex: 3,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        let frontImage = makeAccessibilityImage(
+            id: frontImageID,
+            center: CanvasPoint(x: 80, y: 80),
+            width: 50,
+            height: 50,
+            zIndex: 4,
+            createdAt: Date(timeIntervalSince1970: 201)
+        )
+        var selectedIDs: [UUID?] = []
+        var erasedIDs: [Set<UUID>] = []
+        var nudgeDeltas: [CGSize] = []
+        var resizeFactors: [Double] = []
+        var forwardCount = 0
+        var deleteCount = 0
+        view.onSelectImage = { selectedIDs.append($0) }
+        view.onErase = { erasedIDs.append($0) }
+        view.onNudgeSelectedImage = { nudgeDeltas.append($0) }
+        view.onResizeSelectedImage = { resizeFactors.append($0) }
+        view.onBringSelectedImageForward = { forwardCount += 1 }
+        view.onDeleteSelectedImage = { deleteCount += 1 }
+        view.configure(
+            canvasID: CanvasBoardItem.logicalBoardID,
+            strokes: [CanvasStroke(
+                id: strokeID,
+                color: .red,
+                width: 5,
+                points: [CanvasPoint(x: -10, y: -10), CanvasPoint(x: 10, y: 10)]
+            )],
+            images: [frontImage, image],
+            selectedImageID: nil,
+            tool: .select,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport(),
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+
+        XCTAssertEqual(view.focusNextCanvasObject(backward: false), strokeID)
+        XCTAssertEqual(view.focusNextCanvasObject(backward: false), imageID)
+        XCTAssertEqual(selectedIDs.last!, imageID)
+        XCTAssertEqual(view.focusNextCanvasObject(backward: false), frontImageID)
+        XCTAssertEqual(view.focusNextCanvasObject(backward: false), strokeID)
+        XCTAssertEqual(view.focusNextCanvasObject(backward: true), frontImageID)
+
+        let children = try XCTUnwrap(
+            view.accessibilityChildren() as? [CanvasAccessibilityObjectElement]
+        )
+        let stroke = try XCTUnwrap(children.first { $0.objectID == strokeID })
+        let imageElement = try XCTUnwrap(children.first { $0.objectID == imageID })
+        XCTAssertTrue(stroke.perform(.delete))
+        XCTAssertEqual(erasedIDs, [[strokeID]])
+
+        XCTAssertTrue(imageElement.perform(.moveRight))
+        XCTAssertEqual(nudgeDeltas.last, CGSize(width: 1, height: 0))
+        XCTAssertTrue(imageElement.perform(.makeLarger))
+        XCTAssertEqual(try XCTUnwrap(resizeFactors.last), 1.1, accuracy: 0.001)
+        XCTAssertTrue(imageElement.perform(.bringForward))
+        XCTAssertEqual(forwardCount, 1)
+        XCTAssertTrue(imageElement.accessibilityPerformDelete())
+        XCTAssertEqual(selectedIDs.last!, imageID)
+        XCTAssertEqual(deleteCount, 1)
+    }
+
+    @MainActor
+    func testCanvasKeyboardTraversalMovesResizesAndDeletesSelectedImage() throws {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 240)
+        )
+        let imageID = UUID()
+        var selectedIDs: [UUID?] = []
+        var nudgeDeltas: [CGSize] = []
+        var resizeFactors: [Double] = []
+        var deleteCount = 0
+        view.onSelectImage = { selectedIDs.append($0) }
+        view.onNudgeSelectedImage = { nudgeDeltas.append($0) }
+        view.onResizeSelectedImage = { resizeFactors.append($0) }
+        view.onDeleteSelectedImage = { deleteCount += 1 }
+        view.configure(
+            canvasID: CanvasBoardItem.logicalBoardID,
+            strokes: [],
+            images: [makeAccessibilityImage(
+                id: imageID,
+                center: .zero,
+                width: 80,
+                height: 60,
+                zIndex: 0,
+                createdAt: Date(timeIntervalSince1970: 300)
+            )],
+            selectedImageID: nil,
+            tool: .select,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport(),
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+
+        view.keyDown(with: try canvasKeyEvent(
+            keyCode: 48,
+            characters: "\t"
+        ))
+        XCTAssertEqual(selectedIDs.last!, imageID)
+
+        view.keyDown(with: try canvasKeyEvent(
+            keyCode: 124,
+            characters: "\u{F703}"
+        ))
+        XCTAssertEqual(nudgeDeltas.last, CGSize(width: 1, height: 0))
+
+        view.keyDown(with: try canvasKeyEvent(
+            keyCode: 124,
+            characters: "\u{F703}",
+            modifiers: .option
+        ))
+        XCTAssertEqual(try XCTUnwrap(resizeFactors.last), 1.1, accuracy: 0.001)
+
+        view.keyDown(with: try canvasKeyEvent(
+            keyCode: 51,
+            characters: "\u{8}"
+        ))
+        XCTAssertEqual(deleteCount, 1)
+    }
+
+    @MainActor
+    private func makeAccessibilityImage(
+        id: UUID,
+        center: CanvasPoint,
+        width: Double,
+        height: Double,
+        zIndex: Int64,
+        createdAt: Date
+    ) -> CanvasPlacedImage {
+        CanvasPlacedImage(
+            id: id,
+            encodedData: Data(base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )!,
+            contentType: UTType.png.identifier,
+            pixelWidth: Int(width),
+            pixelHeight: Int(height),
+            transform: CanvasImageTransform(
+                center: center,
+                width: width,
+                height: height,
+                zIndex: zIndex
+            ),
+            createdAt: createdAt
+        )
+    }
+
+    @MainActor
+    private func canvasKeyEvent(
+        keyCode: UInt16,
+        characters: String,
+        modifiers: NSEvent.ModifierFlags = []
+    ) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        ))
+    }
+}
+
 final class CanvasImageDropBatchTests: XCTestCase {
     @MainActor
     func testFileURLDropAdvertisesCopyAndImportsOnlySupportedImages() throws {

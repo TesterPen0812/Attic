@@ -3,6 +3,345 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum CanvasAccessibilityObjectKind: Hashable {
+    case stroke
+    case image
+}
+
+struct CanvasAccessibilityObjectKey: Hashable {
+    let kind: CanvasAccessibilityObjectKind
+    let id: UUID
+}
+
+enum CanvasAccessibilityAction: Equatable {
+    case select
+    case moveLeft
+    case moveRight
+    case moveUp
+    case moveDown
+    case makeSmaller
+    case makeLarger
+    case sendBackward
+    case bringForward
+    case delete
+
+    var title: String {
+        switch self {
+        case .select: "Select"
+        case .moveLeft: "Move left"
+        case .moveRight: "Move right"
+        case .moveUp: "Move up"
+        case .moveDown: "Move down"
+        case .makeSmaller: "Make smaller"
+        case .makeLarger: "Make larger"
+        case .sendBackward: "Send backward"
+        case .bringForward: "Bring forward"
+        case .delete: "Delete"
+        }
+    }
+}
+
+@MainActor
+final class CanvasAccessibilityObjectElement: NSAccessibilityElement {
+    let key: CanvasAccessibilityObjectKey
+    weak var canvasView: CanvasNSView?
+    private(set) var availableActions: [CanvasAccessibilityAction] = []
+
+    var objectID: UUID { key.id }
+    var objectKind: CanvasAccessibilityObjectKind { key.kind }
+    var availableActionNames: [String] { availableActions.map(\.title) }
+
+    init(key: CanvasAccessibilityObjectKey, canvasView: CanvasNSView) {
+        self.key = key
+        self.canvasView = canvasView
+        super.init()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func update(
+        label: String,
+        valueDescription: String,
+        frame: CGRect,
+        selected: Bool,
+        actions: [CanvasAccessibilityAction]
+    ) {
+        availableActions = actions
+        setAccessibilityParent(canvasView)
+        setAccessibilityRole(objectKind == .image ? .image : .group)
+        setAccessibilityIdentifier(
+            "canvas-\(objectKind == .image ? "image" : "stroke")-\(objectID.uuidString)"
+        )
+        setAccessibilityLabel(label)
+        setAccessibilityValueDescription(valueDescription)
+        setAccessibilityHelp(
+            objectKind == .image
+                ? "Select, move, resize, reorder, or delete this image."
+                : "Select or delete this ink stroke."
+        )
+        setAccessibilityEnabled(true)
+        setAccessibilitySelected(selected)
+        setAccessibilityFrameInParentSpace(frame)
+        setAccessibilityCustomActions(actions.map { action in
+            NSAccessibilityCustomAction(name: action.title) { [weak self] in
+                self?.perform(action) ?? false
+            }
+        })
+    }
+
+    func perform(_ action: CanvasAccessibilityAction) -> Bool {
+        guard availableActions.contains(action) else { return false }
+        return canvasView?.performCanvasAccessibilityAction(
+            action,
+            for: key
+        ) ?? false
+    }
+
+    override func isAccessibilityFocused() -> Bool {
+        canvasView?.accessibilityFocusedObjectKey == key
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        perform(.select)
+    }
+
+    override func accessibilityPerformDelete() -> Bool {
+        perform(.delete)
+    }
+}
+
+extension CanvasNSView {
+    func refreshCanvasAccessibilityElements(
+        postLayoutNotification: Bool
+    ) {
+        let orderedStrokes = interaction.strokes.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        let orderedImages = imagesForDisplay.sorted {
+            if $0.zIndex != $1.zIndex { return $0.zIndex < $1.zIndex }
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        let nextOrder = orderedStrokes.map {
+            CanvasAccessibilityObjectKey(kind: .stroke, id: $0.id)
+        } + orderedImages.map {
+            CanvasAccessibilityObjectKey(kind: .image, id: $0.id)
+        }
+        let liveKeys = Set(nextOrder)
+        canvasAccessibilityElements = canvasAccessibilityElements.filter {
+            liveKeys.contains($0.key)
+        }
+        if let accessibilityFocusedObjectKey,
+           !liveKeys.contains(accessibilityFocusedObjectKey) {
+            self.accessibilityFocusedObjectKey = nil
+        }
+
+        for (index, stroke) in orderedStrokes.enumerated() {
+            let key = CanvasAccessibilityObjectKey(kind: .stroke, id: stroke.id)
+            let element = canvasAccessibilityElements[key]
+                ?? CanvasAccessibilityObjectElement(key: key, canvasView: self)
+            canvasAccessibilityElements[key] = element
+            let rect = stroke.bounds ?? CGRect(
+                x: stroke.points.first?.x ?? 0,
+                y: stroke.points.first?.y ?? 0,
+                width: 1,
+                height: 1
+            )
+            element.update(
+                label: "Ink stroke \(index + 1) of \(orderedStrokes.count)",
+                valueDescription: canvasAccessibilityPositionDescription(
+                    worldRect: rect,
+                    prefix: "\(stroke.color.title), width \(canvasAccessibilityNumber(stroke.width))"
+                ),
+                frame: canvasAccessibilityFrame(for: rect),
+                selected: accessibilityFocusedObjectKey == key,
+                actions: [.select, .delete]
+            )
+        }
+
+        for (index, image) in orderedImages.enumerated() {
+            let key = CanvasAccessibilityObjectKey(kind: .image, id: image.id)
+            let element = canvasAccessibilityElements[key]
+                ?? CanvasAccessibilityObjectElement(key: key, canvasView: self)
+            canvasAccessibilityElements[key] = element
+            var actions: [CanvasAccessibilityAction] = [
+                .select, .moveLeft, .moveRight, .moveUp, .moveDown,
+                .makeSmaller, .makeLarger
+            ]
+            if orderedImages.contains(where: {
+                CanvasImagePlacement.imageIsInFront(image, $0)
+            }) {
+                actions.append(.sendBackward)
+            }
+            if orderedImages.contains(where: {
+                CanvasImagePlacement.imageIsInFront($0, image)
+            }) {
+                actions.append(.bringForward)
+            }
+            actions.append(.delete)
+            element.update(
+                label: "Image \(index + 1) of \(orderedImages.count)",
+                valueDescription: canvasAccessibilityPositionDescription(
+                    worldRect: image.worldRect,
+                    prefix: "\(canvasAccessibilityNumber(image.width)) by \(canvasAccessibilityNumber(image.height))"
+                ),
+                frame: canvasAccessibilityFrame(for: image.worldRect),
+                selected: selectedImageID == image.id,
+                actions: actions
+            )
+        }
+
+        canvasAccessibilityNavigationOrder = nextOrder
+        if postLayoutNotification, isRepresentationActive {
+            NSAccessibility.post(element: self, notification: .layoutChanged)
+        }
+    }
+
+    @discardableResult
+    func focusNextCanvasObject(backward: Bool) -> UUID? {
+        refreshCanvasAccessibilityElements(postLayoutNotification: false)
+        guard !canvasAccessibilityNavigationOrder.isEmpty else { return nil }
+        let nextIndex: Int
+        if let focused = accessibilityFocusedObjectKey,
+           let index = canvasAccessibilityNavigationOrder.firstIndex(of: focused) {
+            nextIndex = backward
+                ? (index - 1 + canvasAccessibilityNavigationOrder.count)
+                    % canvasAccessibilityNavigationOrder.count
+                : (index + 1) % canvasAccessibilityNavigationOrder.count
+        } else {
+            nextIndex = backward ? canvasAccessibilityNavigationOrder.count - 1 : 0
+        }
+        let key = canvasAccessibilityNavigationOrder[nextIndex]
+        _ = focusCanvasAccessibilityObject(key)
+        return key.id
+    }
+
+    func performCanvasAccessibilityAction(
+        _ action: CanvasAccessibilityAction,
+        for key: CanvasAccessibilityObjectKey
+    ) -> Bool {
+        guard canvasAccessibilityNavigationOrder.contains(key) else { return false }
+        switch action {
+        case .select:
+            return focusCanvasAccessibilityObject(key)
+        case .delete:
+            guard focusCanvasAccessibilityObject(key) else { return false }
+            if key.kind == .stroke {
+                onErase([key.id])
+            } else {
+                onDeleteSelectedImage()
+            }
+            return true
+        case .moveLeft, .moveRight, .moveUp, .moveDown:
+            guard key.kind == .image,
+                  focusCanvasAccessibilityObject(key) else { return false }
+            let delta: CGSize
+            switch action {
+            case .moveLeft: delta = CGSize(width: -1, height: 0)
+            case .moveRight: delta = CGSize(width: 1, height: 0)
+            case .moveUp: delta = CGSize(width: 0, height: -1)
+            case .moveDown: delta = CGSize(width: 0, height: 1)
+            default: return false
+            }
+            onNudgeSelectedImage(delta)
+            return true
+        case .makeSmaller, .makeLarger:
+            guard key.kind == .image,
+                  focusCanvasAccessibilityObject(key) else { return false }
+            onResizeSelectedImage(action == .makeLarger ? 1.1 : 0.9)
+            return true
+        case .sendBackward:
+            guard key.kind == .image,
+                  focusCanvasAccessibilityObject(key) else { return false }
+            onSendSelectedImageBackward()
+            return true
+        case .bringForward:
+            guard key.kind == .image,
+                  focusCanvasAccessibilityObject(key) else { return false }
+            onBringSelectedImageForward()
+            return true
+        }
+    }
+
+    @discardableResult
+    private func focusCanvasAccessibilityObject(
+        _ key: CanvasAccessibilityObjectKey
+    ) -> Bool {
+        guard canvasAccessibilityNavigationOrder.contains(key) else { return false }
+        accessibilityFocusedObjectKey = key
+        if key.kind == .image {
+            selectedImageID = key.id
+            onSelectImage(key.id)
+        } else {
+            selectedImageID = nil
+            onSelectImage(nil)
+        }
+        window?.makeFirstResponder(self)
+        refreshCanvasAccessibilityElements(postLayoutNotification: false)
+        if let element = canvasAccessibilityElements[key] {
+            NSAccessibility.post(
+                element: element,
+                notification: .focusedUIElementChanged
+            )
+        }
+        NSAccessibility.post(
+            element: self,
+            notification: .selectedChildrenChanged
+        )
+        needsDisplay = true
+        return true
+    }
+
+    private func canvasAccessibilityFrame(for worldRect: CGRect) -> CGRect {
+        guard !worldRect.isNull,
+              !worldRect.isInfinite,
+              worldRect.minX.isFinite,
+              worldRect.minY.isFinite,
+              worldRect.maxX.isFinite,
+              worldRect.maxY.isFinite else { return .zero }
+        let first = interaction.viewport.viewPoint(
+            for: CanvasPoint(x: worldRect.minX, y: worldRect.minY),
+            in: bounds.size
+        )
+        let second = interaction.viewport.viewPoint(
+            for: CanvasPoint(x: worldRect.maxX, y: worldRect.maxY),
+            in: bounds.size
+        )
+        var result = CGRect(
+            x: min(first.x, second.x),
+            y: min(first.y, second.y),
+            width: abs(second.x - first.x),
+            height: abs(second.y - first.y)
+        )
+        let minimumSide: CGFloat = 22
+        if result.width < minimumSide {
+            result = result.insetBy(dx: -(minimumSide - result.width) / 2, dy: 0)
+        }
+        if result.height < minimumSide {
+            result = result.insetBy(dx: 0, dy: -(minimumSide - result.height) / 2)
+        }
+        return result
+    }
+
+    private func canvasAccessibilityPositionDescription(
+        worldRect: CGRect,
+        prefix: String
+    ) -> String {
+        let centerX = canvasAccessibilityNumber(Double(worldRect.midX))
+        let centerY = canvasAccessibilityNumber(Double(worldRect.midY))
+        return "\(prefix), center \(centerX), \(centerY)"
+    }
+
+    private func canvasAccessibilityNumber(_ value: Double) -> String {
+        value.rounded() == value
+            ? String(Int(value))
+            : String(format: "%.1f", value)
+    }
+}
+
 enum CanvasImageDropFilter {
     static func supportedFileURLs(_ urls: [URL]) -> [URL] {
         urls.filter(isSupportedFileURL)
