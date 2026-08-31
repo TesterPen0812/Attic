@@ -1,6 +1,16 @@
 import Combine
 import Foundation
 
+private enum CanvasImagePreparationOutcome: Sendable {
+    case prepared(CanvasPreparedImage)
+    case failed(CanvasImageImportFailure)
+}
+
+private struct CanvasImagePreparationCompletion: Sendable {
+    let index: Int
+    let outcome: CanvasImagePreparationOutcome
+}
+
 @MainActor
 final class CanvasSession: ObservableObject {
     static let minimumWidth = 1.0
@@ -21,23 +31,31 @@ final class CanvasSession: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var interactionCancellationEpoch: UInt64 = 0
     @Published private(set) var pendingPlacement: CanvasPendingPlacement?
+    @Published private(set) var imageImportProgress: CanvasImageImportBatchProgress?
 
     private enum HistoryCommand {
         case addStroke(CanvasStroke)
         case eraseStrokes([CanvasStroke])
         case addImage(CanvasPlacedImage)
+        case addImages([CanvasPlacedImage])
         case transformImage(before: CanvasPlacedImage, after: CanvasPlacedImage)
         case deleteImage(CanvasPlacedImage)
         case clear(strokes: [CanvasStroke], images: [CanvasPlacedImage])
     }
 
     private let store: CanvasStore
+    private let maximumConcurrentImageImports: Int
+    private let prepareImage: @Sendable (
+        CanvasImageImportSource
+    ) async throws -> CanvasPreparedImage
     private var undoStack: [HistoryCommand] = []
     private var redoStack: [HistoryCommand] = []
     private var revisionObservation: AnyCancellable?
     private var errorObservation: AnyCancellable?
     private var lastSemanticSnapshot: SemanticSnapshot
     private var isApplyingLocalMutation = false
+    private var imageImportTasks: [UUID: Task<Void, Never>] = [:]
+    private var latestImageImportBatchID: UUID?
     private static let maximumHistoryCount = 100
 
     private struct SemanticSnapshot: Equatable {
@@ -114,8 +132,25 @@ final class CanvasSession: ObservableObject {
         }
     }
 
-    init(store: CanvasStore) {
+    init(
+        store: CanvasStore,
+        maximumConcurrentImageImports: Int = 2,
+        prepareImage: @escaping @Sendable (
+            CanvasImageImportSource
+        ) async throws -> CanvasPreparedImage = { source in
+            switch source {
+            case let .data(data):
+                try await CanvasImageImporter.prepare(data: data)
+            case let .file(url):
+                try await CanvasImageImporter.prepare(url: url)
+            case let .deliveryFailure(message):
+                throw CanvasImageImportSourceError.deliveryFailed(message)
+            }
+        }
+    ) {
         self.store = store
+        self.maximumConcurrentImageImports = max(1, maximumConcurrentImageImports)
+        self.prepareImage = prepareImage
         canvases = store.canvases
         selectedCanvasID = store.selectedCanvasID
         strokes = store.strokes
@@ -167,6 +202,32 @@ final class CanvasSession: ObservableObject {
         return images.contains {
             CanvasImagePlacement.imageIsInFront(selectedImage, $0)
         }
+    }
+
+    func captureImageImportTarget() -> CanvasImportTarget {
+        CanvasImportTarget(
+            canvasID: selectedCanvasID,
+            boardGeneration: boardGeneration
+        )
+    }
+
+    func startImageImportBatch(_ batch: CanvasImageImportBatch) {
+        imageImportTasks[batch.id]?.cancel()
+        imageImportTasks[batch.id] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = await self.importImageBatch(batch)
+            self.imageImportTasks[batch.id] = nil
+        }
+    }
+
+    func cancelImageImportBatch(_ id: UUID) {
+        imageImportTasks.removeValue(forKey: id)?.cancel()
+    }
+
+    func cancelAllImageImportBatches() {
+        let tasks = imageImportTasks.values
+        imageImportTasks.removeAll(keepingCapacity: true)
+        tasks.forEach { $0.cancel() }
     }
 
     func selectTool(_ tool: CanvasTool) {
@@ -393,30 +454,198 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func importImage(url: URL, at point: CanvasPoint) async -> Bool {
-        do {
-            let prepared = try await CanvasImageImporter.prepare(url: url)
-            try Task.checkCancellation()
-            return importPreparedImage(prepared, at: point)
-        } catch is CancellationError {
-            return false
-        } catch {
-            lastErrorMessage = error.localizedDescription
-            return false
-        }
+        let request = CanvasImageImportRequest(source: .file(url), center: point)
+        let result = await importImageBatch(CanvasImageImportBatch(
+            target: captureImageImportTarget(),
+            items: [request]
+        ))
+        return result.items.first?.outcome.importedImageID != nil
     }
 
     @discardableResult
     func importImage(data: Data, at point: CanvasPoint) async -> Bool {
-        do {
-            let prepared = try await CanvasImageImporter.prepare(data: data)
-            try Task.checkCancellation()
-            return importPreparedImage(prepared, at: point)
-        } catch is CancellationError {
-            return false
-        } catch {
-            lastErrorMessage = error.localizedDescription
-            return false
+        let request = CanvasImageImportRequest(source: .data(data), center: point)
+        let result = await importImageBatch(CanvasImageImportBatch(
+            target: captureImageImportTarget(),
+            items: [request]
+        ))
+        return result.items.first?.outcome.importedImageID != nil
+    }
+
+    func importImageBatch(
+        _ batch: CanvasImageImportBatch
+    ) async -> CanvasImageImportBatchResult {
+        var progress = CanvasImageImportBatchProgress(
+            batchID: batch.id,
+            target: batch.target,
+            items: batch.items.map {
+                CanvasImageImportProgressItem(requestID: $0.id, state: .pending)
+            }
+        )
+        latestImageImportBatchID = batch.id
+        publishImageImportProgress(progress)
+        var outcomes = Array<CanvasImageImportOutcome?>(
+            repeating: nil,
+            count: batch.items.count
+        )
+        var prepared = Array<CanvasPreparedImage?>(
+            repeating: nil,
+            count: batch.items.count
+        )
+        defer {
+            CanvasTemporaryImportCleanup.removeOwnedDirectories(
+                batch.items.compactMap(\.cleanupURL)
+            )
         }
+
+        var preparationIndices: [Int] = []
+        preparationIndices.reserveCapacity(batch.items.count)
+        for (index, item) in batch.items.enumerated() {
+            switch item.source {
+            case let .deliveryFailure(message):
+                let outcome = CanvasImageImportOutcome.failed(.deliveryFailed(message))
+                outcomes[index] = outcome
+                progress.items[index].state = .finished(outcome)
+            case .data, .file:
+                preparationIndices.append(index)
+            }
+        }
+        publishImageImportProgress(progress)
+
+        await withTaskGroup(of: CanvasImagePreparationCompletion.self) { group in
+            var nextPreparation = 0
+            var activeCount = 0
+
+            func addPreparation(at preparationOffset: Int) {
+                let itemIndex = preparationIndices[preparationOffset]
+                let source = batch.items[itemIndex].source
+                let prepareImage = self.prepareImage
+                progress.items[itemIndex].state = .preparing
+                group.addTask {
+                    do {
+                        try Task.checkCancellation()
+                        let image = try await prepareImage(source)
+                        try Task.checkCancellation()
+                        return CanvasImagePreparationCompletion(
+                            index: itemIndex,
+                            outcome: .prepared(image)
+                        )
+                    } catch is CancellationError {
+                        return CanvasImagePreparationCompletion(
+                            index: itemIndex,
+                            outcome: .failed(.cancelled)
+                        )
+                    } catch {
+                        return CanvasImagePreparationCompletion(
+                            index: itemIndex,
+                            outcome: .failed(.preparationFailed(error.localizedDescription))
+                        )
+                    }
+                }
+            }
+
+            while activeCount < maximumConcurrentImageImports,
+                  nextPreparation < preparationIndices.count {
+                addPreparation(at: nextPreparation)
+                nextPreparation += 1
+                activeCount += 1
+            }
+            publishImageImportProgress(progress)
+
+            while let completion = await group.next() {
+                activeCount -= 1
+                switch completion.outcome {
+                case let .prepared(image):
+                    prepared[completion.index] = image
+                case let .failed(failure):
+                    let outcome = CanvasImageImportOutcome.failed(failure)
+                    outcomes[completion.index] = outcome
+                    progress.items[completion.index].state = .finished(outcome)
+                }
+
+                if Task.isCancelled {
+                    group.cancelAll()
+                } else if nextPreparation < preparationIndices.count {
+                    addPreparation(at: nextPreparation)
+                    nextPreparation += 1
+                    activeCount += 1
+                }
+                publishImageImportProgress(progress)
+            }
+        }
+
+        if Task.isCancelled {
+            for index in batch.items.indices where outcomes[index] == nil {
+                let outcome = CanvasImageImportOutcome.failed(.cancelled)
+                outcomes[index] = outcome
+                prepared[index] = nil
+                progress.items[index].state = .finished(outcome)
+            }
+            publishImageImportProgress(progress)
+            return makeImageImportResult(batch: batch, outcomes: outcomes)
+        }
+
+        let preparedImports = batch.items.indices.compactMap { index -> CanvasPreparedImageImport? in
+            guard let image = prepared[index] else { return nil }
+            return CanvasPreparedImageImport(
+                requestID: batch.items[index].id,
+                prepared: image,
+                center: batch.items[index].center
+            )
+        }
+        if !preparedImports.isEmpty {
+            isApplyingLocalMutation = true
+            let storeOutcome = store.importImages(preparedImports, target: batch.target)
+            synchronizeFromStore(clearHistory: false)
+            isApplyingLocalMutation = false
+
+            switch storeOutcome {
+            case let .imported(importedImages):
+                let importedByID = Dictionary(
+                    uniqueKeysWithValues: importedImages.map { ($0.id, $0) }
+                )
+                for index in batch.items.indices where prepared[index] != nil {
+                    let requestID = batch.items[index].id
+                    let outcome = CanvasImageImportOutcome.imported(imageID: requestID)
+                    outcomes[index] = outcome
+                    progress.items[index].state = .finished(outcome)
+                }
+                if selectedCanvasID == batch.target.canvasID,
+                   boardGeneration == batch.target.boardGeneration {
+                    let currentSnapshots = preparedImports.compactMap { item in
+                        images.first(where: { image in
+                            image.id == item.requestID
+                        }) ?? importedByID[item.requestID]
+                    }
+                    if !currentSnapshots.isEmpty {
+                        selectedImageID = currentSnapshots.last?.id
+                        recordNewCommand(.addImages(currentSnapshots))
+                    }
+                }
+            case let .rejected(failure):
+                for index in batch.items.indices where prepared[index] != nil {
+                    let outcome = CanvasImageImportOutcome.failed(failure)
+                    outcomes[index] = outcome
+                    progress.items[index].state = .finished(outcome)
+                }
+            }
+        }
+
+        for index in batch.items.indices where outcomes[index] == nil {
+            let outcome = CanvasImageImportOutcome.failed(.preparationFailed(
+                "The image did not produce an import result."
+            ))
+            outcomes[index] = outcome
+            progress.items[index].state = .finished(outcome)
+        }
+        publishImageImportProgress(progress)
+        if let firstFailure = outcomes.compactMap({ outcome -> CanvasImageImportFailure? in
+            guard case let .failed(failure)? = outcome else { return nil }
+            return failure
+        }).first {
+            lastErrorMessage = firstFailure.message
+        }
+        return makeImageImportResult(batch: batch, outcomes: outcomes)
     }
 
     func selectImage(_ id: UUID?) {
@@ -540,6 +769,11 @@ final class CanvasSession: ObservableObject {
                 return store.restore(strokes)
             case let .addImage(image):
                 return store.setImageDeleted(true, imageIDs: [image.id])
+            case let .addImages(images):
+                return store.setImageDeleted(
+                    true,
+                    imageIDs: Set(images.map(\.id))
+                )
             case let .transformImage(before, _):
                 return store.updateImage(before.id, transform: before.transform)
             case let .deleteImage(image):
@@ -570,6 +804,8 @@ final class CanvasSession: ObservableObject {
                 return store.setDeleted(true, strokeIDs: Set(strokes.map(\.id)))
             case let .addImage(image):
                 return store.restoreImages([image])
+            case let .addImages(images):
+                return store.restoreImages(images)
             case let .transformImage(_, after):
                 return store.updateImage(after.id, transform: after.transform)
             case let .deleteImage(image):
@@ -634,6 +870,8 @@ final class CanvasSession: ObservableObject {
         switch command {
         case let .addImage(image):
             selectedImageID = undoing ? nil : image.id
+        case let .addImages(images):
+            selectedImageID = undoing ? nil : images.last?.id
         case let .transformImage(before, after):
             selectedImageID = undoing ? before.id : after.id
         case let .deleteImage(image):
@@ -643,6 +881,29 @@ final class CanvasSession: ObservableObject {
         case .addStroke, .eraseStrokes:
             break
         }
+    }
+
+    private func makeImageImportResult(
+        batch: CanvasImageImportBatch,
+        outcomes: [CanvasImageImportOutcome?]
+    ) -> CanvasImageImportBatchResult {
+        CanvasImageImportBatchResult(
+            batchID: batch.id,
+            target: batch.target,
+            items: zip(batch.items, outcomes).map { item, outcome in
+                CanvasImageImportItemResult(
+                    requestID: item.id,
+                    outcome: outcome ?? .failed(.preparationFailed(
+                        "The image did not produce an import result."
+                    ))
+                )
+            }
+        )
+    }
+
+    private func publishImageImportProgress(_ progress: CanvasImageImportBatchProgress) {
+        guard latestImageImportBatchID == progress.batchID else { return }
+        imageImportProgress = progress
     }
 
     private func recordNewCommand(_ command: HistoryCommand) {
