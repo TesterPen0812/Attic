@@ -166,7 +166,7 @@ final class CanvasUITests: XCTestCase {
         XCTAssertFalse(notes.exists)
         XCTAssertFalse(canvas.exists)
 
-        dock.hover()
+        tasks.hover()
         XCTAssertTrue(backlog.waitForExistence(timeout: 2))
         XCTAssertTrue(notes.exists)
         XCTAssertTrue(canvas.exists)
@@ -190,10 +190,11 @@ final class CanvasUITests: XCTestCase {
         let modes = [tasks, backlog, notes, canvas]
 
         XCTAssertTrue(dock.waitForExistence(timeout: 3))
-        dock.hover()
+        tasks.hover()
         XCTAssertTrue(canvas.waitForExistence(timeout: 2))
         assertExactlyOneSelected(in: modes, expected: tasks)
 
+        backlog.hover()
         backlog.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
         ).click()
@@ -212,7 +213,7 @@ final class CanvasUITests: XCTestCase {
         XCTAssertTrue(canvas.exists)
         XCTAssertTrue(canvas.isSelected)
 
-        dock.hover()
+        canvas.hover()
         XCTAssertTrue(tasks.waitForExistence(timeout: 2))
         assertExactlyOneSelected(in: modes, expected: canvas)
     }
