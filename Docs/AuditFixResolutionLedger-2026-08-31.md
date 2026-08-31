@@ -76,7 +76,7 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | PANEL-10 | Planned | — | — | — | — | Cursor/drag/resize acquisition matrix remains. |
 | PANEL-11 | Fixed | `507e13c` | Local-only refresh-policy regression included in the 40/40 panel pass; asserts one immediate pass, no retry delay, and maximum pass count 1 | Awaiting installed reveal-latency remeasurement | Baseline reveal 249–339 ms; Local policy now schedules no 900 ms retry or second all-store refresh | Installed timing remains to measure; deferred non-Local sync source remains feature-gated and was not removed. |
 | PANEL-12 | Planned | — | — | — | — | Broad stale launcher still hard-codes process, bundle, signing, `/Applications`, and appearance. |
-| PANEL-13 | Planned | — | — | — | — | Deprecated AX size override remains. |
+| PANEL-13 | Fixed | `4639220` | `PanelSquircleGeometryTests`: 54/54 passed in Local; modern selector permission and dock-corner-authoritative frame routing covered | Awaiting installed Accessibility Inspector/VoiceOver resize UAT | Affected Local build succeeded with the prior `accessibilityIsAttributeSettable` deprecation warning eliminated | Automated routing and warning removal are verified; assistive-client behavior remains installed-UAT pending. |
 
 ## Exclusive live UI automation
 
@@ -91,3 +91,4 @@ Before any command that drives the installed app, cursor, keyboard, trackpad eve
 | `bb762ea` | C-13 true Canvas layer-boundary no-ops and disabled unavailable controls | `CanvasImageSessionTests` 4/4 passed; zero additional persistence/revision/history/z-index mutations asserted. |
 | `507e13c`, `51377e2` | Explicit interaction-lock vocabulary, local-only single reveal refresh, and native-completion-aware transactional hide | Central Local run passed 40/40 `CornerHoverStateMachineTests`, `PanelUIStateTests`, and `PanelGeometryTests`; affected Local build succeeded. |
 | `3957a27`, `69fafe6` | N-005 unique explicit attachment roots for every Notes/MCP test initializer plus a default-shaped sentinel regression | Central Local run passed 82/82 Notes/MCP tests; affected Local build succeeded. |
+| `4639220` | PANEL-13 modern `NSAccessibility` selector permission while retaining dock-corner-authoritative frame routing | `PanelSquircleGeometryTests` 54/54 passed; affected Local build succeeded without the deprecated attribute-settable warning. |
