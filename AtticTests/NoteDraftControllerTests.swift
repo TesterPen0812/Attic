@@ -13,7 +13,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testBodyEditorKeepsFirstResponderAcrossDraftUpdates() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         let uiState = PanelUIState()
         XCTAssertTrue(draft.beginNew())
@@ -57,7 +59,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testSwitchingNotesFlushesThePreviousDraftToItsOwnRecord() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let first = try XCTUnwrap(store.create(title: "First", body: "Original first"))
         let second = try XCTUnwrap(store.create(title: "Second", body: "Original second"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
@@ -74,7 +78,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testCancelledAutosaveCannotWriteThePreviousDraftIntoTheNewSelection() async throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let first = try XCTUnwrap(store.create(title: "First", body: "One"))
         let second = try XCTUnwrap(store.create(title: "Second", body: "Two"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .milliseconds(40))
@@ -92,7 +98,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testRapidTypingCoalescesIntoOneAutosave() async throws {
         let gate = PersistenceGate()
-        let store = try makeTestNoteStore(persist: gate.save)
+        let store = try makeTestNoteStore(
+            persist: gate.save,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .milliseconds(30))
 
         XCTAssertTrue(draft.beginNew())
@@ -108,7 +117,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testFlushPreservesWhitespaceUnicodeAndLargeTextShape() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         let body = "\n  👩🏽‍💻 café\n" + String(repeating: "line  \n", count: 2_000)
 
@@ -124,7 +135,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testAutosaveDoesNotRewriteTheInProgressTitleFormatting() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(title: "Original", body: "Body"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
 
@@ -139,7 +152,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testBlankExistingDraftRevertsInsteadOfErasingTheNote() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(title: "Keep", body: "Important"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
 
@@ -157,7 +172,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testBlankNewDraftClosesWithoutCreatingAnEmptyRecord() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
 
         XCTAssertTrue(draft.beginNew())
@@ -172,7 +189,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testFailedFlushKeepsDraftActiveAndPreventsSwitching() throws {
         let gate = PersistenceGate()
-        let store = try makeTestNoteStore(persist: gate.save)
+        let store = try makeTestNoteStore(
+            persist: gate.save,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let first = try XCTUnwrap(store.create(title: "First", body: "One"))
         let second = try XCTUnwrap(store.create(title: "Second", body: "Two"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
@@ -191,7 +211,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testRemoteDeletionPreservesDirtyDraftWithoutResurrectingTheNote() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let original = try XCTUnwrap(store.create(title: "Draft", body: "Before"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(original))
@@ -213,7 +236,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testSaveAsNewRecoversDraftAfterRemoteDeletion() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let original = try XCTUnwrap(store.create(title: "Draft", body: "Before"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(original))
@@ -237,7 +263,10 @@ final class NoteDraftControllerTests: XCTestCase {
     @MainActor
     func testConcurrentRemoteEditBlocksSilentOverwrite() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(body: "Initial"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(note))
@@ -259,7 +288,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testConflictCanUseRemoteVersion() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(body: "Initial"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(note))
@@ -275,7 +306,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testConflictCanExplicitlyOverwriteRemoteVersion() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(body: "Initial"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(note))
@@ -291,7 +324,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testCleanRemoteChangeReplacesTheDraftSnapshot() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(title: "Remote", body: "Before"))
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
 
@@ -305,7 +340,9 @@ final class NoteDraftControllerTests: XCTestCase {
 
     @MainActor
     func testCloseFlushesThenClearsEditorState() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
 
         XCTAssertTrue(draft.beginNew())

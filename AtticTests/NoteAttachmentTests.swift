@@ -595,7 +595,10 @@ final class NoteAttachmentTests: XCTestCase {
         context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), payload: payload))
         context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), payload: payload))
         try context.save()
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let visible = try XCTUnwrap(store.attachments(for: noteID).first)
 
         XCTAssertTrue(store.removeAttachment(visible))
@@ -652,7 +655,10 @@ final class NoteAttachmentTests: XCTestCase {
         ))
         try context.save()
 
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let visible = try XCTUnwrap(
             store.attachmentsByNoteID.values.flatMap { $0 }.first
         )
@@ -671,7 +677,10 @@ final class NoteAttachmentTests: XCTestCase {
         context.insert(NoteAttachment(noteID: noteID, originalFilename: "one.txt", byteCount: 0, sortIndex: 0, contentDigest: "0".repeated(64)))
         context.insert(NoteAttachment(noteID: noteID, originalFilename: "two.txt", byteCount: 0, sortIndex: 1, contentDigest: "1".repeated(64)))
         try context.save()
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.notes.first)
 
         XCTAssertTrue(store.delete(note))
