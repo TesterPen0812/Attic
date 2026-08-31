@@ -260,6 +260,11 @@ final class AppCoordinator {
         cleanupService.start()
 
         if isUITesting {
+            // LSUIElement apps do not necessarily become active when XCTest
+            // launches them. Activate the real process before presenting the
+            // key panel so AppKit, not a test-only model shortcut, owns mouse
+            // and keyboard delivery through the installed UI hierarchy.
+            NSApp.activate()
             hoverMonitor.keepVisibleForUITesting()
             return
         }
