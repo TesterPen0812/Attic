@@ -20,8 +20,8 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 
 | Finding | Status | Owning commit | Focused tests | Installed UAT | Performance evidence | Residual risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| C-01 | Planned | — | — | — | — | Async target/generation race remains until integrated. |
-| C-02 | Planned | — | — | — | — | Mixed clear/restore and persisted-refresh outcomes remain non-atomic. |
+| C-01 | In progress | — | Regression development on `codex/attic-comprehensive-canvas` | — | — | Async target/generation race remains until integrated. |
+| C-02 | In progress | — | Regression development on `codex/attic-comprehensive-canvas` | — | — | Mixed clear/restore and persisted-refresh outcomes remain non-atomic. |
 | C-03 | Planned | — | — | — | — | VoiceOver and Full Keyboard Access object navigation unverified. |
 | C-04 | Planned | — | — | — | Baseline stress evidence pending capture | Decode/import/history resources remain unbounded. |
 | C-05 | Decision required | — | — | — | — | Semantic text/shape persistence requires a backward-compatible schema/storage decision; truthful legacy affordances can proceed independently. |
@@ -32,10 +32,10 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | C-10 | Planned | — | — | — | Baseline corrupt-decode retry count pending capture | Corrupt assets lack complete recovery/memoization. |
 | C-11 | Planned | — | — | — | — | Import fit/reachability matrix unverified. |
 | C-12 | Planned | — | — | — | — | Hosted content-versus-shell resize hit matrix unverified. |
-| C-13 | Planned | — | — | — | Baseline no-op persistence counts pending capture | Layer boundary operations may save/history on no-op. |
+| C-13 | In progress | — | Regression development on `codex/attic-comprehensive-canvas` | — | Baseline no-op persistence counts pending capture | Layer boundary operations may save/history on no-op. |
 | C-14 | Planned | — | — | — | Baseline rapid-input sample fidelity pending capture | Coalesced sample handling remains incomplete. |
 | C-15 | Planned | — | — | — | — | Real hosted input suite and test-only production path removal remain. |
-| C-16 | Planned | — | — | — | Baseline batch resource evidence pending capture | Drag/drop batch target, progress, cleanup, and concurrency remain. |
+| C-16 | In progress | — | Regression development on `codex/attic-comprehensive-canvas` | — | Baseline batch resource evidence pending capture | Drag/drop batch target, progress, cleanup, and concurrency remain. |
 | C-17 | Planned | — | — | — | — | Canvas documentation still contains stale mobile/Cloud and implementation claims. |
 | C-18 | Planned | — | — | — | — | Compact global-error overlap has not yet been reproduced after integration. |
 
@@ -43,12 +43,12 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 
 | Finding | Status | Owning commit | Focused tests | Installed UAT | Performance evidence | Residual risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| N-001 | Planned | — | — | — | Audit reproduction captured draft text loss | Draft-session attachment race remains. |
-| N-002 | Planned | — | — | — | Audit reproduction captured `NSRangeException` | Cross-note Undo/Redo can still crash. |
-| N-003 | Planned | — | — | — | — | Interaction-lock reasons are still conflated/incomplete. |
+| N-001 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit reproduction captured draft text loss | Draft-session attachment race remains. |
+| N-002 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit reproduction captured `NSRangeException` | Cross-note Undo/Redo can still crash. |
+| N-003 | In progress | — | Panel lock/hide regression development on `codex/attic-comprehensive-panel` | — | — | Notes-owned focus/dirty/import signals still need integration. |
 | N-004 | Planned | — | — | — | — | Note/cursor/selection/scroll session restoration remains. |
-| N-005 | Planned | — | — | — | Audit sentinel showed default-root deletion | Tests can still reconcile the default attachment root. |
-| N-006 | Planned | — | — | — | Audit continuous-typing probe captured unbounded trailing debounce window | Maximum durability checkpoint remains undefined. |
+| N-005 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit sentinel showed default-root deletion | Tests can still reconcile the default attachment root. |
+| N-006 | In progress | — | Regression development on `codex/attic-comprehensive-notes` | — | Audit continuous-typing probe captured unbounded trailing debounce window | Maximum durability checkpoint remains undefined. |
 | N-007 | Planned | — | — | — | Audit attachment lifecycle probe captured stale recency/empty note | Lifecycle invariants remain decentralized. |
 | N-008 | Planned | — | — | — | — | Broad scroll monitor and non-directional swipe remain. |
 | N-009 | Planned | — | — | — | Audit missing-attachment probe returned no URL and no error | Missing/corrupt recovery states/actions remain. |
@@ -58,14 +58,14 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | N-013 | Planned | — | — | — | — | Editor labels, announcements, tab order, hit targets, contrast, and Reduce Motion remain. |
 | N-014 | Planned | — | — | — | — | Compact long-text/mixed-attachment scroll handoff unverified. |
 | N-015 | Planned | — | — | — | — | Deterministic focus teardown and recursion-warning failure policy remain. |
-| N-016 | Planned | — | — | — | Audit hide latency baseline 927–1435 ms | Hide state can commit before failed flush/controller hide. |
+| N-016 | In progress | — | Transactional hide regression development on `codex/attic-comprehensive-panel` | — | Audit hide latency baseline 927–1435 ms | Notes draft acceptance hook still needs workstream integration. |
 
 ## Panel and shell
 
 | Finding | Status | Owning commit | Focused tests | Installed UAT | Performance evidence | Residual risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| PANEL-01 | Planned | — | — | — | — | Shared explicit interaction locks not integrated. |
-| PANEL-02 | Planned | — | — | — | Audit hide latency baseline 927–1435 ms | Shared transactional hide handshake not integrated. |
+| PANEL-01 | In progress | — | Regression development on `codex/attic-comprehensive-panel` | — | — | Shared explicit interaction locks not integrated. |
+| PANEL-02 | In progress | — | Regression development on `codex/attic-comprehensive-panel` | — | Audit hide latency baseline 927–1435 ms | Shared transactional hide handshake not integrated. |
 | PANEL-03 | Planned | — | — | — | — | Dynamic Dock/work-area recovery and preferred-size separation remain. |
 | PANEL-04 | Planned | — | — | — | — | Clear-mode foreground matrix requires installed visual judgment; transmission must remain unchanged. |
 | PANEL-05 | Planned | — | — | Physical trackpad required after automation | Baseline fast edge pass: 0/5 reveals; dismissal intent metrics pending | Phase-aware chrome flick and robust mouse throw remain. |
@@ -74,7 +74,7 @@ Baseline verification: 333/333 Attic macOS unit tests passed in the Local config
 | PANEL-08 | Planned | — | — | — | Baseline hidden sample: 3478 voluntary and 6370 involuntary context switches over 6.2 s; 20 Hz activity remains | Adaptive idle sampling/reveal-latency balance not integrated. |
 | PANEL-09 | Planned | — | — | — | Baseline UI runner exited before connection | Signed unique real-host UI suite remains broken. |
 | PANEL-10 | Planned | — | — | — | — | Cursor/drag/resize acquisition matrix remains. |
-| PANEL-11 | Planned | — | — | — | Baseline reveal 249–339 ms stable; local reveal still schedules 900 ms second refresh | Local-only reveal still carries deferred-sync work. |
+| PANEL-11 | In progress | — | Local-only reveal regression development on `codex/attic-comprehensive-panel` | — | Baseline reveal 249–339 ms stable; local reveal still schedules 900 ms second refresh | Local-only reveal still carries deferred-sync work. |
 | PANEL-12 | Planned | — | — | — | — | Broad stale launcher still hard-codes process, bundle, signing, `/Applications`, and appearance. |
 | PANEL-13 | Planned | — | — | — | — | Deprecated AX size override remains. |
 
@@ -86,4 +86,4 @@ Before any command that drives the installed app, cursor, keyboard, trackpad eve
 
 | Integration commit | Contents | Verification |
 | --- | --- | --- |
-| Pending | Initial ledger and verified clean baseline | 333/333 Local Attic unit tests passed at `87c2062a536c42badac78a5ce2b21bbad7315d12`. |
+| `4b246f6` | Initial ledger and verified clean baseline | 333/333 Local Attic unit tests passed at `87c2062a536c42badac78a5ce2b21bbad7315d12`. |
