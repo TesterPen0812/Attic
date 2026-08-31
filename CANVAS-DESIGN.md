@@ -43,7 +43,7 @@ Stroke geometry is encoded as sorted-key UTF-8 JSON with a version, semantic col
 }
 ```
 
-Unknown versions or malformed stroke payloads are retained and omitted from rendering with a non-destructive warning. Image corruption recovery is still incomplete: failed image decodes are not yet memoized or represented by a complete retry/remove/export placeholder flow.
+Unknown versions or malformed stroke payloads are retained and omitted from rendering with a non-destructive warning. Failed image decodes are memoized, render a stable non-destructive checker/X placeholder, and can be explicitly invalidated for retry by the renderer cache. The Canvas UI does not yet expose the required retry/remove/export recovery actions.
 
 ## Coordinates, pages, and history
 
@@ -60,11 +60,11 @@ Viewport and Undo/Redo history are currently session-local. They are not persist
 
 The macOS `CanvasNSView` owns pointer interaction and renders through Core Graphics. Completed ink and grouped erasure persist once per accepted gesture. Pan, magnification, image transforms, and placement have separate interaction paths.
 
-Rendering culls strokes and images outside an expanded world viewport. Stroke paths and decoded images use caches; the decoded image cache has a 256 MiB cost limit and 48-image count limit. These bounds do not yet make the full pipeline resource-complete:
+Rendering culls strokes and images outside an expanded world viewport. Stroke paths and decoded images use caches; the decoded image cache has a 256 MiB cost limit and 48-image count limit. On macOS, the surface supplies only images intersecting the viewport plus a 192-point prefetch margin to the three-worker decode queue, with onscreen images ahead of margin-only images. Leaving that candidate set prunes queued work. Up to three active ImageIO operations finish into the bounded cache because their C decode cannot be interrupted once entered; page/lifecycle teardown still cancels publication. Failed-decode history retains all current candidates and at most 512 off-canvas failures.
+
+These bounds do not yet make the full pipeline resource-complete:
 
 - rapid ink currently does not consume AppKit coalesced mouse samples;
-- image decode work can still start for every image supplied to the surface rather than a bounded visible-first queue;
-- failed decodes are retried because failure is not memoized;
 - history is count-bounded rather than byte-bounded;
 - transform refresh still performs an exact encoded-`Data` comparison on the main actor.
 
@@ -72,7 +72,7 @@ Image/file import preparation is bounded to two concurrent items, cancellable, o
 
 ## Accessibility and compact-shell boundary
 
-Toolbar and mode controls have labels and stable identifiers, but the Canvas surface does not yet expose every stroke/image as an independently navigable accessibility object with complete keyboard selection, transform, delete, and layer actions. Object-level VoiceOver and Full Keyboard Access remain accepted work under C-03.
+The Canvas surface exposes retained strokes and images as independently navigable accessibility objects with selected state, position, finite forward/reverse keyboard traversal, image transform/delete/layer actions, and truthful mutation outcomes. Installed VoiceOver speech order, rotor behavior, announcements, and Full Keyboard Access visual focus still require UAT under C-03.
 
 The compact shell owns legal resize handles outside content. Hosted all-corner coverage is still required to prove that no drawn Canvas point is stolen by shell resizing and that attached-side resize remains disabled.
 

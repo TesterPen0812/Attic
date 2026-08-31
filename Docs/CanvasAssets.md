@@ -25,13 +25,13 @@ Logical UUIDs are duplicate-safe at the application layer. Refresh selects one d
 
 ## Runtime decode and rendering
 
-Encoded bytes remain durable. Decoded `CGImage` values are kept in an `NSCache` with a 256 MiB total-cost limit and a 48-image count limit. Decoding runs in utility-priority detached work, and drawing culls objects outside an expanded world viewport. Switching pages clears the native image cache.
+Encoded bytes remain durable. Decoded `CGImage` values are kept in an `NSCache` with a 256 MiB total-cost limit and a 48-image count limit. On macOS, only images intersecting the viewport plus a 192-point prefetch margin enter the three-worker queue; onscreen images are ordered before margin-only images. Decoding runs in utility-priority detached work, and drawing culls objects outside an expanded world viewport. Switching pages clears the native image cache.
 
 Current limitations are explicit:
 
-- the surface can request decode for all supplied page images rather than a bounded visible-first queue;
-- cancellation prevents a completed decode from being published, but ImageIO work itself is not cooperatively interrupted once running;
-- failed decode results are not memoized, so an invalid payload can be retried;
+- candidate changes remove queued requests; up to three active macOS ImageIO operations finish into the bounded cache because their C decode cannot be interrupted once entered, while page/lifecycle teardown cancels publication;
+- failed decode results are memoized with a stable checker/X placeholder; all current viewport candidates and at most 512 off-canvas failures are retained;
+- retry invalidation exists in the renderer cache, but the Canvas UI does not yet expose retry/remove/export recovery actions;
 - transform-only persistence avoids rewriting encoded bytes, but refresh still compares the full encoded `Data` on the main actor to validate cache identity;
 - the count/cost-bounded decode cache does not make Undo history byte-bounded.
 
