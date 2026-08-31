@@ -91,6 +91,7 @@ final class NoteDraftControllerTests: XCTestCase {
             .replacedText
         )
         XCTAssertEqual(textView.string, "B")
+        XCTAssertTrue(textView.undoManager?.isUndoRegistrationEnabled == true)
         XCTAssertFalse(textView.undoManager?.canUndo == true)
         XCTAssertFalse(textView.undoManager?.canRedo == true)
 
