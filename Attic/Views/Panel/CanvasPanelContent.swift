@@ -365,7 +365,6 @@ struct CanvasPanelContent: View {
             ) {
                 _ = session.undo()
             }
-            .keyboardShortcut("z", modifiers: .command)
 
             if !compact {
                 CanvasCommandButton(
@@ -376,7 +375,6 @@ struct CanvasPanelContent: View {
                 ) {
                     _ = session.redo()
                 }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
             }
         }
         .padding(.horizontal, compact ? 5 : 8)

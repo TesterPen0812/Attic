@@ -4,6 +4,46 @@ import XCTest
 
 final class CanvasSessionTests: XCTestCase {
     @MainActor
+    func testStableEditCommandRouteIsCanvasScopedAndToolbarIndependent() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertTrue(session.completeStroke(points: [
+            CanvasPoint(x: 1, y: 2),
+            CanvasPoint(x: 3, y: 4)
+        ]))
+
+        for section in PanelSection.allCases where !section.isCanvas {
+            XCTAssertFalse(CanvasEditCommandRoute.canUndo(
+                session: session,
+                section: section
+            ))
+            XCTAssertFalse(CanvasEditCommandRoute.undo(
+                session: session,
+                section: section
+            ))
+            XCTAssertEqual(session.strokes.count, 1)
+        }
+
+        XCTAssertTrue(CanvasEditCommandRoute.canUndo(
+            session: session,
+            section: .canvas
+        ))
+        XCTAssertTrue(CanvasEditCommandRoute.undo(
+            session: session,
+            section: .canvas
+        ))
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(CanvasEditCommandRoute.canRedo(
+            session: session,
+            section: .canvas
+        ))
+        XCTAssertTrue(CanvasEditCommandRoute.redo(
+            session: session,
+            section: .canvas
+        ))
+        XCTAssertEqual(session.strokes.count, 1)
+    }
+
+    @MainActor
     func testCompletedStrokeSupportsUndoAndRedo() throws {
         let session = CanvasSession(store: try makeTestCanvasStore())
         let points = [

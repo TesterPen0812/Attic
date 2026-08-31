@@ -18,6 +18,10 @@ struct AtticApp: App {
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+            CanvasEditCommands(
+                session: coordinator.canvasSession,
+                uiState: coordinator.uiState
+            )
         }
     }
 
@@ -39,5 +43,63 @@ struct AtticApp: App {
         #else
         "eye"
         #endif
+    }
+}
+
+@MainActor
+enum CanvasEditCommandRoute {
+    static func canUndo(session: CanvasSession, section: PanelSection) -> Bool {
+        section.isCanvas && session.canUndo
+    }
+
+    static func canRedo(session: CanvasSession, section: PanelSection) -> Bool {
+        section.isCanvas && session.canRedo
+    }
+
+    @discardableResult
+    static func undo(session: CanvasSession, section: PanelSection) -> Bool {
+        guard section.isCanvas else { return false }
+        return session.undo()
+    }
+
+    @discardableResult
+    static func redo(session: CanvasSession, section: PanelSection) -> Bool {
+        guard section.isCanvas else { return false }
+        return session.redo()
+    }
+}
+
+private struct CanvasEditCommands: Commands {
+    @ObservedObject var session: CanvasSession
+    @ObservedObject var uiState: PanelUIState
+
+    var body: some Commands {
+        CommandGroup(before: .undoRedo) {
+            if uiState.selectedSection.isCanvas {
+                Button("Undo Canvas Change") {
+                    _ = CanvasEditCommandRoute.undo(
+                        session: session,
+                        section: uiState.selectedSection
+                    )
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!CanvasEditCommandRoute.canUndo(
+                    session: session,
+                    section: uiState.selectedSection
+                ))
+
+                Button("Redo Canvas Change") {
+                    _ = CanvasEditCommandRoute.redo(
+                        session: session,
+                        section: uiState.selectedSection
+                    )
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!CanvasEditCommandRoute.canRedo(
+                    session: session,
+                    section: uiState.selectedSection
+                ))
+            }
+        }
     }
 }
