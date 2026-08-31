@@ -441,6 +441,25 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertNil(lifecycle.cancel(reason: .interruptedEventDelivery))
     }
 
+    func testInteractionCaptureWatchdogRecoversOnlyAfterLeftButtonIsReleased() {
+        XCTAssertLessThanOrEqual(
+            PanelInteractionCaptureWatchdogPolicy.intervalMilliseconds,
+            250
+        )
+        XCTAssertFalse(PanelInteractionCaptureWatchdogPolicy.shouldRecover(
+            hasActiveInteraction: false,
+            pressedMouseButtons: 0
+        ))
+        XCTAssertFalse(PanelInteractionCaptureWatchdogPolicy.shouldRecover(
+            hasActiveInteraction: true,
+            pressedMouseButtons: 1
+        ))
+        XCTAssertTrue(PanelInteractionCaptureWatchdogPolicy.shouldRecover(
+            hasActiveInteraction: true,
+            pressedMouseButtons: 0
+        ))
+    }
+
     func testTemporaryWorkAreaClampDuringResizeDoesNotBecomePreferredSize() {
         var state = PanelResizePersistenceState()
         state.beginUserResize()

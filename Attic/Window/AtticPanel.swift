@@ -401,6 +401,17 @@ struct PanelInteractionLifecycle {
     }
 }
 
+enum PanelInteractionCaptureWatchdogPolicy {
+    static let intervalMilliseconds = 200
+
+    static func shouldRecover(
+        hasActiveInteraction: Bool,
+        pressedMouseButtons: Int
+    ) -> Bool {
+        hasActiveInteraction && (pressedMouseButtons & 1) == 0
+    }
+}
+
 /// Retains deliberate mouse-throw intent across the stationary samples that
 /// occur when the physical pointer reaches a screen edge. Direction comes from
 /// the cumulative gesture, while speed is the strongest meaningful rolling
@@ -523,6 +534,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     private var moveSession: MoveSession?
     private var interactionLifecycle = PanelInteractionLifecycle()
     private var escapeKeyMonitor: Any?
+    private var localMouseUpMonitor: Any?
+    private var globalMouseUpMonitor: Any?
+    private var captureWatchdog: DispatchSourceTimer?
 
     init(
         rootView: AtticPanelView,
@@ -554,6 +568,13 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         if let escapeKeyMonitor {
             NSEvent.removeMonitor(escapeKeyMonitor)
         }
+        if let localMouseUpMonitor {
+            NSEvent.removeMonitor(localMouseUpMonitor)
+        }
+        if let globalMouseUpMonitor {
+            NSEvent.removeMonitor(globalMouseUpMonitor)
+        }
+        captureWatchdog?.cancel()
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -716,32 +737,14 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             super.mouseUp(with: event)
             return
         }
-        if resizeSession != nil {
-            resizeSession = nil
-            _ = interactionLifecycle.finish(.windowResize)
-            stopEscapeMonitoring()
-            onLiveResizeEnded?(window.frame.size)
-            return
-        }
-        guard let session = moveSession else {
+        guard finishActiveInteraction(
+            in: window,
+            mouseLocation: NSEvent.mouseLocation,
+            timestamp: event.timestamp
+        ) else {
             super.mouseUp(with: event)
             return
         }
-        moveSession = nil
-        _ = interactionLifecycle.finish(.windowMove)
-        stopEscapeMonitoring()
-        let mouseLocation = NSEvent.mouseLocation
-        let release = session.intent.release(
-            location: mouseLocation,
-            timestamp: event.timestamp
-        )
-        window.invalidateCursorRects(for: self)
-        onWindowDragEnded?(
-            window.frame,
-            mouseLocation,
-            release.velocity,
-            release.translation
-        )
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -777,12 +780,121 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             }
             return nil
         }
+        startCaptureCompletionMonitoring()
     }
 
     private func stopEscapeMonitoring() {
-        guard let escapeKeyMonitor else { return }
-        NSEvent.removeMonitor(escapeKeyMonitor)
-        self.escapeKeyMonitor = nil
+        if let escapeKeyMonitor {
+            NSEvent.removeMonitor(escapeKeyMonitor)
+            self.escapeKeyMonitor = nil
+        }
+        stopCaptureCompletionMonitoring()
+    }
+
+    private func startCaptureCompletionMonitoring() {
+        guard localMouseUpMonitor == nil,
+              globalMouseUpMonitor == nil,
+              captureWatchdog == nil else { return }
+        localMouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) {
+            [weak self] event in
+            MainActor.assumeIsolated {
+                self?.finishCapturedMouseUp(event)
+            }
+            return event
+        }
+        globalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) {
+            [weak self] event in
+            MainActor.assumeIsolated {
+                self?.finishCapturedMouseUp(event)
+            }
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(
+            deadline: .now() + .milliseconds(
+                PanelInteractionCaptureWatchdogPolicy.intervalMilliseconds
+            ),
+            repeating: .milliseconds(
+                PanelInteractionCaptureWatchdogPolicy.intervalMilliseconds
+            ),
+            leeway: .milliseconds(50)
+        )
+        timer.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self,
+                      PanelInteractionCaptureWatchdogPolicy.shouldRecover(
+                        hasActiveInteraction: self.interactionLifecycle.activeInteraction != nil,
+                        pressedMouseButtons: NSEvent.pressedMouseButtons
+                      ) else { return }
+                guard let window = self.window else {
+                    self.cancelActiveInteraction(reason: .lostWindow)
+                    return
+                }
+                _ = self.finishActiveInteraction(
+                    in: window,
+                    mouseLocation: NSEvent.mouseLocation,
+                    timestamp: ProcessInfo.processInfo.systemUptime
+                )
+            }
+        }
+        captureWatchdog = timer
+        timer.resume()
+    }
+
+    private func stopCaptureCompletionMonitoring() {
+        if let localMouseUpMonitor {
+            NSEvent.removeMonitor(localMouseUpMonitor)
+            self.localMouseUpMonitor = nil
+        }
+        if let globalMouseUpMonitor {
+            NSEvent.removeMonitor(globalMouseUpMonitor)
+            self.globalMouseUpMonitor = nil
+        }
+        captureWatchdog?.cancel()
+        captureWatchdog = nil
+    }
+
+    private func finishCapturedMouseUp(_ event: NSEvent) {
+        guard let window else {
+            cancelActiveInteraction(reason: .lostWindow)
+            return
+        }
+        _ = finishActiveInteraction(
+            in: window,
+            mouseLocation: NSEvent.mouseLocation,
+            timestamp: event.timestamp
+        )
+    }
+
+    @discardableResult
+    private func finishActiveInteraction(
+        in window: NSWindow,
+        mouseLocation: CGPoint,
+        timestamp: TimeInterval
+    ) -> Bool {
+        if resizeSession != nil {
+            resizeSession = nil
+            guard interactionLifecycle.finish(.windowResize) else { return false }
+            stopEscapeMonitoring()
+            onLiveResizeEnded?(window.frame.size)
+            return true
+        }
+        guard let session = moveSession,
+              interactionLifecycle.finish(.windowMove) else { return false }
+        moveSession = nil
+        stopEscapeMonitoring()
+        let release = session.intent.release(
+            location: mouseLocation,
+            timestamp: timestamp
+        )
+        window.invalidateCursorRects(for: self)
+        onWindowDragEnded?(
+            window.frame,
+            mouseLocation,
+            release.velocity,
+            release.translation
+        )
+        return true
     }
 
     override func resetCursorRects() {
