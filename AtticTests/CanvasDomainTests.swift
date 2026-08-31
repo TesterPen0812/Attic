@@ -1524,7 +1524,10 @@ final class CanvasDomainTests: XCTestCase {
             wheel2: deltaX,
             wheel3: 0
         ))
-        if command { event.flags = .maskCommand }
+        // CGEvent can inherit the process's current hardware modifier state.
+        // Always assign flags so a non-Command phase cannot accidentally take
+        // the zoom path when the user is physically holding Command.
+        event.flags = command ? .maskCommand : []
         event.location = CGPoint(x: 120, y: 160)
         event.setIntegerValueField(
             .scrollWheelEventScrollPhase,
