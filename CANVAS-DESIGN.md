@@ -1,27 +1,38 @@
-# Canvas Ink Essentials — Repository Design
+# Canvas — verified macOS local implementation
 
-## Scope and placement
+## Product scope
 
-Canvas becomes the fourth macOS `PanelSection` beside Tasks, Backlog, and Notes, and a Canvas destination in the iPhone shell. It is one persistent board. V1 contains only pen, whole-stroke eraser, an accessible fixed palette, continuous width, undo/redo, zoom/pan, fit/reset view, confirmed clear, and automatic persistence of completed operations.
+Canvas is the fourth section of the compact macOS Attic panel, beside Tasks, Backlog, and Notes. Current development and verification are macOS-only and local-first. The iPhone target and CloudKit synchronization are deferred; their source may remain in the repository, but `ATTIC_LOCAL_ONLY` builds do not create Canvas remote-change observers, CloudKit event observers, sync activity assertions, or sync timeouts.
 
-No shapes, arrows, text, files/images, layers, multiple boards, collaboration, templates, or AI drawing are introduced.
+An isolated preview must use a unique `com.taha.Attic.*` bundle identity and its own local store. Canvas work must never copy, reset, migrate, or replace the official app's data.
 
-## Boundaries
+## Current object and tool model
 
-- **Domain/format:** platform-neutral stroke archive, viewport math, hit testing, and gesture state transitions.
-- **Persistence:** a shared `CanvasStore` over the existing SwiftData/CloudKit container.
-- **Session history:** a `CanvasSession` owns tools, viewport, visible immutable stroke snapshots, and session-local undo/redo.
-- **Rendering/input:** one native `NSView`/`UIView` surface renders cached Core Graphics paths and owns the in-progress gesture. SwiftUI supplies controls and accessibility, not one view per point or stroke.
-- **Platform shells:** `CanvasPanelContent` integrates the compact macOS panel; `MobileCanvasScreen` integrates the iPhone root.
+Canvas currently supports:
 
-## Persistent model and stroke format
+- multiple named pages;
+- pen and whole-stroke eraser input;
+- image import, selection, movement, resizing, deletion, and layer movement;
+- rectangle, ellipse, line, and arrow placement;
+- text placement;
+- pan, pinch/magnification, zoom controls, reset, and fit;
+- clear, Undo, and Redo.
 
-Two CloudKit-compatible SwiftData models are added without unique constraints or relationships:
+The persistence model is not yet a fully semantic drawing-object model. Ink is stored as stroke geometry. Shapes are converted to strokes, and text is rendered into image bytes before storage. Therefore existing shape and text content remains renderable but is not structurally editable as a shape or as text. A semantic text/shape migration requires a separately approved, backward-compatible schema and storage plan; legacy content must not be reinterpreted or destroyed.
 
-- `CanvasBoardItem`: deterministic app-level board UUID, `formatVersion` defaulting to `1`, monotonic `clearGeneration` defaulting to `0`, and `updatedAt`.
-- `CanvasStrokeItem`: logical stroke UUID, `payloadVersion` defaulting to `1`, JSON `payload` defaulting to empty `Data`, `boardGeneration` defaulting to `0`, monotonic `mutationVersion` defaulting to `1`, `tombstoned` defaulting to `false`, and created/updated/deleted timestamps. The field avoids the `NSManagedObject.isDeleted` name reserved by SwiftData's Core Data backing.
+## Persistence and duplicate safety
 
-The board row is lazily materialized; no row means generation zero. A completed stroke is encoded once as sorted-key UTF-8 JSON:
+The local SwiftData store contains `CanvasBoardItem`, `CanvasStrokeItem`, and `CanvasImageItem` rows. Logical UUIDs are app-level identifiers rather than SwiftData uniqueness constraints. Refresh selects one deterministic presentation winner for duplicate physical rows, while mutations apply to every physical replica with the same logical UUID.
+
+Board clear uses a monotonic generation. Older-generation content stays retained but invisible, including stale rows that arrive later. Clear Undo restores the captured strokes and images into the current generation in one persistence transaction; it does not decrement the generation. A second-stage restore failure rolls the whole transaction back.
+
+Canvas saves report typed outcomes: no change, persisted, persisted with a refresh warning, or total failure. A successful persistence followed by a failed fresh-context reload is not retried as a save; the store reconciles from the already-saved context and keeps the visible/durable result truthful.
+
+In local-only builds, Canvas save and reveal paths remain Cloud/APNs dormant. Deferred synchronization code is not evidence that CloudKit or mobile delivery works.
+
+## Stroke archive
+
+Stroke geometry is encoded as sorted-key UTF-8 JSON with a version, semantic color token, width, and logical board points:
 
 ```json
 {
@@ -32,95 +43,41 @@ The board row is lazily materialized; no row means generation zero. A completed 
 }
 ```
 
-Coordinates and widths are logical board-point `Double` values. Color is a stable semantic token, not a platform color object. Unknown versions or malformed payloads are ignored for rendering, retained in storage, and surfaced as a non-destructive store error.
+Unknown versions or malformed stroke payloads are retained and omitted from rendering with a non-destructive warning. Image corruption recovery is still incomplete: failed image decodes are not yet memoized or represented by a complete retry/remove/export placeholder flow.
 
-## Coordinate system and viewport
+## Coordinates, pages, and history
 
-Strokes are stored in an unbounded world coordinate system. The viewport is `{center, scale}`:
+Strokes and images use an unbounded world coordinate system. The viewport is `{center, scale}`:
 
 - `view = (world - center) * scale + viewportCenter`
 - `world = (view - viewportCenter) / scale + center`
 
-Resize changes only `viewportCenter`; it never rewrites points. Pan changes `center`; zoom is clamped and anchored around the gesture location. Reset uses center `(0, 0)` and scale `1`. Fit computes visible-stroke bounds plus padding, centers them, and clamps scale. An empty board resets.
+Resize changes the view center and does not rewrite stored object geometry. Pan changes world center; zoom is clamped and anchored around the gesture location. Fit uses visible content bounds plus padding.
 
-Viewport state is local session state and is not written to SwiftData or CloudKit.
+Viewport and Undo/Redo history are currently session-local. They are not persisted on relaunch and are not yet independently retained per page. This is an accepted limitation under C-06, not a documented guarantee. App-level Commands route Command-Z and Command-Shift-Z to the active Canvas independently of whether compact toolbar buttons are visible.
 
-## Input and rendering semantics
+## Input and rendering
 
-The native surface has explicit `idle`, `drawing`, `erasing`, and `panning` states.
+The macOS `CanvasNSView` owns pointer interaction and renders through Core Graphics. Completed ink and grouped erasure persist once per accepted gesture. Pan, magnification, image transforms, and placement have separate interaction paths.
 
-- Primary mouse/pencil/finger input starts pen or eraser work.
-- Trackpad scrolling, magnification, Space-drag, middle/secondary drag, two-finger pan, and pinch are viewport gestures and never begin ink.
-- If a viewport gesture or second touch takes ownership while ink is in progress, the unfinished ink/erase probe is discarded before panning.
-- Pointer/touch up completes the operation. Cancellation, tool change, section removal, window loss, app deactivation, or view dismantling discards it.
-- Coalesced pointer/touch samples are consumed when available. Points remain in memory during the gesture; one callback and at most one SwiftData save occurs when the completed stroke or grouped erase is accepted.
-- Eraser hit IDs are accumulated during the gesture and committed together, so dragging the eraser does not save per sample.
-- Rendering uses one native view and cached `CGPath` values per immutable stroke snapshot. The active stroke is drawn directly by that view.
+Rendering culls strokes and images outside an expanded world viewport. Stroke paths and decoded images use caches; the decoded image cache has a 256 MiB cost limit and 48-image count limit. These bounds do not yet make the full pipeline resource-complete:
 
-## Replica, sync, and failure semantics
+- rapid ink currently does not consume AppKit coalesced mouse samples;
+- image decode work can still start for every image supplied to the surface rather than a bounded visible-first queue;
+- failed decodes are retried because failure is not memoized;
+- history is count-bounded rather than byte-bounded;
+- transform refresh still performs an exact encoded-`Data` comparison on the main actor.
 
-The existing event-driven `NSPersistentStoreRemoteChange` and `NSPersistentCloudKitContainer.eventChangedNotification` protections are reused. A completed import replaces the long-lived `ModelContext` before fetching.
+Image/file import preparation is bounded to two concurrent items, cancellable, ordered by the original batch, and bound to an immutable page UUID plus board generation. The store validates that target immediately before one atomic batch save. UI progress and per-item recovery presentation are still being completed under C-16.
 
-CloudKit may contain physical duplicates with the same logical UUID:
+## Accessibility and compact-shell boundary
 
-- Presentation groups replicas; it never deletes duplicates during refresh.
-- Board generation is the maximum generation across board replicas.
-- A stroke winner is chosen deterministically by `mutationVersion`, then `boardGeneration`, then tombstone-over-visible, then `updatedAt`, then a stable payload/persistent-ID tie break.
-- Mutation, restore, erasure, and deletion state are applied to every physical replica of the logical stroke UUID.
-- Board clear mutation is applied to every physical board replica.
+Toolbar and mode controls have labels and stable identifiers, but the Canvas surface does not yet expose every stroke/image as an independently navigable accessibility object with complete keyboard selection, transform, delete, and layer actions. Object-level VoiceOver and Full Keyboard Access remain accepted work under C-03.
 
-A clear increments the monotonic board generation. Strokes from older generations become invisible, including stale replicas imported later. This avoids destructive mass deletion and prevents pre-clear ink from reappearing.
+The compact shell owns legal resize handles outside content. Hosted all-corner coverage is still required to prove that no drawn Canvas point is stolen by shell resizing and that attached-side resize remains disabled.
 
-On save failure, the context rolls back, a fresh context reloads the persisted state, the attempted session operation is not added to history, and the UI exposes the error. Completed ink already saved before section changes, hiding, Settings focus, termination, relaunch, or imports remains durable.
+## Verification boundary
 
-## Undo, redo, erase, and clear
+Unit tests establish local model, persistence, duplicate, command-routing, import-target, and geometry behavior. Signed UI tests establish only the scenarios they actually drive through the real `NSPanel` host. They do not establish physical trackpad behavior, installed visual quality, CloudKit, APNs, iPhone, TestFlight, or Production behavior.
 
-History is deliberately session-local and is not synchronized or restored after relaunch.
-
-- Add undo/redo toggles the logical stroke tombstone using a higher mutation version.
-- Erase undo restores all strokes erased by that gesture; redo erases the same logical IDs.
-- Clear increments generation. Undo replays the captured pre-clear visible strokes into the current generation without decrementing generation; redo performs another generation increment.
-- A successful new user operation clears redo.
-- A failed operation changes neither stack.
-- A remote/import refresh that changes the semantic board snapshot clears both stacks so stale local commands cannot overwrite imported state.
-
-## Accessibility and compact layout
-
-The four-section macOS picker uses a one-row layout when it fits and a two-row fallback at constrained content widths. Every tool, color, width, history, view, and clear control has a label and stable accessibility identifier. Selection uses shape/border/checkmark state in addition to color. The canvas reports stroke count and active tool. Keyboard focus and shortcuts cover section selection, pen/eraser, undo/redo, fit/reset, and clear. Animations respect Reduce Motion; palette rendering uses semantic system colors in Light and Dark appearances.
-
-UI tests use accessibility hooks for the surface, stroke count, tools, undo/redo, fit/reset, clear confirmation, section switching, Settings focus, and a dedicated local UI-test store that can be retained across a controlled relaunch without touching production data.
-
-## Affected files
-
-New shared files:
-
-- `Attic/Models/CanvasBoardItem.swift`
-- `Attic/Models/CanvasStrokeItem.swift`
-- `Attic/Canvas/CanvasTypes.swift`
-- `Attic/Canvas/CanvasStrokeCodec.swift`
-- `Attic/Canvas/CanvasViewport.swift`
-- `Attic/Canvas/CanvasInputStateMachine.swift`
-- `Attic/Canvas/CanvasSession.swift`
-- `Attic/Canvas/CanvasSurface.swift`
-- `Attic/Services/CanvasStore.swift`
-
-New platform UI files:
-
-- `Attic/Views/Panel/CanvasPanelContent.swift`
-- `AtticMobile/Views/MobileCanvasScreen.swift`
-
-Existing integration files:
-
-- `Attic/Services/PersistenceController.swift`
-- `Attic/App/AppCoordinator.swift`
-- `Attic/Window/PanelSection.swift`
-- `Attic/Window/PanelUIState.swift`
-- `Attic/Window/AtticPanelController.swift`
-- `Attic/Views/Panel/AtticPanelView.swift`
-- `AtticMobile/App/MobileAppModel.swift`
-- `AtticMobile/Views/MobileAppRoot.swift`
-- `Scripts/generate_project.rb`
-- generated `Attic.xcodeproj` files
-- macOS/iPhone unit and UI-test targets
-
-Identifiers, entitlements, APNs/CloudKit environments, observers, store environment separation, and production data paths remain unchanged.
+Current accepted-finding status and exact evidence live in `Docs/AuditFixResolutionLedger-2026-08-31.md`.

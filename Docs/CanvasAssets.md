@@ -1,30 +1,42 @@
-# Canvas image assets and CloudKit limits
+# Canvas image assets — verified local macOS contract
 
-Canvas imports an image as canonical application-owned bytes. A file URL is only an input channel: the importer enters a security-scoped resource when necessary, reads the bytes while access is active, and never persists the source path or bookmark.
+Canvas imports canonical application-owned bytes into the local SwiftData store. A file URL or file-promise delivery is only an input channel: the importer enters security-scoped access when necessary, reads while access is active, and does not persist the source path or bookmark.
 
 ## Import policy
 
-- The source read budget is 64 MiB. Larger inputs are rejected before image decode.
-- ImageIO decodes and applies orientation away from the main actor.
+- Source reads are limited to 64 MiB; larger inputs are rejected before decode.
+- ImageIO applies orientation and prepares canonical bytes away from the main actor.
 - The longest decoded edge is limited to 4,096 pixels.
-- The canonical payload is PNG when alpha is required and JPEG otherwise.
-- The canonical encoded payload is limited to 8 MiB. Encoding retries with bounded dimensions/quality; an image that cannot meet the limit is rejected.
-- Corrupt and unsupported payloads produce a user-visible error and no model row.
+- Canonical output is PNG when alpha is required and JPEG otherwise.
+- Canonical encoded output is limited to 8 MiB; bounded dimension/quality retries are used before rejection.
+- Unsupported or corrupt import input produces a failed item and no image row.
+- Batch preparation is bounded to two concurrent items, supports cancellation, preserves source order, and cleans task-owned temporary delivery directories.
+- Every batch captures a page UUID and board generation before asynchronous work. The store revalidates that immutable target and persists accepted items in one transaction.
 
-These are application limits, not statements of CloudKit's absolute service limits. They intentionally leave headroom for record metadata, mirroring overhead, and future schema growth.
+Drag/drop advertises copy only for supported image/file representations. File-promise delivery errors remain item-scoped. Stable user-visible progress, per-item retry/removal actions, and live Finder/File Provider timing still require completion and installed verification.
 
-## Storage and synchronization model
+## Local storage model
 
-`CanvasImageItem.encodedData` is a SwiftData external-storage attribute. SwiftData/Core Data can mirror that value as a CloudKit asset rather than forcing multi-megabyte data into an inline field. Each image row also stores its logical canvas ID, pixel dimensions, transform, z-order, generation, mutation version, timestamps, and the persisted deletion field `tombstoned`.
+`CanvasImageItem.encodedData` is a SwiftData external-storage attribute. Each row also records its logical canvas UUID, pixel dimensions, transform, z-order, board generation, mutation version, timestamps, and `tombstoned` deletion state.
 
-CloudKit cannot enforce the app UUID as a unique key. Multiple physical rows may therefore represent one logical board or image. Refresh deterministically selects a presentation winner; mutations, restores, clear operations, and deletion update every physical replica. Rows are tombstoned instead of being arbitrarily deleted during reconciliation.
+Logical UUIDs are duplicate-safe at the application layer. Refresh selects one deterministic visible winner; mutation, restore, layer movement, clear, and deletion apply to every physical replica for that logical UUID. Reconciliation does not delete an arbitrary duplicate.
 
-The model remains additive and CloudKit-compatible: every persisted property has a default or is optional, and no SwiftData unique constraint is used. Development schema initialization is versioned, but this implementation does **not** deploy a Production schema. A release must not depend on the new record types until the schema has been reviewed and deliberately deployed through the normal release process.
+`ATTIC_LOCAL_ONLY` builds do not create Canvas CloudKit observers, iCloud status work, export/import activity assertions, or timeout tasks. External storage is a local persistence choice here; it is not a claim of active CloudKit asset synchronization. No Production schema or Mac/iPhone delivery is part of the current verification boundary.
 
-## Runtime memory and rendering
+## Runtime decode and rendering
 
-Encoded bytes remain the durable source. Decoded `CGImage` values live in a bounded cache with a 256 MiB total-cost limit and a 48-image count limit. Decode occurs in a detached utility-priority task. Transform-only changes retain an ephemeral content token, allowing the decoded bitmap to be reused without comparing the encoded `Data` on the main actor. Off-screen images are culled before drawing, pending decode tasks are cancelled when images leave the active canvas, and switching canvases clears the native cache.
+Encoded bytes remain durable. Decoded `CGImage` values are kept in an `NSCache` with a 256 MiB total-cost limit and a 48-image count limit. Decoding runs in utility-priority detached work, and drawing culls objects outside an expanded world viewport. Switching pages clears the native image cache.
+
+Current limitations are explicit:
+
+- the surface can request decode for all supplied page images rather than a bounded visible-first queue;
+- cancellation prevents a completed decode from being published, but ImageIO work itself is not cooperatively interrupted once running;
+- failed decode results are not memoized, so an invalid payload can be retried;
+- transform-only persistence avoids rewriting encoded bytes, but refresh still compares the full encoded `Data` on the main actor to validate cache identity;
+- the count/cost-bounded decode cache does not make Undo history byte-bounded.
+
+Those resource and recovery gaps remain tracked under C-04, C-07, and C-10.
 
 ## Verification boundary
 
-In-memory and simulator tests can prove model compatibility, replica semantics, coordinate transforms, persistence, and buildability. They cannot prove Production Mac-to-iPhone or iPhone-to-Mac delivery. That still requires distributed TestFlight builds on a real Mac and real iPhone, signed into the same iCloud account, following the Live Sync Contract in `AGENTS.md`.
+Local unit tests can establish import limits, immutable target checks, duplicate-safe persistence, ordering, cancellation outcomes, and cache math. Signed installed tests are still required for real file promises, large batches, progress/recovery UI, memory growth, decode latency, cancellation latency, and disk activity. Physical trackpad behavior and any deferred mobile/Cloud workflow are outside what these tests prove.
