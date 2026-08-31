@@ -23,6 +23,33 @@ extension CanvasStore {
 
     @discardableResult
     func save() -> CanvasSaveOutcome {
+        let savedPresentation: CanvasPresentationSnapshot
+        do {
+            // Resolve the pending mutation while the saved context is still
+            // readable. Once persistence succeeds this value is a complete,
+            // non-throwing fallback if a fresh context cannot be loaded.
+            savedPresentation = try resolveCanvasPresentation(
+                using: context,
+                strokeCache: visibleStrokeCache,
+                imageCache: visibleImageCache,
+                permitsEquivalentSourceReuse: false
+            )
+        } catch {
+            let preparationError = "Canvas could not prepare its saved presentation: "
+                + error.localizedDescription
+            context.rollback()
+            do {
+                let warning = try reloadCanvas()
+                lastErrorMessage = warning.map {
+                    "\(preparationError) · \($0)"
+                } ?? preparationError
+            } catch {
+                lastErrorMessage = "\(preparationError) · Reload failed: "
+                    + error.localizedDescription
+            }
+            return .failed(lastErrorMessage ?? preparationError)
+        }
+
         do {
             try persist(context)
             if CanvasCloudInfrastructurePolicy.isEnabled {
@@ -31,28 +58,17 @@ extension CanvasStore {
             }
 
             do {
-                let warning = try reloadCanvas()
+                let warning = try reloadCanvas(reusing: savedPresentation)
                 lastErrorMessage = warning
                 return .persisted(warning: warning)
             } catch {
                 let refreshFailure = "Canvas saved, but refresh failed: \(error.localizedDescription)"
-                do {
-                    let fallbackWarning = try reloadCanvas(
-                        using: context,
-                        replacingContext: false
-                    )
-                    let message = fallbackWarning.map {
-                        "\(refreshFailure) · \($0)"
-                    } ?? refreshFailure
-                    lastErrorMessage = message
-                    return .persistedButRefreshFailed(message)
-                } catch {
-                    let message = "\(refreshFailure) · Saved-context reconciliation failed: "
-                        + error.localizedDescription
-                    lastErrorMessage = message
-                    revision &+= 1
-                    return .persistedButRefreshFailed(message)
-                }
+                let message = savedPresentation.warning.map {
+                    "\(refreshFailure) · \($0)"
+                } ?? refreshFailure
+                applyCanvasPresentation(savedPresentation, replacingContext: nil)
+                lastErrorMessage = message
+                return .persistedButRefreshFailed(message)
             }
         } catch {
             let saveError = error.localizedDescription
@@ -68,19 +84,33 @@ extension CanvasStore {
     }
 
     func reloadCanvas() throws -> String? {
-        try reloadCanvas(
-            using: makeFreshContext(),
-            replacingContext: true
-        )
+        try reloadCanvas(reusing: nil)
     }
 
     private func reloadCanvas(
-        using sourceContext: ModelContext,
-        replacingContext: Bool
+        reusing cachedPresentation: CanvasPresentationSnapshot?
     ) throws -> String? {
-        let boardReplicas = try sourceContext.fetch(FetchDescriptor<CanvasBoardItem>())
-        let strokeReplicas = try sourceContext.fetch(FetchDescriptor<CanvasStrokeItem>())
-        let imageReplicas = try sourceContext.fetch(FetchDescriptor<CanvasImageItem>())
+        let freshContext = try makeFreshContext()
+        let presentation = try resolveCanvasPresentation(
+            using: freshContext,
+            strokeCache: cachedPresentation?.strokeCache ?? visibleStrokeCache,
+            imageCache: cachedPresentation?.imageCache ?? visibleImageCache,
+            permitsEquivalentSourceReuse: cachedPresentation != nil
+        )
+        applyCanvasPresentation(presentation, replacingContext: freshContext)
+        return presentation.warning
+    }
+
+    private func resolveCanvasPresentation(
+        using sourceContext: ModelContext,
+        strokeCache sourceStrokeCache: [CanvasReplicaKey: CanvasStrokeCacheEntry],
+        imageCache sourceImageCache: [CanvasReplicaKey: CanvasImageCacheEntry],
+        permitsEquivalentSourceReuse: Bool
+    ) throws -> CanvasPresentationSnapshot {
+        let replicas = try loadReplicas(sourceContext)
+        let boardReplicas = replicas.boards
+        let strokeReplicas = replicas.strokes
+        let imageReplicas = replicas.images
 
         var warnings: [String] = []
         var omittedWarningCount = 0
@@ -130,20 +160,21 @@ extension CanvasStore {
         }
         resolvedBoards.sort(by: Self.boardComesBefore)
 
-        if !resolvedBoards.contains(where: { $0.id == selectedCanvasID }) {
-            selectedCanvasID = resolvedBoards[0].id
+        var resolvedSelectedCanvasID = selectedCanvasID
+        if !resolvedBoards.contains(where: { $0.id == resolvedSelectedCanvasID }) {
+            resolvedSelectedCanvasID = resolvedBoards[0].id
         }
-        let resolvedBoard = resolvedBoards.first { $0.id == selectedCanvasID }
+        let resolvedBoard = resolvedBoards.first { $0.id == resolvedSelectedCanvasID }
             ?? resolvedBoards[0]
         let resolvedGeneration = resolvedBoard.clearGeneration
 
-        if let selectedReplica = boardWinnerByID[selectedCanvasID],
+        if let selectedReplica = boardWinnerByID[resolvedSelectedCanvasID],
            selectedReplica.formatVersion != CanvasStrokeCodec.currentVersion {
             recordWarning("The selected canvas format is newer than this version of Attic.")
         }
 
         var strokeWinnerByKey: [CanvasReplicaKey: CanvasStrokeItem] = [:]
-        for replica in strokeReplicas where replica.canvasID == selectedCanvasID {
+        for replica in strokeReplicas where replica.canvasID == resolvedSelectedCanvasID {
             let key = CanvasReplicaKey(canvasID: replica.canvasID, id: replica.id)
             if let existing = strokeWinnerByKey[key] {
                 if Self.prefersStroke(replica, over: existing) {
@@ -164,10 +195,21 @@ extension CanvasStore {
                   !replica.tombstoned else {
                 continue
             }
-            if let cached = visibleStrokeCache[key], cached.matches(replica) {
-                nextStrokeCache[key] = cached
-                visibleStrokes.append(cached.stroke)
-                continue
+            if let cached = sourceStrokeCache[key] {
+                let reusableCache: CanvasStrokeCacheEntry?
+                if cached.matches(replica) {
+                    reusableCache = cached
+                } else if permitsEquivalentSourceReuse,
+                          cached.representsSameCommittedValue(as: replica) {
+                    reusableCache = cached.rebound(to: replica)
+                } else {
+                    reusableCache = nil
+                }
+                if let reusableCache {
+                    nextStrokeCache[key] = reusableCache
+                    visibleStrokes.append(reusableCache.stroke)
+                    continue
+                }
             }
             do {
                 let geometry = try decodeStroke(replica.payload, replica.payloadVersion)
@@ -203,7 +245,7 @@ extension CanvasStore {
         visibleStrokes.sort(by: Self.strokeComesBefore)
 
         var imageWinnerByKey: [CanvasReplicaKey: CanvasImageItem] = [:]
-        for replica in imageReplicas where replica.canvasID == selectedCanvasID {
+        for replica in imageReplicas where replica.canvasID == resolvedSelectedCanvasID {
             let key = CanvasReplicaKey(canvasID: replica.canvasID, id: replica.id)
             if let existing = imageWinnerByKey[key] {
                 if Self.prefersImage(replica, over: existing) {
@@ -239,13 +281,30 @@ extension CanvasStore {
                 recordWarning("Image \(replica.id.uuidString) was retained but has invalid data.")
                 continue
             }
-            if let cached = visibleImageCache[key], cached.matches(replica) {
-                nextImageCache[key] = cached
-                visibleImages.append(cached.image)
-                continue
+            if let cached = sourceImageCache[key] {
+                let reusableCache: CanvasImageCacheEntry?
+                if cached.matches(replica) {
+                    reusableCache = cached
+                } else if permitsEquivalentSourceReuse,
+                          cached.representsSameCommittedValue(as: replica) {
+                    reusableCache = cached.rebound(to: replica)
+                } else {
+                    reusableCache = nil
+                }
+                if let reusableCache {
+                    nextImageCache[key] = reusableCache
+                    visibleImages.append(reusableCache.image)
+                    continue
+                }
             }
-            let contentToken = visibleImageCache[key]
-                .flatMap { $0.contentMatches(replica) ? $0.image.contentToken : nil }
+            let contentToken = sourceImageCache[key]
+                .flatMap {
+                    if $0.contentMatches(replica)
+                        || (permitsEquivalentSourceReuse && $0.contentValueMatches(replica)) {
+                        return $0.image.contentToken
+                    }
+                    return nil
+                }
                 ?? UUID()
             let image = CanvasPlacedImage(
                 id: replica.id,
@@ -286,17 +345,33 @@ extension CanvasStore {
             warnings.append("\(omittedWarningCount) additional canvas warning(s) were omitted.")
         }
 
-        if replacingContext {
-            context = sourceContext
+        return CanvasPresentationSnapshot(
+            canvases: resolvedBoards,
+            selectedCanvasID: resolvedSelectedCanvasID,
+            boardGeneration: resolvedGeneration,
+            strokeCache: nextStrokeCache,
+            imageCache: nextImageCache,
+            strokes: visibleStrokes,
+            images: visibleImages,
+            warning: warnings.isEmpty ? nil : warnings.joined(separator: " · ")
+        )
+    }
+
+    private func applyCanvasPresentation(
+        _ presentation: CanvasPresentationSnapshot,
+        replacingContext replacementContext: ModelContext?
+    ) {
+        if let replacementContext {
+            context = replacementContext
         }
-        canvases = resolvedBoards
-        boardGeneration = resolvedGeneration
-        visibleStrokeCache = nextStrokeCache
-        visibleImageCache = nextImageCache
-        strokes = visibleStrokes
-        images = visibleImages
+        canvases = presentation.canvases
+        selectedCanvasID = presentation.selectedCanvasID
+        boardGeneration = presentation.boardGeneration
+        visibleStrokeCache = presentation.strokeCache
+        visibleImageCache = presentation.imageCache
+        strokes = presentation.strokes
+        images = presentation.images
         revision &+= 1
-        return warnings.isEmpty ? nil : warnings.joined(separator: " · ")
     }
 
     func ensureSelectedBoardReplicaExists(at timestamp: Date) throws {

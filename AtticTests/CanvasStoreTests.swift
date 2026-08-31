@@ -298,6 +298,219 @@ final class CanvasStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testAddStrokeReturnsPersistedObjectWithoutDuplicateRetryWhenPostSaveReloadFails() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let replicaReads = CanvasReplicaReadGate()
+        let store = CanvasStore(
+            container: container,
+            persist: { context in
+                try persistence.save(context)
+                replicaReads.persistenceDidSucceed()
+            },
+            loadReplicas: replicaReads.load
+        )
+        replicaReads.failReadsAfterNextPersistence()
+
+        let firstAttempt = store.addStroke(
+            color: .green,
+            width: 4,
+            points: [CanvasPoint(x: 3, y: 9)]
+        )
+        let result = firstAttempt ?? store.addStroke(
+            color: .green,
+            width: 4,
+            points: [CanvasPoint(x: 3, y: 9)]
+        )
+
+        XCTAssertNotNil(firstAttempt)
+        XCTAssertNotNil(result)
+        XCTAssertEqual(persistence.saveCount, 1)
+        XCTAssertEqual(store.strokes.count, 1)
+        XCTAssertEqual(
+            try ModelContext(container).fetchCount(FetchDescriptor<CanvasStrokeItem>()),
+            1
+        )
+        XCTAssertTrue(store.lastErrorMessage?.contains("saved") == true)
+        XCTAssertTrue(store.lastErrorMessage?.contains("refresh failed") == true)
+    }
+
+    @MainActor
+    func testCreateCanvasReturnsPersistedBoardWithoutDuplicateRetryWhenPostSaveReloadFails() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let replicaReads = CanvasReplicaReadGate()
+        let store = CanvasStore(
+            container: container,
+            persist: { context in
+                try persistence.save(context)
+                replicaReads.persistenceDidSucceed()
+            },
+            loadReplicas: replicaReads.load
+        )
+        replicaReads.failReadsAfterNextPersistence()
+
+        let firstAttempt = store.createCanvas(name: "Refresh survivor")
+        let result = firstAttempt ?? store.createCanvas(name: "Retry duplicate")
+
+        let created = try XCTUnwrap(firstAttempt)
+        XCTAssertEqual(result?.id, created.id)
+        XCTAssertEqual(persistence.saveCount, 1)
+        XCTAssertEqual(store.canvases.map(\.id), [created.id])
+        XCTAssertEqual(store.selectedCanvasID, created.id)
+        XCTAssertEqual(
+            try ModelContext(container).fetchCount(FetchDescriptor<CanvasBoardItem>()),
+            1
+        )
+        XCTAssertTrue(store.lastErrorMessage?.contains("saved") == true)
+        XCTAssertTrue(store.lastErrorMessage?.contains("refresh failed") == true)
+    }
+
+    @MainActor
+    func testClearAppliesPersistedPresentationWhenEveryPostSaveReloadFails() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let replicaReads = CanvasReplicaReadGate()
+        let store = CanvasStore(
+            container: container,
+            persist: { context in
+                try persistence.save(context)
+                replicaReads.persistenceDidSucceed()
+            },
+            loadReplicas: replicaReads.load
+        )
+        XCTAssertNotNil(store.addStroke(
+            color: .blue,
+            width: 3,
+            points: [CanvasPoint(x: 2, y: 7)]
+        ))
+        let generationBeforeClear = store.boardGeneration
+        let saveCountBeforeClear = persistence.saveCount
+        replicaReads.failReadsAfterNextPersistence()
+
+        let outcome = store.clearBoardOutcome()
+
+        guard case .persistedButRefreshFailed = outcome else {
+            return XCTFail("Expected persisted-but-refresh-failed, got \(outcome)")
+        }
+        XCTAssertEqual(persistence.saveCount, saveCountBeforeClear + 1)
+        XCTAssertEqual(store.boardGeneration, generationBeforeClear + 1)
+        XCTAssertTrue(store.strokes.isEmpty)
+        let boardRows = try ModelContext(container).fetch(
+            FetchDescriptor<CanvasBoardItem>()
+        )
+        XCTAssertTrue(boardRows.allSatisfy {
+            $0.clearGeneration == generationBeforeClear + 1
+        })
+    }
+
+    @MainActor
+    func testUndoAppliesRestoredPresentationWhenEveryPostSaveReloadFails() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let replicaReads = CanvasReplicaReadGate()
+        let store = CanvasStore(
+            container: container,
+            persist: { context in
+                try persistence.save(context)
+                replicaReads.persistenceDidSucceed()
+            },
+            loadReplicas: replicaReads.load
+        )
+        let session = CanvasSession(store: store)
+        XCTAssertTrue(session.completeStroke(
+            points: [CanvasPoint(x: -4, y: 12)]
+        ))
+        let strokeID = try XCTUnwrap(session.strokes.first?.id)
+        XCTAssertTrue(session.clear())
+        let clearedGeneration = session.boardGeneration
+        replicaReads.failReadsAfterNextPersistence()
+
+        XCTAssertTrue(session.undo())
+
+        XCTAssertEqual(session.strokes.map(\.id), [strokeID])
+        XCTAssertEqual(session.strokes.first?.boardGeneration, clearedGeneration)
+        XCTAssertTrue(session.canRedo)
+        XCTAssertTrue(session.lastErrorMessage?.contains("saved") == true)
+        XCTAssertTrue(session.lastErrorMessage?.contains("refresh failed") == true)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<CanvasStrokeItem>())
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.boardGeneration, clearedGeneration)
+    }
+
+    @MainActor
+    func testNewImageImportStillRejectsPayloadAboveCurrentImportCap() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = CanvasStore(container: container)
+        let oversizedPayload = Data(
+            repeating: 0x5A,
+            count: CanvasImageImportPolicy.standard.maximumEncodedBytes + 1
+        )
+
+        XCTAssertNil(store.addImage(
+            CanvasPreparedImage(
+                encodedData: oversizedPayload,
+                contentType: "public.png",
+                pixelWidth: 128,
+                pixelHeight: 128
+            ),
+            center: .zero
+        ))
+
+        XCTAssertTrue(store.images.isEmpty)
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertEqual(
+            try ModelContext(container).fetchCount(FetchDescriptor<CanvasImageItem>()),
+            0
+        )
+    }
+
+    @MainActor
+    func testMultiImageRestoreRollsBackEarlierImageWhenLaterImageIsInvalid() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = CanvasStore(container: container)
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let blockedID = UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
+        let prepared = CanvasPreparedImage(
+            encodedData: Data([0x89, 0x50, 0x4E, 0x47]),
+            contentType: "public.png",
+            pixelWidth: 80,
+            pixelHeight: 40
+        )
+        let first = try XCTUnwrap(store.addImage(prepared, center: .zero, id: firstID))
+        let blocked = try XCTUnwrap(store.addImage(
+            prepared,
+            center: CanvasPoint(x: 40, y: 20),
+            id: blockedID
+        ))
+        XCTAssertTrue(store.clearBoard())
+        let clearedGeneration = store.boardGeneration
+        let invalidBlocked = CanvasPlacedImage(
+            id: blocked.id,
+            canvasID: blocked.canvasID,
+            encodedData: Data(),
+            contentType: blocked.contentType,
+            pixelWidth: blocked.pixelWidth,
+            pixelHeight: blocked.pixelHeight,
+            transform: blocked.transform,
+            boardGeneration: blocked.boardGeneration,
+            mutationVersion: blocked.mutationVersion,
+            createdAt: blocked.createdAt,
+            updatedAt: blocked.updatedAt
+        )
+
+        XCTAssertFalse(store.restoreImages([first, invalidBlocked]))
+
+        XCTAssertTrue(store.images.isEmpty)
+        XCTAssertNotNil(store.lastErrorMessage)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<CanvasImageItem>())
+        XCTAssertEqual(Set(rows.map(\.id)), [firstID, blockedID])
+        XCTAssertTrue(rows.allSatisfy {
+            $0.boardGeneration != clearedGeneration
+        })
+    }
+
+    @MainActor
     func testFailedMultiStrokeRestoreRollsBackEarlierInserts() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
@@ -482,5 +695,32 @@ private final class CanvasFreshContextGate {
             throw Failure()
         }
         return ModelContext(container)
+    }
+}
+
+@MainActor
+private final class CanvasReplicaReadGate {
+    struct Failure: LocalizedError {
+        var errorDescription: String? {
+            "Injected post-save Canvas replica read failure."
+        }
+    }
+
+    private var shouldFailAfterNextPersistence = false
+    private var shouldRejectReads = false
+
+    func failReadsAfterNextPersistence() {
+        shouldFailAfterNextPersistence = true
+    }
+
+    func persistenceDidSucceed() {
+        guard shouldFailAfterNextPersistence else { return }
+        shouldFailAfterNextPersistence = false
+        shouldRejectReads = true
+    }
+
+    func load(_ context: ModelContext) throws -> CanvasStoredReplicas {
+        guard !shouldRejectReads else { throw Failure() }
+        return try CanvasStoredReplicas.load(from: context)
     }
 }

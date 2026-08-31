@@ -326,8 +326,6 @@ extension CanvasStore {
         for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard let snapshot = uniqueSnapshots[id],
                   !snapshot.encodedData.isEmpty,
-                  snapshot.encodedData.count
-                    <= CanvasImageImportPolicy.standard.maximumEncodedBytes,
                   snapshot.pixelWidth > 0,
                   snapshot.pixelHeight > 0,
                   snapshot.transform.isValid else {

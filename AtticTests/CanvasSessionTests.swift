@@ -243,6 +243,45 @@ final class CanvasSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testClearUndoRestoresAlreadyVisibleLegacyImageAboveCurrentImportCap() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seedContext = ModelContext(container)
+        let imageID = UUID()
+        let legacyPayload = Data(
+            repeating: 0xA5,
+            count: CanvasImageImportPolicy.standard.maximumEncodedBytes + 1
+        )
+        seedContext.insert(CanvasImageItem(
+            id: imageID,
+            encodedData: legacyPayload,
+            contentType: "public.png",
+            pixelWidth: 320,
+            pixelHeight: 180,
+            centerX: 20,
+            centerY: -10,
+            width: 320,
+            height: 180,
+            zIndex: 0,
+            boardGeneration: 0,
+            mutationVersion: 1
+        ))
+        try seedContext.save()
+
+        let session = CanvasSession(store: CanvasStore(container: container))
+        XCTAssertEqual(session.images.map(\.id), [imageID])
+        XCTAssertEqual(session.images.first?.encodedData.count, legacyPayload.count)
+
+        XCTAssertTrue(session.clear())
+        let clearedGeneration = session.boardGeneration
+        XCTAssertTrue(session.images.isEmpty)
+
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.images.map(\.id), [imageID])
+        XCTAssertEqual(session.images.first?.encodedData, legacyPayload)
+        XCTAssertEqual(session.images.first?.boardGeneration, clearedGeneration)
+    }
+
+    @MainActor
     func testMixedClearUndoRollsBackStrokeWhenImageRestoreStageFails() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let store = CanvasStore(container: container)
@@ -284,6 +323,58 @@ final class CanvasSessionTests: XCTestCase {
             strokeRows[0].boardGeneration,
             session.boardGeneration
         )
+    }
+
+    @MainActor
+    func testMixedClearUndoRollsBackBothKindsWhenPersistenceFailsAfterStaging() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let store = CanvasStore(container: container, persist: persistence.save)
+        let session = CanvasSession(store: store)
+        XCTAssertTrue(session.completeStroke(
+            points: [CanvasPoint(x: -5, y: 11)]
+        ))
+        XCTAssertTrue(session.importPreparedImage(
+            CanvasPreparedImage(
+                encodedData: Data([0x89, 0x50, 0x4E, 0x47]),
+                contentType: "public.png",
+                pixelWidth: 96,
+                pixelHeight: 64
+            ),
+            at: CanvasPoint(x: 14, y: 22)
+        ))
+        let strokeID = try XCTUnwrap(session.strokes.first?.id)
+        let imageID = try XCTUnwrap(session.images.first?.id)
+        XCTAssertTrue(session.clear())
+        let clearedGeneration = session.boardGeneration
+
+        persistence.shouldFail = true
+        XCTAssertFalse(session.undo())
+
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.images.isEmpty)
+        XCTAssertTrue(session.canUndo)
+        XCTAssertFalse(session.canRedo)
+        let verificationContext = ModelContext(container)
+        let strokeRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasStrokeItem>()
+        )
+        let imageRows = try verificationContext.fetch(
+            FetchDescriptor<CanvasImageItem>()
+        )
+        XCTAssertEqual(strokeRows.map(\.id), [strokeID])
+        XCTAssertEqual(imageRows.map(\.id), [imageID])
+        XCTAssertTrue(strokeRows.allSatisfy {
+            $0.boardGeneration != clearedGeneration
+        })
+        XCTAssertTrue(imageRows.allSatisfy {
+            $0.boardGeneration != clearedGeneration
+        })
+
+        persistence.shouldFail = false
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.strokes.map(\.id), [strokeID])
+        XCTAssertEqual(session.images.map(\.id), [imageID])
     }
 
     @MainActor

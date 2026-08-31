@@ -68,6 +68,31 @@ struct CanvasReplicaKey: Hashable {
     let id: UUID
 }
 
+struct CanvasStoredReplicas {
+    let boards: [CanvasBoardItem]
+    let strokes: [CanvasStrokeItem]
+    let images: [CanvasImageItem]
+
+    static func load(from context: ModelContext) throws -> CanvasStoredReplicas {
+        CanvasStoredReplicas(
+            boards: try context.fetch(FetchDescriptor<CanvasBoardItem>()),
+            strokes: try context.fetch(FetchDescriptor<CanvasStrokeItem>()),
+            images: try context.fetch(FetchDescriptor<CanvasImageItem>())
+        )
+    }
+}
+
+struct CanvasPresentationSnapshot {
+    let canvases: [CanvasBoard]
+    let selectedCanvasID: UUID
+    let boardGeneration: Int64
+    let strokeCache: [CanvasReplicaKey: CanvasStrokeCacheEntry]
+    let imageCache: [CanvasReplicaKey: CanvasImageCacheEntry]
+    let strokes: [CanvasStroke]
+    let images: [CanvasPlacedImage]
+    let warning: String?
+}
+
 struct CanvasStrokeCacheEntry {
     let sourceReplicaID: String
     let payloadVersion: Int
@@ -80,12 +105,29 @@ struct CanvasStrokeCacheEntry {
 
     func matches(_ replica: CanvasStrokeItem) -> Bool {
         sourceReplicaID == String(reflecting: replica.persistentModelID)
-            && payloadVersion == replica.payloadVersion
+            && representsSameCommittedValue(as: replica)
+    }
+
+    func representsSameCommittedValue(as replica: CanvasStrokeItem) -> Bool {
+        payloadVersion == replica.payloadVersion
             && payloadByteCount == replica.payload.count
             && boardGeneration == replica.boardGeneration
             && mutationVersion == replica.mutationVersion
             && createdAt == replica.createdAt
             && updatedAt == replica.updatedAt
+    }
+
+    func rebound(to replica: CanvasStrokeItem) -> CanvasStrokeCacheEntry {
+        CanvasStrokeCacheEntry(
+            sourceReplicaID: String(reflecting: replica.persistentModelID),
+            payloadVersion: replica.payloadVersion,
+            payloadByteCount: replica.payload.count,
+            boardGeneration: replica.boardGeneration,
+            mutationVersion: replica.mutationVersion,
+            createdAt: replica.createdAt,
+            updatedAt: replica.updatedAt,
+            stroke: stroke
+        )
     }
 }
 
@@ -108,7 +150,11 @@ struct CanvasImageCacheEntry {
 
     func contentMatches(_ replica: CanvasImageItem) -> Bool {
         sourceReplicaID == String(reflecting: replica.persistentModelID)
-            && encodedByteCount == replica.encodedData.count
+            && contentValueMatches(replica)
+    }
+
+    func contentValueMatches(_ replica: CanvasImageItem) -> Bool {
+        encodedByteCount == replica.encodedData.count
             && contentType == replica.contentType
             && pixelWidth == replica.pixelWidth
             && pixelHeight == replica.pixelHeight
@@ -120,7 +166,12 @@ struct CanvasImageCacheEntry {
     }
 
     func matches(_ replica: CanvasImageItem) -> Bool {
-        contentMatches(replica)
+        sourceReplicaID == String(reflecting: replica.persistentModelID)
+            && representsSameCommittedValue(as: replica)
+    }
+
+    func representsSameCommittedValue(as replica: CanvasImageItem) -> Bool {
+        contentValueMatches(replica)
             && centerX == replica.centerX
             && centerY == replica.centerY
             && width == replica.width
@@ -130,6 +181,26 @@ struct CanvasImageCacheEntry {
             && mutationVersion == replica.mutationVersion
             && createdAt == replica.createdAt
             && updatedAt == replica.updatedAt
+    }
+
+    func rebound(to replica: CanvasImageItem) -> CanvasImageCacheEntry {
+        CanvasImageCacheEntry(
+            sourceReplicaID: String(reflecting: replica.persistentModelID),
+            encodedByteCount: replica.encodedData.count,
+            contentType: replica.contentType,
+            pixelWidth: replica.pixelWidth,
+            pixelHeight: replica.pixelHeight,
+            centerX: replica.centerX,
+            centerY: replica.centerY,
+            width: replica.width,
+            height: replica.height,
+            zIndex: replica.zIndex,
+            boardGeneration: replica.boardGeneration,
+            mutationVersion: replica.mutationVersion,
+            createdAt: replica.createdAt,
+            updatedAt: replica.updatedAt,
+            image: image
+        )
     }
 }
 
@@ -159,6 +230,7 @@ final class CanvasStore: ObservableObject {
     let now: () -> Date
     let persist: (ModelContext) throws -> Void
     let makeFreshContext: () throws -> ModelContext
+    let loadReplicas: (ModelContext) throws -> CanvasStoredReplicas
     let decodeStroke: (Data, Int) throws -> CanvasStrokeGeometry
     var visibleStrokeCache: [CanvasReplicaKey: CanvasStrokeCacheEntry] = [:]
     var visibleImageCache: [CanvasReplicaKey: CanvasImageCacheEntry] = [:]
@@ -179,6 +251,9 @@ final class CanvasStore: ObservableObject {
         now: @escaping () -> Date = Date.init,
         persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
         makeFreshContext: (() throws -> ModelContext)? = nil,
+        loadReplicas: @escaping (ModelContext) throws -> CanvasStoredReplicas = {
+            try CanvasStoredReplicas.load(from: $0)
+        },
         decodeStroke: @escaping (Data, Int) throws -> CanvasStrokeGeometry = { data, version in
             try CanvasStrokeCodec.decode(data, expectedVersion: version)
         }
@@ -188,6 +263,7 @@ final class CanvasStore: ObservableObject {
         self.now = now
         self.persist = persist
         self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
+        self.loadReplicas = loadReplicas
         self.decodeStroke = decodeStroke
         refresh()
         if CanvasCloudInfrastructurePolicy.isEnabled {
