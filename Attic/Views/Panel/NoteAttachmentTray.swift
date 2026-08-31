@@ -814,13 +814,17 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
 
             let selectedRanges = textView.selectedRanges
             isApplyingExternalText = true
-            textView.undoManager?.disableUndoRegistration()
-            textView.string = newParent.text
-            textView.selectedRanges = AttachmentAwareTextEditor.clamped(
-                selectedRanges,
-                length: (newParent.text as NSString).length
-            )
-            textView.undoManager?.enableUndoRegistration()
+            do {
+                let undoManager = textView.undoManager
+                undoManager?.disableUndoRegistration()
+                defer { undoManager?.enableUndoRegistration() }
+
+                textView.string = newParent.text
+                textView.selectedRanges = AttachmentAwareTextEditor.clamped(
+                    selectedRanges,
+                    length: (newParent.text as NSString).length
+                )
+            }
             if startsNewSession {
                 textView.breakUndoCoalescing()
                 textView.undoManager?.removeAllActions()
