@@ -38,6 +38,31 @@ enum CanvasReplicaMutationError: LocalizedError {
     }
 }
 
+enum CanvasSaveOutcome: Equatable {
+    case noChanges
+    case persisted(warning: String?)
+    case persistedButRefreshFailed(String)
+    case failed(String)
+
+    var didPersist: Bool {
+        switch self {
+        case .persisted, .persistedButRefreshFailed:
+            true
+        case .noChanges, .failed:
+            false
+        }
+    }
+
+    var succeeded: Bool {
+        switch self {
+        case .noChanges, .persisted, .persistedButRefreshFailed:
+            true
+        case .failed:
+            false
+        }
+    }
+}
+
 struct CanvasReplicaKey: Hashable {
     let canvasID: UUID
     let id: UUID
@@ -123,6 +148,7 @@ final class CanvasStore: ObservableObject {
     var context: ModelContext
     let now: () -> Date
     let persist: (ModelContext) throws -> Void
+    let makeFreshContext: () throws -> ModelContext
     let decodeStroke: (Data, Int) throws -> CanvasStrokeGeometry
     var visibleStrokeCache: [CanvasReplicaKey: CanvasStrokeCacheEntry] = [:]
     var visibleImageCache: [CanvasReplicaKey: CanvasImageCacheEntry] = [:]
@@ -142,6 +168,7 @@ final class CanvasStore: ObservableObject {
         container: ModelContainer,
         now: @escaping () -> Date = Date.init,
         persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        makeFreshContext: (() throws -> ModelContext)? = nil,
         decodeStroke: @escaping (Data, Int) throws -> CanvasStrokeGeometry = { data, version in
             try CanvasStrokeCodec.decode(data, expectedVersion: version)
         }
@@ -150,6 +177,7 @@ final class CanvasStore: ObservableObject {
         context = ModelContext(container)
         self.now = now
         self.persist = persist
+        self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
         self.decodeStroke = decodeStroke
         refresh()
         observeRemoteChanges()

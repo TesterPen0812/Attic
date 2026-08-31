@@ -196,7 +196,7 @@ extension CanvasStore {
                 ))
             }
 
-            guard save() else {
+            guard save().didPersist else {
                 return .rejected(.persistenceFailed(
                     lastErrorMessage ?? "The image batch could not be saved."
                 ))
@@ -259,7 +259,7 @@ extension CanvasStore {
             discardPendingChanges(after: error)
             return false
         }
-        return save()
+        return save().succeeded
     }
 
     @discardableResult
@@ -295,12 +295,23 @@ extension CanvasStore {
             discardPendingChanges(after: error)
             return false
         }
-        return save()
+        return save().succeeded
     }
 
     @discardableResult
     func restoreImages(_ snapshots: [CanvasPlacedImage]) -> Bool {
         guard !snapshots.isEmpty else { return true }
+        return restoreBoardContents(
+            strokes: [],
+            images: snapshots
+        ).succeeded
+    }
+
+    func stageImageRestore(
+        _ snapshots: [CanvasPlacedImage],
+        at timestamp: Date
+    ) throws {
+        guard !snapshots.isEmpty else { return }
         let uniqueSnapshots = Dictionary(
             snapshots.map { ($0.id, $0) },
             uniquingKeysWith: { existing, candidate in
@@ -311,74 +322,66 @@ extension CanvasStore {
         )
         let ids = Set(uniqueSnapshots.keys)
 
-        do {
-            let timestamp = now()
-            try ensureSelectedBoardReplicaExists(at: timestamp)
-            let grouped = try storedImageReplicas(matching: ids)
-            for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
-                guard let snapshot = uniqueSnapshots[id],
-                      !snapshot.encodedData.isEmpty,
-                      snapshot.encodedData.count
-                        <= CanvasImageImportPolicy.standard.maximumEncodedBytes,
-                      snapshot.pixelWidth > 0,
-                      snapshot.pixelHeight > 0,
-                      snapshot.transform.isValid else {
-                    throw CanvasReplicaMutationError.invalidImage
-                }
-                let replicas = grouped[id] ?? []
-                let baseline = max(
-                    replicas.map(\.mutationVersion).max() ?? 0,
-                    snapshot.mutationVersion
-                )
-                let nextVersion = try Self.nextMutationVersion(
-                    after: baseline,
-                    objectID: id
-                )
-                if replicas.isEmpty {
-                    context.insert(CanvasImageItem(
-                        id: id,
-                        canvasID: selectedCanvasID,
-                        encodedData: snapshot.encodedData,
-                        contentType: snapshot.contentType,
-                        pixelWidth: snapshot.pixelWidth,
-                        pixelHeight: snapshot.pixelHeight,
-                        centerX: snapshot.center.x,
-                        centerY: snapshot.center.y,
-                        width: snapshot.width,
-                        height: snapshot.height,
-                        zIndex: snapshot.zIndex,
-                        boardGeneration: boardGeneration,
-                        mutationVersion: nextVersion,
-                        tombstoned: false,
-                        createdAt: snapshot.createdAt,
-                        updatedAt: timestamp
-                    ))
-                } else {
-                    for replica in replicas {
-                        replica.canvasID = selectedCanvasID
-                        replica.encodedData = snapshot.encodedData
-                        replica.contentType = snapshot.contentType
-                        replica.pixelWidth = Int64(snapshot.pixelWidth)
-                        replica.pixelHeight = Int64(snapshot.pixelHeight)
-                        replica.centerX = snapshot.center.x
-                        replica.centerY = snapshot.center.y
-                        replica.width = snapshot.width
-                        replica.height = snapshot.height
-                        replica.zIndex = snapshot.zIndex
-                        replica.boardGeneration = boardGeneration
-                        replica.mutationVersion = nextVersion
-                        replica.tombstoned = false
-                        replica.createdAt = snapshot.createdAt
-                        replica.updatedAt = timestamp
-                        replica.deletedAt = nil
-                    }
+        let grouped = try storedImageReplicas(matching: ids)
+        for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let snapshot = uniqueSnapshots[id],
+                  !snapshot.encodedData.isEmpty,
+                  snapshot.encodedData.count
+                    <= CanvasImageImportPolicy.standard.maximumEncodedBytes,
+                  snapshot.pixelWidth > 0,
+                  snapshot.pixelHeight > 0,
+                  snapshot.transform.isValid else {
+                throw CanvasReplicaMutationError.invalidImage
+            }
+            let replicas = grouped[id] ?? []
+            let baseline = max(
+                replicas.map(\.mutationVersion).max() ?? 0,
+                snapshot.mutationVersion
+            )
+            let nextVersion = try Self.nextMutationVersion(
+                after: baseline,
+                objectID: id
+            )
+            if replicas.isEmpty {
+                context.insert(CanvasImageItem(
+                    id: id,
+                    canvasID: selectedCanvasID,
+                    encodedData: snapshot.encodedData,
+                    contentType: snapshot.contentType,
+                    pixelWidth: snapshot.pixelWidth,
+                    pixelHeight: snapshot.pixelHeight,
+                    centerX: snapshot.center.x,
+                    centerY: snapshot.center.y,
+                    width: snapshot.width,
+                    height: snapshot.height,
+                    zIndex: snapshot.zIndex,
+                    boardGeneration: boardGeneration,
+                    mutationVersion: nextVersion,
+                    tombstoned: false,
+                    createdAt: snapshot.createdAt,
+                    updatedAt: timestamp
+                ))
+            } else {
+                for replica in replicas {
+                    replica.canvasID = selectedCanvasID
+                    replica.encodedData = snapshot.encodedData
+                    replica.contentType = snapshot.contentType
+                    replica.pixelWidth = Int64(snapshot.pixelWidth)
+                    replica.pixelHeight = Int64(snapshot.pixelHeight)
+                    replica.centerX = snapshot.center.x
+                    replica.centerY = snapshot.center.y
+                    replica.width = snapshot.width
+                    replica.height = snapshot.height
+                    replica.zIndex = snapshot.zIndex
+                    replica.boardGeneration = boardGeneration
+                    replica.mutationVersion = nextVersion
+                    replica.tombstoned = false
+                    replica.createdAt = snapshot.createdAt
+                    replica.updatedAt = timestamp
+                    replica.deletedAt = nil
                 }
             }
-        } catch {
-            discardPendingChanges(after: error)
-            return false
         }
-        return save()
     }
 
 }

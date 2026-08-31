@@ -6,6 +6,11 @@ import SwiftData
 extension CanvasStore {
     @discardableResult
     func clearBoard() -> Bool {
+        clearBoardOutcome().succeeded
+    }
+
+    @discardableResult
+    func clearBoardOutcome() -> CanvasSaveOutcome {
         do {
             guard boardGeneration < Int64.max else {
                 throw CanvasReplicaMutationError.generationExhausted
@@ -49,7 +54,28 @@ extension CanvasStore {
             }
         } catch {
             discardPendingChanges(after: error)
-            return false
+            return .failed(lastErrorMessage ?? error.localizedDescription)
+        }
+        return save()
+    }
+
+    @discardableResult
+    func restoreBoardContents(
+        strokes: [CanvasStroke],
+        images: [CanvasPlacedImage]
+    ) -> CanvasSaveOutcome {
+        guard !strokes.isEmpty || !images.isEmpty else {
+            return .noChanges
+        }
+
+        do {
+            let timestamp = now()
+            try ensureSelectedBoardReplicaExists(at: timestamp)
+            try stageStrokeRestore(strokes, at: timestamp)
+            try stageImageRestore(images, at: timestamp)
+        } catch {
+            discardPendingChanges(after: error)
+            return .failed(lastErrorMessage ?? error.localizedDescription)
         }
         return save()
     }
