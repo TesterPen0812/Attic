@@ -167,9 +167,12 @@ end
 
 unit_host.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'
-  settings['PRODUCT_NAME'] = 'AtticUnitTestHost'
-  settings['EXECUTABLE_NAME'] = 'AtticUnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME'] = 'AtticUnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME'] = 'AtticUnitTestHost'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER)'
+  settings['PRODUCT_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'
+  settings['EXECUTABLE_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'
   settings['PRODUCT_MODULE_NAME'] = 'AtticUnitTestHost'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['INFOPLIST_KEY_LSUIElement'] = 'YES'
@@ -188,6 +191,9 @@ unit_tests.build_configurations.each do |config|
   # keep ordinary Local/Debug runs usable when no isolated-host overrides are
   # supplied on the xcodebuild command line.
   settings['ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticTests'
+  settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME'] = 'AtticUnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME'] = 'AtticUnitTestHost'
   settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER)'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
@@ -195,7 +201,7 @@ unit_tests.build_configurations.each do |config|
   settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -module-alias Attic=AtticUnitTestHost'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
-  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost'
+  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 

@@ -93,13 +93,22 @@ class RunLocalUITestsTest < Minitest::Test
     unit_settings = generator[/unit_tests\.build_configurations\.each.*?^end$/m]
 
     refute_nil host_settings
-    assert_includes host_settings, "settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'"
+    assert_includes host_settings,
+      "settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'"
+    assert_includes host_settings,
+      "settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER)'"
+    assert_includes host_settings,
+      "settings['PRODUCT_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'"
+    assert_includes host_settings,
+      "settings['EXECUTABLE_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'"
     assert_includes host_settings, "settings['INFOPLIST_KEY_LSUIElement'] = 'YES'"
     refute_nil unit_settings
     assert_includes unit_settings,
+      "settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'"
+    assert_includes unit_settings,
       "settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -module-alias Attic=AtticUnitTestHost'"
     assert_includes unit_settings,
-      "AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost"
+      "$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)"
   end
 
   def test_default_scheme_is_unit_only_and_ui_runner_uses_dedicated_scheme
