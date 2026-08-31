@@ -25,8 +25,10 @@ extension CanvasStore {
     func save() -> Bool {
         do {
             try persist(context)
-            cloudSyncProtection.noteLocalSave()
-            reconcileProtectedCloudSyncActivity(for: .exportData)
+            if CanvasCloudInfrastructurePolicy.isEnabled {
+                cloudSyncProtection.noteLocalSave()
+                reconcileProtectedCloudSyncActivity(for: .exportData)
+            }
 
             do {
                 lastErrorMessage = try reloadCanvas()

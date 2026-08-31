@@ -5,6 +5,7 @@ import SwiftData
 
 extension CanvasStore {
     func observeRemoteChanges() {
+        guard CanvasCloudInfrastructurePolicy.isEnabled else { return }
         remoteChangeObservation = NotificationCenter.default.publisher(
             for: .NSPersistentStoreRemoteChange
         )
@@ -15,6 +16,7 @@ extension CanvasStore {
     }
 
     func observeCloudKitEvents() {
+        guard CanvasCloudInfrastructurePolicy.isEnabled else { return }
         cloudKitEventObservation = NotificationCenter.default.publisher(
             for: NSPersistentCloudKitContainer.eventChangedNotification
         )
@@ -38,6 +40,7 @@ extension CanvasStore {
     func reconcileProtectedCloudSyncActivity(
         for kind: CloudSyncActivityKind
     ) {
+        guard CanvasCloudInfrastructurePolicy.isEnabled else { return }
         let shouldProtect: Bool
         switch kind {
         case .exportData:
@@ -58,7 +61,7 @@ extension CanvasStore {
     func beginProtectedCloudSyncActivity(
         for kind: CloudSyncActivityKind
     ) {
-#if os(macOS)
+#if os(macOS) && !ATTIC_LOCAL_ONLY
         guard kind != .setup else { return }
         let processInfo = ProcessInfo.processInfo
         switch kind {
@@ -89,7 +92,7 @@ extension CanvasStore {
     func endProtectedCloudSyncActivity(
         for kind: CloudSyncActivityKind
     ) {
-#if os(macOS)
+#if os(macOS) && !ATTIC_LOCAL_ONLY
         switch kind {
         case .exportData:
             exportActivityTimeoutTask?.cancel()
@@ -111,7 +114,7 @@ extension CanvasStore {
 #endif
     }
 
-#if os(macOS)
+#if os(macOS) && !ATTIC_LOCAL_ONLY
     func activityTimeoutTask(
         for kind: CloudSyncActivityKind
     ) -> Task<Void, Never> {

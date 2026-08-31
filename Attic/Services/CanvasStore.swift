@@ -108,6 +108,16 @@ struct CanvasImageCacheEntry {
     }
 }
 
+enum CanvasCloudInfrastructurePolicy {
+    static var isEnabled: Bool {
+        #if ATTIC_LOCAL_ONLY
+        false
+        #else
+        true
+        #endif
+    }
+}
+
 @MainActor
 final class CanvasStore: ObservableObject {
     @Published var canvases: [CanvasBoard] = [.defaultBoard]
@@ -152,8 +162,10 @@ final class CanvasStore: ObservableObject {
         self.persist = persist
         self.decodeStroke = decodeStroke
         refresh()
-        observeRemoteChanges()
-        observeCloudKitEvents()
+        if CanvasCloudInfrastructurePolicy.isEnabled {
+            observeRemoteChanges()
+            observeCloudKitEvents()
+        }
     }
 
     var selectedCanvas: CanvasBoard {

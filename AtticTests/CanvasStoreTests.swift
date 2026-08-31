@@ -300,6 +300,46 @@ final class CanvasStoreTests: XCTestCase {
         )
     }
 
+    #if ATTIC_LOCAL_ONLY
+    @MainActor
+    func testLocalOnlyStoreCreatesNoDeferredCloudInfrastructure() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = CanvasStore(container: container)
+        let initialStatus = store.cloudSyncStatus
+
+        XCTAssertFalse(CanvasCloudInfrastructurePolicy.isEnabled)
+        XCTAssertNil(store.remoteChangeObservation)
+        XCTAssertNil(store.cloudKitEventObservation)
+        XCTAssertNil(store.cloudImportRefreshTask)
+        XCTAssertNil(store.exportActivityToken)
+        XCTAssertNil(store.importActivityToken)
+        XCTAssertNil(store.exportActivityTimeoutTask)
+        XCTAssertNil(store.importActivityTimeoutTask)
+
+        store.beginProtectedCloudSyncActivity(for: .exportData)
+        store.handleCloudSyncEvent(CloudSyncEventUpdate(
+            id: UUID(),
+            kind: .importData,
+            endedAt: Date(),
+            succeeded: true,
+            errorMessage: nil
+        ))
+        XCTAssertNotNil(store.addStroke(
+            color: .ink,
+            width: 3,
+            points: [CanvasPoint(x: 12, y: 34)]
+        ))
+
+        XCTAssertEqual(store.cloudSyncStatus, initialStatus)
+        XCTAssertNil(store.remoteChangeObservation)
+        XCTAssertNil(store.cloudKitEventObservation)
+        XCTAssertNil(store.cloudImportRefreshTask)
+        XCTAssertNil(store.exportActivityToken)
+        XCTAssertNil(store.importActivityToken)
+        XCTAssertNil(store.exportActivityTimeoutTask)
+        XCTAssertNil(store.importActivityTimeoutTask)
+    }
+    #else
     @MainActor
     func testCompletedCloudImportRefreshesThroughFreshContext() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
@@ -326,6 +366,7 @@ final class CanvasStoreTests: XCTestCase {
         XCTAssertEqual(store.strokes.first?.color, .red)
         XCTAssertEqual(store.strokes.first?.points, [CanvasPoint(x: 12, y: 34)])
     }
+    #endif
 
     private func storedStroke(
         id: UUID = UUID(),

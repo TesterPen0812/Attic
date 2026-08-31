@@ -64,6 +64,7 @@ extension CanvasStore {
     }
 
     func handleCloudSyncEvent(_ update: CloudSyncEventUpdate) {
+        guard CanvasCloudInfrastructurePolicy.isEnabled else { return }
         cloudSyncProtection.apply(update)
         reconcileProtectedCloudSyncActivity(for: update.kind)
         cloudSyncStatus.apply(update)
