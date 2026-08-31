@@ -1,5 +1,14 @@
 import Foundation
 
+enum CornerHoverPointerMonitorScope: Equatable {
+    case local
+    case global
+
+    static func required(isApplicationActive: Bool) -> Self {
+        isApplicationActive ? .local : .global
+    }
+}
+
 enum CornerHoverSamplingCadence: Equatable {
     case idle
     case responsive
@@ -30,6 +39,23 @@ struct CornerHoverSamplingDecision: Equatable {
     let shouldSampleImmediately: Bool
 }
 
+struct CornerHoverTimerEpoch {
+    private(set) var current: UInt64 = 0
+
+    mutating func beginTimer() -> UInt64 {
+        current &+= 1
+        return current
+    }
+
+    mutating func invalidate() {
+        current &+= 1
+    }
+
+    func permits(_ candidate: UInt64, whileRunning: Bool) -> Bool {
+        whileRunning && candidate == current
+    }
+}
+
 struct CornerHoverSamplingState {
     static let activationDistance: CGFloat = 96
     static let deactivationDistance: CGFloat = 144
@@ -46,14 +72,18 @@ struct CornerHoverSamplingState {
         let proximityDistance = previousCadence == .responsive
             ? Self.deactivationDistance
             : Self.activationDistance
-        let isNearConfiguredCorner = screenFrames.contains {
+        let activeScreenFrame = Self.activeScreenFrame(
+            containing: pointer,
+            screenFrames: screenFrames
+        )
+        let isNearConfiguredCorner = activeScreenFrame.map {
             Self.isNearCorner(
                 pointer,
                 screenFrame: $0,
                 corner: corner,
                 distance: proximityDistance
             )
-        }
+        } ?? false
         cadence = isPanelVisible || isNearConfiguredCorner ? .responsive : .idle
         return CornerHoverSamplingDecision(
             cadence: cadence,
@@ -80,6 +110,32 @@ struct CornerHoverSamplingState {
         }
         return abs(point.x - cornerPoint.x) <= distance
             && abs(point.y - cornerPoint.y) <= distance
+    }
+
+    private static func activeScreenFrame(
+        containing point: CGPoint,
+        screenFrames: [CGRect]
+    ) -> CGRect? {
+        // Half-open ownership makes a shared seam belong to exactly one
+        // display: the display whose minimum edge starts at that coordinate.
+        // This mirrors AppKit's edge behavior without letting an adjacent
+        // display's corner promote the sampling cadence.
+        if let owned = screenFrames.first(where: {
+            point.x >= $0.minX && point.x < $0.maxX
+                && point.y >= $0.minY && point.y < $0.maxY
+        }) {
+            return owned
+        }
+        // Physical outer edges can report a coordinate exactly one point
+        // outside CGRect's half-open maximum. Choose the closest expanded
+        // frame deterministically, not every matching display.
+        return screenFrames
+            .filter { $0.insetBy(dx: -1, dy: -1).contains(point) }
+            .min { lhs, rhs in
+                let lhsDistance = hypot(point.x - lhs.midX, point.y - lhs.midY)
+                let rhsDistance = hypot(point.x - rhs.midX, point.y - rhs.midY)
+                return lhsDistance < rhsDistance
+            }
     }
 }
 

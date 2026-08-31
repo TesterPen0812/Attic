@@ -3,6 +3,17 @@ import XCTest
 @testable import Attic
 
 final class CornerHoverStateMachineTests: XCTestCase {
+    func testPointerMonitoringUsesOneScopeMatchingAppActivation() {
+        XCTAssertEqual(
+            CornerHoverPointerMonitorScope.required(isApplicationActive: true),
+            .local
+        )
+        XCTAssertEqual(
+            CornerHoverPointerMonitorScope.required(isApplicationActive: false),
+            .global
+        )
+    }
+
     func testSamplingCadenceDefinesDeterministicTimerSchedule() {
         XCTAssertEqual(CornerHoverSamplingCadence.idle.intervalMilliseconds, 1_000)
         XCTAssertEqual(CornerHoverSamplingCadence.idle.leewayMilliseconds, 250)
@@ -158,6 +169,38 @@ final class CornerHoverStateMachineTests: XCTestCase {
                 "Expected \(corner) to promote near \(pointer)"
             )
         }
+    }
+
+    func testAdjacentDisplaySeamDoesNotPromoteForAnotherScreensCorner() {
+        var sampling = CornerHoverSamplingState()
+        let screens = [
+            CGRect(x: 0, y: 0, width: 1_920, height: 1_080),
+            CGRect(x: 1_920, y: 0, width: 1_920, height: 1_080)
+        ]
+
+        let decision = sampling.update(
+            pointer: CGPoint(x: 1_930, y: 1_070),
+            screenFrames: screens,
+            corner: .topRight,
+            isPanelVisible: false
+        )
+
+        XCTAssertEqual(decision.cadence, .idle)
+        XCTAssertFalse(decision.shouldSampleImmediately)
+    }
+
+    func testCancelledOrReplacedTimerEpochRejectsStaleHandlers() {
+        var epoch = CornerHoverTimerEpoch()
+        let first = epoch.beginTimer()
+        XCTAssertTrue(epoch.permits(first, whileRunning: true))
+
+        let replacement = epoch.beginTimer()
+        XCTAssertFalse(epoch.permits(first, whileRunning: true))
+        XCTAssertTrue(epoch.permits(replacement, whileRunning: true))
+
+        epoch.invalidate()
+        XCTAssertFalse(epoch.permits(replacement, whileRunning: true))
+        XCTAssertFalse(epoch.permits(epoch.current, whileRunning: false))
     }
 
     func testRevealsOnlyAfterConfiguredDwell() {
