@@ -571,6 +571,30 @@ final class PanelUIStateTests: XCTestCase {
         }
     }
 
+    func testNotesComposerInteractionSnapshotSeparatesPresentationFromWork() {
+        XCTAssertEqual(
+            NotesComposerInteractionSnapshot(
+                isTitleFocused: false,
+                isBodyFocused: false,
+                isLibraryPresented: false,
+                isImporterPresented: false,
+                isBlockingSave: false
+            ).lockReasons,
+            []
+        )
+
+        XCTAssertEqual(
+            NotesComposerInteractionSnapshot(
+                isTitleFocused: true,
+                isBodyFocused: false,
+                isLibraryPresented: true,
+                isImporterPresented: false,
+                isBlockingSave: true
+            ).lockReasons,
+            [.notesEditorFocus, .notesPopover, .blockingSave]
+        )
+    }
+
     @MainActor
     func testQuickEntryMenuAndWindowReasonsComposeWithoutChangingPin() {
         let state = PanelUIState()

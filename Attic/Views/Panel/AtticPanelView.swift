@@ -137,6 +137,9 @@ struct AtticPanelView: View {
         .onChange(of: noteDraft.hasConflict) { _, _ in
             syncNoteDraftInteractionLocks()
         }
+        .onChange(of: noteStore.attachmentImportState) { _, _ in
+            syncNoteDraftInteractionLocks()
+        }
         .onPreferenceChange(PanelErrorBannerHeightPreferenceKey.self) { measuredHeight in
             let resolvedHeight = currentErrorMessage == nil
                 ? 0
@@ -581,6 +584,13 @@ struct AtticPanelView: View {
     private func syncNoteDraftInteractionLocks() {
         uiState.setInteractionLock(.notesDirty, isActive: noteDraft.isDirty)
         uiState.setInteractionLock(.notesConflict, isActive: noteDraft.hasConflict)
+        let isImporting: Bool
+        if case .importing = noteStore.attachmentImportState {
+            isImporting = true
+        } else {
+            isImporting = false
+        }
+        uiState.setInteractionLock(.notesImport, isActive: isImporting)
     }
 
     private func allSections(from sections: [TaskSectionSnapshot]) -> [TaskSectionSnapshot] {

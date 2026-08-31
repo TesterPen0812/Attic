@@ -2,6 +2,28 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct NotesComposerInteractionSnapshot: Equatable {
+    let isTitleFocused: Bool
+    let isBodyFocused: Bool
+    let isLibraryPresented: Bool
+    let isImporterPresented: Bool
+    let isBlockingSave: Bool
+
+    var lockReasons: Set<PanelInteractionLockReason> {
+        var reasons: Set<PanelInteractionLockReason> = []
+        if isTitleFocused || isBodyFocused {
+            reasons.insert(.notesEditorFocus)
+        }
+        if isLibraryPresented || isImporterPresented {
+            reasons.insert(.notesPopover)
+        }
+        if isBlockingSave {
+            reasons.insert(.blockingSave)
+        }
+        return reasons
+    }
+}
+
 /// The saved-note library is contextual: while an editor is active the library
 /// lives in the editor's overlay so the writing surface keeps all available
 /// panel height.
@@ -85,6 +107,7 @@ struct NoteComposerView: View {
     @State private var isImporterPresented = false
     @State private var isFileTargeted = false
     @State private var isLibraryPresented = false
+    @State private var isBlockingSave = false
     @State private var attachmentImportTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -160,13 +183,30 @@ struct NoteComposerView: View {
             onCompletion: handleImporterResult
         )
         .onAppear {
+            syncComposerInteractionLocks()
             DispatchQueue.main.async { focusBody() }
+        }
+        .onChange(of: isTitleFocused) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isBodyFocused) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isLibraryPresented) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isImporterPresented) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isBlockingSave) { _, _ in
+            syncComposerInteractionLocks()
         }
         .onDisappear {
             attachmentImportTask?.cancel()
             // Shared section/panel controllers flush before their transitions.
             // This is the final durability boundary, never an implicit discard.
-            _ = noteDraft.flush()
+            _ = withBlockingSave { noteDraft.flush() }
+            clearComposerInteractionLocks()
         }
         .animation(reduceMotion ? nil : AtticMotion.quick, value: noteDraft.conflict)
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isFileTargeted)
@@ -397,21 +437,21 @@ struct NoteComposerView: View {
     }
 
     private func beginNewNote() {
-        guard noteDraft.beginNew() else { return }
+        guard withBlockingSave({ noteDraft.beginNew() }) else { return }
         uiState.beginAdding()
         isLibraryPresented = false
         DispatchQueue.main.async { focusBody() }
     }
 
     private func selectNote(_ note: NoteItem) {
-        guard noteDraft.beginEditing(note) else { return }
+        guard withBlockingSave({ noteDraft.beginEditing(note) }) else { return }
         uiState.beginEditingNote(note)
         isLibraryPresented = false
         DispatchQueue.main.async { focusBody() }
     }
 
     private func saveInPlace() {
-        _ = noteDraft.flush()
+        _ = withBlockingSave { noteDraft.flush() }
     }
 
     private func handleImporterResult(_ result: Result<[URL], Error>) {
@@ -442,7 +482,9 @@ struct NoteComposerView: View {
             )
             return
         }
-        guard let request = noteDraft.prepareAttachmentImport(from: urls) else {
+        guard let request = withBlockingSave({
+            noteDraft.prepareAttachmentImport(from: urls)
+        }) else {
             removeTemporaryDirectories(cleanupDirectories)
             return
         }
@@ -474,6 +516,45 @@ struct NoteComposerView: View {
                 try? FileManager.default.removeItem(at: directory)
             }
         }
+    }
+
+    private var interactionSnapshot: NotesComposerInteractionSnapshot {
+        NotesComposerInteractionSnapshot(
+            isTitleFocused: isTitleFocused,
+            isBodyFocused: isBodyFocused,
+            isLibraryPresented: isLibraryPresented,
+            isImporterPresented: isImporterPresented,
+            isBlockingSave: isBlockingSave
+        )
+    }
+
+    private func syncComposerInteractionLocks() {
+        let reasons = interactionSnapshot.lockReasons
+        for reason in [
+            PanelInteractionLockReason.notesEditorFocus,
+            .notesPopover,
+            .blockingSave
+        ] {
+            uiState.setInteractionLock(reason, isActive: reasons.contains(reason))
+        }
+    }
+
+    private func clearComposerInteractionLocks() {
+        uiState.setInteractionLock(.notesEditorFocus, isActive: false)
+        uiState.setInteractionLock(.notesPopover, isActive: false)
+        uiState.setInteractionLock(.blockingSave, isActive: false)
+    }
+
+    private func withBlockingSave<Result>(
+        _ operation: () -> Result
+    ) -> Result {
+        isBlockingSave = true
+        syncComposerInteractionLocks()
+        defer {
+            isBlockingSave = false
+            syncComposerInteractionLocks()
+        }
+        return operation()
     }
 
     private func conflictControls(message: String) -> some View {
