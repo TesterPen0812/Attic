@@ -529,6 +529,10 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     var onWindowDragChanged: ((CGRect, CGPoint) -> CGRect)?
     var onWindowDragEnded: ((CGRect, CGPoint, CGPoint, CGPoint) -> Void)?
     var onInteractionCancelled: ((PanelInteractionCancellation, CGRect?) -> Void)?
+    /// Two-finger swipe toward the attached screen edge. The controller
+    /// owns whether the gesture hides; the hosting view only reports the
+    /// classified gesture so event delivery stays in one place.
+    var onSwipeDismissalTriggered: (() -> Void)?
     private let chromeInteractionState: PanelChromeInteractionState
     private var resizeSession: ResizeSession?
     private var moveSession: MoveSession?
@@ -537,6 +541,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     private var localMouseUpMonitor: Any?
     private var globalMouseUpMonitor: Any?
     private var captureWatchdog: DispatchSourceTimer?
+    private var swipeDismissalAccumulator = PanelSwipeDismissalPolicy.Accumulator()
 
     init(
         rootView: AtticPanelView,
@@ -753,6 +758,56 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return
         }
         cancelActiveInteraction(reason: .escape)
+    }
+
+    /// Two-finger swipe toward the attached screen edge dismisses the
+    /// panel. The gesture is scoped to the chrome header (the non-
+    /// scrollable drag lane): content scrolling continues unaffected and
+    /// can never fight or spuriously trigger dismissal, while the same
+    /// grabby lane that moves the window also dismisses it with a flick.
+    override func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+
+        guard event.window === window else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point) else { return }
+        guard AtticPanelDragPolicy.isTopDragPoint(
+            AtticPanelCoordinateSpace.policyPoint(
+                fromHostingPoint: point,
+                in: bounds,
+                isFlipped: isFlipped
+            ),
+            in: bounds,
+            cornerRadius: panelCornerRadius,
+            modeDockWidth: chromeInteractionState.modeDockWidth,
+            dockedAt: dockedCorner
+        ) else { return }
+        // Momentum never initiates a new dismissal; it can only continue
+        // a sequence the user's fingers already completed.
+        guard event.phase != .cancelled,
+              !event.momentumPhase.contains(.began) else {
+            swipeDismissalAccumulator.reset()
+            return
+        }
+
+        if event.phase.contains(.began) {
+            swipeDismissalAccumulator.reset()
+        }
+
+        if swipeDismissalAccumulator.record(
+            scrollingDeltaX: CGFloat(event.scrollingDeltaX),
+            scrollingDeltaY: CGFloat(event.scrollingDeltaY),
+            corner: dockedCorner,
+            isDeviceDirectionInverted: event.isDirectionInvertedFromDevice
+        ) {
+            swipeDismissalAccumulator.reset()
+            onSwipeDismissalTriggered?()
+        }
+
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled)
+            || event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled) {
+            swipeDismissalAccumulator.reset()
+        }
     }
 
     func cancelActiveInteraction(

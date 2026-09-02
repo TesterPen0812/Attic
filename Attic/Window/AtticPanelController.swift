@@ -52,50 +52,12 @@ enum PanelHideCompletion: Equatable {
     case superseded
 }
 
-struct PanelVisibilityTransitionState {
-    private(set) var generation = 0
-    private var pendingHide: (
-        generation: Int,
-        completion: (PanelHideCompletion) -> Void
-    )?
-
-    mutating func invalidatePendingTransition() {
-        generation += 1
-        resolvePendingHide(.superseded)
-    }
-
-    mutating func beginTransition() -> Int {
-        generation += 1
-        resolvePendingHide(.superseded)
-        return generation
-    }
-
-    mutating func beginHideTransition(
-        completion: @escaping (PanelHideCompletion) -> Void
-    ) -> Int {
-        let generation = beginTransition()
-        pendingHide = (generation, completion)
-        return generation
-    }
-
-    @discardableResult
-    mutating func completeHideTransition(_ candidate: Int) -> Bool {
-        guard ownsCompletion(candidate), pendingHide?.generation == candidate else {
-            return false
-        }
-        resolvePendingHide(.hidden)
-        return true
-    }
-
-    func ownsCompletion(_ candidate: Int) -> Bool {
-        candidate == generation
-    }
-
-    private mutating func resolvePendingHide(_ completion: PanelHideCompletion) {
-        guard let pendingHide else { return }
-        self.pendingHide = nil
-        pendingHide.completion(completion)
-    }
+/// A hide request whose completion is still owed to its caller. The
+/// continuous motion model resolves it when the presentation coordinate
+/// actually reaches hidden, or as superseded when a reveal retargets the
+/// timeline before completion.
+struct PanelPendingHide {
+    let completion: (PanelHideCompletion) -> Void
 }
 
 enum PanelHideRejection: Equatable {
@@ -125,7 +87,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let settings: AppSettings
     private let uiState: PanelUIState
     private var cancellables: Set<AnyCancellable> = []
-    private var isShowing = false
+    private var motion = PanelMotion.Transition()
+    private var pendingHide: PanelPendingHide?
+    private var motionCompletion: (() -> Void)?
     private var needsResizeAfterShowing = false
     private var isLiveResizing = false
     private var resizePersistenceState = PanelResizePersistenceState()
@@ -134,7 +98,6 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var isWindowDragging = false
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
-    private var visibilityTransition = PanelVisibilityTransitionState()
     private(set) var currentScreen: NSScreen?
     private(set) var currentCorner: ScreenCorner = .topRight
     var onInteractiveHideCompleted: (() -> Void)?
@@ -246,10 +209,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
-        // A reveal always supersedes an in-flight hide, even when its frame
-        // already matches. This prevents that hide's completion from ordering
-        // out a panel the user has just asked to see again.
-        visibilityTransition.invalidatePendingTransition()
+        // A reveal always retargets the single motion timeline. If a hide
+        // is mid-flight, the pending hide's completion resolves superseded
+        // and the window continues from its live presentation state.
+        resolvePendingHide(.superseded)
+        motionCompletion = nil
         let frameBeforeWorkAreaRefresh = panel.frame
         guard let workArea = refreshCurrentWorkArea(preferredScreen: screen) else {
             return
@@ -275,7 +239,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
             if makeKey { panel.makeKey() }
             panel.orderFrontRegardless()
-            animateShow(to: safeFrame)
+            let emergenceFrame = PanelGeometry.hiddenFrame(
+                from: safeFrame,
+                corner: corner,
+                in: visibleFrame
+            )
+            animateMotion(
+                toVisibleFrame: safeFrame,
+                emergingFrom: emergenceFrame
+            )
             return
         }
 
@@ -301,10 +273,21 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 panel.orderFrontRegardless()
             }
 
-            animateShow(to: finalFrame)
+            let emergenceFrame = PanelGeometry.hiddenFrame(
+                from: finalFrame,
+                corner: corner,
+                in: visibleFrame
+            )
+            animateMotion(
+                toVisibleFrame: finalFrame,
+                emergingFrom: emergenceFrame
+            )
             return
         }
 
+        // Hidden reveal: stage at the corner-aligned emergence geometry.
+        // If a prior transition left the window mid-flight, the retarget
+        // below continues from the live frame rather than teleporting.
         let initialFrame = PanelGeometry.hiddenFrame(
             from: finalFrame,
             corner: corner,
@@ -319,28 +302,103 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             panel.orderFrontRegardless()
         }
 
-        animateShow(to: finalFrame)
+        animateMotion(
+            toVisibleFrame: finalFrame,
+            emergingFrom: initialFrame
+        )
     }
 
-    private func animateShow(to finalFrame: CGRect) {
-        let generation = visibilityTransition.beginTransition()
-        isShowing = true
+    /// The single motion command. Every reveal and every hide retargets
+    /// the same window-owned timeline: the window server reports live
+    /// animated frames, so a new `animator().setFrame` continues from the
+    /// currently presented frame instead of restarting the motion.
+    private func animateMotion(
+        toVisibleFrame visibleFrame: CGRect,
+        emergingFrom emergenceFrame: CGRect
+    ) {
+        let geometry = PanelMotion.Geometry(
+            visibleFrame: visibleFrame,
+            hiddenFrame: emergenceFrame
+        )
+        motion.geometry = geometry
+
+        // Continue from the live window state. Reading `panel.frame`
+        // mid-animation returns the currently presented frame.
+        let liveFrame = panel.frame
+        let liveProgress = PanelMotion.progress(of: liveFrame, in: geometry)
+        motion.presentedProgress = liveProgress
+
+        // If the window is already presenting the destination, the motion
+        // system still completes presentation state atomically.
+        if framesMatch(liveFrame, visibleFrame) {
+            motion.finishPresentation(at: 1)
+            finishMotionIfNeeded()
+            return
+        }
+
+        motion.beginReveal()
+        let intent = motion.intentSequence
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let duration = PanelMotion.duration(for: .revealing, reduceMotion: reduceMotion)
+
+        if reduceMotion {
+            // Low-motion alternative: the frame reaches its destination
+            // immediately; only a short alpha crossfade presents the change.
+            panel.setFrame(visibleFrame, display: true)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = nil
+                panel.animator().alphaValue = 1
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.completeMotion(at: 1, intent: intent)
+                }
+            }
+            return
+        }
+
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.16
+            context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
-            panel.animator().setFrame(finalFrame, display: true)
+            panel.animator().setFrame(visibleFrame, display: true)
             panel.animator().alphaValue = 1
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                guard self.visibilityTransition.ownsCompletion(generation) else { return }
-                self.isShowing = false
-                if self.needsResizeAfterShowing {
-                    self.needsResizeAfterShowing = false
-                    self.resizeAndReanchor()
-                }
+                self?.completeMotion(at: 1, intent: intent)
             }
         }
+    }
+
+    /// Completes the presentation only if `intent` still owns the motion.
+    /// An interrupted animation's completion handler arrives with a stale
+    /// intent and is ignored; the retargeting animation completes instead.
+    private func completeMotion(at progress: CGFloat, intent: UInt64) {
+        guard motion.ownsCompletion(intent) else { return }
+        motion.finishPresentation(at: progress)
+        finishMotionIfNeeded()
+    }
+
+    private func finishMotionIfNeeded() {
+        let completion = motionCompletion
+        motionCompletion = nil
+        if motion.phase == .visible {
+            if needsResizeAfterShowing {
+                needsResizeAfterShowing = false
+                resizeAndReanchor()
+            }
+        } else if motion.phase == .hidden {
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            stopPointerPassthroughMonitoring()
+            resolvePendingHide(.hidden)
+        }
+        completion?()
+    }
+
+    private func resolvePendingHide(_ outcome: PanelHideCompletion) {
+        guard let pendingHide else { return }
+        self.pendingHide = nil
+        pendingHide.completion(outcome)
     }
 
     @discardableResult
@@ -367,30 +425,53 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.dockingPreviewCorner = nil
         uiState.setInteractionLock(.windowMove, isActive: false)
         uiState.setInteractionLock(.windowResize, isActive: false)
-        let generation = visibilityTransition.beginHideTransition(completion: completion)
-        isShowing = false
+        resolvePendingHide(.superseded)
+        pendingHide = PanelPendingHide(completion: completion)
         needsResizeAfterShowing = false
         let safeFrame = PanelGeometry.constrainedFrame(panel.frame, to: screen.visibleFrame)
         if !framesMatch(panel.frame, safeFrame) {
             panel.setFrame(safeFrame, display: true)
         }
-        let targetFrame = PanelGeometry.hiddenFrame(
+        let emergenceFrame = PanelGeometry.hiddenFrame(
             from: safeFrame,
             corner: currentCorner,
             in: screen.visibleFrame
         )
+        let geometry = PanelMotion.Geometry(
+            visibleFrame: safeFrame,
+            hiddenFrame: emergenceFrame
+        )
+        motion.geometry = geometry
+        let liveProgress = PanelMotion.progress(of: panel.frame, in: geometry)
+        motion.presentedProgress = liveProgress
+        motion.beginHide()
+        let intent = motion.intentSequence
+
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let duration = PanelMotion.duration(for: .hiding, reduceMotion: reduceMotion)
+
+        if reduceMotion {
+            panel.setFrame(emergenceFrame, display: true)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = nil
+                panel.animator().alphaValue = 0
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.completeMotion(at: 0, intent: intent)
+                }
+            }
+            return .accepted
+        }
+
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+            context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
-            panel.animator().setFrame(targetFrame, display: true)
+            panel.animator().setFrame(emergenceFrame, display: true)
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
-                self.panel.orderOut(nil)
-                self.panel.alphaValue = 1
-                self.stopPointerPassthroughMonitoring()
-                self.visibilityTransition.completeHideTransition(generation)
+                self?.completeMotion(at: 0, intent: intent)
             }
         }
         return .accepted
@@ -438,8 +519,37 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         hostingView.onInteractionCancelled = { [weak self] cancellation, frame in
             self?.handleInteractionCancellation(cancellation, frame: frame)
         }
+        hostingView.onSwipeDismissalTriggered = { [weak self] in
+            self?.handleSwipeDismissal()
+        }
         panel.delegate = self
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+    }
+
+    /// Two-finger swipe toward the attached edge hides through the same
+    /// interactive-hide path as a header flick: persistence gate first,
+    /// then the unified hide motion, with a fallback dock if the draft
+    /// cannot flush.
+    private func handleSwipeDismissal() {
+        guard !isWindowDragging, !isLiveResizing else { return }
+        uiState.dockingPreviewCorner = nil
+        uiState.setInteractionLock(.windowMove, isActive: false)
+        let result = requestHide { [weak self] completion in
+            guard completion == .hidden else { return }
+            self?.onInteractiveHideCompleted?()
+        }
+        if !result.isAccepted {
+            // A dirty draft blocks the hide; keep the panel attached and
+            // visible at its current corner without motion ambiguity.
+            if let screen = panel.screen ?? currentScreen ?? NSScreen.main {
+                animateDock(
+                    on: screen,
+                    to: currentCorner,
+                    persistsCorner: false,
+                    showsPreview: false
+                )
+            }
+        }
     }
 
     private func bindContentSize() {
@@ -492,7 +602,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let workArea = refreshCurrentWorkArea(preferredScreen: currentScreen) else {
             return
         }
-        if isShowing {
+        if motion.phase == .revealing || motion.phase == .docking {
             needsResizeAfterShowing = true
             return
         }
@@ -577,8 +687,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func beginLiveResize() {
         guard !isLiveResizing else { return }
-        visibilityTransition.invalidatePendingTransition()
-        isShowing = false
+        // Live user resize takes over window motion; the timeline stops
+        // wherever it is and the frame becomes user-authoritative.
+        motion.beginUserTakeover()
+        motionCompletion = nil
+        resolvePendingHide(.superseded)
         needsResizeAfterShowing = false
         resizePersistenceState.beginUserResize()
         isLiveResizing = true
@@ -605,8 +718,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func beginWindowDrag() {
-        visibilityTransition.invalidatePendingTransition()
-        isShowing = false
+        // The user's drag is the motion authority while it lasts.
+        motion.beginUserTakeover()
+        motionCompletion = nil
+        resolvePendingHide(.superseded)
         needsResizeAfterShowing = false
         isWindowDragging = true
         uiState.setInteractionLock(.windowMove, isActive: true)
@@ -731,19 +846,40 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             in: visibleFrame,
             corner: corner
         ).frame
-        let generation = visibilityTransition.beginTransition()
+        motion.beginDock()
+        let intent = motion.intentSequence
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let duration = PanelMotion.duration(for: .docking, reduceMotion: reduceMotion)
+
+        if reduceMotion {
+            panel.setFrame(targetFrame, display: true)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.completeDock(intent: intent)
+                }
+            }
+            return
+        }
+
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.18
+            context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
             panel.animator().setFrame(targetFrame, display: true)
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
-                self.uiState.updatePanelSize(self.panel.frame.size)
-                self.uiState.dockingPreviewCorner = nil
-                self.uiState.setInteractionLock(.windowMove, isActive: false)
+                self?.completeDock(intent: intent)
             }
         }
+    }
+
+    private func completeDock(intent: UInt64) {
+        guard motion.ownsCompletion(intent) else { return }
+        motion.finishPresentation(at: 1)
+        uiState.updatePanelSize(panel.frame.size)
+        uiState.dockingPreviewCorner = nil
+        uiState.setInteractionLock(.windowMove, isActive: false)
     }
 
     private func screen(containing point: CGPoint) -> NSScreen? {
@@ -798,11 +934,23 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             preferredScreen: preferredScreen
         ) else { return }
 
-        if isShowing {
-            visibilityTransition.invalidatePendingTransition()
-            isShowing = false
+        if motion.isTransitioning {
+            // A screen change or app activation must not leave a partially
+            // presented window in a stale geometry. The user's environment
+            // takes over: settle to fully visible rather than snapping
+            // alpha mid-motion.
+            motion.beginUserTakeover()
+            motionCompletion = nil
+            resolvePendingHide(.superseded)
             needsResizeAfterShowing = false
             panel.alphaValue = 1
+            let safeFrame = PanelGeometry.constrainedFrame(
+                panel.frame,
+                to: workArea.visibleFrame
+            )
+            if !framesMatch(panel.frame, safeFrame) {
+                panel.setFrame(safeFrame, display: true)
+            }
         }
 
         let targetFrame: CGRect

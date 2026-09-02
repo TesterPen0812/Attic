@@ -213,34 +213,35 @@ enum PanelGeometry {
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
-    /// A local, still-on-screen staging frame used while fading the panel.
-    /// Moving inward keeps every intermediate window frame inside the usable
-    /// display area; the panel's alpha supplies the hidden presentation.
+    /// A local, still-on-screen staging frame the panel emerges from or
+    /// returns to. Direction is owned by the unified motion model: the
+    /// frame is offset toward the attached screen corner so the panel
+    /// reads as attached to that physical origin. The staging frame is
+    /// bounded by the visible frame itself (not the docked inset), so the
+    /// emergence travel is real (the inset distance) while every
+    /// intermediate frame stays inside the usable display area and never
+    /// slides under the Dock or menu bar.
     static func hiddenFrame(
         from panelFrame: CGRect,
         corner: ScreenCorner,
         in visibleFrame: CGRect,
-        distance: CGFloat = 18
+        distance: CGFloat = screenInset
     ) -> CGRect {
-        let xOffset: CGFloat
-        let yOffset: CGFloat
+        let offset: CGPoint
         switch corner {
         case .topLeft:
-            xOffset = distance
-            yOffset = -distance
+            offset = CGPoint(x: -distance, y: distance)
         case .topRight:
-            xOffset = -distance
-            yOffset = -distance
+            offset = CGPoint(x: distance, y: distance)
         case .bottomLeft:
-            xOffset = distance
-            yOffset = distance
+            offset = CGPoint(x: -distance, y: -distance)
         case .bottomRight:
-            xOffset = -distance
-            yOffset = distance
+            offset = CGPoint(x: distance, y: -distance)
         }
         return constrainedFrame(
-            panelFrame.offsetBy(dx: xOffset, dy: yOffset),
-            to: visibleFrame
+            panelFrame.offsetBy(dx: offset.x, dy: offset.y),
+            to: visibleFrame,
+            inset: 0
         )
     }
 
