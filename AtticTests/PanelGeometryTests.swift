@@ -520,7 +520,12 @@ final class PanelGeometryTests: XCTestCase {
             )
 
             XCTAssertTrue(safeFrame.contains(dockedFrame), "Docked frame escaped at \(corner)")
-            XCTAssertTrue(safeFrame.contains(hiddenFrame), "Hidden frame escaped at \(corner)")
+            // The emergence frame approaches the attached corner, bounded
+            // by the visible frame itself: it may enter the inset margin —
+            // the panel reads as attached to the physical screen edge —
+            // but never leaves the usable display area and never slides
+            // under the Dock or menu bar.
+            XCTAssertTrue(visibleFrame.contains(hiddenFrame), "Hidden frame escaped at \(corner)")
 
             for step in 0...10 {
                 let progress = CGFloat(step) / 10
@@ -530,7 +535,7 @@ final class PanelGeometryTests: XCTestCase {
                     width: hiddenFrame.width,
                     height: hiddenFrame.height
                 )
-                XCTAssertTrue(safeFrame.contains(interpolated), "Transition escaped at \(corner), step \(step)")
+                XCTAssertTrue(visibleFrame.contains(interpolated), "Transition escaped at \(corner), step \(step)")
             }
         }
     }
@@ -538,10 +543,6 @@ final class PanelGeometryTests: XCTestCase {
     func testCrossDisplayTransitionIsEstablishedLocallyBeforeAnimation() {
         let sourceVisibleFrame = CGRect(x: 0, y: 70, width: 1_440, height: 800)
         let targetVisibleFrame = CGRect(x: 1_680, y: 25, width: 1_920, height: 1_055)
-        let targetSafeFrame = targetVisibleFrame.insetBy(
-            dx: PanelGeometry.screenInset,
-            dy: PanelGeometry.screenInset
-        )
         let size = CGSize(width: 420, height: 560)
         let sourceFrame = PanelGeometry.panelFrame(
             in: sourceVisibleFrame,
@@ -564,8 +565,10 @@ final class PanelGeometryTests: XCTestCase {
             corner: .topRight,
             in: targetVisibleFrame
         )
-        XCTAssertTrue(targetSafeFrame.contains(localInitialFrame))
-        XCTAssertTrue(targetSafeFrame.contains(targetFrame))
+        // Bounded by the target display's usable area (not the inset
+        // margin): the staged frame attaches to the physical corner.
+        XCTAssertTrue(targetVisibleFrame.contains(localInitialFrame))
+        XCTAssertTrue(targetVisibleFrame.contains(targetFrame))
 
         for step in 0...10 {
             let progress = CGFloat(step) / 10
@@ -575,34 +578,37 @@ final class PanelGeometryTests: XCTestCase {
                 width: localInitialFrame.width,
                 height: localInitialFrame.height
             )
-            XCTAssertTrue(targetSafeFrame.contains(interpolated), "Cross-display local transition escaped at step \(step)")
+            XCTAssertTrue(targetVisibleFrame.contains(interpolated), "Cross-display local transition escaped at step \(step)")
         }
     }
 
-    func testMatchingFrameRevealInvalidatesPendingHideCompletion() {
-        var state = PanelVisibilityTransitionState()
-        let hideGeneration = state.beginTransition()
-
-        // `show` invalidates before it can take the matching-frame path.
-        state.invalidatePendingTransition()
-        let revealGeneration = state.beginTransition()
-
-        XCTAssertFalse(state.ownsCompletion(hideGeneration))
-        XCTAssertTrue(state.ownsCompletion(revealGeneration))
+    func testRevealRetargetSupersedesPendingHideCompletion() {
+        // The continuous motion model replaces generation fencing: a
+        // reveal during an in-flight hide resolves that hide as superseded
+        // and continues from the live presentation state.
+        var transition = PanelMotion.Transition()
+        transition.beginHide()
+        transition.reverseToReveal()
+        XCTAssertTrue(transition.isTransitioning)
+        transition.finishPresentation(at: 1)
+        XCTAssertEqual(transition.phase, .visible)
+        XCTAssertFalse(transition.isTransitioning)
     }
 
-    func testDifferingFrameRevealInvalidatesPendingHideCompletion() {
-        var state = PanelVisibilityTransitionState()
-        let hideGeneration = state.beginTransition()
+    func testHideRetargetContinuesFromMidFlightPresentationState() {
+        // Interrupting a reveal with a hide must continue from the
+        // currently presented progress, not restart the timeline.
+        var transition = PanelMotion.Transition()
+        transition.beginReveal()
+        transition.presentedProgress = 0.4
 
-        // The frame animation receives a fresh owner after reveal invalidates
-        // the hide, so only the new reveal may complete window state changes.
-        state.invalidatePendingTransition()
-        let revealGeneration = state.beginTransition()
+        transition.reverseToHide()
+        XCTAssertEqual(transition.phase, .hiding)
+        XCTAssertEqual(transition.presentedProgress, 0.4, accuracy: 0.001)
 
-        XCTAssertFalse(state.ownsCompletion(hideGeneration))
-        XCTAssertTrue(state.ownsCompletion(revealGeneration))
-        XCTAssertGreaterThan(revealGeneration, hideGeneration)
+        transition.finishPresentation(at: 0)
+        XCTAssertEqual(transition.phase, .hidden)
+        XCTAssertFalse(transition.isTransitioning)
     }
 
     func testTaskScrollMaskUsesPointSizedFadesAcrossPanelHeights() {

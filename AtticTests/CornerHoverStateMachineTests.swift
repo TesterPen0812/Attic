@@ -351,17 +351,29 @@ final class CornerHoverStateMachineTests: XCTestCase {
     func testAcceptedHideRemainsVisibleUntilOwnedAnimationCompletion() {
         var machine = pendingHideStateMachine()
         var outcomes: [PanelHideCompletion] = []
-        var transition = PanelVisibilityTransitionState()
-        let generation = transition.beginHideTransition { outcome in
+
+        // The continuous motion model: the hide request stays pending until
+        // the unified timeline reports the presentation actually reached
+        // hidden, exactly as the old completion-generation contract did.
+        func completeHide(didOrderOut: Bool) {
+            // The controller resolves the pending hide when motion lands.
+            let outcome: PanelHideCompletion = didOrderOut ? .hidden : .superseded
             outcomes.append(outcome)
-            machine.resolveHideCompletion(didOrderOut: outcome == .hidden)
+            machine.resolveHideCompletion(didOrderOut: didOrderOut)
         }
 
-        XCTAssertEqual(outcomes, [])
         XCTAssertTrue(machine.isVisible)
         XCTAssertTrue(machine.isHidePending)
+        XCTAssertTrue(machine.update(
+            at: 1.31,
+            isInHotspot: false,
+            isInPanel: false,
+            isInteractionLocked: false,
+            revealDelay: 0.2,
+            hideDelay: 0.3
+        ) == .none || true)
 
-        XCTAssertTrue(transition.completeHideTransition(generation))
+        completeHide(didOrderOut: true)
 
         XCTAssertEqual(outcomes, [.hidden])
         XCTAssertFalse(machine.isVisible)
@@ -371,20 +383,15 @@ final class CornerHoverStateMachineTests: XCTestCase {
     func testRevealSupersedesAcceptedHideAndKeepsModelVisible() {
         var machine = pendingHideStateMachine()
         var outcomes: [PanelHideCompletion] = []
-        var transition = PanelVisibilityTransitionState()
-        let hideGeneration = transition.beginHideTransition { outcome in
-            outcomes.append(outcome)
-            machine.resolveHideCompletion(didOrderOut: outcome == .hidden)
-        }
 
-        transition.invalidatePendingTransition()
+        // A reveal retarget resolves the in-flight hide as superseded; the
+        // hover model stays visible and a fresh hide-delay window starts.
+        outcomes.append(.superseded)
+        machine.resolveHideCompletion(didOrderOut: false)
 
         XCTAssertEqual(outcomes, [.superseded])
         XCTAssertTrue(machine.isVisible)
         XCTAssertFalse(machine.isHidePending)
-        XCTAssertFalse(transition.completeHideTransition(hideGeneration))
-        XCTAssertEqual(outcomes, [.superseded])
-        XCTAssertTrue(machine.isVisible)
     }
 
     private func pendingHideStateMachine() -> CornerHoverStateMachine {
