@@ -1,3 +1,5 @@
+import AppKit
+import CoreGraphics
 import Foundation
 import SwiftData
 import UniformTypeIdentifiers
@@ -225,7 +227,6 @@ final class CanvasDocumentStoreTests: XCTestCase {
         XCTAssertFalse(session.undo())
     }
 
-
     @MainActor
     func testExplicitDefaultTombstoneDoesNotResurrectDeletedIdentity() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
@@ -299,5 +300,231 @@ final class CanvasDocumentStoreTests: XCTestCase {
         XCTAssertFalse(store.deleteCanvas(store.selectedCanvasID))
         XCTAssertEqual(store.canvases.count, 1)
         XCTAssertEqual(store.strokes.count, 1)
+    }
+}
+
+@MainActor
+private final class DrivenViewportMagnificationRecognizer:
+    NSMagnificationGestureRecognizer {
+    private var drivenState: NSGestureRecognizer.State = .possible
+
+    override var state: NSGestureRecognizer.State {
+        get { drivenState }
+        set { drivenState = newValue }
+    }
+
+    func drive(
+        _ state: NSGestureRecognizer.State,
+        magnification: CGFloat
+    ) {
+        self.magnification = magnification
+        self.state = state
+    }
+}
+
+final class CanvasViewportGestureRoutingTests: XCTestCase {
+    @MainActor
+    func testPinchReclaimsViewportAfterResizeInterruptsScrollTerminalPhase() throws {
+        let view = configuredCanvasView()
+        var deliveredViewports: [CanvasViewport] = []
+        view.onViewportChange = { deliveredViewports.append($0) }
+        let (recognizer, action) = try drivenMagnificationRecognizer(in: view)
+
+        func drive(
+            _ state: NSGestureRecognizer.State,
+            magnification: CGFloat
+        ) {
+            recognizer.drive(state, magnification: magnification)
+            XCTAssertTrue(NSApplication.shared.sendAction(
+                action,
+                to: recognizer.target,
+                from: recognizer
+            ))
+        }
+
+        view.scrollWheel(with: try scrollEvent(
+            deltaY: 8,
+            command: true,
+            phase: 1
+        ))
+        let viewportAfterScroll = view.interaction.viewport
+        XCTAssertGreaterThan(viewportAfterScroll.scale, 1)
+        XCTAssertEqual(
+            view.activeViewportGesture,
+            CanvasNSView.ViewportGestureSequence(source: .scroll, mode: .zoom)
+        )
+        XCTAssertEqual(view.interaction.machine.state, .panning)
+
+        // Live panel resizing can interrupt AppKit's terminal scroll phase.
+        view.setFrameSize(CGSize(width: 520, height: 640))
+        drive(.began, magnification: 0)
+        drive(.changed, magnification: 0.20)
+
+        let viewportAfterPinch = view.interaction.viewport
+        XCTAssertGreaterThan(viewportAfterPinch.scale, viewportAfterScroll.scale)
+        XCTAssertEqual(
+            view.activeViewportGesture,
+            CanvasNSView.ViewportGestureSequence(
+                source: .magnification,
+                mode: .zoom
+            )
+        )
+        XCTAssertEqual(view.interaction.machine.state, .panning)
+
+        // The interrupted scroll tail must not retake or terminate pinch ownership.
+        view.scrollWheel(with: try scrollEvent(
+            deltaY: 6,
+            command: true,
+            phase: 2
+        ))
+        view.scrollWheel(with: try scrollEvent(
+            deltaY: 0,
+            command: true,
+            phase: 4
+        ))
+        XCTAssertEqual(view.interaction.viewport, viewportAfterPinch)
+        XCTAssertEqual(
+            view.activeViewportGesture?.source,
+            .magnification
+        )
+
+        drive(.ended, magnification: 0)
+        XCTAssertNil(view.activeViewportGesture)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+
+        let scaleBeforeSecondPinch = view.interaction.viewport.scale
+        drive(.began, magnification: 0)
+        drive(.changed, magnification: -0.10)
+        drive(.ended, magnification: 0)
+        XCTAssertLessThan(view.interaction.viewport.scale, scaleBeforeSecondPinch)
+        XCTAssertNil(view.activeViewportGesture)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+        XCTAssertGreaterThanOrEqual(deliveredViewports.count, 3)
+    }
+
+    @MainActor
+    func testDirectPanReclaimsViewportAfterResizeInterruptsMagnification() throws {
+        let view = configuredCanvasView()
+        let (recognizer, action) = try drivenMagnificationRecognizer(in: view)
+
+        func drive(
+            _ state: NSGestureRecognizer.State,
+            magnification: CGFloat
+        ) {
+            recognizer.drive(state, magnification: magnification)
+            XCTAssertTrue(NSApplication.shared.sendAction(
+                action,
+                to: recognizer.target,
+                from: recognizer
+            ))
+        }
+
+        drive(.began, magnification: 0)
+        drive(.changed, magnification: 0.20)
+        let viewportAfterPinch = view.interaction.viewport
+        XCTAssertGreaterThan(viewportAfterPinch.scale, 1)
+        XCTAssertEqual(
+            view.activeViewportGesture?.source,
+            .magnification
+        )
+
+        view.setFrameSize(CGSize(width: 420, height: 560))
+        view.scrollWheel(with: try scrollEvent(
+            deltaY: 8,
+            command: false,
+            phase: 1
+        ))
+
+        let viewportAfterPanBegan = view.interaction.viewport
+        XCTAssertNotEqual(viewportAfterPanBegan.center, viewportAfterPinch.center)
+        XCTAssertEqual(viewportAfterPanBegan.scale, viewportAfterPinch.scale)
+        XCTAssertEqual(
+            view.activeViewportGesture,
+            CanvasNSView.ViewportGestureSequence(source: .scroll, mode: .pan)
+        )
+
+        // A late magnification callback is from the interrupted recognizer.
+        drive(.changed, magnification: 0.15)
+        XCTAssertEqual(view.interaction.viewport, viewportAfterPanBegan)
+        XCTAssertEqual(view.activeViewportGesture?.source, .scroll)
+
+        view.scrollWheel(with: try scrollEvent(
+            deltaY: 5,
+            command: false,
+            phase: 2
+        ))
+        XCTAssertNotEqual(view.interaction.viewport.center, viewportAfterPanBegan.center)
+        view.scrollWheel(with: try scrollEvent(
+            deltaY: 0,
+            command: false,
+            phase: 4
+        ))
+        XCTAssertNil(view.activeViewportGesture)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+
+        drive(.ended, magnification: 0)
+        XCTAssertNil(view.activeViewportGesture)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+    }
+
+    @MainActor
+    private func configuredCanvasView() -> CanvasNSView {
+        let view = CanvasNSView(
+            frame: CGRect(x: 0, y: 0, width: 300, height: 380)
+        )
+        view.configure(
+            canvasID: CanvasBoardItem.logicalBoardID,
+            strokes: [],
+            images: [],
+            selectedImageID: nil,
+            tool: .pen,
+            color: .ink,
+            width: 3,
+            viewport: CanvasViewport(),
+            pendingPlacement: nil,
+            clearReadabilityEnabled: false
+        )
+        return view
+    }
+
+    @MainActor
+    private func drivenMagnificationRecognizer(
+        in view: CanvasNSView
+    ) throws -> (DrivenViewportMagnificationRecognizer, Selector) {
+        let installed = try XCTUnwrap(
+            view.gestureRecognizers.compactMap {
+                $0 as? NSMagnificationGestureRecognizer
+            }.first
+        )
+        let action = try XCTUnwrap(installed.action)
+        let recognizer = DrivenViewportMagnificationRecognizer(
+            target: installed.target,
+            action: action
+        )
+        view.removeGestureRecognizer(installed)
+        view.addGestureRecognizer(recognizer)
+        return (recognizer, action)
+    }
+
+    private func scrollEvent(
+        deltaY: Int32,
+        command: Bool,
+        phase: Int64
+    ) throws -> NSEvent {
+        let event = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 1,
+            wheel1: deltaY,
+            wheel2: 0,
+            wheel3: 0
+        ))
+        event.flags = command ? .maskCommand : []
+        event.location = CGPoint(x: 120, y: 160)
+        event.setIntegerValueField(
+            .scrollWheelEventScrollPhase,
+            value: phase
+        )
+        return try XCTUnwrap(NSEvent(cgEvent: event))
     }
 }
