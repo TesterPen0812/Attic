@@ -107,8 +107,10 @@ private struct NoteRecoveryWarning: View {
                 Spacer(minLength: 0)
                 Button("Retry") {
                     Task { @MainActor in
-                        await noteDraft.retryRecovery()
-                        guard noteDraft.isActive else { return }
+                        guard let restoredSession = await noteDraft.retryRecovery(),
+                              uiState.selectedSection.isNotes,
+                              noteDraft.isActive,
+                              noteDraft.editorSession == restoredSession else { return }
                         if let note = noteDraft.noteStore.notes.first(where: { $0.id == noteDraft.activeNoteID }) {
                             uiState.beginEditingNote(note)
                         } else {

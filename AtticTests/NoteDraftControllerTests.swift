@@ -67,7 +67,8 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertNil(draft.saveErrorMessage, "Saved text and an unread recovery copy have distinct status")
         XCTAssertEqual(try Data(contentsOf: url), unreadable)
 
-        await draft.retryRecovery()
+        let failedRetrySession = await draft.retryRecovery()
+        XCTAssertNil(failedRetrySession)
         XCTAssertNotNil(draft.recoveryErrorMessage)
         XCTAssertEqual(try Data(contentsOf: url), unreadable)
         XCTAssertEqual(draft.body, "New saved edits")
@@ -102,7 +103,8 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes)
 
         gate.shouldFail = false
-        await draft.retryRecovery()
+        let restoredSession = await draft.retryRecovery()
+        XCTAssertEqual(restoredSession, draft.editorSession)
         XCTAssertEqual(store.notes.map(\.body), ["Current startup draft"])
         XCTAssertEqual(draft.body, "Earlier unsaved draft")
         XCTAssertTrue(draft.isDirty)

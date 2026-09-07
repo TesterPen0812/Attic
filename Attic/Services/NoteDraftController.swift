@@ -220,6 +220,7 @@ final class NoteDraftController: ObservableObject {
     func restoreRecoveryIfNeeded() async -> Bool {
         guard !recoveryWasChecked, !isRestoringRecovery, let recoveryFile else { return false }
         isRestoringRecovery = true
+        let expectedSession = editorSession
         defer { isRestoringRecovery = false }
         do {
             guard let saved = try await recoveryFile.load() else {
@@ -229,7 +230,7 @@ final class NoteDraftController: ObservableObject {
                 return false
             }
             // Never replace edits that were already entered during startup.
-            guard !isDirty else {
+            guard editorSession == expectedSession, !isDirty else {
                 recoveryErrorMessage = "A recovery copy is waiting. Retry will save this draft before opening it."
                 return false
             }
@@ -267,12 +268,15 @@ final class NoteDraftController: ObservableObject {
 
     /// An unread journal remains untouched until it can be read. Preserve any
     /// current edits before an explicit retry can replace the editor session.
-    func retryRecovery() async {
-        guard !isRestoringRecovery, flush() else { return }
-        if !recoveryWasChecked {
-            _ = await restoreRecoveryIfNeeded()
-        }
+    @discardableResult
+    func retryRecovery() async -> NoteEditorSession? {
+        guard !isRestoringRecovery, flush() else { return nil }
+        let restoredSession: NoteEditorSession?
+        if !recoveryWasChecked, await restoreRecoveryIfNeeded() {
+            restoredSession = editorSession
+        } else { restoredSession = nil }
         await waitForRecoveryCheckpoint()
+        return restoredSession
     }
 
     func waitForRecoveryCheckpoint() async { await recoveryTask?.value }
