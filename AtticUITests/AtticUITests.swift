@@ -138,7 +138,7 @@ final class AtticUITests: XCTestCase {
 
         let dragStart = betaRow.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
         let dragEnd = alphaRow.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
-        dragStart.press(
+        dragStart.click(
             forDuration: 0.5,
             thenDragTo: dragEnd,
             withVelocity: .slow,
@@ -200,6 +200,45 @@ final class AtticUITests: XCTestCase {
         )
         XCTAssertTrue(app.buttons["add-note-attachment"].exists)
         XCTAssertFalse(app.staticTexts["Drop files here"].exists)
+    }
+
+    func testNativePanelResizeKeepsDockedEdgesAndMinimumSize() throws {
+        let panel = app.dialogs.firstMatch
+        XCTAssertTrue(panel.waitForExistence(timeout: 3))
+        app.buttons["panel-pin-button"].click()
+        let initial = panel.frame
+        let left = panel.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+        left.click(forDuration: 0.1,
+                   thenDragTo: left.withOffset(CGVector(dx: -90, dy: 0)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertEqual(panel.frame.width, initial.width + 90, accuracy: 3)
+        XCTAssertEqual(panel.frame.height, initial.height, accuracy: 1)
+        XCTAssertEqual(panel.frame.maxX, initial.maxX, accuracy: 1)
+        XCTAssertEqual(panel.frame.minY, initial.minY, accuracy: 1)
+
+        let wider = panel.frame
+        let bottom = panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.998))
+        bottom.click(forDuration: 0.1,
+                     thenDragTo: bottom.withOffset(CGVector(dx: 0, dy: 80)),
+                     withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertEqual(panel.frame.height, wider.height + 80, accuracy: 3)
+        XCTAssertEqual(panel.frame.width, wider.width, accuracy: 1)
+        XCTAssertEqual(panel.frame.minY, initial.minY, accuracy: 1)
+
+        let larger = panel.frame
+        let corner = panel.coordinate(withNormalizedOffset: CGVector(
+            dx: 25 / larger.width, dy: 1 - 25 / larger.height
+        ))
+        corner.click(forDuration: 0.1,
+                     thenDragTo: corner.withOffset(CGVector(dx: 240, dy: -240)),
+                     withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertEqual(panel.frame.width, 332, accuracy: 1)
+        XCTAssertEqual(panel.frame.height, 480, accuracy: 1)
+        XCTAssertEqual(panel.frame.maxX, initial.maxX, accuracy: 1)
+        XCTAssertEqual(panel.frame.minY, initial.minY, accuracy: 1)
+        XCTAssertTrue(app.buttons["panel-pin-button"].isSelected)
+        XCTAssertTrue(app.textFields["quick-entry-title"].isHittable)
+        XCTAssertTrue(app.buttons["panel-section-tasks"].isHittable)
     }
 
     func testNotesBodyPreservesFocusAcrossIncrementalTyping() throws {
