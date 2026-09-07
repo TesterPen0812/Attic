@@ -29,7 +29,7 @@ struct NotesComposerInteractionSnapshot: Equatable {
 /// panel height.
 struct NotesPanelContent: View {
     @ObservedObject var noteStore: NoteStore
-    let noteDraft: NoteDraftController
+    @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -39,7 +39,11 @@ struct NotesPanelContent: View {
                 .frame(height: 0)
                 .accessibilityHidden(true)
         } else {
-            savedNotes
+            VStack(spacing: 8) {
+                NoteRecoveryWarning(noteDraft: noteDraft, uiState: uiState)
+                    .padding(.horizontal, AtticStyle.horizontalPadding)
+                savedNotes
+            }
         }
     }
 
@@ -89,6 +93,39 @@ struct NotesPanelContent: View {
         uiState.beginAdding()
     }
 }
+
+private struct NoteRecoveryWarning: View {
+    @ObservedObject var noteDraft: NoteDraftController
+    @ObservedObject var uiState: PanelUIState
+
+    var body: some View {
+        if let message = noteDraft.recoveryErrorMessage {
+            HStack(alignment: .top, spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Retry") {
+                    Task { @MainActor in
+                        await noteDraft.retryRecovery()
+                        guard noteDraft.isActive else { return }
+                        if let note = noteDraft.noteStore.notes.first(where: { $0.id == noteDraft.activeNoteID }) {
+                            uiState.beginEditingNote(note)
+                        } else {
+                            uiState.beginAdding()
+                        }
+                    }
+                }
+                .disabled(noteDraft.isRestoringRecovery)
+                .accessibilityIdentifier("retry-note-recovery")
+            }
+            .foregroundStyle(.primary)
+            .atticClearGlassForegroundReadability()
+            .accessibilityIdentifier("note-recovery-error")
+        }
+    }
+}
+
 /// A focused note remains mounted while the temporary library slides above it.
 /// That preserves Cocoa selection, the body editor's scroll position, marked
 /// text, undo state, and the app-owned draft while browsing saved notes.
@@ -262,6 +299,7 @@ struct NoteComposerView: View {
                         .atticClearGlassForegroundReadability()
                         .accessibilityIdentifier("note-save-error")
                     }
+                    NoteRecoveryWarning(noteDraft: noteDraft, uiState: uiState)
                 }
                 .padding(.horizontal, 4)
                 .padding(.top, 12)
@@ -402,11 +440,13 @@ struct NoteComposerView: View {
     }
 
     private var isImporting: Bool {
+        if attachmentImportTask != nil { return true }
         if case .importing = noteStore.attachmentImportState { return true }
         return false
     }
 
     private var saveStatusColor: Color {
+        if noteDraft.recoveryErrorMessage != nil { return .orange }
         if noteDraft.saveErrorMessage != nil { return .orange }
         if noteDraft.conflict != nil { return .orange }
         if noteDraft.isDirty { return Color.primary.opacity(0.42) }
@@ -417,6 +457,7 @@ struct NoteComposerView: View {
         if noteDraft.conflict != nil { return "Needs your attention" }
         if noteDraft.saveErrorMessage != nil { return "Not saved · Retry available" }
         if noteDraft.isDirty { return "Unsaved changes" }
+        if noteDraft.recoveryErrorMessage != nil { return "Recovery needs attention · Retry available" }
         guard let noteID = noteDraft.activeNoteID,
               let note = noteStore.notes.first(where: { $0.id == noteID }) else {
             return "New note"
@@ -992,8 +1033,8 @@ struct NoteRowView: View {
     }
 }
 
-/// Observes horizontal trackpad scrolling inside the Notes workspace without
-/// consuming it. A single deliberate swipe toggles the contextual library.
+/// Registers the Notes workspace with the panel's native scroll-event router.
+/// A single deliberate swipe toggles the contextual library.
 private struct NotesHorizontalSwipeMonitor: NSViewRepresentable {
     let isLibraryPresented: Bool
     let onSwipe: () -> Void

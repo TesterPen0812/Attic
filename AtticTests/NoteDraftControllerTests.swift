@@ -6,6 +6,138 @@ import XCTest
 
 final class NoteDraftControllerTests: XCTestCase {
     @MainActor
+    func testInaccessibleRecoveryDirectoryIsNotTreatedAsMissing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProtectedDraftTests-\(UUID().uuidString)")
+        let protectedDirectory = directory.appendingPathComponent("protected")
+        try FileManager.default.createDirectory(at: protectedDirectory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: protectedDirectory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let url = protectedDirectory.appendingPathComponent("draft.json")
+        let snapshot = NoteDraftRecoverySnapshot(
+            noteID: nil, reservedNoteID: UUID(), title: "", body: "Protected recovery",
+            persistedTitle: nil, persistedBody: nil
+        )
+        let journal = NoteDraftRecoveryFile(url: url)
+        try await journal.checkpoint(snapshot, generation: 1)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: protectedDirectory.path)
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60), recoveryURL: url)
+
+        let restored = await draft.restoreRecoveryIfNeeded()
+        XCTAssertFalse(restored)
+        XCTAssertNotNil(draft.recoveryErrorMessage)
+        XCTAssertTrue(draft.beginNew())
+        draft.body = "Independent saved note"
+        XCTAssertTrue(draft.flush())
+        await draft.waitForRecoveryCheckpoint()
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: protectedDirectory.path)
+        let preserved = try await journal.load()
+        XCTAssertEqual(preserved, snapshot)
+        await draft.retryRecovery()
+        XCTAssertEqual(draft.body, snapshot.body)
+        XCTAssertTrue(draft.isDirty)
+        XCTAssertNil(draft.recoveryErrorMessage)
+        XCTAssertTrue(draft.flush())
+        await draft.waitForRecoveryCheckpoint()
+    }
+
+    @MainActor
+    func testUnreadableRecoveryRemainsVisibleAndUntouchedAcrossOpeningAndSavingNotes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticUnreadableDraftTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("draft.json")
+        let unreadable = Data("incomplete recovery file".utf8)
+        try unreadable.write(to: url)
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(body: "Saved note"))
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60), recoveryURL: url)
+
+        let restored = await draft.restoreRecoveryIfNeeded()
+        XCTAssertFalse(restored)
+        let warning = try XCTUnwrap(draft.recoveryErrorMessage)
+        XCTAssertTrue(draft.beginEditing(note))
+        draft.body = "New saved edits"
+        XCTAssertTrue(draft.flush())
+        await draft.waitForRecoveryCheckpoint()
+        XCTAssertEqual(draft.recoveryErrorMessage, warning)
+        XCTAssertNil(draft.saveErrorMessage, "Saved text and an unread recovery copy have distinct status")
+        XCTAssertEqual(try Data(contentsOf: url), unreadable)
+
+        await draft.retryRecovery()
+        XCTAssertNotNil(draft.recoveryErrorMessage)
+        XCTAssertEqual(try Data(contentsOf: url), unreadable)
+        XCTAssertEqual(draft.body, "New saved edits")
+    }
+
+    @MainActor
+    func testRecoveryRetryPreservesCurrentDraftBeforeOpeningWaitingRecovery() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticWaitingDraftTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("draft.json")
+        let snapshot = NoteDraftRecoverySnapshot(
+            noteID: nil, reservedNoteID: UUID(), title: "", body: "Earlier unsaved draft",
+            persistedTitle: nil, persistedBody: nil
+        )
+        let journal = NoteDraftRecoveryFile(url: url)
+        try await journal.checkpoint(snapshot, generation: 1)
+        let bytes = try Data(contentsOf: url)
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore())
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60), recoveryURL: url)
+        XCTAssertTrue(draft.beginNew())
+        draft.body = "Current startup draft"
+
+        let restored = await draft.restoreRecoveryIfNeeded()
+        XCTAssertFalse(restored)
+        XCTAssertNotNil(draft.recoveryErrorMessage)
+        gate.shouldFail = true
+        await draft.retryRecovery()
+        XCTAssertEqual(draft.body, "Current startup draft")
+        XCTAssertTrue(draft.isDirty)
+        XCTAssertNotNil(draft.saveErrorMessage)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+
+        gate.shouldFail = false
+        await draft.retryRecovery()
+        XCTAssertEqual(store.notes.map(\.body), ["Current startup draft"])
+        XCTAssertEqual(draft.body, "Earlier unsaved draft")
+        XCTAssertTrue(draft.isDirty)
+        XCTAssertNil(draft.recoveryErrorMessage)
+        XCTAssertEqual(try Data(contentsOf: url), bytes)
+        XCTAssertTrue(draft.flush())
+        await draft.waitForRecoveryCheckpoint()
+        XCTAssertEqual(Set(store.notes.map(\.body)), ["Current startup draft", "Earlier unsaved draft"])
+    }
+
+    @MainActor
+    func testUsingSavedVersionClearsDiscardedRecoveryBeforeRelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDiscardRecoveryTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("draft.json")
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(body: "Current saved version"))
+        let journal = NoteDraftRecoveryFile(url: url)
+        try await journal.checkpoint(NoteDraftRecoverySnapshot(
+            noteID: note.id, reservedNoteID: note.id, title: "", body: "Discarded local version",
+            persistedTitle: "", persistedBody: "Older saved version"
+        ), generation: 1)
+        let draft = NoteDraftController(noteStore: store, recoveryURL: url)
+        let restored = await draft.restoreRecoveryIfNeeded()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(draft.conflict, .remoteChange)
+        XCTAssertTrue(draft.useRemoteVersion())
+        await draft.waitForRecoveryCheckpoint()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        let relaunched = NoteDraftController(noteStore: store, recoveryURL: url)
+        let restoredAgain = await relaunched.restoreRecoveryIfNeeded()
+        XCTAssertFalse(restoredAgain)
+    }
+
+    @MainActor
     func testNeverSavedDraftSurvivesFailedSaveAndControllerRelaunch() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDraftRecoveryTests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }

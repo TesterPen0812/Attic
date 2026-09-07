@@ -31,8 +31,13 @@ actor NoteDraftRecoveryFile {
     init(url: URL) { self.url = url }
 
     func load() throws -> NoteDraftRecoverySnapshot? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try JSONDecoder().decode(NoteDraftRecoverySnapshot.self, from: Data(contentsOf: url))
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        }
+        return try JSONDecoder().decode(NoteDraftRecoverySnapshot.self, from: data)
     }
 
     func checkpoint(_ snapshot: NoteDraftRecoverySnapshot?, generation: UInt64) throws {
@@ -42,8 +47,12 @@ actor NoteDraftRecoveryFile {
             let data = try JSONEncoder().encode(snapshot)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
-        } else if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
+        } else {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // An already absent checkpoint is successfully cleared.
+            }
         }
     }
 }
@@ -125,6 +134,7 @@ final class NoteDraftController: ObservableObject {
     @Published private(set) var isDirty = false
     @Published private(set) var conflict: Conflict?
     @Published private(set) var saveErrorMessage: String?
+    @Published private(set) var recoveryErrorMessage: String?
     @Published private(set) var isRestoringRecovery = false
     @Published private(set) var editorSession = NoteEditorSession(
         noteID: nil,
@@ -209,16 +219,22 @@ final class NoteDraftController: ObservableObject {
     @discardableResult
     func restoreRecoveryIfNeeded() async -> Bool {
         guard !recoveryWasChecked, !isRestoringRecovery, let recoveryFile else { return false }
-        recoveryWasChecked = true
         isRestoringRecovery = true
         defer { isRestoringRecovery = false }
         do {
             guard let saved = try await recoveryFile.load() else {
+                recoveryWasChecked = true
                 recoveryMayExist = false
+                recoveryErrorMessage = nil
                 return false
             }
             // Never replace edits that were already entered during startup.
-            guard !isDirty else { return false }
+            guard !isDirty else {
+                recoveryErrorMessage = "A recovery copy is waiting. Retry will save this draft before opening it."
+                return false
+            }
+            recoveryWasChecked = true
+            recoveryErrorMessage = nil
             let existing = noteStore.notes.first { $0.id == (saved.noteID ?? saved.reservedNoteID) }
             if let existing,
                existing.title == NoteStore.normalizedTitle(saved.title), existing.body == saved.body {
@@ -244,9 +260,19 @@ final class NoteDraftController: ObservableObject {
             return true
         } catch {
             recoveryWasChecked = false
-            saveErrorMessage = "The recovery copy could not be read: \(error.localizedDescription)"
+            recoveryErrorMessage = "The recovery copy could not be read: \(error.localizedDescription)"
             return false
         }
+    }
+
+    /// An unread journal remains untouched until it can be read. Preserve any
+    /// current edits before an explicit retry can replace the editor session.
+    func retryRecovery() async {
+        guard !isRestoringRecovery, flush() else { return }
+        if !recoveryWasChecked {
+            _ = await restoreRecoveryIfNeeded()
+        }
+        await waitForRecoveryCheckpoint()
     }
 
     func waitForRecoveryCheckpoint() async { await recoveryTask?.value }
@@ -497,6 +523,7 @@ final class NoteDraftController: ObservableObject {
             body: note.body,
             isActive: true
         )
+        checkpointRecovery()
         return true
     }
 
@@ -636,10 +663,12 @@ final class NoteDraftController: ObservableObject {
         recoveryTask = Task { @MainActor [weak self] in
             do {
                 try await recoveryFile.checkpoint(snapshot, generation: expectedGeneration)
+                guard let self, self.recoveryGeneration == expectedGeneration else { return }
+                self.recoveryErrorMessage = nil
             } catch {
                 guard let self, self.recoveryGeneration == expectedGeneration else { return }
                 self.recoveryMayExist = true
-                self.saveErrorMessage = "The recovery copy could not be updated: \(error.localizedDescription)"
+                self.recoveryErrorMessage = "The recovery copy could not be updated: \(error.localizedDescription)"
             }
         }
     }

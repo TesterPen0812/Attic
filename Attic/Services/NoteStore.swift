@@ -492,9 +492,12 @@ final class NoteStore: ObservableObject {
             ) {
                 url = existing
             } else {
-                let reference = AttachmentFileReference(attachment)
+                guard let current = attachmentsByNoteID.values.lazy.flatMap({ $0 }).first(where: {
+                    $0.id == metadata.id && $0.contentDigest == metadata.digest
+                }) else { return nil }
+                let reference = AttachmentFileReference(current)
                 guard let repaired = try await attachmentFileStore.ensureMaterialized(reference) else {
-                    reportAttachmentFailure(attachment.id, message: "The original file is missing. Locate it to restore this attachment.")
+                    reportAttachmentFailure(metadata.id, message: "The original file is missing. Locate it to restore this attachment.")
                     return nil
                 }
                 url = repaired
@@ -506,18 +509,18 @@ final class NoteStore: ObservableObject {
             // actor finishes so removal and materialization remain serialized.
             let stillVisible = attachmentsByNoteID.values.contains { attachments in
                 attachments.contains {
-                    $0.id == attachment.id
-                        && $0.contentDigest == attachment.contentDigest
+                    $0.id == metadata.id
+                        && $0.contentDigest == metadata.digest
                 }
             }
             guard stillVisible else {
                 try? await attachmentFileStore.removeMaterializations([metadata])
                 return nil
             }
-            if attachmentFailures[attachment.id] != nil { attachmentFailures[attachment.id] = nil }
+            if attachmentFailures[metadata.id] != nil { attachmentFailures[metadata.id] = nil }
             return url
         } catch {
-            reportAttachmentFailure(attachment.id, message: error.localizedDescription)
+            reportAttachmentFailure(metadata.id, message: error.localizedDescription)
             return nil
         }
     }
@@ -541,6 +544,7 @@ final class NoteStore: ObservableObject {
         let expectedDigest = attachment.contentDigest
         let expectedBytes = attachment.byteCount
         var imported: [ImportedAttachment] = []
+        var transactionContext: ModelContext?
         do {
             imported = try await attachmentFileStore.importFiles(
                 [sourceURL], baseSortIndex: 0, existingCount: 0, existingBytes: 0
@@ -551,13 +555,16 @@ final class NoteStore: ObservableObject {
                   original.byteCount == expectedBytes else {
                 throw AttachmentFileStoreError.inaccessible(sourceURL, "Choose the original file; this file has different contents.")
             }
-            let replicas = try storedAttachments(matching: id)
+            let refreshedContext = try makeFreshContext()
+            transactionContext = refreshedContext
+            let replicas = try storedAttachments(matching: id, in: refreshedContext)
             guard replicas.allSatisfy({ $0.contentDigest == expectedDigest && $0.byteCount == expectedBytes }) else {
                 throw AttachmentFileStoreError.inaccessible(sourceURL, "The attachment changed while the file was being selected. Retry with its current version.")
             }
             for replica in replicas { replica.payload = original.payload }
-            guard save() else {
-                reportAttachmentFailure(id, message: lastErrorMessage ?? "The restored file could not be saved.")
+            let presentation = try presentationSnapshot(in: refreshedContext)
+            if case let .failed(message) = persistImport(in: refreshedContext, fallbackPresentation: presentation) {
+                reportAttachmentFailure(id, message: message)
                 try? await removeImportedMaterializations(imported)
                 return false
             }
@@ -565,8 +572,15 @@ final class NoteStore: ObservableObject {
             retryAttachment(attachment)
             return true
         } catch {
+            transactionContext?.rollback()
             try? await removeImportedMaterializations(imported)
-            reportAttachmentFailure(id, message: error.localizedDescription)
+            var message = error.localizedDescription
+            do {
+                try reloadModels()
+            } catch {
+                message += " · Reload failed: \(error.localizedDescription)"
+            }
+            reportAttachmentFailure(id, message: message)
             return false
         }
     }

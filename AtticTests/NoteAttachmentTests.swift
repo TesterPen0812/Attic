@@ -82,6 +82,52 @@ final class NoteAttachmentTests: XCTestCase {
     }
 
     @MainActor
+    func testLocateRejectsChangedMetadataInFreshContextBeforeRestoringPayload() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = Data("original".utf8)
+        let source = try write(original, named: "original.txt", in: directory)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let note = NoteItem(body: "Note")
+        let attachment = NoteAttachment(
+            noteID: note.id, originalFilename: "original.txt", byteCount: Int64(original.count), sortIndex: 0,
+            contentDigest: SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined(), payload: nil
+        )
+        context.insert(note)
+        context.insert(attachment)
+        try context.save()
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let stale = try XCTUnwrap(store.attachments(for: note.id).first)
+        let previousDigest = stale.contentDigest
+
+        let external = ModelContext(container)
+        let changed = try XCTUnwrap(external.fetch(FetchDescriptor<NoteAttachment>()).first)
+        let replacement = Data("replacement".utf8)
+        let replacementDigest = SHA256.hash(data: replacement).map { String(format: "%02x", $0) }.joined()
+        changed.contentDigest = replacementDigest
+        changed.byteCount = Int64(replacement.count)
+        try external.save()
+        XCTAssertEqual(stale.contentDigest, previousDigest, "The visible context still holds the original metadata")
+
+        let restored = await store.locateAttachment(stale, at: source)
+        XCTAssertFalse(restored)
+        XCTAssertNotNil(store.attachmentFailures[stale.id])
+        XCTAssertEqual(store.attachments(for: note.id).first?.contentDigest, replacementDigest,
+                       "Retry must use the current metadata after Locate detects a stale row")
+        let verification = ModelContext(container)
+        let saved = try XCTUnwrap(verification.fetch(FetchDescriptor<NoteAttachment>()).first)
+        XCTAssertEqual(saved.contentDigest, replacementDigest)
+        XCTAssertEqual(saved.byteCount, Int64(replacement.count))
+        XCTAssertNil(saved.payload, "Locate must not put old bytes under newly saved metadata")
+        let replacementURL = try write(replacement, named: "replacement.txt", in: directory)
+        let current = try XCTUnwrap(store.attachments(for: note.id).first)
+        let retried = await store.locateAttachment(current, at: replacementURL)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(store.attachments(for: note.id).first?.payload, replacement)
+    }
+
+    @MainActor
     func testAttachmentMutationsUpdateOwningNoteRecency() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
