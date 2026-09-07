@@ -64,30 +64,36 @@ final class CanvasUITests: XCTestCase {
         openCanvas()
         let surface = canvasSurface
         app.buttons["canvas-add-text"].click()
-        let entry = app.textFields["Type something"]
-        XCTAssertTrue(entry.waitForExistence(timeout: 2))
-        entry.click()
-        entry.typeText("Editable canvas text")
-        app.buttons["Place"].click()
+        XCTAssertFalse(app.textFields["Type something"].exists)
         let placement = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.35))
         placement.click()
+        let editor = app.textViews.matching(NSPredicate(format: "label == %@", "Edit canvas text")).firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 2))
+        assertContentCount("0 items")
+        XCTAssertEqual(editor.frame.minX + 4, placement.screenPoint.x, accuracy: 3)
+        XCTAssertEqual(editor.frame.minY + 4, placement.screenPoint.y, accuracy: 3)
+        editor.typeText("Editable canvas text")
+        editor.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: .command)
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 2))
         assertContentCount("1 item")
         let initialText = surface.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "canvas-object-", "Editable canvas text")
         ).firstMatch
         XCTAssertTrue(initialText.waitForExistence(timeout: 2))
-        XCTAssertEqual(initialText.frame.midX, placement.screenPoint.x, accuracy: 3)
-        XCTAssertEqual(initialText.frame.midY, placement.screenPoint.y, accuracy: 3)
+        XCTAssertEqual(initialText.frame.minX + 4, placement.screenPoint.x, accuracy: 3)
+        XCTAssertEqual(initialText.frame.minY + 4, placement.screenPoint.y, accuracy: 3)
         let textID = initialText.identifier
         let textObject = app.descendants(matching: .any).matching(identifier: textID).firstMatch
         app.buttons["canvas-object-edit-text"].click()
-        let editor = app.textViews.matching(NSPredicate(format: "label == %@", "Edit canvas text")).firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 2))
         editor.typeText(" revised")
         editor.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: .command)
         XCTAssertTrue(editor.waitForNonExistence(timeout: 2))
         waitForLabel("Editable canvas text revised", on: textObject)
+        assertFitAndResetChangeObjectGeometry(textObject)
 
+        app.buttons["canvas-tool-pen"].click()
+        waitForSelection(true, on: app.buttons["canvas-tool-pen"])
         app.descendants(matching: .any).matching(identifier: "canvas-add-shape").firstMatch.click()
         let rectangle = app.menuItems["Rectangle"]
         XCTAssertTrue(rectangle.waitForExistence(timeout: 2))
@@ -123,6 +129,10 @@ final class CanvasUITests: XCTestCase {
             guard let element = object as? XCUIElement else { return false }
             return abs(element.frame.minX - originalFrame.minX) < 1
         })
+        assertFitAndResetChangeObjectGeometry(shape)
+        app.typeKey("1", modifierFlags: .command)
+        openCanvas()
+        assertFitAndResetChangeObjectGeometry(shape)
         app.buttons["canvas-object-delete"].click()
         assertContentCount("1 item")
         app.typeKey("z", modifierFlags: .command)
@@ -343,6 +353,23 @@ final class CanvasUITests: XCTestCase {
         // The children-preserving SwiftUI wrapper is exposed as Group on macOS.
         // Its stable identifier, label, and native child tree define the surface.
         app.descendants(matching: .any).matching(identifier: "canvas-surface").firstMatch
+    }
+
+    private func assertFitAndResetChangeObjectGeometry(_ object: XCUIElement,
+                                                       file: StaticString = #filePath, line: UInt = #line) {
+        let original = object.frame
+        app.typeKey("9", modifierFlags: .command)
+        waitForFrame(of: object, matching: NSPredicate { element, _ in
+            guard let element = element as? XCUIElement else { return false }
+            return abs(element.frame.width - original.width) > 2
+        }, file: file, line: line)
+        app.typeKey("0", modifierFlags: .command)
+        waitForFrame(of: object, matching: NSPredicate { element, _ in
+            guard let element = element as? XCUIElement else { return false }
+            return abs(element.frame.width - original.width) < 1
+                && abs(element.frame.minX - original.minX) < 1
+                && abs(element.frame.minY - original.minY) < 1
+        }, file: file, line: line)
     }
 
     private func waitForFrame(of element: XCUIElement, matching predicate: NSPredicate,

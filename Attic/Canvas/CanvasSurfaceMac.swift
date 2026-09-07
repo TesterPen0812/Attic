@@ -79,6 +79,9 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
                 _ = await session?.completePendingText(placement, at: point)
             }
         }
+        view.onBeginTextInsertion = { [weak session] origin, width in
+            session?.makeTextInsertion(at: origin, width: width)
+        }
         view.onCompleteShape = { [weak session] shape, start, end in
             _ = session?.completePendingShape(shape, from: start, to: end)
         }
@@ -170,6 +173,8 @@ final class CanvasNSView: NSView {
     var onImportImageBatch: (CanvasImageImportBatch) -> Void = { _ in }
     var onCancelImageImportBatches: () -> Void = {}
     var onPlaceText: (CanvasTextPlacement, CanvasPoint) -> Void = { _, _ in }
+    var onBeginTextInsertion: (CanvasPoint, Double) -> CanvasSemanticTextDraft? = { _, _ in nil }
+    var editingSemanticIsInsertion = false
     var onCompleteShape: (
         CanvasShapeKind,
         CanvasPoint,
@@ -302,7 +307,9 @@ final class CanvasNSView: NSView {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            // The observer runs on the main queue. Cancel this interaction
+            // now, not a later gesture after the panel has regained focus.
+            MainActor.assumeIsolated {
                 self?.cancelInteraction()
             }
         }
@@ -385,7 +392,7 @@ final class CanvasNSView: NSView {
             changed = true
         }
         if self.semanticObjects != semanticObjects {
-            if let id = editingSemanticObjectID, !semanticObjects.contains(where: { $0.id == id }) {
+            if !editingSemanticIsInsertion, let id = editingSemanticObjectID, !semanticObjects.contains(where: { $0.id == id }) {
                 suspendSemanticTextEditing()
             }
             reconcileSemanticTextEditing(with: semanticObjects)
@@ -477,7 +484,7 @@ final class CanvasNSView: NSView {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.cancelInteraction()
             }
         }
@@ -594,6 +601,22 @@ final class CanvasNSView: NSView {
 
         switch pendingPlacement {
         case let .text(placement):
+            if placement.text.isEmpty {
+                _ = interaction.cancel()
+                if let object = semanticObject(at: worldPoint), object.content?.text != nil {
+                    onSelectSemanticObject(object.id)
+                    selectedSemanticObjectID = object.id
+                    beginSemanticTextEditing(object)
+                } else {
+                    let scale = interaction.viewport.scale
+                    let origin = CanvasPoint(x: worldPoint.x - 4, y: worldPoint.y - 4)
+                    let width = max(48, min(280, (bounds.width - viewPoint.x) / scale))
+                    if let draft = onBeginTextInsertion(origin, width) {
+                        beginSemanticTextEditing(draft.baseline, insertion: draft)
+                    }
+                }
+                return
+            }
             onPlaceText(placement, worldPoint)
             return
         case let .shape(shape):
@@ -774,6 +797,7 @@ final class CanvasNSView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        guard isRepresentationActive else { return }
         let point = convert(event.locationInWindow, from: nil)
         let requestedMode: ViewportGestureMode = event.modifierFlags.contains(.command)
             ? .zoom
@@ -796,6 +820,10 @@ final class CanvasNSView: NSView {
             && (delta.width != 0 || delta.height != 0)
 
         if directBegan {
+            if activeViewportGesture?.source == .magnification {
+                finishViewportGestureSequence(source: .magnification, at: point)
+                suppressesMagnification = true
+            }
             finishViewportGestureSequence(source: .scroll, at: point)
             pendingScrollMomentumMode = nil
             suppressesScrollSequence = false

@@ -77,6 +77,95 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 
 final class CanvasAccessibilityTests: XCTestCase {
     @MainActor
+    func testDirectTextInsertionUsesClickedOriginAndOneDurableUndoableCommit() throws {
+        let store = try makeTestCanvasStore()
+        let session = CanvasSession(store: store)
+        session.zoom(by: 2, anchoredAt: CGPoint(x: 240, y: 180), in: CGSize(width: 480, height: 360))
+        session.selectTextTool()
+        let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 480, height: 360),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        panel.contentView = view
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        XCTAssertEqual(view.baseCursorRole, .textPlacement)
+        let click = CGPoint(x: 80, y: 100)
+        view.mouseDown(with: try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: view.convert(click, to: nil), modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0.5
+        )))
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        XCTAssertTrue(panel.firstResponder === editor)
+        XCTAssertEqual(editor.frame.minX + editor.textContainerInset.width, click.x, accuracy: 0.001)
+        XCTAssertEqual(editor.frame.minY + editor.textContainerInset.height, click.y, accuracy: 0.001)
+        XCTAssertTrue(store.semanticObjects.isEmpty)
+        XCTAssertFalse(session.canUndo)
+        editor.insertText("Direct text", replacementRange: NSRange(location: 0, length: 0))
+        bridge.configure(view)
+        XCTAssertTrue(view.semanticTextEditor === editor)
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r", modifiers: .command))
+        XCTAssertNil(view.semanticTextEditor)
+        XCTAssertEqual(session.semanticObjects.count, 1)
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.content?.text, "Direct text")
+        XCTAssertTrue(session.undo())
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        XCTAssertFalse(session.canUndo)
+        XCTAssertTrue(session.redo())
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Direct text")
+    }
+
+    @MainActor
+    func testUnsavedTextInsertionRetainsFailureAcrossRecreationAndFencesPageGeneration() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestCanvasStore(persist: gate.save)
+        let session = CanvasSession(store: store)
+        session.selectTextTool()
+        let draft = try XCTUnwrap(session.makeTextInsertion(at: CanvasPoint(x: 12, y: 30), width: 160))
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        view.beginSemanticTextEditing(draft.baseline, insertion: draft)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText("Retain me", replacementRange: NSRange(location: 0, length: 0))
+        gate.shouldFail = true
+        XCTAssertFalse(view.finishSemanticTextEditing(commit: true))
+        XCTAssertTrue(view.semanticTextEditor === editor)
+        XCTAssertTrue(store.semanticObjects.isEmpty)
+        view.suspendSemanticTextEditing()
+        let retained = try XCTUnwrap(session.makeTextInsertion(at: .zero, width: 280))
+        XCTAssertEqual(retained.baseline.id, draft.baseline.id)
+        XCTAssertEqual(retained.text, "Retain me")
+        XCTAssertEqual(retained.baseline.worldRect.origin, CGPoint(x: 12, y: 30))
+        gate.shouldFail = false
+        XCTAssertNotNil(session.createCanvas(name: "Other page"))
+        XCTAssertFalse(session.commitSemanticText(retained))
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        XCTAssertTrue(session.selectCanvas(retained.baseline.canvasID))
+        XCTAssertTrue(store.clearBoard())
+        XCTAssertFalse(session.commitSemanticText(retained))
+        XCTAssertEqual(session.semanticTextDraft(retained.key)?.text, "Retain me")
+    }
+
+    @MainActor
+    func testEmptyOrCancelledInsertionNeverCreatesPersistentObject() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        session.selectTextTool()
+        let draft = try XCTUnwrap(session.makeTextInsertion(at: .zero, width: 120))
+        XCTAssertTrue(session.commitSemanticText(draft))
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        view.beginSemanticTextEditing(draft.baseline, insertion: draft)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText("Discard me", replacementRange: NSRange(location: 0, length: 0))
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 53, characters: "\u{1b}"))
+        XCTAssertNil(view.semanticTextEditor)
+        XCTAssertNil(session.semanticTextDraft(draft.key))
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        XCTAssertFalse(session.canUndo)
+    }
+
+    @MainActor
     func testHostedNativeMouseSequenceCompletesInkAfterFocusAndSelectionRefresh() throws {
         let panel = NSPanel(
             contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
@@ -830,6 +919,36 @@ final class CanvasImageDropBatchTests: XCTestCase {
 }
 
 final class CanvasDomainTests: XCTestCase {
+    @MainActor
+    func testFocusLossCancellationCannotCancelANewerViewportGesture() async throws {
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 380))
+        XCTAssertTrue(view.beginViewportGestureSequence(source: .magnification, mode: .zoom))
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
+        // Synchronous ownership release is required before another physical
+        // sequence begins; a queued cancellation would discard the new one.
+        XCTAssertNil(view.activeViewportGesture)
+        XCTAssertTrue(view.beginViewportGestureSequence(source: .scroll, mode: .zoom))
+        await Task.yield()
+        XCTAssertEqual(view.activeViewportGesture?.source, .scroll)
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 8, command: true, phase: 2))
+        XCTAssertGreaterThan(view.interaction.viewport.scale, 1)
+    }
+
+    @MainActor
+    func testNewCommandScrollTakesOwnershipAfterMissingPinchTerminalEvent() throws {
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 380))
+        XCTAssertTrue(view.beginViewportGestureSequence(source: .magnification, mode: .zoom))
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 8, command: true, phase: 1))
+        XCTAssertEqual(view.activeViewportGesture?.source, .scroll)
+        XCTAssertGreaterThan(view.interaction.viewport.scale, 1)
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 0, command: true, phase: 4))
+        XCTAssertNil(view.activeViewportGesture)
+        view.deactivateRepresentation()
+        let viewport = view.interaction.viewport
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 8, command: true))
+        XCTAssertEqual(view.interaction.viewport, viewport)
+    }
+
     func testStrokeCodecRoundTripsVersionedPlatformNeutralArchive() throws {
         let points = [
             CanvasPoint(x: -12.5, y: 8.25),

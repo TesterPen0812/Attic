@@ -172,9 +172,9 @@ enum CanvasPendingPlacement: Equatable, Sendable {
 
     var instruction: String {
         switch self {
-        case .text:
+        case let .text(placement):
             #if os(macOS)
-            "Click the canvas to place editable text"
+            placement.text.isEmpty ? "Click the canvas and type" : "Click the canvas to place editable text"
             #else
             "Click the canvas to place a non-editable text image"
             #endif

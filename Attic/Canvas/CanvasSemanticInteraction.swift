@@ -120,7 +120,7 @@ extension CanvasNSView {
         return true
     }
 
-    func beginSemanticTextEditing(_ object: CanvasSemanticObject) {
+    func beginSemanticTextEditing(_ object: CanvasSemanticObject, insertion: CanvasSemanticTextDraft? = nil) {
         guard let content = object.content, let text = content.text else { return }
         if editingSemanticObjectID == object.id, let editor = semanticTextEditor {
             window?.makeFirstResponder(editor)
@@ -140,13 +140,17 @@ extension CanvasNSView {
         editor.alignment = CanvasSemanticRenderer.alignment(content)
         editor.textColor = content.color.nsColor
         editor.insertionPointColor = selectionAccentColor
-        let draft = onSemanticDraft(CanvasReplicaKey(canvasID: object.canvasID, id: object.id))
+        let draft = insertion ?? onSemanticDraft(CanvasReplicaKey(canvasID: object.canvasID, id: object.id))
         editingSemanticBaseline = draft?.baseline ?? object
+        editingSemanticIsInsertion = draft?.isInsertion ?? false
         editor.string = draft?.text ?? text
         editor.allowsUndo = true
         editor.setAccessibilityLabel("Edit canvas text")
         editor.setAccessibilityHelp("Type directly on the canvas. Command-Return saves; Escape cancels.")
-        editor.onDraft = { [weak self] _ in self?.preserveCurrentSemanticDraft() }
+        editor.onDraft = { [weak self] _ in
+            self?.preserveCurrentSemanticDraft()
+            self?.layoutSemanticTextEditor()
+        }
         editor.onCommit = { [weak self] in self?.finishSemanticTextEditing(commit: true) ?? true }
         editor.onKeyboardCommit = { [weak self] in
             if let self { window?.makeFirstResponder(self) }
@@ -170,7 +174,7 @@ extension CanvasNSView {
         guard let editor = semanticTextEditor, let baseline = editingSemanticBaseline, !editor.isFinishing else { return true }
         editor.isFinishing = true
         defer { editor.isFinishing = false }
-        let draft = CanvasSemanticTextDraft(baseline: baseline, text: editor.string)
+        let draft = CanvasSemanticTextDraft(baseline: baseline, text: editor.string, isInsertion: editingSemanticIsInsertion)
         if commit {
             preserveCurrentSemanticDraft()
             guard onCommitSemanticText(draft) else { return false }
@@ -179,6 +183,7 @@ extension CanvasNSView {
         semanticTextEditor = nil
         editingSemanticObjectID = nil
         editingSemanticBaseline = nil
+        editingSemanticIsInsertion = false
         editor.removeFromSuperview()
         needsDisplay = true
         return true
@@ -186,11 +191,18 @@ extension CanvasNSView {
 
     func layoutSemanticTextEditor() {
         guard let editor = semanticTextEditor,
-              let object = semanticObjects.first(where: { $0.id == editingSemanticObjectID }),
+              let object = editingSemanticIsInsertion ? editingSemanticBaseline
+                : semanticObjects.first(where: { $0.id == editingSemanticObjectID }),
               let content = object.content else { return }
         let origin = interaction.viewport.viewPoint(for: CanvasPoint(x: object.worldRect.minX, y: object.worldRect.minY), in: bounds.size)
+        var editingContent = content
+        editingContent.text = editor.string
+        let height = editingSemanticIsInsertion
+            ? CanvasSemanticRenderer.textSize(editingContent, width: object.transform.width).height
+            : object.transform.height
         editor.frame = CGRect(origin: origin, size: CGSize(width: object.transform.width * interaction.viewport.scale,
-                                                        height: object.transform.height * interaction.viewport.scale))
+                                                        height: height * interaction.viewport.scale))
+        editor.textContainerInset = CGSize(width: 4 * interaction.viewport.scale, height: 4 * interaction.viewport.scale)
         editor.font = CanvasSemanticRenderer.font(content, scale: interaction.viewport.scale)
         editor.alignment = CanvasSemanticRenderer.alignment(content)
         editor.textColor = content.color.nsColor
@@ -205,18 +217,19 @@ extension CanvasNSView {
         semanticTextEditor = nil
         editingSemanticObjectID = nil
         editingSemanticBaseline = nil
+        editingSemanticIsInsertion = false
         editor.removeFromSuperview()
         needsDisplay = true
     }
 
     func preserveCurrentSemanticDraft() {
         guard let editor = semanticTextEditor, let baseline = editingSemanticBaseline else { return }
-        let draft = CanvasSemanticTextDraft(baseline: baseline, text: editor.string)
+        let draft = CanvasSemanticTextDraft(baseline: baseline, text: editor.string, isInsertion: editingSemanticIsInsertion)
         onPreserveSemanticDraft(draft.key, editor.string == baseline.content?.text ? nil : draft)
     }
 
     func reconcileSemanticTextEditing(with objects: [CanvasSemanticObject]) {
-        guard let editor = semanticTextEditor, !editor.isFinishing,
+        guard !editingSemanticIsInsertion, let editor = semanticTextEditor, !editor.isFinishing,
               let baseline = editingSemanticBaseline,
               let current = objects.first(where: { $0.id == baseline.id && $0.canvasID == baseline.canvasID }),
               current != baseline else { return }

@@ -3,6 +3,7 @@ import Foundation
 struct CanvasSemanticTextDraft {
     let baseline: CanvasSemanticObject
     let text: String
+    var isInsertion = false
     var key: CanvasReplicaKey { CanvasReplicaKey(canvasID: baseline.canvasID, id: baseline.id) }
 }
 
@@ -44,6 +45,24 @@ struct CanvasSemanticObject: Identifiable, Equatable {
     var createdAt: Date
     var updatedAt: Date
     var content: CanvasSemanticContent?
+
+    /// An unsaved insertion point, never passed to persistence before typing.
+    init(textInsertionAt origin: CanvasPoint, canvasID: UUID, generation: Int64,
+         content: CanvasSemanticContent, width: Double) {
+        id = UUID()
+        self.canvasID = canvasID
+        kind = "text"
+        payloadVersion = 1
+        payload = Data()
+        transform = CanvasImageTransform(center: CanvasPoint(x: origin.x + width / 2, y: origin.y + 24),
+                                         width: width, height: 48, zIndex: 0)
+        rotation = 0
+        boardGeneration = generation
+        mutationVersion = 0
+        createdAt = Date()
+        updatedAt = createdAt
+        self.content = content
+    }
 
     init(_ row: CanvasSemanticObjectItem) {
         id = row.id

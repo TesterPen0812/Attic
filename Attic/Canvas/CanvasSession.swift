@@ -1018,6 +1018,29 @@ final class CanvasSession: ObservableObject {
     }
 
     #if os(macOS)
+    func selectTextTool() {
+        if case .text? = pendingPlacement {
+            cancelPendingPlacement()
+        } else {
+            pendingPlacement = .text(CanvasTextPlacement(text: "", prefersDarkSurface: false))
+            selectedImageID = nil
+            selectedSemanticObjectID = nil
+        }
+    }
+
+    func makeTextInsertion(at origin: CanvasPoint, width: Double) -> CanvasSemanticTextDraft? {
+        guard case .text? = pendingPlacement, origin.isFinite, width.isFinite, width >= 48 else { return nil }
+        // Reopening the tool recovers an interrupted unsaved insertion on this
+        // page instead of abandoning it when the native view was recreated.
+        if let retained = semanticTextDrafts.values.first(where: {
+            $0.isInsertion && $0.baseline.canvasID == selectedCanvasID
+        }) { return retained }
+        return CanvasSemanticTextDraft(baseline: CanvasSemanticObject(
+            textInsertionAt: origin, canvasID: selectedCanvasID, generation: boardGeneration,
+            content: CanvasSemanticContent(text: "", color: color, strokeWidth: self.width), width: width
+        ), text: "", isInsertion: true)
+    }
+
     var selectedSemanticObject: CanvasSemanticObject? {
         semanticObjects.first { $0.id == selectedSemanticObjectID }
     }
@@ -1032,6 +1055,25 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func commitSemanticText(_ draft: CanvasSemanticTextDraft) -> Bool {
+        if draft.isInsertion {
+            guard !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+            preserveSemanticTextDraft(draft.key, draft: draft)
+            guard draft.baseline.canvasID == selectedCanvasID,
+                  draft.baseline.boardGeneration == boardGeneration,
+                  var content = draft.baseline.content else {
+                reportSemanticTextConflict()
+                return false
+            }
+            content.text = draft.text
+            let size = CanvasSemanticRenderer.textSize(content, width: draft.baseline.transform.width)
+            let origin = draft.baseline.worldRect.origin
+            let succeeded = insertSemanticObject(content: content, transform: CanvasImageTransform(
+                center: CanvasPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2),
+                width: size.width, height: size.height, zIndex: nextObjectZIndex
+            ))
+            if succeeded { preserveSemanticTextDraft(draft.key, draft: nil) }
+            return succeeded
+        }
         // No typing means there is no edit to save, even if an external refresh
         // changed or replaced the object before the view could reconfigure.
         if draft.text == draft.baseline.content?.text { return true }

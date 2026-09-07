@@ -18,18 +18,24 @@ struct CanvasPanelContent: View {
     @State private var isRenameCanvasPresented = false
     @State private var isDeleteCanvasPresented = false
     @State private var isImageImporterPresented = false
+    #if !os(macOS)
     @State private var isTextEntryPresented = false
+    #endif
     @State private var isStylePopoverPresented = false
     @State private var createCanvasName = ""
     @State private var renameCanvasName = ""
+    #if !os(macOS)
     @State private var textEntry = ""
+    #endif
     @State private var replacementImageID: UUID?
     @State private var isReplacementImporterPresented = false
     @State private var isImageExporterPresented = false
     @State private var exportDocument: CanvasImageExportDocument?
     @State private var exportType = UTType.png
     @State private var exportError: String?
+    #if !os(macOS)
     @FocusState private var isTextEntryFocused: Bool
+    #endif
 
     var body: some View {
         GeometryReader { proxy in
@@ -358,6 +364,7 @@ struct CanvasPanelContent: View {
                 identifier: "canvas-tool-select",
                 isSelected: session.pendingPlacement == nil && session.tool == .select
             ) {
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
                 session.selectTool(.select)
             }
             .keyboardShortcut("v", modifiers: [])
@@ -368,6 +375,7 @@ struct CanvasPanelContent: View {
                 identifier: "canvas-tool-pen",
                 isSelected: session.pendingPlacement == nil && session.tool == .pen
             ) {
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
                 session.selectTool(.pen)
             }
             .keyboardShortcut("p", modifiers: [])
@@ -378,6 +386,7 @@ struct CanvasPanelContent: View {
                 identifier: "canvas-tool-eraser",
                 isSelected: session.pendingPlacement == nil && session.tool == .eraser
             ) {
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
                 session.selectTool(.eraser)
             }
             .keyboardShortcut("e", modifiers: [])
@@ -388,16 +397,24 @@ struct CanvasPanelContent: View {
                 identifier: "canvas-add-text",
                 isSelected: isTextPlacementActive
             ) {
+                #if os(macOS)
+                let wasActive = isTextPlacementActive
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
+                if wasActive { session.cancelPendingPlacement() } else { session.selectTextTool() }
+                #else
                 if isTextPlacementActive {
                     session.cancelPendingPlacement()
                 } else {
                     textEntry = ""
                     isTextEntryPresented = true
                 }
+                #endif
             }
+            #if !os(macOS)
             .popover(isPresented: $isTextEntryPresented, arrowEdge: .bottom) {
                 textPlacementPopover
             }
+            #endif
 
             shapeMenu
 
@@ -444,6 +461,7 @@ struct CanvasPanelContent: View {
         Menu {
             ForEach(CanvasShapeKind.allCases) { shape in
                 Button {
+                    guard CanvasEditCommandRoute.finishTextEditing() else { return }
                     session.prepareShapePlacement(shape)
                 } label: {
                     Label(shape.title, systemImage: shape.symbolName)
@@ -469,6 +487,7 @@ struct CanvasPanelContent: View {
         .accessibilityIdentifier("canvas-add-shape")
     }
 
+    #if !os(macOS)
     private var textPlacementPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Add text")
@@ -510,6 +529,7 @@ struct CanvasPanelContent: View {
         textEntry = ""
         isTextEntryPresented = false
     }
+    #endif
 
     private var stylePopover: some View {
         VStack(alignment: .leading, spacing: 14) {

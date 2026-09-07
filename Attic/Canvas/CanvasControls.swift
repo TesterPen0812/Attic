@@ -30,6 +30,7 @@ struct CanvasPaletteControls: View {
                     isSelected: session.color == color
                         && session.tool == .pen
                 ) {
+                    guard CanvasEditCommandRoute.finishTextEditing() else { return }
                     session.selectColor(color)
                 }
             }

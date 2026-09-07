@@ -5,6 +5,20 @@ import AppKit
 
 @MainActor
 enum CanvasEditCommandRoute {
+    /// Toolbar/menu tool changes must honor the same failed-save veto as a
+    /// native responder change, including an unsaved insertion point.
+    static func finishTextEditing() -> Bool {
+        #if os(macOS)
+        if let editor = NSApp.keyWindow?.firstResponder as? CanvasSemanticTextEditor {
+            let canvas = editor.superview
+            let window = editor.window
+            guard editor.onCommit?() != false else { return false }
+            window?.makeFirstResponder(canvas)
+        }
+        #endif
+        return true
+    }
+
     static func canUndo(session: CanvasSession, section: PanelSection) -> Bool {
         guard section.isCanvas else { return false }
         #if os(macOS)
