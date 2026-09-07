@@ -1,6 +1,6 @@
 # Attic recovery validation — 7 September 2026
 
-Status: implementation and installed verification in progress. This report supersedes historical readiness claims, not the historical evidence itself.
+Status, updated 8 September 2026: integrated implementation, automated gates and limited installed-app checks passed; unified preview is running for evaluation. Physical-input, full visual/accessibility and sustained performance acceptance remain open. This report supersedes historical readiness claims, not the historical evidence itself.
 
 ## Provenance and boundaries
 
@@ -41,12 +41,47 @@ ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.recovery20260907.tests
 | Real UI checkpoint 2 | 8/12 pass, 4 fail | Image manipulation/document management passed; drag tests used touch API, text object AX geometry was vertically mirrored; targeted corrections awaiting rerun |
 | Focused real UI checkpoint 3 | 3/4 pass | Native task drag and both ink workflows passed; unprimed text-popover first click failed, not accepted via focus workaround |
 | Focused real UI checkpoint 4 | 2/2 pass | Single-click text placement/editing, shapes/transforms/history/relaunch; native inward-side/free-corner resizing, stable dock edges/minimum size; zero failures/skips/runtime warnings |
-| macOS Local static analysis | Pass, exit 0 | `xcodebuild -quiet -jobs 2 ... analyze`, isolated `AtticRecoveryAnalyze` identity; no diagnostic output |
+| Full real UI checkpoint 5 | 13/13 pass | Zero failures/skips; two runtime priority-inversion warnings remain, not a performance clearance |
+| Final macOS Local static analysis | Pass, exit 0 | `xcodebuild -quiet -jobs 2 ... analyze`, isolated `AtticRecoveryAnalyze` identity; rerun after final runtime corrections, no diagnostic output |
 | `ruby Scripts/test_launch_local_preview.rb` | 7 tests, 54 assertions, pass | Dry-run identity/safety policy, not launch UAT |
 | `ruby Scripts/test_run_local_ui_tests.rb` | 7 tests, 110 assertions, pass | Runner/generator policy, not real UI execution |
 | `bundle exec ruby Scripts/generate_project.rb` and `bundle exec ruby Scripts/verify_project_generation.rb` | Pass | Repeated after source membership changes |
 
 Ruby commands use `PATH=/opt/homebrew/opt/ruby/bin:$PATH`. Full test commands end in `test`; result bundles/logs are in `.build/evidence/`. Focused checkpoint 6 selects `PanelGeometryTests`, `PanelSquircleGeometryTests`, `CanvasDomainTests`, `CanvasSessionTests`, `NoteDraftControllerTests`, `NoteAttachmentTests`, `NoteStoreTests`, and `AppSettingsTests`. Subsequent edits require fresh results before final acceptance.
+
+Final exact commands, run from `/Users/taha/Developer/attic-recovery-20260907`:
+
+```sh
+xcodebuild -quiet -jobs 2 -project Attic.xcodeproj -scheme Attic -configuration Local \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/DerivedData \
+  -resultBundlePath .build/evidence/recovery-full-7.xcresult \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+  ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER=com.taha.Attic.recovery20260907.unithost \
+  ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME=AtticRecoveryUnitHost \
+  ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME=AtticRecoveryUnitHost \
+  ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER=com.taha.Attic.recovery20260907.tests test
+
+Scripts/run_local_ui_tests.zsh \
+  --app-bundle-id com.taha.Attic.recovery20260907.ui \
+  --ui-test-bundle-id com.taha.Attic.recovery20260907.uitests \
+  --unit-test-bundle-id com.taha.Attic.recovery20260907.unituitests \
+  --product-name AtticRecoveryUI --display-name 'Attic Recovery UI' \
+  --derived-data /Users/taha/Developer/attic-recovery-20260907/.build/UI \
+  --result-bundle /Users/taha/Developer/attic-recovery-20260907/.build/evidence/recovery-ui-5.xcresult
+
+xcodebuild -quiet -jobs 2 -project Attic.xcodeproj -scheme Attic -configuration Local \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/DerivedData \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+  ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.recovery20260907.analyze \
+  ATTIC_MACOS_PRODUCT_NAME=AtticRecoveryAnalyze \
+  ATTIC_MACOS_EXECUTABLE_NAME=AtticRecoveryAnalyze analyze
+
+PATH=/opt/homebrew/opt/ruby/bin:$PATH bundle exec ruby Scripts/generate_project.rb
+PATH=/opt/homebrew/opt/ruby/bin:$PATH bundle exec ruby Scripts/verify_project_generation.rb
+ruby Scripts/test_launch_local_preview.rb
+ruby Scripts/test_run_local_ui_tests.rb
+git diff --check 5a2b7ec..HEAD
+```
 
 ## Baseline preview
 
@@ -67,11 +102,11 @@ Ruby commands use `PATH=/opt/homebrew/opt/ruby/bin:$PATH`. Full test commands en
 | Finding | Current classification / remaining proof |
 | --- | --- |
 | C-01 | Automated pass: bounded immutable import ownership; real Finder/provider delivery pending |
-| C-02 | Automated pass: atomic mixed clear/restore; new semantic editor review still underway |
+| C-02 | Automated pass: atomic mixed clear/restore; semantic editor review corrections verified |
 | C-03 | Automated pass: object actions; native wrapper corrected; VoiceOver/installed traversal pending |
 | C-04 | Automated pass for bounded decode/import; large-image latency, memory and long sessions unverified |
-| C-05 | Approved and implemented additively; copied legacy fixture passes; final editor review and UI pending |
-| C-06 | Automated pass: per-board viewport/tool preferences, no selection/history restoration; relaunch UI pending |
+| C-05 | Approved and implemented additively; copied legacy fixture, editor review and semantic native UI workflow pass |
+| C-06 | Automated pass: per-board viewport/tool preferences, no selection/history restoration; native relaunch UI passes |
 | C-07 | Unverified: whole-table/main-thread scaling needs profiling, no speculative optimization accepted |
 | C-08 | Automated pass: Local observer/activity suppression; actual wakeups unverified |
 | C-09 | Automated pass: Canvas Undo routes and inline text ownership; installed shortcut precedence pending |
@@ -82,10 +117,10 @@ Ruby commands use `PATH=/opt/homebrew/opt/ruby/bin:$PATH`. Full test commands en
 | C-14 | Unverified: rapid/coalesced pointer sample fidelity; no unsupported API workaround added |
 | C-15 | Automated pass: stale scroll/pinch ownership and cancellation; physical trackpad sequences pending |
 | C-16 | Automated pass: batch progress/cancel ownership; native file-provider timing pending |
-| C-17 | Documentation being reconciled to semantic implementation; old non-editable labels superseded on macOS |
+| C-17 | Documentation reconciled to semantic implementation; old non-editable labels superseded on macOS |
 | C-18 | Automated pass: measured error-overlay layout; compact rendering pending |
 | N-001 | Automated pass: import ownership, duplicate-safe persistence; native provider timing pending |
-| N-002 | Automated pass: native range/session/focus fences; IME/native typing UAT pending |
+| N-002 | Automated pass plus direct native continuous typing/autosave/navigation check; IME and long-note UAT pending |
 | N-003 | Automated pass: explicit interaction locks; actual menu/file-panel timing pending |
 | N-004 | Automated pass: editor metadata and recovery checkpoint; installed caret/scroll relaunch pending |
 | N-005 | Automated pass: test-store/attachment isolation; no official data touched |
@@ -108,12 +143,12 @@ Ruby commands use `PATH=/opt/homebrew/opt/ruby/bin:$PATH`. Full test commands en
 | PANEL-06 | Automated pass: resize lifecycle/anchor/lock cleanup; real event-loss and outside acquisition pending |
 | PANEL-07 | Existing selected-trait tests pass; assistive speech pending |
 | PANEL-08 | Source review retained correct monitor domains; CPU/wakeup/latency measurement pending |
-| PANEL-09 | Unit and runner policy checks pass; fresh real UI suite pending |
+| PANEL-09 | Unit, runner policy and full real UI suite pass; physical-input acceptance remains separate |
 | PANEL-10 | Automated pass: outside halo and disabled dock edges; all physical corners/sizes pending |
 | PANEL-11 | Automated pass: no new Local cloud activity; installed energy timing pending |
-| PANEL-12 | Desktop Run now delegates to isolated launcher; fresh launch/replace UAT pending |
+| PANEL-12 | Desktop Run delegates to isolated launcher; signed final build passes, direct child did not remain alive under this execution host, verified Launch Services fallback used; no unconditional launcher-success claim |
 | PANEL-13 | Hosted input regression checks pass; assistive-client behavior pending |
-| SYS-009 | Isolated test roots and runner cleanup policy pass; signed UI-root cleanup still to verify |
+| SYS-009 | Isolated test roots, signed runner and owned-root cleanup pass in full UI run |
 
 ## Review corrections
 
@@ -122,8 +157,8 @@ Ruby commands use `PATH=/opt/homebrew/opt/ruby/bin:$PATH`. Full test commands en
 - Notes unreadable recovery warning cleared by ordinary editing: separate persistent warning/Retry, inaccessible-file handling, preserve unread bytes (`756434e`).
 - Locate using stale attachment context after asynchronous I/O: fresh metadata/payload verification and truthful Retry refresh (`756434e`).
 - Recovery Retry completing on a different page: editor-session/section fence (`ad21140`).
-- Composer priority controls disappearing during keyboard focus transfer: latch one composer open during editing; exact native UI test pending.
-- Canvas object accessibility hidden by SwiftUI wrapper: preserve macOS native children; installed AX proof pending.
+- Composer priority controls disappearing during keyboard focus transfer: latch one composer open during editing; native UI test passes consecutive entry, Tab transfer, retained flags and selected priority.
+- Canvas object accessibility hidden by SwiftUI wrapper: preserve macOS native children; installed AX tree and semantic UI test pass. Spoken VoiceOver behavior remains unverified.
 - Canvas same-ID text refresh and cross-page draft identity: captured page/payload/version/generation fences, untouched editor refresh, and scoped preserved drafts; independent source review closed both findings and checkpoint 3 regressions passed.
 - Maximum valid semantic text could exceed the JSON decoder byte cap after escaping: bounded worst-case encoded limit and maximum-size round-trip regression passed.
 - Clean composer presentation blocked auto-hide indefinitely: presentation is now only a visual latch; actual pending content and title/submit/priority focus own visibility locks (`c430d3a` plus root integration). Real external-click behavior still pending.
@@ -159,6 +194,10 @@ All work is on the single integration branch above. Review agents did not create
 | Editable Canvas objects, persistence and conflict review corrections | `e44d64b7fbd3af30498f8125b1a338b77c7911dd` |
 | Clean composer visibility-lock correction | `c430d3acd1ec3fb89193f16a942804a66bb7a493` |
 | Root integration, one composer, shared controls and generated project | `d52ff9bf49c474f45dfb315e89943779de0f692e` |
+| Delivered-event panel resize and move correction | `e9887e9a07ebc483856a13f01ffd37a88782d733` |
+| Canvas AX geometry and single-owner responsive toolbar | `3525494cc08315fd3602e215cbe793ecbe43e3f0` |
+| Native task-drag and panel-resize installed UI checks | `0e0ee46af18cda81ac9e152bb014cb310be4576d` |
+| Verification ledger at final preview build | `647eb2bc4c7d4406fbce2030b6d4d38a08e40015` |
 
 Changed files by workstream (all paths repository-relative):
 
@@ -167,6 +206,38 @@ Changed files by workstream (all paths repository-relative):
 - Panel: `Attic/Window/{AtticPanel,AtticPanelController,PanelUIState}.swift`; `Attic/Services/PanelGeometry.swift`; `AtticTests/{CornerHoverStateMachineTests,PanelGeometryTests,PanelSquircleGeometryTests}.swift`.
 - Root: `Attic/App/AppCoordinator.swift`; `Attic/Services/PersistenceController.swift` (macOS lists only); `Attic/Views/Panel/AtticPanelView.swift`; removed `Attic/Views/Panel/TaskComposerView.swift`; `Attic/Design/AtticStyle.swift`; `Attic/Views/Settings/PanelSettingsView.swift`; `AtticTests/{AppSettingsTests,TaskStoreTests}.swift`; `AtticUITests/AtticUITests.swift`; `Scripts/{generate_project.rb,test_launch_local_preview.rb,test_run_local_ui_tests.rb}`; `script/build_and_run.sh`; generated `Attic.xcodeproj/project.pbxproj`; this report, historical ledger link and `Docs/CanvasSemanticObjectsDecision.md`.
 
+## Final unified preview and direct checks
+
+- Clean build source: `codex/attic-recovery-20260907`, **`647eb2bc4c7d4406fbce2030b6d4d38a08e40015`**. Subsequent report-only commit changes no runtime code. No commits pushed.
+- Display **Attic Recovery Preview**, executable **AtticRecoveryPreview**, bundle **`com.taha.Attic.recovery20260907.preview`**.
+- App: `/Users/taha/Developer/attic-recovery-20260907/.build/RecoveryPreview/Build/Products/Local/AtticRecoveryPreview.app`.
+- Executable: app path above plus `/Contents/MacOS/AtticRecoveryPreview`.
+- SHA-256: **`cae6f0332a1e9d5c6bc476e0f21fdcdd335110d88856dfed182d01f6e267036c`**.
+- Final signed Local build: exit 0; `codesign --verify --deep --strict` passes. Entitlements are sandbox, client/server network, debug; no CloudKit/APNs. Full manifest/signature/entitlements are in `.build/RecoveryPreview/PreviewState/`.
+- Build command:
+
+```sh
+./script/build_and_run.sh --display-name 'Attic Recovery Preview' \
+  --bundle-id com.taha.Attic.recovery20260907.preview \
+  --executable-name AtticRecoveryPreview \
+  --derived-data /Users/taha/Developer/attic-recovery-20260907/.build/RecoveryPreview
+```
+
+An older same-preview PID remained after the initial launch attempt; it was closed through its native Quit menu and its exit verified. Direct child launch from the script exited under this execution host even after the old process quit. No cause or fix is claimed for that launcher/host behavior. The exact newly built app was then launched with:
+
+```sh
+/usr/bin/open -n /Users/taha/Developer/attic-recovery-20260907/.build/RecoveryPreview/Build/Products/Local/AtticRecoveryPreview.app
+```
+
+The resulting PID **19006**, started **8 September 00:13:08 local**, was checked against the exact executable path and remained alive across the following native checks. It differs from the script's short-lived recorded child PID; use this distinction when reading its manifest/logs.
+
+- Pinned the actual preview for stable testing. Direct bottom-edge mouse drag changed panel screenshot bounds from approximately 344×494 to 344×634 while the top stayed anchored. Composer stayed accessible at the bottom. This final check resolves the earlier direct bottom-resize failure, not all external sides/corners.
+- Notes: typed “Final preview: typing stays in one uninterrupted flow.” continuously into an isolated preview note. Body remained focused, status advanced from Unsaved to Saved automatically, and note count became 1. Browsing saved notes and returning preserved the exact body.
+- Canvas: final native AX tree exposes the existing ink objects and compact toolbar. At this point new Canvas input was arriving from the user, so further cursor control was stopped to avoid interference. Full automated semantic text/shape editing, moving/resizing, history and relaunch passed separately in UI checkpoints 4 and 5.
+- Previously observed Light/Dark Settings, seven themes and one-composer task creation/reordering remain recorded above. They are not upgraded to a full appearance/translucency/background matrix.
+- Process samples during this final mixed-interaction session ranged from 0.8–3.8% CPU and 42,848–84,432 KB RSS at the sampled moments. They are not controlled before/after, peak memory, sustained-idle, GPU or energy measurements. Resource growth and perceptual latency remain unverified.
+- Skill used: `build-macos-apps:build-run-debug`, to reuse the existing isolated launcher and separate build identity from installed-app proof.
+
 ## Unresolved choices and measurement boundaries
 
 - The roadmap referenced three previously chosen save policies, but no exact trio exists in source or prior decision material. Automatic/On-exit/Hybrid was asked as an optional clarification; no answer received. Robust current automatic saving remains active. No speculative policy picker was added.
@@ -174,4 +245,6 @@ Changed files by workstream (all paths repository-relative):
 - Before shutdown the Mac had about 1.7 GB disk free and heavy swap; after restart about 10 GB was free. Test elapsed times across that boundary are not causal performance evidence.
 - Unit counts, code review, snapshots and signed builds are not physical trackpad, VoiceOver, multi-display, energy, or release-readiness evidence.
 - UI checkpoint 1 recorded two real priority-inversion warnings inside `AtticRecoveryUI`, not in the test runner. Independent symbol/UUID matching traced both through Foundation `NSConditionLock.lockWhenCondition:beforeDate` into AppKit `__getDataDetectorsScanner`: one from Services menu filtering, one from `NSSpellChecker`/`NSTextCheckingController`. No Attic persistence queue appeared in the resolved frames and no app-level causal fix was established. They are retained as framework/runtime performance observations; spelling, Services and other working features were not disabled to suppress them.
-- The unified preview, final SHA/file inventory, real UI results, and remaining user visual judgments will be added after the final gates.
+- Final full UI checkpoint 5 also records two priority-inversion warnings. They are not suppressed and the run is not described as warning-free or a full performance pass.
+- Canvas failed-save text drafts are retained within the running Canvas session; unlike Notes recovery journaling, they are not crash-durable. This remains a reliability limit, not silently presented as solved.
+- Still needed: physical pinch/swipe direction while pinned; all four corners and outside-edge acquisition at minimum/medium/large sizes; Dock/multi-display and external-app focus/auto-hide; compact/expanded Settings; all themes/appearances/glass modes on bright/dark/detailed backgrounds; VoiceOver/Full Keyboard Access/IME; real Finder/provider attachments and long-note/large-image/long-running resource profiling. The exact three save-policy options still need a product decision. Visual balance and motion feel require the user's judgment.
