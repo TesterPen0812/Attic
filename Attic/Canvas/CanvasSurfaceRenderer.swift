@@ -427,7 +427,8 @@ func drawCanvas(
     imageProvider: (CanvasPlacedImage) -> CGImage? = { _ in nil },
     imageSelectionColor: CGColor? = nil,
     shapePreview: CanvasStrokeGeometry? = nil,
-    strokeReadabilityShadowColor: CGColor? = nil
+    strokeReadabilityShadowColor: CGColor? = nil,
+    drawPlacedObjects: ((CGContext, CGRect) -> Void)? = nil
 ) {
     context.saveGState()
     context.clear(bounds)
@@ -461,21 +462,13 @@ func drawCanvas(
     )
 
     context.interpolationQuality = .high
-    for image in images.sorted(by: imageComesBefore) {
-        let rect = image.worldRect
-        guard rect.intersects(cullingRect),
-              let decoded = imageProvider(image) else {
-            continue
+    if let drawPlacedObjects {
+        drawPlacedObjects(context, cullingRect)
+    } else {
+        for image in images.sorted(by: imageComesBefore) {
+            guard image.worldRect.intersects(cullingRect), let decoded = imageProvider(image) else { continue }
+            drawCanvasImage(image, decoded: decoded, in: context)
         }
-        context.saveGState()
-        context.clip(to: rect)
-        context.translateBy(x: rect.minX, y: rect.maxY)
-        context.scaleBy(x: 1, y: -1)
-        context.draw(
-            decoded,
-            in: CGRect(origin: .zero, size: rect.size)
-        )
-        context.restoreGState()
     }
 
     context.setLineCap(.round)
@@ -575,7 +568,20 @@ private func drawImageSelection(
     viewportSize: CGSize,
     color: CGColor
 ) {
+    drawCanvasObjectSelection(worldRect: image.worldRect, context: context, viewport: viewport, viewportSize: viewportSize, color: color)
+}
+
+func drawCanvasImage(_ image: CanvasPlacedImage, decoded: CGImage, in context: CGContext) {
     let rect = image.worldRect
+    context.saveGState()
+    context.clip(to: rect)
+    context.translateBy(x: rect.minX, y: rect.maxY)
+    context.scaleBy(x: 1, y: -1)
+    context.draw(decoded, in: CGRect(origin: .zero, size: rect.size))
+    context.restoreGState()
+}
+
+func drawCanvasObjectSelection(worldRect rect: CGRect, context: CGContext, viewport: CanvasViewport, viewportSize: CGSize, color: CGColor) {
     let topLeft = viewport.viewPoint(
         for: CanvasPoint(x: rect.minX, y: rect.minY),
         in: viewportSize

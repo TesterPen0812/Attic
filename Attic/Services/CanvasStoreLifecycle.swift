@@ -64,15 +64,23 @@ extension CanvasStore {
         strokes: [CanvasStroke],
         images: [CanvasPlacedImage]
     ) -> CanvasSaveOutcome {
-        guard !strokes.isEmpty || !images.isEmpty else {
+        restoreBoardContents(CanvasBoardContents(strokes: strokes, images: images))
+    }
+
+    @discardableResult
+    func restoreBoardContents(_ contents: CanvasBoardContents) -> CanvasSaveOutcome {
+        guard !contents.isEmpty else {
             return .noChanges
         }
 
         do {
             let timestamp = now()
             try ensureSelectedBoardReplicaExists(at: timestamp)
-            try stageStrokeRestore(strokes, at: timestamp)
-            try stageImageRestore(images, at: timestamp)
+            try stageStrokeRestore(contents.strokes, at: timestamp)
+            try stageImageRestore(contents.images, at: timestamp)
+            #if os(macOS)
+            try stageSemanticRestore(contents.semanticObjects, at: timestamp)
+            #endif
         } catch {
             discardPendingChanges(after: error)
             return .failed(lastErrorMessage ?? error.localizedDescription)

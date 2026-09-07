@@ -34,6 +34,12 @@ final class CanvasSession: ObservableObject {
     @Published private(set) var imageImportProgress: CanvasImageImportBatchProgress?
     @Published private(set) var failedImageIDs: Set<UUID> = []
     @Published private(set) var imageDecodeRetryRequest: CanvasImageDecodeRetryRequest?
+    #if os(macOS)
+    @Published private(set) var semanticObjects: [CanvasSemanticObject] = []
+    @Published private(set) var selectedSemanticObjectID: UUID?
+    @Published private(set) var semanticTextEditRequest: UUID?
+    private var semanticTextDrafts: [CanvasReplicaKey: CanvasSemanticTextDraft] = [:]
+    #endif
 
     private enum HistoryCommand {
         case addStroke(CanvasStroke)
@@ -43,7 +49,10 @@ final class CanvasSession: ObservableObject {
         case transformImage(before: CanvasPlacedImage, after: CanvasPlacedImage)
         case replaceImage(before: CanvasPlacedImage, after: CanvasPlacedImage)
         case deleteImage(CanvasPlacedImage)
-        case clear(strokes: [CanvasStroke], images: [CanvasPlacedImage])
+        case clear(CanvasBoardContents)
+        #if os(macOS)
+        case changeSemantic(before: CanvasSemanticObject?, after: CanvasSemanticObject?)
+        #endif
     }
 
     private let store: CanvasStore
@@ -96,6 +105,9 @@ final class CanvasSession: ObservableObject {
         let boardGeneration: Int64
         let strokes: [StrokeSignature]
         let images: [ImageSignature]
+        #if os(macOS)
+        var semanticObjects: [CanvasSemanticObject] = []
+        #endif
 
         init(
             canvases: [CanvasBoard],
@@ -183,6 +195,10 @@ final class CanvasSession: ObservableObject {
             strokes: store.strokes,
             images: store.images
         )
+        #if os(macOS)
+        semanticObjects = store.semanticObjects
+        lastSemanticSnapshot.semanticObjects = semanticObjects
+        #endif
         restoreViewState()
 
         revisionObservation = store.$revision
@@ -212,6 +228,9 @@ final class CanvasSession: ObservableObject {
 
     var canBringSelectedImageForward: Bool {
         guard let selectedImage else { return false }
+        #if os(macOS)
+        if semanticObjects.contains(where: { $0.transform.zIndex >= selectedImage.zIndex }) { return true }
+        #endif
         return images.contains {
             CanvasImagePlacement.imageIsInFront($0, selectedImage)
         }
@@ -219,6 +238,9 @@ final class CanvasSession: ObservableObject {
 
     var canSendSelectedImageBackward: Bool {
         guard let selectedImage else { return false }
+        #if os(macOS)
+        if semanticObjects.contains(where: { $0.transform.zIndex <= selectedImage.zIndex }) { return true }
+        #endif
         return images.contains {
             CanvasImagePlacement.imageIsInFront(selectedImage, $0)
         }
@@ -316,6 +338,13 @@ final class CanvasSession: ObservableObject {
     ) -> Bool {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return false }
+        #if os(macOS)
+        guard normalized.utf8.count <= 65_536 else {
+            lastErrorMessage = "Keep canvas text below 64 KB. Use a note for longer writing."
+            return false
+        }
+        selectedSemanticObjectID = nil
+        #endif
         pendingPlacement = .text(CanvasTextPlacement(
             text: normalized,
             prefersDarkSurface: prefersDarkSurface
@@ -325,6 +354,9 @@ final class CanvasSession: ObservableObject {
     }
 
     func prepareShapePlacement(_ shape: CanvasShapeKind) {
+        #if os(macOS)
+        selectedSemanticObjectID = nil
+        #endif
         pendingPlacement = .shape(shape)
         selectedImageID = nil
     }
@@ -427,12 +459,27 @@ final class CanvasSession: ObservableObject {
         from start: CanvasPoint,
         to end: CanvasPoint
     ) -> Bool {
+        #if os(macOS)
+        guard start.isFinite, end.isFinite, start != end else { return false }
+        let objectWidth = max(abs(end.x - start.x), 1)
+        let objectHeight = max(abs(end.y - start.y), 1)
+        let content = CanvasSemanticContent(
+            shape: shape, color: color, strokeWidth: width,
+            start: CanvasPoint(x: end.x >= start.x ? 0 : 1, y: end.y >= start.y ? 0 : 1),
+            end: CanvasPoint(x: end.x >= start.x ? 1 : 0, y: end.y >= start.y ? 1 : 0)
+        )
+        return insertSemanticObject(content: content, transform: CanvasImageTransform(
+            center: CanvasPoint(x: start.x / 2 + end.x / 2, y: start.y / 2 + end.y / 2),
+            width: objectWidth, height: objectHeight, zIndex: nextObjectZIndex
+        ))
+        #else
         let points = shape.points(from: start, to: end)
         guard !points.isEmpty else {
             lastErrorMessage = "The shape could not be placed on the canvas."
             return false
         }
         return completeStroke(points: points)
+        #endif
     }
 
     @discardableResult
@@ -455,12 +502,20 @@ final class CanvasSession: ObservableObject {
         at point: CanvasPoint
     ) async -> Bool {
         guard pendingPlacement == .text(placement) else { return false }
+        #if os(macOS)
+        // Semantic placement does not suspend for image decoding. Retain the
+        // entered text and placement mode if persistence fails.
+        let succeeded = await insertText(placement.text, at: point, prefersDarkSurface: placement.prefersDarkSurface)
+        if succeeded { pendingPlacement = nil }
+        return succeeded
+        #else
         pendingPlacement = nil
         return await insertText(
             placement.text,
             at: point,
             prefersDarkSurface: placement.prefersDarkSurface
         )
+        #endif
     }
 
     @discardableResult
@@ -469,6 +524,15 @@ final class CanvasSession: ObservableObject {
         at point: CanvasPoint,
         prefersDarkSurface: Bool
     ) async -> Bool {
+        #if os(macOS)
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty, normalized.utf8.count <= 65_536, point.isFinite else { return false }
+        let content = CanvasSemanticContent(text: normalized, color: color, strokeWidth: width)
+        let size = CanvasSemanticRenderer.defaultTextSize(content)
+        return insertSemanticObject(content: content, transform: CanvasImageTransform(
+            center: point, width: size.width, height: size.height, zIndex: nextObjectZIndex
+        ))
+        #else
         let targetCanvasID = selectedCanvasID
         let targetGeneration = boardGeneration
         do {
@@ -489,6 +553,7 @@ final class CanvasSession: ObservableObject {
             lastErrorMessage = error.localizedDescription
             return false
         }
+        #endif
     }
 
     @discardableResult
@@ -516,6 +581,9 @@ final class CanvasSession: ObservableObject {
             return persistedImage != nil
         }
         guard succeeded, let persistedImage else { return false }
+        #if os(macOS)
+        selectedSemanticObjectID = nil
+        #endif
         selectedImageID = persistedImage.id
         recordNewCommand(.addImage(persistedImage))
         return true
@@ -687,6 +755,9 @@ final class CanvasSession: ObservableObject {
                         }) ?? importedByID[item.requestID]
                     }
                     if !currentSnapshots.isEmpty {
+                        #if os(macOS)
+                        selectedSemanticObjectID = nil
+                        #endif
                         selectedImageID = currentSnapshots.last?.id
                         recordNewCommand(.addImages(currentSnapshots))
                     }
@@ -718,6 +789,9 @@ final class CanvasSession: ObservableObject {
     }
 
     func selectImage(_ id: UUID?) {
+        #if os(macOS)
+        if id != nil { selectedSemanticObjectID = nil }
+        #endif
         guard let id else {
             selectedImageID = nil
             return
@@ -813,7 +887,7 @@ final class CanvasSession: ObservableObject {
     func bringSelectedImageForward() -> Bool {
         guard canBringSelectedImageForward,
               let image = selectedImage,
-              let highest = images.map(\.zIndex).max(),
+              let highest = objectLayerIndices.max(),
               highest < Int64.max else {
             return false
         }
@@ -826,7 +900,7 @@ final class CanvasSession: ObservableObject {
     func sendSelectedImageBackward() -> Bool {
         guard canSendSelectedImageBackward,
               let image = selectedImage,
-              let lowest = images.map(\.zIndex).min(),
+              let lowest = objectLayerIndices.min(),
               lowest > Int64.min else {
             return false
         }
@@ -838,9 +912,11 @@ final class CanvasSession: ObservableObject {
     @discardableResult
     func clear() -> Bool {
         cancelPendingPlacement()
-        let capturedStrokes = strokes
-        let capturedImages = images
-        guard !capturedStrokes.isEmpty || !capturedImages.isEmpty else { return false }
+        var contents = CanvasBoardContents(strokes: strokes, images: images)
+        #if os(macOS)
+        contents.semanticObjects = semanticObjects
+        #endif
+        guard !contents.isEmpty else { return false }
 
         let succeeded = applyLocalMutation {
             store.clearBoard()
@@ -848,7 +924,7 @@ final class CanvasSession: ObservableObject {
         guard succeeded else { return false }
 
         selectedImageID = nil
-        recordNewCommand(.clear(strokes: capturedStrokes, images: capturedImages))
+        recordNewCommand(.clear(contents))
         return true
     }
 
@@ -875,11 +951,13 @@ final class CanvasSession: ObservableObject {
                 return store.restoreImages([before])
             case let .deleteImage(image):
                 return store.restoreImages([image])
-            case let .clear(strokes, images):
-                return store.restoreBoardContents(
-                    strokes: strokes,
-                    images: images
-                ).succeeded
+            case let .clear(contents):
+                return store.restoreBoardContents(contents).succeeded
+            #if os(macOS)
+            case let .changeSemantic(before, after):
+                if let before { return restoreSemanticObject(before) }
+                return after.map { store.deleteSemanticObject($0.id) } ?? false
+            #endif
             }
         }
         guard succeeded else { return false }
@@ -914,6 +992,11 @@ final class CanvasSession: ObservableObject {
                 return store.setImageDeleted(true, imageIDs: [image.id])
             case .clear:
                 return store.clearBoard()
+            #if os(macOS)
+            case let .changeSemantic(before, after):
+                if let after { return restoreSemanticObject(after) }
+                return before.map { store.deleteSemanticObject($0.id) } ?? false
+            #endif
             }
         }
         guard succeeded else { return false }
@@ -925,6 +1008,186 @@ final class CanvasSession: ObservableObject {
         updateHistoryAvailability()
         return true
     }
+
+    private var objectLayerIndices: [Int64] {
+        #if os(macOS)
+        images.map(\.zIndex) + semanticObjects.map { $0.transform.zIndex }
+        #else
+        images.map(\.zIndex)
+        #endif
+    }
+
+    #if os(macOS)
+    var selectedSemanticObject: CanvasSemanticObject? {
+        semanticObjects.first { $0.id == selectedSemanticObjectID }
+    }
+
+    func preserveSemanticTextDraft(_ key: CanvasReplicaKey, draft: CanvasSemanticTextDraft?) { semanticTextDrafts[key] = draft }
+    func semanticTextDraft(_ key: CanvasReplicaKey) -> CanvasSemanticTextDraft? { semanticTextDrafts[key] }
+    func semanticTextDraft(_ id: UUID) -> String? { semanticTextDrafts[CanvasReplicaKey(canvasID: selectedCanvasID, id: id)]?.text }
+
+    func reportSemanticTextConflict() {
+        lastErrorMessage = "This canvas text changed while you were editing. Your draft is retained. Copy it to keep it, or press Escape to discard the draft and show the saved object."
+    }
+
+    @discardableResult
+    func commitSemanticText(_ draft: CanvasSemanticTextDraft) -> Bool {
+        // No typing means there is no edit to save, even if an external refresh
+        // changed or replaced the object before the view could reconfigure.
+        if draft.text == draft.baseline.content?.text { return true }
+        guard draft.baseline.canvasID == selectedCanvasID,
+              let current = semanticObjects.first(where: { $0.id == draft.baseline.id }),
+              var content = current.content, content.text != nil else {
+            preserveSemanticTextDraft(draft.key, draft: draft)
+            reportSemanticTextConflict()
+            return false
+        }
+        if content.text == draft.text { return true }
+        guard current.payload == draft.baseline.payload,
+              current.payloadVersion == draft.baseline.payloadVersion,
+              current.kind == draft.baseline.kind,
+              current.boardGeneration == draft.baseline.boardGeneration else {
+            preserveSemanticTextDraft(draft.key, draft: draft)
+            reportSemanticTextConflict()
+            return false
+        }
+        content.text = draft.text
+        return editSemanticObject(current.id, content: content)
+    }
+
+    func requestSelectedSemanticTextEditing() {
+        guard selectedSemanticObject?.content?.text != nil else { return }
+        semanticTextEditRequest = UUID()
+    }
+
+    private var nextObjectZIndex: Int64 {
+        let highest = objectLayerIndices.max() ?? -1
+        return highest < Int64.max ? highest + 1 : highest
+    }
+
+    func selectSemanticObject(_ id: UUID?) {
+        selectedSemanticObjectID = semanticObjects.contains { $0.id == id } ? id : nil
+        if id != nil { selectedImageID = nil }
+    }
+
+    @discardableResult
+    private func insertSemanticObject(content: CanvasSemanticContent, transform: CanvasImageTransform) -> Bool {
+        guard (objectLayerIndices.max() ?? -1) < Int64.max else {
+            lastErrorMessage = CanvasReplicaMutationError.sortIndexExhausted.localizedDescription
+            return false
+        }
+        var added: CanvasSemanticObject?
+        guard applyLocalMutation({
+            added = store.addSemanticObject(content: content, transform: transform)
+            return added != nil
+        }), let added else { return false }
+        selectedImageID = nil
+        selectedSemanticObjectID = added.id
+        selectTool(.select)
+        recordNewCommand(.changeSemantic(before: nil, after: added))
+        return true
+    }
+
+    private func restoreSemanticObject(_ snapshot: CanvasSemanticObject) -> Bool {
+        var contents = CanvasBoardContents(strokes: [], images: [])
+        contents.semanticObjects = [snapshot]
+        return store.restoreBoardContents(contents).succeeded
+    }
+
+    @discardableResult
+    func transformSemanticObject(_ id: UUID, to transform: CanvasImageTransform) -> Bool {
+        guard let before = semanticObjects.first(where: { $0.id == id }),
+              transform.isValid, before.transform != transform else { return false }
+        var changed = before
+        changed.transform = transform
+        guard applyLocalMutation({ store.updateSemanticObject(changed) }),
+              let after = semanticObjects.first(where: { $0.id == id }) else { return false }
+        selectedSemanticObjectID = id
+        recordNewCommand(.changeSemantic(before: before, after: after))
+        return true
+    }
+
+    @discardableResult
+    func editSemanticObject(_ id: UUID, content: CanvasSemanticContent) -> Bool {
+        guard content.isValid else {
+            lastErrorMessage = "Keep canvas text nonempty and below 64 KB, with a valid font size and ink width."
+            return false
+        }
+        guard let before = semanticObjects.first(where: { $0.id == id }),
+              before.content != nil,
+              before.content != content else { return false }
+        var changed = before
+        do { changed.payload = try JSONEncoder().encode(content) }
+        catch { lastErrorMessage = error.localizedDescription; return false }
+        changed.kind = content.text == nil ? "shape" : "text"
+        changed.content = content
+        if content.text != nil {
+            let size = CanvasSemanticRenderer.textSize(content, width: changed.transform.width)
+            let oldHeight = changed.transform.height
+            changed.transform.height = max(changed.transform.height, size.height)
+            changed.transform.center.y += (changed.transform.height - oldHeight) / 2
+        }
+        guard applyLocalMutation({ store.updateSemanticObject(changed) }),
+              let after = semanticObjects.first(where: { $0.id == id }) else { return false }
+        recordNewCommand(.changeSemantic(before: before, after: after))
+        return true
+    }
+
+    @discardableResult
+    func deleteSemanticObject(_ id: UUID) -> Bool {
+        guard let before = semanticObjects.first(where: { $0.id == id }),
+              applyLocalMutation({ store.deleteSemanticObject(id) }) else { return false }
+        recordNewCommand(.changeSemantic(before: before, after: nil))
+        return true
+    }
+
+    @discardableResult
+    func nudgeSelectedSemanticObject(_ delta: CGSize) -> Bool {
+        guard let object = selectedSemanticObject else { return false }
+        return transformSemanticObject(object.id, to: CanvasImagePlacement.movedTransform(
+            from: object.transform,
+            by: CanvasPoint(x: Double(delta.width) / viewport.scale, y: Double(delta.height) / viewport.scale)
+        ))
+    }
+
+    @discardableResult
+    func resizeSelectedSemanticObject(by factor: Double) -> Bool {
+        guard let object = selectedSemanticObject, factor.isFinite, factor > 0 else { return false }
+        var transform = object.transform
+        transform.width = max(24, transform.width * factor)
+        transform.height = max(24, transform.height * factor)
+        return transformSemanticObject(object.id, to: transform)
+    }
+
+    var canBringSelectedSemanticForward: Bool {
+        guard let object = selectedSemanticObject else { return false }
+        return placedObjects.contains { CanvasPlacedRenderObject.comesBefore(.semantic(object), $0) }
+    }
+
+    var canSendSelectedSemanticBackward: Bool {
+        guard let object = selectedSemanticObject else { return false }
+        return placedObjects.contains { CanvasPlacedRenderObject.comesBefore($0, .semantic(object)) }
+    }
+
+    private var placedObjects: [CanvasPlacedRenderObject] {
+        images.map(CanvasPlacedRenderObject.image) + semanticObjects.map(CanvasPlacedRenderObject.semantic)
+    }
+
+    @discardableResult
+    func moveSelectedSemanticLayer(forward: Bool) -> Bool {
+        guard let object = selectedSemanticObject,
+              forward ? canBringSelectedSemanticForward : canSendSelectedSemanticBackward else { return false }
+        var transform = object.transform
+        if forward {
+            guard let highest = objectLayerIndices.max(), highest < Int64.max else { return false }
+            transform.zIndex = highest + 1
+        } else {
+            guard let lowest = objectLayerIndices.min(), lowest > Int64.min else { return false }
+            transform.zIndex = lowest - 1
+        }
+        return transformSemanticObject(object.id, to: transform)
+    }
+    #endif
 
     func resetView() {
         viewport.reset()
@@ -939,6 +1202,11 @@ final class CanvasSession: ObservableObject {
         for image in images {
             bounds = bounds.map { $0.union(image.worldRect) } ?? image.worldRect
         }
+        #if os(macOS)
+        for object in semanticObjects {
+            bounds = bounds.map { $0.union(object.worldRect) } ?? object.worldRect
+        }
+        #endif
         viewport.fit(bounds: bounds, in: size)
         flushViewState()
     }
@@ -1025,9 +1293,20 @@ final class CanvasSession: ObservableObject {
             selectedImageID = undoing ? image.id : nil
         case .clear:
             selectedImageID = nil
+            #if os(macOS)
+            selectedSemanticObjectID = nil
+            #endif
+        #if os(macOS)
+        case let .changeSemantic(before, after):
+            selectedSemanticObjectID = (undoing ? before : after)?.id
+            selectedImageID = nil
+        #endif
         case .addStroke, .eraseStrokes:
             break
         }
+        #if os(macOS)
+        if selectedImageID != nil { selectedSemanticObjectID = nil }
+        #endif
     }
 
     private func makeImageImportResult(
@@ -1089,13 +1368,16 @@ final class CanvasSession: ObservableObject {
     }
 
     private func handleStoreRevision() {
-        let snapshot = SemanticSnapshot(
+        var snapshot = SemanticSnapshot(
             canvases: store.canvases,
             selectedCanvasID: store.selectedCanvasID,
             boardGeneration: store.boardGeneration,
             strokes: store.strokes,
             images: store.images
         )
+        #if os(macOS)
+        snapshot.semanticObjects = store.semanticObjects
+        #endif
         let semanticChange = snapshot != lastSemanticSnapshot
         synchronizeFromStore(
             clearHistory: semanticChange && !isApplyingLocalMutation
@@ -1113,6 +1395,12 @@ final class CanvasSession: ObservableObject {
         }
         strokes = store.strokes
         images = store.images
+        #if os(macOS)
+        semanticObjects = store.semanticObjects
+        if let id = selectedSemanticObjectID, !semanticObjects.contains(where: { $0.id == id }) {
+            selectedSemanticObjectID = nil
+        }
+        #endif
         failedImageIDs.formIntersection(Set(images.map(\.id)))
         boardGeneration = store.boardGeneration
         lastErrorMessage = store.lastErrorMessage
@@ -1127,6 +1415,9 @@ final class CanvasSession: ObservableObject {
             strokes: store.strokes,
             images: store.images
         )
+        #if os(macOS)
+        lastSemanticSnapshot.semanticObjects = semanticObjects
+        #endif
 
         if clearHistory {
             cancelPendingPlacement()

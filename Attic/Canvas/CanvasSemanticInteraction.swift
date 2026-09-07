@@ -1,0 +1,241 @@
+#if os(macOS)
+import AppKit
+
+enum CanvasPlacedRenderObject {
+    case image(CanvasPlacedImage)
+    case semantic(CanvasSemanticObject)
+    var id: UUID {
+        switch self { case let .image(value): value.id; case let .semantic(value): value.id }
+    }
+    var zIndex: Int64 {
+        switch self { case let .image(value): value.zIndex; case let .semantic(value): value.transform.zIndex }
+    }
+    var worldRect: CGRect {
+        switch self { case let .image(value): value.worldRect; case let .semantic(value): value.worldRect }
+    }
+    var createdAt: Date {
+        switch self { case let .image(value): value.createdAt; case let .semantic(value): value.createdAt }
+    }
+    static func comesBefore(_ lhs: Self, _ rhs: Self) -> Bool {
+        if lhs.zIndex != rhs.zIndex { return lhs.zIndex < rhs.zIndex }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+}
+
+@MainActor
+final class CanvasSemanticTextEditor: NSTextView, NSTextViewDelegate {
+    var onCommit: (() -> Bool)?
+    var onCancel: (() -> Void)?
+    var onKeyboardCommit: (() -> Void)?
+    var onDraft: ((String) -> Void)?
+    var isFinishing = false
+
+    override func resignFirstResponder() -> Bool {
+        if !isFinishing, onCommit?() == false { return false }
+        return super.resignFirstResponder()
+    }
+
+    func textDidChange(_ notification: Notification) { onDraft?(string) }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { onCancel?(); return }
+        if (event.keyCode == 36 || event.keyCode == 76), event.modifierFlags.contains(.command) {
+            unmarkText()
+            if onCommit?() == true { onKeyboardCommit?() }
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.contains(.command) else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "z":
+            if modifiers.contains(.shift) { undoManager?.redo() } else { undoManager?.undo() }
+        case "v": paste(nil)
+        case "c": copy(nil)
+        case "x": cut(nil)
+        case "a": selectAll(nil)
+        case "\r": keyDown(with: event)
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
+    }
+}
+
+extension CanvasNSView {
+    var selectedSemanticObject: CanvasSemanticObject? {
+        semanticObjectsForDisplay.first { $0.id == selectedSemanticObjectID }
+    }
+
+    var semanticObjectsForDisplay: [CanvasSemanticObject] {
+        guard semanticPointerActive, let selectedSemanticObjectID, let previewImageTransform else { return semanticObjects }
+        return semanticObjects.map { object in
+            guard object.id == selectedSemanticObjectID else { return object }
+            var preview = object
+            preview.transform = previewImageTransform
+            return preview
+        }
+    }
+
+    func semanticObject(at worldPoint: CanvasPoint) -> CanvasSemanticObject? {
+        let hitMargin = 6 / interaction.viewport.scale
+        let hits = semanticObjectsForDisplay.filter {
+            $0.worldRect.insetBy(dx: -hitMargin, dy: -hitMargin).contains(worldPoint.cgPoint)
+        }.map(CanvasPlacedRenderObject.semantic)
+        let imageHits = imagesForDisplay.filter { $0.worldRect.contains(worldPoint.cgPoint) }.map(CanvasPlacedRenderObject.image)
+        guard case let .semantic(object)? = (hits + imageHits).max(by: CanvasPlacedRenderObject.comesBefore) else { return nil }
+        return object
+    }
+
+    func beginSemanticPointerInteraction(at point: CGPoint, worldPoint: CanvasPoint, clickCount: Int) -> Bool {
+        if let selected = selectedSemanticObject,
+           let handle = CanvasImagePlacement.resizeHandle(at: point, worldRect: selected.worldRect,
+                viewport: interaction.viewport, viewportSize: bounds.size, radius: 9) {
+            _ = interaction.cancel()
+            semanticPointerActive = true
+            imagePointerMode = .resizing(id: selected.id, handle: handle, original: selected.transform)
+            previewImageTransform = selected.transform
+            cursor(for: resizeCursorRole(for: handle)).set()
+            return true
+        }
+        guard let object = semanticObject(at: worldPoint) else { return false }
+        _ = interaction.cancel()
+        onSelectImage(nil)
+        selectedImageID = nil
+        selectedSemanticObjectID = object.id
+        onSelectSemanticObject(object.id)
+        accessibilityFocusedObjectKey = CanvasAccessibilityObjectKey(kind: .semantic, id: object.id)
+        if clickCount >= 2, object.content?.text != nil {
+            beginSemanticTextEditing(object)
+        } else {
+            semanticPointerActive = true
+            imagePointerMode = .moving(id: object.id, startWorldPoint: worldPoint, original: object.transform)
+            previewImageTransform = object.transform
+            NSCursor.closedHand.set()
+        }
+        needsDisplay = true
+        return true
+    }
+
+    func beginSemanticTextEditing(_ object: CanvasSemanticObject) {
+        guard let content = object.content, let text = content.text else { return }
+        if editingSemanticObjectID == object.id, let editor = semanticTextEditor {
+            window?.makeFirstResponder(editor)
+            return
+        }
+        guard finishSemanticTextEditing(commit: true) else { return }
+        discardImagePreview()
+        let editor = CanvasSemanticTextEditor(frame: .zero)
+        editor.delegate = editor
+        editor.isRichText = false
+        editor.drawsBackground = false
+        editor.isVerticallyResizable = false
+        editor.isHorizontallyResizable = false
+        editor.textContainerInset = CGSize(width: 4, height: 4)
+        editor.textContainer?.lineFragmentPadding = 0
+        editor.font = CanvasSemanticRenderer.font(content, scale: interaction.viewport.scale)
+        editor.alignment = CanvasSemanticRenderer.alignment(content)
+        editor.textColor = content.color.nsColor
+        editor.insertionPointColor = selectionAccentColor
+        let draft = onSemanticDraft(CanvasReplicaKey(canvasID: object.canvasID, id: object.id))
+        editingSemanticBaseline = draft?.baseline ?? object
+        editor.string = draft?.text ?? text
+        editor.allowsUndo = true
+        editor.setAccessibilityLabel("Edit canvas text")
+        editor.setAccessibilityHelp("Type directly on the canvas. Command-Return saves; Escape cancels.")
+        editor.onDraft = { [weak self] _ in self?.preserveCurrentSemanticDraft() }
+        editor.onCommit = { [weak self] in self?.finishSemanticTextEditing(commit: true) ?? true }
+        editor.onKeyboardCommit = { [weak self] in
+            if let self { window?.makeFirstResponder(self) }
+        }
+        editor.onCancel = { [weak self] in
+            _ = self?.finishSemanticTextEditing(commit: false)
+            if let self { window?.makeFirstResponder(self) }
+        }
+        semanticTextEditor = editor
+        editingSemanticObjectID = object.id
+        reconcileSemanticTextEditing(with: [object])
+        addSubview(editor)
+        layoutSemanticTextEditor()
+        window?.makeFirstResponder(editor)
+        editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
+        needsDisplay = true
+    }
+
+    @discardableResult
+    func finishSemanticTextEditing(commit: Bool) -> Bool {
+        guard let editor = semanticTextEditor, let baseline = editingSemanticBaseline, !editor.isFinishing else { return true }
+        editor.isFinishing = true
+        defer { editor.isFinishing = false }
+        let draft = CanvasSemanticTextDraft(baseline: baseline, text: editor.string)
+        if commit {
+            preserveCurrentSemanticDraft()
+            guard onCommitSemanticText(draft) else { return false }
+        }
+        onPreserveSemanticDraft(draft.key, nil)
+        semanticTextEditor = nil
+        editingSemanticObjectID = nil
+        editingSemanticBaseline = nil
+        editor.removeFromSuperview()
+        needsDisplay = true
+        return true
+    }
+
+    func layoutSemanticTextEditor() {
+        guard let editor = semanticTextEditor,
+              let object = semanticObjects.first(where: { $0.id == editingSemanticObjectID }),
+              let content = object.content else { return }
+        let origin = interaction.viewport.viewPoint(for: CanvasPoint(x: object.worldRect.minX, y: object.worldRect.minY), in: bounds.size)
+        editor.frame = CGRect(origin: origin, size: CGSize(width: object.transform.width * interaction.viewport.scale,
+                                                        height: object.transform.height * interaction.viewport.scale))
+        editor.font = CanvasSemanticRenderer.font(content, scale: interaction.viewport.scale)
+        editor.alignment = CanvasSemanticRenderer.alignment(content)
+        editor.textColor = content.color.nsColor
+    }
+
+    /// Leaving a page retains an unsaved draft in the session, without leaving
+    /// the old page's editor attached to the newly selected page.
+    func suspendSemanticTextEditing() {
+        guard let editor = semanticTextEditor else { return }
+        preserveCurrentSemanticDraft()
+        editor.isFinishing = true
+        semanticTextEditor = nil
+        editingSemanticObjectID = nil
+        editingSemanticBaseline = nil
+        editor.removeFromSuperview()
+        needsDisplay = true
+    }
+
+    func preserveCurrentSemanticDraft() {
+        guard let editor = semanticTextEditor, let baseline = editingSemanticBaseline else { return }
+        let draft = CanvasSemanticTextDraft(baseline: baseline, text: editor.string)
+        onPreserveSemanticDraft(draft.key, editor.string == baseline.content?.text ? nil : draft)
+    }
+
+    func reconcileSemanticTextEditing(with objects: [CanvasSemanticObject]) {
+        guard let editor = semanticTextEditor, !editor.isFinishing,
+              let baseline = editingSemanticBaseline,
+              let current = objects.first(where: { $0.id == baseline.id && $0.canvasID == baseline.canvasID }),
+              current != baseline else { return }
+        let contentChanged = current.payload != baseline.payload || current.kind != baseline.kind
+            || current.payloadVersion != baseline.payloadVersion || current.boardGeneration != baseline.boardGeneration
+        if contentChanged, editor.string != baseline.content?.text {
+            preserveCurrentSemanticDraft()
+            onSemanticTextConflict(CanvasReplicaKey(canvasID: baseline.canvasID, id: baseline.id))
+            return
+        }
+        guard let text = current.content?.text else {
+            suspendSemanticTextEditing()
+            return
+        }
+        if contentChanged {
+            editor.string = text
+            editor.undoManager?.removeAllActions()
+        }
+        editingSemanticBaseline = current
+    }
+}
+#endif

@@ -17,7 +17,11 @@ struct CanvasSurface: View {
             // cancellation. Dismantling discards unfinished input without
             // changing completed strokes, images, or viewport state.
             .id(session.interactionCancellationEpoch)
+            #if os(macOS)
+            .accessibilityElement(children: .contain)
+            #else
             .accessibilityElement(children: .ignore)
+            #endif
             .accessibilityLabel("Canvas drawing board")
             .accessibilityValue(accessibilityValue)
             .accessibilityHint(
@@ -54,18 +58,29 @@ struct CanvasSurface: View {
         let imageSummary = session.images.count == 1
             ? "1 image"
             : "\(session.images.count) images"
-        let selectedSummary = session.selectedImageID == nil
+        var selectedSummary = session.selectedImageID == nil
             ? "no image selected"
             : "image selected"
+        var objectSummary = ""
+        #if os(macOS)
+        objectSummary = ", \(session.semanticObjects.count) text and shape objects"
+        if let object = session.selectedSemanticObject {
+            selectedSummary = "\(String(object.title.prefix(80))) selected"
+        } else if session.selectedImageID == nil { selectedSummary = "no object selected" }
+        #endif
         let activeMode = session.pendingPlacement?.accessibilityTitle
             ?? "\(session.tool.title) selected"
-        return "\(strokeSummary), \(imageSummary), \(selectedSummary), \(activeMode)"
+        return "\(strokeSummary), \(imageSummary)\(objectSummary), \(selectedSummary), \(activeMode)"
     }
 
     private var accessibilityHint: String {
         if let pendingPlacement = session.pendingPlacement {
             return "\(pendingPlacement.instruction). Press Escape to cancel."
         }
+        #if os(macOS)
+        return "Draw with the selected tool. Tab between objects; arrow keys move, Option-arrow keys resize, Return edits text. Scroll or drag with Space to pan; pinch or Command-scroll to zoom."
+        #else
         return "Draw with the selected tool. Select images with the Select tool. Scroll or drag with Space to pan; pinch or Command-scroll to zoom."
+        #endif
     }
 }

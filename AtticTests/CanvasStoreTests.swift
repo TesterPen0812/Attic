@@ -5,6 +5,132 @@ import XCTest
 
 final class CanvasStoreTests: XCTestCase {
     @MainActor
+    func testSemanticTextAtAcceptedLimitSurvivesWorstCaseJSONEscaping() throws {
+        let store = try makeTestCanvasStore()
+        let text = String(repeating: "\u{0001}", count: 65_536)
+        let content = CanvasSemanticContent(text: text, color: .ink, strokeWidth: 3)
+        XCTAssertTrue(content.isValid)
+        let saved = try XCTUnwrap(store.addSemanticObject(content: content,
+            transform: CanvasImageTransform(center: .zero, width: 160, height: 48, zIndex: 0)))
+        XCTAssertGreaterThan(saved.payload.count, 131_072)
+        XCTAssertEqual(saved.content?.text, text)
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.content?.text, text)
+        XCTAssertFalse(CanvasSemanticContent(text: text + "x", color: .ink, strokeWidth: 3).isValid)
+    }
+
+    @MainActor
+    func testSemanticDuplicateMutationFailureDeletionAndRestoreAffectEveryReplica() throws {
+        let store = try makeTestCanvasStore()
+        let original = try XCTUnwrap(store.addSemanticObject(
+            content: CanvasSemanticContent(text: "Original", color: .blue, strokeWidth: 3),
+            transform: CanvasImageTransform(center: .zero, width: 120, height: 48, zIndex: 0)))
+        let seed = ModelContext(store.container)
+        let duplicate = CanvasSemanticObjectItem(id: original.id)
+        duplicate.payload = original.payload
+        duplicate.mutationVersion = 7
+        duplicate.width = 120
+        duplicate.height = 48
+        seed.insert(duplicate)
+        try seed.save()
+        let gate = PersistenceGate()
+        let editingStore = CanvasStore(container: store.container, persist: gate.save)
+        var changed = try XCTUnwrap(editingStore.semanticObjects.first)
+        changed.transform.center = CanvasPoint(x: 91, y: -75)
+        gate.shouldFail = true
+        XCTAssertFalse(editingStore.updateSemanticObject(changed))
+        XCTAssertEqual(editingStore.semanticObjects.first?.transform.center, .zero)
+        XCTAssertTrue(try ModelContext(store.container).fetch(FetchDescriptor<CanvasSemanticObjectItem>()).allSatisfy { $0.centerX == 0 })
+        gate.shouldFail = false
+        XCTAssertTrue(editingStore.updateSemanticObject(changed))
+        var rows = try ModelContext(store.container).fetch(FetchDescriptor<CanvasSemanticObjectItem>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.centerX == 91 && $0.centerY == -75 && $0.mutationVersion == 8 })
+        XCTAssertTrue(editingStore.deleteSemanticObject(original.id))
+        rows = try ModelContext(store.container).fetch(FetchDescriptor<CanvasSemanticObjectItem>())
+        XCTAssertTrue(rows.allSatisfy { $0.tombstoned && $0.mutationVersion == 9 })
+        var contents = CanvasBoardContents(strokes: [], images: [])
+        contents.semanticObjects = [changed]
+        XCTAssertTrue(editingStore.restoreBoardContents(contents).succeeded)
+        rows = try ModelContext(store.container).fetch(FetchDescriptor<CanvasSemanticObjectItem>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { !$0.tombstoned && $0.mutationVersion == 10 && $0.payload == original.payload })
+    }
+
+    @MainActor
+    func testUnknownSemanticPayloadIsRetainedThroughTransformDeleteAndUndo() throws {
+        let store = try makeTestCanvasStore()
+        let context = ModelContext(store.container)
+        let row = CanvasSemanticObjectItem()
+        row.kind = "future-chart"
+        row.payloadVersion = 92
+        row.payload = Data([0, 255, 128, 12])
+        let payload = row.payload
+        let id = row.id
+        context.insert(row)
+        try context.save()
+        store.refresh()
+        let session = CanvasSession(store: store)
+        let object = try XCTUnwrap(session.semanticObjects.first)
+        XCTAssertNil(object.content)
+        XCTAssertEqual(object.title, "Unsupported object")
+        session.selectSemanticObject(id)
+        XCTAssertTrue(session.nudgeSelectedSemanticObject(CGSize(width: 20, height: 30)))
+        XCTAssertTrue(session.deleteSemanticObject(id))
+        XCTAssertTrue(session.undo())
+        XCTAssertTrue(session.clear())
+        XCTAssertTrue(session.undo())
+        let saved = try XCTUnwrap(ModelContext(store.container).fetch(FetchDescriptor<CanvasSemanticObjectItem>()).first)
+        XCTAssertEqual(saved.payload, payload)
+        XCTAssertEqual(saved.payloadVersion, 92)
+        XCTAssertEqual(saved.kind, "future-chart")
+        XCTAssertFalse(saved.tombstoned)
+    }
+
+    @MainActor
+    func testCopiedLegacyStoreOpensAdditivelyWithoutRewritingInkOrImages() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CanvasSchemaFixture-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let originalDirectory = root.appendingPathComponent("legacy", isDirectory: true)
+        let copyDirectory = root.appendingPathComponent("upgraded", isDirectory: true)
+        try FileManager.default.createDirectory(at: originalDirectory, withIntermediateDirectories: true)
+        let strokeID = UUID()
+        let imageID = UUID()
+        let legacyInk = try CanvasStrokeCodec.encode(color: .red, width: 3, points: [.zero, CanvasPoint(x: 10, y: 20)])
+        let legacyImage = Data([12, 11, 10, 9])
+        try autoreleasepool {
+            let schema = Schema([TaskItem.self, NoteItem.self, NoteAttachment.self, CanvasBoardItem.self, CanvasStrokeItem.self, CanvasImageItem.self])
+            let configuration = ModelConfiguration("fixture", schema: schema, url: originalDirectory.appendingPathComponent("fixture.store"), cloudKitDatabase: .none)
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            context.insert(CanvasBoardItem(clearGeneration: 2))
+            for index in 0..<128 {
+                context.insert(CanvasStrokeItem(id: index < 2 ? strokeID : UUID(), payload: index == 127 ? Data([255]) : legacyInk,
+                    boardGeneration: index == 126 ? 1 : 2, mutationVersion: Int64(index + 1)))
+            }
+            context.insert(CanvasImageItem(id: imageID, encodedData: legacyImage, pixelWidth: 2, pixelHeight: 2, width: 48, height: 48, boardGeneration: 2))
+            try context.save()
+        }
+        try FileManager.default.copyItem(at: originalDirectory, to: copyDirectory)
+        let schema = Schema([TaskItem.self, NoteItem.self, NoteAttachment.self, CanvasBoardItem.self, CanvasStrokeItem.self, CanvasImageItem.self, CanvasSemanticObjectItem.self])
+        let configuration = ModelConfiguration("fixture", schema: schema, url: copyDirectory.appendingPathComponent("fixture.store"), cloudKitDatabase: .none)
+        let upgraded = try ModelContainer(for: schema, configurations: [configuration])
+        let store = CanvasStore(container: upgraded)
+        XCTAssertTrue(store.semanticObjects.isEmpty)
+        XCTAssertNotNil(store.addSemanticObject(content: CanvasSemanticContent(text: "New semantic text", color: .ink, strokeWidth: 3),
+            transform: CanvasImageTransform(center: .zero, width: 160, height: 48, zIndex: 1)))
+        let context = ModelContext(upgraded)
+        let strokes = try context.fetch(FetchDescriptor<CanvasStrokeItem>())
+        XCTAssertEqual(strokes.count, 128)
+        XCTAssertEqual(strokes.filter { $0.id == strokeID }.count, 2)
+        XCTAssertEqual(strokes.filter { $0.payload == legacyInk }.count, 127)
+        XCTAssertEqual(strokes.filter { $0.payload == Data([255]) }.count, 1)
+        XCTAssertEqual(strokes.filter { $0.boardGeneration == 1 }.count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<CanvasImageItem>()).first?.encodedData, legacyImage)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<CanvasImageItem>()).first?.id, imageID)
+    }
+
+    @MainActor
     func testAddStrokePersistsOneArchiveWithOneSave() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let gate = PersistenceGate()

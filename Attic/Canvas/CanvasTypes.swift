@@ -1,5 +1,37 @@
 import Foundation
 
+/// Presentation preferences only; selection and Undo history never survive relaunch.
+struct CanvasViewState: Codable, Equatable {
+    var center: CanvasPoint
+    var scale: Double
+    var tool: CanvasTool
+    var color: CanvasInkColor
+    var width: Double
+    var viewport: CanvasViewport { CanvasViewport(center: center, scale: scale) }
+}
+
+struct CanvasViewStateArchive: Codable {
+    static let defaultsKey = "canvas.viewState.v1"
+    var selectedCanvasID: UUID
+    var boards: [UUID: CanvasViewState]
+}
+
+struct CanvasBoardContents {
+    let strokes: [CanvasStroke]
+    let images: [CanvasPlacedImage]
+    #if os(macOS)
+    var semanticObjects: [CanvasSemanticObject] = []
+    #endif
+
+    var isEmpty: Bool {
+        #if os(macOS)
+        strokes.isEmpty && images.isEmpty && semanticObjects.isEmpty
+        #else
+        strokes.isEmpty && images.isEmpty
+        #endif
+    }
+}
+
 enum CanvasLegacyObjectAffordance {
     static let selectImageTitle = "Select Image"
     static let addTextTitle = "Add Text Image"
@@ -16,7 +48,12 @@ enum CanvasTool: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .select: CanvasLegacyObjectAffordance.selectImageTitle
+        case .select:
+            #if os(macOS)
+            "Select Object"
+            #else
+            CanvasLegacyObjectAffordance.selectImageTitle
+            #endif
         case .pen: "Pen"
         case .eraser: "Eraser"
         }
@@ -31,7 +68,7 @@ enum CanvasTool: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-enum CanvasShapeKind: String, CaseIterable, Identifiable, Sendable {
+enum CanvasShapeKind: String, CaseIterable, Codable, Identifiable, Sendable {
     case rectangle
     case ellipse
     case line
@@ -136,16 +173,34 @@ enum CanvasPendingPlacement: Equatable, Sendable {
     var instruction: String {
         switch self {
         case .text:
+            #if os(macOS)
+            "Click the canvas to place editable text"
+            #else
             "Click the canvas to place a non-editable text image"
+            #endif
         case let .shape(shape):
+            #if os(macOS)
+            "Drag on the canvas to place a \(shape.title.lowercased())"
+            #else
             "Drag on the canvas to draw a \(shape.title.lowercased()) as ink"
+            #endif
         }
     }
 
     var accessibilityTitle: String {
         switch self {
-        case .text: "Text image placement"
-        case let .shape(shape): "\(shape.title) ink placement"
+        case .text:
+            #if os(macOS)
+            "Text placement"
+            #else
+            "Text image placement"
+            #endif
+        case let .shape(shape):
+            #if os(macOS)
+            "\(shape.title) placement"
+            #else
+            "\(shape.title) ink placement"
+            #endif
         }
     }
 }

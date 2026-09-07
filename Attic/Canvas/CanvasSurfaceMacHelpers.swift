@@ -44,6 +44,7 @@ enum CanvasImageDecodeCandidatePolicy {
 enum CanvasAccessibilityObjectKind: Hashable {
     case stroke
     case image
+    case semantic
 }
 
 struct CanvasAccessibilityObjectKey: Hashable {
@@ -53,6 +54,7 @@ struct CanvasAccessibilityObjectKey: Hashable {
 
 enum CanvasAccessibilityAction: Equatable {
     case select
+    case editText
     case moveLeft
     case moveRight
     case moveUp
@@ -66,6 +68,7 @@ enum CanvasAccessibilityAction: Equatable {
     var title: String {
         switch self {
         case .select: "Select"
+        case .editText: "Edit text"
         case .moveLeft: "Move left"
         case .moveRight: "Move right"
         case .moveUp: "Move up"
@@ -110,13 +113,13 @@ final class CanvasAccessibilityObjectElement: NSAccessibilityElement {
         setAccessibilityParent(canvasView)
         setAccessibilityRole(objectKind == .image ? .image : .group)
         setAccessibilityIdentifier(
-            "canvas-\(objectKind == .image ? "image" : "stroke")-\(objectID.uuidString)"
+            "canvas-\(objectKind == .image ? "image" : objectKind == .semantic ? "object" : "stroke")-\(objectID.uuidString)"
         )
         setAccessibilityLabel(label)
         setAccessibilityValueDescription(valueDescription)
         setAccessibilityHelp(
-            objectKind == .image
-                ? "Select, move, resize, reorder, or delete this image."
+            objectKind != .stroke
+                ? "Select, move, resize, reorder, or delete this object. Press Return to edit text."
                 : "Select or delete this ink stroke."
         )
         setAccessibilityEnabled(true)
@@ -167,6 +170,8 @@ extension CanvasNSView {
             CanvasAccessibilityObjectKey(kind: .stroke, id: $0.id)
         } + orderedImages.map {
             CanvasAccessibilityObjectKey(kind: .image, id: $0.id)
+        } + semanticObjectsForDisplay.map {
+            CanvasAccessibilityObjectKey(kind: .semantic, id: $0.id)
         }
         let liveKeys = Set(nextOrder)
         canvasAccessibilityElements = canvasAccessibilityElements.filter {
@@ -209,12 +214,12 @@ extension CanvasNSView {
                 .select, .moveLeft, .moveRight, .moveUp, .moveDown,
                 .makeSmaller, .makeLarger
             ]
-            if orderedImages.contains(where: {
+            if semanticObjects.contains(where: { $0.transform.zIndex <= image.zIndex }) || orderedImages.contains(where: {
                 CanvasImagePlacement.imageIsInFront(image, $0)
             }) {
                 actions.append(.sendBackward)
             }
-            if orderedImages.contains(where: {
+            if semanticObjects.contains(where: { $0.transform.zIndex >= image.zIndex }) || orderedImages.contains(where: {
                 CanvasImagePlacement.imageIsInFront($0, image)
             }) {
                 actions.append(.bringForward)
@@ -232,6 +237,23 @@ extension CanvasNSView {
             )
         }
 
+        let placedObjects = images.map(CanvasPlacedRenderObject.image) + semanticObjects.map(CanvasPlacedRenderObject.semantic)
+        for object in semanticObjectsForDisplay {
+            let key = CanvasAccessibilityObjectKey(kind: .semantic, id: object.id)
+            let element = canvasAccessibilityElements[key]
+                ?? CanvasAccessibilityObjectElement(key: key, canvasView: self)
+            canvasAccessibilityElements[key] = element
+            var actions: [CanvasAccessibilityAction] = [.select, .moveLeft, .moveRight, .moveUp, .moveDown, .makeSmaller, .makeLarger]
+            if object.content?.text != nil { actions.append(.editText) }
+            if placedObjects.contains(where: { CanvasPlacedRenderObject.comesBefore($0, .semantic(object)) }) { actions.append(.sendBackward) }
+            if placedObjects.contains(where: { CanvasPlacedRenderObject.comesBefore(.semantic(object), $0) }) { actions.append(.bringForward) }
+            actions.append(.delete)
+            element.update(label: String(object.title.prefix(160)),
+                valueDescription: canvasAccessibilityPositionDescription(worldRect: object.worldRect,
+                    prefix: object.content?.text != nil ? "Editable text" : "Canvas object"),
+                frame: canvasAccessibilityFrame(for: object.worldRect),
+                selected: selectedSemanticObjectID == object.id, actions: actions)
+        }
         canvasAccessibilityNavigationOrder = nextOrder
         if postLayoutNotification, isRepresentationActive {
             NSAccessibility.post(element: self, notification: .layoutChanged)
@@ -266,15 +288,22 @@ extension CanvasNSView {
         switch action {
         case .select:
             return focusCanvasAccessibilityObject(key)
+        case .editText:
+            guard focusCanvasAccessibilityObject(key), let object = selectedSemanticObject,
+                  object.content?.text != nil else { return false }
+            beginSemanticTextEditing(object)
+            return semanticTextEditor != nil
         case .delete:
             guard focusCanvasAccessibilityObject(key) else { return false }
             if key.kind == .stroke {
                 return onErase([key.id])
+            } else if key.kind == .semantic {
+                return onDeleteSemanticObject(key.id)
             } else {
                 return onDeleteSelectedImage()
             }
         case .moveLeft, .moveRight, .moveUp, .moveDown:
-            guard key.kind == .image,
+            guard key.kind != .stroke,
                   focusCanvasAccessibilityObject(key) else { return false }
             let delta: CGSize
             switch action {
@@ -284,19 +313,20 @@ extension CanvasNSView {
             case .moveDown: delta = CGSize(width: 0, height: 1)
             default: return false
             }
-            return onNudgeSelectedImage(delta)
+            return key.kind == .semantic ? onNudgeSemanticObject(delta) : onNudgeSelectedImage(delta)
         case .makeSmaller, .makeLarger:
-            guard key.kind == .image,
+            guard key.kind != .stroke,
                   focusCanvasAccessibilityObject(key) else { return false }
-            return onResizeSelectedImage(action == .makeLarger ? 1.1 : 0.9)
+            let factor = action == .makeLarger ? 1.1 : 0.9
+            return key.kind == .semantic ? onResizeSemanticObject(factor) : onResizeSelectedImage(factor)
         case .sendBackward:
-            guard key.kind == .image,
+            guard key.kind != .stroke,
                   focusCanvasAccessibilityObject(key) else { return false }
-            return onSendSelectedImageBackward()
+            return key.kind == .semantic ? onMoveSemanticLayer(false) : onSendSelectedImageBackward()
         case .bringForward:
-            guard key.kind == .image,
+            guard key.kind != .stroke,
                   focusCanvasAccessibilityObject(key) else { return false }
-            return onBringSelectedImageForward()
+            return key.kind == .semantic ? onMoveSemanticLayer(true) : onBringSelectedImageForward()
         }
     }
 
@@ -305,7 +335,10 @@ extension CanvasNSView {
         _ key: CanvasAccessibilityObjectKey
     ) -> Bool {
         guard canvasAccessibilityNavigationOrder.contains(key) else { return false }
+        guard finishSemanticTextEditing(commit: true) else { return false }
         accessibilityFocusedObjectKey = key
+        selectedSemanticObjectID = key.kind == .semantic ? key.id : nil
+        onSelectSemanticObject(selectedSemanticObjectID)
         if key.kind == .image {
             selectedImageID = key.id
             onSelectImage(key.id)
@@ -542,6 +575,7 @@ extension CanvasNSView {
     }
 
     var imagesForDisplay: [CanvasPlacedImage] {
+        guard !semanticPointerActive else { return images }
         guard let selectedImageID,
               let previewImageTransform else {
             return images
@@ -590,6 +624,11 @@ extension CanvasNSView {
         case nil: break
         }
         guard interaction.tool == .select else { return toolCursorRole }
+        if let selected = selectedSemanticObject,
+           let handle = CanvasImagePlacement.resizeHandle(at: viewPoint, worldRect: selected.worldRect,
+                viewport: interaction.viewport, viewportSize: bounds.size, radius: 9) {
+            return resizeCursorRole(for: handle)
+        }
         if let selectedImage,
            let handle = CanvasImagePlacement.resizeHandle(
                 at: viewPoint,
@@ -604,6 +643,7 @@ extension CanvasNSView {
             for: viewPoint,
             in: bounds.size
         )
+        if semanticObject(at: worldPoint) != nil { return .openHand }
         if CanvasImagePlacement.topmostImage(
             at: worldPoint,
             images: imagesForDisplay
@@ -833,14 +873,17 @@ extension CanvasNSView {
         imagePointerMode = .none
         previewImageTransform = nil
         if let final, final != original {
-            onTransformImage(id, final)
+            if semanticPointerActive { onTransformSemanticObject(id, final) }
+            else { onTransformImage(id, final) }
         }
+        semanticPointerActive = false
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
         return true
     }
 
     func discardImagePreview() {
+        semanticPointerActive = false
         imagePointerMode = .none
         previewImageTransform = nil
         needsDisplay = true

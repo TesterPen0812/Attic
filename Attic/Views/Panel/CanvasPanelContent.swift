@@ -51,7 +51,7 @@ struct CanvasPanelContent: View {
                         .atticClearGlassForegroundReadability()
                         .padding(.horizontal, 10)
                         .frame(height: 27)
-                        .background(.thinMaterial, in: Capsule(style: .continuous))
+                        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
                         .overlay {
                             Capsule(style: .continuous)
                                 .stroke(Color.primary.opacity(0.10), lineWidth: 0.75)
@@ -73,8 +73,18 @@ struct CanvasPanelContent: View {
                         .padding(.bottom, 60 + bottomOverlayInset)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                #if os(macOS)
+                if let object = session.selectedSemanticObject {
+                    semanticSelectionDock(object)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 60 + bottomOverlayInset)
+                }
+                #endif
 
-                bottomChrome(compact: proxy.size.width < 350)
+                ViewThatFits(in: .horizontal) {
+                    bottomChrome(compact: false)
+                    bottomChrome(compact: true)
+                }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10 + bottomOverlayInset)
@@ -150,7 +160,7 @@ struct CanvasPanelContent: View {
             .accessibilityIdentifier("Confirm Clear Canvas")
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Every visible stroke and image will be removed. You can undo this during the current session.")
+            Text("Every visible canvas item will be removed. You can undo this during the current session.")
         }
         .confirmationDialog(
             "Delete \(session.selectedCanvas.name)?",
@@ -221,7 +231,7 @@ struct CanvasPanelContent: View {
         }
         .padding(.horizontal, 9)
         .frame(height: 25)
-        .background(.thinMaterial, in: Capsule(style: .continuous))
+        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
         .overlay {
             Capsule(style: .continuous)
                 .stroke(Color.primary.opacity(0.10), lineWidth: 0.75)
@@ -233,10 +243,9 @@ struct CanvasPanelContent: View {
     private func bottomChrome(compact: Bool) -> some View {
         HStack(alignment: .bottom, spacing: compact ? 6 : 10) {
             addMenu(compact: compact)
-            Spacer(minLength: 0)
             toolDock(compact: compact)
-            Spacer(minLength: 0)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .atticGlassEffectContainer(spacing: compact ? 6 : 10)
     }
 
@@ -316,7 +325,7 @@ struct CanvasPanelContent: View {
                 Button("Clear Canvas", systemImage: "trash", role: .destructive) {
                     isClearConfirmationPresented = true
                 }
-                .disabled(session.strokes.isEmpty && session.images.isEmpty)
+                .disabled(canvasIsEmpty)
                 .keyboardShortcut(.delete, modifiers: [.command, .shift])
                 .accessibilityIdentifier("canvas-clear")
             }
@@ -340,7 +349,7 @@ struct CanvasPanelContent: View {
     private func toolDock(compact: Bool) -> some View {
         HStack(spacing: compact ? 0 : 2) {
             CanvasCommandButton(
-                title: CanvasLegacyObjectAffordance.selectImageTitle,
+                title: "Select Object",
                 systemImage: "arrow.up.left",
                 identifier: "canvas-tool-select",
                 isSelected: session.pendingPlacement == nil && session.tool == .select
@@ -370,7 +379,7 @@ struct CanvasPanelContent: View {
             .keyboardShortcut("e", modifiers: [])
 
             CanvasCommandButton(
-                title: CanvasLegacyObjectAffordance.addTextTitle,
+                title: "Add Text",
                 systemImage: "textformat",
                 identifier: "canvas-add-text",
                 isSelected: isTextPlacementActive
@@ -450,14 +459,14 @@ struct CanvasPanelContent: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .help(CanvasLegacyObjectAffordance.addShapeTitle)
-        .accessibilityLabel(CanvasLegacyObjectAffordance.addShapeTitle)
+        .help("Add Shape")
+        .accessibilityLabel("Add Shape")
         .accessibilityIdentifier("canvas-add-shape")
     }
 
     private var textPlacementPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Add text image")
+            Text("Add text")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
 
             TextField("Type something", text: $textEntry)
@@ -466,7 +475,7 @@ struct CanvasPanelContent: View {
                 .onSubmit(beginTextPlacement)
 
             HStack(spacing: 8) {
-                Text("Then click its position on the canvas. \(CanvasLegacyObjectAffordance.textDisclosure)")
+                Text("Click its position on the canvas. Double-click placed text to edit it.")
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -594,9 +603,110 @@ struct CanvasPanelContent: View {
     }
 
     private var contentCountLabel: String {
-        let count = session.strokes.count + session.images.count
+        var count = session.strokes.count + session.images.count
+        #if os(macOS)
+        count += session.semanticObjects.count
+        #endif
         return count == 1 ? "1 item" : "\(count) items"
     }
+
+    private var canvasIsEmpty: Bool {
+        #if os(macOS)
+        session.strokes.isEmpty && session.images.isEmpty && session.semanticObjects.isEmpty
+        #else
+        session.strokes.isEmpty && session.images.isEmpty
+        #endif
+    }
+
+    #if os(macOS)
+    private func semanticSelectionDock(_ object: CanvasSemanticObject) -> some View {
+        HStack(spacing: 2) {
+            if object.content?.text != nil {
+                CanvasCommandButton(title: "Edit Text", systemImage: "text.cursor", identifier: "canvas-object-edit-text") {
+                    session.requestSelectedSemanticTextEditing()
+                }
+            }
+            if let content = object.content {
+                Menu {
+                    Menu("Color") {
+                        ForEach(CanvasInkColor.allCases) { color in
+                            Button(color.title) {
+                                editSemanticStyle(object.id) { $0.color = color }
+                            }
+                        }
+                    }
+                    if content.text != nil {
+                        Menu("Weight") {
+                            ForEach(["regular", "semibold", "bold"], id: \.self) { weight in
+                                Button(weight.capitalized) {
+                                    editSemanticStyle(object.id) { $0.fontWeight = weight }
+                                }
+                            }
+                        }
+                        Menu("Alignment") {
+                            ForEach(["left", "center", "right"], id: \.self) { alignment in
+                                Button(alignment.capitalized) {
+                                    editSemanticStyle(object.id) { $0.alignment = alignment }
+                                }
+                            }
+                        }
+                        Menu("Text Size") {
+                            ForEach([12, 18, 24, 36, 48, 72], id: \.self) { size in
+                                Button("\(size) pt") {
+                                    editSemanticStyle(object.id) { $0.fontSize = Double(size) }
+                                }
+                            }
+                        }
+                    } else {
+                        Menu("Shape") {
+                            ForEach(CanvasShapeKind.allCases) { shape in
+                                Button(shape.title) {
+                                    editSemanticStyle(object.id) { $0.shape = shape }
+                                }
+                            }
+                        }
+                        Menu("Line Width") {
+                            ForEach([1, 3, 6, 10, 16], id: \.self) { width in
+                                Button("\(width) pt") {
+                                    editSemanticStyle(object.id) { $0.strokeWidth = Double(width) }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3").frame(width: 32, height: 32)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .accessibilityLabel("Selected object style")
+            }
+            CanvasCommandButton(title: "Send Object Backward", systemImage: "square.2.layers.3d.bottom.filled",
+                identifier: "canvas-object-send-backward", isDisabled: !session.canSendSelectedSemanticBackward) {
+                _ = session.moveSelectedSemanticLayer(forward: false)
+            }
+            CanvasCommandButton(title: "Bring Object Forward", systemImage: "square.2.layers.3d.top.filled",
+                identifier: "canvas-object-bring-forward", isDisabled: !session.canBringSelectedSemanticForward) {
+                _ = session.moveSelectedSemanticLayer(forward: true)
+            }
+            CanvasCommandButton(title: "Delete Selected Object", systemImage: "trash", identifier: "canvas-object-delete") {
+                _ = session.deleteSemanticObject(object.id)
+            }
+        }
+        .padding(.horizontal, 5)
+        .frame(height: 36)
+        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Selected object actions")
+    }
+
+    private func editSemanticStyle(_ id: UUID, change: (inout CanvasSemanticContent) -> Void) {
+        // Ending inline editing may have saved newer characters after the menu
+        // opened. Apply its style choice to that latest persisted content.
+        guard var content = session.semanticObjects.first(where: { $0.id == id })?.content else { return }
+        change(&content)
+        _ = session.editSemanticObject(id, content: content)
+    }
+    #endif
 
     private func importProgress(_ progress: CanvasImageImportBatchProgress) -> some View {
         let finished = progress.completedCount == progress.items.count
@@ -639,7 +749,7 @@ struct CanvasPanelContent: View {
         }
         .padding(8)
         .frame(maxWidth: 240)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .atticGlassControl(in: RoundedRectangle(cornerRadius: 12), interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Image import progress")
     }

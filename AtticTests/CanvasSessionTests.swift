@@ -4,6 +4,137 @@ import XCTest
 
 final class CanvasSessionTests: XCTestCase {
     @MainActor
+    func testSemanticTextPlacementTransformsLayersAndHistoryPreserveCharacters() async throws {
+        let store = try makeTestCanvasStore()
+        let session = CanvasSession(store: store)
+        let clickedPoint = CanvasPoint(x: -193, y: 287)
+        XCTAssertTrue(session.prepareTextPlacement("Hello 👋\nمرحبا", prefersDarkSurface: false))
+        guard case let .text(placement)? = session.pendingPlacement else { return XCTFail("Expected text placement") }
+        let placed = await session.completePendingText(placement, at: clickedPoint)
+        XCTAssertTrue(placed)
+        let original = try XCTUnwrap(session.semanticObjects.first)
+        XCTAssertEqual(original.transform.center, clickedPoint)
+        XCTAssertEqual(original.content?.text, "Hello 👋\nمرحبا")
+        XCTAssertTrue(session.images.isEmpty)
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertNil(session.pendingPlacement)
+        XCTAssertEqual(session.tool, .select)
+        XCTAssertTrue(session.nudgeSelectedSemanticObject(CGSize(width: 10, height: -4)))
+        XCTAssertEqual(session.selectedSemanticObject?.transform.center, CanvasPoint(x: -183, y: 283))
+        XCTAssertTrue(session.resizeSelectedSemanticObject(by: 1.5))
+        XCTAssertEqual(session.selectedSemanticObject?.transform.width, original.transform.width * 1.5)
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.selectedSemanticObject?.transform.width, original.transform.width)
+        XCTAssertTrue(session.redo())
+        let prepared = CanvasPreparedImage(encodedData: Data([1, 2, 3]), contentType: "public.png", pixelWidth: 20, pixelHeight: 20)
+        XCTAssertTrue(session.importPreparedImage(prepared, at: .zero))
+        XCTAssertNil(session.selectedSemanticObjectID)
+        let image = try XCTUnwrap(session.images.first)
+        XCTAssertGreaterThan(image.zIndex, original.transform.zIndex)
+        session.selectSemanticObject(original.id)
+        XCTAssertTrue(session.moveSelectedSemanticLayer(forward: true))
+        XCTAssertGreaterThan(try XCTUnwrap(session.selectedSemanticObject).transform.zIndex, image.zIndex)
+        XCTAssertTrue(session.moveSelectedSemanticLayer(forward: false))
+        XCTAssertLessThan(try XCTUnwrap(session.selectedSemanticObject).transform.zIndex, image.zIndex)
+        var content = try XCTUnwrap(session.selectedSemanticObject?.content)
+        content.text = "Changed 📝\nSecond line"
+        content.fontWeight = "bold"
+        content.alignment = "center"
+        XCTAssertTrue(session.editSemanticObject(original.id, content: content))
+        XCTAssertEqual(session.selectedSemanticObject?.content, content)
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.selectedSemanticObject?.content?.text, original.content?.text)
+        XCTAssertTrue(session.redo())
+        XCTAssertTrue(session.deleteSemanticObject(original.id))
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.semanticObjects.first?.content, content)
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.content, content)
+    }
+
+    @MainActor
+    func testFailedSemanticPlacementRetainsTextAndCanRetryWithoutDuplicate() async throws {
+        let gate = PersistenceGate()
+        let session = CanvasSession(store: try makeTestCanvasStore(persist: gate.save))
+        XCTAssertTrue(session.prepareTextPlacement("Do not lose this", prefersDarkSurface: false))
+        guard case let .text(placement)? = session.pendingPlacement else { return XCTFail("Expected pending text") }
+        gate.shouldFail = true
+        let failed = await session.completePendingText(placement, at: CanvasPoint(x: 34, y: 78))
+        XCTAssertFalse(failed)
+        XCTAssertEqual(session.pendingPlacement, .text(placement))
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        gate.shouldFail = false
+        let saved = await session.completePendingText(placement, at: CanvasPoint(x: 34, y: 78))
+        XCTAssertTrue(saved)
+        XCTAssertNil(session.pendingPlacement)
+        XCTAssertEqual(session.semanticObjects.count, 1)
+        XCTAssertEqual(session.semanticObjects.first?.transform.center, CanvasPoint(x: 34, y: 78))
+        XCTAssertEqual(session.tool, .select)
+    }
+
+    @MainActor
+    func testImageBatchAndHistoryKeepOneSelectionKind() async throws {
+        let prepared = CanvasPreparedImage(encodedData: Data([1, 2, 3]), contentType: "public.png", pixelWidth: 20, pixelHeight: 20)
+        let session = CanvasSession(store: try makeTestCanvasStore(), prepareImage: { _ in prepared })
+        XCTAssertTrue(session.insertShape(.rectangle, from: .zero, to: CanvasPoint(x: 80, y: 60)))
+        let semanticID = try XCTUnwrap(session.selectedSemanticObjectID)
+        let result = await session.importImageBatch(CanvasImageImportBatch(target: session.captureImageImportTarget(),
+            items: [CanvasImageImportRequest(source: .data(Data([1])), center: .zero)]))
+        XCTAssertNotNil(result.items.first?.outcome.importedImageID)
+        XCTAssertNil(session.selectedSemanticObjectID)
+        XCTAssertNotNil(session.selectedImageID)
+        XCTAssertTrue(session.undo())
+        session.selectSemanticObject(semanticID)
+        XCTAssertTrue(session.redo())
+        XCTAssertNotNil(session.selectedImageID)
+        XCTAssertNil(session.selectedSemanticObjectID)
+    }
+
+    @MainActor
+    func testMixedSemanticClearUndoIsAtomicAndFailedUndoCanBeRetried() async throws {
+        let gate = PersistenceGate()
+        let store = try makeTestCanvasStore(persist: gate.save)
+        let session = CanvasSession(store: store)
+        XCTAssertTrue(session.completeStroke(points: [.zero, CanvasPoint(x: 20, y: 30)]))
+        XCTAssertTrue(session.importPreparedImage(CanvasPreparedImage(encodedData: Data([4, 5, 6]), contentType: "public.png", pixelWidth: 40, pixelHeight: 50), at: .zero))
+        let placed = await session.insertText("Persistent text", at: CanvasPoint(x: 150, y: 50), prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        let semanticID = try XCTUnwrap(session.semanticObjects.first?.id)
+        let saves = gate.saveCount
+        gate.shouldFail = true
+        XCTAssertFalse(session.clear())
+        XCTAssertEqual(session.semanticObjects.count, 1)
+        XCTAssertEqual(session.strokes.count, 1)
+        XCTAssertEqual(session.images.count, 1)
+        gate.shouldFail = false
+        XCTAssertTrue(session.clear())
+        XCTAssertEqual(gate.saveCount, saves + 1)
+        let generation = session.boardGeneration
+        gate.shouldFail = true
+        XCTAssertFalse(session.undo())
+        XCTAssertTrue(session.canUndo)
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.images.isEmpty)
+        let failedRestoreContext = ModelContext(store.container)
+        XCTAssertTrue(try failedRestoreContext.fetch(FetchDescriptor<CanvasSemanticObjectItem>()).allSatisfy { $0.boardGeneration < generation })
+        XCTAssertTrue(try failedRestoreContext.fetch(FetchDescriptor<CanvasStrokeItem>()).allSatisfy { $0.boardGeneration < generation })
+        XCTAssertTrue(try failedRestoreContext.fetch(FetchDescriptor<CanvasImageItem>()).allSatisfy { $0.boardGeneration < generation })
+        gate.shouldFail = false
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(gate.saveCount, saves + 2)
+        XCTAssertEqual(session.semanticObjects.first?.id, semanticID)
+        XCTAssertEqual(session.semanticObjects.first?.boardGeneration, generation)
+        XCTAssertEqual(session.images.count, 1)
+        XCTAssertEqual(session.strokes.count, 1)
+        XCTAssertTrue(session.redo())
+        let reloaded = CanvasStore(container: store.container)
+        XCTAssertTrue(reloaded.semanticObjects.isEmpty)
+        XCTAssertTrue(reloaded.images.isEmpty)
+        XCTAssertTrue(reloaded.strokes.isEmpty)
+    }
+
+    @MainActor
     func testRestoresViewportAndToolPerBoardWithoutHistoryOrSelection() throws {
         let suite = "CanvasViewStateTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -126,7 +257,7 @@ final class CanvasSessionTests: XCTestCase {
     }
 
     @MainActor
-    func testInsertedShapeUsesStrokeHistoryAndCurrentStyle() throws {
+    func testInsertedShapeRemainsSemanticAndUsesHistoryAndCurrentStyle() throws {
         let session = CanvasSession(store: try makeTestCanvasStore())
         session.selectColor(.blue)
         session.setWidth(6.5)
@@ -136,16 +267,17 @@ final class CanvasSessionTests: XCTestCase {
             from: CanvasPoint(x: -20, y: -60),
             to: CanvasPoint(x: 100, y: 20)
         ))
-        let stroke = try XCTUnwrap(session.strokes.first)
-        XCTAssertEqual(stroke.color, .blue)
-        XCTAssertEqual(stroke.width, 6.5)
-        XCTAssertEqual(stroke.points.count, 65)
+        let object = try XCTUnwrap(session.semanticObjects.first)
+        XCTAssertEqual(object.content?.color, .blue)
+        XCTAssertEqual(object.content?.strokeWidth, 6.5)
+        XCTAssertEqual(object.content?.shape, .ellipse)
+        XCTAssertTrue(session.strokes.isEmpty)
         XCTAssertTrue(session.canUndo)
 
         XCTAssertTrue(session.undo())
-        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.semanticObjects.isEmpty)
         XCTAssertTrue(session.redo())
-        XCTAssertEqual(session.strokes.map(\.id), [stroke.id])
+        XCTAssertEqual(session.semanticObjects.map(\.id), [object.id])
     }
 
     @MainActor
@@ -169,16 +301,10 @@ final class CanvasSessionTests: XCTestCase {
             to: end
         ))
         XCTAssertNil(session.pendingPlacement)
-        XCTAssertEqual(
-            try XCTUnwrap(session.strokes.first).points,
-            [
-                CanvasPoint(x: -42, y: -12),
-                CanvasPoint(x: 18, y: -12),
-                CanvasPoint(x: 18, y: 75),
-                CanvasPoint(x: -42, y: 75),
-                CanvasPoint(x: -42, y: -12)
-            ]
-        )
+        let object = try XCTUnwrap(session.semanticObjects.first)
+        XCTAssertEqual(object.worldRect, CGRect(x: -42, y: -12, width: 60, height: 87))
+        XCTAssertEqual(object.content?.shape, .rectangle)
+        XCTAssertTrue(session.strokes.isEmpty)
     }
 
     @MainActor

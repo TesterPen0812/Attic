@@ -435,10 +435,20 @@ enum CanvasImagePlacement {
         viewportSize: CGSize,
         radius: Double = selectionHandleRadius
     ) -> CanvasImageResizeHandle? {
+        resizeHandle(at: viewPoint, worldRect: image.worldRect, viewport: viewport, viewportSize: viewportSize, radius: radius)
+    }
+
+    static func resizeHandle(
+        at viewPoint: CGPoint,
+        worldRect: CGRect,
+        viewport: CanvasViewport,
+        viewportSize: CGSize,
+        radius: Double = selectionHandleRadius
+    ) -> CanvasImageResizeHandle? {
         guard radius.isFinite, radius > 0 else { return nil }
         for handle in CanvasImageResizeHandle.allCases {
             let point = viewport.viewPoint(
-                for: worldPoint(for: handle, in: image.worldRect),
+                for: worldPoint(for: handle, in: worldRect),
                 in: viewportSize
             )
             let dx = Double(viewPoint.x - point.x)

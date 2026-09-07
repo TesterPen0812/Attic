@@ -72,13 +72,28 @@ struct CanvasStoredReplicas {
     let boards: [CanvasBoardItem]
     let strokes: [CanvasStrokeItem]
     let images: [CanvasImageItem]
+    #if os(macOS)
+    var semanticObjects: [CanvasSemanticObjectItem] = []
+    #endif
+
+    init(boards: [CanvasBoardItem], strokes: [CanvasStrokeItem], images: [CanvasImageItem]) {
+        self.boards = boards
+        self.strokes = strokes
+        self.images = images
+    }
 
     static func load(from context: ModelContext) throws -> CanvasStoredReplicas {
-        CanvasStoredReplicas(
+        var replicas = CanvasStoredReplicas(
             boards: try context.fetch(FetchDescriptor<CanvasBoardItem>()),
             strokes: try context.fetch(FetchDescriptor<CanvasStrokeItem>()),
             images: try context.fetch(FetchDescriptor<CanvasImageItem>())
         )
+        #if os(macOS)
+        if context.container.schema.entities.contains(where: { $0.name == "CanvasSemanticObjectItem" }) {
+            replicas.semanticObjects = try context.fetch(FetchDescriptor<CanvasSemanticObjectItem>())
+        }
+        #endif
+        return replicas
     }
 }
 
@@ -90,6 +105,9 @@ struct CanvasPresentationSnapshot {
     let imageCache: [CanvasReplicaKey: CanvasImageCacheEntry]
     let strokes: [CanvasStroke]
     let images: [CanvasPlacedImage]
+    #if os(macOS)
+    var semanticObjects: [CanvasSemanticObject] = []
+    #endif
     let warning: String?
 }
 
@@ -220,6 +238,9 @@ final class CanvasStore: ObservableObject {
     @Published var selectedCanvasID = CanvasBoardItem.logicalBoardID
     @Published var strokes: [CanvasStroke] = []
     @Published var images: [CanvasPlacedImage] = []
+    #if os(macOS)
+    @Published var semanticObjects: [CanvasSemanticObject] = []
+    #endif
     @Published var boardGeneration: Int64 = 0
     @Published var lastErrorMessage: String?
     @Published var revision: UInt64 = 0

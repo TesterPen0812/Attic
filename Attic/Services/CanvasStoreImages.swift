@@ -86,7 +86,7 @@ extension CanvasStore {
             let targetRows = try context.fetch(FetchDescriptor<CanvasImageItem>())
                 .filter { $0.canvasID == target.canvasID }
             let groupedRows = Dictionary(grouping: targetRows, by: \.id)
-            let highestUnaffectedZ = try groupedRows.compactMap { id, replicas -> Int64? in
+            var highestUnaffectedZ = try groupedRows.compactMap { id, replicas -> Int64? in
                 guard !requestIDs.contains(id) else { return nil }
                 let winner = try Self.winningImageReplica(in: replicas)
                 guard !winner.tombstoned,
@@ -95,6 +95,15 @@ extension CanvasStore {
                 }
                 return winner.zIndex
             }.max() ?? -1
+            #if os(macOS)
+            let semanticGroups = Dictionary(grouping: try storedSemanticReplicas(canvasID: target.canvasID), by: \.id)
+            let semanticHighest = semanticGroups.values.compactMap { rows -> Int64? in
+                guard let winner = Self.winningSemanticReplica(rows), !winner.tombstoned,
+                      winner.boardGeneration == target.boardGeneration else { return nil }
+                return winner.zIndex
+            }.max() ?? -1
+            highestUnaffectedZ = max(highestUnaffectedZ, semanticHighest)
+            #endif
             guard highestUnaffectedZ <= Int64.max - Int64(imports.count) else {
                 let message = CanvasReplicaMutationError.sortIndexExhausted.localizedDescription
                 lastErrorMessage = message

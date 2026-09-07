@@ -88,6 +88,24 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         view.onDecodeFailuresChanged = { [weak session] ids in
             session?.setFailedImageIDs(ids)
         }
+        view.onSelectSemanticObject = { [weak session] id in session?.selectSemanticObject(id) }
+        view.onTransformSemanticObject = { [weak session] id, transform in
+            _ = session?.transformSemanticObject(id, to: transform)
+        }
+        view.onDeleteSemanticObject = { [weak session] id in session?.deleteSemanticObject(id) ?? false }
+        view.onNudgeSemanticObject = { [weak session] delta in session?.nudgeSelectedSemanticObject(delta) ?? false }
+        view.onResizeSemanticObject = { [weak session] factor in session?.resizeSelectedSemanticObject(by: factor) ?? false }
+        view.onMoveSemanticLayer = { [weak session] forward in session?.moveSelectedSemanticLayer(forward: forward) ?? false }
+        view.onCommitSemanticText = { [weak session] draft in session?.commitSemanticText(draft) ?? false }
+        view.onSemanticTextConflict = { [weak session] key in
+            Task { @MainActor [weak session] in
+                guard let session, session.selectedCanvasID == key.canvasID,
+                      session.semanticTextDraft(key) != nil else { return }
+                session.reportSemanticTextConflict()
+            }
+        }
+        view.onPreserveSemanticDraft = { [weak session] key, draft in session?.preserveSemanticTextDraft(key, draft: draft) }
+        view.onSemanticDraft = { [weak session] key in session?.semanticTextDraft(key) }
         view.configure(
             canvasID: session.selectedCanvasID,
             strokes: session.strokes,
@@ -99,7 +117,9 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             viewport: session.viewport,
             pendingPlacement: session.pendingPlacement,
             clearReadabilityEnabled: clearReadabilityEnabled,
-            selectionAccentColor: selectionAccentColor
+            selectionAccentColor: selectionAccentColor,
+            semanticObjects: session.semanticObjects,
+            selectedSemanticObjectID: session.selectedSemanticObjectID
         )
         if let request = session.imageDecodeRetryRequest,
            view.lastDecodeRetryRequest != request {
@@ -107,6 +127,10 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             if let image = view.images.first(where: { $0.id == request.imageID }) {
                 view.imageCache.retryDecode(for: image)
             }
+        }
+        if let request = session.semanticTextEditRequest, view.lastSemanticTextEditRequest != request {
+            view.lastSemanticTextEditRequest = request
+            if let object = session.selectedSemanticObject { view.beginSemanticTextEditing(object) }
         }
     }
 }
@@ -154,6 +178,24 @@ final class CanvasNSView: NSView {
     var onCancelPlacement: () -> Void = {}
     var onDecodeFailuresChanged: (Set<UUID>) -> Void = { _ in }
     var lastDecodeRetryRequest: CanvasImageDecodeRetryRequest?
+    var lastSemanticTextEditRequest: UUID?
+    var onSelectSemanticObject: (UUID?) -> Void = { _ in }
+    var onTransformSemanticObject: (UUID, CanvasImageTransform) -> Void = { _, _ in }
+    var onDeleteSemanticObject: (UUID) -> Bool = { _ in false }
+    var onNudgeSemanticObject: (CGSize) -> Bool = { _ in false }
+    var onResizeSemanticObject: (Double) -> Bool = { _ in false }
+    var onMoveSemanticLayer: (Bool) -> Bool = { _ in false }
+    var onCommitSemanticText: (CanvasSemanticTextDraft) -> Bool = { _ in false }
+    var onSemanticTextConflict: (CanvasReplicaKey) -> Void = { _ in }
+    var onPreserveSemanticDraft: (CanvasReplicaKey, CanvasSemanticTextDraft?) -> Void = { _, _ in }
+    var onSemanticDraft: (CanvasReplicaKey) -> CanvasSemanticTextDraft? = { _ in nil }
+    var semanticObjects: [CanvasSemanticObject] = []
+    var selectedSemanticObjectID: UUID?
+    var semanticPointerActive = false
+    let semanticRenderCache = CanvasSemanticRenderCache()
+    var semanticTextEditor: CanvasSemanticTextEditor?
+    var editingSemanticObjectID: UUID?
+    var editingSemanticBaseline: CanvasSemanticObject?
 
     enum ImagePointerMode {
         case none
@@ -239,7 +281,7 @@ final class CanvasNSView: NSView {
             guard let self else { return }
             needsDisplay = true
             onDecodeFailuresChanged(Set(images.filter {
-                imageCache.state(for: $0) == .failed
+                self.imageCache.state(for: $0) == .failed
             }.map(\.id)))
         }
 
@@ -290,14 +332,16 @@ final class CanvasNSView: NSView {
     override func accessibilityLabel() -> String? { "Canvas objects" }
 
     override func accessibilityHelp() -> String? {
-        "Use Tab and Shift-Tab to move between canvas objects. Arrow keys move an image; Option-arrow keys resize it."
+        "Use Tab and Shift-Tab to move between canvas objects. Arrow keys move a selected object; Option-arrow keys resize it. Return edits text."
     }
 
     override func accessibilityChildren() -> [Any]? {
         refreshCanvasAccessibilityElements(postLayoutNotification: false)
-        return canvasAccessibilityNavigationOrder.compactMap {
+        var children: [Any] = canvasAccessibilityNavigationOrder.compactMap {
             canvasAccessibilityElements[$0]
         }
+        if let semanticTextEditor { children.append(semanticTextEditor) }
+        return children
     }
 
     override func accessibilitySelectedChildren() -> [Any]? {
@@ -324,10 +368,13 @@ final class CanvasNSView: NSView {
         viewport: CanvasViewport,
         pendingPlacement: CanvasPendingPlacement?,
         clearReadabilityEnabled: Bool,
-        selectionAccentColor: NSColor = .controlAccentColor
+        selectionAccentColor: NSColor = .controlAccentColor,
+        semanticObjects: [CanvasSemanticObject] = [],
+        selectedSemanticObjectID: UUID? = nil
     ) {
         var changed = false
         if self.canvasID != canvasID {
+            suspendSemanticTextEditing()
             self.canvasID = canvasID
             previewImageTransform = nil
             imagePointerMode = .none
@@ -335,6 +382,22 @@ final class CanvasNSView: NSView {
             canvasAccessibilityElements.removeAll()
             canvasAccessibilityNavigationOrder.removeAll()
             accessibilityFocusedObjectKey = nil
+            changed = true
+        }
+        if self.semanticObjects != semanticObjects {
+            if let id = editingSemanticObjectID, !semanticObjects.contains(where: { $0.id == id }) {
+                suspendSemanticTextEditing()
+            }
+            reconcileSemanticTextEditing(with: semanticObjects)
+            self.semanticObjects = semanticObjects
+            semanticRenderCache.prepare(liveIDs: Set(semanticObjects.map(\.id)))
+            changed = true
+        }
+        if self.selectedSemanticObjectID != selectedSemanticObjectID {
+            self.selectedSemanticObjectID = selectedSemanticObjectID
+            if let id = selectedSemanticObjectID {
+                accessibilityFocusedObjectKey = CanvasAccessibilityObjectKey(kind: .semantic, id: id)
+            }
             changed = true
         }
         let nextImageSignatures = images.map(CanvasImageDisplaySignature.init)
@@ -393,6 +456,7 @@ final class CanvasNSView: NSView {
         )
         refreshCanvasAccessibilityElements(postLayoutNotification: changed)
         if changed { needsDisplay = true }
+        layoutSemanticTextEditor()
         window?.invalidateCursorRects(for: self)
     }
 
@@ -481,8 +545,28 @@ final class CanvasNSView: NSView {
             shapePreview: shapePreview,
             strokeReadabilityShadowColor: clearReadabilityEnabled
                 ? readabilityShadowColor
-                : nil
+                : nil,
+            drawPlacedObjects: { [self] context, cullingRect in
+                let objects = displayImages.map(CanvasPlacedRenderObject.image)
+                    + semanticObjectsForDisplay.map(CanvasPlacedRenderObject.semantic)
+                for object in objects.sorted(by: CanvasPlacedRenderObject.comesBefore) {
+                    guard object.worldRect.intersects(cullingRect) else { continue }
+                    switch object {
+                    case let .image(image):
+                        if let decoded = imageCache.image(for: image) { drawCanvasImage(image, decoded: decoded, in: context) }
+                    case let .semantic(object):
+                        if object.id != editingSemanticObjectID {
+                            CanvasSemanticRenderer.draw(object, in: context, cache: semanticRenderCache)
+                        }
+                    }
+                }
+            }
         )
+        if let selected = selectedSemanticObject {
+            drawCanvasObjectSelection(worldRect: selected.worldRect, context: context,
+                viewport: interaction.viewport, viewportSize: bounds.size,
+                color: selectionAccentColor.cgColor)
+        }
     }
 
     private var readabilityShadowColor: CGColor {
@@ -493,6 +577,7 @@ final class CanvasNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard finishSemanticTextEditing(commit: true) else { return }
         interruptViewportGestureForPointer()
         window?.makeFirstResponder(self)
         let viewPoint = convert(event.locationInWindow, from: nil)
@@ -530,6 +615,12 @@ final class CanvasNSView: NSView {
         }
 
         if interaction.tool == .select,
+           beginSemanticPointerInteraction(at: viewPoint, worldPoint: worldPoint, clickCount: event.clickCount) {
+            return
+        }
+        semanticPointerActive = false
+
+        if interaction.tool == .select,
            let selectedImage,
            let handle = CanvasImagePlacement.resizeHandle(
                 at: viewPoint,
@@ -557,6 +648,8 @@ final class CanvasNSView: NSView {
         ) {
             _ = interaction.cancel()
             onSelectImage(hit.id)
+            onSelectSemanticObject(nil)
+            selectedSemanticObjectID = nil
             selectedImageID = hit.id
             accessibilityFocusedObjectKey = CanvasAccessibilityObjectKey(
                 kind: .image,
@@ -574,6 +667,8 @@ final class CanvasNSView: NSView {
         }
 
         onSelectImage(nil)
+        onSelectSemanticObject(nil)
+        selectedSemanticObjectID = nil
         selectedImageID = nil
         accessibilityFocusedObjectKey = nil
         previewImageTransform = nil
@@ -852,6 +947,9 @@ final class CanvasNSView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let editor = semanticTextEditor, window?.firstResponder === editor {
+            return editor.performKeyEquivalent(with: event)
+        }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers.contains(.command),
               let key = event.charactersIgnoringModifiers?.lowercased() else {
@@ -861,9 +959,11 @@ final class CanvasNSView: NSView {
         case "v":
             return importPasteboard(.general, at: defaultPasteViewPoint)
         case "]":
+            if selectedSemanticObjectID != nil { return onMoveSemanticLayer(true) }
             guard selectedImageID != nil else { return false }
             return onBringSelectedImageForward()
         case "[":
+            if selectedSemanticObjectID != nil { return onMoveSemanticLayer(false) }
             guard selectedImageID != nil else { return false }
             return onSendSelectedImageBackward()
         default:
@@ -873,6 +973,10 @@ final class CanvasNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
+        case 36, 76:
+            if let object = selectedSemanticObject, object.content?.text != nil {
+                beginSemanticTextEditing(object)
+            } else { super.keyDown(with: event) }
         case 48:
             let backward = event.modifierFlags.contains(.shift)
             guard focusNextCanvasObject(backward: backward) == nil else { return }
@@ -895,12 +999,16 @@ final class CanvasNSView: NSView {
             onCancelImageImportBatches()
             onCancelPlacement()
             onSelectImage(nil)
+            onSelectSemanticObject(nil)
+            selectedSemanticObjectID = nil
             selectedImageID = nil
             accessibilityFocusedObjectKey = nil
             refreshCanvasAccessibilityElements(postLayoutNotification: false)
             needsDisplay = true
         case 51, 117:
-            if let key = accessibilityFocusedObjectKey,
+            if let id = selectedSemanticObjectID {
+                if !onDeleteSemanticObject(id) { super.keyDown(with: event) }
+            } else if let key = accessibilityFocusedObjectKey,
                key.kind == .stroke {
                 if !onErase([key.id]) {
                     super.keyDown(with: event)
@@ -913,13 +1021,15 @@ final class CanvasNSView: NSView {
                 super.keyDown(with: event)
             }
         case 123, 124, 125, 126:
-            guard selectedImageID != nil else {
+            guard selectedImageID != nil || selectedSemanticObjectID != nil else {
                 super.keyDown(with: event)
                 return
             }
             if event.modifierFlags.contains(.option) {
                 let grows = event.keyCode == 124 || event.keyCode == 126
-                if !onResizeSelectedImage(grows ? 1.1 : 0.9) {
+                let succeeded = selectedSemanticObjectID != nil
+                    ? onResizeSemanticObject(grows ? 1.1 : 0.9) : onResizeSelectedImage(grows ? 1.1 : 0.9)
+                if !succeeded {
                     super.keyDown(with: event)
                 }
                 return
@@ -932,7 +1042,8 @@ final class CanvasNSView: NSView {
             case 125: delta = CGSize(width: 0, height: distance)
             default: delta = CGSize(width: 0, height: -distance)
             }
-            if !onNudgeSelectedImage(delta) {
+            let succeeded = selectedSemanticObjectID != nil ? onNudgeSemanticObject(delta) : onNudgeSelectedImage(delta)
+            if !succeeded {
                 super.keyDown(with: event)
             }
         default:
@@ -1000,6 +1111,7 @@ final class CanvasNSView: NSView {
     }
 
     func deactivateRepresentation() {
+        if !finishSemanticTextEditing(commit: true) { suspendSemanticTextEditing() }
         isRepresentationActive = false
         gestureRecognizers.forEach { $0.isEnabled = false }
         cancelInteraction()

@@ -51,7 +51,7 @@ private final class CanvasTestFilePromiseDelegate: NSObject, NSFilePromiseProvid
 
 final class CanvasAffordanceTruthTests: XCTestCase {
     func testLegacyObjectAffordancesNameTheActuallyEditableRepresentation() {
-        XCTAssertEqual(CanvasTool.select.title, "Select Image")
+        XCTAssertEqual(CanvasTool.select.title, "Select Object")
         XCTAssertEqual(
             CanvasLegacyObjectAffordance.addTextTitle,
             "Add Text Image"
@@ -64,10 +64,10 @@ final class CanvasAffordanceTruthTests: XCTestCase {
             CanvasPendingPlacement.text(CanvasTextPlacement(
                 text: "Legacy",
                 prefersDarkSurface: false
-            )).instruction.contains("non-editable text image")
+            )).instruction.contains("editable text")
         )
         XCTAssertTrue(
-            CanvasPendingPlacement.shape(.rectangle).instruction.contains("as ink")
+            CanvasPendingPlacement.shape(.rectangle).instruction.contains("place a rectangle")
         )
         XCTAssertTrue(
             CanvasLegacyObjectAffordance.textDisclosure.contains("not editable")
@@ -76,6 +76,231 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 }
 
 final class CanvasAccessibilityTests: XCTestCase {
+    @MainActor
+    func testUntouchedSemanticEditorRefreshesExternalTextWithoutOverwritingIt() async throws {
+        let store = try makeTestCanvasStore()
+        let session = CanvasSession(store: store)
+        let placed = await session.insertText("Original", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        let object = try XCTUnwrap(session.selectedSemanticObject)
+        view.beginSemanticTextEditing(object)
+        let external = ModelContext(store.container)
+        let row = try XCTUnwrap(external.fetch(FetchDescriptor<CanvasSemanticObjectItem>()).first)
+        var changed = try XCTUnwrap(object.content)
+        changed.text = "Newer saved text"
+        row.payload = try JSONEncoder().encode(changed)
+        row.mutationVersion += 1
+        try external.save()
+        store.refresh()
+        bridge.configure(view)
+        XCTAssertEqual(view.semanticTextEditor?.string, "Newer saved text")
+        XCTAssertTrue(view.finishSemanticTextEditing(commit: true))
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.content?.text, "Newer saved text")
+    }
+
+    @MainActor
+    func testDirtySemanticEditorFencesExternalAndUnsupportedPayloadChanges() async throws {
+        let store = try makeTestCanvasStore()
+        let session = CanvasSession(store: store)
+        let placed = await session.insertText("Original", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        let object = try XCTUnwrap(session.selectedSemanticObject)
+        view.beginSemanticTextEditing(object)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" local draft", replacementRange: NSRange(location: 8, length: 0))
+        let draft = editor.string
+        let external = ModelContext(store.container)
+        let row = try XCTUnwrap(external.fetch(FetchDescriptor<CanvasSemanticObjectItem>()).first)
+        var changed = try XCTUnwrap(object.content)
+        changed.text = "External winner"
+        row.payload = try JSONEncoder().encode(changed)
+        row.mutationVersion += 1
+        try external.save()
+        store.refresh()
+        // The session fence also protects the window before SwiftUI has called configure.
+        XCTAssertFalse(view.finishSemanticTextEditing(commit: true))
+        bridge.configure(view)
+        XCTAssertEqual(editor.string, draft)
+        XCTAssertEqual(session.semanticTextDraft(object.id), draft)
+        XCTAssertTrue(session.lastErrorMessage?.contains("Escape") == true)
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.content?.text, "External winner")
+        view.suspendSemanticTextEditing()
+        view.beginSemanticTextEditing(try XCTUnwrap(session.semanticObjects.first))
+        XCTAssertEqual(view.semanticTextEditor?.string, draft)
+        XCTAssertFalse(view.finishSemanticTextEditing(commit: true))
+        let unsupported = ModelContext(store.container)
+        let unknownRow = try XCTUnwrap(unsupported.fetch(FetchDescriptor<CanvasSemanticObjectItem>()).first)
+        unknownRow.kind = "future-object"
+        unknownRow.payloadVersion = 99
+        unknownRow.payload = Data([128, 255, 3])
+        unknownRow.mutationVersion += 1
+        try unsupported.save()
+        store.refresh()
+        bridge.configure(view)
+        XCTAssertFalse(view.finishSemanticTextEditing(commit: true))
+        XCTAssertEqual(session.semanticTextDraft(object.id), draft)
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.payload, Data([128, 255, 3]))
+        view.semanticTextEditor?.keyDown(with: try canvasKeyEvent(keyCode: 53, characters: "\u{1B}"))
+        XCTAssertNil(view.semanticTextEditor)
+        XCTAssertNil(session.semanticTextDraft(object.id))
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.payloadVersion, 99)
+    }
+
+    @MainActor
+    func testSemanticDraftKeysSeparateSameUUIDOnDifferentPages() throws {
+        let store = try makeTestCanvasStore()
+        let pageA = CanvasBoardItem.logicalBoardID
+        let pageB = UUID()
+        let objectID = UUID()
+        let seed = ModelContext(store.container)
+        seed.insert(CanvasBoardItem(id: pageA, name: "A"))
+        seed.insert(CanvasBoardItem(id: pageB, name: "B", sortIndex: 1))
+        for (page, text) in [(pageA, "Page A"), (pageB, "Page B")] {
+            let row = CanvasSemanticObjectItem(id: objectID, canvasID: page)
+            row.payload = try JSONEncoder().encode(CanvasSemanticContent(text: text, color: .ink, strokeWidth: 3))
+            seed.insert(row)
+        }
+        try seed.save()
+        store.refresh()
+        let session = CanvasSession(store: store)
+        XCTAssertTrue(session.selectCanvas(pageA))
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        view.beginSemanticTextEditing(try XCTUnwrap(session.semanticObjects.first))
+        view.semanticTextEditor?.insertText(" draft A", replacementRange: NSRange(location: 6, length: 0))
+        XCTAssertTrue(session.selectCanvas(pageB))
+        bridge.configure(view)
+        XCTAssertNil(session.semanticTextDraft(objectID))
+        view.beginSemanticTextEditing(try XCTUnwrap(session.semanticObjects.first))
+        XCTAssertEqual(view.semanticTextEditor?.string, "Page B")
+        view.semanticTextEditor?.insertText(" draft B", replacementRange: NSRange(location: 6, length: 0))
+        XCTAssertTrue(session.selectCanvas(pageA))
+        bridge.configure(view)
+        view.beginSemanticTextEditing(try XCTUnwrap(session.semanticObjects.first))
+        XCTAssertEqual(view.semanticTextEditor?.string, "Page A draft A")
+        XCTAssertEqual(session.semanticTextDraft(CanvasReplicaKey(canvasID: pageB, id: objectID))?.text, "Page B draft B")
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.content?.text, "Page A")
+    }
+
+    @MainActor
+    func testUnifiedPlacedObjectOrderPreservesLegacyImageDateTieBreak() {
+        let older = makeAccessibilityImage(id: UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!,
+            center: .zero, width: 80, height: 60, zIndex: 0, createdAt: Date(timeIntervalSince1970: 1))
+        let newer = makeAccessibilityImage(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            center: .zero, width: 80, height: 60, zIndex: 0, createdAt: Date(timeIntervalSince1970: 2))
+        let sorted = [CanvasPlacedRenderObject.image(newer), .image(older)].sorted(by: CanvasPlacedRenderObject.comesBefore)
+        XCTAssertEqual(sorted.map(\.id), [older.id, newer.id])
+        XCTAssertEqual(CanvasImagePlacement.topmostImage(at: .zero, images: [older, newer])?.id, sorted.last?.id)
+    }
+
+    @MainActor
+    func testSemanticObjectKeyboardSelectionEditingAndFailedDraftSurviveRecreation() async throws {
+        let gate = PersistenceGate()
+        let store = try makeTestCanvasStore(persist: gate.save)
+        let session = CanvasSession(store: store)
+        let placed = await session.insertText("Original text", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        session.selectTool(.select)
+        session.selectSemanticObject(nil)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        let id = try XCTUnwrap(session.semanticObjects.first?.id)
+        XCTAssertEqual(view.focusNextCanvasObject(backward: false), id)
+        XCTAssertEqual(session.selectedSemanticObjectID, id)
+        let children = try XCTUnwrap(view.accessibilityChildren() as? [CanvasAccessibilityObjectElement])
+        let element = try XCTUnwrap(children.first)
+        XCTAssertTrue(element.availableActions.contains(.editText))
+        XCTAssertTrue(element.perform(.moveRight))
+        XCTAssertEqual(session.selectedSemanticObject?.transform.center.x, 1)
+        bridge.configure(view)
+        let beforeWidth = try XCTUnwrap(session.selectedSemanticObject?.transform.width)
+        view.keyDown(with: try canvasKeyEvent(keyCode: 124, characters: "", modifiers: .option))
+        XCTAssertEqual(try XCTUnwrap(session.selectedSemanticObject?.transform.width), beforeWidth * 1.1, accuracy: 0.001)
+        bridge.configure(view)
+        view.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r"))
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" unsaved 📝", replacementRange: NSRange(location: editor.string.utf16.count, length: 0))
+        let draft = editor.string
+        XCTAssertTrue(draft.contains("unsaved 📝"))
+        gate.shouldFail = true
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r", modifiers: .command))
+        XCTAssertTrue(view.semanticTextEditor === editor)
+        XCTAssertEqual(session.semanticTextDraft(id), draft)
+        XCTAssertEqual(session.selectedSemanticObject?.content?.text, "Original text")
+        XCTAssertNotNil(session.lastErrorMessage)
+        view.deactivateRepresentation()
+        XCTAssertNil(view.semanticTextEditor)
+        XCTAssertEqual(session.semanticTextDraft(id), draft)
+        let recreated = CanvasNSView(frame: view.frame)
+        bridge.configure(recreated)
+        recreated.beginSemanticTextEditing(try XCTUnwrap(session.selectedSemanticObject))
+        XCTAssertEqual(recreated.semanticTextEditor?.string, draft)
+        gate.shouldFail = false
+        recreated.semanticTextEditor?.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r", modifiers: .command))
+        XCTAssertNil(recreated.semanticTextEditor)
+        XCTAssertNil(session.semanticTextDraft(id))
+        XCTAssertEqual(session.selectedSemanticObject?.content?.text, draft)
+        XCTAssertEqual(CanvasStore(container: store.container).semanticObjects.first?.content?.text, draft)
+        XCTAssertTrue(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertEqual(session.selectedSemanticObject?.content?.text, "Original text")
+        XCTAssertTrue(CanvasEditCommandRoute.redo(session: session, section: .canvas))
+        XCTAssertEqual(session.selectedSemanticObject?.content?.text, draft)
+    }
+
+    @MainActor
+    func testInlineEscapeCancelsDraftWithoutDeletingObjectAndNativeUndoStaysInEditor() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = view
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        let object = try XCTUnwrap(session.selectedSemanticObject)
+        view.beginSemanticTextEditing(object)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" draft", replacementRange: NSRange(location: 4, length: 0))
+        XCTAssertEqual(editor.string, "Keep draft")
+        XCTAssertNotNil(editor.undoManager)
+        XCTAssertTrue(editor.performKeyEquivalent(with: try canvasKeyEvent(keyCode: 6, characters: "z", modifiers: .command)))
+        XCTAssertEqual(editor.string, "Keep")
+        XCTAssertEqual(session.semanticObjects.count, 1)
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Keep")
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 53, characters: "\u{1B}"))
+        XCTAssertNil(view.semanticTextEditor)
+        XCTAssertNil(session.semanticTextDraft(object.id))
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Keep")
+        XCTAssertTrue(session.undo())
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+    }
+
+    @MainActor
+    func testTextEditorResignationCommitsWithoutKeyboardFocusCallback() throws {
+        let editor = CanvasSemanticTextEditor(frame: .zero)
+        var commits = 0
+        var keyboardCommits = 0
+        editor.onCommit = { commits += 1; return true }
+        editor.onKeyboardCommit = { keyboardCommits += 1 }
+        _ = editor.resignFirstResponder()
+        XCTAssertEqual(commits, 1)
+        XCTAssertEqual(keyboardCommits, 0)
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r", modifiers: .command))
+        XCTAssertEqual(commits, 2)
+        XCTAssertEqual(keyboardCommits, 1)
+        editor.onCommit = { false }
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r", modifiers: .command))
+        XCTAssertEqual(keyboardCommits, 1)
+    }
+
     @MainActor
     func testCanvasVendsDeterministicObjectChildrenWithMeaningfulState() throws {
         let view = CanvasNSView(

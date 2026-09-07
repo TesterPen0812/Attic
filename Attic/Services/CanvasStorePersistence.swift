@@ -111,6 +111,9 @@ extension CanvasStore {
         let boardReplicas = replicas.boards
         let strokeReplicas = replicas.strokes
         let imageReplicas = replicas.images
+        #if os(macOS)
+        let semanticReplicas = replicas.semanticObjects
+        #endif
 
         var warnings: [String] = []
         var omittedWarningCount = 0
@@ -140,11 +143,16 @@ extension CanvasStore {
         // row exists. Materialise a virtual default only for live legacy
         // content. An explicit board tombstone must continue to win; otherwise
         // deleting the default canvas would make it reappear on refresh.
-        let hasLiveLegacyDefaultContent = strokeReplicas.contains {
+        var hasLiveLegacyDefaultContent = strokeReplicas.contains {
             $0.canvasID == CanvasBoardItem.logicalBoardID && !$0.tombstoned
         } || imageReplicas.contains {
             $0.canvasID == CanvasBoardItem.logicalBoardID && !$0.tombstoned
         }
+        #if os(macOS)
+        hasLiveLegacyDefaultContent = hasLiveLegacyDefaultContent || semanticReplicas.contains {
+            $0.canvasID == CanvasBoardItem.logicalBoardID && !$0.tombstoned
+        }
+        #endif
         if !resolvedBoards.contains(where: { $0.id == CanvasBoardItem.logicalBoardID }),
            boardWinnerByID[CanvasBoardItem.logicalBoardID] == nil,
            hasLiveLegacyDefaultContent {
@@ -341,11 +349,32 @@ extension CanvasStore {
         }
         visibleImages.sort(by: Self.imageComesBefore)
 
+        #if os(macOS)
+        let semanticGroups = Dictionary(grouping: semanticReplicas.filter {
+            $0.canvasID == resolvedSelectedCanvasID
+        }, by: \.id)
+        let visibleSemanticObjects = semanticGroups.values.compactMap { rows -> CanvasSemanticObject? in
+            guard let winner = Self.winningSemanticReplica(rows),
+                  !winner.tombstoned, winner.boardGeneration == resolvedGeneration else { return nil }
+            let object = CanvasSemanticObject(winner)
+            guard object.transform.isValid, object.rotation.isFinite else {
+                recordWarning("A canvas object was retained but its position is invalid.")
+                return nil
+            }
+            if object.content == nil { recordWarning("An unsupported canvas object was retained.") }
+            return object
+        }.sorted { lhs, rhs in
+            if lhs.transform.zIndex != rhs.transform.zIndex { return lhs.transform.zIndex < rhs.transform.zIndex }
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+        #endif
+
         if omittedWarningCount > 0 {
             warnings.append("\(omittedWarningCount) additional canvas warning(s) were omitted.")
         }
 
-        return CanvasPresentationSnapshot(
+        var presentation = CanvasPresentationSnapshot(
             canvases: resolvedBoards,
             selectedCanvasID: resolvedSelectedCanvasID,
             boardGeneration: resolvedGeneration,
@@ -355,6 +384,10 @@ extension CanvasStore {
             images: visibleImages,
             warning: warnings.isEmpty ? nil : warnings.joined(separator: " · ")
         )
+        #if os(macOS)
+        presentation.semanticObjects = visibleSemanticObjects
+        #endif
+        return presentation
     }
 
     private func applyCanvasPresentation(
@@ -371,6 +404,9 @@ extension CanvasStore {
         visibleImageCache = presentation.imageCache
         strokes = presentation.strokes
         images = presentation.images
+        #if os(macOS)
+        semanticObjects = presentation.semanticObjects
+        #endif
         revision &+= 1
     }
 
@@ -423,6 +459,9 @@ extension CanvasStore {
     }
 
     func tombstoneAllContent(canvasID: UUID, at timestamp: Date) throws {
+        #if os(macOS)
+        try tombstoneSemanticObjects(canvasID: canvasID, at: timestamp)
+        #endif
         let strokeGroups = Dictionary(
             grouping: try context.fetch(FetchDescriptor<CanvasStrokeItem>())
                 .filter { $0.canvasID == canvasID },
