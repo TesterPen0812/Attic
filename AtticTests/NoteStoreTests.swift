@@ -3,6 +3,35 @@ import XCTest
 @testable import Attic
 
 final class NoteStoreTests: XCTestCase {
+    #if ATTIC_LOCAL_ONLY
+    @MainActor
+    func testLocalOnlyNotesDoNotStartDeferredCloudActivity() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let initialStatus = store.cloudSyncStatus
+        XCTAssertNotNil(store.create(body: "Local save"))
+        let externalContext = ModelContext(container)
+        let externalNote = try XCTUnwrap(externalContext.fetch(FetchDescriptor<NoteItem>()).first)
+        externalNote.body = "External change"
+        try externalContext.save()
+        store.handleCloudSyncEvent(CloudSyncEventUpdate(
+            id: UUID(), kind: .importData, endedAt: Date(), succeeded: true, errorMessage: nil
+        ))
+        XCTAssertEqual(store.cloudSyncStatus, initialStatus)
+        XCTAssertNil(store.remoteChangeObservation)
+        XCTAssertNil(store.cloudKitEventObservation)
+        XCTAssertNil(store.cloudImportRefreshTask)
+        XCTAssertNil(store.exportActivityToken)
+        XCTAssertNil(store.importActivityToken)
+        XCTAssertNil(store.exportActivityTimeoutTask)
+        XCTAssertNil(store.importActivityTimeoutTask)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(store.notes.first?.body, "Local save", "Deferred events cannot reload Local Notes")
+        store.refresh()
+        XCTAssertEqual(store.notes.first?.body, "External change", "Explicit local refresh must still replace stale contexts")
+    }
+    #endif
+
     @MainActor
     func testEmptyStoreReconciliationLeavesSeparateDefaultLikeRootUntouched() async throws {
         let parent = FileManager.default.temporaryDirectory
@@ -234,6 +263,7 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertTrue(replicas.isEmpty)
     }
 
+    #if !ATTIC_LOCAL_ONLY
     @MainActor
     func testSuccessfulCloudImportRefreshesChangesSavedOutsideStoreContext() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
@@ -267,6 +297,7 @@ final class NoteStoreTests: XCTestCase {
 
         XCTAssertEqual(store.notes.map(\.body), ["Updated from iPhone"])
     }
+    #endif
 
     @MainActor
     func testRemoteDeletionMakesCapturedNoteReferencesNoOps() throws {

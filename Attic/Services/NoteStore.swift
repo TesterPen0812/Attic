@@ -94,6 +94,8 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
     @Published private(set) var attachmentsByNoteID: [UUID: [NoteAttachment]] = [:]
     @Published private(set) var attachmentImportActivity: NoteAttachmentImportActivity?
+    @Published private(set) var attachmentFailures: [UUID: String] = [:]
+    @Published private(set) var attachmentRetryVersions: [UUID: UInt64] = [:]
 
     var attachmentImportState: AttachmentImportState {
         attachmentImportActivity?.state ?? .idle
@@ -109,17 +111,19 @@ final class NoteStore: ObservableObject {
     private let now: () -> Date
     private let persist: (ModelContext) throws -> Void
     private let makeFreshContext: () throws -> ModelContext
-    private var remoteChangeObservation: AnyCancellable?
-    private var cloudKitEventObservation: AnyCancellable?
-    private var cloudImportRefreshTask: Task<Void, Never>?
+    private(set) var remoteChangeObservation: AnyCancellable?
+    private(set) var cloudKitEventObservation: AnyCancellable?
+    private(set) var cloudImportRefreshTask: Task<Void, Never>?
     private var cloudSyncProtection = CloudSyncProtectionState()
 #if os(macOS)
-    private var exportActivityToken: NSObjectProtocol?
-    private var importActivityToken: NSObjectProtocol?
-    private var exportActivityTimeoutTask: Task<Void, Never>?
-    private var importActivityTimeoutTask: Task<Void, Never>?
+    private(set) var exportActivityToken: NSObjectProtocol?
+    private(set) var importActivityToken: NSObjectProtocol?
+    private(set) var exportActivityTimeoutTask: Task<Void, Never>?
+    private(set) var importActivityTimeoutTask: Task<Void, Never>?
     private var attachmentImportInFlight = false
     private var invalidatedAttachmentImportIDs = Set<UUID>()
+    private var attachmentReconciliationTask: Task<Void, Never>?
+    private var attachmentReconciliationGeneration: UInt64 = 0
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
 
@@ -405,6 +409,11 @@ final class NoteStore: ObservableObject {
                 )
             }
             references.forEach(refreshedContext.insert)
+            // Attachment changes participate in the same note recency as text.
+            let timestamp = now()
+            for note in try storedNotes(matching: targetNoteID, in: refreshedContext) {
+                note.updatedAt = timestamp
+            }
             let presentation = try presentationSnapshot(in: refreshedContext)
             switch persistImport(
                 in: refreshedContext,
@@ -452,11 +461,24 @@ final class NoteStore: ObservableObject {
             return false
         }
         let references = replicas.map { AttachmentFileReference($0) }
+        let ownerIDs = Set(replicas.map(\.noteID))
+        let timestamp = now()
+        do {
+            for noteID in ownerIDs {
+                for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
+            }
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
         replicas.forEach(context.delete)
         for noteID in attachmentsByNoteID.keys {
             attachmentsByNoteID[noteID]?.removeAll { $0.id == attachment.id }
         }
         guard save() else { return false }
+        attachmentFailures[attachment.id] = nil
+        attachmentRetryVersions[attachment.id] = nil
         removeMaterializationsAfterSuccessfulSave(references)
         return true
     }
@@ -472,6 +494,7 @@ final class NoteStore: ObservableObject {
             } else {
                 let reference = AttachmentFileReference(attachment)
                 guard let repaired = try await attachmentFileStore.ensureMaterialized(reference) else {
+                    reportAttachmentFailure(attachment.id, message: "The original file is missing. Locate it to restore this attachment.")
                     return nil
                 }
                 url = repaired
@@ -491,10 +514,60 @@ final class NoteStore: ObservableObject {
                 try? await attachmentFileStore.removeMaterializations([metadata])
                 return nil
             }
+            if attachmentFailures[attachment.id] != nil { attachmentFailures[attachment.id] = nil }
             return url
         } catch {
-            lastErrorMessage = error.localizedDescription
+            reportAttachmentFailure(attachment.id, message: error.localizedDescription)
             return nil
+        }
+    }
+
+    func reportAttachmentFailure(_ id: UUID, message: String) {
+        guard attachmentsByNoteID.values.contains(where: { $0.contains(where: { $0.id == id }) }) else { return }
+        guard attachmentFailures[id] != message else { return }
+        attachmentFailures[id] = message
+    }
+
+    func retryAttachment(_ attachment: NoteAttachment) {
+        attachmentFailures[attachment.id] = nil
+        attachmentRetryVersions[attachment.id, default: 0] &+= 1
+    }
+
+    /// Repairs the existing logical attachment using an explicitly selected
+    /// original file. Different bytes are rejected rather than replacing it.
+    @discardableResult
+    func locateAttachment(_ attachment: NoteAttachment, at sourceURL: URL) async -> Bool {
+        let id = attachment.id
+        let expectedDigest = attachment.contentDigest
+        let expectedBytes = attachment.byteCount
+        var imported: [ImportedAttachment] = []
+        do {
+            imported = try await attachmentFileStore.importFiles(
+                [sourceURL], baseSortIndex: 0, existingCount: 0, existingBytes: 0
+            )
+            try Task.checkCancellation()
+            guard let original = imported.first,
+                  original.digest == expectedDigest,
+                  original.byteCount == expectedBytes else {
+                throw AttachmentFileStoreError.inaccessible(sourceURL, "Choose the original file; this file has different contents.")
+            }
+            let replicas = try storedAttachments(matching: id)
+            guard replicas.allSatisfy({ $0.contentDigest == expectedDigest && $0.byteCount == expectedBytes }) else {
+                throw AttachmentFileStoreError.inaccessible(sourceURL, "The attachment changed while the file was being selected. Retry with its current version.")
+            }
+            for replica in replicas { replica.payload = original.payload }
+            guard save() else {
+                reportAttachmentFailure(id, message: lastErrorMessage ?? "The restored file could not be saved.")
+                try? await removeImportedMaterializations(imported)
+                return false
+            }
+            try? await removeImportedMaterializations(imported)
+            retryAttachment(attachment)
+            return true
+        } catch {
+            try? await removeImportedMaterializations(imported)
+            reportAttachmentFailure(id, message: error.localizedDescription)
+            return false
         }
     }
 
@@ -524,6 +597,9 @@ final class NoteStore: ObservableObject {
     }
 
     func handleCloudSyncEvent(_ update: CloudSyncEventUpdate) {
+        #if ATTIC_LOCAL_ONLY
+        return
+        #else
         cloudSyncProtection.apply(update)
         reconcileProtectedCloudSyncActivity(for: update.kind)
         cloudSyncStatus.apply(update)
@@ -544,6 +620,7 @@ final class NoteStore: ObservableObject {
             self?.reconcileProtectedCloudSyncActivity(for: .importData)
             self?.cloudImportRefreshTask = nil
         }
+        #endif
     }
 
     // MARK: - Persistence
@@ -580,8 +657,10 @@ final class NoteStore: ObservableObject {
 
     private func registerSuccessfulLocalSave() {
         revision &+= 1
+        #if !ATTIC_LOCAL_ONLY
         cloudSyncProtection.noteLocalSave()
         reconcileProtectedCloudSyncActivity(for: .exportData)
+        #endif
     }
 
 #if os(macOS)
@@ -603,6 +682,9 @@ final class NoteStore: ObservableObject {
         context = sourceContext
         notes = visibleUniqueNotes(from: presentation.notes)
         attachmentsByNoteID = visibleUniqueAttachments(from: presentation.attachments)
+        let availableIDs = Set(attachmentsByNoteID.values.flatMap { $0.map(\.id) })
+        attachmentFailures = attachmentFailures.filter { availableIDs.contains($0.key) }
+        attachmentRetryVersions = attachmentRetryVersions.filter { availableIDs.contains($0.key) }
         revision &+= 1
         reconcileFileStorage(with: presentation.attachments)
     }
@@ -792,22 +874,29 @@ final class NoteStore: ObservableObject {
     }
 
     private func reconcileFileStorage(with attachments: [NoteAttachment]) {
+        attachmentReconciliationTask?.cancel()
+        attachmentReconciliationGeneration &+= 1
+        let generation = attachmentReconciliationGeneration
         let metadata = attachments.map {
             AttachmentFileReference($0, includePayload: false)
         }
-        Task { [weak self] in
+        attachmentReconciliationTask = Task { [weak self] in
             guard let self else { return }
             do {
+                try Task.checkCancellation()
                 let report = try await attachmentFileStore.reconcileMetadata(metadata)
+                guard !Task.isCancelled, generation == attachmentReconciliationGeneration else { return }
                 let neededKeys = Set(report.needsMaterialization.map {
                     "\($0.id.uuidString)/\($0.digest.lowercased())"
                 })
-                let repairs = attachments.compactMap { attachment -> AttachmentFileReference? in
+                let repairs = attachmentsByNoteID.values.flatMap { $0 }.compactMap { attachment -> AttachmentFileReference? in
                     let key = "\(attachment.id.uuidString)/\(attachment.contentDigest.lowercased())"
                     return neededKeys.contains(key) ? AttachmentFileReference(attachment) : nil
                 }
                 let repairFailures = await attachmentFileStore.repairMaterializations(repairs)
+                guard !Task.isCancelled, generation == attachmentReconciliationGeneration else { return }
                 for failure in report.failures + repairFailures {
+                    reportAttachmentFailure(failure.attachmentID, message: failure.message)
                     NSLog(
                         "Attic attachment reconciliation skipped %@: %@",
                         failure.attachmentID.uuidString,
@@ -904,6 +993,7 @@ final class NoteStore: ObservableObject {
 #endif
 
     private func observeRemoteChanges() {
+        #if !ATTIC_LOCAL_ONLY
         remoteChangeObservation = NotificationCenter.default.publisher(
             for: .NSPersistentStoreRemoteChange
         )
@@ -911,9 +1001,11 @@ final class NoteStore: ObservableObject {
         .sink { [weak self] _ in
             self?.refresh()
         }
+        #endif
     }
 
     private func observeCloudKitEvents() {
+        #if !ATTIC_LOCAL_ONLY
         cloudKitEventObservation = NotificationCenter.default.publisher(
             for: NSPersistentCloudKitContainer.eventChangedNotification
         )
@@ -932,6 +1024,7 @@ final class NoteStore: ObservableObject {
                 errorMessage: Self.cloudSyncErrorMessage(event.error)
             ))
         }
+        #endif
     }
 
     private func reconcileProtectedCloudSyncActivity(for kind: CloudSyncActivityKind) {
@@ -1043,7 +1136,7 @@ final class NoteStore: ObservableObject {
         return message
     }
 
-    private static func normalizedTitle(_ title: String) -> String {
+    static func normalizedTitle(_ title: String) -> String {
         title
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }

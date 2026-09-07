@@ -156,7 +156,7 @@ struct NoteComposerView: View {
                 }
             }
             .background(
-                NotesHorizontalSwipeMonitor {
+                NotesHorizontalSwipeMonitor(isLibraryPresented: isLibraryPresented) {
                     withAnimation(reduceMotion ? nil : AtticMotion.spring) {
                         if isLibraryPresented {
                             closeLibrary()
@@ -227,7 +227,13 @@ struct NoteComposerView: View {
                         session: noteDraft.editorSession,
                         onFocusChange: updateBodyFocus,
                         onImportFiles: importURLs,
-                        onImportError: noteStore.setAttachmentError
+                        onImportError: noteStore.setAttachmentError,
+                        initialViewState: noteDraft.editorViewState,
+                        onViewStateChange: { state, session in
+                            noteDraft.recordEditorViewState(state, for: session)
+                        },
+                        onViewStateCommit: noteDraft.persistEditorSession,
+                        captureImportReceiver: captureImportReceiver
                     )
                     .frame(height: editorHeight(for: availableHeight))
                     .padding(.horizontal, 2)
@@ -242,6 +248,19 @@ struct NoteComposerView: View {
                     if let conflictMessage = noteDraft.conflictMessage {
                         conflictControls(message: conflictMessage)
                             .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                    if let saveError = noteDraft.saveErrorMessage {
+                        HStack(alignment: .top, spacing: 8) {
+                            Label(saveError, systemImage: "exclamationmark.triangle")
+                                .font(.system(size: 11))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Button("Retry", action: saveInPlace)
+                                .accessibilityIdentifier("retry-note-save")
+                        }
+                        .foregroundStyle(.primary)
+                        .atticClearGlassForegroundReadability()
+                        .accessibilityIdentifier("note-save-error")
                     }
                 }
                 .padding(.horizontal, 4)
@@ -323,7 +342,7 @@ struct NoteComposerView: View {
             .accessibilityLabel("Attach files")
             .accessibilityIdentifier("add-note-attachment")
 
-            Button(action: openLibrary) {
+            Button(action: { isLibraryPresented ? closeLibrary() : openLibrary() }) {
                 HStack(spacing: 6) {
                     Image(systemName: "rectangle.stack")
                         .font(.system(size: 10, weight: .medium))
@@ -341,6 +360,7 @@ struct NoteComposerView: View {
             .help("Browse saved notes")
             .accessibilityLabel(libraryLabel)
             .accessibilityIdentifier("browse-saved-notes")
+            .keyboardShortcut("l", modifiers: [.command, .shift])
 
             Button(action: saveInPlace) {
                 Image(systemName: noteDraft.isDirty ? "arrow.up" : "checkmark")
@@ -363,6 +383,7 @@ struct NoteComposerView: View {
             .help("Save note")
             .accessibilityLabel("Save note")
             .accessibilityIdentifier("save-note")
+            .keyboardShortcut("s", modifiers: [.command])
         }
         .padding(.horizontal, 2)
         .frame(height: AtticStyle.composerControlHeight)
@@ -386,6 +407,7 @@ struct NoteComposerView: View {
     }
 
     private var saveStatusColor: Color {
+        if noteDraft.saveErrorMessage != nil { return .orange }
         if noteDraft.conflict != nil { return .orange }
         if noteDraft.isDirty { return Color.primary.opacity(0.42) }
         return Color.primary.opacity(0.28)
@@ -393,7 +415,8 @@ struct NoteComposerView: View {
 
     private var saveStatus: String {
         if noteDraft.conflict != nil { return "Needs your attention" }
-        if noteDraft.isDirty { return "Saving…" }
+        if noteDraft.saveErrorMessage != nil { return "Not saved · Retry available" }
+        if noteDraft.isDirty { return "Unsaved changes" }
         guard let noteID = noteDraft.activeNoteID,
               let note = noteStore.notes.first(where: { $0.id == noteID }) else {
             return "New note"
@@ -489,6 +512,35 @@ struct NoteComposerView: View {
             return
         }
 
+        startAttachmentImport(request, cleanupDirectories: cleanupDirectories)
+    }
+
+    /// File-provider delivery may arrive after the native editor has switched
+    /// notes. Capture the logical owner now, before receiving promised bytes.
+    private func captureImportReceiver() -> (([URL], [URL]) -> Void)? {
+        guard !isImporting,
+              let captured = withBlockingSave({ noteDraft.prepareAttachmentImport(from: []) }) else { return nil }
+        return { urls, cleanup in
+            let request = NoteAttachmentImportRequest(
+                id: captured.id,
+                editorSession: captured.editorSession,
+                origin: captured.origin,
+                urls: urls
+            )
+            startAttachmentImport(request, cleanupDirectories: cleanup)
+        }
+    }
+
+    private func startAttachmentImport(
+        _ request: NoteAttachmentImportRequest,
+        cleanupDirectories: [URL]
+    ) {
+        guard !request.urls.isEmpty, !isImporting else {
+            removeTemporaryDirectories(cleanupDirectories)
+            noteStore.setAttachmentError("Finish or cancel the current attachment import before adding more files.")
+            return
+        }
+
         attachmentImportTask = Task { @MainActor in
             defer {
                 removeTemporaryDirectories(cleanupDirectories)
@@ -568,7 +620,7 @@ struct NoteComposerView: View {
             HStack(spacing: 6) {
                 switch noteDraft.conflict {
                 case .remoteChange:
-                    conflictButton("Use Remote", identifier: "use-remote-note") {
+                    conflictButton("Use Saved", identifier: "use-remote-note") {
                         _ = noteDraft.useRemoteVersion()
                     }
                     conflictButton("Keep Mine", identifier: "keep-local-note") {
@@ -943,24 +995,27 @@ struct NoteRowView: View {
 /// Observes horizontal trackpad scrolling inside the Notes workspace without
 /// consuming it. A single deliberate swipe toggles the contextual library.
 private struct NotesHorizontalSwipeMonitor: NSViewRepresentable {
+    let isLibraryPresented: Bool
     let onSwipe: () -> Void
 
     func makeNSView(context: Context) -> NotesHorizontalSwipeView {
-        NotesHorizontalSwipeView(onSwipe: onSwipe)
+        NotesHorizontalSwipeView(isLibraryPresented: isLibraryPresented, onSwipe: onSwipe)
     }
 
     func updateNSView(_ nsView: NotesHorizontalSwipeView, context: Context) {
         nsView.onSwipe = onSwipe
+        nsView.isNotesLibraryPresented = isLibraryPresented
     }
 }
 
-private final class NotesHorizontalSwipeView: NSView {
+private final class NotesHorizontalSwipeView: NSView, PanelNotesSwipeTarget {
     var onSwipe: () -> Void
-    private var monitor: Any?
-    private var accumulatedX: CGFloat = 0
-    private var hasTriggered = false
+    var isNotesLibraryPresented: Bool
+    var swipeView: NSView { self }
+    private weak var registeredPanel: AtticPanel?
 
-    init(onSwipe: @escaping () -> Void) {
+    init(isLibraryPresented: Bool, onSwipe: @escaping () -> Void) {
+        self.isNotesLibraryPresented = isLibraryPresented
         self.onSwipe = onSwipe
         super.init(frame: .zero)
     }
@@ -972,73 +1027,12 @@ private final class NotesHorizontalSwipeView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil {
-            removeMonitor()
-        } else {
-            installMonitorIfNeeded()
+        if let registeredPanel, registeredPanel.notesSwipeTarget === self {
+            registeredPanel.notesSwipeTarget = nil
         }
+        registeredPanel = window as? AtticPanel
+        registeredPanel?.notesSwipeTarget = self
     }
 
-    deinit {
-        removeMonitor()
-    }
-
-    private func installMonitorIfNeeded() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) {
-            [weak self] event in
-            self?.observe(event)
-            return event
-        }
-    }
-
-    private func removeMonitor() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
-        }
-    }
-
-    private func observe(_ event: NSEvent) {
-        guard event.window === window else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        guard bounds.contains(point) else { return }
-
-        if event.hasPreciseScrollingDeltas,
-           !event.phase.isEmpty,
-           let panel = event.window as? AtticPanel,
-           PanelTrackpadDismissTracker.isTowardDockedSide(
-                deltaX: event.scrollingDeltaX,
-                deltaY: event.scrollingDeltaY,
-                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice,
-                dockedCorner: panel.trackpadDismissCorner
-           ) {
-            accumulatedX = 0
-            hasTriggered = false
-            return
-        }
-
-        if event.phase == .began {
-            accumulatedX = 0
-            hasTriggered = false
-        }
-
-        let horizontal = CGFloat(event.scrollingDeltaX)
-        let vertical = CGFloat(event.scrollingDeltaY)
-        if abs(horizontal) > abs(vertical) * 1.15 {
-            accumulatedX += horizontal
-        }
-
-        if abs(accumulatedX) >= 42, !hasTriggered {
-            hasTriggered = true
-            DispatchQueue.main.async { [weak self] in self?.onSwipe() }
-        }
-
-        if event.phase == .ended
-            || event.phase == .cancelled
-            || event.momentumPhase == .ended {
-            accumulatedX = 0
-            hasTriggered = false
-        }
-    }
+    func performNotesSwipe() { onSwipe() }
 }

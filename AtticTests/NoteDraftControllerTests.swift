@@ -6,6 +6,151 @@ import XCTest
 
 final class NoteDraftControllerTests: XCTestCase {
     @MainActor
+    func testNeverSavedDraftSurvivesFailedSaveAndControllerRelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDraftRecoveryTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recoveryURL = directory.appendingPathComponent("draft.json")
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore())
+        let first = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60), recoveryURL: recoveryURL)
+        _ = await first.restoreRecoveryIfNeeded()
+        XCTAssertTrue(first.beginNew())
+        first.title = "Recovered title"
+        first.body = "Never saved 👩🏽‍💻\n  preserve whitespace  "
+        gate.shouldFail = true
+        XCTAssertFalse(first.flush())
+        await first.waitForRecoveryCheckpoint()
+        XCTAssertTrue(store.notes.isEmpty)
+        let restored = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60), recoveryURL: recoveryURL)
+        let didRestore = await restored.restoreRecoveryIfNeeded()
+        XCTAssertTrue(didRestore)
+        XCTAssertTrue(restored.isDirty)
+        XCTAssertNil(restored.activeNoteID)
+        XCTAssertEqual(restored.title, first.title)
+        XCTAssertEqual(restored.body, first.body)
+        gate.shouldFail = false
+        XCTAssertTrue(restored.flush())
+        await restored.waitForRecoveryCheckpoint()
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.body, first.body)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
+    }
+
+    @MainActor
+    func testRecoveryDoesNotOverwriteNewerSavedNote() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDraftConflictTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("draft.json")
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(body: "Newer saved body"))
+        let journal = NoteDraftRecoveryFile(url: url)
+        try await journal.checkpoint(NoteDraftRecoverySnapshot(
+            noteID: note.id, reservedNoteID: note.id, title: "", body: "Recovered unsaved body",
+            persistedTitle: "", persistedBody: "Older saved body"
+        ), generation: 1)
+        let draft = NoteDraftController(noteStore: store, recoveryURL: url)
+        let didRestore = await draft.restoreRecoveryIfNeeded()
+        XCTAssertTrue(didRestore)
+        XCTAssertEqual(draft.conflict, .remoteChange)
+        XCTAssertFalse(draft.flush())
+        XCTAssertEqual(draft.body, "Recovered unsaved body")
+        XCTAssertEqual(store.notes.first?.body, "Newer saved body")
+        await draft.waitForRecoveryCheckpoint()
+    }
+
+    func testOlderRecoveryWriteCannotRecreateFileAfterSuccessfulSaveClear() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticDraftOrderingTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("draft.json")
+        let journal = NoteDraftRecoveryFile(url: url)
+        let snapshot = NoteDraftRecoverySnapshot(
+            noteID: nil, reservedNoteID: UUID(), title: "", body: "Old draft", persistedTitle: nil, persistedBody: nil
+        )
+        try await journal.checkpoint(snapshot, generation: 2)
+        try await journal.checkpoint(nil, generation: 3)
+        try await journal.checkpoint(snapshot, generation: 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @MainActor
+    func testContinuousTypingHasBoundedDurabilityCheckpoint() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let draft = NoteDraftController(
+            noteStore: store,
+            autosaveDelay: .seconds(60),
+            maximumAutosaveDelay: .milliseconds(60)
+        )
+        XCTAssertTrue(draft.beginNew())
+        for index in 0..<8 {
+            draft.body = "Continuous typing \(index)"
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(store.notes.isEmpty, "Ongoing typing must not postpone durability indefinitely")
+        XCTAssertTrue(draft.flush())
+        XCTAssertEqual(store.notes.first?.body, "Continuous typing 7")
+    }
+
+    @MainActor
+    func testFailedSaveKeepsDraftAndExposesRetryUntilSuccess() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: gate.save, attachmentFileStore: makeTestAttachmentFileStore())
+        let draft = NoteDraftController(noteStore: store)
+        XCTAssertTrue(draft.beginNew())
+        draft.body = "Retain this draft"
+        gate.shouldFail = true
+        XCTAssertFalse(draft.close())
+        XCTAssertTrue(draft.isActive)
+        XCTAssertTrue(draft.isDirty)
+        XCTAssertNotNil(draft.saveErrorMessage)
+        XCTAssertEqual(draft.body, "Retain this draft")
+        gate.shouldFail = false
+        XCTAssertTrue(draft.flush())
+        XCTAssertNil(draft.saveErrorMessage)
+        XCTAssertEqual(store.notes.first?.body, "Retain this draft")
+    }
+
+    @MainActor
+    func testSavedEditorSessionRestoresNoteSelectionAndScrollWithoutWritingNoteTextToDefaults() throws {
+        let suite = "AtticNoteSessionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(body: "Private note content"))
+        let draft = NoteDraftController(noteStore: store, sessionDefaults: defaults)
+        XCTAssertTrue(draft.beginEditing(note))
+        let state = NoteEditorViewState(selectionLocation: 4, selectionLength: 3, scrollY: 140)
+        draft.recordEditorViewState(state, for: draft.editorSession)
+        XCTAssertTrue(draft.close())
+        let restored = NoteDraftController(noteStore: store, sessionDefaults: defaults)
+        XCTAssertTrue(restored.resumeLastSession())
+        XCTAssertEqual(restored.activeNoteID, note.id)
+        XCTAssertEqual(restored.editorViewState, state)
+        let persisted = try XCTUnwrap(defaults.data(forKey: "notes.lastEditorSession.v1"))
+        XCTAssertFalse(String(decoding: persisted, as: UTF8.self).contains(note.body))
+        restored.discardDeletedNote(note.id)
+        XCTAssertNil(defaults.data(forKey: "notes.lastEditorSession.v1"))
+    }
+
+    @MainActor
+    func testQueuedFocusRequestCannotOverrideNewerIntentInSameSession() throws {
+        let box = EditorTextBox("Text")
+        let session = NoteEditorSession(noteID: UUID(), generation: 1)
+        var editor = makeTestBodyEditor(text: box, session: session, isFocused: false)
+        let coordinator = editor.makeCoordinator()
+        let (textView, window) = makeUndoTextView(coordinator: coordinator)
+        defer { tearDownHarnessWindow(window) }
+        _ = coordinator.synchronize(parent: editor, textView: textView)
+        XCTAssertTrue(window.makeFirstResponder(textView))
+        coordinator.requestFocus(false, for: session, textView: textView)
+        // The newer render still wants editing. The earlier queued release
+        // must not take first responder away after that render.
+        editor = makeTestBodyEditor(text: box, session: session)
+        _ = coordinator.synchronize(parent: editor, textView: textView)
+        drainMainRunLoop()
+        XCTAssertTrue(window.firstResponder === textView)
+    }
+
+    @MainActor
     func testBodyEditorKeepsFirstResponderAcrossDraftUpdates() throws {
         let store = try makeTestNoteStore(
             attachmentFileStore: makeTestAttachmentFileStore()

@@ -11,6 +11,7 @@ struct NoteAttachmentTray: View {
 
     @State private var selectedAttachmentID: UUID?
     @State private var isFileTargeted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         noteStore: NoteStore,
@@ -65,6 +66,23 @@ struct NoteAttachmentTray: View {
                         selectedAttachmentID: $selectedAttachmentID
                     )
                 }
+                if let failure = noteStore.attachmentFailures[attachment.id] {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Label(failure, systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 10))
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 10) {
+                            Button("Retry") { noteStore.retryAttachment(attachment) }
+                            Button("Locate Original…") {
+                                NoteAttachmentActions.locate(store: noteStore, attachment: attachment)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .atticClearGlassForegroundReadability()
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("attachment-recovery-\(attachment.id.uuidString)")
+                }
             }
 
             importStatus
@@ -93,8 +111,8 @@ struct NoteAttachmentTray: View {
                 self.selectedAttachmentID = nil
             }
         }
-        .animation(AtticMotion.quick, value: attachments.map(\.id))
-        .animation(AtticMotion.quick, value: importPresentation)
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: attachments.map(\.id))
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: importPresentation)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Note attachments")
     }
@@ -125,6 +143,7 @@ struct NoteAttachmentTray: View {
                 .buttonStyle(.borderless)
                 .labelStyle(.iconOnly)
                 .help(cancelImportHelp)
+                .accessibilityLabel(cancelImportHelp)
                 .accessibilityIdentifier("cancel-note-attachment-import")
             }
             .padding(.horizontal, 9)
@@ -133,7 +152,7 @@ struct NoteAttachmentTray: View {
                 Color.primary.opacity(0.045),
                 in: RoundedRectangle(cornerRadius: 9, style: .continuous)
             )
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .contain)
             .accessibilityLabel(progressLabel)
         case let .failed(message):
             Label(importFailureLabel(message), systemImage: "exclamationmark.triangle.fill")
@@ -276,6 +295,10 @@ private struct NoteImageAttachmentCard: View {
 
     @ViewBuilder
     private var attachmentActions: some View {
+        Button("Retry Preview", systemImage: "arrow.clockwise") { noteStore.retryAttachment(attachment) }
+        Button("Locate Original…", systemImage: "folder.badge.questionmark") {
+            NoteAttachmentActions.locate(store: noteStore, attachment: attachment)
+        }
         Button("Quick Look", systemImage: "eye", action: preview)
         Button("Open", systemImage: "arrow.up.forward.square", action: open)
             .disabled(!NoteAttachmentActions.isSafeToOpen(attachment))
@@ -479,8 +502,14 @@ private struct AttachmentPreviewImage: View {
             } else if presentation == .inlineImage {
                 ZStack {
                     Color.primary.opacity(0.035)
-                    ProgressView()
-                        .controlSize(.small)
+                    if noteStore.attachmentFailures[attachment.id] != nil {
+                        Image(systemName: "photo.badge.exclamationmark")
+                            .foregroundStyle(.secondary)
+                            .atticClearGlassForegroundReadability()
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                 }
                 .frame(height: 148)
             } else {
@@ -497,7 +526,7 @@ private struct AttachmentPreviewImage: View {
         }
         .frame(maxWidth: .infinity)
         .frame(maxHeight: presentation == .inlineImage ? 250 : 40)
-        .task(id: "\(attachment.id.uuidString)-\(attachment.contentDigest)-\(presentation)") {
+        .task(id: "\(attachment.id.uuidString)-\(attachment.contentDigest)-\(presentation)-\(noteStore.attachmentRetryVersions[attachment.id, default: 0])") {
             await loadPreview()
         }
         .accessibilityHidden(true)
@@ -508,6 +537,7 @@ private struct AttachmentPreviewImage: View {
     }
 
     private func loadPreview() async {
+        image = nil
         if presentation == .fileIcon {
             image = NSWorkspace.shared.icon(for: attachment.contentType)
         }
@@ -527,10 +557,18 @@ private struct AttachmentPreviewImage: View {
             let representation = try await QLThumbnailGenerator.shared
                 .generateBestRepresentation(for: request)
             guard !Task.isCancelled else { return }
-            image = representation.nsImage
+            if presentation == .inlineImage, representation.type == .icon {
+                noteStore.reportAttachmentFailure(attachment.id, message: "This image could not be previewed. Retry, locate the original, or export the saved file.")
+            } else {
+                image = representation.nsImage
+            }
         } catch {
             guard !Task.isCancelled else { return }
-            image = NSWorkspace.shared.icon(forFile: url.path)
+            if presentation == .inlineImage {
+                noteStore.reportAttachmentFailure(attachment.id, message: "This image could not be previewed. Retry, locate the original, or export the saved file.")
+            } else {
+                image = NSWorkspace.shared.icon(forFile: url.path)
+            }
         }
     }
 }
@@ -611,6 +649,10 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     let onFocusChange: (Bool) -> Void
     let onImportFiles: ([URL], [URL]) -> Void
     let onImportError: (String) -> Void
+    var initialViewState = NoteEditorViewState()
+    var onViewStateChange: (NoteEditorViewState, NoteEditorSession) -> Void = { _, _ in }
+    var onViewStateCommit: () -> Void = {}
+    var captureImportReceiver: (() -> (([URL], [URL]) -> Void)?)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -659,6 +701,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             NoteAttachmentPasteboardRouter.legacyFilePromiseType
         ])
         textView.setAccessibilityIdentifier("note-body")
+        textView.setAccessibilityLabel("Note body")
         context.coordinator.textView = textView
         _ = context.coordinator.synchronize(parent: self, textView: textView)
         Self.applyReadability(
@@ -677,12 +720,19 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         textView.onImportError = { [weak coordinator = context.coordinator] message in
             coordinator?.parent.onImportError(message)
         }
+        textView.captureImportReceiver = { [weak coordinator = context.coordinator] in
+            guard let coordinator else { return nil }
+            if let capture = coordinator.parent.captureImportReceiver { return capture() }
+            return coordinator.parent.onImportFiles
+        }
         textView.onFileTargetingChanged = {
             [weak coordinator = context.coordinator] targeted in
             coordinator?.parent.isFileTargeted = targeted
         }
 
         scrollView.documentView = textView
+        context.coordinator.observeScrollView(scrollView)
+        context.coordinator.restoreScrollPosition(in: scrollView)
         return scrollView
     }
 
@@ -696,6 +746,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             textView: textView
         )
         guard synchronization != .staleSession else { return }
+        context.coordinator.captureViewState()
         let replacedExternalText = synchronization == .replacedText
 
         if !textView.hasMarkedText(), Self.needsReadabilityApplication(
@@ -720,23 +771,16 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
 
         let expectedSession = session
         if isFocused, textView.window?.firstResponder !== textView {
-            DispatchQueue.main.async {
-                [weak textView, weak coordinator = context.coordinator] in
-                guard let textView,
-                      textView.window != nil,
-                      coordinator?.isCurrent(expectedSession) == true else { return }
-                textView.window?.makeFirstResponder(textView)
-            }
+            context.coordinator.requestFocus(true, for: expectedSession, textView: textView)
         } else if !isFocused, textView.window?.firstResponder === textView {
-            DispatchQueue.main.async {
-                [weak textView, weak coordinator = context.coordinator] in
-                guard let textView,
-                      let window = textView.window,
-                      coordinator?.isCurrent(expectedSession) == true,
-                      window.firstResponder === textView else { return }
-                window.makeFirstResponder(nil)
-            }
+            context.coordinator.requestFocus(false, for: expectedSession, textView: textView)
         }
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.captureViewState()
+        coordinator.parent.onViewStateCommit()
+        (scrollView.documentView as? NSTextView)?.delegate = nil
     }
 
     private static func clamped(_ ranges: [NSValue], length: Int) -> [NSValue] {
@@ -813,9 +857,25 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         var appliedReadabilityEnabled: Bool?
         var appliedReadabilityColorScheme: ColorScheme?
         private var appliedSession: NoteEditorSession?
+        private var pendingScrollRestore = false
+        private var scrollObservation: NSObjectProtocol?
 
         init(parent: AttachmentAwareTextEditor) {
             self.parent = parent
+        }
+
+        deinit {
+            if let scrollObservation { NotificationCenter.default.removeObserver(scrollObservation) }
+        }
+
+        func observeScrollView(_ scrollView: NSScrollView) {
+            if let scrollObservation { NotificationCenter.default.removeObserver(scrollObservation) }
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            scrollObservation = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in self?.captureViewState() }
         }
 
         func recordAppliedReadability(enabled: Bool, colorScheme: ColorScheme) {
@@ -837,6 +897,8 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
 
             let startsNewSession = newParent.session != appliedSession
             if startsNewSession {
+                captureViewState()
+                pendingScrollRestore = true
                 isApplyingExternalText = true
                 if textView.hasMarkedText() {
                     textView.unmarkText()
@@ -851,6 +913,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             guard textView.string != newParent.text,
                   startsNewSession || !textView.hasMarkedText() else {
                 isApplyingExternalText = false
+                if startsNewSession { applyInitialSelection(to: textView) }
                 return .unchanged
             }
 
@@ -870,35 +933,86 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             if startsNewSession {
                 textView.breakUndoCoalescing()
                 textView.undoManager?.removeAllActions()
+                applyInitialSelection(to: textView)
             }
             isApplyingExternalText = false
             return .replacedText
+        }
+
+        private func applyInitialSelection(to textView: NSTextView) {
+            let state = parent.initialViewState
+            textView.selectedRanges = AttachmentAwareTextEditor.clamped(
+                [NSValue(range: NSRange(location: max(0, state.selectionLocation), length: max(0, state.selectionLength)))],
+                length: (textView.string as NSString).length
+            )
+            if let scrollView = textView.enclosingScrollView { restoreScrollPosition(in: scrollView) }
+        }
+
+        func restoreScrollPosition(in scrollView: NSScrollView) {
+            guard pendingScrollRestore else { return }
+            pendingScrollRestore = false
+            let session = parent.session
+            let y = parent.initialViewState.scrollY
+            DispatchQueue.main.async { [weak self, weak scrollView] in
+                guard let self, self.isCurrent(session), let scrollView else { return }
+                let maximum = max(0, (scrollView.documentView?.bounds.height ?? 0) - scrollView.contentSize.height)
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, CGFloat(y.isFinite ? y : 0)), maximum)))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+        }
+
+        func captureViewState() {
+            guard !isApplyingExternalText, let textView, appliedSession != nil else { return }
+            let selection = textView.selectedRange()
+            parent.onViewStateChange(NoteEditorViewState(
+                selectionLocation: selection.location == NSNotFound ? 0 : selection.location,
+                selectionLength: selection.length,
+                scrollY: Double(textView.enclosingScrollView?.contentView.bounds.origin.y ?? 0)
+            ), parent.session)
         }
 
         func isCurrent(_ session: NoteEditorSession) -> Bool {
             appliedSession == session
         }
 
+        func requestFocus(_ focused: Bool, for session: NoteEditorSession, textView: NSTextView) {
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, self.isCurrent(session), self.parent.isFocused == focused,
+                      let textView, let window = textView.window else { return }
+                if focused {
+                    window.makeFirstResponder(textView)
+                } else if window.firstResponder === textView {
+                    window.makeFirstResponder(nil)
+                }
+            }
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !isApplyingExternalText,
                   let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            captureViewState()
         }
+
+        func textViewDidChangeSelection(_ notification: Notification) { captureViewState() }
 
         func textDidBeginEditing(_ notification: Notification) {
             parent.onFocusChange(true)
         }
 
         func textDidEndEditing(_ notification: Notification) {
+            captureViewState()
+            parent.onViewStateCommit()
             parent.onFocusChange(false)
         }
     }
 }
 
-private final class AttachmentAcceptingTextView: NSTextView {
+final class AttachmentAcceptingTextView: NSTextView {
     var onImportFiles: (([URL], [URL]) -> Void)?
     var onImportError: ((String) -> Void)?
     var onFileTargetingChanged: ((Bool) -> Void)?
+    var captureImportReceiver: (() -> (([URL], [URL]) -> Void)?)?
     private var activePromiseBatches: [UUID: PromisedFileBatch] = [:]
 
     private static let promiseOperationQueue: OperationQueue = {
@@ -991,6 +1105,7 @@ private final class AttachmentAcceptingTextView: NSTextView {
     }
 
     private func receivePromisedFiles(_ receivers: [NSFilePromiseReceiver]) {
+        guard let receive = captureFileImportReceiver() else { return }
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent("Attic", isDirectory: true)
             .appendingPathComponent("FilePromises", isDirectory: true)
@@ -1014,11 +1129,7 @@ private final class AttachmentAcceptingTextView: NSTextView {
                 self?.activePromiseBatches[batchID] = nil
                 switch result {
                 case let .success(urls):
-                    if let self {
-                        self.onImportFiles?(urls, [destination])
-                    } else {
-                        try? FileManager.default.removeItem(at: destination)
-                    }
+                    receive(urls, [destination])
                 case let .failure(message):
                     try? FileManager.default.removeItem(at: destination)
                     self?.onImportError?(message)
@@ -1036,6 +1147,13 @@ private final class AttachmentAcceptingTextView: NSTextView {
                 batch.record(index: index, url: url, error: error)
             }
         }
+    }
+
+    func captureFileImportReceiver() -> (([URL], [URL]) -> Void)? {
+        if let captureImportReceiver {
+            return captureImportReceiver()
+        }
+        return onImportFiles
     }
 }
 

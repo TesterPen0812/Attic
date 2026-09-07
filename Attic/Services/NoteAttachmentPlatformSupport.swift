@@ -43,11 +43,23 @@ enum NoteAttachmentActions {
             panel.prompt = "Export"
             guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
             do {
-                try exportCopy(from: sourceURL, to: destinationURL)
+                try await Task.detached(priority: .utility) {
+                    try exportCopy(from: sourceURL, to: destinationURL)
+                }.value
             } catch {
                 store.setAttachmentError("Export failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    static func locate(store: NoteStore, attachment: NoteAttachment) {
+        let panel = NSOpenPanel()
+        panel.title = "Locate Original Attachment"
+        panel.message = "Choose the original file for \(attachment.originalFilename). Its contents must match the saved attachment."
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { _ = await store.locateAttachment(attachment, at: url) }
     }
 
     static func isSafeToOpen(_ attachment: NoteAttachment) -> Bool {
@@ -67,7 +79,7 @@ enum NoteAttachmentActions {
             && attachment.contentType != .data
     }
 
-    private static func exportCopy(from sourceURL: URL, to destinationURL: URL) throws {
+    nonisolated private static func exportCopy(from sourceURL: URL, to destinationURL: URL) throws {
         let fileManager = FileManager.default
         let directory = destinationURL.deletingLastPathComponent()
         let temporaryURL = directory.appendingPathComponent(

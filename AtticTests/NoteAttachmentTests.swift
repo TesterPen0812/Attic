@@ -7,6 +7,99 @@ import XCTest
 
 final class NoteAttachmentTests: XCTestCase {
     @MainActor
+    func testPromisedFileReceiverRetainsInitiatingNoteAfterEditorSwitch() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("promised".utf8), named: "promise.txt", in: directory)
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let first = try XCTUnwrap(store.create(body: "First"))
+        let second = try XCTUnwrap(store.create(body: "Second"))
+        let draft = NoteDraftController(noteStore: store)
+        XCTAssertTrue(draft.beginEditing(first))
+        let view = AttachmentAcceptingTextView()
+        var delivered: NoteAttachmentImportRequest?
+        view.captureImportReceiver = {
+            guard let captured = draft.prepareAttachmentImport(from: []) else { return nil }
+            return { urls, _ in
+                delivered = NoteAttachmentImportRequest(
+                    id: captured.id, editorSession: captured.editorSession,
+                    origin: captured.origin, urls: urls
+                )
+            }
+        }
+        let receiver = try XCTUnwrap(view.captureFileImportReceiver())
+        XCTAssertTrue(draft.beginEditing(second))
+        receiver([source], [])
+        let request = try XCTUnwrap(delivered)
+        XCTAssertEqual(request.origin, .note(first.id))
+        let outcome = await store.importAttachments(request)
+        XCTAssertEqual(outcome, .imported(noteID: first.id))
+        XCTAssertEqual(store.attachments(for: first.id).count, 1)
+        XCTAssertTrue(store.attachments(for: second.id).isEmpty)
+        XCTAssertEqual(draft.activeNoteID, second.id)
+    }
+
+    @MainActor
+    func testRejectedPromiseCaptureCannotFallBackToCurrentEditor() {
+        let view = AttachmentAcceptingTextView()
+        view.captureImportReceiver = { nil }
+        view.onImportFiles = { _, _ in XCTFail("A failed owner capture must not fall back to a different editor") }
+        XCTAssertNil(view.captureFileImportReceiver())
+    }
+
+    @MainActor
+    func testMissingAttachmentReportsRecoveryAndLocateRejectsDifferentContents() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("original".utf8), named: "original.txt", in: directory)
+        let other = try write(Data("different".utf8), named: "other.txt", in: directory)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let note = NoteItem(body: "Note")
+        let original = Data("original".utf8)
+        let attachment = NoteAttachment(
+            noteID: note.id, originalFilename: "original.txt", byteCount: Int64(original.count), sortIndex: 0,
+            contentDigest: SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined(), payload: nil
+        )
+        context.insert(note)
+        context.insert(attachment)
+        try context.save()
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let visible = try XCTUnwrap(store.attachments(for: note.id).first)
+        let missing = await store.materializedURL(for: visible)
+        XCTAssertNil(missing)
+        XCTAssertNotNil(store.attachmentFailures[visible.id])
+        let rejected = await store.locateAttachment(visible, at: other)
+        XCTAssertFalse(rejected)
+        XCTAssertNil(visible.payload)
+        let restored = await store.locateAttachment(visible, at: source)
+        XCTAssertTrue(restored)
+        let restoredURL = await store.materializedURL(for: visible)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(restoredURL)), original)
+        XCTAssertNil(store.attachmentFailures[visible.id])
+        XCTAssertEqual(store.attachments(for: note.id).count, 1)
+        XCTAssertEqual(store.attachments(for: note.id).first?.id, attachment.id)
+    }
+
+    @MainActor
+    func testAttachmentMutationsUpdateOwningNoteRecency() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("recency".utf8), named: "recency.txt", in: directory)
+        let clock = MutableNow(Date(timeIntervalSince1970: 100))
+        let store = try makeTestNoteStore(now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(body: "Note"))
+        clock.value = Date(timeIntervalSince1970: 200)
+        let outcome = await store.importAttachments(makeStoreImportRequest(from: [source], noteID: note.id))
+        XCTAssertEqual(outcome, .imported(noteID: note.id))
+        XCTAssertEqual(store.notes.first?.updatedAt, clock.value)
+        let attachment = try XCTUnwrap(store.attachments(for: note.id).first)
+        clock.value = Date(timeIntervalSince1970: 300)
+        XCTAssertTrue(store.removeAttachment(attachment))
+        XCTAssertEqual(store.notes.first?.updatedAt, clock.value)
+    }
+
+    @MainActor
     func testEditorReadabilityChangesGlyphAttributesWithoutChangingTextOrSelection() {
         let textView = NSTextView()
         textView.string = "Draft body"

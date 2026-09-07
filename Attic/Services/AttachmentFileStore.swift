@@ -178,6 +178,7 @@ actor AttachmentFileStore {
     func reconcileMetadata(
         _ references: [AttachmentFileReference]
     ) throws -> AttachmentReconciliationReport {
+        try Task.checkCancellation()
         try prepare()
         var expected = Set<String>()
         var needsMaterialization: [AttachmentFileReference] = []
@@ -198,6 +199,7 @@ actor AttachmentFileStore {
             }
         }
 
+        try Task.checkCancellation()
         try cleanOrphans(expected: expected)
         return AttachmentReconciliationReport(
             needsMaterialization: needsMaterialization,
@@ -212,6 +214,7 @@ actor AttachmentFileStore {
     ) -> [AttachmentReconciliationFailure] {
         var failures: [AttachmentReconciliationFailure] = []
         for reference in references {
+            guard !Task.isCancelled else { return failures }
             do {
                 _ = try ensureMaterialized(reference)
             } catch {
