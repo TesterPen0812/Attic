@@ -41,6 +41,14 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
         addButton.click()
 
+        let composer = app.descendants(matching: .any)["task-entry-bar"]
+        let submit = app.buttons["quick-entry-submit"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 2))
+        XCTAssertGreaterThanOrEqual(addButton.frame.minY - composer.frame.minY, 5,
+                                    "The expanded composer needs space above its action hit targets")
+        XCTAssertGreaterThanOrEqual(addButton.frame.minX - composer.frame.minX, 6)
+        XCTAssertGreaterThanOrEqual(composer.frame.maxX - submit.frame.maxX, 6)
+
         let titleField = app.textFields["quick-entry-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
         XCTAssertFalse(app.textFields["new-task-title"].exists, "Task options must expand the one composer, not create a second input")
