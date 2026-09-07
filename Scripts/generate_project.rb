@@ -174,8 +174,13 @@ unit_host.build_configurations.each do |config|
   settings['PRODUCT_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'
   settings['EXECUTABLE_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'
   settings['PRODUCT_MODULE_NAME'] = 'AtticUnitTestHost'
-  settings['GENERATE_INFOPLIST_FILE'] = 'YES'
-  settings['INFOPLIST_KEY_LSUIElement'] = 'YES'
+  # Exercise the same exported drag types as the app without duplicating its
+  # declaration. Identity and version remain specific to the isolated host.
+  settings['GENERATE_INFOPLIST_FILE'] = 'NO'
+  settings['INFOPLIST_FILE'] = 'Attic/Info.plist'
+  settings['ATTIC_DISPLAY_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'
+  settings['MARKETING_VERSION'] = '1.0'
+  settings['CURRENT_PROJECT_VERSION'] = '1'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['ENABLE_APP_SANDBOX'] = 'YES'

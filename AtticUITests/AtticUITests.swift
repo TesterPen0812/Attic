@@ -41,13 +41,30 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
         addButton.click()
 
-        let titleField = app.textFields["new-task-title"]
+        let titleField = app.textFields["quick-entry-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.textFields["new-task-title"].exists, "Task options must expand the one composer, not create a second input")
         titleField.typeText("Ship prototype")
+        let highPriority = app.buttons["task-priority-high"]
+        XCTAssertTrue(highPriority.waitForExistence(timeout: 2))
+        highPriority.click()
         titleField.typeKey(.return, modifierFlags: [])
 
         let title = app.staticTexts["Ship prototype"]
         XCTAssertTrue(title.waitForExistence(timeout: 2))
+        let statusButton = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "complete-task-"
+        )).firstMatch
+        XCTAssertEqual(statusButton.value as? String, "High priority")
+        // A successful Return keeps the same composer ready for consecutive
+        // entry, including keyboard focus transfer to its priority controls.
+        titleField.typeText("Next thought")
+        titleField.typeKey(.tab, modifierFlags: [])
+        XCTAssertTrue(highPriority.exists)
+        titleField.click()
+        titleField.typeKey("a", modifierFlags: .command)
+        titleField.typeKey(.delete, modifierFlags: [])
+        titleField.typeKey(.escape, modifierFlags: [])
         let row = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "task-row-")
         ).firstMatch
@@ -86,7 +103,7 @@ final class AtticUITests: XCTestCase {
         app.buttons["add-task-button"].click()
 
         let longTitle = "A long task title that should wrap onto multiple lines instead of being cut off"
-        let titleField = app.textFields["new-task-title"]
+        let titleField = app.textFields["quick-entry-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
         titleField.typeText(longTitle)
         titleField.typeKey(.return, modifierFlags: [])
@@ -207,14 +224,9 @@ final class AtticUITests: XCTestCase {
     }
 
     private func addTask(named title: String) {
-        let addButton = app.buttons["add-task-button"]
-        XCTAssertTrue(addButton.waitForExistence(timeout: 2))
-        addButton.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        ).click()
-
-        let titleField = app.textFields["new-task-title"]
+        let titleField = app.textFields["quick-entry-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
+        titleField.click()
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
     }

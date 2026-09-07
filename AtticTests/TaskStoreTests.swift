@@ -27,6 +27,10 @@ final class TaskStoreTests: XCTestCase {
     }
 
     func testTaskDragPayloadExportsInternalDataAndPlainText() {
+        let declaredTypes = Bundle.main.object(forInfoDictionaryKey: "UTExportedTypeDeclarations") as? [[String: Any]]
+        XCTAssertTrue(declaredTypes?.contains(where: {
+            $0["UTTypeIdentifier"] as? String == TaskDragPayload.internalTaskType.identifier
+        }) == true, "The real test host must export the same task drag type as Attic")
         let taskID = UUID()
         let payload = TaskDragPayload(taskID: taskID, title: "Paste me")
         let provider = payload.itemProvider()

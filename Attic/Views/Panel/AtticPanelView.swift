@@ -14,13 +14,16 @@ struct AtticPanelView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var quickEntryTitle = ""
+    @State private var quickEntryPriority: TaskPriority = .none
     @State private var isModeDockHovered = false
     @State private var hoveredModeSection: PanelSection?
     @State private var isQuickSubmitHovered = false
     @State private var errorBannerHeight: CGFloat = 0
+    @State private var hasRestoredNoteSession = false
     @FocusState private var isQuickEntryFocused: Bool
     @FocusState private var focusedModeSection: PanelSection?
     @FocusState private var isQuickSubmitFocused: Bool
+    @FocusState private var focusedQuickPriority: TaskPriority?
 
     private var cornerRadius: CGFloat { settings.panelCornerSize }
 
@@ -55,6 +58,9 @@ struct AtticPanelView: View {
     }
     private var canSaveQuickTask: Bool {
         !quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    private var isTaskEntryExpanded: Bool {
+        isQuickEntryFocused || uiState.isComposerPresented
     }
     private var panelThemePalette: AtticPanelThemePalette {
         settings.panelTheme.palette(
@@ -96,11 +102,6 @@ struct AtticPanelView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if uiState.isComposerPresented, uiState.selectedSection.isTaskBased {
-                advancedTaskComposer
-            }
-        }
-        .overlay(alignment: .bottom) {
             if let error = currentErrorMessage {
                 errorBanner(error)
             }
@@ -110,6 +111,7 @@ struct AtticPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.colorScheme, systemColorScheme)
         .environment(\.atticPanelGlassStyle, settings.panelGlassStyle)
+        .environment(\.atticPanelTranslucencyEnabled, settings.isTranslucent)
         .environment(
             \.atticClearGlassForegroundReadabilityEnabled,
             AtticClearGlassReadabilityPolicy.isEnabled(
@@ -139,6 +141,13 @@ struct AtticPanelView: View {
             }
         }
         .onChange(of: uiState.selectedSection) { _, _ in
+            syncComposerInteractionHeight()
+            syncTaskEntryInteractionLocks()
+            openMostRecentNoteIfNeeded()
+        }
+        .task {
+            _ = await noteDraft.restoreRecoveryIfNeeded()
+            hasRestoredNoteSession = true
             openMostRecentNoteIfNeeded()
         }
         .onChange(of: store.revision) { _, _ in
@@ -150,14 +159,28 @@ struct AtticPanelView: View {
         }
         .onAppear {
             syncModeDockInteractionWidth()
+            syncComposerInteractionHeight()
+            syncTaskEntryInteractionLocks()
             syncNoteDraftInteractionLocks()
         }
         .onChange(of: isModeDockExpanded) { _, _ in
             syncModeDockInteractionWidth()
         }
-        .onChange(of: isQuickEntryFocused) { _, isFocused in
-            uiState.setInteractionLock(.quickEntryFocus, isActive: isFocused)
+        .onChange(of: isTaskEntryExpanded) { _, _ in
+            syncComposerInteractionHeight()
         }
+        .onChange(of: isQuickEntryFocused) { _, isFocused in
+            syncTaskEntryInteractionLocks()
+            if isFocused, uiState.selectedSection.isTaskBased {
+                // Keep priority controls mounted when Tab or a pointer click
+                // transfers focus out of the title field into the composer.
+                uiState.beginAdding()
+            }
+        }
+        .onChange(of: isQuickSubmitFocused) { _, _ in syncTaskEntryInteractionLocks() }
+        .onChange(of: focusedQuickPriority) { _, _ in syncTaskEntryInteractionLocks() }
+        .onChange(of: quickEntryTitle) { _, _ in syncTaskEntryInteractionLocks() }
+        .onChange(of: quickEntryPriority) { _, _ in syncTaskEntryInteractionLocks() }
         .onChange(of: noteDraft.isDirty) { _, _ in
             syncNoteDraftInteractionLocks()
         }
@@ -338,6 +361,23 @@ struct AtticPanelView: View {
         )
     }
 
+    private func syncComposerInteractionHeight() {
+        chromeInteractionState.bottomControlsHeight =
+            uiState.selectedSection.isTaskBased && isTaskEntryExpanded ? 88 : 42
+    }
+
+    private func syncTaskEntryInteractionLocks() {
+        let isTaskSection = uiState.selectedSection.isTaskBased
+        uiState.setInteractionLock(
+            .quickEntryFocus,
+            isActive: isTaskSection && (isQuickEntryFocused || isQuickSubmitFocused || focusedQuickPriority != nil)
+        )
+        uiState.setInteractionLock(
+            .taskComposer,
+            isActive: isTaskSection && (!quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || quickEntryPriority != .none)
+        )
+    }
+
     @ViewBuilder
     private var sectionWorkspace: some View {
         if uiState.selectedSection.isTaskBased {
@@ -382,7 +422,7 @@ struct AtticPanelView: View {
                     }
                     .padding(.horizontal, horizontalInset + 2)
                     .padding(.top, AtticStyle.taskScrollTopPadding)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, isTaskEntryExpanded ? 142 : 96)
                 }
                 .scrollIndicators(.never)
             }
@@ -391,7 +431,10 @@ struct AtticPanelView: View {
     }
 
     private var taskScrollMask: some View {
-        let stops = TaskScrollMaskLayout.stops(panelHeight: panelSize.height)
+        let stops = TaskScrollMaskLayout.stops(
+            panelHeight: panelSize.height,
+            bottomObscuredHeight: isTaskEntryExpanded ? 122 : 76
+        )
         return LinearGradient(
             stops: [
                 .init(color: .clear, location: 0),
@@ -406,7 +449,9 @@ struct AtticPanelView: View {
 
     private var notesWorkspace: some View {
         Group {
-            if uiState.isComposerPresented {
+            if !hasRestoredNoteSession {
+                ProgressView("Restoring draft…")
+            } else if uiState.isComposerPresented {
                 NoteComposerView(noteDraft: noteDraft, uiState: uiState)
                     .padding(.horizontal, horizontalInset)
             } else {
@@ -420,97 +465,135 @@ struct AtticPanelView: View {
     }
 
     private var taskEntryBar: some View {
-        HStack(spacing: 0) {
-            Button {
-                withAnimation(reduceMotion ? nil : AtticMotion.spring) {
-                    if uiState.isComposerPresented {
-                        uiState.endAdding()
-                    } else {
-                        uiState.beginAdding()
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button {
+                    withAnimation(reduceMotion ? nil : AtticMotion.spring) {
+                        if uiState.isComposerPresented {
+                            isQuickEntryFocused = false
+                            uiState.endAdding()
+                        } else {
+                            uiState.beginAdding()
+                            isQuickEntryFocused = true
+                        }
                     }
+                } label: {
+                    Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.primary.opacity(0.92))
+                        .atticClearGlassForegroundReadability()
+                        .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
+                        .background(
+                            Color.primary.opacity(uiState.isComposerPresented ? 0.10 : 0),
+                            in: Circle()
+                        )
+                        .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                        .contentShape(Circle())
                 }
-            } label: {
-                Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
-                    .font(.system(size: 16, weight: .medium))
+                .buttonStyle(.plain)
+                .help(uiState.isComposerPresented ? "Close task options" : "Task options")
+                .accessibilityLabel(uiState.isComposerPresented ? "Close task options" : "Task options")
+                .accessibilityIdentifier("add-task-button")
+
+                TextField("Add a task, note, or idea", text: $quickEntryTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, design: .rounded))
                     .foregroundStyle(Color.primary.opacity(0.92))
                     .atticClearGlassForegroundReadability()
-                    .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
-                    .background(
-                        Color.primary.opacity(uiState.isComposerPresented ? 0.10 : 0),
-                        in: Circle()
-                    )
-                    .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help(uiState.isComposerPresented ? "Close task options" : "Task options")
-            .accessibilityLabel(uiState.isComposerPresented ? "Close task options" : "Task options")
-            .accessibilityIdentifier("add-task-button")
-
-            TextField("Add a task, note, or idea", text: $quickEntryTitle)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, design: .rounded))
-                .foregroundStyle(Color.primary.opacity(0.92))
-                .atticClearGlassForegroundReadability()
-                .padding(.horizontal, 5)
-                .frame(maxWidth: .infinity)
-                .frame(height: AtticStyle.entryControlHeight)
-                .focused($isQuickEntryFocused)
-                .onSubmit(saveQuickTask)
-                .accessibilityIdentifier("quick-entry-title")
-
-            Button(action: saveQuickTask) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(
-                        quickSubmitForegroundColor
-                    )
-                    .atticClearGlassForegroundReadability()
-                    .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
-                    .background(
-                        quickSubmitBackgroundColor,
-                        in: Circle()
-                    )
-                    .overlay {
-                        Circle().stroke(
-                            quickSubmitStrokeColor,
-                            lineWidth: (isQuickSubmitFocused || hasIncreasedContrast) ? 1 : 0.75
-                        )
+                    .padding(.horizontal, 5)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: AtticStyle.entryControlHeight)
+                    .focused($isQuickEntryFocused)
+                    .onSubmit(saveQuickTask)
+                    .onExitCommand {
+                        isQuickEntryFocused = false
+                        uiState.endAdding()
                     }
-                    .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-                    .contentShape(Circle())
+                    .accessibilityIdentifier("quick-entry-title")
+
+                Button(action: saveQuickTask) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(
+                            quickSubmitForegroundColor
+                        )
+                        .atticClearGlassForegroundReadability()
+                        .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
+                        .background(
+                            quickSubmitBackgroundColor,
+                            in: Circle()
+                        )
+                        .overlay {
+                            Circle().stroke(
+                                quickSubmitStrokeColor,
+                                lineWidth: (isQuickSubmitFocused || hasIncreasedContrast) ? 1 : 0.75
+                            )
+                        }
+                        .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSaveQuickTask)
+                .focused($isQuickSubmitFocused)
+                .onHover { isQuickSubmitHovered = $0 }
+                .help("Add task")
+                .accessibilityLabel("Add task")
+                .accessibilityIdentifier("quick-entry-submit")
             }
-            .buttonStyle(.plain)
-            .disabled(!canSaveQuickTask)
-            .focused($isQuickSubmitFocused)
-            .onHover { isQuickSubmitHovered = $0 }
-            .help("Add task")
-            .accessibilityLabel("Add task")
-            .accessibilityIdentifier("quick-entry-submit")
+            .padding(.horizontal, 2)
+            .frame(height: AtticStyle.composerControlHeight)
+            if isTaskEntryExpanded {
+                HStack(spacing: 4) {
+                    ForEach(TaskPriority.allCases) { priority in
+                        Button {
+                            quickEntryPriority = priority
+                            uiState.beginAdding()
+                            isQuickEntryFocused = true
+                        } label: {
+                            Image(systemName: priority == .none ? "flag.slash" : "flag.fill")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(priority == .none ? Color.secondary : priority.color)
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    priority.color.opacity(quickEntryPriority == priority ? 0.16 : 0),
+                                    in: Circle()
+                                )
+                                .overlay {
+                                    Circle().stroke(
+                                        priority.color.opacity(quickEntryPriority == priority ? 0.55 : 0),
+                                        lineWidth: 1)
+                                }
+                                .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .focused($focusedQuickPriority, equals: priority)
+                        .help("\(priority.title) priority")
+                        .accessibilityLabel("\(priority.title) priority")
+                        .accessibilityAddTraits(quickEntryPriority == priority ? .isSelected : [])
+                        .accessibilityIdentifier("task-priority-\(priority.rawValue)")
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 4)
+                .transition(.opacity)
+            }
         }
-        .padding(.horizontal, 2)
-        .frame(height: AtticStyle.composerControlHeight)
-        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
-        .contentShape(Capsule(style: .continuous))
+        .atticGlassControl(
+            in: RoundedRectangle(cornerRadius: AtticStyle.composerControlHeight / 2, style: .continuous),
+            interactive: false
+        )
+        .contentShape(
+            RoundedRectangle(cornerRadius: AtticStyle.composerControlHeight / 2, style: .continuous)
+        )
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: isTaskEntryExpanded)
         .padding(.horizontal, chromeInset)
         .padding(.bottom, chromeBottomAdjustment)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Quick task entry")
         .accessibilityIdentifier("task-entry-bar")
-    }
-
-    private var advancedTaskComposer: some View {
-        TaskComposerView(store: store, uiState: uiState)
-            .padding(10)
-            .atticGlassControl(
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous),
-                interactive: false
-            )
-            .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
-            .padding(.horizontal, chromeInset)
-            .padding(.bottom, 62)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var taskEmptyState: some View {
@@ -559,9 +642,12 @@ struct AtticPanelView: View {
     private func saveQuickTask() {
         guard store.create(
             title: quickEntryTitle,
+            priority: quickEntryPriority,
             status: uiState.selectedScope.creationStatus
         ) != nil else { return }
         quickEntryTitle = ""
+        quickEntryPriority = .none
+        uiState.beginAdding()
         DispatchQueue.main.async { isQuickEntryFocused = true }
     }
 
@@ -594,15 +680,33 @@ struct AtticPanelView: View {
     }
 
     private func openMostRecentNoteIfNeeded() {
-        guard uiState.selectedSection.isNotes,
+        guard hasRestoredNoteSession,
+              uiState.selectedSection.isNotes,
               !uiState.isComposerPresented,
-              uiState.editingNoteID == nil,
-              !noteDraft.isActive,
-              let mostRecentNote = noteStore.orderedNotes().first,
-              noteDraft.beginEditing(mostRecentNote) else { return }
+              uiState.editingNoteID == nil else { return }
+
+        if noteDraft.isActive {
+            if let restored = noteStore.orderedNotes().first(where: { $0.id == noteDraft.activeNoteID }) {
+                uiState.beginEditingNote(restored)
+            } else {
+                uiState.beginAdding()
+            }
+            return
+        }
+
+        let note: NoteItem
+        if noteDraft.resumeLastSession(),
+           let restored = noteStore.orderedNotes().first(where: { $0.id == noteDraft.activeNoteID }) {
+            note = restored
+        } else if let recent = noteStore.orderedNotes().first,
+                  noteDraft.beginEditing(recent) {
+            note = recent
+        } else {
+            return
+        }
 
         withAnimation(reduceMotion ? nil : AtticMotion.spring) {
-            uiState.beginEditingNote(mostRecentNote)
+            uiState.beginEditingNote(note)
         }
     }
 

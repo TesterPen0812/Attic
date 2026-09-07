@@ -9,7 +9,7 @@ struct PanelSettingsView: View {
             subtitle: "Control where the panel waits and how it fits your workspace.",
             accessibilityIdentifier: "settings-page-panel"
         ) {
-            SettingsGroup("Hiding corner") {
+            SettingsGroup("Docking") {
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Reveal Attic from", systemImage: "rectangle.inset.filled")
                         .font(.system(size: 13, weight: .medium))
@@ -18,6 +18,8 @@ struct PanelSettingsView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text("The same corner works on every connected display.")
+                        Text("You can also drag the panel’s top area to another corner. Its buttons remain clickable.")
+                        Text("Swipe with two fingers toward the attached screen edge to hide the panel, even while pinned. Canvas gestures stay on the canvas.")
                         Text("macOS Hot Corners may activate at the same time.")
                     }
                     .font(.caption)
@@ -84,7 +86,7 @@ struct PanelSettingsView: View {
 
                 SettingsRow(
                     title: "Panel width",
-                    description: "Adjust the panel width. Live resizing remains available from the panel itself.",
+                    description: "Resize from the panel’s inward-facing edges. The docked corner stays anchored above the Dock.",
                     systemImage: "arrow.left.and.right"
                 ) {
                     SettingsSliderControl(

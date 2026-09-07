@@ -109,7 +109,8 @@ class RunLocalUITestsTest < Minitest::Test
       "settings['PRODUCT_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'"
     assert_includes host_settings,
       "settings['EXECUTABLE_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'"
-    assert_includes host_settings, "settings['INFOPLIST_KEY_LSUIElement'] = 'YES'"
+    assert_includes host_settings, "settings['INFOPLIST_FILE'] = 'Attic/Info.plist'"
+    assert_includes File.read(File.join(ROOT, 'Attic', 'Info.plist')), 'com.taha.attic.task-id'
     refute_nil unit_settings
     assert_includes unit_settings,
       "settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'"

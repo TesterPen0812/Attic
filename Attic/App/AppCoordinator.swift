@@ -37,6 +37,14 @@ struct AppRuntimeEnvironment {
         !isUnitTestHost
     }
 
+    var noteRecoveryURL: URL? {
+        // The sandbox resolves this inside the running preview's own bundle
+        // container. Test controllers inject their own temporary file instead.
+        guard !isRunningTests else { return nil }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("Attic/Notes/draft-recovery.json")
+    }
+
     func makeSettingsDefaults(
         standard: UserDefaults = .standard
     ) -> UserDefaults {
@@ -231,8 +239,22 @@ final class AppCoordinator {
             attachmentFileStore: runtime.makeAttachmentFileStore()
         )
         let canvasStore = CanvasStore(container: container)
-        let canvasSession = CanvasSession(store: canvasStore)
-        let noteDraft = NoteDraftController(noteStore: noteStore)
+        let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
+        if isUITesting,
+           !usesCanvasUITestPersistence || environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1" {
+            // The real UI host exercises restoration in its own bundle domain;
+            // only the explicit start of a test scenario resets that state.
+            canvasViewDefaults?.removeObject(forKey: CanvasViewStateArchive.defaultsKey)
+        }
+        let canvasSession = CanvasSession(
+            store: canvasStore,
+            viewStateDefaults: canvasViewDefaults
+        )
+        let noteDraft = NoteDraftController(
+            noteStore: noteStore,
+            sessionDefaults: isRunningTests ? nil : runtime.makeSettingsDefaults(),
+            recoveryURL: runtime.noteRecoveryURL
+        )
         let uiState = PanelUIState()
         let loginItemService = LoginItemService()
         // Unit/UI test hosts must not prompt for the user's Keychain item while
@@ -356,6 +378,7 @@ final class AppCoordinator {
 
     func prepareForTermination() -> Bool {
         canvasSession.cancelActiveInteraction()
+        canvasSession.flushViewState()
         guard noteDraft.flush() else {
             hoverMonitor.revealProgrammatically(section: .notes)
             return false

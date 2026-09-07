@@ -70,6 +70,7 @@ enum PersistenceController {
             CanvasBoardItem.self,
             CanvasStrokeItem.self,
             CanvasImageItem.self,
+            CanvasSemanticObjectItem.self,
             configurations: configuration
         )
         #else
@@ -124,6 +125,7 @@ enum PersistenceController {
             CanvasBoardItem.self,
             CanvasStrokeItem.self,
             CanvasImageItem.self,
+            CanvasSemanticObjectItem.self,
             configurations: configuration
         )
         #else

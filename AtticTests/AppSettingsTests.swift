@@ -27,6 +27,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(runtime.isRunningTests)
         XCTAssertTrue(runtime.isUnitTestHost)
         XCTAssertFalse(runtime.shouldStartInteractiveShellServices)
+        XCTAssertNil(runtime.noteRecoveryURL)
         let resolved = runtime.makeSettingsDefaults(standard: simulatedStandard)
         XCTAssertFalse(resolved === simulatedStandard)
         _ = AppSettings(defaults: resolved)
@@ -51,6 +52,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(runtime.isUITesting)
         XCTAssertFalse(runtime.isUnitTestHost)
         XCTAssertTrue(runtime.shouldStartInteractiveShellServices)
+        XCTAssertNil(runtime.noteRecoveryURL)
         XCTAssertTrue(runtime.makeSettingsDefaults(standard: simulatedStandard) === simulatedStandard)
     }
 

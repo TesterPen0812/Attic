@@ -234,7 +234,16 @@ private struct AtticPanelGlassStyleKey: EnvironmentKey {
     static let defaultValue: PanelGlassStyle = .clear
 }
 
+private struct AtticPanelTranslucencyEnabledKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
 extension EnvironmentValues {
+    var atticPanelTranslucencyEnabled: Bool {
+        get { self[AtticPanelTranslucencyEnabledKey.self] }
+        set { self[AtticPanelTranslucencyEnabledKey.self] = newValue }
+    }
+
     var atticPanelGlassStyle: PanelGlassStyle {
         get { self[AtticPanelGlassStyleKey.self] }
         set { self[AtticPanelGlassStyleKey.self] = newValue }
@@ -259,12 +268,13 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.atticPanelGlassStyle) private var glassStyle
+    @Environment(\.atticPanelTranslucencyEnabled) private var isTranslucent
     @Environment(\.atticPanelThemePalette) private var palette
     @Environment(\.atticPanelUsesSystemOpaqueSurface) private var usesSystemOpaqueSurface
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if reduceTransparency {
+        if reduceTransparency || !isTranslucent {
             content
                 .background(opaqueControlColor, in: shape)
                 .overlay {
@@ -335,11 +345,13 @@ private struct AtticGlassEffectContainerModifier: ViewModifier {
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.atticPanelGlassStyle) private var glassStyle
+    @Environment(\.atticPanelTranslucencyEnabled) private var isTranslucent
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *),
            glassStyle != .glassmorphism,
+           isTranslucent,
            !reduceTransparency {
             GlassEffectContainer(spacing: spacing) {
                 content
@@ -373,7 +385,11 @@ extension View {
         in shape: S,
         interactive: Bool = true
     ) -> some View {
-        modifier(AtticGlassControlModifier(shape: shape, interactive: interactive))
+        // These controls have their own native/opaque backing. Applying the
+        // clear-panel glyph shadow here creates a halo on an already readable
+        // surface; only unbacked panel content should inherit that treatment.
+        environment(\.atticClearGlassForegroundReadabilityEnabled, false)
+            .modifier(AtticGlassControlModifier(shape: shape, interactive: interactive))
     }
 
     func atticGlassEffectContainer(spacing: CGFloat) -> some View {
