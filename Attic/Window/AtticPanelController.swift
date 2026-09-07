@@ -507,11 +507,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 switch event {
                 case .screenParametersChanged:
+                    panel.cancelTrackpadSwipe()
                     hostingView.cancelActiveInteraction(reason: .screenChanged)
                     recoverPanelInsideUsableArea()
                 case .applicationActivated:
                     recoverPanelInsideUsableArea()
                 case .applicationDeactivated:
+                    panel.cancelTrackpadSwipe()
                     hostingView.cancelActiveInteraction(reason: .applicationDeactivated)
                 }
             }
@@ -928,6 +930,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidChangeScreen(_ notification: Notification) {
+        panel.cancelTrackpadSwipe()
         // A pointer-driven cross-display move is still the same gesture.
         // Actual display reconfiguration is cancelled by the separate
         // didChangeScreenParameters observer.

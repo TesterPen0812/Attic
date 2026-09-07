@@ -99,6 +99,52 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testPanelSwipeCannotFinishAfterLosingKeyWindow() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var hides = 0
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.resignKey()
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 0)
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 1)
+    }
+
+    @MainActor
+    func testInteractionLockStartingDuringSwipeCancelsDismissal() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var eligible = true
+        panel.canBeginTrackpadSwipe = { _ in eligible }
+        var hides = 0
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        eligible = false
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 0)
+    }
+
+    @MainActor
+    func testReregisteredNotesTargetRequiresFreshSwipe() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let target = SwipeNotesTarget(frame: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000))
+        panel.contentView = SwipeHitTargetView(target: target)
+        panel.notesSwipeTarget = target
+        panel.sendEvent(try panelScrollEvent(deltaX: 60, deltaY: 0, phase: .began))
+        panel.notesSwipeTarget = nil
+        panel.notesSwipeTarget = target
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(target.navigationCount, 0)
+        panel.sendEvent(try panelScrollEvent(deltaX: 60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(target.navigationCount, 1)
+    }
+
+    @MainActor
     func testPanelNeverClaimsCanvasPanBeforeCanvasReceivesItsEvents() throws {
         let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)

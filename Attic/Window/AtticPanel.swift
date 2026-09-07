@@ -12,8 +12,16 @@ final class AtticPanel: NSPanel {
     var onAccessibilityResizeRequest: ((CGSize) -> Void)?
     var onAccessibilityMoveRequest: ((CGRect) -> Void)?
     var onTrackpadDismissRequest: (() -> Void)?
-    var trackpadDismissCorner: ScreenCorner = .topRight
-    weak var notesSwipeTarget: (any PanelNotesSwipeTarget)?
+    var trackpadDismissCorner: ScreenCorner = .topRight {
+        didSet {
+            if trackpadDismissCorner != oldValue { cancelTrackpadSwipe() }
+        }
+    }
+    weak var notesSwipeTarget: (any PanelNotesSwipeTarget)? {
+        didSet {
+            if notesSwipeTarget !== oldValue { cancelTrackpadSwipe() }
+        }
+    }
     var canBeginTrackpadSwipe: ((NSEvent) -> Bool)?
     private var trackpadDismissTracker = PanelTrackpadDismissTracker()
     private enum SwipeRoute { case hide, notes, content }
@@ -41,9 +49,14 @@ final class AtticPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    override func resignKey() {
+        cancelTrackpadSwipe()
+        super.resignKey()
+    }
+
     override func sendEvent(_ event: NSEvent) {
         guard event.type == .scrollWheel else {
-            if [.magnify, .beginGesture, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown].contains(event.type) {
+            if [.magnify, .beginGesture, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .flagsChanged].contains(event.type) {
                 cancelTrackpadSwipe()
             }
             super.sendEvent(event)
@@ -86,10 +99,22 @@ final class AtticPanel: NSPanel {
             super.sendEvent(event)
             return
         }
-        if NSEvent.pressedMouseButtons != 0 {
+        // Imports, modal presentation, or other interaction locks may start
+        // after the initial sample. They must invalidate this sequence too.
+        if NSEvent.pressedMouseButtons != 0 || !(canBeginTrackpadSwipe?(event) ?? true) {
             cancelTrackpadSwipe()
             super.sendEvent(event)
             return
+        }
+        if swipeStartedInNotes {
+            guard let target = swipeNotesTarget,
+                  target === notesSwipeTarget,
+                  target.swipeView.window === self,
+                  target.isNotesLibraryPresented == swipeStartedInLibrary else {
+                cancelTrackpadSwipe()
+                super.sendEvent(event)
+                return
+            }
         }
 
         var trackerPhase = phase
