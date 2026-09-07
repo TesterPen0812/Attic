@@ -2,8 +2,8 @@ import Combine
 import Foundation
 
 /// Independent reasons that make hover-driven auto-hide unsafe. Presentation
-/// state is intentionally not a lock by itself: a clean, unfocused saved note
-/// may remain presented while an unpinned panel hides normally.
+/// state is intentionally not a lock by itself: a clean, unfocused composer
+/// or saved note may remain presented while an unpinned panel hides normally.
 enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
@@ -41,9 +41,6 @@ final class PanelUIState: ObservableObject {
 
     var interactionLockReasons: Set<PanelInteractionLockReason> {
         var reasons = managedInteractionLocks
-        if selectedSection.taskScope != nil, isComposerPresented {
-            reasons.insert(.taskComposer)
-        }
         if editingTaskID != nil {
             reasons.insert(.taskEditing)
         }

@@ -523,13 +523,63 @@ final class PanelUIStateTests: XCTestCase {
     }
 
     @MainActor
-    func testTaskComposerAndEditingRemainExplicitLocks() {
+    func testCleanPresentedTaskComposerAllowsAutoHide() {
         let state = PanelUIState()
-
         state.beginAdding()
-        XCTAssertEqual(state.interactionLockReasons, [.taskComposer])
+        XCTAssertTrue(state.isComposerPresented)
+        XCTAssertFalse(state.isInteractionLocked)
 
-        state.endAdding()
+        var machine = CornerHoverStateMachine()
+        machine.forceVisible(at: 0, grace: 0)
+        XCTAssertEqual(machine.update(
+            at: 1, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: state.isInteractionLocked,
+            revealDelay: 0.2, hideDelay: 0.3
+        ), .none)
+        XCTAssertEqual(machine.update(
+            at: 1.4, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: state.isInteractionLocked,
+            revealDelay: 0.2, hideDelay: 0.3
+        ), .requestHide)
+        XCTAssertTrue(state.isComposerPresented, "Auto-hide eligibility must not collapse keyboard controls")
+    }
+
+    @MainActor
+    func testPendingTaskContentOrComposerFocusBlocksHideUntilReleased() {
+        for reason in [PanelInteractionLockReason.taskComposer, .quickEntryFocus] {
+            let state = PanelUIState()
+            state.beginAdding()
+            state.setInteractionLock(reason, isActive: true)
+            XCTAssertEqual(state.interactionLockReasons, [reason])
+
+            var machine = CornerHoverStateMachine()
+            machine.forceVisible(at: 0, grace: 0)
+            for timestamp in [1.0, 2.0] {
+                XCTAssertEqual(machine.update(
+                    at: timestamp, isInHotspot: false, isInPanel: false,
+                    isInteractionLocked: state.isInteractionLocked,
+                    revealDelay: 0.2, hideDelay: 0.3
+                ), .none, "Expected \(reason) to protect ongoing input")
+            }
+
+            state.setInteractionLock(reason, isActive: false)
+            XCTAssertEqual(machine.update(
+                at: 3, isInHotspot: false, isInPanel: false,
+                isInteractionLocked: state.isInteractionLocked,
+                revealDelay: 0.2, hideDelay: 0.3
+            ), .none)
+            XCTAssertEqual(machine.update(
+                at: 3.4, isInHotspot: false, isInPanel: false,
+                isInteractionLocked: state.isInteractionLocked,
+                revealDelay: 0.2, hideDelay: 0.3
+            ), .requestHide)
+            XCTAssertTrue(state.isComposerPresented)
+        }
+    }
+
+    @MainActor
+    func testTaskEditingRemainsAnExplicitLock() {
+        let state = PanelUIState()
         let task = TaskItem(title: "Edit me")
         state.beginEditing(task)
         XCTAssertEqual(state.interactionLockReasons, [.taskEditing])
