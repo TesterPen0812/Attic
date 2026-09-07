@@ -51,7 +51,9 @@ struct NoteAttachmentTray: View {
     }
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 9) {
+        // The native document owns scrolling and needs the complete section's
+        // height. A lazy stack here would estimate offscreen attachment sizes.
+        VStack(alignment: .leading, spacing: 9) {
             ForEach(attachments) { attachment in
                 if attachment.isImage {
                     NoteImageAttachmentCard(
@@ -637,11 +639,124 @@ enum NoteAttachmentPasteboardRouter {
     }
 }
 
+/// One document scroll view keeps text and its attachments in the same flow.
+/// Native text layout owns body height; resizing never replaces the editor or
+/// publishes geometry through the SwiftUI draft model.
+final class NoteDocumentScrollView: NSScrollView {
+    override func layout() {
+        super.layout()
+        (documentView as? NoteEditorDocumentView)?.layoutDocument(viewport: contentSize)
+    }
+}
+
+final class NoteEditorDocumentView: NSView {
+    let textView: AttachmentAcceptingTextView
+    private let accessories = NoteDocumentHostingView(rootView: AnyView(EmptyView()))
+    private var accessoryContent = AnyView(EmptyView())
+    private var contentWidth: CGFloat = -1
+    private var isLayingOutDocument = false
+    private var measuredTextHeight: CGFloat?
+
+    override var isFlipped: Bool { true }
+
+    init(textView: AttachmentAcceptingTextView) {
+        self.textView = textView
+        super.init(frame: .zero)
+        addSubview(textView)
+        addSubview(accessories)
+        accessories.sizingOptions = [.intrinsicContentSize]
+        accessories.onSizeInvalidated = { [weak self] in
+            self?.needsLayout = true
+        }
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    func updateAccessories(_ content: AnyView) {
+        accessoryContent = content
+        updateAccessoryWidth(max(1, contentWidth))
+        needsLayout = true
+    }
+
+    func invalidateTextLayout() {
+        measuredTextHeight = nil
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        if let scrollView = enclosingScrollView {
+            layoutDocument(viewport: scrollView.contentSize)
+        }
+    }
+
+    func layoutDocument(viewport: NSSize) {
+        guard !isLayingOutDocument, viewport.width > 0 else { return }
+        isLayingOutDocument = true
+        defer { isLayingOutDocument = false }
+
+        let width = viewport.width
+        if contentWidth != width {
+            contentWidth = width
+            textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+            updateAccessoryWidth(width)
+            measuredTextHeight = nil
+        }
+        let accessoryHeight = max(0, ceil(accessories.fittingSize.height))
+        let naturalTextHeight: CGFloat
+        if let measuredTextHeight {
+            naturalTextHeight = measuredTextHeight
+        } else {
+            let layoutManager = textView.layoutManager
+            if let container = textView.textContainer {
+                layoutManager?.ensureLayout(for: container)
+                let usedHeight = layoutManager?.usedRect(for: container).maxY ?? 0
+                let extraLineHeight = layoutManager?.extraLineFragmentRect.maxY ?? 0
+                naturalTextHeight = ceil(max(usedHeight, extraLineHeight)
+                    + textView.textContainerInset.height * 2)
+            } else {
+                naturalTextHeight = 0
+            }
+            self.measuredTextHeight = naturalTextHeight
+        }
+
+        // Empty space belongs to the editor when there are no attachments.
+        // Otherwise attachments follow the final text line, not a fixed footer.
+        let hasAccessories = accessoryHeight > 0
+        let textHeight = max(naturalTextHeight, hasAccessories ? 24 : viewport.height)
+        let accessoryY = textHeight + (hasAccessories ? 12 : 0)
+        let textFrame = NSRect(x: 0, y: 0, width: width, height: textHeight)
+        let accessoryFrame = NSRect(x: 0, y: accessoryY, width: width, height: accessoryHeight)
+        if textView.frame != textFrame { textView.frame = textFrame }
+        if accessories.frame != accessoryFrame { accessories.frame = accessoryFrame }
+        let documentHeight = max(viewport.height, accessoryY + accessoryHeight)
+        if frame.size != NSSize(width: width, height: documentHeight) {
+            setFrameSize(NSSize(width: width, height: documentHeight))
+        }
+    }
+
+    private func updateAccessoryWidth(_ width: CGFloat) {
+        accessories.rootView = AnyView(accessoryContent
+            .frame(width: width, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true))
+    }
+}
+
+private final class NoteDocumentHostingView: NSHostingView<AnyView> {
+    var onSizeInvalidated: (() -> Void)?
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        onSizeInvalidated?()
+    }
+}
+
 /// A Cocoa text editor keeps selection, marked text, undo, links, and keyboard
 /// behavior native while taking ownership of file drag/paste classification.
 struct AttachmentAwareTextEditor: NSViewRepresentable {
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Binding var text: String
     @Binding var isFileTargeted: Bool
     let isFocused: Bool
@@ -653,13 +768,14 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     var onViewStateChange: (NoteEditorViewState, NoteEditorSession) -> Void = { _, _ in }
     var onViewStateCommit: () -> Void = {}
     var captureImportReceiver: (() -> (([URL], [URL]) -> Void)?)? = nil
+    var documentAccessories = AnyView(EmptyView())
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = NoteDocumentScrollView()
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
@@ -669,13 +785,14 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.font = .systemFont(ofSize: 12)
         textView.textColor = .labelColor
+        textView.insertionPointColor = .labelColor
         textView.drawsBackground = false
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        textView.isVerticallyResizable = true
+        textView.isVerticallyResizable = false
         textView.isHorizontallyResizable = false
         textView.isAutomaticLinkDetectionEnabled = true
         textView.isContinuousSpellCheckingEnabled = true
@@ -685,8 +802,9 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
-        textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
+        textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.containerSize = NSSize(
             width: 0,
             height: CGFloat.greatestFiniteMagnitude
@@ -707,11 +825,13 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         Self.applyReadability(
             to: textView,
             enabled: clearReadabilityEnabled,
-            colorScheme: colorScheme
+            colorScheme: colorScheme,
+            increasedContrast: colorSchemeContrast == .increased
         )
         context.coordinator.recordAppliedReadability(
             enabled: clearReadabilityEnabled,
-            colorScheme: colorScheme
+            colorScheme: colorScheme,
+            increasedContrast: colorSchemeContrast == .increased
         )
 
         textView.onImportFiles = { [weak coordinator = context.coordinator] urls, cleanup in
@@ -730,22 +850,28 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             coordinator?.parent.isFileTargeted = targeted
         }
 
-        scrollView.documentView = textView
+        let document = NoteEditorDocumentView(textView: textView)
+        document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)))
+        scrollView.documentView = document
         context.coordinator.observeScrollView(scrollView)
         context.coordinator.restoreScrollPosition(in: scrollView)
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? AttachmentAcceptingTextView else {
+        guard let document = scrollView.documentView as? NoteEditorDocumentView else {
             return
         }
+        let textView = document.textView
 
         let synchronization = context.coordinator.synchronize(
             parent: self,
             textView: textView
         )
         guard synchronization != .staleSession else { return }
+        document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)))
+        if synchronization == .replacedText { document.invalidateTextLayout() }
+        document.layoutDocument(viewport: scrollView.contentSize)
         context.coordinator.captureViewState()
         let replacedExternalText = synchronization == .replacedText
 
@@ -754,18 +880,22 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             lastColorScheme: context.coordinator.appliedReadabilityColorScheme,
             enabled: clearReadabilityEnabled,
             colorScheme: colorScheme,
-            externalTextWasReplaced: replacedExternalText
+            externalTextWasReplaced: replacedExternalText,
+            lastIncreasedContrast: context.coordinator.appliedIncreasedContrast,
+            increasedContrast: colorSchemeContrast == .increased
         ) {
             context.coordinator.isApplyingExternalText = true
             Self.applyReadability(
                 to: textView,
                 enabled: clearReadabilityEnabled,
-                colorScheme: colorScheme
+                colorScheme: colorScheme,
+                increasedContrast: colorSchemeContrast == .increased
             )
             context.coordinator.isApplyingExternalText = false
             context.coordinator.recordAppliedReadability(
                 enabled: clearReadabilityEnabled,
-                colorScheme: colorScheme
+                colorScheme: colorScheme,
+                increasedContrast: colorSchemeContrast == .increased
             )
         }
 
@@ -780,7 +910,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.captureViewState()
         coordinator.parent.onViewStateCommit()
-        (scrollView.documentView as? NSTextView)?.delegate = nil
+        coordinator.textView?.delegate = nil
     }
 
     private static func clamped(_ ranges: [NSValue], length: Int) -> [NSValue] {
@@ -802,7 +932,8 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     static func applyReadability(
         to textView: NSTextView,
         enabled: Bool,
-        colorScheme: ColorScheme
+        colorScheme: ColorScheme,
+        increasedContrast: Bool = false
     ) {
         let key = NSAttributedString.Key.shadow
         let fullRange = NSRange(location: 0, length: textView.textStorage?.length ?? 0)
@@ -815,11 +946,12 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
 
         if enabled {
             let shadow = NSShadow()
+            let opacity = AtticClearGlassReadabilityPolicy.edgeOpacity(increasedContrast: increasedContrast)
             shadow.shadowColor = colorScheme == .dark
-                ? NSColor.black.withAlphaComponent(0.56)
-                : NSColor.white.withAlphaComponent(0.62)
-            shadow.shadowBlurRadius = 0.7
-            shadow.shadowOffset = NSSize(width: 0, height: -0.35)
+                ? NSColor.black.withAlphaComponent(opacity)
+                : NSColor.white.withAlphaComponent(opacity)
+            shadow.shadowBlurRadius = AtticClearGlassReadabilityPolicy.edgeRadius
+            shadow.shadowOffset = .zero
             if fullRange.length > 0 {
                 textView.textStorage?.addAttribute(key, value: shadow, range: fullRange)
             }
@@ -837,11 +969,14 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         lastColorScheme: ColorScheme?,
         enabled: Bool,
         colorScheme: ColorScheme,
-        externalTextWasReplaced: Bool
+        externalTextWasReplaced: Bool,
+        lastIncreasedContrast: Bool = false,
+        increasedContrast: Bool = false
     ) -> Bool {
         externalTextWasReplaced
             || lastEnabled != enabled
             || lastColorScheme != colorScheme
+            || lastIncreasedContrast != increasedContrast
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -856,6 +991,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         var isApplyingExternalText = false
         var appliedReadabilityEnabled: Bool?
         var appliedReadabilityColorScheme: ColorScheme?
+        var appliedIncreasedContrast = false
         private var appliedSession: NoteEditorSession?
         private var pendingScrollRestore = false
         private var scrollObservation: NSObjectProtocol?
@@ -878,9 +1014,10 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             ) { [weak self] _ in self?.captureViewState() }
         }
 
-        func recordAppliedReadability(enabled: Bool, colorScheme: ColorScheme) {
+        func recordAppliedReadability(enabled: Bool, colorScheme: ColorScheme, increasedContrast: Bool = false) {
             appliedReadabilityEnabled = enabled
             appliedReadabilityColorScheme = colorScheme
+            appliedIncreasedContrast = increasedContrast
         }
 
         @discardableResult
@@ -955,6 +1092,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             let y = parent.initialViewState.scrollY
             DispatchQueue.main.async { [weak self, weak scrollView] in
                 guard let self, self.isCurrent(session), let scrollView else { return }
+                (scrollView.documentView as? NoteEditorDocumentView)?.layoutDocument(viewport: scrollView.contentSize)
                 let maximum = max(0, (scrollView.documentView?.bounds.height ?? 0) - scrollView.contentSize.height)
                 scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, CGFloat(y.isFinite ? y : 0)), maximum)))
                 scrollView.reflectScrolledClipView(scrollView.contentView)
@@ -990,6 +1128,11 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !isApplyingExternalText,
                   let textView = notification.object as? NSTextView else { return }
+            if let document = textView.superview as? NoteEditorDocumentView,
+               let scrollView = textView.enclosingScrollView {
+                document.invalidateTextLayout()
+                document.layoutDocument(viewport: scrollView.contentSize)
+            }
             parent.text = textView.string
             captureViewState()
         }

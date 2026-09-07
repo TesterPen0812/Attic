@@ -157,9 +157,9 @@ struct NoteComposerView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
+        GeometryReader { _ in
             ZStack {
-                editorSurface(availableHeight: proxy.size.height)
+                editorSurface
                     .allowsHitTesting(!isLibraryPresented)
                     .accessibilityHidden(isLibraryPresented)
 
@@ -253,64 +253,72 @@ struct NoteComposerView: View {
         .accessibilityIdentifier("active-note-workspace")
     }
 
-    private func editorSurface(availableHeight: CGFloat) -> some View {
+    private var editorSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
             noteHeader
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    AttachmentAwareTextEditor(
-                        text: $noteDraft.body,
-                        isFileTargeted: $isFileTargeted,
-                        isFocused: isBodyFocused,
-                        session: noteDraft.editorSession,
-                        onFocusChange: updateBodyFocus,
-                        onImportFiles: importURLs,
-                        onImportError: noteStore.setAttachmentError,
-                        initialViewState: noteDraft.editorViewState,
-                        onViewStateChange: { state, session in
-                            noteDraft.recordEditorViewState(state, for: session)
-                        },
-                        onViewStateCommit: noteDraft.persistEditorSession,
-                        captureImportReceiver: captureImportReceiver
-                    )
-                    .frame(height: editorHeight(for: availableHeight))
-                    .padding(.horizontal, 2)
-
-                    NoteAttachmentTray(
-                        noteStore: noteStore,
-                        noteDraft: noteDraft,
-                        onCancelImport: cancelAttachmentImport,
-                        onImportFiles: importURLs
-                    )
-
-                    if let conflictMessage = noteDraft.conflictMessage {
-                        conflictControls(message: conflictMessage)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                    if let saveError = noteDraft.saveErrorMessage {
-                        HStack(alignment: .top, spacing: 8) {
-                            Label(saveError, systemImage: "exclamationmark.triangle")
-                                .font(.system(size: 11))
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                            Button("Retry", action: saveInPlace)
-                                .accessibilityIdentifier("retry-note-save")
-                        }
-                        .foregroundStyle(.primary)
-                        .atticClearGlassForegroundReadability()
-                        .accessibilityIdentifier("note-save-error")
-                    }
-                    NoteRecoveryWarning(noteDraft: noteDraft, uiState: uiState)
-                }
-                .padding(.horizontal, 4)
-                .padding(.top, 12)
-                .padding(.bottom, 12)
-            }
-            .scrollIndicators(.never)
+            AttachmentAwareTextEditor(
+                text: $noteDraft.body,
+                isFileTargeted: $isFileTargeted,
+                isFocused: isBodyFocused,
+                session: noteDraft.editorSession,
+                onFocusChange: updateBodyFocus,
+                onImportFiles: importURLs,
+                onImportError: noteStore.setAttachmentError,
+                initialViewState: noteDraft.editorViewState,
+                onViewStateChange: { state, session in
+                    noteDraft.recordEditorViewState(state, for: session)
+                },
+                onViewStateCommit: noteDraft.persistEditorSession,
+                captureImportReceiver: captureImportReceiver,
+                documentAccessories: AnyView(documentAccessories)
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 8)
 
             bottomComposer
         }
+    }
+
+    private var documentAccessories: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if hasDocumentAttachments {
+                NoteAttachmentTray(
+                    noteStore: noteStore,
+                    noteDraft: noteDraft,
+                    onCancelImport: cancelAttachmentImport,
+                    onImportFiles: importURLs
+                )
+            }
+
+            if let conflictMessage = noteDraft.conflictMessage {
+                conflictControls(message: conflictMessage)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            if let saveError = noteDraft.saveErrorMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Label(saveError, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("Retry", action: saveInPlace)
+                        .accessibilityIdentifier("retry-note-save")
+                }
+                .foregroundStyle(.primary)
+                .atticClearGlassForegroundReadability()
+                .accessibilityIdentifier("note-save-error")
+            }
+            if noteDraft.recoveryErrorMessage != nil {
+                NoteRecoveryWarning(noteDraft: noteDraft, uiState: uiState)
+            }
+        }
+    }
+
+    private var hasDocumentAttachments: Bool {
+        if noteStore.attachmentImportPresentation(for: noteDraft.editorSession) != .idle { return true }
+        guard let noteID = noteDraft.activeNoteID else { return false }
+        return !noteStore.attachments(for: noteID).isEmpty
     }
 
     private var noteHeader: some View {
@@ -469,10 +477,6 @@ struct NoteComposerView: View {
         formatter.unitsStyle = .full
         let relative = formatter.localizedString(for: note.updatedAt, relativeTo: Date())
         return relative == "now" ? "Saved just now" : "Saved \(relative)"
-    }
-
-    private func editorHeight(for availableHeight: CGFloat) -> CGFloat {
-        min(max(availableHeight * 0.28, 96), 170)
     }
 
     private func updateBodyFocus(_ isFocused: Bool) {

@@ -6,6 +6,108 @@ import XCTest
 
 final class NoteDraftControllerTests: XCTestCase {
     @MainActor
+    func testNoteDocumentFillsTallWorkspaceAndResizesWithoutReplacingEditor() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        XCTAssertTrue(draft.beginNew())
+        let uiState = PanelUIState()
+        uiState.beginAdding()
+        let host = NSHostingView(rootView: NoteComposerView(noteDraft: draft, uiState: uiState))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 560),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        defer { tearDownHarnessWindow(window) }
+        drainMainRunLoop()
+        host.layoutSubtreeIfNeeded()
+        let textView = try XCTUnwrap(firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" })
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        XCTAssertTrue(scrollView.documentView is NoteEditorDocumentView)
+        XCTAssertNil(scrollView.enclosingScrollView, "Notes must not nest two vertical scroll owners")
+        XCTAssertGreaterThan(textView.frame.height, 400, "The writing area must not retain its old 170-point cap")
+        XCTAssertEqual(textView.frame.height, scrollView.contentSize.height, accuracy: 1)
+        XCTAssertTrue(window.makeFirstResponder(textView))
+        textView.insertText("Continuous draft", replacementRange: textView.selectedRange())
+        drainMainRunLoop()
+        let selection = textView.selectedRange()
+        let previousHeight = textView.frame.height
+
+        window.setContentSize(NSSize(width: 360, height: 800))
+        drainMainRunLoop()
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" } === textView)
+        XCTAssertGreaterThan(textView.frame.height, previousHeight + 200)
+        XCTAssertEqual(textView.frame.height, scrollView.contentSize.height, accuracy: 1)
+        XCTAssertEqual(textView.selectedRange(), selection)
+        XCTAssertTrue(window.firstResponder === textView)
+        XCTAssertEqual(draft.body, "Continuous draft")
+    }
+
+    @MainActor
+    func testDocumentAccessoriesFollowTextAndShareItsScrollPosition() throws {
+        let text = EditorTextBox("Short body")
+        var editor = makeTestBodyEditor(text: text, session: NoteEditorSession(noteID: UUID(), generation: 1))
+        editor.documentAccessories = AnyView(Text("Attachment fixture").frame(height: 120))
+        let (host, window) = makeDocumentHarness(editor: editor)
+        defer { tearDownHarnessWindow(window) }
+        drainMainRunLoop()
+        let textView = try XCTUnwrap(firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" })
+        let document = try XCTUnwrap(textView.superview as? NoteEditorDocumentView)
+        let accessory = try XCTUnwrap(document.subviews.first { $0 !== textView })
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        document.layoutDocument(viewport: scrollView.contentSize)
+        XCTAssertLessThan(textView.frame.height, 60)
+        XCTAssertEqual(accessory.frame.minY, textView.frame.maxY + 12, accuracy: 1)
+        let originalY = accessory.frame.minY
+
+        XCTAssertTrue(window.makeFirstResponder(textView))
+        textView.insertText(String(repeating: "\nA long document line that wraps as the panel narrows.", count: 50),
+                            replacementRange: NSRange(location: (textView.string as NSString).length, length: 0))
+        drainMainRunLoop()
+        XCTAssertGreaterThan(accessory.frame.minY, originalY + 500)
+        XCTAssertEqual(accessory.frame.minY, textView.frame.maxY + 12, accuracy: 1)
+        XCTAssertGreaterThan(document.frame.height, scrollView.contentSize.height)
+        XCTAssertTrue(accessory.enclosingScrollView === scrollView)
+        scrollView.contentView.scroll(to: .zero)
+        let textY = textView.convert(.zero, to: nil).y
+        let accessoryY = accessory.convert(.zero, to: nil).y
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 160))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        let textMovement = textView.convert(.zero, to: nil).y - textY
+        let accessoryMovement = accessory.convert(.zero, to: nil).y - accessoryY
+        XCTAssertEqual(abs(textMovement), 160, accuracy: 1)
+        XCTAssertEqual(accessoryMovement, textMovement, accuracy: 1)
+
+        let wideHeight = textView.frame.height
+        window.setContentSize(NSSize(width: 230, height: 400))
+        drainMainRunLoop()
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(textView.frame.height, wideHeight, "Narrowing must reflow the full document, not clip it")
+        XCTAssertEqual(accessory.frame.minY, textView.frame.maxY + 12, accuracy: 1)
+    }
+
+    @MainActor
+    func testDocumentHeightIncludesTrailingEmptyLineAndShrinksAfterDeletion() throws {
+        let text = EditorTextBox(String(repeating: "Line\n", count: 80))
+        let editor = makeTestBodyEditor(text: text, session: NoteEditorSession(noteID: UUID(), generation: 1))
+        let (host, window) = makeDocumentHarness(editor: editor)
+        defer { tearDownHarnessWindow(window) }
+        drainMainRunLoop()
+        let textView = try XCTUnwrap(firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" })
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        let extraLine = try XCTUnwrap(textView.layoutManager).extraLineFragmentRect
+        XCTAssertGreaterThan(extraLine.height, 0)
+        XCTAssertGreaterThanOrEqual(textView.frame.height, extraLine.maxY + textView.textContainerInset.height * 2)
+        XCTAssertTrue(window.makeFirstResponder(textView))
+        textView.insertText("Short again", replacementRange: NSRange(location: 0, length: (textView.string as NSString).length))
+        drainMainRunLoop()
+        XCTAssertEqual(textView.frame.height, scrollView.contentSize.height, accuracy: 1)
+        XCTAssertEqual(scrollView.documentView?.frame.height ?? 0, scrollView.contentSize.height, accuracy: 1)
+        XCTAssertEqual(text.value, "Short again")
+    }
+
+    @MainActor
     func testInaccessibleRecoveryDirectoryIsNotTreatedAsMissing() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProtectedDraftTests-\(UUID().uuidString)")
         let protectedDirectory = directory.appendingPathComponent("protected")
@@ -784,6 +886,17 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertEqual(draft.title, "")
         XCTAssertEqual(draft.body, "")
     }
+}
+
+@MainActor
+private func makeDocumentHarness(editor: AttachmentAwareTextEditor) -> (NSHostingView<AttachmentAwareTextEditor>, NSWindow) {
+    let host = NSHostingView(rootView: editor)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 400),
+                          styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.orderBack(nil)
+    return (host, window)
 }
 
 @MainActor

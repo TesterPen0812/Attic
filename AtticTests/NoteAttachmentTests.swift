@@ -165,6 +165,11 @@ final class NoteAttachmentTests: XCTestCase {
             effectiveRange: nil
         ))
         XCTAssertNotNil(textView.typingAttributes[.shadow])
+        let shadow = textView.typingAttributes[.shadow] as? NSShadow
+        XCTAssertEqual(shadow?.shadowBlurRadius, AtticClearGlassReadabilityPolicy.edgeRadius)
+        XCTAssertEqual(shadow?.shadowOffset, .zero)
+        XCTAssertEqual((shadow?.shadowColor as? NSColor)?.alphaComponent,
+                       CGFloat(AtticClearGlassReadabilityPolicy.edgeOpacity(increasedContrast: false)))
 
         AttachmentAwareTextEditor.applyReadability(
             to: textView,
@@ -182,6 +187,15 @@ final class NoteAttachmentTests: XCTestCase {
     }
 
     func testEditorReadabilitySkipsFullRangeWorkForUnchangedTypingState() {
+        XCTAssertTrue(AttachmentAwareTextEditor.needsReadabilityApplication(
+            lastEnabled: true,
+            lastColorScheme: .dark,
+            enabled: true,
+            colorScheme: .dark,
+            externalTextWasReplaced: false,
+            lastIncreasedContrast: false,
+            increasedContrast: true
+        ))
         XCTAssertFalse(AttachmentAwareTextEditor.needsReadabilityApplication(
             lastEnabled: true,
             lastColorScheme: .dark,
