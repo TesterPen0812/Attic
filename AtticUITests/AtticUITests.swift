@@ -175,6 +175,11 @@ final class AtticUITests: XCTestCase {
 
         let body = app.textViews["note-body"]
         XCTAssertTrue(body.waitForExistence(timeout: 2))
+        let controls = app.descendants(matching: .any)["note-entry-bar"]
+        XCTAssertGreaterThan(body.frame.height, app.dialogs.firstMatch.frame.height * 0.5,
+                             "An attachment-free note should use the workspace, not a fixed short editor")
+        XCTAssertLessThan(abs(controls.frame.minY - body.frame.maxY), 20,
+                          "Writing should extend down to the note controls")
         body.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         app.typeText("The active draft stays mounted while the library is open.")
         app.typeKey(.escape, modifierFlags: [])
