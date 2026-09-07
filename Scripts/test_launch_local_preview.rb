@@ -75,4 +75,15 @@ class LaunchLocalPreviewTest < Minitest::Test
     assert_includes source, "command does not match the exact recorded executable"
     assert_includes source, "attic-exclusive-ui.lock"
   end
+
+  def test_desktop_run_delegates_to_same_isolated_launcher
+    wrapper = File.join(ROOT, "script", "build_and_run.sh")
+    stdout, stderr, status = Open3.capture3(wrapper, "--dry-run", chdir: ROOT)
+    assert status.success?, stderr
+    assert_match(/^bundle_id=com\.taha\.Attic\.local\.[0-9a-f]{12}$/, stdout)
+    assert_includes stdout, "signing_identity=-"
+    assert_includes stdout, "-DATTIC_LOCAL_ONLY"
+    refute_includes stdout, "/Applications"
+    refute_match(/\b(pkill|killall)\b/, File.read(wrapper))
+  end
 end

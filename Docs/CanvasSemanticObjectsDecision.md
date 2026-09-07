@@ -1,6 +1,6 @@
 # Canvas semantic text and shape storage decision
 
-Status: approval required before implementation
+Status: implementation authorized by the user's full recovery-roadmap request, 2026-09-07; isolated validation in progress. This is not release or user-store migration approval.
 
 Finding: C-05
 
@@ -8,7 +8,7 @@ Finding: C-05
 
 Current shapes are encoded as ordinary `CanvasStrokeItem` point lists, so after placement they are indistinguishable from freehand ink. Current text is rendered into image bytes and stored as `CanvasImageItem`, so its characters, font choices, and paragraph structure cannot be recovered for editing. Existing rows do not contain enough information to reconstruct semantic shapes or text safely.
 
-Changing only the UI would therefore be misleading. Editable text and shape selection require a new persisted semantic object type. This is an additive SwiftData schema change and is not authorized by the current fixing task without an explicit user decision.
+Changing only the UI would therefore be misleading. Editable text and shape selection require a new persisted semantic object type. The subsequent recovery-roadmap authorization covers this additive macOS-only model and synthetic-fixture validation; all original data and platform boundaries below remain in force.
 
 ## Proposed additive model
 
@@ -46,6 +46,6 @@ Shape payload v1 stores the shape kind and semantic ink style. Text payload v1 s
 
 The code must tolerate a store that already contains the additive model if the feature is later disabled. Rollback means stopping new semantic writes while continuing to retain and render supported semantic rows; it does not mean deleting the model or downgrading the store. If additive opening fails in fixture validation, implementation stops before any real preview store is opened and the schema change is not shipped.
 
-## Decision requested
+## Authorized boundary
 
-Approve or reject this additive, legacy-preserving `CanvasSemanticObjectItem` plan. Approval authorizes implementation and isolated migration validation only; it does not authorize CloudKit/mobile activation, Production schema deployment, destructive conversion, or access to the official user store.
+The additive, legacy-preserving `CanvasSemanticObjectItem` plan is authorized for implementation and isolated migration validation only. It does not authorize CloudKit/mobile activation, Production schema deployment, destructive conversion, or access to the official user store. Failed compatibility tests block preview activation, not justify deleting or recreating the fixture.
