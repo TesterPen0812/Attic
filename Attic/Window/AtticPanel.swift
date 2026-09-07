@@ -932,6 +932,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         if interactionLifecycle.activeInteraction != nil {
             cancelActiveInteraction(reason: .interruptedEventDelivery)
         }
+        // The delivered event owns this sample. Reading the live global
+        // cursor instead can collapse queued or replayed movement to zero.
         if let edges = AtticPanelResizePolicy.resizeEdges(
                 at: policyPoint,
                 in: bounds,
@@ -942,7 +944,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             resizeSession = ResizeSession(
                 edges: edges,
                 initialFrame: (window as? AtticPanel)?.visibleContentFrame ?? window.frame,
-                initialMouseLocation: NSEvent.mouseLocation
+                initialMouseLocation: window.convertPoint(toScreen: event.locationInWindow)
             )
             interactionLifecycle.begin(.windowResize)
             startEscapeMonitoring()
@@ -961,7 +963,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return
         }
 
-        let mouseLocation = NSEvent.mouseLocation
+        let mouseLocation = window.convertPoint(toScreen: event.locationInWindow)
         moveSession = MoveSession(
             initialFrame: (window as? AtticPanel)?.visibleContentFrame ?? window.frame,
             initialMouseLocation: mouseLocation,
@@ -984,7 +986,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return
         }
         if let session = resizeSession {
-            let mouseLocation = NSEvent.mouseLocation
+            let mouseLocation = window.convertPoint(toScreen: event.locationInWindow)
             let delta = CGPoint(
                 x: mouseLocation.x - session.initialMouseLocation.x,
                 y: mouseLocation.y - session.initialMouseLocation.y
@@ -1009,7 +1011,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             return
         }
 
-        let mouseLocation = NSEvent.mouseLocation
+        let mouseLocation = window.convertPoint(toScreen: event.locationInWindow)
         let delta = CGPoint(
             x: mouseLocation.x - session.initialMouseLocation.x,
             y: mouseLocation.y - session.initialMouseLocation.y
@@ -1035,7 +1037,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         }
         guard finishActiveInteraction(
             in: window,
-            mouseLocation: NSEvent.mouseLocation,
+            mouseLocation: window.convertPoint(toScreen: event.locationInWindow),
             timestamp: event.timestamp
         ) else {
             super.mouseUp(with: event)
@@ -1165,7 +1167,12 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         }
         _ = finishActiveInteraction(
             in: window,
-            mouseLocation: NSEvent.mouseLocation,
+            // Own-window mouse-up is delivered before the responder path by
+            // the local monitor. Preserve its event position too; events from
+            // another window or the global monitor need the global fallback.
+            mouseLocation: event.window === window
+                ? window.convertPoint(toScreen: event.locationInWindow)
+                : NSEvent.mouseLocation,
             timestamp: event.timestamp
         )
     }

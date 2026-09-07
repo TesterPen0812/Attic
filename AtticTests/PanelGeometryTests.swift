@@ -4,6 +4,50 @@ import XCTest
 @testable import Attic
 
 final class PanelGeometryTests: XCTestCase {
+    @MainActor
+    func testHostedResizeUsesDeliveredMovementWithoutMovingGlobalCursor() throws {
+        try withHiddenHostedPanel { panel, host in
+            let initial = panel.visibleContentFrame
+            let down = CGPoint(x: initial.midX, y: initial.minY + 1)
+            let dragged = CGPoint(x: down.x, y: down.y + 40)
+            var endedSize: CGSize?
+            host.onLiveResizeEnded = { endedSize = $0 }
+
+            host.mouseDown(with: try panelMouseEvent(.leftMouseDown, at: down, in: panel, timestamp: 1))
+            host.mouseDragged(with: try panelMouseEvent(.leftMouseDragged, at: dragged, in: panel, timestamp: 1.1))
+            host.mouseUp(with: try panelMouseEvent(.leftMouseUp, at: dragged, in: panel, timestamp: 1.2))
+
+            XCTAssertEqual(panel.visibleContentFrame.height, initial.height - 40, accuracy: 0.01)
+            XCTAssertEqual(panel.visibleContentFrame.maxY, initial.maxY, accuracy: 0.01)
+            XCTAssertEqual(endedSize, panel.visibleContentFrame.size)
+        }
+    }
+
+    @MainActor
+    func testHostedMoveAndReleaseUseDeliveredScreenPoints() throws {
+        try withHiddenHostedPanel { panel, host in
+            let initial = panel.visibleContentFrame
+            let down = CGPoint(x: initial.midX, y: initial.maxY - 6)
+            let dragged = CGPoint(x: down.x - 40, y: down.y - 30)
+            let released = CGPoint(x: dragged.x - 5, y: dragged.y - 3)
+            var releasedPoint: CGPoint?
+            var translation: CGPoint?
+            host.onWindowDragEnded = { _, point, _, delta in
+                releasedPoint = point
+                translation = delta
+            }
+
+            host.mouseDown(with: try panelMouseEvent(.leftMouseDown, at: down, in: panel, timestamp: 1))
+            host.mouseDragged(with: try panelMouseEvent(.leftMouseDragged, at: dragged, in: panel, timestamp: 1.1))
+            host.mouseUp(with: try panelMouseEvent(.leftMouseUp, at: released, in: panel, timestamp: 1.2))
+
+            XCTAssertEqual(panel.visibleContentFrame.minX, initial.minX - 40, accuracy: 0.01)
+            XCTAssertEqual(panel.visibleContentFrame.minY, initial.minY - 30, accuracy: 0.01)
+            XCTAssertEqual(releasedPoint, released)
+            XCTAssertEqual(translation, CGPoint(x: -45, y: -33))
+        }
+    }
+
     func testInterruptedDockTransitionReleasesItsInteractionLockExactlyOnce() {
         var state = PanelVisibilityTransitionState()
         var releases = 0
@@ -1028,6 +1072,65 @@ final class PanelGeometryTests: XCTestCase {
             PanelGeometry.preferredWorkspaceHeight(contentWidth: 1_000),
             PanelGeometry.preferredHeightCeiling
         )
+    }
+
+    @MainActor
+    private func withHiddenHostedPanel(
+        _ body: (AtticPanel, AtticPanelHostingView) throws -> Void
+    ) throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let visible = PanelGeometry.workAreaPlacement(
+            preferredSize: CGSize(width: 480, height: 620),
+            in: screen.visibleFrame, corner: .topRight
+        ).frame
+        guard visible.height >= PanelGeometry.minimumPanelSize.height + 40 else {
+            throw XCTSkip("The hosted resize regression needs 40 points above the minimum height")
+        }
+        let suite = "AtticPanelPointerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        state.updatePanelSize(visible.size)
+        let chrome = PanelChromeInteractionState()
+        let host = AtticPanelHostingView(
+            rootView: AtticPanelView(
+                store: store, noteStore: notes,
+                canvasSession: CanvasSession(store: CanvasStore(container: container)),
+                noteDraft: NoteDraftController(noteStore: notes),
+                chromeInteractionState: chrome, uiState: state,
+                settings: AppSettings(defaults: defaults)
+            ),
+            panelCornerRadius: 80, dockedCorner: .topRight, chromeInteractionState: chrome
+        )
+        let panel = AtticPanel(contentRect: visible, styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
+        panel.setVisibleContentFrame(visible, display: false)
+        panel.contentView = AtticPanelContentContainer(
+            hostingView: host, visibleSize: visible.size, perimeter: panel.resizePerimeter
+        )
+        defer {
+            host.cancelActiveInteraction(reason: .lostWindow)
+            panel.contentView = nil
+        }
+        // Direct delivery exercises the real hosting responder without
+        // posting HID events or changing the user's physical mouse position.
+        try body(panel, host)
+    }
+
+    @MainActor
+    private func panelMouseEvent(
+        _ type: NSEvent.EventType, at screenPoint: CGPoint,
+        in panel: AtticPanel, timestamp: TimeInterval
+    ) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(
+            with: type, location: panel.convertPoint(fromScreen: screenPoint),
+            modifierFlags: [], timestamp: timestamp, windowNumber: panel.windowNumber,
+            context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1
+        ))
     }
 
     private func panelScrollEvent(
