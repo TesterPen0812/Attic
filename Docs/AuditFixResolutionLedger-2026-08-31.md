@@ -1,5 +1,7 @@
 # 2026-08-31 Comprehensive Audit Fix Resolution Ledger
 
+Current recovery status and re-verification: [RecoveryValidation-2026-09-07.md](RecoveryValidation-2026-09-07.md). This historical ledger does not establish readiness of later edits.
+
 Integration branch: `codex/attic-comprehensive-audit-fixes`
 
 Audited baseline: `87c2062a536c42badac78a5ce2b21bbad7315d12`
