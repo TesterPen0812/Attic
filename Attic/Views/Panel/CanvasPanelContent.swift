@@ -19,6 +19,12 @@ struct CanvasPanelContent: View {
     @State private var createCanvasName = ""
     @State private var renameCanvasName = ""
     @State private var textEntry = ""
+    @State private var replacementImageID: UUID?
+    @State private var isReplacementImporterPresented = false
+    @State private var isImageExporterPresented = false
+    @State private var exportDocument: CanvasImageExportDocument?
+    @State private var exportType = UTType.png
+    @State private var exportError: String?
     @FocusState private var isTextEntryFocused: Bool
 
     var body: some View {
@@ -30,6 +36,13 @@ struct CanvasPanelContent: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.top, 10)
                     .padding(.leading, 10)
+
+                if let progress = session.imageImportProgress {
+                    importProgress(progress)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(.top, 42)
+                        .padding(.horizontal, 10)
+                }
 
                 if let pendingPlacement = session.pendingPlacement {
                     Text(pendingPlacement.instruction)
@@ -87,15 +100,44 @@ struct CanvasPanelContent: View {
         .fileImporter(
             isPresented: $isImageImporterPresented,
             allowedContentTypes: [.image],
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
-            guard case let .success(urls) = result,
-                  let url = urls.first else {
-                return
-            }
-            Task {
-                _ = await session.importImage(url: url, at: session.viewport.center)
-            }
+            guard case let .success(urls) = result, !urls.isEmpty else { return }
+            let target = session.captureImageImportTarget()
+            let center = session.viewport.center
+            let spacing = 18 / session.viewport.scale
+            session.startImageImportBatch(CanvasImageImportBatch(
+                target: target,
+                items: urls.enumerated().map { index, url in
+                    CanvasImageImportRequest(source: .file(url), center: CanvasPoint(
+                        x: center.x + Double(index) * spacing,
+                        y: center.y + Double(index) * spacing
+                    ))
+                }
+            ))
+        }
+        .fileImporter(
+            isPresented: $isReplacementImporterPresented,
+            allowedContentTypes: [.image]
+        ) { result in
+            guard let id = replacementImageID, case let .success(url) = result else { return }
+            Task { _ = await session.replaceImage(id, from: url) }
+        }
+        .fileExporter(
+            isPresented: $isImageExporterPresented,
+            document: exportDocument,
+            contentType: exportType,
+            defaultFilename: "Canvas image"
+        ) { result in
+            if case let .failure(error) = result { exportError = error.localizedDescription }
+        }
+        .alert("Image export failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK") { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
         }
         .confirmationDialog(
             "Clear \(session.selectedCanvas.name)?",
@@ -473,6 +515,34 @@ struct CanvasPanelContent: View {
 
     private var imageSelectionDock: some View {
         HStack(spacing: 2) {
+            if let image = session.selectedImage {
+                Menu {
+                    if session.failedImageIDs.contains(image.id) {
+                        Button("Retry Image", systemImage: "arrow.clockwise") {
+                            session.retryImageDecode(image.id)
+                        }
+                    }
+                    Button("Locate Replacement…", systemImage: "folder") {
+                        replacementImageID = image.id
+                        isReplacementImporterPresented = true
+                    }
+                    Button("Export Original…", systemImage: "square.and.arrow.up") {
+                        exportDocument = CanvasImageExportDocument(data: image.encodedData)
+                        exportType = UTType(image.contentType) ?? .data
+                        isImageExporterPresented = true
+                    }
+                    Button("Remove Image", systemImage: "trash", role: .destructive) {
+                        _ = session.deleteImage(image.id)
+                    }
+                } label: {
+                    Image(systemName: session.failedImageIDs.contains(image.id)
+                        ? "exclamationmark.triangle" : "ellipsis")
+                        .frame(width: 32, height: 32)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .accessibilityLabel("Image recovery and export")
+            }
             CanvasCommandButton(
                 title: "Send Image Backward",
                 systemImage: "square.2.layers.3d.bottom.filled",
@@ -526,6 +596,52 @@ struct CanvasPanelContent: View {
     private var contentCountLabel: String {
         let count = session.strokes.count + session.images.count
         return count == 1 ? "1 item" : "\(count) items"
+    }
+
+    private func importProgress(_ progress: CanvasImageImportBatchProgress) -> some View {
+        let finished = progress.completedCount == progress.items.count
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(finished ? "Import complete" : "Importing images")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("\(progress.completedCount)/\(progress.items.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                Button {
+                    if finished { session.dismissImageImportProgress() }
+                    else { session.cancelAllImageImportBatches() }
+                } label: {
+                    Image(systemName: "xmark").frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(finished ? "Dismiss import results" : "Cancel image import")
+            }
+            if !finished {
+                ProgressView(value: Double(progress.completedCount), total: Double(max(progress.items.count, 1)))
+            }
+            let failures = progress.items.enumerated().compactMap { index, item -> String? in
+                guard case let .finished(.failed(failure)) = item.state else { return nil }
+                return "Image \(index + 1): \(failure.message)"
+            }
+            if !failures.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(failures.enumerated()), id: \.offset) { _, message in
+                            Text(message).font(.system(size: 10)).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .frame(maxHeight: 72)
+                if finished {
+                    Button("Choose Failed Files Again…") { isImageImporterPresented = true }
+                        .font(.system(size: 10))
+                }
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: 240)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Image import progress")
     }
 
     private var isTextPlacementActive: Bool {

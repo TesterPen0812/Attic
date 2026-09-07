@@ -32,6 +32,8 @@ final class CanvasSession: ObservableObject {
     @Published private(set) var interactionCancellationEpoch: UInt64 = 0
     @Published private(set) var pendingPlacement: CanvasPendingPlacement?
     @Published private(set) var imageImportProgress: CanvasImageImportBatchProgress?
+    @Published private(set) var failedImageIDs: Set<UUID> = []
+    @Published private(set) var imageDecodeRetryRequest: CanvasImageDecodeRetryRequest?
 
     private enum HistoryCommand {
         case addStroke(CanvasStroke)
@@ -39,6 +41,7 @@ final class CanvasSession: ObservableObject {
         case addImage(CanvasPlacedImage)
         case addImages([CanvasPlacedImage])
         case transformImage(before: CanvasPlacedImage, after: CanvasPlacedImage)
+        case replaceImage(before: CanvasPlacedImage, after: CanvasPlacedImage)
         case deleteImage(CanvasPlacedImage)
         case clear(strokes: [CanvasStroke], images: [CanvasPlacedImage])
     }
@@ -57,6 +60,9 @@ final class CanvasSession: ObservableObject {
     private var imageImportTasks: [UUID: Task<Void, Never>] = [:]
     private var latestImageImportBatchID: UUID?
     private static let maximumHistoryCount = 100
+    private let viewStateDefaults: UserDefaults?
+    private var savedViewStates: [UUID: CanvasViewState] = [:]
+    private var viewStateSaveTask: Task<Void, Never>?
 
     private struct SemanticSnapshot: Equatable {
         struct BoardSignature: Equatable {
@@ -134,6 +140,7 @@ final class CanvasSession: ObservableObject {
 
     init(
         store: CanvasStore,
+        viewStateDefaults: UserDefaults? = nil,
         maximumConcurrentImageImports: Int = 2,
         prepareImage: @escaping @Sendable (
             CanvasImageImportSource
@@ -149,6 +156,18 @@ final class CanvasSession: ObservableObject {
         }
     ) {
         self.store = store
+        // The application explicitly injects its own preference domain;
+        // synthetic stores and tests never inherit the user's preferences.
+        self.viewStateDefaults = viewStateDefaults
+        if let data = self.viewStateDefaults?.data(forKey: CanvasViewStateArchive.defaultsKey),
+           let archive = try? JSONDecoder().decode(CanvasViewStateArchive.self, from: data) {
+            savedViewStates = archive.boards.filter { id, _ in
+                store.canvases.contains { $0.id == id }
+            }
+            if store.canvases.contains(where: { $0.id == archive.selectedCanvasID }) {
+                _ = store.selectCanvas(archive.selectedCanvasID)
+            }
+        }
         self.maximumConcurrentImageImports = max(1, maximumConcurrentImageImports)
         self.prepareImage = prepareImage
         canvases = store.canvases
@@ -164,6 +183,7 @@ final class CanvasSession: ObservableObject {
             strokes: store.strokes,
             images: store.images
         )
+        restoreViewState()
 
         revisionObservation = store.$revision
             .dropFirst()
@@ -230,15 +250,63 @@ final class CanvasSession: ObservableObject {
         tasks.forEach { $0.cancel() }
     }
 
+    func setFailedImageIDs(_ ids: Set<UUID>) {
+        let visible = ids.intersection(Set(images.map(\.id)))
+        if failedImageIDs != visible { failedImageIDs = visible }
+    }
+
+    func retryImageDecode(_ id: UUID) {
+        guard images.contains(where: { $0.id == id }) else { return }
+        imageDecodeRetryRequest = CanvasImageDecodeRetryRequest(imageID: id)
+    }
+
+    func dismissImageImportProgress() {
+        guard let progress = imageImportProgress,
+              progress.completedCount == progress.items.count else { return }
+        latestImageImportBatchID = nil
+        imageImportProgress = nil
+    }
+
+    @discardableResult
+    func replaceImage(_ id: UUID, from url: URL) async -> Bool {
+        let target = captureImageImportTarget()
+        guard let before = images.first(where: { $0.id == id }) else { return false }
+        do {
+            let prepared = try await prepareImage(.file(url))
+            try Task.checkCancellation()
+            guard captureImageImportTarget() == target,
+                  let current = images.first(where: { $0.id == id }),
+                  current.mutationVersion == before.mutationVersion else { return false }
+            let replacement = CanvasPlacedImage(
+                id: id, canvasID: target.canvasID,
+                encodedData: prepared.encodedData, contentType: prepared.contentType,
+                pixelWidth: prepared.pixelWidth, pixelHeight: prepared.pixelHeight,
+                transform: before.transform, boardGeneration: target.boardGeneration,
+                mutationVersion: before.mutationVersion, createdAt: before.createdAt
+            )
+            guard applyLocalMutation({ store.restoreImages([replacement]) }),
+                  let after = images.first(where: { $0.id == id }) else { return false }
+            recordNewCommand(.replaceImage(before: before, after: after))
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     func selectTool(_ tool: CanvasTool) {
         cancelPendingPlacement()
         self.tool = tool
+        flushViewState()
     }
 
     func selectColor(_ color: CanvasInkColor) {
         cancelPendingPlacement()
         self.color = color
         tool = .pen
+        flushViewState()
     }
 
     @discardableResult
@@ -268,6 +336,7 @@ final class CanvasSession: ObservableObject {
     func setWidth(_ width: Double) {
         guard width.isFinite else { return }
         self.width = min(max(width, Self.minimumWidth), Self.maximumWidth)
+        scheduleViewStateSave()
     }
 
     @discardableResult
@@ -802,6 +871,8 @@ final class CanvasSession: ObservableObject {
                 )
             case let .transformImage(before, _):
                 return store.updateImage(before.id, transform: before.transform)
+            case let .replaceImage(before, _):
+                return store.restoreImages([before])
             case let .deleteImage(image):
                 return store.restoreImages([image])
             case let .clear(strokes, images):
@@ -837,6 +908,8 @@ final class CanvasSession: ObservableObject {
                 return store.restoreImages(images)
             case let .transformImage(_, after):
                 return store.updateImage(after.id, transform: after.transform)
+            case let .replaceImage(_, after):
+                return store.restoreImages([after])
             case let .deleteImage(image):
                 return store.setImageDeleted(true, imageIDs: [image.id])
             case .clear:
@@ -855,6 +928,7 @@ final class CanvasSession: ObservableObject {
 
     func resetView() {
         viewport.reset()
+        flushViewState()
     }
 
     func fit(in size: CGSize) {
@@ -866,14 +940,18 @@ final class CanvasSession: ObservableObject {
             bounds = bounds.map { $0.union(image.worldRect) } ?? image.worldRect
         }
         viewport.fit(bounds: bounds, in: size)
+        flushViewState()
     }
 
     func setViewport(_ viewport: CanvasViewport) {
+        guard self.viewport != viewport else { return }
         self.viewport = viewport
+        scheduleViewStateSave()
     }
 
     func pan(byViewTranslation translation: CGSize) {
         viewport.pan(byViewTranslation: translation)
+        scheduleViewStateSave()
     }
 
     func zoom(
@@ -882,10 +960,50 @@ final class CanvasSession: ObservableObject {
         in size: CGSize
     ) {
         viewport.zoom(by: factor, anchoredAt: anchor, in: size)
+        scheduleViewStateSave()
     }
 
     func cancelActiveInteraction() {
+        flushViewState()
         interactionCancellationEpoch &+= 1
+    }
+
+    func flushViewState() {
+        viewStateSaveTask?.cancel()
+        viewStateSaveTask = nil
+        savedViewStates[selectedCanvasID] = CanvasViewState(
+            center: viewport.center, scale: viewport.scale, tool: tool,
+            color: color, width: width
+        )
+        savedViewStates = savedViewStates.filter { id, _ in
+            canvases.contains { $0.id == id }
+        }
+        guard let viewStateDefaults,
+              let data = try? JSONEncoder().encode(CanvasViewStateArchive(
+                selectedCanvasID: selectedCanvasID, boards: savedViewStates
+              )) else { return }
+        if viewStateDefaults.data(forKey: CanvasViewStateArchive.defaultsKey) != data {
+            viewStateDefaults.set(data, forKey: CanvasViewStateArchive.defaultsKey)
+        }
+    }
+
+    private func scheduleViewStateSave() {
+        viewStateSaveTask?.cancel()
+        viewStateSaveTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(400)) }
+            catch { return }
+            self?.flushViewState()
+        }
+    }
+
+    private func restoreViewState() {
+        let state = savedViewStates[selectedCanvasID]
+        viewport = state?.viewport ?? CanvasViewport()
+        tool = state?.tool ?? .pen
+        color = state?.color ?? .ink
+        let restoredWidth = state?.width ?? 3
+        width = restoredWidth.isFinite
+            ? min(max(restoredWidth, Self.minimumWidth), Self.maximumWidth) : 3
     }
 
     func refresh() {
@@ -901,7 +1019,7 @@ final class CanvasSession: ObservableObject {
             selectedImageID = undoing ? nil : image.id
         case let .addImages(images):
             selectedImageID = undoing ? nil : images.last?.id
-        case let .transformImage(before, after):
+        case let .transformImage(before, after), let .replaceImage(before, after):
             selectedImageID = undoing ? before.id : after.id
         case let .deleteImage(image):
             selectedImageID = undoing ? image.id : nil
@@ -985,10 +1103,17 @@ final class CanvasSession: ObservableObject {
     }
 
     private func synchronizeFromStore(clearHistory: Bool) {
+        let changedBoard = selectedCanvasID != store.selectedCanvasID
+        if changedBoard { flushViewState() }
         canvases = store.canvases
         selectedCanvasID = store.selectedCanvasID
+        if changedBoard {
+            restoreViewState()
+            flushViewState()
+        }
         strokes = store.strokes
         images = store.images
+        failedImageIDs.formIntersection(Set(images.map(\.id)))
         boardGeneration = store.boardGeneration
         lastErrorMessage = store.lastErrorMessage
         if let selectedImageID,

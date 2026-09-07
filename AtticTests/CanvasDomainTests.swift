@@ -1430,6 +1430,36 @@ final class CanvasDomainTests: XCTestCase {
     }
 
     @MainActor
+    func testNewPinchTakesOverScrollWithoutTerminalEventAndIgnoresMomentumTail() throws {
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 380))
+        let installed = try XCTUnwrap(view.gestureRecognizers.compactMap {
+            $0 as? NSMagnificationGestureRecognizer
+        }.first)
+        let action = try XCTUnwrap(installed.action)
+        let recognizer = DrivenMagnificationGestureRecognizer(target: view, action: action)
+        view.removeGestureRecognizer(installed)
+        view.addGestureRecognizer(recognizer)
+
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 8, command: false, phase: 1))
+        XCTAssertEqual(view.activeViewportGesture?.source, .scroll)
+        // AppKit can begin magnification before scroll momentum finishes, or
+        // after another responder consumed the scroll's terminal event.
+        recognizer.drive(.began, magnification: 0)
+        XCTAssertTrue(NSApplication.shared.sendAction(action, to: view, from: recognizer))
+        recognizer.drive(.changed, magnification: 0.25)
+        XCTAssertTrue(NSApplication.shared.sendAction(action, to: view, from: recognizer))
+        XCTAssertEqual(view.interaction.viewport.scale, 1.25, accuracy: 0.001)
+        let zoomed = view.interaction.viewport
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 12, command: false, momentumPhase: 1))
+        XCTAssertEqual(view.interaction.viewport, zoomed)
+        recognizer.drive(.ended, magnification: 0)
+        XCTAssertTrue(NSApplication.shared.sendAction(action, to: view, from: recognizer))
+        XCTAssertNil(view.activeViewportGesture)
+        view.scrollWheel(with: try canvasScrollEvent(deltaY: 8, command: false, phase: 1))
+        XCTAssertNotEqual(view.interaction.viewport.center, zoomed.center)
+    }
+
+    @MainActor
     func testCancelledMagnificationTailCannotRestartUntilNewBegan() throws {
         let view = CanvasNSView(
             frame: CGRect(x: 0, y: 0, width: 300, height: 380)

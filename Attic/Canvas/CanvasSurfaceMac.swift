@@ -85,6 +85,9 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         view.onCancelPlacement = { [weak session] in
             session?.cancelPendingPlacement()
         }
+        view.onDecodeFailuresChanged = { [weak session] ids in
+            session?.setFailedImageIDs(ids)
+        }
         view.configure(
             canvasID: session.selectedCanvasID,
             strokes: session.strokes,
@@ -98,6 +101,13 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             clearReadabilityEnabled: clearReadabilityEnabled,
             selectionAccentColor: selectionAccentColor
         )
+        if let request = session.imageDecodeRetryRequest,
+           view.lastDecodeRetryRequest != request {
+            view.lastDecodeRetryRequest = request
+            if let image = view.images.first(where: { $0.id == request.imageID }) {
+                view.imageCache.retryDecode(for: image)
+            }
+        }
     }
 }
 
@@ -142,6 +152,8 @@ final class CanvasNSView: NSView {
         CanvasPoint
     ) -> Void = { _, _, _ in }
     var onCancelPlacement: () -> Void = {}
+    var onDecodeFailuresChanged: (Set<UUID>) -> Void = { _ in }
+    var lastDecodeRetryRequest: CanvasImageDecodeRetryRequest?
 
     enum ImagePointerMode {
         case none
@@ -224,7 +236,11 @@ final class CanvasNSView: NSView {
                 }
         )
         imageCache.onImageReady = { [weak self] in
-            self?.needsDisplay = true
+            guard let self else { return }
+            needsDisplay = true
+            onDecodeFailuresChanged(Set(images.filter {
+                imageCache.state(for: $0) == .failed
+            }.map(\.id)))
         }
 
         // Own pinch recognition at the native Canvas boundary. Depending on
@@ -776,6 +792,14 @@ final class CanvasNSView: NSView {
         switch recognizer.state {
         case .began:
             suppressesMagnification = false
+            // A new physical pinch supersedes scroll momentum (including a
+            // scroll whose terminal event was consumed by an ancestor). Do
+            // not let stale scroll ownership reject the whole pinch stream.
+            if activeViewportGesture?.source == .scroll, panLastPoint == nil {
+                finishViewportGestureSequence(source: .scroll, at: point)
+                pendingScrollMomentumMode = nil
+                suppressesScrollSequence = true
+            }
             _ = beginViewportGestureSequence(
                 source: .magnification,
                 mode: .zoom

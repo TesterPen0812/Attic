@@ -1,5 +1,10 @@
 import Foundation
 
+struct CanvasImageDecodeRetryRequest: Equatable {
+    let imageID: UUID
+    let attemptID = UUID()
+}
+
 struct CanvasPreparedImage: Equatable, Sendable {
     let encodedData: Data
     let contentType: String

@@ -4,6 +4,64 @@ import XCTest
 
 final class CanvasSessionTests: XCTestCase {
     @MainActor
+    func testRestoresViewportAndToolPerBoardWithoutHistoryOrSelection() throws {
+        let suite = "CanvasViewStateTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try makeTestCanvasStore()
+        let session = CanvasSession(store: store, viewStateDefaults: defaults)
+        let firstID = session.selectedCanvasID
+        let firstViewport = CanvasViewport(center: CanvasPoint(x: 83, y: -42), scale: 2.5)
+        session.setViewport(firstViewport)
+        session.selectTool(.eraser)
+        XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: 1, y: 2)]))
+        let second = try XCTUnwrap(session.createCanvas(name: "Second"))
+        XCTAssertEqual(session.viewport, CanvasViewport())
+        XCTAssertEqual(session.tool, .pen)
+        let secondViewport = CanvasViewport(center: CanvasPoint(x: -91, y: 115), scale: 0.5)
+        session.setViewport(secondViewport)
+        session.selectTool(.select)
+        XCTAssertTrue(session.selectCanvas(firstID))
+        XCTAssertEqual(session.viewport, firstViewport)
+        XCTAssertEqual(session.tool, .eraser)
+        XCTAssertTrue(session.selectCanvas(second.id))
+        session.flushViewState()
+        let restored = CanvasSession(store: CanvasStore(container: store.container), viewStateDefaults: defaults)
+        XCTAssertEqual(restored.selectedCanvasID, second.id)
+        XCTAssertEqual(restored.viewport, secondViewport)
+        XCTAssertEqual(restored.tool, .select)
+        XCTAssertFalse(restored.canUndo)
+        XCTAssertNil(restored.selectedImageID)
+        XCTAssertTrue(restored.selectCanvas(firstID))
+        XCTAssertEqual(restored.viewport, firstViewport)
+    }
+
+    @MainActor
+    func testImageReplacementRollsBackOnSaveFailureAndUndoRestoresOriginalBytes() async throws {
+        let gate = PersistenceGate()
+        let store = try makeTestCanvasStore(persist: gate.save)
+        let replacement = CanvasPreparedImage(encodedData: Data([9, 8, 7]), contentType: "public.png", pixelWidth: 90, pixelHeight: 70)
+        let session = CanvasSession(store: store, prepareImage: { _ in replacement })
+        let original = CanvasPreparedImage(encodedData: Data([1, 2, 3]), contentType: "public.png", pixelWidth: 40, pixelHeight: 30)
+        XCTAssertTrue(session.importPreparedImage(original, at: CanvasPoint(x: 12, y: 25)))
+        let image = try XCTUnwrap(session.images.first)
+        gate.shouldFail = true
+        let failed = await session.replaceImage(image.id, from: URL(fileURLWithPath: "/unused-replacement-fixture"))
+        XCTAssertFalse(failed)
+        XCTAssertEqual(session.images.first?.encodedData, original.encodedData)
+        gate.shouldFail = false
+        let succeeded = await session.replaceImage(image.id, from: URL(fileURLWithPath: "/unused-replacement-fixture"))
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(session.images.first?.encodedData, replacement.encodedData)
+        XCTAssertEqual(session.images.first?.transform, image.transform)
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.images.first?.encodedData, original.encodedData)
+        XCTAssertTrue(session.redo())
+        XCTAssertEqual(session.images.first?.encodedData, replacement.encodedData)
+        XCTAssertEqual(try ModelContext(store.container).fetch(FetchDescriptor<CanvasImageItem>()).count, 1)
+    }
+
+    @MainActor
     func testStableEditCommandRouteIsCanvasScopedAndToolbarIndependent() throws {
         let session = CanvasSession(store: try makeTestCanvasStore())
         XCTAssertTrue(session.completeStroke(points: [
