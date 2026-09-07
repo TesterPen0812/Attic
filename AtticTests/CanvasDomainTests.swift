@@ -77,6 +77,64 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 
 final class CanvasAccessibilityTests: XCTestCase {
     @MainActor
+    func testLiveInsertionUsesNativeLayoutForLongTextTrailingLinesAndViewportResize() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        session.selectTextTool()
+        let draft = try XCTUnwrap(session.makeTextInsertion(at: CanvasPoint(x: 10, y: 20), width: 180))
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        bridge.configure(view)
+        view.beginSemanticTextEditing(draft.baseline, insertion: draft)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        let layout = try XCTUnwrap(editor.layoutManager)
+        let container = try XCTUnwrap(editor.textContainer)
+        XCTAssertTrue(container.widthTracksTextView)
+        XCTAssertFalse(container.heightTracksTextView)
+        let longText = String(repeating: "A long line wraps in this insertion.\n", count: 40)
+        editor.insertText(longText, replacementRange: NSRange(location: 0, length: 0))
+        let longHeight = editor.frame.height
+        XCTAssertGreaterThan(longHeight, 1_000)
+        XCTAssertGreaterThan(layout.extraLineFragmentRect.height, 0)
+        XCTAssertGreaterThanOrEqual(editor.frame.height, layout.extraLineFragmentRect.maxY + 12)
+        let selection = editor.selectedRange()
+
+        view.setFrameSize(CGSize(width: 320, height: 520))
+        view.layoutSemanticTextEditor()
+        XCTAssertTrue(view.semanticTextEditor === editor)
+        XCTAssertTrue(editor.layoutManager === layout)
+        XCTAssertEqual(editor.selectedRange(), selection)
+        XCTAssertEqual(editor.string, longText)
+
+        session.zoom(by: 2, anchoredAt: CGPoint(x: 160, y: 260), in: view.bounds.size)
+        bridge.configure(view)
+        XCTAssertEqual(editor.frame.width, 360, accuracy: 0.001)
+        XCTAssertEqual(editor.font?.pointSize ?? 0, 48, accuracy: 0.001)
+        XCTAssertEqual(editor.textContainerInset.height, 8, accuracy: 0.001)
+        XCTAssertGreaterThan(editor.frame.height, longHeight * 1.8)
+        XCTAssertEqual(editor.selectedRange(), selection)
+
+        editor.insertText("Short\n", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        XCTAssertLessThan(editor.frame.height, 200)
+        XCTAssertGreaterThanOrEqual(editor.frame.height, layout.extraLineFragmentRect.maxY + 24)
+        editor.setMarkedText("にほん", selectedRange: NSRange(location: 3, length: 0),
+                             replacementRange: NSRange(location: editor.string.utf16.count, length: 0))
+        let markedRange = editor.markedRange()
+        view.layoutSemanticTextEditor()
+        XCTAssertTrue(editor.hasMarkedText())
+        XCTAssertEqual(editor.markedRange(), markedRange)
+        XCTAssertTrue(editor.layoutManager === layout)
+        editor.unmarkText()
+        let finalText = editor.string
+        var content = try XCTUnwrap(draft.baseline.content)
+        content.text = finalText
+        let savedSize = CanvasSemanticRenderer.textSize(content, width: draft.baseline.transform.width)
+        XCTAssertTrue(view.finishSemanticTextEditing(commit: true))
+        XCTAssertEqual(session.selectedSemanticObject?.content?.text, finalText)
+        XCTAssertEqual(session.selectedSemanticObject?.transform.height, savedSize.height)
+        XCTAssertEqual(session.selectedSemanticObject?.worldRect.origin, draft.baseline.worldRect.origin)
+    }
+
+    @MainActor
     func testDirectTextInsertionUsesClickedOriginAndOneDurableUndoableCommit() throws {
         let store = try makeTestCanvasStore()
         let session = CanvasSession(store: store)

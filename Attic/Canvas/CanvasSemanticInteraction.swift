@@ -136,6 +136,9 @@ extension CanvasNSView {
         editor.isHorizontallyResizable = false
         editor.textContainerInset = CGSize(width: 4, height: 4)
         editor.textContainer?.lineFragmentPadding = 0
+        editor.textContainer?.widthTracksTextView = true
+        editor.textContainer?.heightTracksTextView = false
+        editor.textContainer?.containerSize = CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         editor.font = CanvasSemanticRenderer.font(content, scale: interaction.viewport.scale)
         editor.alignment = CanvasSemanticRenderer.alignment(content)
         editor.textColor = content.color.nsColor
@@ -195,17 +198,30 @@ extension CanvasNSView {
                 : semanticObjects.first(where: { $0.id == editingSemanticObjectID }),
               let content = object.content else { return }
         let origin = interaction.viewport.viewPoint(for: CanvasPoint(x: object.worldRect.minX, y: object.worldRect.minY), in: bounds.size)
-        var editingContent = content
-        editingContent.text = editor.string
-        let height = editingSemanticIsInsertion
-            ? CanvasSemanticRenderer.textSize(editingContent, width: object.transform.width).height
-            : object.transform.height
-        editor.frame = CGRect(origin: origin, size: CGSize(width: object.transform.width * interaction.viewport.scale,
-                                                        height: height * interaction.viewport.scale))
-        editor.textContainerInset = CGSize(width: 4 * interaction.viewport.scale, height: 4 * interaction.viewport.scale)
-        editor.font = CanvasSemanticRenderer.font(content, scale: interaction.viewport.scale)
-        editor.alignment = CanvasSemanticRenderer.alignment(content)
-        editor.textColor = content.color.nsColor
+        let scale = interaction.viewport.scale
+        let font = CanvasSemanticRenderer.font(content, scale: scale)
+        let alignment = CanvasSemanticRenderer.alignment(content)
+        let inset = CGSize(width: 4 * scale, height: 4 * scale)
+        if editor.font != font { editor.font = font }
+        if editor.alignment != alignment { editor.alignment = alignment }
+        if editor.textColor != content.color.nsColor { editor.textColor = content.color.nsColor }
+        if editor.textContainerInset != inset { editor.textContainerInset = inset }
+        let width = object.transform.width * scale
+        if editor.frame.width != width {
+            editor.setFrameSize(CGSize(width: width, height: editor.frame.height))
+        }
+
+        var height = object.transform.height * scale
+        if editingSemanticIsInsertion, let layout = editor.layoutManager, let container = editor.textContainer {
+            // Reuse NSTextView's incremental layout, including its marked text
+            // and trailing empty line. Final saved bounds still use the shared
+            // Canvas renderer once, when the draft is committed.
+            layout.ensureLayout(for: container)
+            let usedHeight = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+            height = max(48 * scale, ceil(usedHeight + 12 * scale))
+        }
+        let frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
+        if editor.frame != frame { editor.frame = frame }
     }
 
     /// Leaving a page retains an unsaved draft in the session, without leaving
