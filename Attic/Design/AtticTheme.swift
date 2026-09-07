@@ -78,6 +78,14 @@ extension EnvironmentValues {
 }
 
 enum AtticClearGlassReadabilityPolicy {
+    // A tight, centred opposite-tone edge survives both light and dark
+    // transmitted content without the old offset glow or a surface scrim.
+    static let edgeRadius: CGFloat = 0.45
+
+    static func edgeOpacity(increasedContrast: Bool) -> Double {
+        increasedContrast ? 1 : 0.90
+    }
+
     static func isEnabled(
         isTranslucent: Bool,
         isClearStyle: Bool,
@@ -90,16 +98,16 @@ enum AtticClearGlassReadabilityPolicy {
 private struct ClearGlassForegroundReadabilityModifier: ViewModifier {
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if isEnabled {
             content.shadow(
                 color: colorScheme == .dark
-                    ? Color.black.opacity(0.56)
-                    : Color.white.opacity(0.62),
-                radius: 0.7,
-                y: 0.35
+                    ? Color.black.opacity(AtticClearGlassReadabilityPolicy.edgeOpacity(increasedContrast: contrast == .increased))
+                    : Color.white.opacity(AtticClearGlassReadabilityPolicy.edgeOpacity(increasedContrast: contrast == .increased)),
+                radius: AtticClearGlassReadabilityPolicy.edgeRadius
             )
         } else {
             content

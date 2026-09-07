@@ -62,6 +62,10 @@ struct AtticPanelView: View {
     private var isTaskEntryExpanded: Bool {
         isQuickEntryFocused || uiState.isComposerPresented
     }
+    private var taskEntryHeight: CGFloat {
+        AtticStyle.taskComposerRowHeight
+            + (isTaskEntryExpanded ? AtticStyle.taskComposerOptionsHeight : 0)
+    }
     private var panelThemePalette: AtticPanelThemePalette {
         settings.panelTheme.palette(
             for: systemColorScheme,
@@ -363,7 +367,7 @@ struct AtticPanelView: View {
 
     private func syncComposerInteractionHeight() {
         chromeInteractionState.bottomControlsHeight =
-            uiState.selectedSection.isTaskBased && isTaskEntryExpanded ? 88 : 42
+            uiState.selectedSection.isTaskBased ? taskEntryHeight : AtticStyle.composerControlHeight
     }
 
     private func syncTaskEntryInteractionLocks() {
@@ -422,7 +426,7 @@ struct AtticPanelView: View {
                     }
                     .padding(.horizontal, horizontalInset + 2)
                     .padding(.top, AtticStyle.taskScrollTopPadding)
-                    .padding(.bottom, isTaskEntryExpanded ? 142 : 96)
+                    .padding(.bottom, taskEntryHeight + 54)
                 }
                 .scrollIndicators(.never)
             }
@@ -433,7 +437,7 @@ struct AtticPanelView: View {
     private var taskScrollMask: some View {
         let stops = TaskScrollMaskLayout.stops(
             panelHeight: panelSize.height,
-            bottomObscuredHeight: isTaskEntryExpanded ? 122 : 76
+            bottomObscuredHeight: taskEntryHeight + 34
         )
         return LinearGradient(
             stops: [
@@ -540,8 +544,8 @@ struct AtticPanelView: View {
                 .accessibilityLabel("Add task")
                 .accessibilityIdentifier("quick-entry-submit")
             }
-            .padding(.horizontal, 2)
-            .frame(height: AtticStyle.composerControlHeight)
+            .padding(.horizontal, 8)
+            .frame(height: AtticStyle.taskComposerRowHeight)
             if isTaskEntryExpanded {
                 HStack(spacing: 4) {
                     ForEach(TaskPriority.allCases) { priority in
@@ -581,11 +585,11 @@ struct AtticPanelView: View {
             }
         }
         .atticGlassControl(
-            in: RoundedRectangle(cornerRadius: AtticStyle.composerControlHeight / 2, style: .continuous),
+            in: RoundedRectangle(cornerRadius: AtticStyle.taskComposerRowHeight / 2, style: .continuous),
             interactive: false
         )
         .contentShape(
-            RoundedRectangle(cornerRadius: AtticStyle.composerControlHeight / 2, style: .continuous)
+            RoundedRectangle(cornerRadius: AtticStyle.taskComposerRowHeight / 2, style: .continuous)
         )
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isTaskEntryExpanded)
         .padding(.horizontal, chromeInset)

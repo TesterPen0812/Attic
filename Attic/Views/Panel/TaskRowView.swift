@@ -10,6 +10,7 @@ struct TaskRowView: View {
     @State private var isDropTargeted = false
     @FocusState private var isRenameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
 
     private var isEditing: Bool { uiState.editingTaskID == task.id }
 
@@ -36,7 +37,10 @@ struct TaskRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .layoutPriority(1)
                         .strikethrough(task.status == .done, color: .secondary)
-                        .foregroundStyle(Color.primary.opacity(task.status == .done ? 0.48 : 0.92))
+                        .foregroundStyle(Color.primary.opacity(
+                            task.status == .done ? (clearReadabilityEnabled ? 0.76 : 0.48)
+                                : (clearReadabilityEnabled ? 1 : 0.92)
+                        ))
                         .accessibilityLabel(task.title)
                 }
             }
@@ -133,7 +137,7 @@ struct TaskRowView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .opacity(isHovering ? 1 : 0.38)
+            .opacity(isHovering ? 1 : (clearReadabilityEnabled ? 0.85 : 0.38))
             .help("Edit task")
             .accessibilityLabel("Edit task")
             .accessibilityIdentifier("task-actions-\(task.id.uuidString)")
