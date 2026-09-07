@@ -482,6 +482,91 @@ private struct NoteFileAttachmentCard: View {
     }
 }
 
+struct NoteAttachmentPreviewDemand: Equatable, Hashable {
+    var pixelWidth = 0
+    var pixelHeight = 0
+    var isVisible: Bool { pixelWidth > 0 && pixelHeight > 0 }
+
+    static func resolve(bounds: CGRect, visibleRect: CGRect, scale: CGFloat) -> Self {
+        guard bounds.width.isFinite, bounds.height.isFinite, scale.isFinite,
+              bounds.width > 0, bounds.height > 0,
+              !bounds.intersection(visibleRect).isEmpty else { return Self() }
+        // Round into small pixel buckets so live resizing does not restart a
+        // request on every point; never request the source image's full size.
+        let backingScale = max(1, min(scale, 3))
+        return Self(pixelWidth: Int(ceil(bounds.width * backingScale / 64) * 64),
+                    pixelHeight: Int(ceil(bounds.height * backingScale / 64) * 64))
+    }
+}
+
+private struct NoteAttachmentVisibilityReader: NSViewRepresentable {
+    let onChange: (NoteAttachmentPreviewDemand) -> Void
+
+    func makeNSView(context: Context) -> NoteAttachmentVisibilityView {
+        NoteAttachmentVisibilityView()
+    }
+
+    func updateNSView(_ view: NoteAttachmentVisibilityView, context: Context) {
+        view.onChange = onChange
+        view.refreshVisibility()
+    }
+}
+
+final class NoteAttachmentVisibilityView: NSView {
+    var onChange: ((NoteAttachmentPreviewDemand) -> Void)?
+    private(set) var demand = NoteAttachmentPreviewDemand()
+    private weak var observedScrollView: NSScrollView?
+    private var observations: [NSObjectProtocol] = []
+    private var hasPendingDelivery = false
+
+    deinit { observations.forEach { NotificationCenter.default.removeObserver($0) } }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshVisibility()
+    }
+    override func layout() {
+        super.layout()
+        refreshVisibility()
+    }
+
+    func refreshVisibility() {
+        let scrollView = enclosingScrollView
+        if observedScrollView !== scrollView {
+            observations.forEach { NotificationCenter.default.removeObserver($0) }
+            observations.removeAll()
+            observedScrollView = scrollView
+            if let scrollView {
+                scrollView.contentView.postsBoundsChangedNotifications = true
+                for (name, object) in [
+                    (NSView.boundsDidChangeNotification, scrollView.contentView as NSView),
+                    (NoteEditorDocumentView.layoutDidChange, scrollView.documentView ?? scrollView)
+                ] {
+                    observations.append(NotificationCenter.default.addObserver(
+                        forName: name, object: object, queue: .main
+                    ) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.refreshVisibility() }
+                    })
+                }
+            }
+        }
+        let next = window == nil || isHiddenOrHasHiddenAncestor
+            ? NoteAttachmentPreviewDemand()
+            : NoteAttachmentPreviewDemand.resolve(bounds: bounds, visibleRect: visibleRect,
+                                                   scale: window?.backingScaleFactor ?? 2)
+        guard next != demand else { return }
+        demand = next
+        guard !hasPendingDelivery else { return }
+        hasPendingDelivery = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hasPendingDelivery = false
+            self.onChange?(self.demand)
+        }
+    }
+}
+
 private struct AttachmentPreviewImage: View {
     enum Presentation {
         case inlineImage
@@ -493,6 +578,7 @@ private struct AttachmentPreviewImage: View {
     let presentation: Presentation
 
     @State private var image: NSImage?
+    @State private var previewDemand = NoteAttachmentPreviewDemand()
 
     var body: some View {
         Group {
@@ -513,7 +599,6 @@ private struct AttachmentPreviewImage: View {
                             .controlSize(.small)
                     }
                 }
-                .frame(height: 148)
             } else {
                 Image(systemName: fallbackSymbol)
                     .font(.system(size: 18, weight: .medium))
@@ -527,9 +612,14 @@ private struct AttachmentPreviewImage: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(maxHeight: presentation == .inlineImage ? 250 : 40)
-        .task(id: "\(attachment.id.uuidString)-\(attachment.contentDigest)-\(presentation)-\(noteStore.attachmentRetryVersions[attachment.id, default: 0])") {
-            await loadPreview()
+        // Stable geometry before and after decoding keeps scrolling/caret
+        // restoration independent of asynchronous thumbnail completion.
+        .frame(height: presentation == .inlineImage ? 250 : 40)
+        .background(NoteAttachmentVisibilityReader { previewDemand = $0 })
+        .task(id: "\(attachment.id.uuidString)-\(attachment.contentDigest)-\(presentation)-\(noteStore.attachmentRetryVersions[attachment.id, default: 0])-\(previewDemand)") {
+            image = nil
+            guard previewDemand.isVisible else { return }
+            await loadPreview(demand: previewDemand)
         }
         .accessibilityHidden(true)
     }
@@ -538,26 +628,26 @@ private struct AttachmentPreviewImage: View {
         attachment.contentType.conforms(to: .pdf) ? "doc.richtext" : "doc"
     }
 
-    private func loadPreview() async {
-        image = nil
+    private func loadPreview(demand: NoteAttachmentPreviewDemand) async {
         if presentation == .fileIcon {
             image = NSWorkspace.shared.icon(for: attachment.contentType)
         }
 
-        guard let url = await noteStore.materializedURL(for: attachment) else { return }
-        let targetSize = presentation == .inlineImage
-            ? CGSize(width: 960, height: 720)
-            : CGSize(width: 96, height: 96)
+        guard let url = await noteStore.materializedURL(for: attachment), !Task.isCancelled else { return }
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
-            size: targetSize,
-            scale: NSScreen.main?.backingScaleFactor ?? 2,
+            size: CGSize(width: CGFloat(demand.pixelWidth), height: CGFloat(demand.pixelHeight)),
+            scale: 1,
             representationTypes: .all
         )
 
         do {
-            let representation = try await QLThumbnailGenerator.shared
-                .generateBestRepresentation(for: request)
+            let representation = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+            } onCancel: {
+                QLThumbnailGenerator.shared.cancel(request)
+            }
             guard !Task.isCancelled else { return }
             if presentation == .inlineImage, representation.type == .icon {
                 noteStore.reportAttachmentFailure(attachment.id, message: "This image could not be previewed. Retry, locate the original, or export the saved file.")
@@ -650,12 +740,14 @@ final class NoteDocumentScrollView: NSScrollView {
 }
 
 final class NoteEditorDocumentView: NSView {
+    static let layoutDidChange = Notification.Name("AtticNoteDocumentLayoutDidChange")
     let textView: AttachmentAcceptingTextView
     private let accessories = NoteDocumentHostingView(rootView: AnyView(EmptyView()))
     private var accessoryContent = AnyView(EmptyView())
     private var contentWidth: CGFloat = -1
     private var isLayingOutDocument = false
     private var measuredTextHeight: CGFloat?
+    private var hasAccessories = false
 
     override var isFlipped: Bool { true }
 
@@ -672,8 +764,10 @@ final class NoteEditorDocumentView: NSView {
 
     required init?(coder: NSCoder) { return nil }
 
-    func updateAccessories(_ content: AnyView) {
+    func updateAccessories(_ content: AnyView, isPresent: Bool) {
         accessoryContent = content
+        hasAccessories = isPresent
+        accessories.isHidden = !isPresent
         updateAccessoryWidth(max(1, contentWidth))
         needsLayout = true
     }
@@ -702,7 +796,9 @@ final class NoteEditorDocumentView: NSView {
             updateAccessoryWidth(width)
             measuredTextHeight = nil
         }
-        let accessoryHeight = max(0, ceil(accessories.fittingSize.height))
+        // An EmptyView hosting root can still report AppKit's default fitting
+        // size. Presence is a document fact, not a measurement inference.
+        let accessoryHeight = hasAccessories ? max(0, ceil(accessories.fittingSize.height)) : 0
         let naturalTextHeight: CGFloat
         if let measuredTextHeight {
             naturalTextHeight = measuredTextHeight
@@ -722,17 +818,18 @@ final class NoteEditorDocumentView: NSView {
 
         // Empty space belongs to the editor when there are no attachments.
         // Otherwise attachments follow the final text line, not a fixed footer.
-        let hasAccessories = accessoryHeight > 0
         let textHeight = max(naturalTextHeight, hasAccessories ? 24 : viewport.height)
         let accessoryY = textHeight + (hasAccessories ? 12 : 0)
         let textFrame = NSRect(x: 0, y: 0, width: width, height: textHeight)
         let accessoryFrame = NSRect(x: 0, y: accessoryY, width: width, height: accessoryHeight)
+        let changed = textView.frame != textFrame || accessories.frame != accessoryFrame
         if textView.frame != textFrame { textView.frame = textFrame }
         if accessories.frame != accessoryFrame { accessories.frame = accessoryFrame }
         let documentHeight = max(viewport.height, accessoryY + accessoryHeight)
         if frame.size != NSSize(width: width, height: documentHeight) {
             setFrameSize(NSSize(width: width, height: documentHeight))
         }
+        if changed { NotificationCenter.default.post(name: Self.layoutDidChange, object: self) }
     }
 
     private func updateAccessoryWidth(_ width: CGFloat) {
@@ -769,6 +866,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     var onViewStateCommit: () -> Void = {}
     var captureImportReceiver: (() -> (([URL], [URL]) -> Void)?)? = nil
     var documentAccessories = AnyView(EmptyView())
+    var hasDocumentAccessories = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -851,7 +949,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         }
 
         let document = NoteEditorDocumentView(textView: textView)
-        document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)))
+        document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)), isPresent: hasDocumentAccessories)
         scrollView.documentView = document
         context.coordinator.observeScrollView(scrollView)
         context.coordinator.restoreScrollPosition(in: scrollView)
@@ -869,7 +967,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             textView: textView
         )
         guard synchronization != .staleSession else { return }
-        document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)))
+        document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)), isPresent: hasDocumentAccessories)
         if synchronization == .replacedText { document.invalidateTextLayout() }
         document.layoutDocument(viewport: scrollView.contentSize)
         context.coordinator.captureViewState()

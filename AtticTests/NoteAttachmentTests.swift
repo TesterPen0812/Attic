@@ -6,6 +6,18 @@ import XCTest
 @testable import Attic
 
 final class NoteAttachmentTests: XCTestCase {
+    func testPreviewDemandUsesVisibleDisplayPixelsWithoutDoubleApplyingScale() {
+        let bounds = CGRect(x: 0, y: 0, width: 420, height: 250)
+        let demand = NoteAttachmentPreviewDemand.resolve(bounds: bounds, visibleRect: bounds, scale: 2)
+        XCTAssertEqual(demand.pixelWidth, 896)
+        XCTAssertEqual(demand.pixelHeight, 512)
+        XCTAssertFalse(NoteAttachmentPreviewDemand.resolve(bounds: bounds, visibleRect: .zero, scale: 2).isVisible)
+        XCTAssertFalse(NoteAttachmentPreviewDemand.resolve(bounds: bounds, visibleRect: CGRect(x: 0, y: 400, width: 420, height: 250), scale: 2).isVisible)
+        XCTAssertEqual(demand, NoteAttachmentPreviewDemand.resolve(
+            bounds: CGRect(x: 0, y: 0, width: 421, height: 250), visibleRect: bounds, scale: 2
+        ), "A one-point resize must not restart a preview within the same pixel bucket")
+    }
+
     @MainActor
     func testPromisedFileReceiverRetainsInitiatingNoteAfterEditorSwitch() async throws {
         let directory = try makeDirectory()

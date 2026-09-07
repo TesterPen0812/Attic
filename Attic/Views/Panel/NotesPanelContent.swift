@@ -271,7 +271,9 @@ struct NoteComposerView: View {
                 },
                 onViewStateCommit: noteDraft.persistEditorSession,
                 captureImportReceiver: captureImportReceiver,
-                documentAccessories: AnyView(documentAccessories)
+                documentAccessories: AnyView(documentAccessories),
+                hasDocumentAccessories: hasDocumentAttachments || noteDraft.conflictMessage != nil
+                    || noteDraft.saveErrorMessage != nil || noteDraft.recoveryErrorMessage != nil
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 4)

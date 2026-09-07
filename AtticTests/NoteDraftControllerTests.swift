@@ -6,6 +6,44 @@ import XCTest
 
 final class NoteDraftControllerTests: XCTestCase {
     @MainActor
+    func testNativePreviewDemandTracksVisibleCardsWithoutPublishingEveryScrollSample() {
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 400))
+        let document = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 1200))
+        let first = NoteAttachmentVisibilityView(frame: NSRect(x: 0, y: 20, width: 400, height: 250))
+        let last = NoteAttachmentVisibilityView(frame: NSRect(x: 0, y: 700, width: 400, height: 250))
+        document.addSubview(first)
+        document.addSubview(last)
+        scrollView.documentView = document
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        window.orderBack(nil)
+        defer { tearDownHarnessWindow(window) }
+        var firstDemandChanges = 0
+        first.onChange = { _ in firstDemandChanges += 1 }
+        scrollView.contentView.scroll(to: .zero)
+        first.refreshVisibility()
+        last.refreshVisibility()
+        drainMainRunLoop()
+        XCTAssertTrue(first.demand.isVisible)
+        XCTAssertFalse(last.demand.isVisible)
+        let initialChanges = firstDemandChanges
+        for y in 1...10 {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+            first.refreshVisibility()
+        }
+        drainMainRunLoop()
+        XCTAssertEqual(firstDemandChanges, initialChanges, "Visible-to-visible scrolling must not republish demand")
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: 680))
+        first.refreshVisibility()
+        last.refreshVisibility()
+        drainMainRunLoop()
+        XCTAssertFalse(first.demand.isVisible)
+        XCTAssertTrue(last.demand.isVisible)
+        XCTAssertEqual(firstDemandChanges, initialChanges + 1)
+    }
+
+    @MainActor
     func testNoteDocumentFillsTallWorkspaceAndResizesWithoutReplacingEditor() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
@@ -49,6 +87,7 @@ final class NoteDraftControllerTests: XCTestCase {
         let text = EditorTextBox("Short body")
         var editor = makeTestBodyEditor(text: text, session: NoteEditorSession(noteID: UUID(), generation: 1))
         editor.documentAccessories = AnyView(Text("Attachment fixture").frame(height: 120))
+        editor.hasDocumentAccessories = true
         let (host, window) = makeDocumentHarness(editor: editor)
         defer { tearDownHarnessWindow(window) }
         drainMainRunLoop()
