@@ -2,6 +2,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct CanvasPanelContent: View {
+    // Add control + gap + eight tool slots + seven gaps + dock padding,
+    // followed by the existing ten-point inset on each side of the toolbar.
+    static let fullChromeRequiredWidth: CGFloat = 42 + 10 + 8 * 32 + 7 * 2 + 2 * 8 + 20
+
     @ObservedObject var session: CanvasSession
     let horizontalInset: CGFloat
     @Binding var isClearConfirmationPresented: Bool
@@ -81,10 +85,10 @@ struct CanvasPanelContent: View {
                 }
                 #endif
 
-                ViewThatFits(in: .horizontal) {
-                    bottomChrome(compact: false)
-                    bottomChrome(compact: true)
-                }
+                // Keep only one owner of the text/style popover bindings.
+                // ViewThatFits can retain an unplaced second toolbar whose
+                // presenter competes with the visible button's presenter.
+                bottomChrome(compact: proxy.size.width < Self.fullChromeRequiredWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10 + bottomOverlayInset)
@@ -459,6 +463,7 @@ struct CanvasPanelContent: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .frame(width: 32, height: 32)
         .help("Add Shape")
         .accessibilityLabel("Add Shape")
         .accessibilityIdentifier("canvas-add-shape")

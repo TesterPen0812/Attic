@@ -17,7 +17,7 @@ final class CanvasUITests: XCTestCase {
 
     func testCanvasDrawUndoRedoEraseAndConfirmedClear() throws {
         openCanvas()
-        let surface = app.otherElements["canvas-surface"]
+        let surface = canvasSurface
         XCTAssertTrue(surface.waitForExistence(timeout: 3))
 
         prepareSurfaceForInkInput(surface)
@@ -60,9 +60,85 @@ final class CanvasUITests: XCTestCase {
         assertStrokeCount(1)
     }
 
+    func testSemanticTextAndShapesEditTransformUndoAndSurviveRelaunch() throws {
+        openCanvas()
+        let surface = canvasSurface
+        app.buttons["canvas-add-text"].click()
+        let entry = app.textFields["Type something"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 2))
+        entry.click()
+        entry.typeText("Editable canvas text")
+        app.buttons["Place"].click()
+        let placement = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.35))
+        placement.click()
+        assertContentCount("1 item")
+        let initialText = surface.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "canvas-object-", "Editable canvas text")
+        ).firstMatch
+        XCTAssertTrue(initialText.waitForExistence(timeout: 2))
+        XCTAssertEqual(initialText.frame.midX, placement.screenPoint.x, accuracy: 3)
+        XCTAssertEqual(initialText.frame.midY, placement.screenPoint.y, accuracy: 3)
+        let textID = initialText.identifier
+        let textObject = app.descendants(matching: .any).matching(identifier: textID).firstMatch
+        app.buttons["canvas-object-edit-text"].click()
+        let editor = app.textViews.matching(NSPredicate(format: "label == %@", "Edit canvas text")).firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 2))
+        editor.typeText(" revised")
+        editor.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: .command)
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 2))
+        waitForLabel("Editable canvas text revised", on: textObject)
+
+        app.descendants(matching: .any).matching(identifier: "canvas-add-shape").firstMatch.click()
+        let rectangle = app.menuItems["Rectangle"]
+        XCTAssertTrue(rectangle.waitForExistence(timeout: 2))
+        rectangle.click()
+        let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
+        let end = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.72))
+        start.click(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0)
+        assertContentCount("2 items")
+        let shape = surface.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "canvas-object-", "Rectangle")
+        ).firstMatch
+        XCTAssertTrue(shape.waitForExistence(timeout: 2))
+        shape.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(shape.isSelected)
+        let originalFrame = shape.frame
+        app.typeKey(.rightArrow, modifierFlags: .shift)
+        waitForFrame(of: shape, matching: NSPredicate { object, _ in
+            guard let element = object as? XCUIElement else { return false }
+            return abs(element.frame.minX - originalFrame.minX - 10) < 3
+        })
+        app.typeKey(.rightArrow, modifierFlags: .option)
+        waitForFrame(of: shape, matching: NSPredicate { object, _ in
+            guard let element = object as? XCUIElement else { return false }
+            return element.frame.width > originalFrame.width + 1
+        })
+        app.typeKey("z", modifierFlags: .command)
+        waitForFrame(of: shape, matching: NSPredicate { object, _ in
+            guard let element = object as? XCUIElement else { return false }
+            return abs(element.frame.width - originalFrame.width) < 1
+        })
+        app.typeKey("z", modifierFlags: .command)
+        waitForFrame(of: shape, matching: NSPredicate { object, _ in
+            guard let element = object as? XCUIElement else { return false }
+            return abs(element.frame.minX - originalFrame.minX) < 1
+        })
+        app.buttons["canvas-object-delete"].click()
+        assertContentCount("1 item")
+        app.typeKey("z", modifierFlags: .command)
+        assertContentCount("2 items")
+        try saveVisualEvidence(named: "canvas-semantic-text-and-shape")
+        terminateApp()
+        launch(resetCanvasStore: false)
+        openCanvas()
+        assertContentCount("2 items")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: textID).firstMatch.waitForExistence(timeout: 2))
+        waitForLabel("Editable canvas text revised", on: app.descendants(matching: .any).matching(identifier: textID).firstMatch)
+    }
+
     func testCompletedInkSurvivesSectionsSettingsAndRelaunch() throws {
         openCanvas()
-        let surface = app.otherElements["canvas-surface"]
+        let surface = canvasSurface
         XCTAssertTrue(surface.waitForExistence(timeout: 3))
         prepareSurfaceForInkInput(surface)
         drawStroke(on: surface)
@@ -85,7 +161,7 @@ final class CanvasUITests: XCTestCase {
 
     func testCanvasImagePasteMoveResizeDeleteUndoAndVisualStates() throws {
         openCanvas()
-        let surface = app.otherElements["canvas-surface"]
+        let surface = canvasSurface
         XCTAssertTrue(surface.waitForExistence(timeout: 3))
         surface.click()
         if app.buttons["canvas-undo"].isEnabled {
@@ -254,8 +330,25 @@ final class CanvasUITests: XCTestCase {
     private func openCanvas() {
         app.typeKey("4", modifierFlags: .command)
         XCTAssertTrue(
-            app.otherElements["canvas-surface"].waitForExistence(timeout: 3)
+            canvasSurface.waitForExistence(timeout: 3)
         )
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "canvas-surface").count, 1)
+        XCTAssertEqual(canvasSurface.label, "Canvas drawing board")
+        XCTAssertTrue(canvasSurface.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Canvas objects"))
+            .firstMatch.exists, "The native object accessibility tree must remain exposed")
+    }
+
+    private var canvasSurface: XCUIElement {
+        // The children-preserving SwiftUI wrapper is exposed as Group on macOS.
+        // Its stable identifier, label, and native child tree define the surface.
+        app.descendants(matching: .any).matching(identifier: "canvas-surface").firstMatch
+    }
+
+    private func waitForFrame(of element: XCUIElement, matching predicate: NSPredicate,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 3),
+                       .completed, file: file, line: line)
     }
 
     private func assertExactlyOneSelected(
@@ -311,7 +404,8 @@ final class CanvasUITests: XCTestCase {
         let end = surface.coordinate(
             withNormalizedOffset: CGVector(dx: 0.78, dy: 0.62)
         )
-        start.press(
+        // Use AppKit mouse synthesis; press/drag belongs to XCUI touch events.
+        start.click(
             forDuration: 0.05,
             thenDragTo: end,
             withVelocity: .slow,
@@ -341,7 +435,7 @@ final class CanvasUITests: XCTestCase {
         let end = surface.coordinate(
             withNormalizedOffset: CGVector(dx: 0.80, dy: 0.63)
         )
-        start.press(
+        start.click(
             forDuration: 0.05,
             thenDragTo: end,
             withVelocity: .slow,

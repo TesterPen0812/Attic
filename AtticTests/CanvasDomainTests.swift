@@ -77,6 +77,46 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 
 final class CanvasAccessibilityTests: XCTestCase {
     @MainActor
+    func testHostedNativeMouseSequenceCompletesInkAfterFocusAndSelectionRefresh() throws {
+        let panel = NSPanel(
+            contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        panel.contentView = view
+        view.activateRepresentation()
+        func configure() {
+            view.configure(canvasID: CanvasBoardItem.logicalBoardID, strokes: [], images: [],
+                           selectedImageID: nil, tool: .pen, color: .ink, width: 3,
+                           viewport: CanvasViewport(), pendingPlacement: nil,
+                           clearReadabilityEnabled: false)
+        }
+        configure()
+        view.onSelectImage = { _ in configure() }
+        view.onSelectSemanticObject = { _ in configure() }
+        var completedPoints: [[CanvasPoint]] = []
+        view.onCompleteStroke = { points, _, _ in completedPoints.append(points) }
+        func event(_ type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: view.convert(point, to: nil), modifierFlags: [],
+                timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 0.5
+            ))
+        }
+        view.mouseDown(with: try event(.leftMouseDown, at: CGPoint(x: 70, y: 84)))
+        XCTAssertEqual(view.interaction.machine.state, .drawing)
+        configure()
+        view.mouseDragged(with: try event(.leftMouseDragged, at: CGPoint(x: 160, y: 120)))
+        XCTAssertEqual(view.interaction.machine.state, .drawing)
+        view.mouseUp(with: try event(.leftMouseUp, at: CGPoint(x: 250, y: 150)))
+        XCTAssertEqual(completedPoints.count, 1)
+        XCTAssertEqual(completedPoints.first?.count, 3)
+        XCTAssertEqual(view.interaction.machine.state, .idle)
+    }
+
+    @MainActor
     func testUntouchedSemanticEditorRefreshesExternalTextWithoutOverwritingIt() async throws {
         let store = try makeTestCanvasStore()
         let session = CanvasSession(store: store)
@@ -383,6 +423,12 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertTrue(children.allSatisfy {
             !$0.accessibilityFrameInParentSpace().isNull
         })
+        // The off-center object is drawn below the view center. AX parent
+        // coordinates must invert Y, or its screen frame points above it.
+        XCTAssertEqual(
+            children[3].accessibilityFrameInParentSpace(),
+            CGRect(x: 190, y: 25, width: 100, height: 50)
+        )
     }
 
     @MainActor

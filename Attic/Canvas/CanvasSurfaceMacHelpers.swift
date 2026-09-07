@@ -390,6 +390,9 @@ extension CanvasNSView {
         if result.height < minimumSide {
             result = result.insetBy(dx: 0, dy: -(minimumSide - result.height) / 2)
         }
+        // NSAccessibilityElement parent-space frames use a bottom-left
+        // origin even though the Canvas NSView draws in flipped coordinates.
+        result.origin.y = bounds.height - result.maxY
         return result
     }
 
