@@ -4,6 +4,156 @@ import XCTest
 @testable import Attic
 
 final class PanelGeometryTests: XCTestCase {
+    func testInterruptedDockTransitionReleasesItsInteractionLockExactlyOnce() {
+        var state = PanelVisibilityTransitionState()
+        var releases = 0
+        let docking = state.beginTransition(onSuperseded: { releases += 1 })
+        state.invalidatePendingTransition()
+        XCTAssertEqual(releases, 1)
+        XCTAssertFalse(state.completeTransition(docking))
+        _ = state.beginTransition()
+        XCTAssertEqual(releases, 1)
+    }
+
+    func testCompletedDockDoesNotRunCancellationOnNextReveal() {
+        var state = PanelVisibilityTransitionState()
+        var cancellations = 0
+        let docking = state.beginTransition(onSuperseded: { cancellations += 1 })
+        XCTAssertTrue(state.completeTransition(docking))
+        state.invalidatePendingTransition()
+        XCTAssertEqual(cancellations, 0)
+    }
+
+    func testTinyVisibleAreaWinsOverPreferredMinimumAndPreservesPreference() {
+        let visible = CGRect(x: -400, y: 120, width: 320, height: 460)
+        for corner in ScreenCorner.allCases {
+            let placement = PanelGeometry.workAreaPlacement(
+                preferredSize: PanelGeometry.minimumPanelSize, in: visible, corner: corner
+            )
+            XCTAssertEqual(placement.preferredSize, PanelGeometry.minimumPanelSize)
+            XCTAssertEqual(placement.frame.size, CGSize(width: 296, height: 436))
+            XCTAssertTrue(visible.insetBy(dx: 12, dy: 12).contains(placement.frame))
+        }
+    }
+
+    @MainActor
+    func testNativeDisplayedSizeIsNotEnlargedBackToPreferredMinimum() {
+        let state = PanelUIState()
+        state.updatePanelSize(CGSize(width: 296, height: 436))
+        XCTAssertEqual(state.panelSize, CGSize(width: 296, height: 436))
+        state.updatePanelSize(CGSize(width: CGFloat.infinity, height: 20))
+        XCTAssertEqual(state.panelSize, CGSize(width: 296, height: 436))
+    }
+
+    func testCancelledSwipeCannotResumeWithoutFreshBegin() {
+        var tracker = PanelTrackpadDismissTracker()
+        _ = tracker.update(sample: PanelTrackpadSwipeSample(
+            deltaX: -30, deltaY: 0, phase: .began, isPrecise: true,
+            isDirectionInvertedFromDevice: false
+        ), dockedCorner: .topRight)
+        tracker.cancel()
+        XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+            deltaX: -80, deltaY: 0, phase: .changed, isPrecise: true,
+            isDirectionInvertedFromDevice: false
+        ), dockedCorner: .topRight), .passThrough)
+        XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+            deltaX: 0, deltaY: 0, phase: .ended, isPrecise: true,
+            isDirectionInvertedFromDevice: false
+        ), dockedCorner: .topRight), .passThrough)
+    }
+
+    func testSwipeCountsTerminalMovementAndNormalizesBothScrollSettingsAtEveryCorner() {
+        for corner in ScreenCorner.allCases {
+            for inverted in [false, true] {
+                let left = corner == .topLeft || corner == .bottomLeft
+                let delta: CGFloat = (left ? 1 : -1) * (inverted ? -1 : 1)
+                var tracker = PanelTrackpadDismissTracker()
+                _ = tracker.update(sample: PanelTrackpadSwipeSample(
+                    deltaX: delta * 30, deltaY: 0, phase: .began, isPrecise: true,
+                    isDirectionInvertedFromDevice: inverted
+                ), dockedCorner: corner)
+                XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+                    deltaX: delta * 18, deltaY: 0, phase: .ended, isPrecise: true,
+                    isDirectionInvertedFromDevice: inverted
+                ), dockedCorner: corner), .requestHide)
+            }
+        }
+    }
+
+    @MainActor
+    func testBlockedPanelGestureKeepsItsContentOwnershipUntilNextBegin() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var eligible = false
+        panel.canBeginTrackpadSwipe = { _ in eligible }
+        var hides = 0
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -20, deltaY: 0, phase: .began))
+        eligible = true
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .changed))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 0)
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 1)
+    }
+
+    @MainActor
+    func testPanelNeverClaimsCanvasPanBeforeCanvasReceivesItsEvents() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let target = CanvasNSView()
+        let root = SwipeHitTargetView(target: target)
+        panel.contentView = root
+        var hides = 0
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 0)
+    }
+
+    @MainActor
+    func testNotesNavigationAndPanelHidingHaveOneDirectionOwner() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let target = SwipeNotesTarget(frame: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000))
+        panel.contentView = SwipeHitTargetView(target: target)
+        panel.notesSwipeTarget = target
+        var hides = 0
+        panel.onTrackpadDismissRequest = { hides += 1 }
+
+        panel.sendEvent(try panelScrollEvent(deltaX: 60, deltaY: 0, phase: .began))
+        XCTAssertEqual(target.navigationCount, 0, "Navigation waits until fingers lift")
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(target.navigationCount, 1)
+        XCTAssertEqual(hides, 0)
+
+        target.isNotesLibraryPresented = true
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(target.navigationCount, 2, "Library returns to draft before edgeward hiding")
+        XCTAssertEqual(hides, 0)
+
+        target.isNotesLibraryPresented = false
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 1)
+    }
+
+    @MainActor
+    func testNotesGestureCannotNavigateReplacementWorkspace() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let original = SwipeNotesTarget(frame: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000))
+        panel.contentView = SwipeHitTargetView(target: original)
+        panel.notesSwipeTarget = original
+        panel.sendEvent(try panelScrollEvent(deltaX: 60, deltaY: 0, phase: .began))
+        let replacement = SwipeNotesTarget(frame: original.frame)
+        panel.notesSwipeTarget = replacement
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(original.navigationCount, 0)
+        XCTAssertEqual(replacement.navigationCount, 0)
+    }
     func testCanvasControlsReserveMeasuredErrorBannerFootprint() {
         XCTAssertEqual(
             PanelGeometry.canvasErrorBannerOffset(measuredHeight: 0),
@@ -784,6 +934,13 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual((1 - compact.bottomFadeStart) * 480, 76, accuracy: 0.001)
         XCTAssertEqual(tall.topFadeEnd * 900, 18, accuracy: 0.001)
         XCTAssertEqual((1 - tall.bottomFadeStart) * 900, 76, accuracy: 0.001)
+        let expanded = TaskScrollMaskLayout.stops(panelHeight: 480, bottomObscuredHeight: 122)
+        XCTAssertLessThan(expanded.bottomFadeStart, compact.bottomFadeStart)
+        XCTAssertEqual((1 - expanded.bottomFadeStart) * 480, 122, accuracy: 0.001)
+        XCTAssertEqual(
+            TaskScrollMaskLayout.stops(panelHeight: 480, bottomObscuredHeight: CGFloat.infinity).bottomFadeStart,
+            compact.bottomFadeStart
+        )
     }
 
     @MainActor
@@ -861,4 +1018,24 @@ final class PanelGeometryTests: XCTestCase {
         )
         return try XCTUnwrap(NSEvent(cgEvent: event))
     }
+}
+
+@MainActor
+private final class SwipeHitTargetView: NSView {
+    let target: NSView
+    init(target: NSView) {
+        self.target = target
+        super.init(frame: .zero)
+        addSubview(target)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { target }
+}
+
+@MainActor
+private final class SwipeNotesTarget: NSView, PanelNotesSwipeTarget {
+    var swipeView: NSView { self }
+    var isNotesLibraryPresented = false
+    var navigationCount = 0
+    func performNotesSwipe() { navigationCount += 1 }
 }

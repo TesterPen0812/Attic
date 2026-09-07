@@ -3,6 +3,64 @@ import XCTest
 @testable import Attic
 
 final class PanelSquircleGeometryTests: XCTestCase {
+    func testOutsidePerimeterAcquiresOnlyInwardFacingResizeEdges() {
+        for size in [PanelGeometry.minimumPanelSize, CGSize(width: 480, height: 620), CGSize(width: 900, height: 900)] {
+            let bounds = CGRect(origin: .zero, size: size)
+            let points: [(CGPoint, PanelResizeEdges)] = [
+                (CGPoint(x: -3, y: bounds.midY), .left),
+                (CGPoint(x: bounds.maxX + 3, y: bounds.midY), .right),
+                (CGPoint(x: bounds.midX, y: -3), .bottom),
+                (CGPoint(x: bounds.midX, y: bounds.maxY + 3), .top)
+            ]
+            for corner in ScreenCorner.allCases {
+                for (point, edge) in points {
+                    XCTAssertEqual(AtticPanelResizePolicy.resizeEdges(
+                        at: point, in: bounds, cornerRadius: 100, dockedAt: corner, acquisitionInset: 6
+                    ), AtticPanelResizePolicy.allowedResizeEdges(edge, dockedAt: corner))
+                }
+                XCTAssertNil(AtticPanelResizePolicy.resizeEdges(
+                    at: CGPoint(x: -7, y: bounds.midY), in: bounds, cornerRadius: 100,
+                    dockedAt: corner, acquisitionInset: 6
+                ))
+                XCTAssertNil(AtticPanelResizePolicy.resizeEdges(
+                    at: CGPoint(x: -3, y: -3), in: bounds, cornerRadius: 100,
+                    dockedAt: corner, acquisitionInset: 6
+                ))
+            }
+        }
+        XCTAssertNil(AtticPanelResizePolicy.resizeEdges(
+            at: CGPoint(x: -3, y: 30), in: CGRect(x: 0, y: 0, width: 600, height: 700),
+            cornerRadius: 200, dockedAt: .topRight, acquisitionInset: 6
+        ), "The rectangular perimeter must not claim empty space beside a large rounded corner")
+    }
+
+    @MainActor
+    func testNativeResizePerimeterPreservesVisibleSizeAndAnchor() {
+        let visible = CGRect(x: 100, y: 200, width: 480, height: 620)
+        let panel = AtticPanel(contentRect: visible, styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        panel.resizePerimeter = 6
+        panel.setVisibleContentFrame(visible, display: false)
+        XCTAssertEqual(panel.visibleContentFrame, visible)
+        XCTAssertEqual(panel.frame, visible.insetBy(dx: -6, dy: -6))
+        XCTAssertEqual(panel.accessibilityFrame(), visible)
+    }
+
+    func testBlankHeaderAboveControlsIsDraggableAcrossItsWidth() {
+        let bounds = CGRect(x: 0, y: 0, width: 480, height: 620)
+        let radius: CGFloat = 80
+        let insets = PanelGeometry.chromeInsets(cornerSize: radius, panelSize: bounds.size)
+        for x in [insets.leading + 21, bounds.midX, bounds.maxX - insets.trailing - 21] {
+            XCTAssertTrue(AtticPanelDragPolicy.isTopDragPoint(
+                CGPoint(x: x, y: bounds.maxY - insets.top + 6), in: bounds,
+                cornerRadius: radius, modeDockWidth: 168, dockedAt: .topRight
+            ))
+        }
+        XCTAssertFalse(AtticPanelDragPolicy.isTopDragPoint(
+            CGPoint(x: insets.leading + 21, y: bounds.maxY - insets.top - 21),
+            in: bounds, cornerRadius: radius, dockedAt: .topRight
+        ))
+    }
     func testCompactControlMetricsKeepLargerPointerTargets() {
         XCTAssertEqual(AtticStyle.actionControlSize, 36)
         XCTAssertEqual(AtticStyle.modeControlSize, 34)

@@ -77,10 +77,13 @@ final class PanelUIState: ObservableObject {
     }
 
     func updatePanelSize(_ size: CGSize) {
-        let clamped = PanelGeometry.clampedPanelSize(size)
-        guard abs(panelSize.width - clamped.width) >= 0.25
-                || abs(panelSize.height - clamped.height) >= 0.25 else { return }
-        panelSize = clamped
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else { return }
+        // AppKit already enforced the display's usable bounds. Reapplying the
+        // preferred minimum here would make SwiftUI larger than its window.
+        guard abs(panelSize.width - size.width) >= 0.25
+                || abs(panelSize.height - size.height) >= 0.25 else { return }
+        panelSize = size
     }
 
     func beginAdding() {

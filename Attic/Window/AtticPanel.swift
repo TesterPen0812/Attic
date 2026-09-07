@@ -1,29 +1,119 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+protocol PanelNotesSwipeTarget: AnyObject {
+    var swipeView: NSView { get }
+    var isNotesLibraryPresented: Bool { get }
+    func performNotesSwipe()
+}
+
 final class AtticPanel: NSPanel {
     var onAccessibilityResizeRequest: ((CGSize) -> Void)?
     var onAccessibilityMoveRequest: ((CGRect) -> Void)?
     var onTrackpadDismissRequest: (() -> Void)?
     var trackpadDismissCorner: ScreenCorner = .topRight
+    weak var notesSwipeTarget: (any PanelNotesSwipeTarget)?
+    var canBeginTrackpadSwipe: ((NSEvent) -> Bool)?
     private var trackpadDismissTracker = PanelTrackpadDismissTracker()
+    private enum SwipeRoute { case hide, notes, content }
+    private var swipeRoute: SwipeRoute?
+    private var swipeSequenceActive = false
+    private var swipeStartedInNotes = false
+    private var swipeStartedInLibrary = false
+    private weak var swipeNotesTarget: (any PanelNotesSwipeTarget)?
+
+    /// The invisible acquisition perimeter is part of the native window only.
+    /// Content geometry and saved sizes always describe the visible surface.
+    var resizePerimeter: CGFloat = 0
+    var visibleContentFrame: CGRect {
+        frame.insetBy(dx: resizePerimeter, dy: resizePerimeter)
+    }
+
+    func nativeFrame(forVisibleFrame frame: CGRect) -> CGRect {
+        frame.insetBy(dx: -resizePerimeter, dy: -resizePerimeter)
+    }
+
+    func setVisibleContentFrame(_ frame: CGRect, display: Bool) {
+        setFrame(nativeFrame(forVisibleFrame: frame), display: display)
+    }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
         guard event.type == .scrollWheel else {
+            if [.magnify, .beginGesture, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown].contains(event.type) {
+                cancelTrackpadSwipe()
+            }
             super.sendEvent(event)
             return
         }
-        guard event.momentumPhase.isEmpty,
+        guard (event.momentumPhase.isEmpty || event.phase.contains(.ended)),
               event.modifierFlags.intersection([
                 .command,
                 .control,
                 .option,
                 .shift
               ]).isEmpty else {
-            trackpadDismissTracker.cancel()
+            cancelTrackpadSwipe()
+            super.sendEvent(event)
+            return
+        }
+
+        let phase = trackpadSwipePhase(for: event.phase)
+        guard event.hasPreciseScrollingDeltas, phase != .none else {
+            cancelTrackpadSwipe()
+            super.sendEvent(event)
+            return
+        }
+        if phase == .began {
+            cancelTrackpadSwipe()
+            swipeSequenceActive = event.hasPreciseScrollingDeltas
+                && NSEvent.pressedMouseButtons == 0
+                && (canBeginTrackpadSwipe?(event) ?? true)
+                && !contentOwnsHorizontalScrolling(at: event.locationInWindow)
+            swipeRoute = swipeSequenceActive ? nil : .content
+            if let target = notesSwipeTarget {
+                let point = target.swipeView.convert(event.locationInWindow, from: nil)
+                swipeStartedInNotes = target.swipeView.window === self
+                    && target.swipeView.bounds.contains(point)
+                swipeStartedInLibrary = target.isNotesLibraryPresented
+                swipeNotesTarget = swipeStartedInNotes ? target : nil
+            }
+        }
+        guard swipeSequenceActive else {
+            super.sendEvent(event)
+            return
+        }
+        if NSEvent.pressedMouseButtons != 0 {
+            cancelTrackpadSwipe()
+            super.sendEvent(event)
+            return
+        }
+
+        var trackerPhase = phase
+        if swipeRoute == nil,
+           hypot(event.scrollingDeltaX, event.scrollingDeltaY) >= PanelTrackpadDismissTracker.minimumIntentDelta {
+            let towardEdge = PanelTrackpadDismissTracker.isTowardDockedSide(
+                deltaX: event.scrollingDeltaX,
+                deltaY: event.scrollingDeltaY,
+                isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice,
+                dockedCorner: trackpadDismissCorner
+            )
+            if abs(event.scrollingDeltaX) <= abs(event.scrollingDeltaY) * PanelTrackpadDismissTracker.horizontalDominance {
+                swipeRoute = .content
+            } else if swipeStartedInNotes && (towardEdge == swipeStartedInLibrary) {
+                swipeRoute = .notes
+            } else {
+                swipeRoute = towardEdge ? .hide : .content
+            }
+            // AppKit commonly begins with a zero-delta event. Preserve that
+            // sequence boundary when the first directional sample follows it.
+            trackerPhase = phase == .changed ? .began : phase
+        }
+        guard let route = swipeRoute, route != .content else {
+            if phase == .ended || phase == .cancelled { cancelTrackpadSwipe() }
             super.sendEvent(event)
             return
         }
@@ -32,20 +122,55 @@ final class AtticPanel: NSPanel {
             sample: PanelTrackpadSwipeSample(
                 deltaX: event.scrollingDeltaX,
                 deltaY: event.scrollingDeltaY,
-                phase: trackpadSwipePhase(for: event.phase),
+                phase: trackerPhase,
                 isPrecise: event.hasPreciseScrollingDeltas,
                 isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice
             ),
-            dockedCorner: trackpadDismissCorner
+            dockedCorner: trackpadDismissCorner,
+            towardDockedSide: route == .hide || swipeStartedInLibrary
         )
+        let navigationTarget = swipeNotesTarget
+        let beganInLibrary = swipeStartedInLibrary
+        if phase == .ended || phase == .cancelled { cancelTrackpadSwipe() }
         switch update {
         case .passThrough:
             super.sendEvent(event)
         case .tracking:
             break
         case .requestHide:
-            onTrackpadDismissRequest?()
+            if route == .notes {
+                guard let navigationTarget,
+                      navigationTarget === notesSwipeTarget,
+                      navigationTarget.isNotesLibraryPresented == beganInLibrary else { return }
+                navigationTarget.performNotesSwipe()
+            } else {
+                onTrackpadDismissRequest?()
+            }
         }
+    }
+
+    func cancelTrackpadSwipe() {
+        trackpadDismissTracker.cancel()
+        swipeRoute = nil
+        swipeSequenceActive = false
+        swipeStartedInNotes = false
+        swipeStartedInLibrary = false
+        swipeNotesTarget = nil
+    }
+
+    private func contentOwnsHorizontalScrolling(at windowPoint: CGPoint) -> Bool {
+        guard let contentView else { return false }
+        var view = contentView.hitTest(contentView.convert(windowPoint, from: nil))
+        while let candidate = view {
+            if candidate is CanvasNSView || candidate is NSControl { return true }
+            if let scroll = candidate as? NSScrollView,
+               let document = scroll.documentView,
+               document.bounds.width > scroll.contentView.bounds.width + 1 {
+                return true
+            }
+            view = candidate.superview
+        }
+        return false
     }
 
     private func trackpadSwipePhase(for phase: NSEvent.Phase) -> PanelTrackpadSwipePhase {
@@ -65,7 +190,7 @@ final class AtticPanel: NSPanel {
     }
 
     override func setAccessibilityFrame(_ accessibilityFrame: NSRect) {
-        guard accessibilityFrame.size != frame.size else {
+        guard accessibilityFrame.size != visibleContentFrame.size else {
             if let onAccessibilityMoveRequest {
                 onAccessibilityMoveRequest(accessibilityFrame)
                 return
@@ -80,6 +205,10 @@ final class AtticPanel: NSPanel {
         // AX clients commonly send an origin together with the new size. The
         // selected dock corner, not that untrusted origin, owns panel position.
         onAccessibilityResizeRequest(accessibilityFrame.size)
+    }
+
+    override func accessibilityFrame() -> NSRect {
+        visibleContentFrame
     }
 }
 
@@ -135,6 +264,7 @@ enum AtticPanelInteractionPolicy {
 }
 
 enum AtticPanelResizePolicy {
+    static let outsideGripThickness: CGFloat = 6
     static let edgeGripThickness: CGFloat = 14
     static let cornerGripThickness: CGFloat = 28
     /// The transparent corner remains click-through except for a thin band
@@ -154,15 +284,20 @@ enum AtticPanelResizePolicy {
         // capable of ignoring AppKit's min/max properties and delegate clamp.
         // Keep one resize authority: the generous custom grips below.
         panel.styleMask.remove(.resizable)
-        let minimumSize = PanelGeometry.minimumPanelSize
+        let perimeter = (panel as? AtticPanel)?.resizePerimeter ?? 0
+        let minimumSize = CGSize(
+            width: min(PanelGeometry.minimumPanelSize.width, maximumSize?.width ?? .greatestFiniteMagnitude) + perimeter * 2,
+            height: min(PanelGeometry.minimumPanelSize.height, maximumSize?.height ?? .greatestFiniteMagnitude) + perimeter * 2
+        )
 
         // Retain explicit limits for accessibility and programmatic callers.
         // Custom live resizing clamps independently before setting the frame.
         panel.minSize = minimumSize
         panel.contentMinSize = minimumSize
         if let maximumSize {
-            panel.maxSize = maximumSize
-            panel.contentMaxSize = maximumSize
+            let nativeMaximum = CGSize(width: maximumSize.width + perimeter * 2, height: maximumSize.height + perimeter * 2)
+            panel.maxSize = nativeMaximum
+            panel.contentMaxSize = nativeMaximum
         }
         panel.preservesContentDuringLiveResize = true
     }
@@ -171,7 +306,8 @@ enum AtticPanelResizePolicy {
         at point: CGPoint,
         in bounds: CGRect,
         cornerRadius: CGFloat,
-        dockedAt corner: ScreenCorner? = nil
+        dockedAt corner: ScreenCorner? = nil,
+        acquisitionInset: CGFloat = 0
     ) -> PanelResizeEdges? {
         // NSView's local bounds are half-open, but an event on the visual
         // right/top border can arrive exactly at maxX/maxY. Pull only those
@@ -180,10 +316,34 @@ enum AtticPanelResizePolicy {
         // region or claiming a transparent corner outside the squircle.
         guard bounds.width > 0,
               bounds.height > 0,
-              point.x >= bounds.minX,
-              point.x <= bounds.maxX,
-              point.y >= bounds.minY,
-              point.y <= bounds.maxY else { return nil }
+              point.x >= bounds.minX - acquisitionInset,
+              point.x <= bounds.maxX + acquisitionInset,
+              point.y >= bounds.minY - acquisitionInset,
+              point.y <= bounds.maxY + acquisitionInset else { return nil }
+        if !bounds.contains(point) && acquisitionInset > 0 {
+            let alongVerticalSide = point.y >= bounds.minY + cornerGripThickness
+                && point.y <= bounds.maxY - cornerGripThickness
+            let alongHorizontalSide = point.x >= bounds.minX + cornerGripThickness
+                && point.x <= bounds.maxX - cornerGripThickness
+            let candidate: PanelResizeEdges?
+            if point.x < bounds.minX && alongVerticalSide { candidate = .left }
+            else if point.x > bounds.maxX && alongVerticalSide { candidate = .right }
+            else if point.y < bounds.minY && alongHorizontalSide { candidate = .bottom }
+            else if point.y > bounds.maxY && alongHorizontalSide { candidate = .top }
+            else { candidate = nil }
+            if let candidate {
+                var acquisitionPoint = point
+                if candidate == .left { acquisitionPoint.x += acquisitionInset }
+                if candidate == .right { acquisitionPoint.x -= acquisitionInset }
+                if candidate == .bottom { acquisitionPoint.y += acquisitionInset }
+                if candidate == .top { acquisitionPoint.y -= acquisitionInset }
+                guard Squircle.contains(
+                    acquisitionPoint, in: bounds, cornerRadius: cornerRadius,
+                    exponent: AtticStyle.panelSquircleExponent
+                ) else { return nil }
+                return allowedResizeEdges(candidate, dockedAt: corner)
+            }
+        }
         let point = CGPoint(
             x: min(point.x, bounds.maxX.nextDown),
             y: min(point.y, bounds.maxY.nextDown)
@@ -392,10 +552,31 @@ enum AtticPanelDragPolicy {
             modeDockWidth: modeDockWidth,
             dockedAt: corner
         )
-        return point.x >= region.minX
+        let inMiddleLane = point.x >= region.minX
             && point.x < region.maxX
             && point.y >= region.minY
             && point.y <= region.maxY
+        return inMiddleLane || upperDragRegion(
+            in: bounds,
+            cornerRadius: cornerRadius,
+            dockedAt: corner
+        ).contains(point)
+    }
+
+    /// Blank chrome above the controls remains draggable across the panel.
+    /// The four-point gap protects the actual control hit rectangles.
+    static func upperDragRegion(
+        in bounds: CGRect,
+        cornerRadius: CGFloat,
+        dockedAt corner: ScreenCorner?
+    ) -> CGRect {
+        let insets = PanelGeometry.chromeInsets(cornerSize: cornerRadius, panelSize: bounds.size)
+        let topLocked = corner.map {
+            AtticPanelResizePolicy.allowedResizeEdges(.top, dockedAt: $0) == nil
+        } ?? false
+        let top = bounds.maxY - (topLocked ? 0 : AtticPanelResizePolicy.edgeGripThickness)
+        let bottom = bounds.maxY - insets.top + 4
+        return CGRect(x: bounds.minX, y: bottom, width: bounds.width, height: max(0, top - bottom))
     }
 }
 
@@ -536,6 +717,7 @@ struct PanelDragIntentTracker {
 @MainActor
 final class PanelChromeInteractionState {
     var onModeDockWidthChanged: (() -> Void)?
+    var bottomControlsHeight: CGFloat = AtticStyle.controlHitSize
     var modeDockWidth = PanelModeDockLayout.width(isExpanded: false) {
         didSet {
             guard modeDockWidth != oldValue else { return }
@@ -547,6 +729,29 @@ final class PanelChromeInteractionState {
 /// The window server still treats a transparent borderless panel as a
 /// rectangle. Keep AppKit's responder hit test aligned with the visible
 /// squircle so transparent corner pixels cannot obstruct the app behind it.
+final class AtticPanelContentContainer: NSView {
+    let hostingView: AtticPanelHostingView
+
+    init(hostingView: AtticPanelHostingView, visibleSize: CGSize, perimeter: CGFloat) {
+        self.hostingView = hostingView
+        super.init(frame: CGRect(origin: .zero, size: CGSize(
+            width: visibleSize.width + perimeter * 2,
+            height: visibleSize.height + perimeter * 2
+        )))
+        hostingView.frame = bounds.insetBy(dx: perimeter, dy: perimeter)
+        hostingView.autoresizingMask = [.width, .height]
+        addSubview(hostingView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(convert(point, from: superview)) else { return nil }
+        return hostingView.hitTest(convert(point, from: superview))
+    }
+}
+
 final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     private struct ResizeSession {
         let edges: PanelResizeEdges
@@ -633,8 +838,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = convert(point, from: superview)
         let policyPoint = AtticPanelCoordinateSpace.policyPoint(
-            fromHostingPoint: point,
+            fromHostingPoint: localPoint,
             in: bounds,
             isFlipped: isFlipped
         )
@@ -648,7 +854,8 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             at: policyPoint,
             in: bounds,
             cornerRadius: panelCornerRadius,
-            dockedAt: dockedCorner
+            dockedAt: dockedCorner,
+            acquisitionInset: (window as? AtticPanel)?.resizePerimeter ?? 0
         )
         guard isInsideSquircle || resizeEdges != nil else { return nil }
         if resizeEdges != nil {
@@ -670,6 +877,21 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         true
     }
 
+    func isChromeControlPoint(_ windowPoint: CGPoint) -> Bool {
+        let point = AtticPanelCoordinateSpace.policyPoint(
+            fromHostingPoint: convert(windowPoint, from: nil), in: bounds, isFlipped: isFlipped
+        )
+        let insets = PanelGeometry.chromeInsets(cornerSize: panelCornerRadius, panelSize: bounds.size)
+        let topControlsY = bounds.maxY - insets.top - AtticStyle.controlHitSize
+        let pinRect = CGRect(x: bounds.minX + insets.leading, y: topControlsY,
+                             width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+        let modeRect = CGRect(x: bounds.maxX - insets.trailing - chromeInteractionState.modeDockWidth,
+                              y: topControlsY, width: chromeInteractionState.modeDockWidth,
+                              height: AtticStyle.controlHitSize)
+        return pinRect.contains(point) || modeRect.contains(point)
+            || point.y < bounds.minY + insets.bottom + chromeInteractionState.bottomControlsHeight
+    }
+
     override func mouseDown(with event: NSEvent) {
         let hostingPoint = convert(event.locationInWindow, from: nil)
         let policyPoint = AtticPanelCoordinateSpace.policyPoint(
@@ -689,11 +911,12 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 at: policyPoint,
                 in: bounds,
                 cornerRadius: panelCornerRadius,
-                dockedAt: dockedCorner
+                dockedAt: dockedCorner,
+                acquisitionInset: (window as? AtticPanel)?.resizePerimeter ?? 0
               ) {
             resizeSession = ResizeSession(
                 edges: edges,
-                initialFrame: window.frame,
+                initialFrame: (window as? AtticPanel)?.visibleContentFrame ?? window.frame,
                 initialMouseLocation: NSEvent.mouseLocation
             )
             interactionLifecycle.begin(.windowResize)
@@ -715,7 +938,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
         let mouseLocation = NSEvent.mouseLocation
         moveSession = MoveSession(
-            initialFrame: window.frame,
+            initialFrame: (window as? AtticPanel)?.visibleContentFrame ?? window.frame,
             initialMouseLocation: mouseLocation,
             intent: PanelDragIntentTracker(
                 location: mouseLocation,
@@ -752,7 +975,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 maximumSize: maximumSize,
                 visibleFrame: visibleFrame
             )
-            window.setFrame(frame, display: true)
+            setContentFrame(frame, in: window)
             onLiveResizeChanged?(frame.size)
             return
         }
@@ -776,7 +999,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         proposedFrame.origin.x += delta.x
         proposedFrame.origin.y += delta.y
         let frame = onWindowDragChanged?(proposedFrame, mouseLocation) ?? proposedFrame
-        window.setFrame(frame, display: true)
+        setContentFrame(frame, in: window)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -815,7 +1038,15 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         window?.ignoresMouseEvents = false
         window?.invalidateCursorRects(for: self)
         NSCursor.arrow.set()
-        onInteractionCancelled?(cancellation, window?.frame)
+        onInteractionCancelled?(cancellation, (window as? AtticPanel)?.visibleContentFrame ?? window?.frame)
+    }
+
+    private func setContentFrame(_ frame: CGRect, in window: NSWindow) {
+        if let panel = window as? AtticPanel {
+            panel.setVisibleContentFrame(frame, display: true)
+        } else {
+            window.setFrame(frame, display: true)
+        }
     }
 
     private func startEscapeMonitoring() {
@@ -924,7 +1155,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
             resizeSession = nil
             guard interactionLifecycle.finish(.windowResize) else { return false }
             stopEscapeMonitoring()
-            onLiveResizeEnded?(window.frame.size)
+            onLiveResizeEnded?(((window as? AtticPanel)?.visibleContentFrame ?? window.frame).size)
             return true
         }
         guard let session = moveSession,
@@ -937,7 +1168,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         )
         window.invalidateCursorRects(for: self)
         onWindowDragEnded?(
-            window.frame,
+            (window as? AtticPanel)?.visibleContentFrame ?? window.frame,
             mouseLocation,
             release.velocity,
             release.translation
@@ -963,6 +1194,12 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
                 in: bounds,
                 isFlipped: isFlipped
             ),
+            cursor: .openHand
+        )
+        addCursorRect(
+            localCursorRect(AtticPanelDragPolicy.upperDragRegion(
+                in: bounds, cornerRadius: panelCornerRadius, dockedAt: dockedCorner
+            )),
             cursor: .openHand
         )
 

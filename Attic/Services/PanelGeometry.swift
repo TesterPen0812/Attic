@@ -101,8 +101,8 @@ enum PanelGeometry {
     /// product-defined maximum; the visible work area is the only upper bound.
     static func resizeMaximumSize(in visibleFrame: CGRect) -> CGSize {
         CGSize(
-            width: max(minimumPanelSize.width, visibleFrame.width - (screenInset * 2)),
-            height: max(minimumPanelSize.height, visibleFrame.height - (screenInset * 2))
+            width: max(0, visibleFrame.width - (screenInset * 2)),
+            height: max(0, visibleFrame.height - (screenInset * 2))
         )
     }
 
@@ -380,12 +380,13 @@ struct PanelTrackpadDismissTracker {
     static let minimumIntentDelta: CGFloat = 0.5
 
     private enum State {
+        case idle
         case undecided
         case tracking
         case rejected
     }
 
-    private var state = State.undecided
+    private var state = State.idle
     private var progress: CGFloat = 0
 
     static func isTowardDockedSide(
@@ -404,7 +405,8 @@ struct PanelTrackpadDismissTracker {
 
     mutating func update(
         sample: PanelTrackpadSwipeSample,
-        dockedCorner: ScreenCorner
+        dockedCorner: ScreenCorner,
+        towardDockedSide: Bool = true
     ) -> PanelTrackpadDismissUpdate {
         guard sample.isPrecise, sample.phase != .none else {
             reset()
@@ -413,13 +415,18 @@ struct PanelTrackpadDismissTracker {
 
         if sample.phase == .began {
             reset()
+            state = .undecided
         }
+        guard state != .idle else { return .passThrough }
         if sample.phase == .cancelled {
             let wasTracking = state == .tracking
             reset()
             return wasTracking ? .tracking : .passThrough
         }
         if sample.phase == .ended {
+            let inversion: CGFloat = sample.isDirectionInvertedFromDevice ? -1 : 1
+            let direction = Self.horizontalEdgeDirection(for: dockedCorner) * (towardDockedSide ? 1 : -1)
+            progress = max(0, progress + sample.deltaX * inversion * direction)
             let shouldHide = state == .tracking && progress >= Self.minimumDistance
             reset()
             return shouldHide ? .requestHide : .passThrough
@@ -428,7 +435,7 @@ struct PanelTrackpadDismissTracker {
         let inversion: CGFloat = sample.isDirectionInvertedFromDevice ? -1 : 1
         let physicalX = sample.deltaX * inversion
         let physicalY = sample.deltaY * inversion
-        let edgeDirection = Self.horizontalEdgeDirection(for: dockedCorner)
+        let edgeDirection = Self.horizontalEdgeDirection(for: dockedCorner) * (towardDockedSide ? 1 : -1)
         let edgeProgress = physicalX * edgeDirection
 
         if state == .rejected {
@@ -438,12 +445,8 @@ struct PanelTrackpadDismissTracker {
             guard hypot(physicalX, physicalY) >= Self.minimumIntentDelta else {
                 return .passThrough
             }
-            guard Self.isTowardDockedSide(
-                deltaX: sample.deltaX,
-                deltaY: sample.deltaY,
-                isDirectionInvertedFromDevice: sample.isDirectionInvertedFromDevice,
-                dockedCorner: dockedCorner
-            ) else {
+            guard edgeProgress > 0,
+                  abs(physicalX) > abs(physicalY) * Self.horizontalDominance else {
                 state = .rejected
                 return .passThrough
             }
@@ -459,7 +462,7 @@ struct PanelTrackpadDismissTracker {
     }
 
     private mutating func reset() {
-        state = .undecided
+        state = .idle
         progress = 0
     }
 
@@ -506,10 +509,14 @@ enum TaskEntryBarLayout {
 enum TaskScrollMaskLayout {
     /// Preserve short, optical fades as the panel grows rather than scaling
     /// them into large translucent bands at taller user-selected sizes.
-    static func stops(panelHeight: CGFloat) -> (topFadeEnd: CGFloat, bottomFadeStart: CGFloat) {
-        let height = max(panelHeight, 1)
+    static func stops(
+        panelHeight: CGFloat,
+        bottomObscuredHeight: CGFloat = 76
+    ) -> (topFadeEnd: CGFloat, bottomFadeStart: CGFloat) {
+        let height = panelHeight.isFinite ? max(panelHeight, 1) : 1
+        let obscuredHeight = bottomObscuredHeight.isFinite ? max(0, bottomObscuredHeight) : 76
         let topFadeEnd = min(0.12, 18 / height)
-        let bottomFadeStart = max(topFadeEnd + 0.25, 1 - (76 / height))
+        let bottomFadeStart = max(topFadeEnd + 0.25, 1 - (obscuredHeight / height))
         return (topFadeEnd, min(bottomFadeStart, 0.96))
     }
 }
