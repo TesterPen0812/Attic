@@ -326,7 +326,8 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
             kind = .opaque
         } else {
             switch glassStyle {
-            case .clear: kind = .clearGlass
+            case .clear:
+                kind = self == .original && appearance == .dark ? .clearGlass : .frostedGlass
             case .frosted: kind = .frostedGlass
             case .glassmorphism: kind = .glassmorphism
             }
@@ -335,6 +336,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
         return AtticPanelSurfaceTreatment(
             kind: kind,
             palette: palette,
+            appearance: appearance,
             usesSystemOpaqueSurface: self == .original
         )
     }
@@ -349,6 +351,29 @@ struct AtticThemeColor: Equatable, Hashable, Sendable {
     let red: Double
     let green: Double
     let blue: Double
+
+    init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    init?(hex: String) {
+        var value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("#") { value.removeFirst() }
+        guard value.utf8.count == 6,
+              value.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+              let rgb = UInt32(value, radix: 16) else { return nil }
+        self.init(red: Double((rgb >> 16) & 255) / 255,
+                  green: Double((rgb >> 8) & 255) / 255,
+                  blue: Double(rgb & 255) / 255)
+    }
+
+    var hexString: String {
+        guard red.isFinite, green.isFinite, blue.isFinite else { return "" }
+        func byte(_ value: Double) -> Int { Int((min(max(value, 0), 1) * 255).rounded()) }
+        return String(format: "%02X%02X%02X", byte(red), byte(green), byte(blue))
+    }
 
     var isValid: Bool {
         red.isFinite && green.isFinite && blue.isFinite
@@ -381,6 +406,12 @@ struct AtticThemeColor: Equatable, Hashable, Sendable {
         let lighter = max(relativeLuminance, other.relativeLuminance)
         let darker = min(relativeLuminance, other.relativeLuminance)
         return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    var contrastingForeground: AtticThemeColor {
+        let black = AtticThemeColor(red: 0, green: 0, blue: 0)
+        let white = AtticThemeColor(red: 1, green: 1, blue: 1)
+        return contrastRatio(with: black) >= contrastRatio(with: white) ? black : white
     }
 
     func mixed(with other: AtticThemeColor, amount: Double) -> AtticThemeColor {
@@ -417,6 +448,18 @@ struct AtticPanelThemePalette: Equatable, Sendable {
 
     var accentColor: Color { accent.swiftUIColor() }
     var opaqueSurfaceColor: Color { opaqueSurface.swiftUIColor() }
+    // Explicit RGB foregrounds avoid multiplying the system secondary label's
+    // already-reduced alpha by another local opacity.
+    var primaryForeground: AtticThemeColor {
+        let value = opaqueSurface.relativeLuminance < 0.5 ? 0.96 : 0.08
+        return .init(red: value, green: value, blue: value)
+    }
+    var secondaryForeground: AtticThemeColor {
+        let value = opaqueSurface.relativeLuminance < 0.5 ? 0.80 : 0.20
+        return .init(red: value, green: value, blue: value)
+    }
+    var primaryForegroundColor: Color { primaryForeground.swiftUIColor() }
+    var secondaryForegroundColor: Color { secondaryForeground.swiftUIColor() }
 
     fileprivate func increasingContrast(
         for appearance: AtticPanelThemeAppearance
@@ -451,7 +494,51 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
 
     let kind: Kind
     let palette: AtticPanelThemePalette
+    let appearance: AtticPanelThemeAppearance
     let usesSystemOpaqueSurface: Bool
+
+    /// The material is aesthetic, not the contrast guarantee. This foundation
+    /// sits ABOVE it so even an inactive material over the opposite desktop is
+    /// bounded. These normal sRGB source-over values preserve desktop detail
+    /// while keeping the explicit secondary foreground above 4.5:1 over every
+    /// RGB desktop extreme, including below the gradient. Opaque and Reduce
+    /// Transparency states transmit no desktop. Clear keeps its original path.
+    var foundationOpacity: Double {
+        switch kind {
+        case .opaque: 1
+        case .clearGlass: 0
+        case .frostedGlass: appearance == .dark ? 0.82 : 0.74
+        case .glassmorphism: appearance == .dark ? 0.80 : 0.72
+        }
+    }
+
+    func gradientColor(customHex: String) -> AtticThemeColor {
+        let tint = AtticThemeColor(hex: customHex) ?? palette.surfaceTint
+        let pole = appearance == .dark
+            ? AtticThemeColor(red: 0, green: 0, blue: 0)
+            : AtticThemeColor(red: 1, green: 1, blue: 1)
+        // Preserve the chosen hue without allowing a white top in Dark or a
+        // black top in Light to invalidate the foreground contrast floor.
+        return pole.mixed(with: tint, amount: 0.12)
+    }
+
+    static func normalizedGradientCoverage(_ coverage: Double) -> Double {
+        coverage.isFinite ? min(max(coverage, 0), 1) : 0.55
+    }
+
+    func gradientOpacity(at location: Double, coverage: Double) -> Double {
+        guard kind != .clearGlass else { return 0 }
+        let coverage = Self.normalizedGradientCoverage(coverage)
+        guard coverage > 0, location.isFinite else { return 0 }
+        return 0.82 * max(0, 1 - min(max(location, 0), 1) / coverage)
+    }
+
+    func compositedSurface(over backdrop: AtticThemeColor, location: Double = 1,
+                           gradientCoverage: Double = 0.55, gradientColorHex: String = "") -> AtticThemeColor {
+        backdrop.mixed(with: palette.opaqueSurface, amount: foundationOpacity)
+            .mixed(with: gradientColor(customHex: gradientColorHex),
+                   amount: gradientOpacity(at: location, coverage: gradientCoverage))
+    }
 
     var tintOpacity: Double {
         switch kind {

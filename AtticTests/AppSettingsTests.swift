@@ -292,6 +292,11 @@ final class AppSettingsTests: XCTestCase {
                         3,
                         context
                     )
+                    XCTAssertGreaterThanOrEqual(
+                        palette.accent.contrastingForeground.contrastRatio(with: palette.accent),
+                        4.5,
+                        context
+                    )
                 }
             }
         }
@@ -403,7 +408,8 @@ final class AppSettingsTests: XCTestCase {
 
         let expectedCustomOpacities: [AtticPanelSurfaceTreatment.Kind: Double] = [
             .opaque: 0.18,
-            .clearGlass: 0.22,
+            // Custom themes resolve a saved Clear preference to Frosted.
+            .clearGlass: 0.20,
             .frostedGlass: 0.20,
             .glassmorphism: 0.17
         ]
@@ -633,7 +639,9 @@ final class AppSettingsTests: XCTestCase {
                                     expectedKind = .opaque
                                 } else {
                                     switch style {
-                                    case .clear: expectedKind = .clearGlass
+                                    case .clear:
+                                        expectedKind = theme == .original && appearance == .dark
+                                            ? .clearGlass : .frostedGlass
                                     case .frosted: expectedKind = .frostedGlass
                                     case .glassmorphism: expectedKind = .glassmorphism
                                     }
@@ -715,6 +723,122 @@ final class AppSettingsTests: XCTestCase {
                         $0 == reducedEdgeOpacities[0]
                     })
                     XCTAssertEqual(opaqueEdgeOpacities, reducedEdgeOpacities)
+                }
+            }
+        }
+    }
+
+    func testReadableSurfaceForegroundsMeetContrastOverDesktopExtremes() {
+        // Normal sRGB source-over is monotone in each desktop channel. The
+        // eight RGB cube corners bound all SDR desktop colors; custom gradient
+        // hue extremes also exercise the user picker at its light/dark limits.
+        let extremes = [0.0, 1.0].flatMap { red in
+            [0.0, 1.0].flatMap { green in
+                [0.0, 1.0].map { blue in
+                    AtticThemeColor(red: red, green: green, blue: blue)
+                }
+            }
+        }
+        let gradientHues = [""] + extremes.map(\.hexString)
+        for theme in AtticPanelTheme.allCases {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for contrast in colorSchemeContrasts {
+                    for kind: AtticPanelSurfaceTreatment.Kind in [.opaque, .frostedGlass, .glassmorphism] {
+                        let surface = treatment(for: theme, appearance: appearance,
+                                                contrast: contrast, kind: kind)
+                        let context = "\(themeContext(theme, appearance, contrast)) \(kind.rawValue)"
+                        for desktop in extremes {
+                            for hue in gradientHues {
+                                for coverage in [0.0, 0.55, 1.0] {
+                                    for location in [0, coverage / 2, coverage, 1] {
+                                        let color = surface.compositedSurface(
+                                            over: desktop, location: location,
+                                            gradientCoverage: coverage, gradientColorHex: hue
+                                        )
+                                        let detail = "\(context) desktop=\(desktop.hexString) hue=\(hue) "
+                                            + "coverage=\(coverage) location=\(location)"
+                                        XCTAssertGreaterThanOrEqual(
+                                            surface.palette.primaryForeground.contrastRatio(with: color),
+                                            4.5, detail
+                                        )
+                                        XCTAssertGreaterThanOrEqual(
+                                            surface.palette.secondaryForeground.contrastRatio(with: color),
+                                            4.5, detail
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testGradientCoverageCannotRemoveReadableFoundation() {
+        XCTAssertEqual(AtticPanelSurfaceTreatment.normalizedGradientCoverage(-1), 0)
+        XCTAssertEqual(AtticPanelSurfaceTreatment.normalizedGradientCoverage(2), 1)
+        XCTAssertEqual(AtticPanelSurfaceTreatment.normalizedGradientCoverage(.nan), 0.55)
+        XCTAssertEqual(AtticPanelSurfaceTreatment.normalizedGradientCoverage(.infinity), 0.55)
+
+        for theme in AtticPanelTheme.allCases {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for kind: AtticPanelSurfaceTreatment.Kind in [.frostedGlass, .glassmorphism] {
+                    let surface = treatment(for: theme, appearance: appearance,
+                                            contrast: .standard, kind: kind)
+                    XCTAssertGreaterThan(surface.foundationOpacity, 0)
+                    XCTAssertLessThan(surface.foundationOpacity, 0.85)
+                    XCTAssertEqual(surface.gradientOpacity(at: 0, coverage: 0), 0)
+                    XCTAssertEqual(surface.gradientOpacity(at: 0, coverage: 0.55), 0.82)
+                    XCTAssertEqual(surface.gradientOpacity(at: 0.275, coverage: 0.55), 0.41)
+                    XCTAssertEqual(surface.gradientOpacity(at: 0.55, coverage: 0.55), 0)
+                    XCTAssertEqual(surface.gradientOpacity(at: 1, coverage: 1), 0)
+                    XCTAssertEqual(surface.gradientOpacity(at: .nan, coverage: 1), 0)
+                    let desktop = AtticThemeColor(red: 1, green: 0, blue: 1)
+                    let expected = desktop.mixed(with: surface.palette.opaqueSurface,
+                                                 amount: surface.foundationOpacity)
+                    XCTAssertEqual(surface.compositedSurface(over: desktop, location: 0,
+                                                             gradientCoverage: 0), expected)
+                }
+            }
+        }
+    }
+
+    func testOpaqueAndReducedTransparencySurfacesTransmitNoDesktop() {
+        let black = AtticThemeColor(red: 0, green: 0, blue: 0)
+        let white = AtticThemeColor(red: 1, green: 1, blue: 1)
+        for theme in AtticPanelTheme.allCases {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for style in PanelGlassStyle.allCases {
+                    for reduceTransparency in [false, true] {
+                        let surface = theme.surfaceTreatment(
+                            appearance: appearance, glassStyle: style,
+                            isTranslucent: reduceTransparency, reduceTransparency: reduceTransparency
+                        )
+                        XCTAssertEqual(surface.kind, .opaque)
+                        XCTAssertEqual(surface.foundationOpacity, 1)
+                        for location in [0.0, 0.275, 0.55, 1.0] {
+                            let fromBlack = surface.compositedSurface(over: black, location: location)
+                            let fromWhite = surface.compositedSurface(over: white, location: location)
+                            XCTAssertEqual(fromBlack.red, fromWhite.red, accuracy: 0.000_000_001)
+                            XCTAssertEqual(fromBlack.green, fromWhite.green, accuracy: 0.000_000_001)
+                            XCTAssertEqual(fromBlack.blue, fromWhite.blue, accuracy: 0.000_000_001)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testOriginalDarkClearKeepsItsUnbackedUngradedSurface() {
+        for contrast in colorSchemeContrasts {
+            let clear = treatment(for: .original, appearance: .dark, contrast: contrast, kind: .clearGlass)
+            XCTAssertEqual(clear.kind, .clearGlass)
+            XCTAssertEqual(clear.foundationOpacity, 0)
+            XCTAssertEqual(clear.tintOpacity, 0.06)
+            for coverage in [0.0, 0.55, 1.0] {
+                for location in [0.0, 0.55, 1.0] {
+                    XCTAssertEqual(clear.gradientOpacity(at: location, coverage: coverage), 0)
                 }
             }
         }
@@ -883,8 +1007,8 @@ final class AppSettingsTests: XCTestCase {
         for treatment: AtticPanelSurfaceTreatment,
         appearance: AtticPanelThemeAppearance
     ) -> AtticThemeColor {
-        if treatment.kind == .opaque {
-            return treatment.palette.opaqueSurface
+        if treatment.kind != .clearGlass {
+            return treatment.compositedSurface(over: representativeBackdrop(for: appearance))
         }
         return composite(
             treatment.palette.surfaceTint,
