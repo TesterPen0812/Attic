@@ -28,6 +28,7 @@ struct NotesComposerInteractionSnapshot: Equatable {
 /// lives in the editor's overlay so the writing surface keeps all available
 /// panel height.
 struct NotesPanelContent: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
@@ -55,7 +56,7 @@ struct NotesPanelContent: View {
             VStack(spacing: 10) {
                 Image(systemName: "note.text")
                     .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                 Text("A quiet place for the next thought.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -95,6 +96,7 @@ struct NotesPanelContent: View {
 }
 
 private struct NoteRecoveryWarning: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
 
@@ -121,7 +123,7 @@ private struct NoteRecoveryWarning: View {
                 .disabled(noteDraft.isRestoringRecovery)
                 .accessibilityIdentifier("retry-note-recovery")
             }
-            .foregroundStyle(.primary)
+            .foregroundStyle(palette.primaryForegroundColor)
             .atticClearGlassForegroundReadability()
             .accessibilityIdentifier("note-recovery-error")
         }
@@ -132,6 +134,7 @@ private struct NoteRecoveryWarning: View {
 /// That preserves Cocoa selection, the body editor's scroll position, marked
 /// text, undo state, and the app-owned draft while browsing saved notes.
 struct NoteComposerView: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject private var noteStore: NoteStore
     @ObservedObject var uiState: PanelUIState
@@ -308,7 +311,7 @@ struct NoteComposerView: View {
                     Button("Retry", action: saveInPlace)
                         .accessibilityIdentifier("retry-note-save")
                 }
-                .foregroundStyle(.primary)
+                .foregroundStyle(palette.primaryForegroundColor)
                 .atticClearGlassForegroundReadability()
                 .accessibilityIdentifier("note-save-error")
             }
@@ -329,7 +332,7 @@ struct NoteComposerView: View {
             TextField("Untitled note", text: $noteDraft.title)
                 .textFieldStyle(.plain)
                 .font(.system(size: 21, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.primary.opacity(0.96))
+                .foregroundStyle(palette.primaryForegroundColor)
                 .atticClearGlassForegroundReadability()
                 .focused($isTitleFocused)
                 .onChange(of: isTitleFocused) { _, focused in
@@ -350,7 +353,7 @@ struct NoteComposerView: View {
                     .atticClearGlassForegroundReadability()
                 Text(saveStatus)
                     .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                     .lineLimit(1)
             }
@@ -401,7 +404,7 @@ struct NoteComposerView: View {
                         .font(.system(size: 10.5, weight: .medium, design: .rounded))
                         .lineLimit(1)
                 }
-                .foregroundStyle(Color.primary.opacity(0.74))
+                .foregroundStyle(palette.secondaryForegroundColor)
                 .atticClearGlassForegroundReadability()
                 .frame(maxWidth: .infinity)
                 .frame(height: AtticStyle.entryControlHeight)
@@ -416,7 +419,7 @@ struct NoteComposerView: View {
             Button(action: saveInPlace) {
                 Image(systemName: noteDraft.isDirty ? "arrow.up" : "checkmark")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.primary.opacity(noteDraft.canPersist ? 0.92 : 0.34))
+                    .foregroundStyle(palette.primaryForegroundColor.opacity(noteDraft.canPersist ? 1 : 0.34))
                     .atticClearGlassForegroundReadability()
                     .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
                     .background(
@@ -663,7 +666,7 @@ struct NoteComposerView: View {
         VStack(alignment: .leading, spacing: 7) {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(.primary)
+                .foregroundStyle(palette.primaryForegroundColor)
                 .atticClearGlassForegroundReadability()
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -716,6 +719,7 @@ struct NoteComposerView: View {
 }
 
 private struct SavedNotesDrawer: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     let selectedNoteID: UUID?
     let onSelect: (NoteItem) -> Void
@@ -731,7 +735,7 @@ private struct SavedNotesDrawer: View {
                         .atticClearGlassForegroundReadability()
                     Text(summary)
                         .font(.system(size: 9.5, design: .rounded))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.secondaryForegroundColor)
                         .atticClearGlassForegroundReadability()
                 }
 
@@ -768,7 +772,7 @@ private struct SavedNotesDrawer: View {
                 VStack(spacing: 8) {
                     Image(systemName: "note.text")
                         .font(.system(size: 20, weight: .light))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.secondaryForegroundColor)
                         .atticClearGlassForegroundReadability()
                     Text("No saved notes yet")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -821,6 +825,7 @@ private struct SavedNotesDrawer: View {
 }
 
 private struct SavedNoteRow: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     let note: NoteItem
     let isSelected: Bool
@@ -846,7 +851,7 @@ private struct SavedNoteRow: View {
                         }
                     }
                     .font(.system(size: 9.5, design: .rounded))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -870,7 +875,7 @@ private struct SavedNoteRow: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .foregroundStyle(.secondary)
+            .foregroundStyle(palette.secondaryForegroundColor)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -927,6 +932,7 @@ private struct SavedNoteRow: View {
 }
 
 struct NoteRowView: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     let noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
@@ -946,7 +952,7 @@ struct NoteRowView: View {
                         .atticClearGlassForegroundReadability()
                     Text(preview)
                         .font(.system(size: 10.5, design: .rounded))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.secondaryForegroundColor)
                         .atticClearGlassForegroundReadability()
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -974,7 +980,7 @@ struct NoteRowView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .foregroundStyle(.secondary)
+            .foregroundStyle(palette.secondaryForegroundColor)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)

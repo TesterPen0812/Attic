@@ -4,6 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct NoteAttachmentTray: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
     let onCancelImport: () -> Void
@@ -135,7 +136,7 @@ struct NoteAttachmentTray: View {
                     .controlSize(.mini)
                 Text(progressLabel)
                     .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                 Spacer(minLength: 4)
                 Button(action: onCancelImport) {
@@ -159,7 +160,7 @@ struct NoteAttachmentTray: View {
         case let .failed(message):
             Label(importFailureLabel(message), systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                .foregroundStyle(.primary)
+                .foregroundStyle(palette.primaryForegroundColor)
                 .atticClearGlassForegroundReadability()
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 9)
@@ -197,6 +198,7 @@ struct NoteAttachmentTray: View {
 }
 
 private struct NoteImageAttachmentCard: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     let attachment: NoteAttachment
     @Binding var selectedAttachmentID: UUID?
@@ -227,7 +229,7 @@ private struct NoteImageAttachmentCard: View {
             HStack(spacing: 7) {
                 Image(systemName: "photo")
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                 Text(attachment.originalFilename)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -237,7 +239,7 @@ private struct NoteImageAttachmentCard: View {
                 Spacer(minLength: 4)
                 Text(fileSize)
                     .font(.system(size: 9, design: .rounded))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                 actionsMenu
             }
@@ -336,6 +338,7 @@ private struct NoteImageAttachmentCard: View {
 }
 
 private struct NoteFileAttachmentCard: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     let attachment: NoteAttachment
     @Binding var selectedAttachmentID: UUID?
@@ -372,7 +375,7 @@ private struct NoteFileAttachmentCard: View {
                         .atticClearGlassForegroundReadability()
                     Text(metadata)
                         .font(.system(size: 9.5, design: .rounded))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.secondaryForegroundColor)
                         .lineLimit(1)
                         .atticClearGlassForegroundReadability()
                 }
@@ -583,6 +586,7 @@ final class NoteAttachmentVisibilityView: NSView {
 }
 
 private struct AttachmentPreviewImage: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     enum Presentation {
         case inlineImage
         case fileIcon
@@ -607,7 +611,7 @@ private struct AttachmentPreviewImage: View {
                     Color.primary.opacity(0.035)
                     if noteStore.attachmentFailures[attachment.id] != nil {
                         Image(systemName: "photo.badge.exclamationmark")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(palette.secondaryForegroundColor)
                             .atticClearGlassForegroundReadability()
                     } else {
                         ProgressView()
@@ -617,7 +621,7 @@ private struct AttachmentPreviewImage: View {
             } else {
                 Image(systemName: fallbackSymbol)
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(
