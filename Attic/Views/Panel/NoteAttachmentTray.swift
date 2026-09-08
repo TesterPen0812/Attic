@@ -516,6 +516,7 @@ final class NoteAttachmentVisibilityView: NSView {
     var onChange: ((NoteAttachmentPreviewDemand) -> Void)?
     private(set) var demand = NoteAttachmentPreviewDemand()
     private weak var observedScrollView: NSScrollView?
+    private weak var observedWindow: NSWindow?
     private var observations: [NSObjectProtocol] = []
     private var hasPendingDelivery = false
 
@@ -533,10 +534,11 @@ final class NoteAttachmentVisibilityView: NSView {
 
     func refreshVisibility() {
         let scrollView = enclosingScrollView
-        if observedScrollView !== scrollView {
+        if observedScrollView !== scrollView || observedWindow !== window {
             observations.forEach { NotificationCenter.default.removeObserver($0) }
             observations.removeAll()
             observedScrollView = scrollView
+            observedWindow = window
             if let scrollView {
                 scrollView.contentView.postsBoundsChangedNotifications = true
                 for (name, object) in [
@@ -550,8 +552,21 @@ final class NoteAttachmentVisibilityView: NSView {
                     })
                 }
             }
+            if let window {
+                for name in [NSWindow.didChangeOcclusionStateNotification,
+                             NSWindow.didMiniaturizeNotification,
+                             NSWindow.didDeminiaturizeNotification] {
+                    observations.append(NotificationCenter.default.addObserver(
+                        forName: name, object: window, queue: .main
+                    ) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.refreshVisibility() }
+                    })
+                }
+            }
         }
-        let next = window == nil || isHiddenOrHasHiddenAncestor
+        let documentIsVisible = (scrollView?.documentView as? NoteEditorDocumentView)?.allowsPreviewLoading ?? true
+        let windowIsVisible = window.map { $0.isVisible && $0.occlusionState.contains(.visible) } ?? false
+        let next = !windowIsVisible || !documentIsVisible || isHiddenOrHasHiddenAncestor
             ? NoteAttachmentPreviewDemand()
             : NoteAttachmentPreviewDemand.resolve(bounds: bounds, visibleRect: visibleRect,
                                                    scale: window?.backingScaleFactor ?? 2)
@@ -741,6 +756,13 @@ final class NoteDocumentScrollView: NSScrollView {
 
 final class NoteEditorDocumentView: NSView {
     static let layoutDidChange = Notification.Name("AtticNoteDocumentLayoutDidChange")
+    var allowsPreviewLoading = true {
+        didSet {
+            if allowsPreviewLoading != oldValue {
+                NotificationCenter.default.post(name: Self.layoutDidChange, object: self)
+            }
+        }
+    }
     let textView: AttachmentAcceptingTextView
     private let accessories = NoteDocumentHostingView(rootView: AnyView(EmptyView()))
     private var accessoryContent = AnyView(EmptyView())
@@ -867,6 +889,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     var captureImportReceiver: (() -> (([URL], [URL]) -> Void)?)? = nil
     var documentAccessories = AnyView(EmptyView())
     var hasDocumentAccessories = false
+    var isDocumentVisible = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -949,6 +972,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         }
 
         let document = NoteEditorDocumentView(textView: textView)
+        document.allowsPreviewLoading = isDocumentVisible
         document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)), isPresent: hasDocumentAccessories)
         scrollView.documentView = document
         context.coordinator.observeScrollView(scrollView)
@@ -967,6 +991,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             textView: textView
         )
         guard synchronization != .staleSession else { return }
+        document.allowsPreviewLoading = isDocumentVisible
         document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)), isPresent: hasDocumentAccessories)
         if synchronization == .replacedText { document.invalidateTextLayout() }
         document.layoutDocument(viewport: scrollView.contentSize)

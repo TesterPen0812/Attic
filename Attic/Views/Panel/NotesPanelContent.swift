@@ -273,7 +273,8 @@ struct NoteComposerView: View {
                 captureImportReceiver: captureImportReceiver,
                 documentAccessories: AnyView(documentAccessories),
                 hasDocumentAccessories: hasDocumentAttachments || noteDraft.conflictMessage != nil
-                    || noteDraft.saveErrorMessage != nil || noteDraft.recoveryErrorMessage != nil
+                    || noteDraft.saveErrorMessage != nil || noteDraft.recoveryErrorMessage != nil,
+                isDocumentVisible: !isLibraryPresented
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 4)

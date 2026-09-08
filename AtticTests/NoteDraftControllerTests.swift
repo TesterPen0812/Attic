@@ -14,7 +14,7 @@ final class NoteDraftControllerTests: XCTestCase {
         document.addSubview(first)
         document.addSubview(last)
         scrollView.documentView = document
-        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = PreviewDemandTestWindow(contentRect: scrollView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = scrollView
         window.orderBack(nil)
@@ -41,6 +41,42 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertFalse(first.demand.isVisible)
         XCTAssertTrue(last.demand.isVisible)
         XCTAssertEqual(firstDemandChanges, initialChanges + 1)
+    }
+
+    @MainActor
+    func testPreviewDemandStopsForHiddenWindowOcclusionAndLibraryWithoutScrolling() {
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 400))
+        let document = NoteEditorDocumentView(textView: AttachmentAcceptingTextView())
+        document.frame = scrollView.bounds
+        let sensor = NoteAttachmentVisibilityView(frame: NSRect(x: 0, y: 20, width: 400, height: 250))
+        document.addSubview(sensor)
+        scrollView.documentView = document
+        let window = PreviewDemandTestWindow(contentRect: scrollView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = scrollView
+        window.orderBack(nil)
+        defer { tearDownHarnessWindow(window) }
+        sensor.refreshVisibility()
+        XCTAssertTrue(sensor.demand.isVisible)
+
+        document.allowsPreviewLoading = false
+        XCTAssertFalse(sensor.demand.isVisible, "Covering the editor with its library must release preview demand")
+        document.allowsPreviewLoading = true
+        XCTAssertTrue(sensor.demand.isVisible)
+        window.simulatedOcclusionState = []
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        XCTAssertFalse(sensor.demand.isVisible, "A fully occluded panel must not keep decoded previews alive")
+        window.simulatedOcclusionState = [.visible]
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        XCTAssertTrue(sensor.demand.isVisible)
+
+        window.orderOut(nil)
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        XCTAssertTrue(sensor.window === window, "Order-out retains the view's window and must be checked separately")
+        XCTAssertFalse(sensor.demand.isVisible)
+        window.orderBack(nil)
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        XCTAssertTrue(sensor.demand.isVisible)
     }
 
     @MainActor
@@ -925,6 +961,14 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertEqual(draft.title, "")
         XCTAssertEqual(draft.body, "")
     }
+}
+
+@MainActor
+private final class PreviewDemandTestWindow: NSWindow {
+    // Keep OS desktop overlap out of unit tests. Notification-driven state
+    // changes and real isVisible/orderOut behavior are tested explicitly.
+    var simulatedOcclusionState: NSWindow.OcclusionState = [.visible]
+    override var occlusionState: NSWindow.OcclusionState { simulatedOcclusionState }
 }
 
 @MainActor
