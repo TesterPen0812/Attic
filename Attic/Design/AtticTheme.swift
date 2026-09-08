@@ -25,6 +25,7 @@ struct TaskStatusMark: View {
     let priority: TaskPriority
     var size: CGFloat = 15
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
+    @Environment(\.colorScheme) private var colorScheme
 
     private var indicatorColor: Color {
         priority == .none && clearReadabilityEnabled
@@ -54,7 +55,8 @@ struct TaskStatusMark: View {
                     .frame(width: size, height: size)
                 Image(systemName: "checkmark")
                     .font(.system(size: size * 0.47, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(priority == .none && clearReadabilityEnabled && colorScheme == .dark
+                        ? Color.black : Color.white)
             case .backlog:
                 Circle()
                     .stroke(
