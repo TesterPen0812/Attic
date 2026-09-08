@@ -536,6 +536,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         settings.$corner
             .sink { [weak self] corner in
                 guard let self else { return }
+                if !self.isApplyingInteractiveCorner {
+                    // A new attached corner invalidates the old layer-space
+                    // anchor before either routing or layout can observe it.
+                    self.settlePresentationBeforeReanchoring()
+                }
                 self.currentCorner = corner
                 self.panel.trackpadDismissCorner = corner
                 self.hostingView.dockedCorner = corner
@@ -582,11 +587,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func resizeAndReanchor(to configuredSize: CGSize? = nil) {
         guard !isLiveResizing, !panel.inLiveResize else { return }
-        guard let workArea = refreshCurrentWorkArea(preferredScreen: currentScreen) else {
-            return
-        }
         if isShowing {
             needsResizeAfterShowing = true
+            return
+        }
+        settlePresentationBeforeReanchoring()
+        guard let workArea = refreshCurrentWorkArea(preferredScreen: currentScreen) else {
             return
         }
         let targetFrame = frame(
@@ -596,6 +602,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
         guard !framesMatch(panel.visibleContentFrame, targetFrame) else { return }
         panel.setVisibleContentFrame(targetFrame, display: panel.isVisible)
+    }
+
+    private func settlePresentationBeforeReanchoring() {
+        clearInteractiveDismissal()
+        panel.cancelTrackpadSwipe()
+        stopPanelMotion()
+        restoreFullPresentation()
     }
 
     private func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {

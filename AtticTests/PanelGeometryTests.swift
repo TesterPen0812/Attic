@@ -141,6 +141,48 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsSizeAndCornerResetCollapsedPresentationBeforeReanchoring() throws {
+        let suite = "AtticPanelMotionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: persistence)
+        let notes = NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore())
+        let settings = AppSettings(defaults: defaults)
+        let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        let controller = AtticPanelController(
+            store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: persistence)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: settings, uiState: PanelUIState()
+        )
+        let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
+            .first { !existingWindows.contains(ObjectIdentifier($0)) })
+        let container = try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
+        XCTAssertFalse(panel.isVisible, "This regression must not display a test window")
+        let screen = try XCTUnwrap(controller.currentScreen)
+        for corner in ScreenCorner.allCases {
+            container.setCollapseProgress(0.65, corner: controller.currentCorner, reduceMotion: false)
+            settings.corner = corner
+            XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
+            XCTAssertEqual(controller.currentCorner, corner)
+            container.setCollapseProgress(0.65, corner: corner, reduceMotion: false)
+            settings.persistPanelSize(CGSize(
+                width: settings.panelContentSize == 480 ? 420 : 480,
+                height: settings.panelHeight == 620 ? 600 : 620
+            ))
+            XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
+            let expected = PanelGeometry.workAreaPlacement(
+                preferredSize: CGSize(width: settings.panelContentSize, height: settings.panelHeight),
+                in: screen.visibleFrame, corner: corner
+            ).frame
+            XCTAssertEqual(panel.visibleContentFrame, expected)
+            XCTAssertEqual(container.hostingView.frame.size, expected.size)
+            XCTAssertFalse(panel.isVisible)
+        }
+        withExtendedLifetime(controller) {}
+    }
+
+    @MainActor
     func testHideWaitsForPresentationAndStaleHideCannotCompleteAfterReveal() {
         var transitions = PanelVisibilityTransitionState()
         var hidden = 0
