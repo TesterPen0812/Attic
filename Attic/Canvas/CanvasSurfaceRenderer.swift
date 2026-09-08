@@ -427,7 +427,8 @@ func drawCanvas(
     imageProvider: (CanvasPlacedImage) -> CGImage? = { _ in nil },
     imageSelectionColor: CGColor? = nil,
     shapePreview: CanvasStrokeGeometry? = nil,
-    strokeReadabilityShadowColor: CGColor? = nil,
+    strokeReadabilityShadowColor: ((CGColor) -> CGColor)? = nil,
+    strokeReadabilityEdgeRadius: CGFloat = 0,
     drawPlacedObjects: ((CGContext, CGRect) -> Void)? = nil
 ) {
     context.saveGState()
@@ -476,9 +477,9 @@ func drawCanvas(
     func strokePath(color: CGColor, width: CGFloat) {
         if let strokeReadabilityShadowColor {
             context.setShadow(
-                offset: CGSize(width: 0, height: 0.35),
-                blur: 0.7,
-                color: strokeReadabilityShadowColor
+                offset: .zero,
+                blur: strokeReadabilityEdgeRadius,
+                color: strokeReadabilityShadowColor(color)
             )
         }
         context.setStrokeColor(color)

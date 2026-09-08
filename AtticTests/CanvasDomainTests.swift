@@ -77,6 +77,99 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 
 final class CanvasAccessibilityTests: XCTestCase {
     @MainActor
+    func testClearReadabilityUsesOppositeResolvedInkAndPreservesInlineDraftSelection() throws {
+        let whiteEdge = CanvasSemanticRenderer.readabilityEdgeColor(for: .black, increasedContrast: false)
+        let blackEdge = CanvasSemanticRenderer.readabilityEdgeColor(for: .white, increasedContrast: true)
+        XCTAssertEqual(whiteEdge.usingColorSpace(.deviceRGB)?.redComponent, 1)
+        XCTAssertEqual(whiteEdge.alphaComponent, 0.90, accuracy: 0.001)
+        XCTAssertEqual(blackEdge.usingColorSpace(.deviceRGB)?.redComponent, 0)
+        XCTAssertEqual(blackEdge.alphaComponent, 1)
+
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        session.selectTextTool()
+        let draft = try XCTUnwrap(session.makeTextInsertion(at: .zero, width: 200))
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                 clearReadabilityEnabled: false).configure(view)
+        view.beginSemanticTextEditing(draft.baseline, insertion: draft)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText("Keep this draft", replacementRange: NSRange(location: 0, length: 0))
+        editor.setSelectedRange(NSRange(location: 5, length: 4))
+        let selection = editor.selectedRange()
+        let frame = editor.frame
+        let storage = try XCTUnwrap(editor.textStorage)
+        view.clearReadabilityEnabled = true
+        view.layoutSemanticTextEditor()
+        let shadow = try XCTUnwrap(storage.attribute(.shadow, at: 0, effectiveRange: nil) as? NSShadow)
+        XCTAssertEqual(shadow.shadowOffset, .zero)
+        XCTAssertEqual(shadow.shadowBlurRadius, AtticClearGlassReadabilityPolicy.edgeRadius)
+        view.layoutSemanticTextEditor()
+        XCTAssertTrue(storage.attribute(.shadow, at: 0, effectiveRange: nil) as? NSShadow === shadow)
+        XCTAssertEqual(editor.selectedRange(), selection)
+        XCTAssertEqual(editor.frame, frame)
+        XCTAssertEqual(editor.string, "Keep this draft")
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        editor.insertText("new", replacementRange: selection)
+        XCTAssertNotNil(storage.attribute(.shadow, at: 5, effectiveRange: nil))
+        let editedText = editor.string
+        let editedSelection = editor.selectedRange()
+        view.clearReadabilityEnabled = false
+        view.layoutSemanticTextEditor()
+        XCTAssertNil(storage.attribute(.shadow, at: 0, effectiveRange: nil))
+        XCTAssertNil(editor.typingAttributes[.shadow])
+        XCTAssertEqual(editor.string, editedText)
+        XCTAssertEqual(editor.selectedRange(), editedSelection)
+        XCTAssertTrue(view.finishSemanticTextEditing(commit: true))
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, editedText)
+    }
+
+    @MainActor
+    func testClearReadabilityPaintsSemanticTextAndShapesWithoutLeakingOntoImagesOrCache() throws {
+        let appearance = try XCTUnwrap(NSAppearance(named: .aqua))
+        let cache = CanvasSemanticRenderCache()
+        let text = CanvasSemanticObject(textInsertionAt: CanvasPoint(x: 20, y: 20), canvasID: UUID(),
+            generation: 0, content: CanvasSemanticContent(text: "Readable", color: .ink, strokeWidth: 2), width: 160)
+        var shape = text
+        shape.content = CanvasSemanticContent(shape: .rectangle, color: .ink, strokeWidth: 2)
+        let image = makeAccessibilityImage(id: UUID(), center: CanvasPoint(x: 210, y: 210),
+            width: 24, height: 24, zIndex: 1, createdAt: Date())
+        let source = try XCTUnwrap(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8,
+            bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        source.setFillColor(NSColor.red.cgColor)
+        source.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        let decoded = try XCTUnwrap(source.makeImage())
+        func pixels(_ object: CanvasSemanticObject, edge: Bool) throws -> [UInt8] {
+            let context = try XCTUnwrap(CGContext(data: nil, width: 256, height: 256, bitsPerComponent: 8,
+                bytesPerRow: 1024, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(NSColor.black.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: 256, height: 256))
+            appearance.performAsCurrentDrawingAppearance {
+                CanvasSemanticRenderer.draw(object, in: context, cache: cache, clearReadabilityEnabled: edge)
+            }
+            // Draw an actual image after the semantic paint pass: its pixels
+            // and surrounding background must not inherit the object's edge.
+            drawCanvasImage(image, decoded: decoded, in: context)
+            let data = try XCTUnwrap(context.makeImage()?.dataProvider?.data)
+            return Array(data as Data)
+        }
+        for object in [text, shape] {
+            let plain = try pixels(object, edge: false)
+            let edged = try pixels(object, edge: true)
+            XCTAssertNotEqual(plain, edged)
+            for row in 180..<240 {
+                let range = (row * 1024 + 180 * 4)..<(row * 1024 + 240 * 4)
+                XCTAssertEqual(Array(plain[range]), Array(edged[range]))
+            }
+        }
+        let content = try XCTUnwrap(text.content)
+        let framesetter = cache.framesetter(for: text, content: content)
+        _ = try pixels(text, edge: true)
+        _ = try pixels(text, edge: false)
+        XCTAssertTrue(cache.framesetter(for: text, content: content) === framesetter)
+        XCTAssertEqual(text.content, content)
+    }
+
+    @MainActor
     func testFailedInsertionOnVirtualFirstPageCannotBeStrandedByCreatingCanvas() throws {
         let gate = PersistenceGate()
         let store = try makeTestCanvasStore(persist: gate.save)

@@ -492,6 +492,7 @@ final class CanvasNSView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        layoutSemanticTextEditor()
         needsDisplay = true
     }
 
@@ -528,6 +529,7 @@ final class CanvasNSView: NSView {
             return
         }
         let displayImages = imagesForDisplay
+        let increasedContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
         imageCache.prepare(
             for: CanvasImageDecodeCandidatePolicy.candidates(
                 in: displayImages,
@@ -551,8 +553,11 @@ final class CanvasNSView: NSView {
             imageSelectionColor: selectionAccentColor.cgColor,
             shapePreview: shapePreview,
             strokeReadabilityShadowColor: clearReadabilityEnabled
-                ? readabilityShadowColor
+                ? { ink in CanvasSemanticRenderer.readabilityEdgeColor(
+                    for: NSColor(cgColor: ink) ?? .labelColor,
+                    increasedContrast: increasedContrast).cgColor }
                 : nil,
+            strokeReadabilityEdgeRadius: AtticClearGlassReadabilityPolicy.edgeRadius,
             drawPlacedObjects: { [self] context, cullingRect in
                 let objects = displayImages.map(CanvasPlacedRenderObject.image)
                     + semanticObjectsForDisplay.map(CanvasPlacedRenderObject.semantic)
@@ -563,7 +568,9 @@ final class CanvasNSView: NSView {
                         if let decoded = imageCache.image(for: image) { drawCanvasImage(image, decoded: decoded, in: context) }
                     case let .semantic(object):
                         if object.id != editingSemanticObjectID {
-                            CanvasSemanticRenderer.draw(object, in: context, cache: semanticRenderCache)
+                            CanvasSemanticRenderer.draw(object, in: context, cache: semanticRenderCache,
+                                clearReadabilityEnabled: clearReadabilityEnabled,
+                                increasedContrast: increasedContrast)
                         }
                     }
                 }
@@ -574,13 +581,6 @@ final class CanvasNSView: NSView {
                 viewport: interaction.viewport, viewportSize: bounds.size,
                 color: selectionAccentColor.cgColor)
         }
-    }
-
-    private var readabilityShadowColor: CGColor {
-        let match = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
-        return (match == .darkAqua
-            ? NSColor.black.withAlphaComponent(0.56)
-            : NSColor.white.withAlphaComponent(0.62)).cgColor
     }
 
     override func mouseDown(with event: NSEvent) {

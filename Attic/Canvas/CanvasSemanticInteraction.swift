@@ -30,6 +30,26 @@ final class CanvasSemanticTextEditor: NSTextView, NSTextViewDelegate {
     var onKeyboardCommit: (() -> Void)?
     var onDraft: ((String) -> Void)?
     var isFinishing = false
+    private var readabilityEdgeColor: NSColor?
+
+    func updateReadabilityEdge(color: NSColor?) {
+        guard readabilityEdgeColor != color else { return }
+        readabilityEdgeColor = color
+        var attributes = typingAttributes
+        let range = NSRange(location: 0, length: textStorage?.length ?? 0)
+        if let color {
+            let shadow = NSShadow()
+            shadow.shadowOffset = .zero
+            shadow.shadowBlurRadius = AtticClearGlassReadabilityPolicy.edgeRadius
+            shadow.shadowColor = color
+            textStorage?.addAttribute(.shadow, value: shadow, range: range)
+            attributes[.shadow] = shadow
+        } else {
+            textStorage?.removeAttribute(.shadow, range: range)
+            attributes.removeValue(forKey: .shadow)
+        }
+        typingAttributes = attributes
+    }
 
     override func resignFirstResponder() -> Bool {
         if !isFinishing, onCommit?() == false { return false }
@@ -205,6 +225,12 @@ extension CanvasNSView {
         if editor.font != font { editor.font = font }
         if editor.alignment != alignment { editor.alignment = alignment }
         if editor.textColor != content.color.nsColor { editor.textColor = content.color.nsColor }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            editor.updateReadabilityEdge(color: clearReadabilityEnabled
+                ? CanvasSemanticRenderer.readabilityEdgeColor(for: content.color.nsColor,
+                    increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
+                : nil)
+        }
         if editor.textContainerInset != inset { editor.textContainerInset = inset }
         let width = object.transform.width * scale
         if editor.frame.width != width {

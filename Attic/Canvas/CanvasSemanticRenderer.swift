@@ -27,6 +27,13 @@ final class CanvasSemanticRenderCache {
 
 @MainActor
 enum CanvasSemanticRenderer {
+    static func readabilityEdgeColor(for ink: NSColor, increasedContrast: Bool) -> NSColor {
+        let rgb = ink.usingColorSpace(.deviceRGB) ?? .black
+        let luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+        return (luminance >= 0.5 ? NSColor.black : NSColor.white)
+            .withAlphaComponent(AtticClearGlassReadabilityPolicy.edgeOpacity(increasedContrast: increasedContrast))
+    }
+
     static func font(_ content: CanvasSemanticContent, scale: Double = 1) -> NSFont {
         .systemFont(ofSize: content.fontSize * scale,
                     weight: content.fontWeight == "bold" ? .bold : content.fontWeight == "semibold" ? .semibold : .regular)
@@ -59,7 +66,8 @@ enum CanvasSemanticRenderer {
         textSize(content, width: 280)
     }
 
-    static func draw(_ object: CanvasSemanticObject, in context: CGContext, cache: CanvasSemanticRenderCache) {
+    static func draw(_ object: CanvasSemanticObject, in context: CGContext, cache: CanvasSemanticRenderCache,
+                     clearReadabilityEnabled: Bool = false, increasedContrast: Bool = false) {
         let rect = object.worldRect
         context.saveGState()
         defer { context.restoreGState() }
@@ -72,6 +80,10 @@ enum CanvasSemanticRenderer {
             context.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
             context.strokePath()
             return
+        }
+        if clearReadabilityEnabled {
+            context.setShadow(offset: .zero, blur: AtticClearGlassReadabilityPolicy.edgeRadius,
+                color: readabilityEdgeColor(for: content.color.nsColor, increasedContrast: increasedContrast).cgColor)
         }
         if let shape = content.shape {
             let start = CanvasPoint(x: rect.minX + content.start.x * rect.width, y: rect.minY + content.start.y * rect.height)
