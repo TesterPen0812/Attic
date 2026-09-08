@@ -319,6 +319,9 @@ final class AppCoordinator {
         hasStarted = true
         guard shouldStartInteractiveShellServices else { return }
         NSApp.appearance = settings.appearance.nsAppearance
+        appearanceObservation = settings.$appearance.sink { preference in
+            NSApp.appearance = preference.nsAppearance
+        }
 
         observeMenuTracking()
         cleanupService.start()
@@ -335,9 +338,6 @@ final class AppCoordinator {
 
         newTaskHotKey.register()
         hoverMonitor.start()
-        appearanceObservation = settings.$appearance.sink { preference in
-            NSApp.appearance = preference.nsAppearance
-        }
         if !isRunningTests {
             agentAccessObservation = settings.$isAgentAccessEnabled.sink { [weak self] isEnabled in
                 guard let self else { return }

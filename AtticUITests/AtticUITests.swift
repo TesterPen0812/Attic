@@ -36,6 +36,123 @@ final class AtticUITests: XCTestCase {
         app = nil
     }
 
+    func testAppearanceThemesResolveClearAndGradientControls() throws {
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Attic Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        settings.descendants(matching: .any)["settings-nav-appearance"].click()
+        let page = settings.descendants(matching: .any)["settings-page-appearance"]
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        let appearance = settings.descendants(matching: .any)["setting-appearance"]
+        let glass = settings.descendants(matching: .any)["setting-glass-style"]
+        let translucency = settings.descendants(matching: .any)["setting-translucency"]
+        let coverage = settings.sliders["setting-panel-gradient-coverage"]
+        let original = settings.buttons["setting-panel-theme-original"]
+
+        func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
+            picker.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
+        }
+        func reveal(_ element: XCUIElement, deltaY: CGFloat) {
+            for _ in 0..<5 {
+                if element.isHittable { return }
+                page.scroll(byDeltaX: 0, deltaY: deltaY)
+            }
+            XCTAssertTrue(element.isHittable, "Settings control must be reachable without resizing the window")
+        }
+        func waitFor(_ message: String, _ condition: @escaping () -> Bool) {
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message)
+        }
+        func assertSelected(_ element: XCUIElement) {
+            waitFor("Expected selected glass style: \(element.label)") {
+                element.isSelected || (element.value as? String) == "1"
+                    || (element.value as? NSNumber)?.boolValue == true
+            }
+        }
+        func recordPanel(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        // One app launch covers every preset in both explicit appearances.
+        // Establish Clear once, then prove unavailable states do not erase it.
+        reveal(original, deltaY: 450)
+        original.click()
+        segment("Dark", in: appearance).click()
+        if !glass.exists {
+            reveal(translucency, deltaY: -450)
+            translucency.click()
+        }
+        XCTAssertTrue(glass.waitForExistence(timeout: 3))
+        let clear = segment("Clear", in: glass)
+        reveal(clear, deltaY: -450)
+        waitFor("Original Dark must enable Clear") { clear.isEnabled }
+        clear.click()
+        assertSelected(clear)
+
+        let themes = ["original", "midnightCobalt", "porcelainVapor", "smokedUmber",
+                      "electricBlue", "seaGlass", "amethyst"]
+        for scheme in ["Light", "Dark"] {
+            let schemeControl = segment(scheme, in: appearance)
+            reveal(schemeControl, deltaY: 450)
+            schemeControl.click()
+            for theme in themes {
+                let choice = settings.buttons["setting-panel-theme-\(theme)"]
+                XCTAssertTrue(choice.waitForExistence(timeout: 3))
+                reveal(choice, deltaY: -300)
+                choice.click()
+                waitFor("Selected theme must update") { (choice.value as? String) == "Selected" }
+                let clearIsAvailable = theme == "original" && scheme == "Dark"
+                waitFor("Clear availability must follow the selected preset and appearance") {
+                    clear.isEnabled == clearIsAvailable
+                }
+                assertSelected(segment(clearIsAvailable ? "Clear" : "Frosted", in: glass))
+                XCTAssertEqual(settings.descendants(matching: .any)["setting-clear-availability"].exists,
+                               !clearIsAvailable)
+                // Evidence only: these screenshots do not assert contrast or
+                // physical desktop readability on their own.
+                recordPanel("Theme-\(theme)-\(scheme)")
+            }
+        }
+
+        reveal(original, deltaY: 450)
+        original.click()
+        assertSelected(clear)
+        reveal(translucency, deltaY: -450)
+        translucency.click()
+        waitFor("Opaque mode hides the glass picker") { !glass.exists }
+        recordPanel("Original-Dark-Opaque")
+        translucency.click()
+        XCTAssertTrue(glass.waitForExistence(timeout: 3))
+        assertSelected(clear)
+
+        // Explicit Frosted makes the gradient active; Original Dark Clear
+        // intentionally preserves its existing surface instead.
+        let frosted = segment("Frosted", in: glass)
+        reveal(frosted, deltaY: -450)
+        frosted.click()
+        assertSelected(frosted)
+        reveal(coverage, deltaY: -450)
+        XCTAssertTrue(coverage.isEnabled)
+        for endpoint: CGFloat in [0, 1] {
+            coverage.adjust(toNormalizedSliderPosition: endpoint)
+            waitFor("Gradient slider must reach its endpoint") {
+                abs(coverage.normalizedSliderPosition - endpoint) < 0.01
+            }
+            recordPanel(endpoint == 0 ? "Gradient-Off" : "Gradient-Full-Coverage")
+        }
+        coverage.adjust(toNormalizedSliderPosition: 0.55)
+        reveal(clear, deltaY: 450)
+        clear.click()
+        let systemAppearance = segment("System", in: appearance)
+        reveal(systemAppearance, deltaY: 450)
+        systemAppearance.click()
+        settings.buttons[XCUIIdentifierCloseWindow].click()
+        XCTAssertTrue(app.descendants(matching: .any)["panel-section-picker"].exists)
+    }
+
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
         let addButton = app.buttons["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
