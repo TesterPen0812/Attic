@@ -321,7 +321,6 @@ final class AppCoordinator {
         NSApp.appearance = settings.appearance.nsAppearance
         appearanceObservation = settings.$appearance
             .removeDuplicates()
-            .receive(on: RunLoop.main)
             .sink { preference in
                 NSApp.appearance = preference.nsAppearance
             }
