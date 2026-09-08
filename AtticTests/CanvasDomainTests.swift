@@ -190,10 +190,10 @@ final class CanvasAccessibilityTests: XCTestCase {
             width: 24, height: 24, zIndex: 1, createdAt: Date())
         let source = try XCTUnwrap(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8,
             bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        source.setFillColor(NSColor.red.cgColor)
+        source.setFillColor(NSColor.red.withAlphaComponent(0.5).cgColor)
         source.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
         let decoded = try XCTUnwrap(source.makeImage())
-        func pixels(_ object: CanvasSemanticObject, edge: Bool) throws -> [UInt8] {
+        func pixels(_ object: CanvasSemanticObject, edge: Bool, imagePassOnly: Bool = false) throws -> [UInt8] {
             let context = try XCTUnwrap(CGContext(data: nil, width: 256, height: 256, bitsPerComponent: 8,
                 bytesPerRow: 1024, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             context.setFillColor(NSColor.black.cgColor)
@@ -201,8 +201,10 @@ final class CanvasAccessibilityTests: XCTestCase {
             appearance.performAsCurrentDrawingAppearance {
                 CanvasSemanticRenderer.draw(object, in: context, cache: cache, clearReadabilityEnabled: edge)
             }
-            // Draw an actual image after the semantic paint pass: its pixels
-            // and surrounding background must not inherit the object's edge.
+            // Erase only pixels, preserving graphics state. Any leaked shadow
+            // will remain visible under this translucent image. Comparing the
+            // entire image-only pass avoids flipped-bitmap sampling mistakes.
+            if imagePassOnly { context.clear(CGRect(x: 0, y: 0, width: 256, height: 256)) }
             drawCanvasImage(image, decoded: decoded, in: context)
             let data = try XCTUnwrap(context.makeImage()?.dataProvider?.data)
             return Array(data as Data)
@@ -211,16 +213,20 @@ final class CanvasAccessibilityTests: XCTestCase {
             let plain = try pixels(object, edge: false)
             let edged = try pixels(object, edge: true)
             XCTAssertNotEqual(plain, edged)
-            for row in 180..<240 {
-                let range = (row * 1024 + 180 * 4)..<(row * 1024 + 240 * 4)
-                XCTAssertEqual(Array(plain[range]), Array(edged[range]))
-            }
+            let plainImage = try pixels(object, edge: false, imagePassOnly: true)
+            let edgedImage = try pixels(object, edge: true, imagePassOnly: true)
+            XCTAssertTrue(plainImage == edgedImage, "Semantic edge must not change subsequent image pixels")
         }
         let content = try XCTUnwrap(text.content)
-        let framesetter = cache.framesetter(for: text, content: content)
+        var framesetterIdentity: ObjectIdentifier?
+        appearance.performAsCurrentDrawingAppearance {
+            framesetterIdentity = ObjectIdentifier(cache.framesetter(for: text, content: content))
+        }
         _ = try pixels(text, edge: true)
         _ = try pixels(text, edge: false)
-        XCTAssertTrue(cache.framesetter(for: text, content: content) === framesetter)
+        appearance.performAsCurrentDrawingAppearance {
+            XCTAssertEqual(ObjectIdentifier(cache.framesetter(for: text, content: content)), framesetterIdentity)
+        }
         XCTAssertEqual(text.content, content)
     }
 
