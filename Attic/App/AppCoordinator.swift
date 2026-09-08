@@ -319,9 +319,12 @@ final class AppCoordinator {
         hasStarted = true
         guard shouldStartInteractiveShellServices else { return }
         NSApp.appearance = settings.appearance.nsAppearance
-        appearanceObservation = settings.$appearance.sink { preference in
-            NSApp.appearance = preference.nsAppearance
-        }
+        appearanceObservation = settings.$appearance
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { preference in
+                NSApp.appearance = preference.nsAppearance
+            }
 
         observeMenuTracking()
         cleanupService.start()

@@ -47,7 +47,7 @@ struct AppearanceSettingsView: View {
                     description: "Follow your Mac or keep Attic in Light or Dark appearance.",
                     systemImage: "sun.max"
                 ) {
-                    Picker("Appearance", selection: $settings.appearance) {
+                    Picker("Appearance", selection: appearanceSelection) {
                         ForEach(AppearancePreference.allCases) { preference in
                             Text(preference.title).tag(preference)
                         }
@@ -211,6 +211,15 @@ struct AppearanceSettingsView: View {
         }
     }
 
+    private var appearanceSelection: Binding<AppearancePreference> {
+        Binding {
+            settings.appearance
+        } set: { preference in
+            guard settings.appearance != preference else { return }
+            settings.appearance = preference
+        }
+    }
+
     private var gradientColor: Binding<Color> {
         Binding {
             let color = AtticThemeColor(hex: settings.panelGradientColorHex)
@@ -243,6 +252,7 @@ struct AppearanceSettingsView: View {
             settings.panelGlassStyle.resolved(for: settings.panelTheme, colorScheme: effectiveColorScheme)
         } set: { style in
             guard style != .clear || isClearAvailable else { return }
+            guard settings.panelGlassStyle != style else { return }
             settings.panelGlassStyle = style
         }
     }
