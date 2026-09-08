@@ -122,13 +122,59 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertTrue(panel.firstResponder === view)
         XCTAssertTrue(session.selectedSemanticObject?.content?.text?.hasSuffix(" unsaved") == true)
         XCTAssertTrue(view.performKeyEquivalent(with: reset))
-        panel.makeFirstResponder(nil)
+        let otherEditor = NSTextView(frame: CGRect(x: 0, y: 0, width: 100, height: 40))
+        view.addSubview(otherEditor)
+        panel.makeFirstResponder(otherEditor)
         XCTAssertFalse(view.performKeyEquivalent(with: fit))
+        XCTAssertTrue(panel.firstResponder === otherEditor)
         XCTAssertEqual(session.viewport, original)
         panel.makeFirstResponder(view)
         view.deactivateRepresentation()
         XCTAssertFalse(view.performKeyEquivalent(with: fit))
         XCTAssertEqual(session.viewport, original)
+    }
+
+    @MainActor
+    func testViewportShortcutAfterSectionReplacementClaimsOnlyUnassignedWindowFocus() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        session.selectTextTool()
+        var draft = try XCTUnwrap(session.makeTextInsertion(at: CanvasPoint(x: 20, y: 40), width: 160))
+        draft = CanvasSemanticTextDraft(baseline: draft.baseline, text: "Keep viewport commands", isInsertion: true)
+        XCTAssertTrue(session.commitSemanticText(draft))
+        let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 315, height: 383),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let oldView = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 315, height: 383))
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                               clearReadabilityEnabled: false)
+        panel.contentView = oldView
+        bridge.configure(oldView)
+        panel.makeFirstResponder(oldView)
+        oldView.deactivateRepresentation()
+        panel.contentView = NSView(frame: oldView.frame)
+        panel.makeFirstResponder(nil)
+        let view = CanvasNSView(frame: oldView.frame)
+        bridge.configure(view)
+        panel.contentView = view
+        panel.makeFirstResponder(nil)
+        XCTAssertTrue(panel.firstResponder === panel)
+        let fit = try canvasKeyEvent(keyCode: 25, characters: "9", modifiers: [.command, .capsLock])
+        let reset = try canvasKeyEvent(keyCode: 82, characters: "0", modifiers: [.command, .numericPad])
+        XCTAssertFalse(oldView.performKeyEquivalent(with: fit))
+        XCTAssertTrue(view.performKeyEquivalent(with: fit))
+        XCTAssertTrue(panel.firstResponder === view)
+        XCTAssertNotEqual(session.viewport.scale, 1)
+        XCTAssertTrue(view.performKeyEquivalent(with: reset))
+        XCTAssertEqual(session.viewport, CanvasViewport())
+        for modifier: NSEvent.ModifierFlags in [.shift, .option, .control] {
+            XCTAssertFalse(view.performKeyEquivalent(with: try canvasKeyEvent(
+                keyCode: 25, characters: "9", modifiers: [.command, modifier])))
+            XCTAssertEqual(session.viewport, CanvasViewport())
+        }
+        panel.makeFirstResponder(nil)
+        view.isHidden = true
+        XCTAssertFalse(view.performKeyEquivalent(with: fit))
+        XCTAssertTrue(panel.firstResponder === panel)
+        XCTAssertEqual(session.viewport, CanvasViewport())
     }
 
     @MainActor

@@ -980,13 +980,18 @@ final class CanvasNSView: NSView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let shortcutModifiers = modifiers.intersection([.command, .control, .option, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
         // Popup-menu shortcuts are not a dependable responder route before
         // their nested menu has opened. Handle viewport keys on the native
         // canvas that actually owns focus, using its current measured bounds.
-        if modifiers == .command, key == "9" || key == "0",
-           isRepresentationActive, let window,
-           window.firstResponder === self || (semanticTextEditor != nil && window.firstResponder === semanticTextEditor) {
+        // Section replacement can leave NSWindow itself as first responder.
+        // An explicit viewport command may claim that otherwise-unassigned
+        // focus, but must never take it from another section's text/control.
+        if shortcutModifiers == .command, key == "9" || key == "0",
+           isRepresentationActive, !isHiddenOrHasHiddenAncestor, let window,
+           window.firstResponder === window || window.firstResponder === self
+                || (semanticTextEditor != nil && window.firstResponder === semanticTextEditor) {
             guard finishSemanticTextEditing(commit: true) else { return true }
             window.makeFirstResponder(self)
             interruptViewportGestureForPointer()
