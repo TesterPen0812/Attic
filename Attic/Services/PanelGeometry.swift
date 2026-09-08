@@ -365,6 +365,34 @@ struct PanelTrackpadSwipeSample: Equatable {
     let isDirectionInvertedFromDevice: Bool
 }
 
+/// Accumulates only the undecided prefix of one precise, phase-owned gesture.
+/// The first nonzero direction remains authoritative even when every sample
+/// is smaller than the acquisition threshold.
+struct PanelTrackpadSwipeIntent {
+    private(set) var displacement = CGPoint.zero
+    private(set) var initialDirection: CGPoint?
+
+    mutating func accumulate(deltaX: CGFloat, deltaY: CGFloat) {
+        guard deltaX.isFinite, deltaY.isFinite else { return }
+        if initialDirection == nil, deltaX != 0 || deltaY != 0 {
+            initialDirection = CGPoint(x: deltaX, y: deltaY)
+        }
+        displacement.x += deltaX
+        displacement.y += deltaY
+    }
+
+    var isReady: Bool {
+        hypot(displacement.x, displacement.y) >= PanelTrackpadDismissTracker.minimumIntentDelta
+    }
+
+    var isHorizontal: Bool {
+        guard let initialDirection else { return false }
+        let dominance = PanelTrackpadDismissTracker.horizontalDominance
+        return abs(initialDirection.x) > abs(initialDirection.y) * dominance
+            && abs(displacement.x) > abs(displacement.y) * dominance
+    }
+}
+
 enum PanelTrackpadDismissUpdate: Equatable {
     case passThrough
     case tracking
@@ -419,6 +447,7 @@ struct PanelTrackpadDismissTracker {
     }
 
     private var state = State.idle
+    private var intent = PanelTrackpadSwipeIntent()
     private(set) var progress: CGFloat = 0
 
     static func isTowardDockedSide(
@@ -474,15 +503,17 @@ struct PanelTrackpadDismissTracker {
             return .passThrough
         }
         if state == .undecided {
-            guard hypot(physicalX, physicalY) >= Self.minimumIntentDelta else {
-                return .passThrough
-            }
-            guard edgeProgress > 0,
-                  abs(physicalX) > abs(physicalY) * Self.horizontalDominance else {
+            intent.accumulate(deltaX: physicalX, deltaY: physicalY)
+            guard intent.isReady else { return .passThrough }
+            guard (intent.initialDirection?.x ?? 0) * edgeDirection > 0,
+                  intent.displacement.x * edgeDirection > 0,
+                  intent.isHorizontal else {
                 state = .rejected
                 return .passThrough
             }
             state = .tracking
+            progress = intent.displacement.x * edgeDirection
+            return .tracking
         }
 
         progress = max(0, progress + edgeProgress)
@@ -495,6 +526,7 @@ struct PanelTrackpadDismissTracker {
 
     private mutating func reset() {
         state = .idle
+        intent = PanelTrackpadSwipeIntent()
         progress = 0
     }
 

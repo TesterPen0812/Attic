@@ -31,6 +31,7 @@ final class AtticPanel: NSPanel {
     private enum SwipeRoute { case hide, notes, content }
     private var swipeRoute: SwipeRoute?
     private var swipeSequenceActive = false
+    private var swipeIntent = PanelTrackpadSwipeIntent()
     private var hasInteractiveDismissal = false
     private var swipeStartedInNotes = false
     private var swipeStartedInLibrary = false
@@ -126,15 +127,19 @@ final class AtticPanel: NSPanel {
         }
 
         var trackerPhase = phase
-        if swipeRoute == nil,
-           hypot(event.scrollingDeltaX, event.scrollingDeltaY) >= PanelTrackpadDismissTracker.minimumIntentDelta {
+        var trackerDelta = CGPoint(x: event.scrollingDeltaX, y: event.scrollingDeltaY)
+        if swipeRoute == nil, phase == .began || phase == .changed {
+            swipeIntent.accumulate(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY)
+        }
+        if swipeRoute == nil, swipeIntent.isReady,
+           let initialDirection = swipeIntent.initialDirection {
             let towardEdge = PanelTrackpadDismissTracker.isTowardDockedSide(
-                deltaX: event.scrollingDeltaX,
-                deltaY: event.scrollingDeltaY,
+                deltaX: initialDirection.x,
+                deltaY: initialDirection.y,
                 isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice,
                 dockedCorner: trackpadDismissCorner
             )
-            if abs(event.scrollingDeltaX) <= abs(event.scrollingDeltaY) * PanelTrackpadDismissTracker.horizontalDominance {
+            if !swipeIntent.isHorizontal {
                 swipeRoute = .content
             } else if swipeStartedInNotes && (towardEdge == swipeStartedInLibrary) {
                 swipeRoute = .notes
@@ -144,6 +149,9 @@ final class AtticPanel: NSPanel {
             // AppKit commonly begins with a zero-delta event. Preserve that
             // sequence boundary when the first directional sample follows it.
             trackerPhase = phase == .changed ? .began : phase
+            // The tracker did not receive undecided samples. Seed its first
+            // sample with their total so slow movement is never discarded.
+            trackerDelta = swipeIntent.displacement
         }
         guard let route = swipeRoute, route != .content else {
             if phase == .ended || phase == .cancelled { cancelTrackpadSwipe() }
@@ -153,8 +161,8 @@ final class AtticPanel: NSPanel {
 
         let update = trackpadDismissTracker.update(
             sample: PanelTrackpadSwipeSample(
-                deltaX: event.scrollingDeltaX,
-                deltaY: event.scrollingDeltaY,
+                deltaX: trackerDelta.x,
+                deltaY: trackerDelta.y,
                 phase: trackerPhase,
                 isPrecise: event.hasPreciseScrollingDeltas,
                 isDirectionInvertedFromDevice: event.isDirectionInvertedFromDevice
@@ -197,6 +205,7 @@ final class AtticPanel: NSPanel {
         trackpadDismissTracker.cancel()
         swipeRoute = nil
         swipeSequenceActive = false
+        swipeIntent = PanelTrackpadSwipeIntent()
         swipeStartedInNotes = false
         swipeStartedInLibrary = false
         swipeNotesTarget = nil

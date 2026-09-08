@@ -49,6 +49,71 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual(PanelCollapseGeometry.progress(forSwipeDistance: .infinity, panelWidth: 332), 0)
     }
 
+    func testVerySlowPreciseSwipeAccumulatesIntentAndReportsEveryLaterSample() {
+        for corner in ScreenCorner.allCases {
+            for inverted in [false, true] {
+                let side: CGFloat = [.topRight, .bottomRight].contains(corner) ? -1 : 1
+                let delta = 0.2 * side * (inverted ? -1 : 1)
+                var intent = PanelTrackpadSwipeIntent()
+                var tracker = PanelTrackpadDismissTracker()
+                for index in 0..<300 {
+                    intent.accumulate(deltaX: delta, deltaY: 0)
+                    let update = tracker.update(sample: PanelTrackpadSwipeSample(
+                        deltaX: delta, deltaY: 0, phase: index == 0 ? .began : .changed,
+                        isPrecise: true, isDirectionInvertedFromDevice: inverted
+                    ), dockedCorner: corner)
+                    XCTAssertEqual(intent.isReady, index >= 2)
+                    XCTAssertTrue(intent.isHorizontal)
+                    XCTAssertEqual(update, index >= 2 ? .tracking : .passThrough)
+                    if index >= 2 {
+                        XCTAssertEqual(tracker.progress, CGFloat(index + 1) * 0.2, accuracy: 0.001)
+                    }
+                }
+                XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+                    deltaX: 0, deltaY: 0, phase: .ended,
+                    isPrecise: true, isDirectionInvertedFromDevice: inverted
+                ), dockedCorner: corner), .requestHide)
+            }
+        }
+    }
+
+    func testTinyVerticalSamplesRemainContentOwnedEvenAfterTurningHorizontal() {
+        var intent = PanelTrackpadSwipeIntent()
+        var tracker = PanelTrackpadDismissTracker()
+        for index in 0..<300 {
+            intent.accumulate(deltaX: 0, deltaY: 0.2)
+            XCTAssertFalse(intent.isHorizontal)
+            XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+                deltaX: 0, deltaY: 0.2, phase: index == 0 ? .began : .changed,
+                isPrecise: true, isDirectionInvertedFromDevice: false
+            ), dockedCorner: .topRight), .passThrough)
+        }
+        intent.accumulate(deltaX: -100, deltaY: 0)
+        XCTAssertFalse(intent.isHorizontal, "Initial content direction cannot turn into panel dismissal")
+        for phase in [PanelTrackpadSwipePhase.changed, .ended] {
+            XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+                deltaX: -100, deltaY: 0, phase: phase,
+                isPrecise: true, isDirectionInvertedFromDevice: false
+            ), dockedCorner: .topRight), .passThrough)
+        }
+    }
+
+    func testTinyInitialMovementAwayCannotBeReinterpretedAsDismissal() {
+        var tracker = PanelTrackpadDismissTracker()
+        XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+            deltaX: 0.2, deltaY: 0, phase: .began,
+            isPrecise: true, isDirectionInvertedFromDevice: false
+        ), dockedCorner: .topRight), .passThrough)
+        XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+            deltaX: -80, deltaY: 0, phase: .changed,
+            isPrecise: true, isDirectionInvertedFromDevice: false
+        ), dockedCorner: .topRight), .passThrough)
+        XCTAssertEqual(tracker.update(sample: PanelTrackpadSwipeSample(
+            deltaX: 0, deltaY: 0, phase: .ended,
+            isPrecise: true, isDirectionInvertedFromDevice: false
+        ), dockedCorner: .topRight), .passThrough)
+    }
+
     @MainActor
     func testSwipeReportsFingerProgressAndRestoresAfterReversalBelowThreshold() throws {
         let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
