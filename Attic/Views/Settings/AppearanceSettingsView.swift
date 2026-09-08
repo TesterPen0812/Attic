@@ -131,10 +131,9 @@ struct AppearanceSettingsView: View {
 
                     if settings.isTranslucent {
                         Picker("Glass style", selection: resolvedGlassStyle) {
-                            ForEach(PanelGlassStyle.allCases) { style in
+                            ForEach(PanelGlassStyle.allCases.filter { $0 != .clear || isClearAvailable }) { style in
                                 Text(style.title)
                                     .tag(style)
-                                    .disabled(style == .clear && !isClearAvailable)
                             }
                         }
                         .pickerStyle(.segmented)

@@ -106,8 +106,9 @@ final class AtticUITests: XCTestCase {
                 waitFor("Selected theme must update") { (choice.value as? String) == "Selected" }
                 let clearIsAvailable = theme == "original" && scheme == "Dark"
                 waitFor("Clear availability must follow the selected preset and appearance") {
-                    clear.isEnabled == clearIsAvailable
+                    clear.exists == clearIsAvailable
                 }
+                if clearIsAvailable { XCTAssertTrue(clear.isEnabled) }
                 assertSelected(segment(clearIsAvailable ? "Clear" : "Frosted", in: glass))
                 XCTAssertEqual(settings.descendants(matching: .any)["setting-clear-availability"].exists,
                                !clearIsAvailable)
