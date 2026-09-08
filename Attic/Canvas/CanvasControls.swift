@@ -90,6 +90,15 @@ struct CanvasCommandButton: View {
     let action: () -> Void
 
     @State private var isHovered = false
+    @Environment(\.atticPanelThemePalette) private var palette
+
+    private var selectedForeground: Color {
+        #if os(macOS)
+        palette.accent.contrastingForeground.swiftUIColor()
+        #else
+        .white
+        #endif
+    }
 
     var body: some View {
         Button(action: action) {
@@ -97,7 +106,7 @@ struct CanvasCommandButton: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(
                     isSelected
-                        ? Color.white
+                        ? selectedForeground
                         : symbolColor ?? Color.primary
                 )
                 .atticClearGlassForegroundReadability()
@@ -169,6 +178,15 @@ private struct CanvasColorButton: View {
     let color: CanvasInkColor
     let isSelected: Bool
     let action: () -> Void
+    @Environment(\.atticPanelThemePalette) private var palette
+
+    private var selectedForeground: Color {
+        #if os(macOS)
+        palette.accent.contrastingForeground.swiftUIColor()
+        #else
+        .white
+        #endif
+    }
 
     var body: some View {
         Button(action: action) {
@@ -193,7 +211,7 @@ private struct CanvasColorButton: View {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 8, weight: .bold))
                         .symbolRenderingMode(.palette)
-                        .foregroundStyle(Color.white, Color.accentColor)
+                        .foregroundStyle(selectedForeground, Color.accentColor)
                         .atticClearGlassForegroundReadability()
                         .offset(x: 2, y: -2)
                         .accessibilityHidden(true)

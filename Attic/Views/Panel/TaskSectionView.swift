@@ -9,13 +9,14 @@ struct TaskSectionView: View {
     @State private var isDropTargeted = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
+    @Environment(\.atticPanelThemePalette) private var palette
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 5) {
                 Text("\(status.title) · \(tasks.count)")
                     .font(.caption)
-                    .foregroundStyle(clearReadabilityEnabled ? Color.primary.opacity(0.84) : Color.secondary)
+                    .foregroundStyle(clearReadabilityEnabled ? Color.primary.opacity(0.84) : palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                     .contentTransition(.numericText())
                     .accessibilityIdentifier("task-section-\(status.rawValue)")

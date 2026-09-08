@@ -38,10 +38,9 @@ enum AtticStyle {
 
 struct AtticPanelSurface: ViewModifier {
     let treatment: AtticPanelSurfaceTreatment
-    let glassStyle: PanelGlassStyle
-    let opaqueColor: Color
     let cornerRadius: CGFloat
-    let prefersDarkSurface: Bool
+    let gradientCoverage: Double
+    let gradientColorHex: String
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -80,30 +79,37 @@ struct AtticPanelSurface: ViewModifier {
 
     @ViewBuilder
     private func surfaceBackground(shape: Squircle) -> some View {
-        if treatment.usesSystemOpaqueSurface {
+        if treatment.kind == .clearGlass {
             originalSurfaceBackground(shape: shape)
         } else {
-            themedSurfaceBackground(shape: shape)
+            ZStack {
+                themedSurfaceBackground(shape: shape)
+                if treatment.kind != .opaque {
+                    shape.fill(treatment.palette.opaqueSurfaceColor.opacity(treatment.foundationOpacity))
+                }
+                let coverage = AtticPanelSurfaceTreatment.normalizedGradientCoverage(gradientCoverage)
+                if coverage > 0 {
+                    let tint = treatment.gradientColor(customHex: gradientColorHex)
+                    LinearGradient(stops: [
+                        .init(color: tint.swiftUIColor(
+                            opacity: treatment.gradientOpacity(at: 0, coverage: coverage)), location: 0),
+                        .init(color: tint.swiftUIColor(opacity: 0), location: coverage),
+                        .init(color: tint.swiftUIColor(opacity: 0), location: 1)
+                    ], startPoint: .top, endPoint: .bottom)
+                    .clipShape(shape)
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func originalSurfaceBackground(shape: Squircle) -> some View {
-        switch treatment.kind {
-        case .opaque:
-            shape.fill(opaqueColor)
-        case .glassmorphism:
-            // This is Attic's original glassmorphism contract: one native
-            // material layer, without an acrylic color wash or capture loop.
+        // Only Original Dark can resolve to Clear. Keep its established
+        // glass and lighting intact, outside the readable-material path.
+        if #available(macOS 26.0, *) {
+            originalNativeGlassBackground(shape: shape)
+        } else {
             shape.fill(.ultraThinMaterial)
-        case .clearGlass, .frostedGlass:
-            if #available(macOS 26.0, *) {
-                originalNativeGlassBackground(shape: shape)
-            } else if treatment.kind == .clearGlass {
-                shape.fill(.ultraThinMaterial)
-            } else {
-                shape.fill(.regularMaterial)
-            }
         }
     }
 
@@ -142,41 +148,13 @@ struct AtticPanelSurface: ViewModifier {
 
     @available(macOS 26.0, *)
     private func originalNativeGlassBackground(shape: Squircle) -> some View {
-        let isDark = prefersDarkSurface
-        let glass: Glass = treatment.kind == .clearGlass
-            ? .clear.tint(isDark ? Color.black.opacity(0.06) : Color.white.opacity(0.08))
-            : .regular.tint(isDark ? Color.black.opacity(0.22) : Color.white.opacity(0.24))
-        let lightingStops: [Gradient.Stop]
-
-        if isDark {
-            lightingStops = treatment.kind == .clearGlass
-                ? [
-                    .init(color: Color.black.opacity(0.82), location: 0),
-                    .init(color: Color.black.opacity(0.58), location: 0.42),
-                    .init(color: Color.black.opacity(0.18), location: 0.74),
-                    .init(color: Color.black.opacity(0.02), location: 1)
-                ]
-                : [
-                    .init(color: Color.black.opacity(0.94), location: 0),
-                    .init(color: Color.black.opacity(0.82), location: 0.42),
-                    .init(color: Color.black.opacity(0.58), location: 0.74),
-                    .init(color: Color.black.opacity(0.30), location: 1)
-                ]
-        } else {
-            lightingStops = treatment.kind == .clearGlass
-                ? [
-                    .init(color: Color.white.opacity(0.42), location: 0),
-                    .init(color: Color.white.opacity(0.23), location: 0.45),
-                    .init(color: Color.white.opacity(0.10), location: 0.76),
-                    .init(color: Color.black.opacity(0.025), location: 1)
-                ]
-                : [
-                    .init(color: Color.white.opacity(0.72), location: 0),
-                    .init(color: Color.white.opacity(0.56), location: 0.45),
-                    .init(color: Color.white.opacity(0.36), location: 0.76),
-                    .init(color: Color.black.opacity(0.045), location: 1)
-                ]
-        }
+        let glass: Glass = .clear.tint(Color.black.opacity(0.06))
+        let lightingStops: [Gradient.Stop] = [
+            .init(color: Color.black.opacity(0.82), location: 0),
+            .init(color: Color.black.opacity(0.58), location: 0.42),
+            .init(color: Color.black.opacity(0.18), location: 0.74),
+            .init(color: Color.black.opacity(0.02), location: 1)
+        ]
 
         return ZStack {
             shape
@@ -207,12 +185,8 @@ struct AtticPanelSurface: ViewModifier {
     }
 
     private var surfaceAnimationIdentity: SurfaceAnimationIdentity {
-        if treatment.usesSystemOpaqueSurface {
-            // Original follows the system appearance directly. Its light/dark
-            // palette is implementation data, not a theme transition to
-            // crossfade.
-            return .original(treatment.kind)
-        }
+        // Coverage follows the slider directly; animate appearance/theme changes
+        // only, so scrubbing does not continuously restart a transition.
         return .themed(treatment)
     }
 
@@ -228,7 +202,6 @@ struct AtticPanelSurface: ViewModifier {
 }
 
 private enum SurfaceAnimationIdentity: Equatable {
-    case original(AtticPanelSurfaceTreatment.Kind)
     case themed(AtticPanelSurfaceTreatment)
 }
 
@@ -367,18 +340,16 @@ private struct AtticGlassEffectContainerModifier: ViewModifier {
 extension View {
     func atticPanelSurface(
         treatment: AtticPanelSurfaceTreatment,
-        glassStyle: PanelGlassStyle = .clear,
-        opaqueColor: Color = Color(nsColor: .windowBackgroundColor),
         cornerRadius: CGFloat = AtticStyle.panelCornerRadius,
-        prefersDarkSurface: Bool = false
+        gradientCoverage: Double = 0.55,
+        gradientColorHex: String = ""
     ) -> some View {
         modifier(
             AtticPanelSurface(
                 treatment: treatment,
-                glassStyle: glassStyle,
-                opaqueColor: opaqueColor,
                 cornerRadius: cornerRadius,
-                prefersDarkSurface: prefersDarkSurface
+                gradientCoverage: gradientCoverage,
+                gradientColorHex: gradientColorHex
             )
         )
     }

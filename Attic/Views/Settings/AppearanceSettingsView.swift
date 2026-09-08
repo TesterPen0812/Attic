@@ -33,6 +33,7 @@ struct AppearanceSettingsView: View {
     @ObservedObject var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         SettingsPage(
@@ -181,22 +182,26 @@ struct AppearanceSettingsView: View {
                             .frame(minWidth: 44, alignment: .trailing)
                             .accessibilityHidden(true)
                     }
+                    .disabled(usesOriginalClear)
 
                     Divider()
 
                     HStack(spacing: 12) {
                         ColorPicker("Gradient color", selection: gradientColor, supportsOpacity: false)
+                            .disabled(usesOriginalClear)
                             .accessibilityLabel("Panel gradient color")
                             .accessibilityIdentifier("setting-panel-gradient-color")
                         Button("Use theme color") { settings.panelGradientColorHex = "" }
-                            .disabled(settings.panelGradientColorHex.isEmpty)
+                            .disabled(settings.panelGradientColorHex.isEmpty || usesOriginalClear)
                             .accessibilityLabel("Reset gradient to theme color")
                             .accessibilityIdentifier("setting-panel-gradient-color-reset")
                     }
 
-                    Text(settings.panelGradientColorHex.isEmpty
+                    Text(usesOriginalClear
+                         ? "Original Clear keeps its signature lighting. Choose Frosted or Glassmorphism to customize the gradient."
+                         : settings.panelGradientColorHex.isEmpty
                          ? "Using the theme's adaptive color."
-                         : "Custom color: #\(settings.panelGradientColorHex)")
+                         : "Custom color: #\(settings.panelGradientColorHex). Tint adapts to keep text readable.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -228,6 +233,10 @@ struct AppearanceSettingsView: View {
 
     private var isClearAvailable: Bool {
         PanelGlassStyle.clear.resolved(for: settings.panelTheme, colorScheme: effectiveColorScheme) == .clear
+    }
+
+    private var usesOriginalClear: Bool {
+        settings.isTranslucent && !reduceTransparency && resolvedGlassStyle.wrappedValue == .clear
     }
 
     private var resolvedGlassStyle: Binding<PanelGlassStyle> {

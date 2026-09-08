@@ -26,10 +26,26 @@ struct TaskStatusMark: View {
     var size: CGFloat = 15
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
     @Environment(\.colorScheme) private var colorScheme
+    #if os(macOS)
+    @Environment(\.atticPanelThemePalette) private var palette
+    #endif
 
     private var indicatorColor: Color {
-        priority == .none && clearReadabilityEnabled
+        #if os(macOS)
+        if priority == .none && !clearReadabilityEnabled {
+            return palette.secondaryForegroundColor
+        }
+        #endif
+        return priority == .none && clearReadabilityEnabled
             ? Color.primary.opacity(0.78) : priority.color
+    }
+
+    private var checkColor: Color {
+        #if os(macOS)
+        if priority == .medium { return .black }
+        if priority == .none { return colorScheme == .dark ? .black : .white }
+        #endif
+        return priority == .none && clearReadabilityEnabled && colorScheme == .dark ? .black : .white
     }
 
     var body: some View {
@@ -55,8 +71,7 @@ struct TaskStatusMark: View {
                     .frame(width: size, height: size)
                 Image(systemName: "checkmark")
                     .font(.system(size: size * 0.47, weight: .bold))
-                    .foregroundStyle(priority == .none && clearReadabilityEnabled && colorScheme == .dark
-                        ? Color.black : Color.white)
+                    .foregroundStyle(checkColor)
             case .backlog:
                 Circle()
                     .stroke(

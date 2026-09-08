@@ -13,6 +13,14 @@ struct CanvasPanelContent: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.atticPanelThemePalette) private var palette
+    private var selectedShapeForeground: Color {
+        #if os(macOS)
+        palette.accent.contrastingForeground.swiftUIColor()
+        #else
+        .white
+        #endif
+    }
     @State private var surfaceSize = CGSize(width: 240, height: 300)
     @State private var isCreateCanvasPresented = false
     @State private var isRenameCanvasPresented = false
@@ -472,7 +480,7 @@ struct CanvasPanelContent: View {
         } label: {
             Image(systemName: pendingShape?.symbolName ?? "square")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(pendingShape == nil ? Color.primary : Color.white)
+                .foregroundStyle(pendingShape == nil ? Color.primary : selectedShapeForeground)
                 .atticClearGlassForegroundReadability()
                 .frame(width: 32, height: 32)
                 .background {

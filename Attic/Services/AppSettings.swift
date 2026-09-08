@@ -296,8 +296,6 @@ final class AppSettings: ObservableObject {
         panelGradientColorHex = AtticThemeColor(
             hex: defaults.string(forKey: Key.panelGradientColorHex) ?? ""
         )?.hexString ?? ""
-        defaults.set(panelGradientCoverage, forKey: Key.panelGradientCoverage)
-        defaults.set(panelGradientColorHex, forKey: Key.panelGradientColorHex)
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
@@ -323,6 +321,8 @@ final class AppSettings: ObservableObject {
             minimum: PanelGeometry.minimumHeight,
             fallback: PanelGeometry.defaultPanelSize.height
         )
+        defaults.set(panelGradientCoverage, forKey: Key.panelGradientCoverage)
+        defaults.set(panelGradientColorHex, forKey: Key.panelGradientColorHex)
     }
 
     var agentServerPort: UInt16 {

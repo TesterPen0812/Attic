@@ -11,6 +11,7 @@ struct TaskRowView: View {
     @FocusState private var isRenameFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
+    @Environment(\.atticPanelThemePalette) private var palette
 
     private var isEditing: Bool { uiState.editingTaskID == task.id }
 
@@ -37,10 +38,8 @@ struct TaskRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .layoutPriority(1)
                         .strikethrough(task.status == .done, color: .secondary)
-                        .foregroundStyle(Color.primary.opacity(
-                            task.status == .done ? (clearReadabilityEnabled ? 0.76 : 0.48)
-                                : (clearReadabilityEnabled ? 1 : 0.92)
-                        ))
+                        .foregroundStyle(task.status == .done
+                            ? palette.secondaryForegroundColor : palette.primaryForegroundColor)
                         .accessibilityLabel(task.title)
                 }
             }
@@ -129,7 +128,7 @@ struct TaskRowView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.primary.opacity(0.72))
+                    .foregroundStyle(palette.secondaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
@@ -137,7 +136,6 @@ struct TaskRowView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .opacity(isHovering ? 1 : (clearReadabilityEnabled ? 0.85 : 0.38))
             .help("Edit task")
             .accessibilityLabel("Edit task")
             .accessibilityIdentifier("task-actions-\(task.id.uuidString)")

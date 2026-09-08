@@ -159,7 +159,7 @@ struct NoteAttachmentTray: View {
         case let .failed(message):
             Label(importFailureLabel(message), systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                .foregroundStyle(.red)
+                .foregroundStyle(.primary)
                 .atticClearGlassForegroundReadability()
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 9)

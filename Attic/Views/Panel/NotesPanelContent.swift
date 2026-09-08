@@ -55,7 +55,7 @@ struct NotesPanelContent: View {
             VStack(spacing: 10) {
                 Image(systemName: "note.text")
                     .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(Color.primary.opacity(0.55))
+                    .foregroundStyle(.secondary)
                     .atticClearGlassForegroundReadability()
                 Text("A quiet place for the next thought.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -663,7 +663,7 @@ struct NoteComposerView: View {
         VStack(alignment: .leading, spacing: 7) {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(.orange)
+                .foregroundStyle(.primary)
                 .atticClearGlassForegroundReadability()
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -870,7 +870,7 @@ private struct SavedNoteRow: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .opacity(isHovering ? 1 : 0.38)
+            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -974,7 +974,7 @@ struct NoteRowView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .opacity(isHovering ? 1 : 0.38)
+            .foregroundStyle(.secondary)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)

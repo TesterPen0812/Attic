@@ -76,10 +76,13 @@ struct AtticPanelView: View {
         settings.panelTheme.surfaceTreatment(
             colorScheme: systemColorScheme,
             contrast: colorSchemeContrast,
-            glassStyle: settings.panelGlassStyle,
+            glassStyle: effectiveGlassStyle,
             isTranslucent: settings.isTranslucent,
             reduceTransparency: reduceTransparency
         )
+    }
+    private var effectiveGlassStyle: PanelGlassStyle {
+        settings.panelGlassStyle.resolved(for: settings.panelTheme, colorScheme: systemColorScheme)
     }
     private var panelAccentColor: Color {
         settings.panelTheme.usesSystemAccent
@@ -114,23 +117,23 @@ struct AtticPanelView: View {
         .padding(.bottom, contentInsets.bottom)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.colorScheme, systemColorScheme)
-        .environment(\.atticPanelGlassStyle, settings.panelGlassStyle)
+        .foregroundStyle(panelThemePalette.primaryForegroundColor, panelThemePalette.secondaryForegroundColor)
+        .environment(\.atticPanelGlassStyle, effectiveGlassStyle)
         .environment(\.atticPanelTranslucencyEnabled, settings.isTranslucent)
         .environment(
             \.atticClearGlassForegroundReadabilityEnabled,
             AtticClearGlassReadabilityPolicy.isEnabled(
                 isTranslucent: settings.isTranslucent,
-                isClearStyle: settings.panelGlassStyle == .clear,
+                isClearStyle: effectiveGlassStyle == .clear,
                 reduceTransparency: reduceTransparency
             )
         )
         .environment(\.controlActiveState, .key)
         .atticPanelSurface(
             treatment: panelSurfaceTreatment,
-            glassStyle: settings.panelGlassStyle,
-            opaqueColor: Color(nsColor: .windowBackgroundColor),
             cornerRadius: cornerRadius,
-            prefersDarkSurface: systemColorScheme == .dark
+            gradientCoverage: settings.panelGradientCoverage,
+            gradientColorHex: settings.panelGradientColorHex
         )
         .overlay {
             dockingPreview
@@ -556,7 +559,7 @@ struct AtticPanelView: View {
                         } label: {
                             Image(systemName: priority == .none ? "flag.slash" : "flag.fill")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(priority == .none ? Color.secondary : priority.color)
+                                .foregroundStyle(priority == .none ? panelThemePalette.secondaryForegroundColor : priority.color)
                                 .frame(width: 30, height: 30)
                                 .background(
                                     priority.color.opacity(quickEntryPriority == priority ? 0.16 : 0),
@@ -619,7 +622,7 @@ struct AtticPanelView: View {
     private func errorBanner(_ error: String) -> some View {
         Text(error)
             .font(.caption2)
-            .foregroundStyle(.red)
+            .foregroundStyle(.primary)
             .atticClearGlassForegroundReadability()
             .lineLimit(2)
             .padding(.horizontal, 10)
