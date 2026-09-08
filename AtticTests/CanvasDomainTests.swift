@@ -110,7 +110,21 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertEqual(editor.frame.width, 360, accuracy: 0.001)
         XCTAssertEqual(editor.font?.pointSize ?? 0, 48, accuracy: 0.001)
         XCTAssertEqual(editor.textContainerInset.height, 8, accuracy: 0.001)
-        XCTAssertGreaterThan(editor.frame.height, longHeight * 1.8)
+        // System-font optical sizing changes wrapping (on macOS 27 this text
+        // has 120 lines at 24pt but 80 at 48pt), so height is not linear in zoom.
+        // Compare against a fresh native layout to detect stale zoomed glyphs.
+        let reference = NSTextView(frame: CGRect(x: 0, y: 0, width: 360, height: 100_000))
+        reference.font = .systemFont(ofSize: 48)
+        reference.textContainerInset = CGSize(width: 8, height: 8)
+        reference.textContainer?.lineFragmentPadding = 0
+        reference.string = longText
+        let referenceLayout = try XCTUnwrap(reference.layoutManager)
+        let referenceContainer = try XCTUnwrap(reference.textContainer)
+        referenceLayout.ensureLayout(for: referenceContainer)
+        let expectedHeight = ceil(max(referenceLayout.usedRect(for: referenceContainer).maxY,
+                                      referenceLayout.extraLineFragmentRect.maxY) + 24)
+        XCTAssertEqual(editor.frame.height, expectedHeight, accuracy: 0.001)
+        XCTAssertGreaterThan(editor.frame.height, longHeight)
         XCTAssertEqual(editor.selectedRange(), selection)
 
         editor.insertText("Short\n", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
@@ -177,6 +191,9 @@ final class CanvasAccessibilityTests: XCTestCase {
         let gate = PersistenceGate()
         let store = try makeTestCanvasStore(persist: gate.save)
         let session = CanvasSession(store: store)
+        // Persist both pages: the initial empty placeholder is not a stored
+        // board and disappears when the first actual board is created.
+        XCTAssertNotNil(session.createCanvas(name: "Draft page"))
         session.selectTextTool()
         let draft = try XCTUnwrap(session.makeTextInsertion(at: CanvasPoint(x: 12, y: 30), width: 160))
         let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
