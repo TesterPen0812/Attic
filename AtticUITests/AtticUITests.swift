@@ -7,6 +7,12 @@ final class AtticUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        if name.contains("testAppearanceThemesResolveClearAndGradientControls")
+            || name.contains("testGradientCoverageReachesExactEndpoints") {
+            // Seed only the gradient tests. The model still changes in
+            // response to real native input after this initial defaults read.
+            app.launchArguments += ["-panelGradientCoverage", "0.55"]
+        }
         forwardOwnedAttachmentRoot(to: app)
         app.launch()
         app.activate()
@@ -149,6 +155,59 @@ final class AtticUITests: XCTestCase {
         systemAppearance.click()
         settings.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(app.descendants(matching: .any)["panel-section-picker"].exists)
+    }
+
+    func testAppearancePickerSelectionTransitions() throws {
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Attic Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        settings.descendants(matching: .any)["settings-nav-appearance"].click()
+        let page = settings.descendants(matching: .any)["settings-page-appearance"]
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        let appearance = settings.descendants(matching: .any)["setting-appearance"]
+        let glass = settings.descendants(matching: .any)["setting-glass-style"]
+        let translucency = settings.descendants(matching: .any)["setting-translucency"]
+        func reveal(_ element: XCUIElement, deltaY: CGFloat) {
+            for _ in 0..<5 where !element.isHittable {
+                page.scroll(byDeltaX: 0, deltaY: deltaY)
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+        func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
+            picker.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", title)).firstMatch
+        }
+        func waitFor(_ message: String, _ condition: @escaping () -> Bool) {
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message)
+        }
+        let original = settings.buttons["setting-panel-theme-original"]
+        reveal(original, deltaY: 450)
+        original.click()
+        if !glass.exists {
+            reveal(translucency, deltaY: -450)
+            translucency.click()
+        }
+        XCTAssertTrue(glass.waitForExistence(timeout: 3))
+        let clear = segment("Clear", in: glass)
+        for scheme in ["Dark", "Light", "Dark"] {
+            let choice = segment(scheme, in: appearance)
+            reveal(choice, deltaY: 450)
+            choice.click()
+            waitFor("Model-backed Clear eligibility must follow \(scheme)") {
+                clear.exists == (scheme == "Dark")
+            }
+        }
+        for style in ["Frosted", "Clear", "Frosted"] {
+            let choice = segment(style, in: glass)
+            reveal(choice, deltaY: -450)
+            choice.click()
+            waitFor("Glass selection must settle on \(style)") {
+                choice.isSelected || (choice.value as? String) == "1"
+                    || (choice.value as? NSNumber)?.boolValue == true
+            }
+        }
+        settings.buttons[XCUIIdentifierCloseWindow].click()
     }
 
     func testGradientCoverageReachesExactEndpoints() throws {

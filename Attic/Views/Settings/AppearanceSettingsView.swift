@@ -215,8 +215,12 @@ struct AppearanceSettingsView: View {
         Binding {
             settings.appearance
         } set: { preference in
-            guard settings.appearance != preference else { return }
-            settings.appearance = preference
+            // Native segmented Picker can deliver its binding callback
+            // during a SwiftUI view update. Publish after that callback.
+            DispatchQueue.main.async {
+                guard settings.appearance != preference else { return }
+                settings.appearance = preference
+            }
         }
     }
 
@@ -252,8 +256,11 @@ struct AppearanceSettingsView: View {
             settings.panelGlassStyle.resolved(for: settings.panelTheme, colorScheme: effectiveColorScheme)
         } set: { style in
             guard style != .clear || isClearAvailable else { return }
-            guard settings.panelGlassStyle != style else { return }
-            settings.panelGlassStyle = style
+            DispatchQueue.main.async {
+                guard style != .clear || isClearAvailable else { return }
+                guard settings.panelGlassStyle != style else { return }
+                settings.panelGlassStyle = style
+            }
         }
     }
 
