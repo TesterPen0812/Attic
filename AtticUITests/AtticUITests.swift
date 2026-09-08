@@ -138,17 +138,7 @@ final class AtticUITests: XCTestCase {
         reveal(coverage, deltaY: -450)
         XCTAssertTrue(coverage.isEnabled)
         for endpoint: CGFloat in [0, 1] {
-            coverage.adjust(toNormalizedSliderPosition: endpoint)
-            // XCTest's native drag can stop one step inside the track
-            // (UI2 visibly ended at 1% when asked for zero). Complete the
-            // endpoint with the focused slider's native keyboard action;
-            // do not accept a near-zero gradient as being switched off.
-            for _ in 0..<3 where coverage.normalizedSliderPosition != endpoint {
-                coverage.typeKey(endpoint == 0 ? .leftArrow : .rightArrow, modifierFlags: [])
-            }
-            waitFor("Gradient slider must reach \(endpoint); actual: \(coverage.normalizedSliderPosition), value: \(String(describing: coverage.value))") {
-                coverage.normalizedSliderPosition == endpoint
-            }
+            dragGradientCoverage(coverage, to: endpoint)
             recordPanel(endpoint == 0 ? "Gradient-Off" : "Gradient-Full-Coverage")
         }
         coverage.adjust(toNormalizedSliderPosition: 0.55)
@@ -159,6 +149,60 @@ final class AtticUITests: XCTestCase {
         systemAppearance.click()
         settings.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(app.descendants(matching: .any)["panel-section-picker"].exists)
+    }
+
+    func testGradientCoverageReachesExactEndpoints() throws {
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Attic Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        settings.descendants(matching: .any)["settings-nav-appearance"].click()
+        let page = settings.descendants(matching: .any)["settings-page-appearance"]
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        // Light makes the gradient available even if the previous run stored
+        // Original Clear, without replaying the whole theme matrix.
+        settings.descendants(matching: .any)["setting-appearance"]
+            .descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Light")).firstMatch.click()
+        let coverage = settings.sliders["setting-panel-gradient-coverage"]
+        for _ in 0..<5 where !coverage.isHittable {
+            page.scroll(byDeltaX: 0, deltaY: -450)
+        }
+        XCTAssertTrue(coverage.isHittable)
+        XCTAssertTrue(coverage.isEnabled)
+        for endpoint: CGFloat in [0, 1] {
+            dragGradientCoverage(coverage, to: endpoint)
+            let attachment = XCTAttachment(screenshot: settings.screenshot())
+            attachment.name = "Gradient-Endpoint-\(endpoint)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        coverage.adjust(toNormalizedSliderPosition: 0.55)
+        settings.buttons[XCUIIdentifierCloseWindow].click()
+    }
+
+    private func dragGradientCoverage(_ slider: XCUIElement, to endpoint: CGFloat) {
+        // The XCTest normalized-position convenience gesture stops inside
+        // this native track (1% / 99%). Drag the actual thumb past the track
+        // boundary so AppKit clamps to the exact endpoint, without relying
+        // on keyboard focus or accepting a near-zero gradient as off.
+        let frame = slider.frame
+        let inset = min(frame.height / 2, frame.width / 2)
+        let origin = slider.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let thumb = origin.withOffset(CGVector(
+            dx: inset + (frame.width - 2 * inset) * slider.normalizedSliderPosition,
+            dy: frame.height / 2
+        ))
+        let beyondTrack = origin.withOffset(CGVector(
+            dx: endpoint == 0 ? -24 : frame.width + 24,
+            dy: frame.height / 2
+        ))
+        thumb.click(forDuration: 0.1, thenDragTo: beyondTrack,
+                    withVelocity: .slow, thenHoldForDuration: 0)
+        let reachedEndpoint = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            slider.normalizedSliderPosition == endpoint
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [reachedEndpoint], timeout: 3), .completed,
+                       "Gradient must reach \(endpoint); actual: \(slider.normalizedSliderPosition), value: \(String(describing: slider.value))")
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
