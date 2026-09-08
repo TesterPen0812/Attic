@@ -139,8 +139,15 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(coverage.isEnabled)
         for endpoint: CGFloat in [0, 1] {
             coverage.adjust(toNormalizedSliderPosition: endpoint)
-            waitFor("Gradient slider must reach its endpoint") {
-                abs(coverage.normalizedSliderPosition - endpoint) < 0.01
+            // XCTest's native drag can stop one step inside the track
+            // (UI2 visibly ended at 1% when asked for zero). Complete the
+            // endpoint with the focused slider's native keyboard action;
+            // do not accept a near-zero gradient as being switched off.
+            for _ in 0..<3 where coverage.normalizedSliderPosition != endpoint {
+                coverage.typeKey(endpoint == 0 ? .leftArrow : .rightArrow, modifierFlags: [])
+            }
+            waitFor("Gradient slider must reach \(endpoint); actual: \(coverage.normalizedSliderPosition), value: \(String(describing: coverage.value))") {
+                coverage.normalizedSliderPosition == endpoint
             }
             recordPanel(endpoint == 0 ? "Gradient-Off" : "Gradient-Full-Coverage")
         }
