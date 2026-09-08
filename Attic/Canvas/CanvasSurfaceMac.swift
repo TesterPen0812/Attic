@@ -44,6 +44,8 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
             guard view?.isRepresentationActive == true else { return }
             session?.setViewport(viewport)
         }
+        view.onFitViewport = { [weak session] size in session?.fit(in: size) }
+        view.onResetViewport = { [weak session] in session?.resetView() }
         view.onSelectImage = { [weak session] id in
             session?.selectImage(id)
         }
@@ -162,6 +164,8 @@ final class CanvasNSView: NSView {
     ) -> Void = { _, _, _ in }
     var onErase: (Set<UUID>) -> Bool = { _ in false }
     var onViewportChange: (CanvasViewport) -> Void = { _ in }
+    var onFitViewport: (CGSize) -> Void = { _ in }
+    var onResetViewport: () -> Void = {}
     var onSelectImage: (UUID?) -> Void = { _ in }
     var onTransformImage: (UUID, CanvasImageTransform) -> Void = { _, _ in }
     var onDeleteSelectedImage: () -> Bool = { false }
@@ -975,12 +979,25 @@ final class CanvasNSView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        // Popup-menu shortcuts are not a dependable responder route before
+        // their nested menu has opened. Handle viewport keys on the native
+        // canvas that actually owns focus, using its current measured bounds.
+        if modifiers == .command, key == "9" || key == "0",
+           isRepresentationActive, let window,
+           window.firstResponder === self || (semanticTextEditor != nil && window.firstResponder === semanticTextEditor) {
+            guard finishSemanticTextEditing(commit: true) else { return true }
+            window.makeFirstResponder(self)
+            interruptViewportGestureForPointer()
+            if key == "9" { onFitViewport(bounds.size) } else { onResetViewport() }
+            return true
+        }
         if let editor = semanticTextEditor, window?.firstResponder === editor {
             return editor.performKeyEquivalent(with: event)
         }
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers.contains(.command),
-              let key = event.charactersIgnoringModifiers?.lowercased() else {
+              let key else {
             return super.performKeyEquivalent(with: event)
         }
         switch key {

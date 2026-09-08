@@ -77,6 +77,61 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 
 final class CanvasAccessibilityTests: XCTestCase {
     @MainActor
+    func testViewportKeysWorkAfterInlineCommitWithoutOpeningMenuAndRespectFocusAndSaveVeto() throws {
+        let gate = PersistenceGate()
+        let session = CanvasSession(store: try makeTestCanvasStore(persist: gate.save))
+        let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 315, height: 383),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 315, height: 383))
+        panel.contentView = view
+        let bridge = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                               clearReadabilityEnabled: false)
+        session.selectTextTool()
+        bridge.configure(view)
+        let draft = try XCTUnwrap(session.makeTextInsertion(at: .zero, width: 200))
+        view.beginSemanticTextEditing(draft.baseline, insertion: draft)
+        var editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText("Editable canvas text", replacementRange: NSRange(location: 0, length: 0))
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r", modifiers: .command))
+        bridge.configure(view)
+        view.beginSemanticTextEditing(try XCTUnwrap(session.selectedSemanticObject))
+        editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" revised", replacementRange: editor.selectedRange())
+        editor.keyDown(with: try canvasKeyEvent(keyCode: 36, characters: "\r", modifiers: .command))
+        bridge.configure(view)
+        XCTAssertTrue(panel.firstResponder === view)
+        XCTAssertNil(view.semanticTextEditor)
+        let original = session.viewport
+        let fit = try canvasKeyEvent(keyCode: 25, characters: "9", modifiers: .command)
+        let reset = try canvasKeyEvent(keyCode: 29, characters: "0", modifiers: .command)
+        XCTAssertTrue(view.performKeyEquivalent(with: fit))
+        XCTAssertGreaterThan(abs(session.viewport.scale - original.scale), 0.01)
+        XCTAssertTrue(view.performKeyEquivalent(with: reset))
+        XCTAssertEqual(session.viewport, original)
+
+        view.beginSemanticTextEditing(try XCTUnwrap(session.selectedSemanticObject))
+        editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" unsaved", replacementRange: editor.selectedRange())
+        gate.shouldFail = true
+        XCTAssertTrue(view.performKeyEquivalent(with: fit))
+        XCTAssertTrue(panel.firstResponder === editor)
+        XCTAssertTrue(view.semanticTextEditor === editor)
+        XCTAssertEqual(session.viewport, original)
+        gate.shouldFail = false
+        XCTAssertTrue(view.performKeyEquivalent(with: fit))
+        XCTAssertTrue(panel.firstResponder === view)
+        XCTAssertTrue(session.selectedSemanticObject?.content?.text?.hasSuffix(" unsaved") == true)
+        XCTAssertTrue(view.performKeyEquivalent(with: reset))
+        panel.makeFirstResponder(nil)
+        XCTAssertFalse(view.performKeyEquivalent(with: fit))
+        XCTAssertEqual(session.viewport, original)
+        panel.makeFirstResponder(view)
+        view.deactivateRepresentation()
+        XCTAssertFalse(view.performKeyEquivalent(with: fit))
+        XCTAssertEqual(session.viewport, original)
+    }
+
+    @MainActor
     func testClearReadabilityUsesOppositeResolvedInkAndPreservesInlineDraftSelection() throws {
         let whiteEdge = CanvasSemanticRenderer.readabilityEdgeColor(for: .black, increasedContrast: false)
         let blackEdge = CanvasSemanticRenderer.readabilityEdgeColor(for: .white, increasedContrast: true)
