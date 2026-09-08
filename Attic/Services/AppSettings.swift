@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import SwiftUI
 
 enum AppearancePreference: String, CaseIterable, Identifiable {
     case system
@@ -46,12 +47,17 @@ enum PanelGlassStyle: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .clear:
-            return "Maximum live transparency and native refraction."
+            return "Live transparency and native refraction, available with Original in Dark appearance."
         case .frosted:
             return "Native blur with stronger contrast."
         case .glassmorphism:
             return "Classic live macOS blur and vibrancy, matching Attic's original surface."
         }
+    }
+
+    /// Resolve presentation without overwriting the user's saved glass choice.
+    func resolved(for theme: AtticPanelTheme, colorScheme: ColorScheme) -> Self {
+        self == .clear && (theme != .original || colorScheme != .dark) ? .frosted : self
     }
 }
 
@@ -122,6 +128,8 @@ final class AppSettings: ObservableObject {
         static let isTranslucent = "isTranslucent"
         static let panelGlassStyle = "panelGlassStyle"
         static let panelTheme = "panelTheme"
+        static let panelGradientCoverage = "panelGradientCoverage"
+        static let panelGradientColorHex = "panelGradientColorHex"
         static let appearance = "appearancePreference"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
@@ -145,6 +153,23 @@ final class AppSettings: ObservableObject {
 
     @Published var panelTheme: AtticPanelTheme {
         didSet { defaults.set(panelTheme.rawValue, forKey: Key.panelTheme) }
+    }
+
+    @Published var panelGradientCoverage: Double {
+        didSet {
+            let normalized = Self.clamp(panelGradientCoverage, to: 0...1, fallback: 0.55)
+            if panelGradientCoverage != normalized { panelGradientCoverage = normalized }
+            defaults.set(normalized, forKey: Key.panelGradientCoverage)
+        }
+    }
+
+    /// Empty follows the adaptive theme; custom colors are opaque sRGB RRGGBB.
+    @Published var panelGradientColorHex: String {
+        didSet {
+            let normalized = AtticThemeColor(hex: panelGradientColorHex)?.hexString ?? ""
+            if panelGradientColorHex != normalized { panelGradientColorHex = normalized }
+            defaults.set(normalized, forKey: Key.panelGradientColorHex)
+        }
     }
 
     @Published var appearance: AppearancePreference {
@@ -263,6 +288,16 @@ final class AppSettings: ObservableObject {
         panelTheme = AtticPanelTheme(
             rawValue: defaults.string(forKey: Key.panelTheme) ?? ""
         ) ?? .defaultTheme
+        panelGradientCoverage = Self.clamp(
+            defaults.object(forKey: Key.panelGradientCoverage) as? Double ?? 0.55,
+            to: 0...1,
+            fallback: 0.55
+        )
+        panelGradientColorHex = AtticThemeColor(
+            hex: defaults.string(forKey: Key.panelGradientColorHex) ?? ""
+        )?.hexString ?? ""
+        defaults.set(panelGradientCoverage, forKey: Key.panelGradientCoverage)
+        defaults.set(panelGradientColorHex, forKey: Key.panelGradientColorHex)
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.

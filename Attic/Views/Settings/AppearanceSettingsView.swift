@@ -1,9 +1,16 @@
+import AppKit
 import SwiftUI
 
 enum AppearanceSettingsPresentation {
     static let themeChooserAccessibilityIdentifier = "setting-panel-theme"
     static let themeChoiceHeight: CGFloat = 74
     static let themeTitleLineLimit = 2
+
+    static func gradientColorHex(from color: Color) -> String? {
+        guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+        return AtticThemeColor(red: rgb.redComponent, green: rgb.greenComponent,
+                               blue: rgb.blueComponent).hexString
+    }
 
     static var orderedThemeAccessibilityIdentifiers: [String] {
         AtticPanelTheme.allCases.map(\.accessibilityIdentifier)
@@ -24,6 +31,8 @@ enum AppearanceSettingsPresentation {
 
 struct AppearanceSettingsView: View {
     @ObservedObject var settings: AppSettings
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
         SettingsPage(
@@ -120,9 +129,11 @@ struct AppearanceSettingsView: View {
                     }
 
                     if settings.isTranslucent {
-                        Picker("Glass style", selection: $settings.panelGlassStyle) {
+                        Picker("Glass style", selection: resolvedGlassStyle) {
                             ForEach(PanelGlassStyle.allCases) { style in
-                                Text(style.title).tag(style)
+                                Text(style.title)
+                                    .tag(style)
+                                    .disabled(style == .clear && !isClearAvailable)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -130,7 +141,64 @@ struct AppearanceSettingsView: View {
                         .frame(maxWidth: 360)
                         .accessibilityLabel("Panel glass style")
                         .accessibilityIdentifier("setting-glass-style")
+
+                        if !isClearAvailable {
+                            Text(settings.panelGlassStyle == .clear
+                                 ? "Frosted is active here. Your Clear choice returns with Original in Dark appearance."
+                                 : "Clear is available with Original in Dark appearance.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("setting-clear-availability")
+                        }
                     }
+                }
+                .padding(.horizontal, 15)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            SettingsGroup("Panel gradient") {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Gradient coverage")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Choose how far the color extends. At 0%, the decorative gradient is off; readability stays on.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    HStack(spacing: 10) {
+                        Slider(value: $settings.panelGradientCoverage, in: 0...1, step: 0.01)
+                            .accessibilityLabel("Panel gradient coverage")
+                            .accessibilityValue(settings.panelGradientCoverage.formatted(.percent.precision(.fractionLength(0))))
+                            .accessibilityIdentifier("setting-panel-gradient-coverage")
+                        Text(settings.panelGradientCoverage, format: .percent.precision(.fractionLength(0)))
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 44, alignment: .trailing)
+                            .accessibilityHidden(true)
+                    }
+
+                    Divider()
+
+                    HStack(spacing: 12) {
+                        ColorPicker("Gradient color", selection: gradientColor, supportsOpacity: false)
+                            .accessibilityLabel("Panel gradient color")
+                            .accessibilityIdentifier("setting-panel-gradient-color")
+                        Button("Use theme color") { settings.panelGradientColorHex = "" }
+                            .disabled(settings.panelGradientColorHex.isEmpty)
+                            .accessibilityLabel("Reset gradient to theme color")
+                            .accessibilityIdentifier("setting-panel-gradient-color-reset")
+                    }
+
+                    Text(settings.panelGradientColorHex.isEmpty
+                         ? "Using the theme's adaptive color."
+                         : "Custom color: #\(settings.panelGradientColorHex)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 15)
                 .padding(.vertical, 12)
@@ -139,9 +207,41 @@ struct AppearanceSettingsView: View {
         }
     }
 
+    private var gradientColor: Binding<Color> {
+        Binding {
+            let color = AtticThemeColor(hex: settings.panelGradientColorHex)
+                ?? settings.panelTheme.palette(for: effectiveColorScheme, contrast: colorSchemeContrast).surfaceTint
+            return color.swiftUIColor()
+        } set: { color in
+            guard let hex = AppearanceSettingsPresentation.gradientColorHex(from: color) else { return }
+            settings.panelGradientColorHex = hex
+        }
+    }
+
+    private var effectiveColorScheme: ColorScheme {
+        switch settings.appearance {
+        case .light: .light
+        case .dark: .dark
+        case .system: colorScheme
+        }
+    }
+
+    private var isClearAvailable: Bool {
+        PanelGlassStyle.clear.resolved(for: settings.panelTheme, colorScheme: effectiveColorScheme) == .clear
+    }
+
+    private var resolvedGlassStyle: Binding<PanelGlassStyle> {
+        Binding {
+            settings.panelGlassStyle.resolved(for: settings.panelTheme, colorScheme: effectiveColorScheme)
+        } set: { style in
+            guard style != .clear || isClearAvailable else { return }
+            settings.panelGlassStyle = style
+        }
+    }
+
     private var glassDescription: String {
         settings.isTranslucent
-            ? settings.panelGlassStyle.detail
+            ? settings.panelGlassStyle.resolved(for: settings.panelTheme, colorScheme: effectiveColorScheme).detail
             : "The solid surface is active while translucency is off."
     }
 }
