@@ -30,7 +30,9 @@ final class CanvasUITests: XCTestCase {
         app.typeKey("z", modifierFlags: [.command, .shift])
         assertStrokeCount(1)
 
-        app.buttons["canvas-tool-eraser"].click()
+        let eraser = app.buttons["canvas-tool-eraser"]
+        eraser.click()
+        XCTAssertTrue(eraser.isSelected, "The single Eraser click must select the tool before its drag")
         eraseStroke(on: surface)
         assertStrokeCount(0)
 
