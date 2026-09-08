@@ -502,10 +502,12 @@ struct AtticPanelView: View {
                 .accessibilityLabel(uiState.isComposerPresented ? "Close task options" : "Task options")
                 .accessibilityIdentifier("add-task-button")
 
-                TextField("Add a task, note, or idea", text: $quickEntryTitle)
+                TextField("Add a task, note, or idea", text: $quickEntryTitle,
+                          prompt: Text("Add a task, note, or idea")
+                            .foregroundStyle(panelThemePalette.secondaryForegroundColor))
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, design: .rounded))
-                    .foregroundStyle(Color.primary.opacity(0.92))
+                    .foregroundStyle(panelThemePalette.primaryForegroundColor)
                     .atticClearGlassForegroundReadability()
                     .padding(.horizontal, 5)
                     .frame(maxWidth: .infinity)
@@ -612,7 +614,7 @@ struct AtticPanelView: View {
                 ? "Add a task and it will stay close by."
                 : "Capture an idea for later.")
                 .font(.system(size: 11, design: .rounded))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(panelThemePalette.secondaryForegroundColor)
                 .atticClearGlassForegroundReadability()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

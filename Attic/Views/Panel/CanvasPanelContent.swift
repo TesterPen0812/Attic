@@ -21,6 +21,13 @@ struct CanvasPanelContent: View {
         .white
         #endif
     }
+    private var secondaryForeground: Color {
+        #if os(macOS)
+        palette.secondaryForegroundColor
+        #else
+        .secondary
+        #endif
+    }
     @State private var surfaceSize = CGSize(width: 240, height: 300)
     @State private var isCreateCanvasPresented = false
     @State private var isRenameCanvasPresented = false
@@ -65,7 +72,7 @@ struct CanvasPanelContent: View {
                 if let pendingPlacement = session.pendingPlacement {
                     Text(pendingPlacement.instruction)
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryForeground)
                         .atticClearGlassForegroundReadability()
                         .padding(.horizontal, 10)
                         .frame(height: 27)
@@ -242,7 +249,7 @@ struct CanvasPanelContent: View {
                 .atticClearGlassForegroundReadability()
             Text(contentCountLabel)
                 .font(.system(size: 9, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(secondaryForeground)
                 .atticClearGlassForegroundReadability()
                 .contentTransition(.numericText())
                 .accessibilityIdentifier("canvas-content-count")
@@ -624,7 +631,7 @@ struct CanvasPanelContent: View {
                     "\(canvasDimensionLabel(selected.width)) × \(canvasDimensionLabel(selected.height))"
                 )
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(secondaryForeground)
                 .atticClearGlassForegroundReadability()
                 .padding(.trailing, 8)
                 .accessibilityLabel("Selected image size")

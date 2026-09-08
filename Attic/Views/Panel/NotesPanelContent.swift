@@ -329,7 +329,8 @@ struct NoteComposerView: View {
 
     private var noteHeader: some View {
         VStack(alignment: .leading, spacing: 4) {
-            TextField("Untitled note", text: $noteDraft.title)
+            TextField("Untitled note", text: $noteDraft.title,
+                      prompt: Text("Untitled note").foregroundStyle(palette.secondaryForegroundColor))
                 .textFieldStyle(.plain)
                 .font(.system(size: 21, weight: .medium, design: .rounded))
                 .foregroundStyle(palette.primaryForegroundColor)
