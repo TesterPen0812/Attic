@@ -325,9 +325,8 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
         if !isTranslucent || reduceTransparency {
             kind = .opaque
         } else {
-            switch glassStyle {
-            case .clear:
-                kind = self == .original && appearance == .dark ? .clearGlass : .frostedGlass
+            switch glassStyle.resolved(for: self, colorScheme: appearance == .dark ? .dark : .light) {
+            case .clear: kind = .clearGlass
             case .frosted: kind = .frostedGlass
             case .glassmorphism: kind = .glassmorphism
             }
