@@ -248,7 +248,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
 
                 XCTAssertGreaterThanOrEqual(
                     barWidth,
-                    (2 * AtticStyle.controlHitSize) + 120 + 4
+                    (2 * AtticStyle.controlHitSize) + 120 + 26
                 )
                 XCTAssertGreaterThanOrEqual(fieldWidth, 120)
             }

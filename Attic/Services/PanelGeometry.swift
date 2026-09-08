@@ -565,7 +565,8 @@ enum TaskEntryBarLayout {
             0,
             width(panelWidth: panelWidth, chromeInsets: chromeInsets)
                 - (2 * AtticStyle.controlHitSize)
-                - 4
+                // Composer row: 8pt each side; text field: 5pt each side.
+                - 26
         )
     }
 }
