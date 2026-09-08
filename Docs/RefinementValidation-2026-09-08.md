@@ -1,6 +1,6 @@
 # Attic interaction and visual refinement — 8 September 2026
 
-Status: integrated implementation and final 535-unit-test gate pass. Native UI coverage is partial because recorded concurrent desktop input interrupted several checks. Preview build/identity is recorded below when available. This document does not claim physical trackpad, complete visual/accessibility, or sustained performance acceptance.
+Status: integrated implementation, final 535-unit-test gate, static analysis, and isolated preview build pass. The unified preview is running. Native UI coverage remains partial: several failures overlapped desktop transitions/concurrent input, and a quiet-input rerun is required. This document does not claim physical trackpad, complete visual/accessibility, or sustained performance acceptance.
 
 ## Scope and provenance
 
@@ -38,7 +38,7 @@ All result bundles and logs are under `.build/evidence/` in the integration work
 
 The final eraser-selection assertion added after these runs is not yet executed; it distinguishes a missed tool click from actual eraser behavior, without retries or weakened assertions. A quiet-input rerun is required. Earlier failing checkpoints are retained here rather than presented as passes.
 
-Project-generation verification passes and the generated project is current. No project inputs or file memberships changed, so no regenerated-project diff is needed. Static analysis before the last viewport-focus correction passed with exit0/no output; that checkpoint alone does not prove the later change analyzed.
+Project-generation verification passes and the generated project is current. No project inputs or file memberships changed, so no regenerated-project diff is needed. Final static analysis passed with exit 0 and an empty diagnostic log (`refinement-analyze-final.log`), after the last viewport-focus correction. Final preview build passed (`refinement-preview-final-build.log`).
 
 ## Workstream ownership and source commits
 
@@ -49,7 +49,22 @@ Project-generation verification passes and the generated project is current. No 
 | Motion | `codex/attic-motion-20260908` at `f211d3d8c472b6375e8723cec4a65509146a90e1` | `Attic/Window/AtticPanel.swift`, `AtticPanelController.swift`, `PanelUIState.swift`; `Attic/Services/PanelGeometry.swift`; `AtticTests/PanelGeometryTests.swift`, `PanelSquircleGeometryTests.swift` |
 | Parent visual/integration | Runtime-source head `a085ac3` on integration branch | `Attic/Design/AtticStyle.swift`, `AtticTheme.swift`; `Attic/Views/Panel/AtticPanelView.swift`, `TaskRowView.swift`, `TaskSectionView.swift`; `AtticUITests/AtticUITests.swift`; this report |
 
-All three implementation worktrees are clean. Read-only reviews used the integrated commits, not extra review branches: the Notes owner reviewed motion; the motion owner reviewed Notes, shared visuals, and final Canvas routing. Meaningful findings were returned to their existing owners and cherry-picked separately. The baseline branch remains at2255f10. No push occurred.
+All three implementation worktrees are clean. Read-only reviews used the integrated commits, not extra review branches: the Notes owner reviewed motion; the motion owner reviewed Notes, shared visuals, and final Canvas routing. Meaningful findings were returned to their existing owners and cherry-picked separately. The baseline branch remains at 2255f10. No push occurred.
+
+## Unified preview and installed observation
+
+- Display name: **Attic Refinement Preview**.
+- Executable: `AtticRefinementPreview`.
+- Bundle identifier: `com.taha.Attic.refinement20260908.preview`.
+- Built from clean `codex/attic-refinement-20260908` at `17cdea238f65b6d3bfc3c3f52481bc3930ccc6a1`. Later report-only commits do not change runtime source.
+- App: `/Users/taha/Developer/attic-recovery-20260907/.build/RefinementPreview/Build/Products/Local/AtticRefinementPreview.app`.
+- Binary: app path plus `/Contents/MacOS/AtticRefinementPreview`.
+- Binary SHA-256: `10913e0e25566d8cab74b7b024f754a19ea461f10ed895576fd8980a7e4915d3`.
+- Ad-hoc signature verified by launcher; sandbox/network/debug entitlements only, no CloudKit/APNs. Manifest and entitlement evidence: `.build/RefinementPreview/PreviewState/`.
+- Launch Services background launch succeeded; process38264 observed at the exact binary path. Preview store was retained; no official data or another preview was replaced.
+- Passive native AX/screenshot inspection shows the combined Tasks page in Light appearance over a bright background: task text, high-priority ring, top controls, and inset composer are visible without clipping in that captured state. This is not the full background/appearance matrix.
+- One idle `ps` sample after launch/capture: 0.3% CPU and84,272KiB resident memory (about82.3MiB). This is an uncontrolled snapshot with other applications active, not a before/after performance benchmark or energy clearance.
+- Further pointer-driven manual checks were paused because another Codex task was receiving input during the automated run. Physical swipe/pinch feel, final dark/detailed-background readability, and Notes attachment-flow visual judgment remain open.
 
 ## Commands
 
@@ -67,6 +82,17 @@ Scripts/run_local_ui_tests.zsh --app-bundle-id com.taha.Attic.refinement20260908
 
 Focused UI runs append `--only-testing AtticUITests/Class/testName`. The three-test checkpoint selects `AtticUITests/testCreateAdvanceCompleteAndOpenContextMenu`, `AtticUITests/testNotesEditorKeepsDraftWhileBrowsingSavedNotes`, and `AtticUITests/testNativePanelResizeKeepsDockedEdgesAndMinimumSize`. Canvas checkpoints select `CanvasUITests/testSemanticTextAndShapesEditTransformUndoAndSurviveRelaunch`.
 
+The recheck selects `AtticUITests/testNotesEditorKeepsDraftWhileBrowsingSavedNotes`, `CanvasUITests/testCanvasDrawUndoRedoEraseAndConfirmedClear`, and `CanvasUITests/testCanvasImagePasteMoveResizeDeleteUndoAndVisualStates`.
+
+Final analysis uses the unit command above without `-resultBundlePath ...`, replacing the final `test` action with `analyze`. Preview and generation commands:
+
+```sh
+PATH=/opt/homebrew/opt/ruby/bin:$PATH bundle exec ruby Scripts/verify_project_generation.rb
+./script/build_and_run.sh --build-only --display-name 'Attic Refinement Preview' --bundle-id com.taha.Attic.refinement20260908.preview --executable-name AtticRefinementPreview --derived-data /Users/taha/Developer/attic-recovery-20260907/.build/RefinementPreview
+/usr/bin/open -g -n /Users/taha/Developer/attic-recovery-20260907/.build/RefinementPreview/Build/Products/Local/AtticRefinementPreview.app
+git diff 2255f10..HEAD --check
+```
+
 ## Review and performance boundaries
 
 - Independent motion review: no concrete source-level finding after settings reanchor and cumulative slow-intent corrections. Actual animation completion timing/physical swipe feel remain separate proof gates.
@@ -76,4 +102,4 @@ Focused UI runs append `--only-testing AtticUITests/Class/testName`. The three-t
 - Native layout reuse avoids a fresh full CoreText layout on each draft keystroke. Visible-card QuickLook demand avoids eagerly decoding every attachment at a fixed 2×960×720 target. These are structural improvements, not measured CPU/GPU/energy or user-perceived latency claims.
 - Remaining acceptance includes physical pinch/swipe direction and reversal, all corner/size combinations, visual judgment of the foreground treatment across backgrounds, IME/VoiceOver/full keyboard access, large attachments/long notes and sustained resource profiling. Passing builds/tests are not substitutes.
 - Full UI run emitted two AppKit quality-of-service warnings. They are not suppressed or classified as application defects without a matching stack/profile. The host also had substantial concurrent CPU activity from unrelated apps; no quiet before/after CPU/GPU/memory/energy benchmark was obtained.
-- Notes and Canvas reviewers inspected saved failure videos/AX/events. Notes Browse overlapped a desktop/window transition; image disappearance preceded the resize commands; the isolated eraser rerun never entered Canvas and overlapped typing into a different Codex task. No speculative eraser/persistence fix was made from contaminated events.
+- Notes and Canvas reviewers inspected saved failure videos/AX/events. Notes Browse overlapped a desktop/window transition; image disappearance preceded the resize commands; the isolated eraser rerun never entered Canvas and overlapped typing into a different Codex task. Notes/image flows passed unchanged on recheck, but the original desktop-transition cause cannot be conclusively attributed to external input versus native click-through state. No speculative eraser/persistence fix or timeout widening was made. These observations justify a quiet-input rerun, not declaring all original failures resolved.
