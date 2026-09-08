@@ -775,6 +775,35 @@ final class AppSettingsTests: XCTestCase {
         }
     }
 
+    func testReadableFoundationIsTheLowestWholePercentMeetingContrastTarget() {
+        for theme in AtticPanelTheme.allCases {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for contrast in colorSchemeContrasts {
+                    for kind: AtticPanelSurfaceTreatment.Kind in [.frostedGlass, .glassmorphism] {
+                        let surface = treatment(for: theme, appearance: appearance,
+                                                contrast: contrast, kind: kind)
+                        let value = appearance == .dark ? 1.0 : 0.0
+                        let backdrop = AtticThemeColor(red: value, green: value, blue: value)
+                        func contrastAt(_ opacity: Double) -> Double {
+                            let color = backdrop.mixed(with: surface.palette.opaqueSurface, amount: opacity)
+                            return min(surface.palette.primaryForeground.contrastRatio(with: color),
+                                       surface.palette.secondaryForeground.contrastRatio(with: color))
+                        }
+                        let context = "\(themeContext(theme, appearance, contrast)) \(kind.rawValue)"
+                        XCTAssertGreaterThanOrEqual(contrastAt(surface.foundationOpacity),
+                                                   AtticPanelSurfaceTreatment.readableContrastTarget, context)
+                        XCTAssertLessThan(contrastAt(surface.foundationOpacity - 0.01),
+                                          AtticPanelSurfaceTreatment.readableContrastTarget, context)
+                        // A meaningful reduction from the earlier blanket fills,
+                        // not simply a solver that keeps an almost opaque panel.
+                        XCTAssertLessThan(surface.foundationOpacity,
+                                          appearance == .dark ? 0.75 : 0.65, context)
+                    }
+                }
+            }
+        }
+    }
+
     func testGradientCoverageCannotRemoveReadableFoundation() {
         XCTAssertEqual(AtticPanelSurfaceTreatment.normalizedGradientCoverage(-1), 0)
         XCTAssertEqual(AtticPanelSurfaceTreatment.normalizedGradientCoverage(2), 1)

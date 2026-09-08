@@ -171,13 +171,13 @@ struct AtticPanelSurface: ViewModifier {
 
     @available(macOS 26.0, *)
     private func themedNativeGlassBackground(shape: Squircle) -> some View {
-        let glass: Glass = treatment.kind == .clearGlass
-            ? .clear.tint(themedSurfaceTint)
-            : .regular.tint(themedSurfaceTint)
-
+        // The calibrated foundation and optional gradient already carry the
+        // theme color. A second tint inside native glass only adds opacity.
+        // Keep regular glass's blur so background lettering does not compete
+        // with foreground content. Original Clear has its own untouched path.
         return shape
             .fill(Color.clear)
-            .glassEffect(glass, in: shape)
+            .glassEffect(.regular, in: shape)
     }
 
     private var themedSurfaceTint: Color {

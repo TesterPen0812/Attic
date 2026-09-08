@@ -454,7 +454,9 @@ struct AtticPanelThemePalette: Equatable, Sendable {
         return .init(red: value, green: value, blue: value)
     }
     var secondaryForeground: AtticThemeColor {
-        let value = opaqueSurface.relativeLuminance < 0.5 ? 0.80 : 0.20
+        // Keep hierarchy through size/weight rather than faint text: stronger
+        // captions allow the glass beneath them to transmit more background.
+        let value = opaqueSurface.relativeLuminance < 0.5 ? 0.90 : 0.12
         return .init(red: value, green: value, blue: value)
     }
     var primaryForegroundColor: Color { primaryForeground.swiftUIColor() }
@@ -495,20 +497,46 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     let palette: AtticPanelThemePalette
     let appearance: AtticPanelThemeAppearance
     let usesSystemOpaqueSurface: Bool
+    let foundationOpacity: Double
 
-    /// The material is aesthetic, not the contrast guarantee. This foundation
-    /// sits ABOVE it so even an inactive material over the opposite desktop is
-    /// bounded. These normal sRGB source-over values preserve desktop detail
-    /// while keeping the explicit secondary foreground above 4.5:1 over every
-    /// RGB desktop extreme, including below the gradient. Opaque and Reduce
-    /// Transparency states transmit no desktop. Clear keeps its original path.
-    var foundationOpacity: Double {
+    // A small buffer above 4.5:1, without retaining an arbitrary heavy fill.
+    static let readableContrastTarget = 4.75
+
+    init(kind: Kind, palette: AtticPanelThemePalette,
+         appearance: AtticPanelThemeAppearance, usesSystemOpaqueSurface: Bool) {
+        self.kind = kind
+        self.palette = palette
+        self.appearance = appearance
+        self.usesSystemOpaqueSurface = usesSystemOpaqueSurface
         switch kind {
-        case .opaque: 1
-        case .clearGlass: 0
-        case .frostedGlass: appearance == .dark ? 0.82 : 0.74
-        case .glassmorphism: appearance == .dark ? 0.80 : 0.72
+        case .opaque: foundationOpacity = 1
+        case .clearGlass: foundationOpacity = 0
+        case .frostedGlass, .glassmorphism:
+            foundationOpacity = Self.minimumReadableOpacity(palette: palette, appearance: appearance)
         }
+    }
+
+    /// Solve once per treatment, not per gradient sample or drawing layer.
+    /// Black/white bound an sRGB source-over backdrop for these fixed light/dark
+    /// foregrounds. Native glass is deliberately not credited with extra
+    /// contrast: its appearance varies with activation, OS, and background.
+    /// This model still needs native screenshot checks; it is not a claim
+    /// about every system compositor or physical display.
+    private static func minimumReadableOpacity(palette: AtticPanelThemePalette,
+                                               appearance: AtticPanelThemeAppearance) -> Double {
+        let extreme = appearance == .dark ? 1.0 : 0.0
+        let backdrop = AtticThemeColor(red: extreme, green: extreme, blue: extreme)
+        var lower = 0.0
+        var upper = 1.0
+        for _ in 0..<16 {
+            let alpha = (lower + upper) / 2
+            let surface = backdrop.mixed(with: palette.opaqueSurface, amount: alpha)
+            let ratio = min(palette.primaryForeground.contrastRatio(with: surface),
+                            palette.secondaryForeground.contrastRatio(with: surface))
+            if ratio >= readableContrastTarget { upper = alpha } else { lower = alpha }
+        }
+        // The first whole percentage point that clears the target.
+        return min(ceil(upper * 100) / 100, 1)
     }
 
     func gradientColor(customHex: String) -> AtticThemeColor {
