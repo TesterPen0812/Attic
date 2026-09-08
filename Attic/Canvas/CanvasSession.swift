@@ -386,6 +386,17 @@ final class CanvasSession: ObservableObject {
 
     @discardableResult
     func createCanvas(name: String? = nil) -> CanvasBoard? {
+        #if os(macOS)
+        // An empty virtual board disappears when the first stored board is
+        // created. Do not strand an interrupted insertion under its old ID.
+        if selectedCanvas.createdAt == .distantPast,
+           semanticTextDrafts.values.contains(where: {
+               $0.isInsertion && $0.baseline.canvasID == selectedCanvasID && !$0.text.isEmpty
+           }) {
+            lastErrorMessage = "Your unsaved canvas text is retained. Reopen the Text tool to save it, or press Escape in the editor to discard it, before creating another canvas."
+            return nil
+        }
+        #endif
         cancelPendingPlacement()
         cancelActiveInteraction()
         selectedImageID = nil

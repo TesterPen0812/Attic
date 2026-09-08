@@ -272,6 +272,7 @@ struct CanvasPanelContent: View {
             Section("Canvases") {
                 ForEach(session.canvases) { canvas in
                     Button {
+                        guard CanvasEditCommandRoute.finishTextEditing() else { return }
                         _ = session.selectCanvas(canvas.id)
                     } label: {
                         Label(
@@ -285,6 +286,7 @@ struct CanvasPanelContent: View {
             }
 
             Button {
+                guard CanvasEditCommandRoute.finishTextEditing() else { return }
                 createCanvasName = ""
                 isCreateCanvasPresented = true
             } label: {

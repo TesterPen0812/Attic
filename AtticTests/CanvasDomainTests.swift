@@ -77,6 +77,35 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 
 final class CanvasAccessibilityTests: XCTestCase {
     @MainActor
+    func testFailedInsertionOnVirtualFirstPageCannotBeStrandedByCreatingCanvas() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestCanvasStore(persist: gate.save)
+        let session = CanvasSession(store: store)
+        let originalID = session.selectedCanvasID
+        session.selectTextTool()
+        let draft = try XCTUnwrap(session.makeTextInsertion(at: .zero, width: 160))
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                 clearReadabilityEnabled: false).configure(view)
+        view.beginSemanticTextEditing(draft.baseline, insertion: draft)
+        try XCTUnwrap(view.semanticTextEditor).insertText("Keep first draft", replacementRange: NSRange(location: 0, length: 0))
+        gate.shouldFail = true
+        XCTAssertFalse(view.finishSemanticTextEditing(commit: true))
+        view.suspendSemanticTextEditing()
+        gate.shouldFail = false
+        XCTAssertNil(session.createCanvas(name: "Other page"))
+        XCTAssertEqual(session.selectedCanvasID, originalID)
+        XCTAssertEqual(session.canvases.map(\.id), [originalID])
+        XCTAssertTrue(session.lastErrorMessage?.contains("unsaved canvas text is retained") == true)
+        let retained = try XCTUnwrap(session.makeTextInsertion(at: .zero, width: 160))
+        XCTAssertEqual(retained.text, "Keep first draft")
+        XCTAssertTrue(session.commitSemanticText(retained))
+        XCTAssertNotNil(session.createCanvas(name: "Other page"))
+        XCTAssertTrue(session.selectCanvas(originalID))
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Keep first draft")
+    }
+
+    @MainActor
     func testLiveInsertionUsesNativeLayoutForLongTextTrailingLinesAndViewportResize() throws {
         let session = CanvasSession(store: try makeTestCanvasStore())
         session.selectTextTool()
