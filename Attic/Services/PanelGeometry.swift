@@ -371,6 +371,38 @@ enum PanelTrackpadDismissUpdate: Equatable {
     case requestHide
 }
 
+/// Presentation geometry only: the native hosting bounds and saved panel size
+/// never participate in the collapse. Translations are relative to the backing
+/// layer's actual anchor so the selected visible corner remains stationary.
+enum PanelCollapseGeometry {
+    static let collapsedScale: CGFloat = 0.015
+
+    static func progress(forSwipeDistance distance: CGFloat, panelWidth: CGFloat) -> CGFloat {
+        guard distance.isFinite, panelWidth.isFinite else { return 0 }
+        let travel = min(280, max(120, panelWidth * 0.65))
+        return min(0.95, max(0, distance / travel))
+    }
+
+    static func transform(
+        progress: CGFloat, visibleBounds: CGRect, layerBounds: CGRect,
+        corner: ScreenCorner, reduceMotion: Bool = false, layerAnchor: CGPoint? = nil
+    ) -> CGAffineTransform {
+        guard !reduceMotion else { return .identity }
+        let progress = progress.isFinite ? min(1, max(0, progress)) : 0
+        let scale = 1 - progress * (1 - collapsedScale)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topRight || corner == .topLeft
+        let anchor = CGPoint(x: right ? visibleBounds.maxX : visibleBounds.minX,
+                             y: top ? visibleBounds.maxY : visibleBounds.minY)
+        let pivot = layerAnchor ?? CGPoint(x: layerBounds.midX, y: layerBounds.midY)
+        return CGAffineTransform(
+            a: scale, b: 0, c: 0, d: scale,
+            tx: (anchor.x - pivot.x) * (1 - scale),
+            ty: (anchor.y - pivot.y) * (1 - scale)
+        )
+    }
+}
+
 /// Recognizes a phase-aware, precise horizontal swipe toward the screen edge
 /// that owns the panel. Mouse wheels and ordinary content scrolling remain on
 /// their existing paths.
@@ -387,7 +419,7 @@ struct PanelTrackpadDismissTracker {
     }
 
     private var state = State.idle
-    private var progress: CGFloat = 0
+    private(set) var progress: CGFloat = 0
 
     static func isTowardDockedSide(
         deltaX: CGFloat,

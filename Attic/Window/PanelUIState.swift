@@ -17,6 +17,7 @@ enum PanelInteractionLockReason: Hashable, Sendable {
     case canvasConfirmation
     case windowMove
     case windowResize
+    case panelSwipe
     case blockingSave
 }
 

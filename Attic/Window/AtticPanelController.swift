@@ -52,6 +52,26 @@ enum PanelHideCompletion: Equatable {
     case superseded
 }
 
+/// A stationary window can finish its AppKit frame animation before the live
+/// subtree finishes collapsing. Order-out must wait for both, exactly once.
+@MainActor
+final class PanelMotionCompletionBarrier {
+    private var frameFinished = false
+    private var presentationFinished = false
+    private var completion: (() -> Void)?
+
+    init(completion: @escaping () -> Void) { self.completion = completion }
+
+    func finishFrame() { frameFinished = true; finishIfReady() }
+    func finishPresentation() { presentationFinished = true; finishIfReady() }
+
+    private func finishIfReady() {
+        guard frameFinished, presentationFinished, let completion else { return }
+        self.completion = nil
+        completion()
+    }
+}
+
 struct PanelVisibilityTransitionState {
     private(set) var generation = 0
     private var transitionCancellation: (() -> Void)?
@@ -144,6 +164,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var isShowing = false
     private var isPanelMotionActive = false
+    private var isInteractiveDismissal = false
+    private var interactiveSwipeStartProgress: CGFloat = 0
     private var needsResizeAfterShowing = false
     private var isLiveResizing = false
     private var resizePersistenceState = PanelResizePersistenceState()
@@ -158,6 +180,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var lastUsableFrame: CGRect?
     private(set) var currentCorner: ScreenCorner = .topRight
     var onInteractiveHideCompleted: (() -> Void)?
+
+    private var contentContainer: AtticPanelContentContainer? {
+        panel.contentView as? AtticPanelContentContainer
+    }
 
     init(
         store: TaskStore,
@@ -285,6 +311,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
         // out a panel the user has just asked to see again.
+        clearInteractiveDismissal()
+        panel.cancelTrackpadSwipe()
         stopPanelMotion()
         let frameBeforeWorkAreaRefresh = panel.visibleContentFrame
         guard let workArea = refreshCurrentWorkArea(preferredScreen: screen) else {
@@ -323,13 +351,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             let mustEstablishOnTargetDisplay = !framesMatch(priorFrame, localPriorFrame)
 
             if mustEstablishOnTargetDisplay {
-                let localInitialFrame = PanelGeometry.hiddenFrame(
-                    from: finalFrame,
-                    corner: corner,
-                    in: visibleFrame
-                )
-                panel.alphaValue = 0
-                panel.setVisibleContentFrame(localInitialFrame, display: true)
+                panel.setVisibleContentFrame(finalFrame, display: true)
+                contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
             }
 
             if makeKey {
@@ -342,13 +365,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             return
         }
 
-        let initialFrame = PanelGeometry.hiddenFrame(
-            from: finalFrame,
-            corner: corner,
-            in: visibleFrame
-        )
-        panel.setVisibleContentFrame(initialFrame, display: true)
-        panel.alphaValue = 0
+        panel.setVisibleContentFrame(finalFrame, display: true)
+        contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+        panel.alphaValue = 1
 
         if makeKey {
             panel.makeKeyAndOrderFront(nil)
@@ -362,7 +381,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func animateShow(to finalFrame: CGRect) {
         let generation = visibilityTransition.beginTransition()
         isShowing = true
-        animatePanel(to: finalFrame, alpha: 1, duration: 0.18) { [weak self] in
+        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.visibilityTransition.completeTransition(generation) else { return }
@@ -390,6 +409,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard noteDraft.flush() else {
             return .rejected(.draftFlushFailed)
         }
+        clearInteractiveDismissal()
         stopPanelMotion()
         panel.cancelTrackpadSwipe()
 
@@ -408,12 +428,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if !framesMatch(panel.visibleContentFrame, safeFrame) {
             panel.setVisibleContentFrame(safeFrame, display: true)
         }
-        let targetFrame = PanelGeometry.hiddenFrame(
-            from: safeFrame,
-            corner: currentCorner,
-            in: screen.visibleFrame
+        // A released window throw can start away from its attached corner.
+        // Move its fixed-size native frame back while the same live subtree
+        // collapses, so every hide reason converges on the actual dock anchor.
+        let targetFrame = PanelGeometry.panelFrame(
+            in: screen.visibleFrame, size: safeFrame.size, corner: currentCorner
         )
-        animatePanel(to: targetFrame, alpha: 0, duration: 0.16) { [weak self] in
+        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
@@ -449,10 +470,25 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self?.applyAccessibilityMoveRequest(requestedFrame)
         }
         panel.onTrackpadDismissRequest = { [weak self] in
-            _ = self?.requestInteractiveHide()
+            guard let self else { return }
+            if !self.requestInteractiveHide().isAccepted {
+                self.cancelInteractiveDismissal()
+            }
+        }
+        panel.onTrackpadDismissProgress = { [weak self] distance in
+            self?.updateInteractiveDismissal(distance: distance)
+        }
+        panel.onTrackpadDismissCancelled = { [weak self] in
+            self?.cancelInteractiveDismissal()
+        }
+        panel.onDirectContentInteraction = { [weak self] in
+            guard let self, self.isShowing || self.isInteractiveDismissal else { return }
+            self.clearInteractiveDismissal()
+            self.stopPanelMotion()
+            self.restoreFullPresentation()
         }
         panel.canBeginTrackpadSwipe = { [weak self] event in
-            guard let self else { return false }
+            guard let self, !self.isPanelMotionActive else { return false }
             let blockers: Set<PanelInteractionLockReason> = [
                 .windowMove, .windowResize, .menuTracking, .blockingSave, .canvasConfirmation,
                 .notesImport, .taskEditing
@@ -491,6 +527,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func bindContentSize() {
+        uiState.$selectedSection
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.panel.cancelTrackpadSwipe() }
+            .store(in: &cancellables)
+
         settings.$corner
             .sink { [weak self] corner in
                 guard let self else { return }
@@ -585,6 +627,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func applyAccessibilityResizeRequest(_ requestedSize: CGSize) {
+        clearInteractiveDismissal()
+        panel.cancelTrackpadSwipe()
+        stopPanelMotion()
+        restoreFullPresentation()
         guard let workArea = refreshCurrentWorkArea(
             preferredScreen: panel.screen ?? currentScreen
         ) else { return }
@@ -602,6 +648,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func applyAccessibilityMoveRequest(_ requestedFrame: CGRect) {
+        clearInteractiveDismissal()
+        panel.cancelTrackpadSwipe()
+        stopPanelMotion()
+        restoreFullPresentation()
         guard let screen = bestScreen(for: requestedFrame) ?? panel.screen ?? currentScreen else {
             return
         }
@@ -629,8 +679,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func beginLiveResize() {
         guard !isLiveResizing else { return }
+        clearInteractiveDismissal()
         stopPanelMotion()
         panel.cancelTrackpadSwipe()
+        restoreFullPresentation()
         panel.alphaValue = 1
         isShowing = false
         needsResizeAfterShowing = false
@@ -659,8 +711,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     private func beginWindowDrag() {
+        clearInteractiveDismissal()
         stopPanelMotion()
         panel.cancelTrackpadSwipe()
+        restoreFullPresentation()
         panel.alphaValue = 1
         isShowing = false
         needsResizeAfterShowing = false
@@ -764,6 +818,48 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func updateInteractiveDismissal(distance: CGFloat) {
+        guard panel.isVisible else { return }
+        if !isInteractiveDismissal {
+            stopPanelMotion()
+            isInteractiveDismissal = true
+            let scale = contentContainer?.presentationTransform.m11 ?? 1
+            interactiveSwipeStartProgress = min(1, max(0,
+                (1 - scale) / (1 - PanelCollapseGeometry.collapsedScale)
+            ))
+            uiState.setInteractionLock(.panelSwipe, isActive: true)
+        }
+        let progress = PanelCollapseGeometry.progress(
+            forSwipeDistance: distance, panelWidth: panel.visibleContentFrame.width
+        )
+        contentContainer?.allowsContentInteraction = false
+        contentContainer?.setCollapseProgress(
+            interactiveSwipeStartProgress + (1 - interactiveSwipeStartProgress) * progress,
+            corner: currentCorner,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
+    }
+
+    private func clearInteractiveDismissal() {
+        isInteractiveDismissal = false
+        interactiveSwipeStartProgress = 0
+        uiState.setInteractionLock(.panelSwipe, isActive: false)
+    }
+
+    private func cancelInteractiveDismissal() {
+        guard isInteractiveDismissal else { return }
+        clearInteractiveDismissal()
+        stopPanelMotion()
+        guard panel.isVisible else { restoreFullPresentation(); return }
+        animateShow(to: panel.visibleContentFrame)
+    }
+
+    private func restoreFullPresentation() {
+        clearInteractiveDismissal()
+        contentContainer?.setCollapseProgress(0, corner: currentCorner, reduceMotion: true)
+        contentContainer?.allowsContentInteraction = true
+    }
+
     private func animateDock(
         on screen: NSScreen,
         to corner: ScreenCorner,
@@ -797,7 +893,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self?.uiState.dockingPreviewCorner = nil
             self?.uiState.setInteractionLock(.windowMove, isActive: false)
         })
-        animatePanel(to: targetFrame, alpha: 1, duration: 0.18) { [weak self] in
+        animatePanel(to: targetFrame, collapseProgress: 0, duration: 0.18) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.completeTransition(generation) else { return }
                 self.uiState.updatePanelSize(self.panel.visibleContentFrame.size)
@@ -807,41 +903,58 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Every visibility and docking trigger retargets the same native frame
-    /// and alpha properties, preserving AppKit's current presentation values.
+    /// Native layout remains full size. Only the live presentation subtree is
+    /// transformed; no snapshot, opacity track, or per-frame SwiftUI layout is
+    /// involved. Both animation paths are bounded and generation-owned.
     private func animatePanel(
         to frame: CGRect,
-        alpha: CGFloat,
+        collapseProgress: CGFloat,
         duration: TimeInterval,
         completion: @escaping () -> Void
     ) {
         let generation = visibilityTransition.generation
         isPanelMotionActive = true
+        contentContainer?.allowsContentInteraction = false
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let currentScale = contentContainer?.presentationTransform.m11 ?? 1
+        let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
+        let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
+        let duration = reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
+        let finishes = PanelMotionCompletionBarrier { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
+                self.isPanelMotionActive = false
+                self.contentContainer?.allowsContentInteraction = collapseProgress == 0
+                completion()
+            }
+        }
+        contentContainer?.setCollapseProgress(
+            collapseProgress, corner: currentCorner, reduceMotion: reduceMotion,
+            duration: duration, completion: {
+                MainActor.assumeIsolated { finishes.finishPresentation() }
+            }
+        )
+        if contentContainer == nil { finishes.finishPresentation() }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
+            context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
             panel.animator().setFrame(panel.nativeFrame(forVisibleFrame: frame), display: true)
-            panel.animator().alphaValue = alpha
-        } completionHandler: { [weak self] in
+        } completionHandler: {
             MainActor.assumeIsolated {
-                if let self, self.visibilityTransition.ownsCompletion(generation) {
-                    self.isPanelMotionActive = false
-                }
-                completion()
+                finishes.finishFrame()
             }
         }
     }
 
     private func stopPanelMotion() {
         visibilityTransition.invalidatePendingTransition()
+        contentContainer?.stopCollapseMotion()
         let currentFrame = panel.frame
-        let currentAlpha = panel.alphaValue
         // NSAnimatablePropertyContainer documents a zero-duration animator
         // update as the way to stop an in-flight property animation.
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             panel.animator().setFrame(currentFrame, display: false)
-            panel.animator().alphaValue = currentAlpha
         }
         isShowing = false
         isPanelMotionActive = false
@@ -900,11 +1013,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             preferredScreen: preferredScreen
         ) else { return }
 
-        if isPanelMotionActive {
+        if isPanelMotionActive || isInteractiveDismissal {
+            clearInteractiveDismissal()
+            panel.cancelTrackpadSwipe()
             stopPanelMotion()
             isShowing = false
             needsResizeAfterShowing = false
             panel.alphaValue = 1
+            restoreFullPresentation()
         }
 
         let targetFrame: CGRect

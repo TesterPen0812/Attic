@@ -1,9 +1,177 @@
 import AppKit
 import Combine
+import QuartzCore
 import XCTest
 @testable import Attic
 
 final class PanelGeometryTests: XCTestCase {
+    func testCollapseKeepsEveryAttachedCornerFixedInsideTheOriginalSurface() {
+        let native = CGRect(x: 0, y: 0, width: 492, height: 632)
+        let visible = native.insetBy(dx: 6, dy: 6)
+        let center = CGPoint(x: native.midX, y: native.midY)
+        for corner in ScreenCorner.allCases {
+            let anchor = CGPoint(
+                x: [.topRight, .bottomRight].contains(corner) ? visible.maxX : visible.minX,
+                y: [.topLeft, .topRight].contains(corner) ? visible.maxY : visible.minY
+            )
+            for progress in [CGFloat(0), 0.25, 0.65, 1] {
+                let transform = PanelCollapseGeometry.transform(
+                    progress: progress, visibleBounds: visible, layerBounds: native, corner: corner
+                )
+                func presented(_ point: CGPoint) -> CGPoint {
+                    let relative = CGPoint(x: point.x - center.x, y: point.y - center.y).applying(transform)
+                    return CGPoint(x: relative.x + center.x, y: relative.y + center.y)
+                }
+                XCTAssertEqual(presented(anchor).x, anchor.x, accuracy: 0.001)
+                XCTAssertEqual(presented(anchor).y, anchor.y, accuracy: 0.001)
+                for point in [CGPoint(x: visible.minX, y: visible.minY), CGPoint(x: visible.maxX, y: visible.maxY)] {
+                    let result = presented(point)
+                    XCTAssertGreaterThanOrEqual(result.x, visible.minX - 0.001)
+                    XCTAssertLessThanOrEqual(result.x, visible.maxX + 0.001)
+                    XCTAssertGreaterThanOrEqual(result.y, visible.minY - 0.001)
+                    XCTAssertLessThanOrEqual(result.y, visible.maxY + 0.001)
+                }
+            }
+        }
+        XCTAssertTrue(PanelCollapseGeometry.transform(
+            progress: 1, visibleBounds: visible, layerBounds: native,
+            corner: .topRight, reduceMotion: true
+        ).isIdentity)
+    }
+
+    func testInteractiveCollapseProgressIsBoundedAndReversible() {
+        let forward = PanelCollapseGeometry.progress(forSwipeDistance: 60, panelWidth: 332)
+        let reverse = PanelCollapseGeometry.progress(forSwipeDistance: 20, panelWidth: 332)
+        XCTAssertGreaterThan(forward, reverse)
+        XCTAssertGreaterThan(reverse, 0)
+        XCTAssertEqual(PanelCollapseGeometry.progress(forSwipeDistance: -10, panelWidth: 332), 0)
+        XCTAssertEqual(PanelCollapseGeometry.progress(forSwipeDistance: 10_000, panelWidth: 332), 0.95)
+        XCTAssertEqual(PanelCollapseGeometry.progress(forSwipeDistance: .infinity, panelWidth: 332), 0)
+    }
+
+    @MainActor
+    func testSwipeReportsFingerProgressAndRestoresAfterReversalBelowThreshold() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var samples: [CGFloat] = []
+        var cancellations = 0
+        var hides = 0
+        panel.onTrackpadDismissProgress = { samples.append($0) }
+        panel.onTrackpadDismissCancelled = { cancellations += 1 }
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -20, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: -40, deltaY: 0, phase: .changed))
+        panel.sendEvent(try panelScrollEvent(deltaX: 35, deltaY: 0, phase: .changed))
+        XCTAssertEqual(samples, [20, 60, 25], "The surface follows every delivered sample before fingers lift")
+        XCTAssertEqual(hides, 0)
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(hides, 0)
+        panel.cancelTrackpadSwipe()
+        XCTAssertEqual(cancellations, 1)
+    }
+
+    @MainActor
+    func testCommittedSwipeDoesNotRestoreBeforeStartingTheCommonHideTransition() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var events: [String] = []
+        panel.onTrackpadDismissProgress = { _ in events.append("progress") }
+        panel.onTrackpadDismissCancelled = { events.append("restore") }
+        panel.onTrackpadDismissRequest = { events.append("hide") }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(events, ["progress", "hide"])
+        panel.cancelTrackpadSwipe()
+        XCTAssertEqual(events, ["progress", "hide"])
+    }
+
+    @MainActor
+    func testInterruptedSwipeRestoresOnceAndRequiresAnotherBegin() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var cancellations = 0
+        var hides = 0
+        panel.onTrackpadDismissCancelled = { cancellations += 1 }
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.resignKey()
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .changed))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(hides, 0)
+    }
+
+    @MainActor
+    func testDirectInputSettlesTheCancelledSwipeBeforeResponderDispatch() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        var events: [String] = []
+        panel.onTrackpadDismissCancelled = { events.append("restore") }
+        panel.onDirectContentInteraction = { events.append("settle") }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        let modifier = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged, location: .zero, modifierFlags: .shift,
+            timestamp: 1, windowNumber: panel.windowNumber, context: nil,
+            characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56
+        ))
+        panel.sendEvent(modifier)
+        XCTAssertEqual(events, ["restore", "settle"])
+        panel.cancelTrackpadSwipe()
+        XCTAssertEqual(events, ["restore", "settle"], "Stale gesture cleanup cannot restart the return animation")
+    }
+
+    @MainActor
+    func testHostedCollapseNeverChangesNativeOrSwiftUILayoutBounds() throws {
+        try withHiddenHostedPanel { panel, host in
+            let container = try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
+            let nativeFrame = panel.frame
+            let hostingFrame = host.frame
+            let hostingBounds = host.bounds
+            container.setCollapseProgress(0.6, corner: .bottomLeft, reduceMotion: false)
+            XCTAssertLessThan(container.presentationTransform.m11, 1)
+            XCTAssertEqual(panel.frame, nativeFrame)
+            XCTAssertEqual(host.frame, hostingFrame)
+            XCTAssertEqual(host.bounds, hostingBounds)
+            container.stopCollapseMotion()
+            container.setCollapseProgress(0, corner: .bottomLeft, reduceMotion: true)
+            XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
+            XCTAssertEqual(host.bounds, hostingBounds)
+        }
+    }
+
+    @MainActor
+    func testHideWaitsForPresentationAndStaleHideCannotCompleteAfterReveal() {
+        var transitions = PanelVisibilityTransitionState()
+        var hidden = 0
+        var superseded = 0
+        let hide = transitions.beginHideTransition { result in
+            if result == .hidden { hidden += 1 } else { superseded += 1 }
+        }
+        let completion = PanelMotionCompletionBarrier { _ = transitions.completeHideTransition(hide) }
+        completion.finishFrame()
+        XCTAssertEqual(hidden, 0, "An unchanged native frame must not order out the collapsing surface early")
+        transitions.invalidatePendingTransition()
+        completion.finishPresentation()
+        completion.finishPresentation()
+        XCTAssertEqual(hidden, 0)
+        XCTAssertEqual(superseded, 1)
+    }
+
+    @MainActor
+    func testMotionCompletionBarrierFinishesExactlyOnceInEitherOrder() {
+        for frameFirst in [false, true] {
+            var count = 0
+            let completion = PanelMotionCompletionBarrier { count += 1 }
+            if frameFirst { completion.finishFrame() } else { completion.finishPresentation() }
+            XCTAssertEqual(count, 0)
+            completion.finishFrame()
+            completion.finishPresentation()
+            completion.finishFrame()
+            XCTAssertEqual(count, 1)
+        }
+    }
+
     @MainActor
     func testHostedResizeUsesDeliveredMovementWithoutMovingGlobalCursor() throws {
         try withHiddenHostedPanel { panel, host in

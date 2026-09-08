@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 @MainActor
@@ -12,6 +13,9 @@ final class AtticPanel: NSPanel {
     var onAccessibilityResizeRequest: ((CGSize) -> Void)?
     var onAccessibilityMoveRequest: ((CGRect) -> Void)?
     var onTrackpadDismissRequest: (() -> Void)?
+    var onTrackpadDismissProgress: ((CGFloat) -> Void)?
+    var onTrackpadDismissCancelled: (() -> Void)?
+    var onDirectContentInteraction: (() -> Void)?
     var trackpadDismissCorner: ScreenCorner = .topRight {
         didSet {
             if trackpadDismissCorner != oldValue { cancelTrackpadSwipe() }
@@ -27,6 +31,7 @@ final class AtticPanel: NSPanel {
     private enum SwipeRoute { case hide, notes, content }
     private var swipeRoute: SwipeRoute?
     private var swipeSequenceActive = false
+    private var hasInteractiveDismissal = false
     private var swipeStartedInNotes = false
     private var swipeStartedInLibrary = false
     private weak var swipeNotesTarget: (any PanelNotesSwipeTarget)?
@@ -58,6 +63,9 @@ final class AtticPanel: NSPanel {
         guard event.type == .scrollWheel else {
             if [.magnify, .beginGesture, .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown, .flagsChanged].contains(event.type) {
                 cancelTrackpadSwipe()
+                // Finish a returning presentation before AppKit hit-testing
+                // this new interaction at the untransformed content bounds.
+                onDirectContentInteraction?()
             }
             super.sendEvent(event)
             return
@@ -156,12 +164,17 @@ final class AtticPanel: NSPanel {
         )
         let navigationTarget = swipeNotesTarget
         let beganInLibrary = swipeStartedInLibrary
-        if phase == .ended || phase == .cancelled { cancelTrackpadSwipe() }
+        if phase == .ended || phase == .cancelled {
+            resetTrackpadSwipe(notifyCancellation: update != .requestHide)
+        }
         switch update {
         case .passThrough:
             super.sendEvent(event)
         case .tracking:
-            break
+            if route == .hide, phase != .cancelled {
+                hasInteractiveDismissal = true
+                onTrackpadDismissProgress?(trackpadDismissTracker.progress)
+            }
         case .requestHide:
             if route == .notes {
                 guard let navigationTarget,
@@ -175,12 +188,19 @@ final class AtticPanel: NSPanel {
     }
 
     func cancelTrackpadSwipe() {
+        resetTrackpadSwipe(notifyCancellation: true)
+    }
+
+    private func resetTrackpadSwipe(notifyCancellation: Bool) {
+        let shouldNotify = hasInteractiveDismissal && notifyCancellation
+        hasInteractiveDismissal = false
         trackpadDismissTracker.cancel()
         swipeRoute = nil
         swipeSequenceActive = false
         swipeStartedInNotes = false
         swipeStartedInLibrary = false
         swipeNotesTarget = nil
+        if shouldNotify { onTrackpadDismissCancelled?() }
     }
 
     private func contentOwnsHorizontalScrolling(at windowPoint: CGPoint) -> Bool {
@@ -756,6 +776,9 @@ final class PanelChromeInteractionState {
 /// squircle so transparent corner pixels cannot obstruct the app behind it.
 final class AtticPanelContentContainer: NSView {
     let hostingView: AtticPanelHostingView
+    private let motionView = NSView()
+    private static let collapseAnimationKey = "attic.panel.collapse"
+    var allowsContentInteraction = true
 
     init(hostingView: AtticPanelHostingView, visibleSize: CGSize, perimeter: CGFloat) {
         self.hostingView = hostingView
@@ -763,17 +786,69 @@ final class AtticPanelContentContainer: NSView {
             width: visibleSize.width + perimeter * 2,
             height: visibleSize.height + perimeter * 2
         )))
+        motionView.frame = bounds
+        motionView.autoresizingMask = [.width, .height]
+        motionView.wantsLayer = true
+        addSubview(motionView)
         hostingView.frame = bounds.insetBy(dx: perimeter, dy: perimeter)
         hostingView.autoresizingMask = [.width, .height]
-        addSubview(hostingView)
+        motionView.addSubview(hostingView)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(convert(point, from: superview)) else { return nil }
+        guard allowsContentInteraction,
+              bounds.contains(convert(point, from: superview)) else { return nil }
         return hostingView.hitTest(convert(point, from: superview))
+    }
+
+    var presentationTransform: CATransform3D {
+        motionView.layer?.presentation()?.transform ?? motionView.layer?.transform ?? CATransform3DIdentity
+    }
+
+    func stopCollapseMotion() {
+        guard let layer = motionView.layer else { return }
+        let current = presentationTransform
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = current
+        layer.removeAnimation(forKey: Self.collapseAnimationKey)
+        CATransaction.commit()
+    }
+
+    func setCollapseProgress(
+        _ progress: CGFloat, corner: ScreenCorner, reduceMotion: Bool,
+        duration: TimeInterval = 0, completion: (() -> Void)? = nil
+    ) {
+        guard let layer = motionView.layer else { completion?(); return }
+        let from = presentationTransform
+        let target = CATransform3DMakeAffineTransform(PanelCollapseGeometry.transform(
+            progress: progress, visibleBounds: hostingView.frame,
+            layerBounds: motionView.bounds, corner: corner, reduceMotion: reduceMotion,
+            layerAnchor: CGPoint(
+                x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
+                y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height
+            )
+        ))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.removeAnimation(forKey: Self.collapseAnimationKey)
+        layer.transform = target
+        if duration > 0, !reduceMotion, !CATransform3DEqualToTransform(from, target) {
+            let animation = CABasicAnimation(keyPath: "transform")
+            animation.fromValue = NSValue(caTransform3D: from)
+            animation.toValue = NSValue(caTransform3D: target)
+            animation.duration = duration
+            animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
+            CATransaction.setCompletionBlock(completion)
+            layer.add(animation, forKey: Self.collapseAnimationKey)
+            CATransaction.commit()
+        } else {
+            CATransaction.commit()
+            completion?()
+        }
     }
 }
 
