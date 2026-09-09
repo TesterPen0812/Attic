@@ -31,10 +31,15 @@ Attic lives in the menu bar and reveals a lightweight panel when the pointer res
 
 ## Build and run
 
-1. Clone the repository.
-2. Open `Attic.xcodeproj` in Xcode.
-3. Select the `Attic` target and choose your development team under Signing & Capabilities.
-4. Run the `Attic` scheme for Mac. The official bundle identifier is `com.taha.Attic`.
+For development, use `./script/build_and_run.sh` to build and launch an isolated
+local preview. The Codex Run action uses this path and does not update the daily
+app. See [Daily app and development previews](Docs/DailyApp.md) for deliberately
+installing or updating `/Applications/Attic Daily.app` from a reviewed commit.
+
+You can open `Attic.xcodeproj` in Xcode for source inspection. For Xcode-only
+experiments, configure a unique preview bundle identifier and local-only
+entitlements first; `com.taha.Attic` is reserved for the daily app. The preview
+script handles that isolation automatically.
 
 Choose a corner and reveal delay in Settings. Press `Control–Option–Space` from anywhere in macOS to reveal Attic with the new-task field focused.
 Press `Command–,` while Attic is focused to open Settings.

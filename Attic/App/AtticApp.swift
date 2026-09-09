@@ -26,7 +26,9 @@ struct AtticApp: App {
     }
 
     private var menuBarTitle: String {
-        #if ATTIC_GLASSMORPHISM_PREVIEW
+        #if ATTIC_DAILY
+        "Attic Daily"
+        #elseif ATTIC_GLASSMORPHISM_PREVIEW
         "Attic Glassmorphism"
         #elseif ATTIC_LOCAL_ONLY
         "Attic Notes Local"
