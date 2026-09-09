@@ -482,6 +482,40 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(app.buttons["panel-section-tasks"].isHittable)
     }
 
+    func testNoteTextScrollsUnderStationaryControls() throws {
+        app.typeKey("3", modifierFlags: .command)
+        let newNote = app.buttons["new-note-empty-state"]
+        XCTAssertTrue(newNote.waitForExistence(timeout: 3))
+        newNote.click()
+        let body = app.textViews["note-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 3))
+        let scroll = app.scrollViews["note-document-scroll"]
+        scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        app.typeText((1...30).map { String($0) }.joined(separator: "\n"))
+        let pin = app.buttons["panel-pin-button"]
+        let controls = app.descendants(matching: .any)["note-entry-bar"]
+        XCTAssertTrue(scroll.exists)
+        XCTAssertLessThan(scroll.frame.minY, pin.frame.minY)
+        XCTAssertGreaterThan(scroll.frame.maxY, controls.frame.maxY)
+        let pinFrame = pin.frame
+        let controlsFrame = controls.frame
+        // AppKit's scroll view delegates hit testing to its document; XCTest
+        // cannot synthesize a wheel hit on the scroll-view AX wrapper. Native
+        // Home/Page Down scroll the same viewport without relocating controls.
+        app.typeKey(.home, modifierFlags: [])
+        let title = app.textFields["note-title"]
+        XCTAssertTrue(title.isHittable)
+        let initialTitleY = title.frame.minY
+        app.typeKey(.pageDown, modifierFlags: [])
+        XCTAssertEqual(pin.frame, pinFrame)
+        XCTAssertEqual(controls.frame, controlsFrame)
+        XCTAssertLessThan(title.frame.minY, initialTitleY)
+        let capture = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
+        capture.name = "Note-text-under-fixed-controls"
+        capture.lifetime = .keepAlways
+        add(capture)
+    }
+
     func testNotesBodyPreservesFocusAcrossIncrementalTyping() throws {
         app.typeKey("3", modifierFlags: .command)
 

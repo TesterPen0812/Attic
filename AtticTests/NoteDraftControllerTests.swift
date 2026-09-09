@@ -6,6 +6,52 @@ import XCTest
 
 final class NoteDraftControllerTests: XCTestCase {
     @MainActor
+    func testNoteViewportExtendsUnderChromeWithReachableDocumentEnds() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        XCTAssertTrue(draft.beginNew())
+        draft.title = "Scrolling title"
+        draft.body = String(repeating: "A line that must scroll beneath the floating controls.\n", count: 50)
+        let uiState = PanelUIState()
+        uiState.beginAdding()
+        let host = NSHostingView(rootView: NoteComposerView(noteDraft: draft, uiState: uiState,
+                                                           topContentInset: 80, bottomContentInset: 20))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 560),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { tearDownHarnessWindow(window) }
+        host.layoutSubtreeIfNeeded()
+        drainMainRunLoop()
+        let textView = try XCTUnwrap(firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" })
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        let document = try XCTUnwrap(scrollView.documentView as? NoteEditorDocumentView)
+        document.layoutDocument(viewport: scrollView.contentSize)
+        XCTAssertEqual(scrollView.frame.height, host.frame.height, accuracy: 1,
+                       "Chrome must overlay the viewport, not shorten it")
+        XCTAssertGreaterThan(textView.frame.minY, 80, "At rest the title and first line clear the top chrome")
+        let startY = textView.frame.minY
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: startY - 30))
+        XCTAssertEqual(textView.convert(.zero, to: scrollView.contentView).y
+                       - scrollView.contentView.bounds.minY, 30, accuracy: 1,
+                       "Text must be allowed into the top controls' band")
+        let bottomReserve = 20 + AtticStyle.composerControlHeight + 14
+        XCTAssertGreaterThanOrEqual(document.frame.height - textView.frame.maxY, bottomReserve,
+                                    "The last line must scroll fully above the bottom controls")
+        XCTAssertEqual(textView.string, draft.body)
+        let end = NSRange(location: (textView.string as NSString).length - 1, length: 1)
+        textView.scrollRangeToVisible(end)
+        let manager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+        let glyphs = manager.glyphRange(forCharacterRange: end, actualCharacterRange: nil)
+        let endRect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+        let visibleEnd = textView.convert(endRect, to: scrollView.contentView)
+        XCTAssertLessThanOrEqual(visibleEnd.maxY, scrollView.contentView.bounds.maxY - bottomReserve + 1,
+                                 "Keyboard scrolling must keep the caret above the fixed composer")
+    }
+
+    @MainActor
     func testNativePreviewDemandTracksVisibleCardsWithoutPublishingEveryScrollSample() {
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 400))
         let document = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 1200))
@@ -100,7 +146,8 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertTrue(scrollView.documentView is NoteEditorDocumentView)
         XCTAssertNil(scrollView.enclosingScrollView, "Notes must not nest two vertical scroll owners")
         XCTAssertGreaterThan(textView.frame.height, 400, "The writing area must not retain its old 170-point cap")
-        XCTAssertEqual(textView.frame.height, scrollView.contentSize.height, accuracy: 1)
+        XCTAssertEqual(scrollView.documentView!.frame.height, scrollView.contentSize.height, accuracy: 1)
+        XCTAssertGreaterThan(textView.frame.minY, 0, "The title belongs inside the scrolling document")
         XCTAssertTrue(window.makeFirstResponder(textView))
         textView.insertText("Continuous draft", replacementRange: textView.selectedRange())
         drainMainRunLoop()
@@ -112,7 +159,7 @@ final class NoteDraftControllerTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         XCTAssertTrue(firstTextView(in: host) { $0.accessibilityIdentifier() == "note-body" } === textView)
         XCTAssertGreaterThan(textView.frame.height, previousHeight + 200)
-        XCTAssertEqual(textView.frame.height, scrollView.contentSize.height, accuracy: 1)
+        XCTAssertEqual(scrollView.documentView!.frame.height, scrollView.contentSize.height, accuracy: 1)
         XCTAssertEqual(textView.selectedRange(), selection)
         XCTAssertTrue(window.firstResponder === textView)
         XCTAssertEqual(draft.body, "Continuous draft")

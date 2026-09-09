@@ -768,6 +768,11 @@ final class NoteEditorDocumentView: NSView {
         }
     }
     let textView: AttachmentAcceptingTextView
+    private let header = NoteDocumentHostingView(rootView: AnyView(EmptyView()))
+    private var headerContent = AnyView(EmptyView())
+    private var hasHeader = false
+    var topContentInset: CGFloat = 0
+    var bottomContentInset: CGFloat = 0
     private let accessories = NoteDocumentHostingView(rootView: AnyView(EmptyView()))
     private var accessoryContent = AnyView(EmptyView())
     private var contentWidth: CGFloat = -1
@@ -782,6 +787,9 @@ final class NoteEditorDocumentView: NSView {
         super.init(frame: .zero)
         addSubview(textView)
         addSubview(accessories)
+        addSubview(header)
+        header.sizingOptions = [.intrinsicContentSize]
+        header.onSizeInvalidated = { [weak self] in self?.needsLayout = true }
         accessories.sizingOptions = [.intrinsicContentSize]
         accessories.onSizeInvalidated = { [weak self] in
             self?.needsLayout = true
@@ -789,6 +797,14 @@ final class NoteEditorDocumentView: NSView {
     }
 
     required init?(coder: NSCoder) { return nil }
+
+    func updateHeader(_ content: AnyView, isPresent: Bool) {
+        headerContent = content
+        hasHeader = isPresent
+        header.isHidden = !isPresent
+        updateHeaderWidth(max(1, contentWidth))
+        needsLayout = true
+    }
 
     func updateAccessories(_ content: AnyView, isPresent: Bool) {
         accessoryContent = content
@@ -820,11 +836,16 @@ final class NoteEditorDocumentView: NSView {
             contentWidth = width
             textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
             updateAccessoryWidth(width)
+            updateHeaderWidth(width)
             measuredTextHeight = nil
         }
         // An EmptyView hosting root can still report AppKit's default fitting
         // size. Presence is a document fact, not a measurement inference.
         let accessoryHeight = hasAccessories ? max(0, ceil(accessories.fittingSize.height)) : 0
+        let headerHeight = hasHeader ? max(0, ceil(header.fittingSize.height)) : 0
+        let topInset = topContentInset.isFinite ? max(0, topContentInset) : 0
+        let bottomInset = bottomContentInset.isFinite ? max(0, bottomContentInset) : 0
+        let textY = topInset + headerHeight + (hasHeader ? 8 : 0)
         let naturalTextHeight: CGFloat
         if let measuredTextHeight {
             naturalTextHeight = measuredTextHeight
@@ -844,14 +865,16 @@ final class NoteEditorDocumentView: NSView {
 
         // Empty space belongs to the editor when there are no attachments.
         // Otherwise attachments follow the final text line, not a fixed footer.
-        let textHeight = max(naturalTextHeight, hasAccessories ? 24 : viewport.height)
-        let accessoryY = textHeight + (hasAccessories ? 12 : 0)
-        let textFrame = NSRect(x: 0, y: 0, width: width, height: textHeight)
+        let textHeight = max(naturalTextHeight, hasAccessories ? 24 : max(24, viewport.height - textY - bottomInset))
+        let accessoryY = textY + textHeight + (hasAccessories ? 12 : 0)
+        let headerFrame = NSRect(x: 0, y: topInset, width: width, height: headerHeight)
+        let textFrame = NSRect(x: 0, y: textY, width: width, height: textHeight)
         let accessoryFrame = NSRect(x: 0, y: accessoryY, width: width, height: accessoryHeight)
-        let changed = textView.frame != textFrame || accessories.frame != accessoryFrame
+        let changed = textView.frame != textFrame || accessories.frame != accessoryFrame || header.frame != headerFrame
+        if header.frame != headerFrame { header.frame = headerFrame }
         if textView.frame != textFrame { textView.frame = textFrame }
         if accessories.frame != accessoryFrame { accessories.frame = accessoryFrame }
-        let documentHeight = max(viewport.height, accessoryY + accessoryHeight)
+        let documentHeight = max(viewport.height, accessoryY + accessoryHeight + bottomInset)
         if frame.size != NSSize(width: width, height: documentHeight) {
             setFrameSize(NSSize(width: width, height: documentHeight))
         }
@@ -860,6 +883,12 @@ final class NoteEditorDocumentView: NSView {
 
     private func updateAccessoryWidth(_ width: CGFloat) {
         accessories.rootView = AnyView(accessoryContent
+            .frame(width: width, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true))
+    }
+
+    private func updateHeaderWidth(_ width: CGFloat) {
+        header.rootView = AnyView(headerContent
             .frame(width: width, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true))
     }
@@ -894,6 +923,10 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     var documentAccessories = AnyView(EmptyView())
     var hasDocumentAccessories = false
     var isDocumentVisible = true
+    var documentHeader = AnyView(EmptyView())
+    var hasDocumentHeader = false
+    var topContentInset: CGFloat = 0
+    var bottomContentInset: CGFloat = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -905,6 +938,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.setAccessibilityIdentifier("note-document-scroll")
 
         let textView = AttachmentAcceptingTextView()
         textView.delegate = context.coordinator
@@ -976,6 +1010,9 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         }
 
         let document = NoteEditorDocumentView(textView: textView)
+        document.topContentInset = topContentInset
+        document.bottomContentInset = bottomContentInset
+        document.updateHeader(AnyView(documentHeader.environment(\.self, context.environment)), isPresent: hasDocumentHeader)
         document.allowsPreviewLoading = isDocumentVisible
         document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)), isPresent: hasDocumentAccessories)
         scrollView.documentView = document
@@ -995,6 +1032,9 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
             textView: textView
         )
         guard synchronization != .staleSession else { return }
+        document.topContentInset = topContentInset
+        document.bottomContentInset = bottomContentInset
+        document.updateHeader(AnyView(documentHeader.environment(\.self, context.environment)), isPresent: hasDocumentHeader)
         document.allowsPreviewLoading = isDocumentVisible
         document.updateAccessories(AnyView(documentAccessories.environment(\.self, context.environment)), isPresent: hasDocumentAccessories)
         if synchronization == .replacedText { document.invalidateTextLayout() }
@@ -1279,6 +1319,36 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
 }
 
 final class AttachmentAcceptingTextView: NSTextView {
+    override func scrollRangeToVisible(_ range: NSRange) {
+        super.scrollRangeToVisible(range)
+        guard let document = superview as? NoteEditorDocumentView,
+              let scrollView = enclosingScrollView,
+              let manager = layoutManager, let container = textContainer,
+              range.location != NSNotFound else { return }
+        document.invalidateTextLayout()
+        document.layoutDocument(viewport: scrollView.contentSize)
+        let safeRange = NSIntersectionRange(range, NSRange(location: 0, length: (string as NSString).length))
+        let glyphs = manager.glyphRange(forCharacterRange: safeRange, actualCharacterRange: nil)
+        var rect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+        if rect.isEmpty {
+            rect = manager.extraLineFragmentRect
+            if rect.isEmpty, manager.numberOfGlyphs > 0 {
+                rect = manager.lineFragmentRect(forGlyphAt: min(glyphs.location, manager.numberOfGlyphs - 1),
+                                                effectiveRange: nil)
+            }
+        }
+        guard rect.height > 0 else { return }
+        rect = convert(rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y), to: document)
+        // Inset the *requested visible area*, not the clip view. Wheel scrolling
+        // can still pass underneath chrome, while caret navigation avoids it.
+        let top = max(0, document.topContentInset)
+        let bottom = max(0, document.bottomContentInset)
+        guard rect.height + top + bottom < scrollView.contentSize.height else { return }
+        rect.origin.y -= top
+        rect.size.height += top + bottom
+        _ = document.scrollToVisible(rect)
+    }
+
     var onImportFiles: (([URL], [URL]) -> Void)?
     var onImportError: ((String) -> Void)?
     var onFileTargetingChanged: ((Bool) -> Void)?

@@ -32,6 +32,8 @@ struct NotesPanelContent: View {
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
+    var topContentInset: CGFloat = 0
+    var bottomContentInset: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -68,6 +70,8 @@ struct NotesPanelContent: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 28)
+            .padding(.top, topContentInset)
+            .padding(.bottom, bottomContentInset)
         } else {
             ScrollView {
                 LazyVStack(spacing: 5) {
@@ -81,8 +85,8 @@ struct NotesPanelContent: View {
                     }
                 }
                 .padding(.horizontal, AtticStyle.horizontalPadding - 4)
-                .padding(.top, 2)
-                .padding(.bottom, 18)
+                .padding(.top, topContentInset + 2)
+                .padding(.bottom, bottomContentInset + 18)
             }
             .scrollIndicators(.never)
             .animation(reduceMotion ? nil : AtticMotion.spring, value: notes.map(\.id))
@@ -138,6 +142,8 @@ struct NoteComposerView: View {
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject private var noteStore: NoteStore
     @ObservedObject var uiState: PanelUIState
+    let topContentInset: CGFloat
+    let bottomContentInset: CGFloat
 
     /// The title participates in SwiftUI's focus system, while the wrapped
     /// NSTextView owns body focus through AppKit's responder chain. Treating
@@ -153,10 +159,13 @@ struct NoteComposerView: View {
     @State private var attachmentImportTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(noteDraft: NoteDraftController, uiState: PanelUIState) {
+    init(noteDraft: NoteDraftController, uiState: PanelUIState,
+         topContentInset: CGFloat = 0, bottomContentInset: CGFloat = 0) {
         self.noteDraft = noteDraft
         _noteStore = ObservedObject(wrappedValue: noteDraft.noteStore)
         self.uiState = uiState
+        self.topContentInset = topContentInset
+        self.bottomContentInset = bottomContentInset
     }
 
     var body: some View {
@@ -174,6 +183,8 @@ struct NoteComposerView: View {
                         onNew: beginNewNote,
                         onClose: closeLibrary
                     )
+                    .padding(.top, topContentInset)
+                    .padding(.bottom, bottomContentInset)
                     .transition(
                         reduceMotion
                             ? .opacity
@@ -257,9 +268,7 @@ struct NoteComposerView: View {
     }
 
     private var editorSurface: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            noteHeader
-
+        ZStack(alignment: .bottom) {
             AttachmentAwareTextEditor(
                 text: $noteDraft.body,
                 isFileTargeted: $isFileTargeted,
@@ -277,13 +286,17 @@ struct NoteComposerView: View {
                 documentAccessories: AnyView(documentAccessories),
                 hasDocumentAccessories: hasDocumentAttachments || noteDraft.conflictMessage != nil
                     || noteDraft.saveErrorMessage != nil || noteDraft.recoveryErrorMessage != nil,
-                isDocumentVisible: !isLibraryPresented
+                isDocumentVisible: !isLibraryPresented,
+                documentHeader: AnyView(noteHeader),
+                hasDocumentHeader: true,
+                topContentInset: topContentInset,
+                bottomContentInset: bottomContentInset + AtticStyle.composerControlHeight + 14
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 4)
-            .padding(.vertical, 8)
 
             bottomComposer
+                .padding(.bottom, bottomContentInset)
         }
     }
 
@@ -361,7 +374,7 @@ struct NoteComposerView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(saveStatus)
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 2)
         .padding(.top, 2)
         .padding(.bottom, 2)
     }

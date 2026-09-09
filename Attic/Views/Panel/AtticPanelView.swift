@@ -41,12 +41,6 @@ struct AtticPanelView: View {
 
     private var horizontalInset: CGFloat { contentInsets.leading }
     private var chromeInset: CGFloat { chromeInsets.leading }
-    private var chromeTopAdjustment: CGFloat {
-        max(0, chromeInsets.top - contentInsets.top)
-    }
-    private var chromeBottomAdjustment: CGFloat {
-        max(0, chromeInsets.bottom - contentInsets.bottom)
-    }
     private var taskWorkspaceTopPadding: CGFloat {
         PanelGeometry.taskWorkspaceTopPadding(
             cornerSize: cornerRadius,
@@ -111,10 +105,9 @@ struct AtticPanelView: View {
         .overlay(alignment: .bottom) {
             if let error = currentErrorMessage {
                 errorBanner(error)
+                    .padding(.bottom, contentInsets.bottom)
             }
         }
-        .padding(.top, contentInsets.top)
-        .padding(.bottom, contentInsets.bottom)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.colorScheme, systemColorScheme)
         .foregroundStyle(panelThemePalette.primaryForegroundColor, panelThemePalette.secondaryForegroundColor)
@@ -245,7 +238,7 @@ struct AtticPanelView: View {
         }
         .atticGlassEffectContainer(spacing: 12)
         .padding(.horizontal, chromeInset)
-        .padding(.top, chromeTopAdjustment)
+        .padding(.top, chromeInsets.top)
         .frame(maxWidth: .infinity)
     }
 
@@ -389,7 +382,6 @@ struct AtticPanelView: View {
     private var sectionWorkspace: some View {
         if uiState.selectedSection.isTaskBased {
             taskWorkspace
-                .padding(.top, taskWorkspaceTopPadding)
                 .transition(.opacity)
         } else if uiState.selectedSection.isCanvas {
             CanvasPanelContent(
@@ -400,11 +392,11 @@ struct AtticPanelView: View {
                     measuredHeight: errorBannerHeight
                 )
             )
-            .padding(.top, 62)
+            .padding(.top, contentInsets.top + 62)
+            .padding(.bottom, contentInsets.bottom)
             .transition(.opacity)
         } else {
             notesWorkspace
-                .padding(.top, 64)
                 .transition(.opacity)
         }
     }
@@ -415,6 +407,8 @@ struct AtticPanelView: View {
         return Group {
             if snapshot.visibleCount == 0 {
                 taskEmptyState
+                    .padding(.top, contentInsets.top + taskWorkspaceTopPadding)
+                    .padding(.bottom, contentInsets.bottom)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 18) {
@@ -428,8 +422,8 @@ struct AtticPanelView: View {
                         }
                     }
                     .padding(.horizontal, horizontalInset + 2)
-                    .padding(.top, AtticStyle.taskScrollTopPadding)
-                    .padding(.bottom, taskEntryHeight + 54)
+                    .padding(.top, contentInsets.top + taskWorkspaceTopPadding + AtticStyle.taskScrollTopPadding)
+                    .padding(.bottom, contentInsets.bottom + taskEntryHeight + 54)
                 }
                 .scrollIndicators(.never)
             }
@@ -459,13 +453,17 @@ struct AtticPanelView: View {
             if !hasRestoredNoteSession {
                 ProgressView("Restoring draft…")
             } else if uiState.isComposerPresented {
-                NoteComposerView(noteDraft: noteDraft, uiState: uiState)
+                NoteComposerView(noteDraft: noteDraft, uiState: uiState,
+                                 topContentInset: contentInsets.top + 64,
+                                 bottomContentInset: contentInsets.bottom)
                     .padding(.horizontal, horizontalInset)
             } else {
                 NotesPanelContent(
                     noteStore: noteStore,
                     noteDraft: noteDraft,
-                    uiState: uiState
+                    uiState: uiState,
+                    topContentInset: contentInsets.top + 64,
+                    bottomContentInset: contentInsets.bottom
                 )
             }
         }
@@ -598,7 +596,7 @@ struct AtticPanelView: View {
         )
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isTaskEntryExpanded)
         .padding(.horizontal, chromeInset)
-        .padding(.bottom, chromeBottomAdjustment)
+        .padding(.bottom, chromeInsets.bottom)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Quick task entry")
