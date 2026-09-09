@@ -139,4 +139,12 @@ final class AgentHTTPRequestTests: XCTestCase {
             bearerToken: token
         ))
     }
+
+    func testAgentRequestSecurityRejectsMalformedLoopbackHosts() {
+        for host in ["127.0.0.1:", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:evil", "127.0.0.1:7335.evil.example", "127.0.0.1:7335:80"] {
+            XCTAssertFalse(AgentRequestSecurity.isAuthorized(
+                headers: ["host": host, "authorization": "Bearer test-secret"], bearerToken: "test-secret"
+            ), host)
+        }
+    }
 }

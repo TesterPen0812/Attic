@@ -67,7 +67,14 @@ evidence of cross-device synchronization.
 
 ## Agent access (MCP)
 
-When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and every request must include the random bearer token shown under Settings → Agent access. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.taha.Attic agentServerPort <port>`.
+When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and tool requests require the private bearer token provided by Settings → Agent Access → Copy setup prompt. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.taha.Attic agentServerPort <port>`.
+
+Local-only builds support authenticated local MCP without enabling CloudKit or
+APNs. Each app bundle identity has its own cryptographically random 256-bit
+credential in Keychain, so previews never reuse the daily app's token. Credential
+generation, access, or persistence failures prevent the listener from starting;
+there is no fixed or ephemeral fallback. Keep the token private. Do not grant
+broader Keychain permissions just to automate connection setup.
 
 Settings also provides **Copy setup prompt**, which creates a client-aware prompt containing the local endpoint and private bearer token. Paste it into Codex, Synara, or Claude to have that client configure or repair only its `attic` MCP entry and verify the connection.
 
@@ -108,6 +115,23 @@ bearer_token_env_var = "ATTIC_MCP_TOKEN"
 Set `ATTIC_MCP_TOKEN` to the token shown in Attic before starting Codex.
 
 Older Codex builds without authenticated Streamable HTTP support must be updated before connecting to Attic.
+
+For a read-only check with the official TypeScript MCP SDK, set
+`ATTIC_MCP_SDK_ROOT` to an installed `@modelcontextprotocol/sdk` directory and
+provide `ATTIC_MCP_TOKEN` privately in the process environment, then run
+`node Scripts/verify_mcp_client.mjs`. `ATTIC_MCP_ENDPOINT` defaults to the endpoint
+above and rejects non-loopback destinations. Alternatively, set
+`ATTIC_MCP_BUNDLE_ID` to the intended app identity to request its Keychain item;
+macOS may require interactive approval. The script never prints credentials or
+task/note content. Its optional `--exercise-test-data` flag creates, completes,
+verifies and deletes only a uniquely identified task from that invocation.
+
+The optional `AgentServerIntegrationTests/testOfficialMCPClientInteroperability`
+gate starts the real listener on an ephemeral loopback port with an in-memory
+store and runs the same SDK script in another process. Supply
+`TEST_RUNNER_ATTIC_MCP_NODE` and `TEST_RUNNER_ATTIC_MCP_SDK_ROOT` to `xcodebuild`
+to enable this gate; it is explicitly skipped when those dependencies are not
+configured. The remaining native socket/authentication tests require no SDK.
 
 ## Tests
 

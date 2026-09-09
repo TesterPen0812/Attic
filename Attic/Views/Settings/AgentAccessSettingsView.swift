@@ -84,6 +84,7 @@ struct AgentAccessSettingsView: View {
                                 )
                             }
                             .controlSize(.regular)
+                            .disabled(!AgentAccessTokenStore.isValid(agentAccessToken))
                             .accessibilityIdentifier("settings-copy-agent-setup")
                             .help("Copy connection instructions with the private token")
 
@@ -125,7 +126,6 @@ struct AgentAccessSettingsView: View {
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel("Agent server endpoint, \(endpoint)")
             .accessibilityIdentifier("settings-agent-endpoint")
     }
 
@@ -184,6 +184,7 @@ struct AgentAccessSettingsView: View {
     }
 
     private func copyAgentSetupPrompt() {
+        guard AgentAccessTokenStore.isValid(agentAccessToken) else { return }
         let prompt = AgentSetupPrompt.make(
             endpoint: endpoint,
             bearerToken: agentAccessToken

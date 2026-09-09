@@ -13,8 +13,9 @@ not overwritten when developing or using the normal Codex Run action.
 
 The original `/Applications/Attic.app` and former owner's container are not
 modified. Existing notes in another app/preview are not silently transferred.
-CloudKit and APNs remain disabled. Agent Access is off in the installed daily
-app and must stay off pending the MCP authentication repair described below.
+CloudKit and APNs remain disabled. Agent Access is opt-in. The initial daily
+release requires the MCP authentication repair described below before access
+can safely be enabled.
 
 ### Agent Access warning for the initial daily release
 
@@ -24,10 +25,12 @@ This is not an enforced compile-time disable. Do not turn on Agent Access in
 daily release `8b03586` or distribute its setup prompt. No listener was running
 during verification, and access was left off.
 
-Before enabling MCP, use a private per-install credential for the daily app,
-retain explicit opt-in and loopback binding, keep preview credentials isolated,
-and verify an authenticated real-client handshake and tool call. Passing the
-HTTP/parser and handler unit tests alone does not establish client connectivity.
+The repaired source now uses private per-identity Keychain credentials and
+rejects invalid credentials before opening a listener. Its socket tests and
+optional official-SDK gate cover authenticated connections. Update the initial
+daily binary before enabling access; changing source does not update an
+installed release. A successful SDK test against an isolated test store does
+not configure the user's clients or grant them the daily app's credential.
 See [daily installation and MCP validation](DailyAppValidation-2026-09-09.md).
 
 ## Install or update the daily app

@@ -42,6 +42,29 @@ final class AtticUITests: XCTestCase {
         app = nil
     }
 
+    func testAgentAccessConnectionDetailsRemainAccessible() throws {
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Attic Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        settings.descendants(matching: .any)["settings-nav-agentAccess"].click()
+        let toggle = settings.descendants(matching: .any)["setting-agent-access"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 3))
+        if settings.descendants(matching: .any)["settings-agent-disabled-message"].exists {
+            toggle.click()
+        }
+        let endpoint = settings.descendants(matching: .any)["settings-agent-endpoint"]
+        XCTAssertTrue(endpoint.waitForExistence(timeout: 3))
+        // Request the full AX subtree: the selectable endpoint previously
+        // recursed through its overridden accessibility label on macOS.
+        XCTAssertTrue(settings.debugDescription.contains("127.0.0.1"))
+        let copy = settings.buttons["settings-copy-agent-endpoint"]
+        XCTAssertTrue(copy.isEnabled)
+        copy.click()
+        XCTAssertTrue(settings.buttons["settings-copy-agent-setup"].isEnabled)
+        toggle.click()
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-agent-disabled-message"].waitForExistence(timeout: 3))
+    }
+
     func testAppearanceThemesResolveClearAndGradientControls() throws {
         app.typeKey(",", modifierFlags: .command)
         let settings = app.windows["Attic Settings"]

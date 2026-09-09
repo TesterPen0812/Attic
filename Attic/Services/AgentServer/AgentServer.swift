@@ -26,6 +26,8 @@ final class AgentServer: ObservableObject {
     private let logger = Logger(subsystem: "com.taha.Attic", category: "AgentServer")
     private var listener: NWListener?
 
+    var boundPort: UInt16? { listener?.port?.rawValue }
+
     init(port: UInt16, bearerToken: String, handler: MCPRequestHandler) {
         self.port = port
         self.bearerToken = bearerToken
@@ -34,6 +36,10 @@ final class AgentServer: ObservableObject {
 
     func start() {
         guard listener == nil else { return }
+        guard AgentAccessTokenStore.isValid(bearerToken) else {
+            state = .failed("A private agent credential could not be loaded. Check Keychain access and reopen Attic before enabling Agent Access.")
+            return
+        }
         guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
             logger.error("Invalid agent server port \(self.port)")
             state = .failed("Invalid port \(port).")
@@ -189,9 +195,12 @@ final class AgentServer: ObservableObject {
 
 enum AgentRequestSecurity {
     static func isAuthorized(headers: [String: String], bearerToken: String) -> Bool {
-        guard let host = headers["host"]?.lowercased(),
-              host == "127.0.0.1" || host.hasPrefix("127.0.0.1:") else {
-            return false
+        guard let host = headers["host"]?.lowercased() else { return false }
+        if host != "127.0.0.1" {
+            let parts = host.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 2, parts[0] == "127.0.0.1",
+                  !parts[1].isEmpty, parts[1].utf8.allSatisfy({ (48...57).contains($0) }),
+                  let port = UInt16(parts[1]), port > 0 else { return false }
         }
         guard let authorization = headers["authorization"] else { return false }
         return constantTimeEquals(authorization, "Bearer \(bearerToken)")

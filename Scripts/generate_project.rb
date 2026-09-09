@@ -181,6 +181,9 @@ unit_host.build_configurations.each do |config|
   settings['ATTIC_DISPLAY_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'
   settings['MARKETING_VERSION'] = '1.0'
   settings['CURRENT_PROJECT_VERSION'] = '1'
+  # Socket-level MCP tests exercise the real loopback listener while retaining
+  # the same local-only sandbox/network permissions as the application.
+  settings['CODE_SIGN_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
   settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['ENABLE_APP_SANDBOX'] = 'YES'
