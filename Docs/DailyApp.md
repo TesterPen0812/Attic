@@ -27,11 +27,26 @@ Scripts/install_daily_app.zsh --install --expected-sha <full-reviewed-commit-sha
 ```
 
 The installer rejects dirty or mismatched source, retains the preview launcher's
-official-identity guard, and uses the available Apple Development certificate
-for team `ZGZWS73268`. It builds only `Local` with `ATTIC_LOCAL_ONLY` and
+official-identity guard, and checks the signed certificate's actual team against
+`ZGZWS73268` or an explicitly approved local override. A certificate display
+name's parenthesized suffix is not treated as its team ID.
+It builds only `Local` with `ATTIC_LOCAL_ONLY` and
 `ATTIC_DAILY`, explicitly uses sandbox/network-only entitlements, and pins the
 store environment to `Development` so a future release configuration cannot
 accidentally select `default.store`/the production store.
+
+On this Mac, the user approved the installed Taha Waseem development certificate
+with actual team `AQ484LXN59` as a local override on 2026-09-09. This does not
+change the project's official team or development contract. Use:
+
+```sh
+Scripts/install_daily_app.zsh --install --expected-sha <full-reviewed-commit-sha> \
+  --development-team AQ484LXN59 \
+  --signing-identity 12F1981F20A99BA8CC316439D7A04ACE14643BC0
+```
+
+The installer requires an exact valid development-certificate fingerprint for
+an explicit identity and still verifies the actual signed team before install.
 
 For an existing daily app, it requests a normal quit, backs up the app and its
 Application Support/preferences/saved-window-state directories, stages and

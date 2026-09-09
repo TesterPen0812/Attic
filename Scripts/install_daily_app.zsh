@@ -7,7 +7,7 @@ readonly repository_root=${0:A:h:h}
 readonly target_app='/Applications/Attic Daily.app'
 readonly bundle_id='com.taha.Attic'
 readonly executable_name='AtticDaily'
-readonly team_id='ZGZWS73268'
+readonly project_team_id='ZGZWS73268'
 readonly derived_data="$repository_root/.build/Daily"
 readonly state_dir="$derived_data/ReleaseState"
 readonly built_app="$derived_data/Build/Products/Local/$executable_name.app"
@@ -19,6 +19,7 @@ fail() { print -u2 -- "install_daily_app: $*"; exit 1; }
 usage() {
     print -- 'Usage: Scripts/install_daily_app.zsh --dry-run'
     print -- '       Scripts/install_daily_app.zsh --install --expected-sha FULL_COMMIT_SHA [--no-launch]'
+    print -- '         [--development-team TEAM_ID --signing-identity CERTIFICATE_SHA1]'
     print -- 'Builds a clean, pinned local-only daily release, backs up the previous daily app/data,'
     print -- 'then installs only /Applications/Attic Daily.app. Never touches the former owner store.'
 }
@@ -26,6 +27,8 @@ usage() {
 mode=''
 expected_sha=''
 launch=true
+team_id=$project_team_id
+signing_identity=''
 while (( $# )); do
     case "$1" in
         --dry-run|--install)
@@ -34,12 +37,20 @@ while (( $# )); do
         --expected-sha)
             (( $# >= 2 )) || fail '--expected-sha requires a value'
             expected_sha=$2; shift 2 ;;
+        --development-team)
+            (( $# >= 2 )) || fail '--development-team requires a value'
+            team_id=$2; shift 2 ;;
+        --signing-identity)
+            (( $# >= 2 )) || fail '--signing-identity requires a value'
+            signing_identity=$2; shift 2 ;;
         --no-launch) launch=false; shift ;;
         --help|-h) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
 done
 [[ -n "$mode" ]] || { usage; exit 0; }
+[[ "$team_id" =~ '^[A-Z0-9]{10}$' ]] || fail 'team ID must be ten uppercase letters/digits'
+[[ -z "$signing_identity" || "$signing_identity" =~ '^[A-Fa-f0-9]{40}$' ]] || fail 'signing identity must be a certificate SHA-1, not an ad-hoc or fuzzy identity'
 readonly source_sha=$(/usr/bin/git -C "$repository_root" rev-parse HEAD)
 readonly source_branch=$(/usr/bin/git -C "$repository_root" branch --show-current)
 if [[ -n "$expected_sha" ]]; then
@@ -56,6 +67,8 @@ print -- "source_branch=$source_branch"
 print -- "source_sha=$source_sha"
 print -- "target_app=$target_app"
 print -- "bundle_id=$bundle_id"
+print -- "project_team_id=$project_team_id"
+print -- "local_signing_team=$team_id"
 print -- 'configuration=Local'
 print -- 'compile_flags=ATTIC_LOCAL_ONLY ATTIC_DAILY'
 print -- 'entitlements=Attic/AtticNotesLocal.entitlements (sandbox and network only)'
@@ -74,11 +87,17 @@ if [[ -e "$target_app" ]]; then
     build_number=$(( previous_build + 1 ))
 fi
 
-# Select the available certificate for the project's team; never fall back to
-# another team or silently strip signing to make the build succeed.
-signing_identity=$(/usr/bin/security find-identity -v -p codesigning \
-    | /usr/bin/awk '/Apple Development:/ && /\(ZGZWS73268\)/ {print $2; exit}')
-[[ -n "$signing_identity" ]] || fail 'no Apple Development signing identity for team ZGZWS73268'
+# A certificate's parenthesized display-name suffix is not its team ID. Select
+# an exact installed certificate, then require the actual signed TeamIdentifier
+# below to match the project team or the explicit local override.
+available_identities=$(/usr/bin/security find-identity -v -p codesigning)
+if [[ -z "$signing_identity" ]]; then
+    signing_identity=$(print -r -- "$available_identities" | /usr/bin/awk '/Apple Development:/ {print $2; exit}')
+fi
+[[ -n "$signing_identity" ]] || fail 'no Apple Development signing identity is available'
+print -r -- "$available_identities" | /usr/bin/awk -v expected="$signing_identity" \
+    'toupper($2) == toupper(expected) && /Apple Development:/ {found=1} END {exit !found}' \
+    || fail 'requested development certificate is not installed or valid'
 
 owns_lock=false
 stage_dir=''
@@ -185,6 +204,8 @@ if [[ -e "$target_app" ]]; then /bin/mv "$target_app" "$stage_dir/Previous.app";
     print -- "installed_app=$target_app"
     print -- "executable=$target_app/Contents/MacOS/$executable_name"
     print -- "team_id=$team_id"
+    print -- "project_team_id=$project_team_id"
+    print -- "signing_identity=$signing_identity"
     print -- 'local_only=true'
     print -- 'store_environment=Development'
     print -- "executable_sha256=$(/usr/bin/shasum -a 256 "$target_app/Contents/MacOS/$executable_name" | /usr/bin/awk '{print $1}')"

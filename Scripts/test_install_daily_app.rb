@@ -28,6 +28,25 @@ class InstallDailyAppTest < Minitest::Test
     assert_includes stdout, "compile_flags=ATTIC_LOCAL_ONLY ATTIC_DAILY"
     assert_includes stdout, "store_environment=Development"
     assert_includes stdout, "Attic/AtticNotesLocal.entitlements"
+    assert_includes stdout, "project_team_id=ZGZWS73268"
+    assert_includes stdout, "local_signing_team=ZGZWS73268"
+  end
+
+  def test_explicit_local_signing_override_does_not_change_project_team
+    stdout, stderr, status = invoke("--dry-run", "--development-team", "AQ484LXN59",
+                                   "--signing-identity", "12F1981F20A99BA8CC316439D7A04ACE14643BC0")
+    assert status.success?, stderr
+    assert_includes stdout, "project_team_id=ZGZWS73268"
+    assert_includes stdout, "local_signing_team=AQ484LXN59"
+    assert_includes stdout, "bundle_id=com.taha.Attic\n"
+  end
+
+  def test_signing_override_rejects_ad_hoc_names_and_invalid_team_ids
+    [["--signing-identity", "-"], ["--signing-identity", "Apple Development"],
+     ["--development-team", "bad"]].each do |arguments|
+      _, _, status = invoke("--dry-run", *arguments)
+      refute status.success?
+    end
   end
 
   def test_install_requires_pinned_commit_before_building
