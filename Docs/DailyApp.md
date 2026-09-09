@@ -13,8 +13,22 @@ not overwritten when developing or using the normal Codex Run action.
 
 The original `/Applications/Attic.app` and former owner's container are not
 modified. Existing notes in another app/preview are not silently transferred.
-CloudKit, APNs, and the local agent server remain disabled, matching the current
-local-only preview scope.
+CloudKit and APNs remain disabled. Agent Access is off in the installed daily
+app and must stay off pending the MCP authentication repair described below.
+
+### Agent Access warning for the initial daily release
+
+The 2026-09-09 connection check found that `ATTIC_LOCAL_ONLY` substitutes a fixed
+placeholder bearer token, but the Settings switch can still start the server.
+This is not an enforced compile-time disable. Do not turn on Agent Access in
+daily release `8b03586` or distribute its setup prompt. No listener was running
+during verification, and access was left off.
+
+Before enabling MCP, use a private per-install credential for the daily app,
+retain explicit opt-in and loopback binding, keep preview credentials isolated,
+and verify an authenticated real-client handshake and tool call. Passing the
+HTTP/parser and handler unit tests alone does not establish client connectivity.
+See [daily installation and MCP validation](DailyAppValidation-2026-09-09.md).
 
 ## Install or update the daily app
 
