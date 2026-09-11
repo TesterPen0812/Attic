@@ -78,7 +78,7 @@ final class PanelGeometryTests: XCTestCase {
                 var previousDistance = CGFloat.greatestFiniteMagnitude
                 for progress in stride(from: 0.0, through: 1.0, by: 0.05) {
                     let warped = PanelGenieGeometry.warpedPoint(
-                        point, in: geniePanelSize, progress: progress,
+                        point, in: geniePanelSize, progress: CGFloat(progress),
                         corner: corner, anchor: anchor
                     )
                     XCTAssertTrue(warped.x.isFinite && warped.y.isFinite)
