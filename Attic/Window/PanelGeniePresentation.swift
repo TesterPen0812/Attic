@@ -1,5 +1,6 @@
 import AppKit
 import os
+import OSLog
 import QuartzCore
 import SpriteKit
 
