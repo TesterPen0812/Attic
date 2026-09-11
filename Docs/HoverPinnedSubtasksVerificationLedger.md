@@ -58,7 +58,31 @@ the edit, hover re-arm while busy then open, unrelated locks not deferring
 close, unpin not evicting a busy surface, pin-replace refusal while busy and
 success when idle.
 
-## Checks actually run in this environment
+## Review round 3 — local adversarial review of `7535d00`
+
+The cloud reviewer's pass-2 over `7535d00` was cut off mid-analysis; a local
+read-only reviewer completed it (report: `.build/LocalAdversarialReview.md`)
+and the local implementer independently reached the same four findings plus
+one test-proven defect the first native run exposed. Resolution:
+
+| # | Severity | Verdict | Resolution |
+|---|----------|---------|------------|
+| F1 | P2 | Fixed | `releaseFamilyInteractionState` was host-over-scoped: `belongsToFamily` matched the parent's own id, but the parent's rename field and delete alert live on the MAIN-list row (the surface hosts only child rows + display-only title). Every unguarded teardown (`closePinned`, `windowWillClose`, `unpinPinned` dissolve, transient Escape/scroll-out/`mainPanelDidHide`) discarded a live parent rename or dismissed its alert. Release is now child-keyed (`parentID == familyID`) only; the parent-scope stays in `familyEditBusy`, where it is the correct deferral predicate. |
+| F2 | P3 | Fixed | Dying-host focus race: the old host's `isEntryFocused → false` `.onChange` could nil `focusedSubtaskParentID` after the pin/unpin re-bump (AppKit resign isn't synchronous with `orderOut`). Resign now routes through `noteSubtaskEntryResigned` gated by `isLiveSurface(for:mode:)` — only a live host clears the pointer. Two residuals also handled: a same-click pin/unpin resigns the field before its action, so `entryFocusEngaged` treats a resign within `entryResignReuseWindow` (0.5 s) as still-engaged; and `releaseFamilyInteractionState` now clears a stale `focusedSubtaskParentID` when the family's last surface dies (entry row + draft still survive; focus is not grabbed unprompted on reopen). |
+| F3 | P3 | Fixed | Replace-pinned refusal while the displaced family is edit-busy was a silent no-op. The pin affordance now disables + dims with "Finish the pinned list's current edit first" help / VoiceOver hint while `pinReplacementBlocked`. |
+| F4 | P3 | Fixed | `commitPendingOpen`'s anchor-nil/not-hoverWorthy branch was the only transient teardown skipping `releaseFamilyInteractionState`; it now routes through `closeTransientSurface()`. |
+| F5 | P2 | Fixed | First-ever native test run exposed a willSet lag: `@Published` sinks for `subtaskDrafts`/`focusedSubtaskParentID` called `syncComposerLock()` which read the OLD stored values, so the `.subtaskComposer` lock engaged one change late and released one change late — the R1 mechanism never actually worked. Sinks now hand the just-emitted values to `syncComposerLock(drafts:focusedParentID:)`; `refreshSurfaceSizes` triggers (`$lastErrorMessage`, `$subtaskEntryActiveIDs`, `reconcileStore`'s re-fit) defer one runloop turn so the hosting view has applied the change, matching the `noteMeasuredListHeight` precedent. |
+
+New controller tests cover: parent rename surviving pinned close and
+main-hide-with-transient, parent delete-confirmation surviving pinned close,
+child edit still released on unpin-without-anchor, live-surface ownership
+across pin/unpin/dismiss, same-click resign refocus, aged resign not
+refocusing, teardown clearing the stale focus pointer, and anchor-nil
+maturation releasing the family's state.
+
+## Checks actually run
+
+Cloud environment (`7535d00` and earlier):
 
 - `ruby Scripts/generate_project.rb` — project regenerated; new controller
   test file globbed into AtticTests.
@@ -66,11 +90,29 @@ success when idle.
 - Static consistency sweep of all touched files (balanced delimiters,
   call-site/parameter agreement, stale references removed).
 
+Local Mac (this checkout, round-3 fixes on top of `7535d00`):
+
+- `bundle exec ruby Scripts/verify_project_generation.rb` — current and
+  repeatable (no project-input changes this round; existing files only).
+- `xcodebuild test -scheme Attic -destination 'platform=macOS'
+  -only-testing:AtticTests CODE_SIGNING_ALLOWED=NO` — **637 tests, 0
+  failures, 1 skipped** (includes all 37 `SubtaskPanelControllerTests`,
+  `SubtaskTests`, `SubtaskPanelTests`, `PanelGeometryTests`,
+  `PanelSquircleGeometryTests`). The first native run also exposed F5:
+  five lock tests failed at `7535d00` before the fix, all pass after.
+- `xcodebuild build -scheme Attic -destination 'platform=macOS'
+  CODE_SIGNING_ALLOWED=NO` — **BUILD SUCCEEDED** (Local configuration).
+  Note: default Debug signing wants a `Mac Development` cert for team
+  ZGZWS73268 that is absent from this keychain; `CODE_SIGNING_ALLOWED=NO`
+  covers local verification only — preview installs keep using
+  `Scripts/launch_local_preview.zsh`'s ad-hoc path.
+
 ## UNRUN — macOS acceptance checklist (not passes)
 
-- `xcodebuild -scheme Attic build` and `xcodebuild test` (AtticTests:
-  `SubtaskPanelTests`, `SubtaskTests`, `SubtaskPanelControllerTests`,
-  `PanelGeometryTests`; AtticUITests `testCompactComposerAndSubtaskPanels`).
+Unit coverage ran locally (see above). Remaining manual/native items:
+
+- AtticUITests `testCompactComposerAndSubtaskPanels` (signed UI runner,
+  `Scripts/run_local_ui_tests.zsh`) — not run; needs the signed host.
 - Hover dwell (300–400 ms) open; pointer travel across the row→panel gap;
   close-grace timing; anchor disappearance on scroll.
 - Outside-click matrix: unrelated window dismisses; menu/sheet/count-control

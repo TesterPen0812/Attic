@@ -100,23 +100,45 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             .store(in: &cancellables)
         store.$lastErrorMessage
             .dropFirst()
-            .sink { [weak self] _ in self?.refreshSurfaceSizes() }
+            .sink { [weak self] _ in
+                // @Published emits in willSet — before the value stores —
+                // and the hosting view applies it on its own pass. Fit on
+                // the next turn, like noteMeasuredListHeight does.
+                DispatchQueue.main.async { self?.refreshSurfaceSizes() }
+            }
             .store(in: &cancellables)
         uiState.$selectedSection
             .dropFirst()
             .sink { [weak self] _ in self?.dismissTransient() }
             .store(in: &cancellables)
+        // The lock must engage the moment a draft/focus change lands, so
+        // these sinks hand the just-emitted values to syncComposerLock —
+        // reading uiState here would lag one change behind.
         uiState.$subtaskDrafts
             .dropFirst()
-            .sink { [weak self] _ in self?.syncComposerLock() }
+            .sink { [weak self] drafts in
+                guard let self else { return }
+                self.syncComposerLock(
+                    drafts: drafts,
+                    focusedParentID: self.uiState.focusedSubtaskParentID
+                )
+            }
             .store(in: &cancellables)
         uiState.$focusedSubtaskParentID
             .dropFirst()
-            .sink { [weak self] _ in self?.syncComposerLock() }
+            .sink { [weak self] focused in
+                guard let self else { return }
+                self.syncComposerLock(
+                    drafts: self.uiState.subtaskDrafts,
+                    focusedParentID: focused
+                )
+            }
             .store(in: &cancellables)
         uiState.$subtaskEntryActiveIDs
             .dropFirst()
-            .sink { [weak self] _ in self?.refreshSurfaceSizes() }
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.refreshSurfaceSizes() }
+            }
             .store(in: &cancellables)
         notificationTokens.append(
             NotificationCenter.default.addObserver(
@@ -257,8 +279,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         // Hover opens only for a real family with a live anchor: no empty
         // panels for childless rows, none for rows already scrolled away.
         guard screenAnchorRect(for: familyID) != nil, hoverWorthy(familyID) else {
-            lifecycle.closeTransient()
-            syncState()
+            // Same teardown path as every other close — the matured family's
+            // surface-hosted interaction state must not outlive it either.
+            closeTransientSurface()
             return
         }
         lastOutsideDismissal = nil
@@ -321,6 +344,46 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         uiState.interactionLockReasons.contains(.menuTracking)
     }
 
+    /// Whether that surface kind currently hosts the family. The content
+    /// view consults this from its focus-teardown path: a dying host (a
+    /// transient ordered out by a pin, a pinned window replaced by a
+    /// re-anchored transient, a swapped family) must not clear
+    /// `focusedSubtaskParentID` after the replacement surface already
+    /// asserted it — AppKit's field-editor resignation is not synchronous
+    /// with `orderOut`, so the stale resign can otherwise land after the
+    /// controller's re-focus bump and leave the new entry unfocused.
+    func isLiveSurface(for familyID: UUID, mode: SubtaskPanelContent.Mode) -> Bool {
+        switch mode {
+        case .transient: return lifecycle.transientFamilyID == familyID
+        case .pinned: return lifecycle.pinnedFamilyID == familyID
+        }
+    }
+
+    /// When a LIVE surface's entry last resigned its field editor. A
+    /// pin/unpin click resigns on mouse-down, before the button's action
+    /// runs — recording the resign lets the swap still restore focus.
+    private var entryResignTimestamps: [UUID: TimeInterval] = [:]
+
+    /// Called by a live surface when its entry's field editor resigns:
+    /// releases the shared focus pointer (so the composer lock drops) and
+    /// records the resign so a same-click pin/unpin still counts the entry
+    /// as engaged. Dying hosts are gated off by `isLiveSurface`.
+    func noteSubtaskEntryResigned(for familyID: UUID) {
+        guard uiState.focusedSubtaskParentID == familyID else { return }
+        uiState.focusedSubtaskParentID = nil
+        entryResignTimestamps[familyID] = Self.now()
+    }
+
+    /// Whether the family's entry counts as focus-engaged for a host swap:
+    /// still focused, or resigned inside the same click that triggered the
+    /// swap (the press resigns on mouse-down, the action fires on up).
+    private func entryFocusEngaged(for familyID: UUID) -> Bool {
+        if uiState.focusedSubtaskParentID == familyID { return true }
+        guard uiState.subtaskEntryActiveIDs.contains(familyID),
+              let at = entryResignTimestamps[familyID] else { return false }
+        return Self.now() - at < SubtaskPanelLayout.entryResignReuseWindow
+    }
+
     /// Guard shared by hover dwell, explicit opens, and outside clicks.
     func surfaceInteractionBusy(_ familyID: UUID) -> Bool {
         familyEditBusy(familyID) || menuTrackingActive
@@ -328,11 +391,23 @@ final class SubtaskPanelController: NSObject, ObservableObject {
 
     /// The transient surface's composer work is what keeps the main panel
     /// alive — a pinned window is independent and a dismissed surface's
-    /// retained draft must not lock anything.
+    /// retained draft must not lock anything. The value-taking overload is
+    /// for the Combine sinks: @Published delivers the new value in willSet,
+    /// before the property stores it, so reading uiState there lags a
+    /// change behind — the lock would engage late and release late.
     private func syncComposerLock() {
+        syncComposerLock(
+            drafts: uiState.subtaskDrafts,
+            focusedParentID: uiState.focusedSubtaskParentID
+        )
+    }
+
+    private func syncComposerLock(
+        drafts: [UUID: String],
+        focusedParentID: UUID?
+    ) {
         let active = lifecycle.transientFamilyID.map { familyID in
-            !(uiState.subtaskDrafts[familyID] ?? "").isEmpty
-                || uiState.focusedSubtaskParentID == familyID
+            !(drafts[familyID] ?? "").isEmpty || focusedParentID == familyID
         } ?? false
         uiState.setInteractionLock(.subtaskComposer, isActive: active)
     }
@@ -471,7 +546,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         // survives the replacement affordance's deliberate wording but not
         // a silent swap — refuse while the displaced family is mid-action.
         if let displaced, familyEditBusy(displaced) { return }
-        let refocusEntry = uiState.focusedSubtaskParentID == familyID
+        let refocusEntry = entryFocusEngaged(for: familyID)
         let promotedFrame = lifecycle.transientFamilyID == familyID
             && transientPanel?.isVisible == true
             ? transientPanel?.frame
@@ -500,7 +575,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         let evictionBusy = lifecycle.transientFamilyID.map {
             $0 != familyID && surfaceInteractionBusy($0)
         } ?? false
-        let refocusEntry = uiState.focusedSubtaskParentID == familyID
+        let refocusEntry = entryFocusEngaged(for: familyID)
         if mainPanelVisible, screenAnchorRect(for: familyID) != nil, !evictionBusy {
             lifecycle.openTransient(familyID, latched: true)
             presentTransient(familyID)
@@ -595,21 +670,30 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     /// Called when a family's last surface is torn down: an in-flight rename
     /// or delete confirmation hosted by that surface must not outlive it —
     /// the orphaned lock would hold the main panel open and stall every
-    /// future hover-close retry. Ends the interaction the same way a section
-    /// switch does; subtask drafts are unaffected and keep surviving.
+    /// future hover-close retry. Only CHILD work is surface-hosted: the
+    /// checklist renders child rows, while the parent's own rename field and
+    /// delete alert live on its main-list row, which outlives any auxiliary
+    /// surface. Ends the interaction the same way a section switch does;
+    /// subtask drafts are unaffected and keep surviving.
     private func releaseFamilyInteractionState(_ familyID: UUID) {
         guard lifecycle.transientFamilyID != familyID,
               lifecycle.pinnedFamilyID != familyID else { return }
-        func belongsToFamily(_ id: UUID?) -> Bool {
+        func isSurfaceHostedChild(_ id: UUID?) -> Bool {
             guard let id else { return false }
-            return id == familyID
-                || store.tasks.contains { $0.id == id && $0.parentID == familyID }
+            return store.tasks.contains { $0.id == id && $0.parentID == familyID }
         }
-        if belongsToFamily(uiState.editingTaskID) {
+        if isSurfaceHostedChild(uiState.editingTaskID) {
             uiState.endEditing()
         }
-        if belongsToFamily(uiState.confirmingTaskDeletionID) {
+        if isSurfaceHostedChild(uiState.confirmingTaskDeletionID) {
             uiState.confirmingTaskDeletionID = nil
+        }
+        // The entry's focus pointer is surface-hosted too: with the last
+        // surface gone, a stale pointer would refocus the entry on the next
+        // open without being asked. The entry row itself (its active flag
+        // and draft) still survives — only the focus claim is released.
+        if uiState.focusedSubtaskParentID == familyID {
+            uiState.focusedSubtaskParentID = nil
         }
     }
 
@@ -910,9 +994,11 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         listHeights = listHeights.filter { liveIDs.contains($0.key) }
         rowFrames = rowFrames.filter { liveIDs.contains($0.key) }
         controlFrames = controlFrames.filter { liveIDs.contains($0.key) }
+        entryResignTimestamps = entryResignTimestamps.filter { liveIDs.contains($0.key) }
         // Child adds/removals, status changes, and error rows all change the
-        // content height — re-fit (and re-clamp) on every store revision.
-        refreshSurfaceSizes()
+        // content height — re-fit (and re-clamp) once the hosting views have
+        // applied the revision on their own pass.
+        DispatchQueue.main.async { [weak self] in self?.refreshSurfaceSizes() }
     }
 
     private static func now() -> TimeInterval {

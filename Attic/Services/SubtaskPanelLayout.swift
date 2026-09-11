@@ -19,6 +19,10 @@ enum SubtaskPanelLayout {
     /// Grace for pointer travel across the row-to-panel gap before the
     /// transient surface dismisses.
     static let closeGrace: TimeInterval = 0.45
+    /// A pin/unpin press resigns the entry's field editor on mouse-down —
+    /// before the button's action runs — so a resign inside this window
+    /// still counts as "the entry was engaged" for the host swap.
+    static let entryResignReuseWindow: TimeInterval = 0.5
     /// Horizontal gap between the main panel and the auxiliary surface.
     static let sideGap: CGFloat = 10
     /// Matches the main panel's display-edge breathing room.

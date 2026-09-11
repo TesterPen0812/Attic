@@ -470,6 +470,167 @@ final class SubtaskPanelControllerTests: XCTestCase {
         XCTAssertNil(harness.controller.transientFamilyID)
     }
 
+    // MARK: - Review round 3 regressions (local continuation)
+
+    /// The parent's own rename field lives on the MAIN-list row — only child
+    /// rows are hosted by the auxiliary surface. Tearing a surface down must
+    /// release child edits but never discard the parent's live editor. (F1)
+    func testPinnedClosePreservesMainListParentRename() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        _ = try XCTUnwrap(harness.store.create(title: "Child", parentID: parent.id))
+        installAnchor(harness, for: parent.id)
+        harness.controller.pinFamily(parent.id)
+        harness.uiState.beginEditing(parent)
+        harness.uiState.editingDraftTitle = "Half-typed rename"
+
+        harness.controller.closePinned()
+        XCTAssertNil(harness.controller.pinnedFamilyID)
+        XCTAssertEqual(harness.uiState.editingTaskID, parent.id)
+        XCTAssertEqual(harness.uiState.editingDraftTitle, "Half-typed rename")
+    }
+
+    func testMainHideWithTransientPreservesParentRename() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        _ = try XCTUnwrap(harness.store.create(title: "Child", parentID: parent.id))
+        installAnchor(harness, for: parent.id)
+        harness.controller.openFamilyPanel(for: parent.id, focusEntry: false)
+        harness.uiState.beginEditing(parent)
+        harness.uiState.editingDraftTitle = "Draft"
+
+        harness.controller.mainPanelDidHide()
+        XCTAssertNil(harness.controller.transientFamilyID)
+        XCTAssertEqual(harness.uiState.editingTaskID, parent.id)
+        XCTAssertEqual(harness.uiState.editingDraftTitle, "Draft")
+    }
+
+    func testPinnedClosePreservesParentDeleteConfirmation() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        _ = try XCTUnwrap(harness.store.create(title: "Child", parentID: parent.id))
+        harness.controller.pinFamily(parent.id)
+        harness.uiState.confirmingTaskDeletionID = parent.id
+
+        harness.controller.closePinned()
+        XCTAssertEqual(harness.uiState.confirmingTaskDeletionID, parent.id)
+        XCTAssertTrue(harness.uiState.interactionLockReasons.contains(.taskConfirmation))
+    }
+
+    /// Complement: child edits ARE surface-hosted, so an unpin that cannot
+    /// re-anchor (main hidden) still releases them — the orphan-lock fix
+    /// keeps working on the state the surface actually owned.
+    func testUnpinWithoutAnchorReleasesChildEdit() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        let child = try XCTUnwrap(harness.store.create(title: "Child", parentID: parent.id))
+        harness.controller.pinFamily(parent.id)
+        harness.uiState.beginEditing(child)
+
+        harness.controller.mainPanelVisibleForTesting = false
+        harness.controller.unpinPinned()
+        XCTAssertNil(harness.controller.pinnedFamilyID)
+        XCTAssertNil(harness.controller.transientFamilyID)
+        XCTAssertNil(harness.uiState.editingTaskID)
+    }
+
+    /// Focus teardown consults surface ownership so a dying host's late
+    /// resign can't clear focus state its replacement asserted. (F2)
+    func testLiveSurfaceOwnershipTracksPinAndUnpin() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        installAnchor(harness, for: parent.id)
+
+        harness.controller.openFamilyPanel(for: parent.id, focusEntry: false)
+        XCTAssertTrue(harness.controller.isLiveSurface(for: parent.id, mode: .transient))
+        XCTAssertFalse(harness.controller.isLiveSurface(for: parent.id, mode: .pinned))
+
+        harness.controller.pinFamily(parent.id)
+        XCTAssertFalse(harness.controller.isLiveSurface(for: parent.id, mode: .transient))
+        XCTAssertTrue(harness.controller.isLiveSurface(for: parent.id, mode: .pinned))
+
+        harness.controller.unpinPinned()
+        XCTAssertTrue(harness.controller.isLiveSurface(for: parent.id, mode: .transient))
+        XCTAssertFalse(harness.controller.isLiveSurface(for: parent.id, mode: .pinned))
+
+        harness.controller.dismissTransient()
+        XCTAssertFalse(harness.controller.isLiveSurface(for: parent.id, mode: .transient))
+    }
+
+    /// A pin/unpin press resigns the entry on mouse-down, before the button
+    /// action runs — the recorded resign keeps the entry "engaged" so the
+    /// swap still restores focus. (F2 click-ordering)
+    func testEntryResignWithinClickStillRefocusesAfterPin() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        installAnchor(harness, for: parent.id)
+        harness.controller.openFamilyPanel(for: parent.id, focusEntry: true)
+        XCTAssertEqual(harness.uiState.focusedSubtaskParentID, parent.id)
+
+        // The pin button's mouse-down resigns the field editor first.
+        harness.controller.noteSubtaskEntryResigned(for: parent.id)
+        XCTAssertNil(harness.uiState.focusedSubtaskParentID)
+
+        harness.controller.pinFamily(parent.id)
+        XCTAssertEqual(harness.controller.pinnedFamilyID, parent.id)
+        XCTAssertEqual(harness.uiState.focusedSubtaskParentID, parent.id)
+    }
+
+    /// A resign older than the click window means the user really left the
+    /// field — pin must not resurrect focus. (F2)
+    func testAgedEntryResignDoesNotRefocusOnPin() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        installAnchor(harness, for: parent.id)
+        harness.controller.openFamilyPanel(for: parent.id, focusEntry: true)
+        harness.controller.noteSubtaskEntryResigned(for: parent.id)
+
+        RunLoop.main.run(until: Date(
+            timeIntervalSinceNow: SubtaskPanelLayout.entryResignReuseWindow + 0.15
+        ))
+        harness.controller.pinFamily(parent.id)
+        XCTAssertEqual(harness.controller.pinnedFamilyID, parent.id)
+        XCTAssertNil(harness.uiState.focusedSubtaskParentID)
+    }
+
+    /// A real teardown with no surviving surface drops the stale focus
+    /// pointer — the entry row and draft still survive, but the next open
+    /// doesn't grab focus unprompted. (F2 residual)
+    func testTeardownClearsStaleEntryFocusPointer() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        harness.controller.pinFamily(parent.id)
+        harness.uiState.activateSubtaskEntry(for: parent.id)
+        XCTAssertEqual(harness.uiState.focusedSubtaskParentID, parent.id)
+
+        harness.controller.closePinned()
+        XCTAssertNil(harness.uiState.focusedSubtaskParentID)
+        XCTAssertTrue(harness.uiState.subtaskEntryActiveIDs.contains(parent.id))
+    }
+
+    /// The anchor-nil branch of a matured hover open is a real teardown:
+    /// it must release the matured family's surface-hosted state like every
+    /// other close path. (F4)
+    func testPendingOpenWithoutAnchorReleasesMaturedFamilyState() throws {
+        let harness = try makeHarness()
+        let parentA = try XCTUnwrap(harness.store.create(title: "A"))
+        let parentB = try XCTUnwrap(harness.store.create(title: "B"))
+        let childB = try XCTUnwrap(harness.store.create(title: "B child", parentID: parentB.id))
+        installAnchor(harness, for: parentA.id)
+        // B never gets a row anchor — its matured open finds nothing.
+        harness.controller.openFamilyPanel(for: parentA.id, focusEntry: false)
+        // A stale in-flight edit belonging to B's family: the close path
+        // that tears down B's just-matured surface must still release it.
+        harness.uiState.beginEditing(childB)
+
+        harness.controller.noteRowHover(familyID: parentB.id, isHovering: true)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: SubtaskPanelLayout.openDwell + 0.2))
+
+        XCTAssertNil(harness.controller.transientFamilyID)
+        XCTAssertNil(harness.uiState.editingTaskID)
+        XCTAssertFalse(harness.uiState.interactionLockReasons.contains(.taskEditing))
+    }
+
     // MARK: - Lifecycle bookkeeping
 
     func testDeletingFamilyClosesItsSurfaces() throws {

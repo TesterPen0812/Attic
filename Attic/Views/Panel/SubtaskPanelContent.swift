@@ -74,6 +74,25 @@ struct SubtaskPanelContent: View {
         return false
     }
 
+    /// Replacement is refused while the pinned family is mid-edit or
+    /// mid-confirmation — shown as a disabled control with an explanatory
+    /// label rather than a click that silently does nothing.
+    private var pinReplacementBlocked: Bool {
+        guard let pinned = subtaskPanels.pinnedFamilyID, pinned != parentID else {
+            return false
+        }
+        return subtaskPanels.familyEditBusy(pinned)
+    }
+
+    private var pinButtonHelp: String {
+        if pinReplacementBlocked {
+            return "Finish the pinned list's current edit first"
+        }
+        return replacingPinnedFamily
+            ? "Replace the currently pinned list"
+            : "Keep this list visible"
+    }
+
     private var panelThemePalette: AtticPanelThemePalette {
         settings.panelTheme.palette(for: systemColorScheme, contrast: colorSchemeContrast)
     }
@@ -177,8 +196,12 @@ struct SubtaskPanelContent: View {
         .onChange(of: isEntryFocused) { _, focused in
             if focused {
                 uiState.focusedSubtaskParentID = parentID
-            } else if uiState.focusedSubtaskParentID == parentID {
-                uiState.focusedSubtaskParentID = nil
+            } else if subtaskPanels.isLiveSurface(for: parentID, mode: mode) {
+                // A live host's resign reports through the controller, which
+                // records it so a same-click pin/unpin still restores focus.
+                // A dying host is gated off — its late resign must not clear
+                // the pointer the replacement surface already asserted.
+                subtaskPanels.noteSubtaskEntryResigned(for: parentID)
             }
         }
         .onAppear {
@@ -254,12 +277,15 @@ struct SubtaskPanelContent: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .help(replacingPinnedFamily
-                ? "Replace the currently pinned list"
-                : "Keep this list visible")
+            .disabled(pinReplacementBlocked)
+            .opacity(pinReplacementBlocked ? 0.35 : 1)
+            .help(pinButtonHelp)
             .accessibilityLabel(replacingPinnedFamily
                 ? "Replace pinned subtask list"
                 : "Pin subtask list")
+            .accessibilityHint(pinReplacementBlocked
+                ? "Unavailable while the pinned list has an edit in progress"
+                : "")
             .accessibilityIdentifier("subtask-pin-\(parentID.uuidString)")
         case .pinned:
             HStack(spacing: 6) {
