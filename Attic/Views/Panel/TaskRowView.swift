@@ -14,6 +14,10 @@ struct TaskRowView: View {
     @Environment(\.atticPanelThemePalette) private var palette
 
     private var isEditing: Bool { uiState.editingTaskID == task.id }
+    private var isDeleteConfirmationPresented: Binding<Bool> {
+        Binding(get: { uiState.confirmingTaskDeletionID == task.id },
+                set: { if !$0, uiState.confirmingTaskDeletionID == task.id { uiState.confirmingTaskDeletionID = nil } })
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -62,6 +66,12 @@ struct TaskRowView: View {
         .onTapGesture(count: 2, perform: handleDoubleClick)
         .help(progressToggleHelp)
         .contextMenu { taskActions }
+        .alert("Delete task and subtasks?", isPresented: isDeleteConfirmationPresented) {
+            Button("Delete all", role: .destructive) { store.delete(task) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes “\(task.title)” and its \(store.subtasks(of: task.id).count) subtasks.")
+        }
         .draggable(TaskDragPayload(taskID: task.id, title: task.title)) {
             dragPreview
         }
@@ -143,8 +153,18 @@ struct TaskRowView: View {
         }
     }
 
+    @ViewBuilder
     private var taskActions: some View {
-        TaskActionsMenu(store: store, task: task, editLabel: "Edit title…") {
+        if task.parentID == nil && task.status != .done {
+            Button("Add subtask…", systemImage: "plus") {
+                uiState.focusSubtaskEntry(for: task.id)
+            }
+            Divider()
+        }
+        TaskActionsMenu(store: store, task: task, editLabel: "Edit title…", deleteRequested: {
+            if store.subtasks(of: task.id).isEmpty { store.delete(task) }
+            else { uiState.confirmingTaskDeletionID = task.id }
+        }) {
             uiState.beginEditing(task)
         }
     }

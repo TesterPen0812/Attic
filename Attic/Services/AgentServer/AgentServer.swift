@@ -18,28 +18,71 @@ final class AgentServer: ObservableObject {
     nonisolated private static let maxRequestBytes = 1_048_576
 
     @Published private(set) var state: State = .stopped
+    @Published private(set) var setupToken = ""
 
     private let port: UInt16
-    private let bearerToken: String
+    private let tokenProvider: (@Sendable () throws -> String)?
     private let handler: MCPRequestHandler
     private let queue = DispatchQueue(label: "com.taha.Attic.AgentServer")
     private let logger = Logger(subsystem: "com.taha.Attic", category: "AgentServer")
     private var listener: NWListener?
+    private var credentialTask: Task<Void, Never>?
+    private var pendingCredentialLoad: Task<String, Error>?
+    private var generation = UUID()
 
     var boundPort: UInt16? { listener?.port?.rawValue }
 
     init(port: UInt16, bearerToken: String, handler: MCPRequestHandler) {
         self.port = port
-        self.bearerToken = bearerToken
+        self.setupToken = bearerToken
+        self.tokenProvider = nil
         self.handler = handler
     }
 
+    init(port: UInt16, handler: MCPRequestHandler,
+         tokenProvider: @escaping @Sendable () throws -> String = { try AgentAccessTokenStore().loadOrCreate() }) {
+        self.port = port
+        self.handler = handler
+        self.tokenProvider = tokenProvider
+    }
+
     func start() {
-        guard listener == nil else { return }
-        guard AgentAccessTokenStore.isValid(bearerToken) else {
-            state = .failed("A private agent credential could not be loaded. Check Keychain access and reopen Attic before enabling Agent Access.")
+        guard listener == nil, credentialTask == nil else { return }
+        generation = UUID()
+        guard let tokenProvider else {
+            startListener(bearerToken: setupToken)
             return
         }
+        state = .starting
+        let requestedGeneration = generation
+        // A cancelled opt-in may still be waiting on a system prompt. Reuse
+        // that one load on a rapid retry instead of creating more prompts.
+        let load = pendingCredentialLoad ?? Task.detached(operation: tokenProvider)
+        pendingCredentialLoad = load
+        credentialTask = Task { [weak self] in
+            // Keychain may ask the user to unlock or grant access. Never block
+            // the app's main thread or open a listener while that is pending.
+            let result = await load.result
+            guard let self, !Task.isCancelled, generation == requestedGeneration else { return }
+            credentialTask = nil
+            pendingCredentialLoad = nil
+            switch result {
+            case let .success(token):
+                startListener(bearerToken: token)
+            case .failure:
+                setupToken = ""
+                state = .failed("The private agent credential could not be loaded. Check Keychain access, then retry.")
+            }
+        }
+    }
+
+    private func startListener(bearerToken: String) {
+        guard AgentAccessTokenStore.isValid(bearerToken) else {
+            setupToken = ""
+            state = .failed("A private agent credential could not be loaded. Check Keychain access, then retry.")
+            return
+        }
+        setupToken = bearerToken
         guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
             logger.error("Invalid agent server port \(self.port)")
             state = .failed("Invalid port \(port).")
@@ -80,9 +123,10 @@ final class AgentServer: ObservableObject {
                 break
             }
         }
+        let listenerGeneration = generation
         listener.newConnectionHandler = { [weak self] connection in
             connection.start(queue: self?.queue ?? .global())
-            self?.receive(on: connection, buffer: Data())
+            self?.receive(on: connection, buffer: Data(), bearerToken: bearerToken, generation: listenerGeneration)
         }
 
         listener.start(queue: queue)
@@ -90,12 +134,16 @@ final class AgentServer: ObservableObject {
     }
 
     func stop() {
+        generation = UUID()
+        credentialTask?.cancel()
+        credentialTask = nil
         listener?.cancel()
         listener = nil
         state = .stopped
     }
 
-    nonisolated private func receive(on connection: NWConnection, buffer: Data, searchedBytes: Int = 0) {
+    nonisolated private func receive(on connection: NWConnection, buffer: Data, searchedBytes: Int = 0,
+                                    bearerToken: String, generation: UUID) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
             guard let self else {
                 connection.cancel()
@@ -111,20 +159,20 @@ final class AgentServer: ObservableObject {
             }
             switch AgentHTTPRequest.parse(buffer, searchedBytes: searchedBytes) {
             case let .request(request):
-                self.route(request, on: connection)
+                self.route(request, on: connection, bearerToken: bearerToken, generation: generation)
             case .invalid:
                 self.send(status: 400, reason: "Bad Request", body: nil, on: connection)
             case let .incomplete(searchedBytes):
                 if isComplete || error != nil {
                     connection.cancel()
                 } else {
-                    self.receive(on: connection, buffer: buffer, searchedBytes: searchedBytes)
+                    self.receive(on: connection, buffer: buffer, searchedBytes: searchedBytes, bearerToken: bearerToken, generation: generation)
                 }
             }
         }
     }
 
-    nonisolated private func route(_ request: AgentHTTPRequest, on connection: NWConnection) {
+    nonisolated private func route(_ request: AgentHTTPRequest, on connection: NWConnection, bearerToken: String, generation: UUID) {
         // Native agents never send an Origin header; a browser reaching this
         // endpoint through DNS rebinding would, so refuse any that appears.
         guard request.headers["origin"] == nil else {
@@ -153,7 +201,7 @@ final class AgentServer: ObservableObject {
             return
         }
         Task { @MainActor [weak self] in
-            guard let self, self.listener != nil else {
+            guard let self, self.listener != nil, self.generation == generation else {
                 connection.cancel()
                 return
             }

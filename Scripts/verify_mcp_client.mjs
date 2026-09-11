@@ -31,7 +31,7 @@ if (!token && process.env.ATTIC_MCP_BUNDLE_ID) {
 }
 assert.ok(typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token), 'A private MCP credential is required');
 const exercise = process.argv.includes('--exercise-test-data');
-const report = { endpoint: endpoint.href, authenticated: false, reconnect: false, rejectionChecks: [], tools: [], testDataRemoved: null };
+const report = { endpoint: endpoint.href, authenticated: false, reconnect: false, rejectionChecks: [], tools: [], subtasksVerified: null, testDataRemoved: null };
 const controller = new AbortController();
 const timer = setTimeout(() => controller.abort(), 30_000);
 let client;
@@ -86,7 +86,22 @@ try {
         const created = await call('create_task', { title });
         const id = created.task?.id;
         assert.ok(id, 'Created test task must have an ID');
+        let childID;
         try {
+            const child = await call('create_task', { title: `${title} step`, parent_id: id });
+            childID = child.task?.id;
+            assert.ok(childID, 'Created test step must have an ID');
+            assert.equal(child.task.parent_id, id);
+            const prematureCompletion = await client.callTool({ name: 'update_task', arguments: { id, status: 'done' } });
+            assert.equal(prematureCompletion.isError, true, 'Unfinished steps must prevent parent completion');
+            await call('update_task', { id: childID, status: 'done' });
+            const steps = await call('list_tasks', { parent_id: id });
+            assert.equal(steps.count, 1);
+            assert.equal(steps.tasks[0].id, childID);
+            assert.equal(steps.tasks[0].status, 'done');
+            const beforeCompletion = await call('list_tasks');
+            assert.equal(beforeCompletion.tasks.find(task => task.id === id)?.status, 'todo');
+            report.subtasksVerified = true;
             const updated = await call('update_task', { id, status: 'done' });
             assert.equal(updated.task?.status, 'done');
             // A separate SDK instance must reconnect and observe the change.
@@ -94,12 +109,13 @@ try {
             client = await connect();
             const listed = await call('list_tasks');
             assert.ok(listed.tasks.some(task => task.id === id && task.title === title && task.status === 'done'));
+            assert.ok(listed.tasks.some(task => task.id === childID && task.parent_id === id && task.status === 'done'));
             report.reconnect = true;
         } finally {
-            // Delete only the exact item created by this invocation, never user data.
+            // Delete only the exact family created by this invocation, never user data.
             await call('delete_task', { id });
             const listed = await call('list_tasks');
-            report.testDataRemoved = !listed.tasks.some(task => task.id === id);
+            report.testDataRemoved = !listed.tasks.some(task => task.id === id || task.id === childID);
             assert.equal(report.testDataRemoved, true);
         }
     } else {

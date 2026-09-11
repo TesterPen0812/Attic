@@ -33,7 +33,7 @@ final class AgentTaskTools {
         [
             "name": "list_tasks",
             "title": "List Attic Tasks",
-            "description": "Read tasks directly from Attic. Use this instead of opening the Attic app with Computer Use. Tasks are returned in display order and can be filtered by status.",
+            "description": "Read main tasks and subtasks directly from Attic. Results include parent_id for subtasks; filter by parent_id to read a main task's steps, including completed ones. Status filtering is optional.",
             "annotations": [
                 "readOnlyHint": true,
                 "destructiveHint": false,
@@ -47,6 +47,10 @@ final class AgentTaskTools {
                         "type": "string",
                         "enum": TaskStatus.allCases.map(\.rawValue),
                         "description": "Only return tasks with this status."
+                    ],
+                    "parent_id": [
+                        "type": "string",
+                        "description": "Main task UUID. Only return its subtasks."
                     ]
                 ],
                 "additionalProperties": false
@@ -55,7 +59,7 @@ final class AgentTaskTools {
         [
             "name": "create_task",
             "title": "Create Attic Task",
-            "description": "Create a task directly in Attic without using its graphical interface. Use status backlog for ideas that are not ready to work on.",
+            "description": "Create a task directly in Attic. Supply parent_id to create a subtask of an unfinished main task. One level only. Completing all subtasks does not automatically complete the parent. Use backlog for ideas.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -78,6 +82,10 @@ final class AgentTaskTools {
                         "type": "string",
                         "enum": TaskPriority.allCases.map(\.rawValue),
                         "description": "Priority. Defaults to none."
+                    ],
+                    "parent_id": [
+                        "type": "string",
+                        "description": "Optional unfinished main task UUID. Creates an indented subtask."
                     ]
                 ],
                 "required": ["title"],
@@ -87,7 +95,7 @@ final class AgentTaskTools {
         [
             "name": "update_task",
             "title": "Update Attic Task",
-            "description": "Update a Attic task directly without using its graphical interface. Change its title, status, or priority; set status to done to complete it or todo to reopen it.",
+            "description": "Update a main task or subtask. Change title, status, or priority. Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -118,7 +126,7 @@ final class AgentTaskTools {
         [
             "name": "delete_task",
             "title": "Delete Attic Task",
-            "description": "Permanently delete a task directly from Attic. Prefer update_task with status done for finished work.",
+            "description": "Permanently delete a task AND all its subtasks. Deleting a subtask leaves the parent intact. Prefer update_task with status done for finished work.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": true,
@@ -254,7 +262,9 @@ final class AgentTaskTools {
         } else {
             statuses = [.inProgress, .todo, .done, .backlog]
         }
-        let tasks = statuses.flatMap(store.orderedTasks(for:))
+        let parentID = try parentID(from: arguments)
+        let tasks = parentID.map { id in store.subtasks(of: id).filter { statuses.contains($0.status) } }
+            ?? statuses.flatMap(store.orderedTasks(for:))
         return try encode(["count": tasks.count, "tasks": tasks.map(serialize)])
     }
 
@@ -267,7 +277,8 @@ final class AgentTaskTools {
             ? .todo
             : try status(from: arguments, allowed: [.todo, .inProgress, .backlog])
         let priority = try priority(from: arguments)
-        guard let task = store.create(title: title, priority: priority, status: status) else {
+        let parentID = try parentID(from: arguments)
+        guard let task = store.create(title: title, priority: priority, status: status, parentID: parentID) else {
             throw AgentToolError.storeFailure(store.lastErrorMessage ?? "Unknown error.")
         }
         return try encode(["task": serialize(task)])
@@ -316,6 +327,17 @@ final class AgentTaskTools {
             throw AgentToolError.notFound(rawID)
         }
         return task
+    }
+
+    private func parentID(from arguments: [String: Any]) throws -> UUID? {
+        guard let raw = arguments["parent_id"] else { return nil }
+        guard let string = raw as? String, let id = UUID(uuidString: string) else {
+            throw AgentToolError.invalidArguments("parent_id must be a main task UUID.")
+        }
+        guard store.tasks.contains(where: { $0.id == id && $0.parentID == nil }) else {
+            throw AgentToolError.invalidArguments("parent_id must identify an existing main task.")
+        }
+        return id
     }
 
     private func status(from arguments: [String: Any], allowed: [TaskStatus]) throws -> TaskStatus {
@@ -438,6 +460,7 @@ final class AgentTaskTools {
         if let completedAt = task.completedAt {
             payload["completedAt"] = Self.dateFormatter.string(from: completedAt)
         }
+        if let parentID = task.parentID { payload["parent_id"] = parentID.uuidString }
         return payload
     }
 

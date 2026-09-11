@@ -23,8 +23,8 @@ enum AtticStyle {
     static let controlSymbolSize: CGFloat = 14
     static let composerControlHeight: CGFloat = 42
     static let composerActionSize: CGFloat = 34
-    static let taskComposerRowHeight: CGFloat = controlHitSize + 12
-    static let taskComposerOptionsHeight: CGFloat = controlHitSize + 4
+    static let taskComposerRowHeight: CGFloat = controlHitSize + 8
+    static let taskComposerOptionsHeight: CGFloat = 34
 
     /// Permanent chrome keeps a calm, even optical margin from every panel
     /// edge. Larger squircles can require more room where the corner curve

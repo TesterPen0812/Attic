@@ -295,7 +295,7 @@ final class AtticUITests: XCTestCase {
         let composer = app.descendants(matching: .any)["task-entry-bar"]
         let submit = app.buttons["quick-entry-submit"]
         XCTAssertTrue(composer.waitForExistence(timeout: 2))
-        XCTAssertGreaterThanOrEqual(addButton.frame.minY - composer.frame.minY, 5,
+        XCTAssertGreaterThanOrEqual(addButton.frame.minY - composer.frame.minY, 4,
                                     "The expanded composer needs space above its action hit targets")
         XCTAssertGreaterThanOrEqual(addButton.frame.minX - composer.frame.minX, 6)
         XCTAssertGreaterThanOrEqual(composer.frame.maxX - submit.frame.maxX, 6)
@@ -356,6 +356,132 @@ final class AtticUITests: XCTestCase {
             NSPredicate(format: "identifier BEGINSWITH %@", "edit-task-title-")
         ).firstMatch
         XCTAssertTrue(editField.waitForExistence(timeout: 2))
+    }
+
+    func testCompactComposerAndInlineSubtasks() throws {
+        // Keep this long editing workflow independent of pointer-driven
+        // auto-hide; interaction-lock policy has separate focused coverage.
+        app.buttons["panel-pin-button"].click()
+        let title = app.textFields["quick-entry-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        let composer = app.descendants(matching: .any)["task-entry-bar"]
+        let collapsedHeight = composer.frame.height
+        title.click()
+        title.typeText("Plan weekend trip")
+        XCTAssertFalse(app.buttons["task-priority-high"].exists, "Typing should keep the composer compact")
+        XCTAssertEqual(composer.frame.height, collapsedHeight, accuracy: 1)
+        app.buttons["add-task-button"].click()
+        let high = app.buttons["task-priority-high"]
+        XCTAssertTrue(high.waitForExistence(timeout: 2))
+        XCTAssertLessThanOrEqual(composer.frame.height - collapsedHeight, 35)
+        high.click()
+        app.buttons["add-task-button"].click()
+        XCTAssertEqual(title.value as? String, "Plan weekend trip")
+        XCTAssertFalse(high.exists)
+        app.buttons["quick-entry-submit"].click()
+        XCTAssertTrue(app.staticTexts["Plan weekend trip"].waitForExistence(timeout: 2))
+        XCTAssertFalse(high.exists)
+
+        let actions = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "task-actions-")).firstMatch
+        let parentID = actions.identifier.replacingOccurrences(of: "task-actions-", with: "")
+        actions.click()
+        app.menuItems["Add subtask…"].click()
+        let childTitle = app.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-title-")).firstMatch
+        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
+        // As with the note editor, macOS XCTest's automatic scroll-to-hit
+        // calculation does not handle the masked scroll view. Click the
+        // actual field bounds and verify input through the created task.
+        XCTAssertGreaterThan(childTitle.frame.height, 0)
+        XCTAssertLessThan(childTitle.frame.maxY, composer.frame.minY)
+        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        childTitle.typeText("Choose destination")
+        childTitle.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.staticTexts["Choose destination"].waitForExistence(timeout: 2))
+        childTitle.typeText("Book accommodation")
+        childTitle.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.staticTexts["Book accommodation"].waitForExistence(timeout: 2))
+        let progress = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-progress-")).firstMatch
+        func waitForChange(_ description: String, _ condition: @escaping () -> Bool) {
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, description)
+        }
+        func assertProgress(_ text: String) {
+            // SwiftUI's AX value can lag the visible status animation by a
+            // snapshot. Wait for the same exact result, rather than sleeping.
+            waitForChange("Expected progress: \(text)") { (progress.value as? String) == text }
+        }
+        assertProgress("0 of 2 complete")
+        assertSectionCount("To do", count: 1)
+        let childRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Choose destination")).firstMatch
+        childRow.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "complete-task-")).firstMatch
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        assertProgress("1 of 2 complete")
+        assertSectionCount("Done", count: 0)
+        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        childTitle.typeText("Draft step")
+        // Finish text editing without submitting or discarding the draft.
+        childTitle.typeKey(.escape, modifierFlags: [])
+        let toggle = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toggle-subtasks-")).firstMatch
+        func clickDisclosure() {
+            // Anchor the pointer to the panel, not the masked scroll element:
+            // XCTest's element-relative coordinate still attempts AX scrolling.
+            let panel = app.dialogs.firstMatch
+            let target = toggle.frame
+            XCTAssertGreaterThan(target.width, 0)
+            XCTAssertTrue(panel.frame.contains(target))
+            panel.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: target.midX - panel.frame.minX,
+                dy: target.midY - panel.frame.minY
+            )).click()
+        }
+        clickDisclosure()
+        waitForChange("Collapsing hides the inline field") { !childTitle.exists }
+        XCTAssertTrue(progress.exists)
+        clickDisclosure()
+        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
+        XCTAssertEqual(childTitle.value as? String, "Draft step")
+        XCTAssertGreaterThan(childRow.frame.minX, app.staticTexts["Plan weekend trip"].frame.minX - 20)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Subtasks and compact composer"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        childTitle.typeKey("a", modifierFlags: .command)
+        childTitle.typeKey(.delete, modifierFlags: [])
+        childTitle.typeKey(.escape, modifierFlags: [])
+        app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(app.staticTexts["panel-error-message"].waitForExistence(timeout: 2))
+        assertSectionCount("Done", count: 0)
+        let secondRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Book accommodation")).firstMatch
+        secondRow.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "complete-task-")).firstMatch
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        assertProgress("2 of 2 complete")
+        assertSectionCount("To do", count: 1)
+        app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        assertSectionCount("Done", count: 1)
+        app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        assertSectionCount("To do", count: 1)
+        let parentMenu = app.descendants(matching: .any)["task-actions-\(parentID)"]
+        parentMenu.click()
+        app.menuItems["Delete task and subtasks"].click()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 2))
+        app.buttons["Cancel"].click()
+        XCTAssertTrue(app.staticTexts["Plan weekend trip"].exists)
+        parentMenu.click()
+        app.menuItems["Delete task and subtasks"].click()
+        app.buttons["Delete all"].click()
+        waitForChange("Confirmed deletion removes the entire family") { !self.app.staticTexts["Plan weekend trip"].exists }
+        XCTAssertFalse(app.staticTexts["Choose destination"].exists)
+        XCTAssertFalse(app.staticTexts["Book accommodation"].exists)
+    }
+
+    private func assertSectionCount(_ title: String, count: Int, file: StaticString = #filePath, line: UInt = #line) {
+        // macOS can merge adjacent empty-section text into one AX text node.
+        // Assert the displayed count, not whether that node kept one header ID.
+        let text = "\(title) · \(count)"
+        let header = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 2), "Expected \(text)", file: file, line: line)
     }
 
     func testLongTaskTitleWrapsInsteadOfTruncating() throws {

@@ -30,8 +30,7 @@ final class SettingsWindowController: NSWindowController {
         settings: AppSettings,
         loginItemService: LoginItemService,
         agentServer: AgentServer,
-        store: TaskStore,
-        agentAccessToken: String
+        store: TaskStore
     ) {
         // The coordinator still owns TaskStore. Sync controls are intentionally
         // absent while Attic is macOS-first and local-only.
@@ -40,8 +39,7 @@ final class SettingsWindowController: NSWindowController {
         let rootView = SettingsView(
             settings: settings,
             loginItemService: loginItemService,
-            agentServer: agentServer,
-            agentAccessToken: agentAccessToken
+            agentServer: agentServer
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)

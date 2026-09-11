@@ -54,7 +54,7 @@ struct AtticPanelView: View {
         !quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     private var isTaskEntryExpanded: Bool {
-        isQuickEntryFocused || uiState.isComposerPresented
+        uiState.isComposerPresented
     }
     private var taskEntryHeight: CGFloat {
         AtticStyle.taskComposerRowHeight
@@ -169,13 +169,8 @@ struct AtticPanelView: View {
         .onChange(of: isTaskEntryExpanded) { _, _ in
             syncComposerInteractionHeight()
         }
-        .onChange(of: isQuickEntryFocused) { _, isFocused in
+        .onChange(of: isQuickEntryFocused) { _, _ in
             syncTaskEntryInteractionLocks()
-            if isFocused, uiState.selectedSection.isTaskBased {
-                // Keep priority controls mounted when Tab or a pointer click
-                // transfers focus out of the title field into the composer.
-                uiState.beginAdding()
-            }
         }
         .onChange(of: isQuickSubmitFocused) { _, _ in syncTaskEntryInteractionLocks() }
         .onChange(of: focusedQuickPriority) { _, _ in syncTaskEntryInteractionLocks() }
@@ -410,22 +405,34 @@ struct AtticPanelView: View {
                     .padding(.top, contentInsets.top + taskWorkspaceTopPadding)
                     .padding(.bottom, contentInsets.bottom)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 18) {
-                        ForEach(allSections(from: snapshot.sections)) { section in
-                            TaskSectionView(
-                                store: store,
-                                uiState: uiState,
-                                status: section.status,
-                                tasks: section.tasks
-                            )
+                ScrollViewReader { scrollProxy in
+                    ScrollView {
+                        LazyVStack(spacing: 18) {
+                            ForEach(allSections(from: snapshot.sections)) { section in
+                                TaskSectionView(
+                                    store: store,
+                                    uiState: uiState,
+                                    status: section.status,
+                                    tasks: section.tasks
+                                )
+                            }
+                        }
+                        .padding(.horizontal, horizontalInset + 2)
+                        .padding(.top, contentInsets.top + taskWorkspaceTopPadding + AtticStyle.taskScrollTopPadding)
+                        .padding(.bottom, contentInsets.bottom + taskEntryHeight + 54)
+                    }
+                    .scrollIndicators(.never)
+                    .onChange(of: uiState.subtaskEntryRequest) { _, _ in
+                        guard let parentID = uiState.focusedSubtaskParentID else { return }
+                        // Let the newly expanded/saved row lay out first. Center
+                        // the input above the glass composer and its fade mask.
+                        DispatchQueue.main.async {
+                            withAnimation(reduceMotion ? nil : AtticMotion.quick) {
+                                scrollProxy.scrollTo("subtask-entry-\(parentID.uuidString)", anchor: .center)
+                            }
                         }
                     }
-                    .padding(.horizontal, horizontalInset + 2)
-                    .padding(.top, contentInsets.top + taskWorkspaceTopPadding + AtticStyle.taskScrollTopPadding)
-                    .padding(.bottom, contentInsets.bottom + taskEntryHeight + 54)
                 }
-                .scrollIndicators(.never)
             }
         }
         .mask(taskScrollMask)
@@ -551,6 +558,10 @@ struct AtticPanelView: View {
             .frame(height: AtticStyle.taskComposerRowHeight)
             if isTaskEntryExpanded {
                 HStack(spacing: 4) {
+                    Text("Priority")
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(panelThemePalette.secondaryForegroundColor)
+                        .padding(.leading, 4)
                     ForEach(TaskPriority.allCases) { priority in
                         Button {
                             quickEntryPriority = priority
@@ -558,19 +569,20 @@ struct AtticPanelView: View {
                             isQuickEntryFocused = true
                         } label: {
                             Image(systemName: priority == .none ? "flag.slash" : "flag.fill")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(priority == .none ? panelThemePalette.secondaryForegroundColor : priority.color)
-                                .frame(width: 30, height: 30)
+                                .frame(width: 34, height: 24)
                                 .background(
                                     priority.color.opacity(quickEntryPriority == priority ? 0.16 : 0),
-                                    in: Circle()
+                                    in: Capsule()
                                 )
                                 .overlay {
-                                    Circle().stroke(
+                                    Capsule().stroke(
                                         priority.color.opacity(quickEntryPriority == priority ? 0.55 : 0),
                                         lineWidth: 1)
                                 }
-                                .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 30)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -580,7 +592,6 @@ struct AtticPanelView: View {
                         .accessibilityAddTraits(quickEntryPriority == priority ? .isSelected : [])
                         .accessibilityIdentifier("task-priority-\(priority.rawValue)")
                     }
-                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 4)
@@ -654,7 +665,6 @@ struct AtticPanelView: View {
         ) != nil else { return }
         quickEntryTitle = ""
         quickEntryPriority = .none
-        uiState.beginAdding()
         DispatchQueue.main.async { isQuickEntryFocused = true }
     }
 

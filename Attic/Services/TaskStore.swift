@@ -141,6 +141,7 @@ private struct TaskReplicaSnapshot: Equatable {
     let updatedAt: Date
     let completedAt: Date?
     let manualOrder: Int64?
+    let parentID: UUID?
 
     init(_ task: TaskItem) {
         id = task.id
@@ -151,6 +152,7 @@ private struct TaskReplicaSnapshot: Equatable {
         updatedAt = task.updatedAt
         completedAt = task.completedAt
         manualOrder = task.manualOrder
+        parentID = task.parentID
     }
 }
 
@@ -210,7 +212,8 @@ final class TaskStore: ObservableObject {
     func create(
         title: String,
         priority: TaskPriority = .none,
-        status: TaskStatus = .todo
+        status: TaskStatus = .todo,
+        parentID: UUID? = nil
     ) -> TaskItem? {
         let normalizedTitle = Self.normalized(title)
         guard !normalizedTitle.isEmpty else { return nil }
@@ -218,9 +221,17 @@ final class TaskStore: ObservableObject {
         let timestamp = now()
         let manualOrder: Int64?
         do {
+            if let parentID {
+                let parents = try storedTasks(matching: parentID)
+                guard parents.allSatisfy({ $0.parentID == nil && $0.status != .done }) else {
+                    lastErrorMessage = "Subtasks need an unfinished main task. Reopen the main task first."
+                    return nil
+                }
+            }
             manualOrder = try nextManualOrder(
                 status: status,
                 priority: priority,
+                parentID: parentID,
                 updatedAt: timestamp
             )
         } catch {
@@ -233,7 +244,8 @@ final class TaskStore: ObservableObject {
             priority: priority,
             createdAt: timestamp,
             completedAt: status == .done ? timestamp : nil,
-            manualOrder: manualOrder
+            manualOrder: manualOrder,
+            parentID: parentID
         )
         context.insert(task)
         tasks.append(task)
@@ -279,6 +291,22 @@ final class TaskStore: ObservableObject {
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
         let destinationStatus = status ?? task.status
+        do {
+            let stored = try context.fetch(FetchDescriptor<TaskItem>())
+            if destinationStatus == .done,
+               stored.contains(where: { $0.parentID == task.id && $0.status != .done }) {
+                lastErrorMessage = "Finish the subtasks before completing this task."
+                return false
+            }
+            if destinationStatus != .done, let parentID = task.parentID,
+               stored.contains(where: { $0.id == parentID && $0.status == .done }) {
+                lastErrorMessage = "Reopen the main task before reopening a subtask."
+                return false
+            }
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
         let titleChanged = destinationTitle != task.title
         let priorityChanged = destinationPriority != task.priority
         let statusChanged = destinationStatus != task.status
@@ -297,6 +325,7 @@ final class TaskStore: ObservableObject {
                 destinationManualOrder = try nextManualOrder(
                     status: destinationStatus,
                     priority: destinationPriority,
+                    parentID: task.parentID,
                     excluding: task.id,
                     updatedAt: timestamp
                 )
@@ -319,6 +348,7 @@ final class TaskStore: ObservableObject {
             replica.priority = destinationPriority
             replica.status = destinationStatus
             replica.createdAt = task.createdAt
+            replica.parentID = task.parentID
             replica.manualOrder = destinationManualOrder
             replica.completedAt = destinationCompletedAt
             replica.updatedAt = timestamp
@@ -358,13 +388,40 @@ final class TaskStore: ObservableObject {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
         let replicas: [TaskItem]
         do {
-            replicas = try storedTasks(matching: task.id)
+            let stored = try context.fetch(FetchDescriptor<TaskItem>())
+            // Refuse ambiguous family ownership rather than deleting a peer's
+            // task through a conflicting imported parent link.
+            var familyIDs: Set<UUID> = [task.id]
+            var previousCount = 0
+            while familyIDs.count != previousCount {
+                previousCount = familyIDs.count
+                for item in stored where item.parentID.map(familyIDs.contains) == true {
+                    familyIDs.insert(item.id)
+                }
+            }
+            let family = stored.filter { familyIDs.contains($0.id) }
+            let groups = Dictionary(grouping: family, by: \.id)
+            guard groups[task.id]?.isEmpty == false else {
+                throw TaskReplicaMutationError.missingReplica(task.id)
+            }
+            guard groups.values.allSatisfy({ Set($0.map(\.parentID)).count == 1 }) else {
+                lastErrorMessage = "Conflicting subtask links prevent safe deletion. Refresh and resolve them first."
+                return false
+            }
+            guard family.allSatisfy({ item in
+                item.id == task.id || (task.parentID == nil && item.parentID == task.id)
+            }) else {
+                lastErrorMessage = "An unsupported nested or cyclic subtask link prevents safe deletion."
+                return false
+            }
+            replicas = family
         } catch {
             lastErrorMessage = error.localizedDescription
             return false
         }
         replicas.forEach(context.delete)
-        tasks.removeAll { $0.id == task.id }
+        let deletedIDs = Set(replicas.map(\.id))
+        tasks.removeAll { deletedIDs.contains($0.id) }
         return save()
     }
 
@@ -379,7 +436,7 @@ final class TaskStore: ObservableObject {
         }
 
         let grouped = Dictionary(grouping: stored, by: \.id)
-        let expiredIDs = Set(grouped.compactMap { id, replicas -> UUID? in
+        var expiredIDs = Set(grouped.compactMap { id, replicas -> UUID? in
             guard let first = replicas.first else { return nil }
             let agreedSnapshot = TaskReplicaSnapshot(first)
             guard replicas.dropFirst().allSatisfy({ TaskReplicaSnapshot($0) == agreedSnapshot }) else {
@@ -390,6 +447,18 @@ final class TaskStore: ObservableObject {
                 ? id
                 : nil
         })
+        // Keep a family together: neither completed children of an active
+        // parent nor a parent with active/recent/divergent children may expire.
+        var previousCount = -1
+        while previousCount != expiredIDs.count {
+            previousCount = expiredIDs.count
+            for item in stored {
+                if let parentID = item.parentID {
+                    if !expiredIDs.contains(parentID) { expiredIDs.remove(item.id) }
+                    if !expiredIDs.contains(item.id) { expiredIDs.remove(parentID) }
+                }
+            }
+        }
         guard !expiredIDs.isEmpty else { return 0 }
         stored.filter { expiredIDs.contains($0.id) }.forEach(context.delete)
         tasks.removeAll { expiredIDs.contains($0.id) }
@@ -420,6 +489,23 @@ final class TaskStore: ObservableObject {
             }
     }
 
+    /// Invalid/orphaned imported links remain visible as roots; never hide data.
+    func parent(of task: TaskItem) -> TaskItem? {
+        guard let parentID = task.parentID, parentID != task.id else { return nil }
+        return tasks.first { $0.id == parentID && $0.parentID == nil }
+    }
+
+    func subtasks(of parentID: UUID) -> [TaskItem] {
+        tasks.filter { $0.parentID == parentID && parent(of: $0)?.id == parentID }
+            .sorted {
+                if $0.manualOrder != $1.manualOrder {
+                    return ($0.manualOrder ?? 0) > ($1.manualOrder ?? 0)
+                }
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
     /// Memoized per revision: SwiftUI evaluates view bodies far more often
     /// than tasks change, so repeated calls between edits are O(1). Every
     /// mutation path goes through save()/reloadTasks(), which bump `revision`.
@@ -429,7 +515,7 @@ final class TaskStore: ObservableObject {
         }
 
         let sections = scope.statuses.compactMap { status -> TaskSectionSnapshot? in
-            let statusTasks = orderedTasks(for: status)
+            let statusTasks = orderedTasks(for: status).filter { parent(of: $0) == nil }
             guard !statusTasks.isEmpty else { return nil }
             return TaskSectionSnapshot(status: status, tasks: statusTasks)
         }
@@ -469,6 +555,8 @@ final class TaskStore: ObservableObject {
             return false
         }
 
+        guard task.parentID == target.parentID else { return false }
+
         if task.status == target.status {
             return reorder(taskID: taskID, relativeTo: targetID)
         }
@@ -495,12 +583,15 @@ final class TaskStore: ObservableObject {
         guard taskID != targetID,
               let task = tasks.first(where: { $0.id == taskID }),
               let target = tasks.first(where: { $0.id == targetID }),
+              task.parentID == target.parentID,
               task.status == target.status,
               task.priority == target.priority else {
             return false
         }
 
-        var group = orderedTasks(for: task.status).filter { $0.priority == task.priority }
+        var group = (task.parentID.map(subtasks(of:)) ?? orderedTasks(for: task.status)).filter {
+            $0.priority == task.priority && $0.parentID == task.parentID && $0.status == task.status
+        }
         guard let sourceIndex = group.firstIndex(where: { $0.id == taskID }),
               let targetIndex = group.firstIndex(where: { $0.id == targetID }) else {
             return false
@@ -772,16 +863,17 @@ final class TaskStore: ObservableObject {
     private func nextManualOrder(
         status: TaskStatus,
         priority: TaskPriority,
+        parentID: UUID? = nil,
         excluding excludedID: UUID? = nil,
         updatedAt: Date
     ) throws -> Int64? {
         let group = tasks.filter {
-            $0.id != excludedID && $0.status == status && $0.priority == priority
+            $0.id != excludedID && $0.status == status && $0.priority == priority && $0.parentID == parentID
         }
         guard let maximum = group.compactMap(\.manualOrder).max() else { return nil }
         guard maximum <= .max - Self.manualOrderStride else {
-            let orderedGroup = orderedTasks(for: status).filter {
-                $0.id != excludedID && $0.priority == priority
+            let orderedGroup = (parentID.map(subtasks(of:)) ?? orderedTasks(for: status)).filter {
+                $0.id != excludedID && $0.status == status && $0.priority == priority && $0.parentID == parentID
             }
             try assignSpacedManualOrders(to: orderedGroup, updatedAt: updatedAt)
             return Int64(orderedGroup.count + 1) * Self.manualOrderStride
@@ -864,6 +956,7 @@ final class TaskStore: ObservableObject {
             String(task.createdAt.timeIntervalSinceReferenceDate.bitPattern),
             task.completedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
             task.manualOrder.map(String.init) ?? "",
+            task.parentID?.uuidString ?? "",
             String(reflecting: task.persistentModelID)
         ].joined(separator: "\u{1F}")
     }

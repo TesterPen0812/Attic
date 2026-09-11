@@ -8,6 +8,8 @@ enum PanelInteractionLockReason: Hashable, Sendable {
     case quickEntryFocus
     case taskComposer
     case taskEditing
+    case subtaskComposer
+    case taskConfirmation
     case notesEditorFocus
     case notesDirty
     case notesConflict
@@ -26,6 +28,11 @@ final class PanelUIState: ObservableObject {
     @Published var isComposerPresented = false
     @Published var editingTaskID: UUID?
     @Published var editingNoteID: UUID?
+    @Published var expandedTaskIDs: Set<UUID> = []
+    @Published var subtaskDrafts: [UUID: String] = [:]
+    @Published var focusedSubtaskParentID: UUID?
+    @Published private(set) var subtaskEntryRequest: UInt64 = 0
+    @Published var confirmingTaskDeletionID: UUID?
     @Published var isCanvasConfirmationPresented = false
     @Published var isPanelPinned = false
     @Published var dockingPreviewCorner: ScreenCorner?
@@ -44,6 +51,11 @@ final class PanelUIState: ObservableObject {
         var reasons = managedInteractionLocks
         if editingTaskID != nil {
             reasons.insert(.taskEditing)
+        }
+        if confirmingTaskDeletionID != nil { reasons.insert(.taskConfirmation) }
+        if selectedSection.taskScope != nil,
+           focusedSubtaskParentID != nil || subtaskDrafts.values.contains(where: { !$0.isEmpty }) {
+            reasons.insert(.subtaskComposer)
         }
         if isCanvasConfirmationPresented {
             reasons.insert(.canvasConfirmation)
@@ -90,6 +102,12 @@ final class PanelUIState: ObservableObject {
         isComposerPresented = true
     }
 
+    func focusSubtaskEntry(for parentID: UUID) {
+        expandedTaskIDs.insert(parentID)
+        focusedSubtaskParentID = parentID
+        subtaskEntryRequest &+= 1
+    }
+
     func selectSection(_ section: PanelSection) {
         guard selectedSection != section else { return }
         managedInteractionLocks.remove(.quickEntryFocus)
@@ -99,6 +117,8 @@ final class PanelUIState: ObservableObject {
         editingTaskID = nil
         editingNoteID = nil
         draggedTaskID = nil
+        focusedSubtaskParentID = nil
+        confirmingTaskDeletionID = nil
         isCanvasConfirmationPresented = false
         selectedSection = section
     }
@@ -127,6 +147,14 @@ final class PanelUIState: ObservableObject {
     }
 
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
+        if let confirmingTaskDeletionID, !availableIDs.contains(confirmingTaskDeletionID) {
+            self.confirmingTaskDeletionID = nil
+        }
+        expandedTaskIDs.formIntersection(availableIDs)
+        subtaskDrafts = subtaskDrafts.filter { availableIDs.contains($0.key) }
+        if let focusedSubtaskParentID, !availableIDs.contains(focusedSubtaskParentID) {
+            self.focusedSubtaskParentID = nil
+        }
         if let editingTaskID, !availableIDs.contains(editingTaskID) {
             self.editingTaskID = nil
         }

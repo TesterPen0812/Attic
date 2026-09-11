@@ -33,6 +33,8 @@ struct AppRuntimeEnvironment {
         isRunningTests && !isUITesting
     }
 
+    var usesEphemeralAgentCredential: Bool { isUITesting || isRunningTests }
+
     var shouldStartInteractiveShellServices: Bool {
         !isUnitTestHost
     }
@@ -259,22 +261,22 @@ final class AppCoordinator {
         let loginItemService = LoginItemService()
         // Local-only disables cloud services, not authenticated loopback MCP.
         // Each bundle identity owns its credential; previews never reuse Daily's.
-        // Test hosts do not touch Keychain or start the listener. Failure leaves
-        // an empty token that AgentServer rejects before opening a socket.
-        let agentAccessToken = (try? (isRunningTests
-            ? AgentAccessTokenStore.generateToken()
-            : AgentAccessTokenStore().loadOrCreate())) ?? ""
-        let agentServer = AgentServer(
-            port: settings.agentServerPort,
-            bearerToken: agentAccessToken,
-            handler: MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore))
-        )
+        // Both kinds of test host avoid Keychain. In normal use, credential
+        // loading starts only after opt-in and runs away from the main thread.
+        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore))
+        let agentServer: AgentServer
+        if runtime.usesEphemeralAgentCredential {
+            agentServer = AgentServer(port: settings.agentServerPort,
+                                      bearerToken: (try? AgentAccessTokenStore.generateToken()) ?? "",
+                                      handler: agentHandler)
+        } else {
+            agentServer = AgentServer(port: settings.agentServerPort, handler: agentHandler)
+        }
         let settingsWindowController = SettingsWindowController(
             settings: settings,
             loginItemService: loginItemService,
             agentServer: agentServer,
-            store: store,
-            agentAccessToken: agentAccessToken
+            store: store
         )
         let panelController = AtticPanelController(
             store: store,

@@ -33,7 +33,7 @@ struct TaskSectionView: View {
             if !tasks.isEmpty {
                 VStack(spacing: 3) {
                     ForEach(tasks) { task in
-                        TaskRowView(store: store, uiState: uiState, task: task)
+                        TaskFamilyView(store: store, uiState: uiState, task: task)
                             .transition(
                                 .asymmetric(
                                     insertion: .move(edge: .top).combined(with: .opacity),

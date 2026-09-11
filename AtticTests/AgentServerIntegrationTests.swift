@@ -3,6 +3,57 @@ import XCTest
 
 @MainActor
 final class AgentServerIntegrationTests: XCTestCase {
+    func testNormalCredentialLoadingIsDeferredAndOffMainThread() async throws {
+        let probe = CredentialLoadProbe(token: try AgentAccessTokenStore.generateToken())
+        let server = AgentServer(port: 0, handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore())), tokenProvider: { try probe.load() })
+        defer { server.stop() }
+        XCTAssertEqual(probe.callCount, 0, "Disabled Agent Access must not contact Keychain at launch")
+        XCTAssertEqual(server.state, .stopped)
+        XCTAssertTrue(server.setupToken.isEmpty)
+        let port = try await start(server)
+        XCTAssertEqual(probe.callCount, 1)
+        XCTAssertFalse(probe.calledOnMainThread)
+        let response = try await post(port, token: probe.token, method: "ping")
+        XCTAssertEqual(response.status, 200)
+    }
+
+    func testDisablingWhileCredentialApprovalIsPendingNeverStartsListener() async throws {
+        let began = expectation(description: "Credential load began")
+        let release = DispatchSemaphore(value: 0)
+        let token = try AgentAccessTokenStore.generateToken()
+        let server = AgentServer(port: 0, handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore()))) {
+            began.fulfill()
+            _ = release.wait(timeout: .now() + 2)
+            return token
+        }
+        defer { release.signal(); server.stop() }
+        server.start()
+        await fulfillment(of: [began], timeout: 1)
+        XCTAssertEqual(server.state, .starting)
+        XCTAssertNil(server.boundPort)
+        server.stop()
+        release.signal()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(server.state, .stopped)
+        XCTAssertNil(server.boundPort)
+        XCTAssertTrue(server.setupToken.isEmpty)
+    }
+
+    func testDeniedCredentialFailsClosedAndRetryCanRecover() async throws {
+        let probe = CredentialLoadProbe(token: try AgentAccessTokenStore.generateToken(), failFirst: true)
+        let server = AgentServer(port: 0, handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore())), tokenProvider: { try probe.load() })
+        defer { server.stop() }
+        server.start()
+        for _ in 0..<100 {
+            if case .failed = server.state { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard case .failed = server.state else { return XCTFail("Denied credential must fail closed") }
+        XCTAssertNil(server.boundPort)
+        _ = try await start(server)
+        XCTAssertEqual(probe.callCount, 2)
+    }
+
     func testOfficialMCPClientInteroperability() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let node = environment["ATTIC_MCP_NODE"],
@@ -40,6 +91,7 @@ final class AgentServerIntegrationTests: XCTestCase {
         XCTAssertEqual(report["result"] as? String, "passed")
         XCTAssertEqual(report["authenticated"] as? Bool, true)
         XCTAssertEqual(report["reconnect"] as? Bool, true)
+        XCTAssertEqual(report["subtasksVerified"] as? Bool, true)
         XCTAssertEqual(report["testDataRemoved"] as? Bool, true)
         XCTAssertTrue(store.tasks.isEmpty)
     }
@@ -143,5 +195,30 @@ final class AgentServerIntegrationTests: XCTestCase {
         let (data, response) = try await session.data(for: request)
         return (try XCTUnwrap(response as? HTTPURLResponse).statusCode,
                 (try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+    }
+}
+
+private final class CredentialLoadProbe: @unchecked Sendable {
+    let token: String
+    private let failFirst: Bool
+    private let lock = NSLock()
+    private var calls = 0
+    private var usedMainThread = false
+    var callCount: Int { lock.withLock { calls } }
+    var calledOnMainThread: Bool { lock.withLock { usedMainThread } }
+
+    init(token: String, failFirst: Bool = false) {
+        self.token = token
+        self.failFirst = failFirst
+    }
+
+    func load() throws -> String {
+        let shouldFail = lock.withLock {
+            calls += 1
+            usedMainThread = usedMainThread || Thread.isMainThread
+            return failFirst && calls == 1
+        }
+        if shouldFail { throw CocoaError(.fileReadNoPermission) }
+        return token
     }
 }

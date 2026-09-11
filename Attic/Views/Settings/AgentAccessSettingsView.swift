@@ -4,7 +4,6 @@ import SwiftUI
 struct AgentAccessSettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var agentServer: AgentServer
-    let agentAccessToken: String
 
     @State private var didCopyAgentSetupPrompt = false
     @State private var didCopyEndpoint = false
@@ -84,7 +83,7 @@ struct AgentAccessSettingsView: View {
                                 )
                             }
                             .controlSize(.regular)
-                            .disabled(!AgentAccessTokenStore.isValid(agentAccessToken))
+                            .disabled(!AgentAccessTokenStore.isValid(agentServer.setupToken))
                             .accessibilityIdentifier("settings-copy-agent-setup")
                             .help("Copy connection instructions with the private token")
 
@@ -184,10 +183,10 @@ struct AgentAccessSettingsView: View {
     }
 
     private func copyAgentSetupPrompt() {
-        guard AgentAccessTokenStore.isValid(agentAccessToken) else { return }
+        guard AgentAccessTokenStore.isValid(agentServer.setupToken) else { return }
         let prompt = AgentSetupPrompt.make(
             endpoint: endpoint,
-            bearerToken: agentAccessToken
+            bearerToken: agentServer.setupToken
         )
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()

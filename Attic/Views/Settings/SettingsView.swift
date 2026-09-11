@@ -30,7 +30,6 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var agentServer: AgentServer
-    let agentAccessToken: String
 
     @AppStorage(SettingsSection.selectionStorageKey)
     private var selectedSectionRawValue = SettingsSection.general.rawValue
@@ -98,8 +97,7 @@ struct SettingsView: View {
         case .agentAccess:
             AgentAccessSettingsView(
                 settings: settings,
-                agentServer: agentServer,
-                agentAccessToken: agentAccessToken
+                agentServer: agentServer
             )
         case .about:
             AboutSettingsView()

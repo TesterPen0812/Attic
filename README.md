@@ -13,6 +13,7 @@ Attic lives in the menu bar and reveals a lightweight panel when the pointer res
 - Reveals from any screen corner after a configurable delay
 - Global `Control–Option–Space` shortcut for creating a task
 - Separate Tasks and Backlog scopes, with To do, In Progress and Done states
+- Indented subtasks with inline entry, a completion count, and collapsible families
 - None, Low, Medium and High priorities
 - Local-first SwiftData persistence
 - Automatic cleanup of completed tasks after the day changes
@@ -65,6 +66,29 @@ evidence of cross-device synchronization.
 - Drag a task into another app to insert its title as plain text.
 - Use the trailing ellipsis to edit, move, reprioritize or delete a task.
 
+### Subtasks and compact entry
+
+Choose **Add subtask…** from a main task's ellipsis menu. Steps are saved inline,
+remain indented when completed, and can be shown or hidden with the chevron.
+The progress count stays visible while collapsed. Section totals count main
+tasks only; moving a main task between Tasks and Backlog carries its family.
+Subtasks support one level, their own title, status and priority, and reordering
+within the same parent/status/priority group.
+
+Complete the steps before completing their parent. Finishing the last step does
+not complete the parent automatically. Reopen a completed parent before adding
+or reopening a step. Deleting a parent asks for confirmation and deletes its
+subtasks too; deleting one step leaves the rest intact. Automatic cleanup keeps
+a family until every member is completed before the current local day and all
+physical replicas agree. Existing tasks gain an empty optional parent link;
+their identities and content are preserved by normal local schema migration.
+
+The quick-entry composer stays one row tall while typing. Click **+** to reveal
+the slim priority strip and **×** to collapse it without clearing the title or
+priority. Return or the arrow saves the task. Unsaved subtask text survives
+collapsing its family and switching sections during the current app session;
+it is not a saved task until submitted.
+
 ## Agent access (MCP)
 
 When Agent access is explicitly enabled, Attic serves the [Model Context Protocol](https://modelcontextprotocol.io) over Streamable HTTP at `http://127.0.0.1:7335/mcp`, loopback only. The feature is disabled by default and tool requests require the private bearer token provided by Settings → Agent Access → Copy setup prompt. Authorized clients such as Claude Code, Synara, Codex or Cursor can list, create, update, complete and delete tasks, and every change appears live in the panel. Change the port with `defaults write com.taha.Attic agentServerPort <port>`.
@@ -76,9 +100,20 @@ generation, access, or persistence failures prevent the listener from starting;
 there is no fixed or ephemeral fallback. Keep the token private. Do not grant
 broader Keychain permissions just to automate connection setup.
 
+Credential loading begins only when Agent Access is enabled and never blocks
+the app's main thread. If macOS requires Keychain approval, the listener remains
+closed until that succeeds. Turning access off while approval is pending keeps
+the listener off. Both unit and UI test hosts use isolated ephemeral credentials.
+
 Settings also provides **Copy setup prompt**, which creates a client-aware prompt containing the local endpoint and private bearer token. Paste it into Codex, Synara, or Claude to have that client configure or repair only its `attic` MCP entry and verify the connection.
 
 Tools: `list_tasks`, `create_task`, `update_task` (set `status` to `done` to complete), `delete_task`. Statuses are `todo`, `inProgress`, `done`, `backlog`; priorities are `none`, `low`, `medium`, `high`.
+
+`create_task` accepts optional `parent_id` (an unfinished main task UUID).
+`list_tasks` returns main tasks and subtasks and accepts `parent_id` to list only
+that parent's steps. Subtask results include `parent_id`; updates use the usual
+task UUID. `delete_task` on a parent deletes its entire family, so clients must
+include the children in the user's deletion scope.
 
 Claude Code / Synara (available in every project via `--scope user`):
 
@@ -124,7 +159,7 @@ above and rejects non-loopback destinations. Alternatively, set
 `ATTIC_MCP_BUNDLE_ID` to the intended app identity to request its Keychain item;
 macOS may require interactive approval. The script never prints credentials or
 task/note content. Its optional `--exercise-test-data` flag creates, completes,
-verifies and deletes only a uniquely identified task from that invocation.
+verifies and deletes only a uniquely identified task family from that invocation.
 
 The optional `AgentServerIntegrationTests/testOfficialMCPClientInteroperability`
 gate starts the real listener on an ephemeral loopback port with an in-memory

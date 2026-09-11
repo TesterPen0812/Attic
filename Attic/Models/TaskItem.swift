@@ -13,6 +13,9 @@ final class TaskItem {
     var updatedAt: Date = Date()
     var completedAt: Date? = nil
     var manualOrder: Int64? = nil
+    /// A scalar, optional link keeps existing local stores compatible and
+    /// avoids SwiftData relationship ownership across duplicate UUID replicas.
+    var parentID: UUID? = nil
 
     init(
         id: UUID = UUID(),
@@ -22,7 +25,8 @@ final class TaskItem {
         createdAt: Date = Date(),
         updatedAt: Date? = nil,
         completedAt: Date? = nil,
-        manualOrder: Int64? = nil
+        manualOrder: Int64? = nil,
+        parentID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -32,6 +36,7 @@ final class TaskItem {
         self.updatedAt = updatedAt ?? createdAt
         self.completedAt = completedAt
         self.manualOrder = manualOrder
+        self.parentID = parentID
     }
 
     var status: TaskStatus {

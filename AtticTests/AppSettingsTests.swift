@@ -5,6 +5,12 @@ import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    func testUIHostsUseEphemeralAgentCredentialsWithoutXCTestEnvironmentKeys() {
+        XCTAssertTrue(AppRuntimeEnvironment(environment: ["ATTIC_UI_TESTING": "1"]).usesEphemeralAgentCredential)
+        XCTAssertTrue(AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1"]).usesEphemeralAgentCredential)
+        XCTAssertTrue(AppRuntimeEnvironment(environment: ["XCTestBundlePath": "/test"]).usesEphemeralAgentCredential)
+        XCTAssertFalse(AppRuntimeEnvironment(environment: [:]).usesEphemeralAgentCredential)
+    }
     @MainActor
     func testUnitTestRuntimeUsesIsolatedDefaultsAndDisablesInteractiveShell() {
         let isolatedSuite = "AppRuntimeTests.\(UUID().uuidString)"

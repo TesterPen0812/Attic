@@ -71,3 +71,14 @@ a reviewed clean commit with the protected daily installer before enabling its
 MCP listener. Credential transfer into a trusted client still requires the app's
 normal setup-prompt flow or the user's macOS approval. CloudKit, APNs, iPhone,
 public distribution, and production-store behavior remain out of scope.
+
+## Follow-up during subtask verification
+
+Native UI verification subsequently found a test-isolation/startup issue: an
+explicit UI host without XCTest environment keys still took the real Keychain
+path. The later implementation recognizes both host types, defers normal app
+credential access until MCP opt-in, and performs that load off the main thread.
+Cancellation cannot enable the listener later; denied access remains closed and
+Retry performs a fresh attempt. No Keychain permissions are broadened. See
+[subtask/composer verification](SubtasksComposerValidation-2026-09-09.md) for the
+sample, regression gates, and later installed-preview evidence.

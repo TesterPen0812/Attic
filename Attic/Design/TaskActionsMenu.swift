@@ -10,6 +10,7 @@ struct TaskActionsMenu: View {
     @ObservedObject var store: TaskStore
     let task: TaskItem
     var editLabel = "Edit"
+    var deleteRequested: (() -> Void)? = nil
     let edit: () -> Void
 
     var body: some View {
@@ -47,8 +48,9 @@ struct TaskActionsMenu: View {
 
         Divider()
 
-        Button("Delete", systemImage: "trash", role: .destructive) {
-            store.delete(task)
+        Button(store.subtasks(of: task.id).isEmpty ? "Delete" : "Delete task and subtasks", systemImage: "trash", role: .destructive) {
+            if let deleteRequested { deleteRequested() }
+            else { store.delete(task) }
         }
     }
 
