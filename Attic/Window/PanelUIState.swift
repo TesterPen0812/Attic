@@ -28,7 +28,6 @@ final class PanelUIState: ObservableObject {
     @Published var isComposerPresented = false
     @Published var editingTaskID: UUID?
     @Published var editingNoteID: UUID?
-    @Published var expandedTaskIDs: Set<UUID> = []
     @Published var subtaskDrafts: [UUID: String] = [:]
     @Published var focusedSubtaskParentID: UUID?
     @Published private(set) var subtaskEntryRequest: UInt64 = 0
@@ -102,8 +101,9 @@ final class PanelUIState: ObservableObject {
         isComposerPresented = true
     }
 
+    /// Focused entry lives in the auxiliary subtask surface (transient or
+    /// pinned), which watches `subtaskEntryRequest` for re-focus bumps.
     func focusSubtaskEntry(for parentID: UUID) {
-        expandedTaskIDs.insert(parentID)
         focusedSubtaskParentID = parentID
         subtaskEntryRequest &+= 1
     }
@@ -150,7 +150,6 @@ final class PanelUIState: ObservableObject {
         if let confirmingTaskDeletionID, !availableIDs.contains(confirmingTaskDeletionID) {
             self.confirmingTaskDeletionID = nil
         }
-        expandedTaskIDs.formIntersection(availableIDs)
         subtaskDrafts = subtaskDrafts.filter { availableIDs.contains($0.key) }
         if let focusedSubtaskParentID, !availableIDs.contains(focusedSubtaskParentID) {
             self.focusedSubtaskParentID = nil

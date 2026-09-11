@@ -1,9 +1,23 @@
 import SwiftUI
 
+/// Compact `done/total` child progress rendered on a parent row. Presented
+/// inline when children exist; tapping it opens the family's shared subtask
+/// panel (the click/keyboard/VoiceOver alternative to hover).
+struct SubtaskRowSummary: Equatable {
+    let done: Int
+    let total: Int
+}
+
 struct TaskRowView: View {
     @ObservedObject var store: TaskStore
     @ObservedObject var uiState: PanelUIState
+    @ObservedObject var subtaskPanels: SubtaskPanelController
     let task: TaskItem
+    var subtaskSummary: SubtaskRowSummary? = nil
+    /// True while the family's auxiliary surface (transient or pinned) is
+    /// presenting this row's checklist — keeps a soft highlight so the open
+    /// panel reads as anchored to the row.
+    var isFamilyPresented = false
 
     @State private var editTitle = ""
     @State private var isHovering = false
@@ -51,6 +65,10 @@ struct TaskRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .atticClearGlassForegroundReadability()
 
+            if let subtaskSummary {
+                subtaskCountButton(summary: subtaskSummary)
+            }
+
             trailingAction
         }
         .padding(.vertical, 4)
@@ -59,7 +77,7 @@ struct TaskRowView: View {
         .background(
             isDropTargeted
                 ? Color.accentColor.opacity(0.08)
-                : Color.primary.opacity(isHovering ? 0.055 : 0),
+                : Color.primary.opacity(isHovering || isFamilyPresented ? 0.055 : 0),
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
         .contentShape(Rectangle())
@@ -117,6 +135,26 @@ struct TaskRowView: View {
         }
     }
 
+    private func subtaskCountButton(summary: SubtaskRowSummary) -> some View {
+        Button {
+            subtaskPanels.toggleFamilyPanel(for: task.id)
+        } label: {
+            Text("\(summary.done)/\(summary.total)")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(palette.secondaryForegroundColor)
+                .atticClearGlassForegroundReadability()
+                .padding(.horizontal, 6)
+                .frame(minWidth: 26, minHeight: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Show subtasks")
+        .accessibilityLabel("Show subtasks")
+        .accessibilityValue("\(summary.done) of \(summary.total) complete")
+        .accessibilityIdentifier("subtask-progress-\(task.id.uuidString)")
+        .accessibilityAddTraits(isFamilyPresented ? .isSelected : [])
+    }
+
     @ViewBuilder
     private var trailingAction: some View {
         if isEditing {
@@ -155,9 +193,16 @@ struct TaskRowView: View {
 
     @ViewBuilder
     private var taskActions: some View {
-        if task.parentID == nil && task.status != .done {
-            Button("Add subtask…", systemImage: "plus") {
-                uiState.focusSubtaskEntry(for: task.id)
+        if task.parentID == nil {
+            if !store.subtasks(of: task.id).isEmpty {
+                Button("Show subtasks", systemImage: "list.bullet.indent") {
+                    subtaskPanels.openFamilyPanel(for: task.id, focusEntry: false)
+                }
+            }
+            if task.status != .done {
+                Button("Add subtask…", systemImage: "plus") {
+                    subtaskPanels.openFamilyPanel(for: task.id, focusEntry: true)
+                }
             }
             Divider()
         }

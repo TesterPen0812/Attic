@@ -3,6 +3,7 @@ import SwiftUI
 struct TaskSectionView: View {
     @ObservedObject var store: TaskStore
     @ObservedObject var uiState: PanelUIState
+    @ObservedObject var subtaskPanels: SubtaskPanelController
     let status: TaskStatus
     let tasks: [TaskItem]
 
@@ -33,7 +34,12 @@ struct TaskSectionView: View {
             if !tasks.isEmpty {
                 VStack(spacing: 3) {
                     ForEach(tasks) { task in
-                        TaskFamilyView(store: store, uiState: uiState, task: task)
+                        TaskFamilyView(
+                            store: store,
+                            uiState: uiState,
+                            subtaskPanels: subtaskPanels,
+                            task: task
+                        )
                             .transition(
                                 .asymmetric(
                                     insertion: .move(edge: .top).combined(with: .opacity),

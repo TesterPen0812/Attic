@@ -259,13 +259,21 @@ final class SubtaskTests: XCTestCase {
         XCTAssertTrue(store.tasks.isEmpty)
     }
 
-    func testSubtaskDraftSurvivesCollapseAndLocksOnlyTaskSections() throws {
+    /// Drafts live in `uiState.subtaskDrafts`, independent of which surface
+    /// is presenting the family: closing a hover panel or the pinned window
+    /// must not discard typed text, and the draft still holds the panel open
+    /// while a task section is selected.
+    func testSubtaskDraftSurvivesSurfaceDismissalAndLocksOnlyTaskSections() throws {
         let state = PanelUIState()
         let id = UUID()
         state.subtaskDrafts[id] = "Unfinished thought"
-        state.expandedTaskIDs.insert(id)
-        state.expandedTaskIDs.remove(id)
+        state.focusSubtaskEntry(for: id)
+        XCTAssertEqual(state.focusedSubtaskParentID, id)
         XCTAssertEqual(state.subtaskDrafts[id], "Unfinished thought")
+        XCTAssertTrue(state.interactionLockReasons.contains(.subtaskComposer))
+        // The auxiliary surfaces manage their own visibility; the draft and
+        // its lock never depended on row expansion.
+        state.focusedSubtaskParentID = nil
         XCTAssertTrue(state.interactionLockReasons.contains(.subtaskComposer))
         state.selectSection(.notes)
         XCTAssertFalse(state.interactionLockReasons.contains(.subtaskComposer))

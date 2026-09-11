@@ -8,6 +8,7 @@ struct AtticPanelView: View {
     let chromeInteractionState: PanelChromeInteractionState
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
+    @ObservedObject var subtaskPanels: SubtaskPanelController
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -94,6 +95,7 @@ struct AtticPanelView: View {
         ZStack {
             sectionWorkspace
         }
+        .coordinateSpace(name: AtticPanelCoordinateSpaceName.taskWorkspace)
         .overlay(alignment: .top) {
             topChrome
         }
@@ -152,6 +154,12 @@ struct AtticPanelView: View {
         }
         .onChange(of: store.revision) { _, _ in
             uiState.reconcileTaskIDs(Set(store.tasks.map(\.id)))
+        }
+        .onPreferenceChange(TaskRowAnchorPreferenceKey.self) { frames in
+            subtaskPanels.updateTaskRowFrames(frames)
+        }
+        .onPreferenceChange(TaskListViewportPreferenceKey.self) { viewport in
+            subtaskPanels.updateTaskListViewport(viewport)
         }
         .onChange(of: noteStore.revision) { _, _ in
             reconcileNoteDraft()
@@ -405,32 +413,31 @@ struct AtticPanelView: View {
                     .padding(.top, contentInsets.top + taskWorkspaceTopPadding)
                     .padding(.bottom, contentInsets.bottom)
             } else {
-                ScrollViewReader { scrollProxy in
-                    ScrollView {
-                        LazyVStack(spacing: 18) {
-                            ForEach(allSections(from: snapshot.sections)) { section in
-                                TaskSectionView(
-                                    store: store,
-                                    uiState: uiState,
-                                    status: section.status,
-                                    tasks: section.tasks
-                                )
-                            }
+                ScrollView {
+                    LazyVStack(spacing: 18) {
+                        ForEach(allSections(from: snapshot.sections)) { section in
+                            TaskSectionView(
+                                store: store,
+                                uiState: uiState,
+                                subtaskPanels: subtaskPanels,
+                                status: section.status,
+                                tasks: section.tasks
+                            )
                         }
-                        .padding(.horizontal, horizontalInset + 2)
-                        .padding(.top, contentInsets.top + taskWorkspaceTopPadding + AtticStyle.taskScrollTopPadding)
-                        .padding(.bottom, contentInsets.bottom + taskEntryHeight + 54)
                     }
-                    .scrollIndicators(.never)
-                    .onChange(of: uiState.subtaskEntryRequest) { _, _ in
-                        guard let parentID = uiState.focusedSubtaskParentID else { return }
-                        // Let the newly expanded/saved row lay out first. Center
-                        // the input above the glass composer and its fade mask.
-                        DispatchQueue.main.async {
-                            withAnimation(reduceMotion ? nil : AtticMotion.quick) {
-                                scrollProxy.scrollTo("subtask-entry-\(parentID.uuidString)", anchor: .center)
-                            }
-                        }
+                    .padding(.horizontal, horizontalInset + 2)
+                    .padding(.top, contentInsets.top + taskWorkspaceTopPadding + AtticStyle.taskScrollTopPadding)
+                    .padding(.bottom, contentInsets.bottom + taskEntryHeight + 54)
+                }
+                .scrollIndicators(.never)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: TaskListViewportPreferenceKey.self,
+                            value: proxy.frame(
+                                in: .named(AtticPanelCoordinateSpaceName.taskWorkspace)
+                            )
+                        )
                     }
                 }
             }

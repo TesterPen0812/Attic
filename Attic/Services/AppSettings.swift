@@ -137,6 +137,7 @@ final class AppSettings: ObservableObject {
         static let panelCornerSize = "panelCornerSize"
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
+        static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
     }
 
     @Published var corner: ScreenCorner {
@@ -217,6 +218,27 @@ final class AppSettings: ObservableObject {
                 panelHeight = clamped
             } else {
                 defaults.set(panelHeight, forKey: Key.panelHeight)
+            }
+        }
+    }
+
+    /// Last on-screen frame of the pinned subtask mini-window. Persisted as
+    /// a rect string so reopening restores position; invalid or stale values
+    /// fall back to anchored placement beside the main panel.
+    var pinnedSubtaskWindowFrame: CGRect? {
+        get {
+            guard let stored = defaults.string(forKey: Key.pinnedSubtaskWindowFrame),
+                  !stored.isEmpty else { return nil }
+            let rect = NSRectFromString(stored)
+            guard rect.width >= 1, rect.height >= 1,
+                  rect.origin.x.isFinite, rect.origin.y.isFinite else { return nil }
+            return rect
+        }
+        set {
+            if let newValue {
+                defaults.set(NSStringFromRect(newValue), forKey: Key.pinnedSubtaskWindowFrame)
+            } else {
+                defaults.removeObject(forKey: Key.pinnedSubtaskWindowFrame)
             }
         }
     }

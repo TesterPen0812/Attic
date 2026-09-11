@@ -157,6 +157,9 @@ final class AppCoordinator {
 
     private let cleanupService: DailyCleanupService
     private let panelController: AtticPanelController
+    /// The auxiliary subtask surfaces (transient hover panel and the single
+    /// pinned mini-window) owned by the panel controller.
+    var subtaskPanels: SubtaskPanelController { panelController.subtaskPanels }
     private let settingsWindowController: SettingsWindowController
     private let hoverMonitor: CornerHoverMonitor
     private let agentServer: AgentServer
@@ -362,6 +365,7 @@ final class AppCoordinator {
         canvasSession.cancelActiveInteraction()
         _ = noteDraft.flush()
         cleanupService.stop()
+        panelController.subtaskPanels.tearDown()
         hoverMonitor.stop()
         newTaskHotKey.unregister()
         appearanceObservation = nil

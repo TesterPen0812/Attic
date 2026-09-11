@@ -358,7 +358,7 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(editField.waitForExistence(timeout: 2))
     }
 
-    func testCompactComposerAndInlineSubtasks() throws {
+    func testCompactComposerAndSubtaskPanels() throws {
         // Keep this long editing workflow independent of pointer-driven
         // auto-hide; interaction-lock policy has separate focused coverage.
         app.buttons["panel-pin-button"].click()
@@ -382,17 +382,28 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Plan weekend trip"].waitForExistence(timeout: 2))
         XCTAssertFalse(high.exists)
 
+        func waitForChange(_ description: String, _ condition: @escaping () -> Bool) {
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, description)
+        }
+        // The auxiliary surfaces are separate borderless panels; querying by
+        // identifier works whatever window class AppKit reports them as.
+        func subtaskSurface(_ prefix: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", prefix)
+            ).firstMatch
+        }
+
+        // The menu's explicit open is the click/keyboard/VoiceOver path: it
+        // latches the panel and focuses the inline entry field.
         let actions = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "task-actions-")).firstMatch
         let parentID = actions.identifier.replacingOccurrences(of: "task-actions-", with: "")
         actions.click()
         app.menuItems["Add subtask…"].click()
-        let childTitle = app.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-title-")).firstMatch
+        let hoverPanel = subtaskSurface("subtask-panel-\(parentID)")
+        XCTAssertTrue(hoverPanel.waitForExistence(timeout: 2))
+        let childTitle = app.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-title-\(parentID)")).firstMatch
         XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
-        // As with the note editor, macOS XCTest's automatic scroll-to-hit
-        // calculation does not handle the masked scroll view. Click the
-        // actual field bounds and verify input through the created task.
-        XCTAssertGreaterThan(childTitle.frame.height, 0)
-        XCTAssertLessThan(childTitle.frame.maxY, composer.frame.minY)
         childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         childTitle.typeText("Choose destination")
         childTitle.typeKey(.return, modifierFlags: [])
@@ -400,11 +411,9 @@ final class AtticUITests: XCTestCase {
         childTitle.typeText("Book accommodation")
         childTitle.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(app.staticTexts["Book accommodation"].waitForExistence(timeout: 2))
-        let progress = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-progress-")).firstMatch
-        func waitForChange(_ description: String, _ condition: @escaping () -> Bool) {
-            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, description)
-        }
+        // The compact parent row keeps an inline N/M count control; its
+        // accessibility value still reports "N of M complete".
+        let progress = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-progress-\(parentID)")).firstMatch
         func assertProgress(_ text: String) {
             // SwiftUI's AX value can lag the visible status animation by a
             // snapshot. Wait for the same exact result, rather than sleeping.
@@ -412,40 +421,41 @@ final class AtticUITests: XCTestCase {
         }
         assertProgress("0 of 2 complete")
         assertSectionCount("To do", count: 1)
+        // Completing a child in the panel updates progress without touching
+        // the parent's manual status.
         let childRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Choose destination")).firstMatch
         childRow.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "complete-task-")).firstMatch
             .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         assertProgress("1 of 2 complete")
         assertSectionCount("Done", count: 0)
+
         childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         childTitle.typeText("Draft step")
         // Finish text editing without submitting or discarding the draft.
         childTitle.typeKey(.escape, modifierFlags: [])
-        let toggle = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toggle-subtasks-")).firstMatch
-        func clickDisclosure() {
-            // Anchor the pointer to the panel, not the masked scroll element:
-            // XCTest's element-relative coordinate still attempts AX scrolling.
-            let panel = app.dialogs.firstMatch
-            let target = toggle.frame
-            XCTAssertGreaterThan(target.width, 0)
-            XCTAssertTrue(panel.frame.contains(target))
-            panel.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-                dx: target.midX - panel.frame.minX,
-                dy: target.midY - panel.frame.minY
-            )).click()
-        }
-        clickDisclosure()
-        waitForChange("Collapsing hides the inline field") { !childTitle.exists }
-        XCTAssertTrue(progress.exists)
-        clickDisclosure()
-        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
+        // A latched panel dismisses on a click outside it; the draft lives in
+        // uiState so reopening restores it.
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        waitForChange("Outside click dismisses the latched panel") { !subtaskSurface("subtask-panel-\(parentID)").exists }
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
         XCTAssertEqual(childTitle.value as? String, "Draft step")
-        XCTAssertGreaterThan(childRow.frame.minX, app.staticTexts["Plan weekend trip"].frame.minX - 20)
+
+        // Pin promotes the same checklist into the independent mini-window.
+        app.buttons["subtask-pin-\(parentID)"].click()
+        XCTAssertTrue(subtaskSurface("subtask-pinned-\(parentID)").waitForExistence(timeout: 2))
+        XCTAssertFalse(subtaskSurface("subtask-panel-\(parentID)").exists)
+        // Unpin returns to the transient surface while the anchor row exists.
+        app.buttons["subtask-unpin-\(parentID)"].click()
+        XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
+        XCTAssertFalse(subtaskSurface("subtask-pinned-\(parentID)").exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "Subtasks and compact composer"
+        screenshot.name = "Subtask panel and compact composer"
         screenshot.lifetime = .keepAlways
         add(screenshot)
 
+        // Clear the draft, then complete the remaining child before the
+        // manual parent completion that unfinished children must block.
         childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         childTitle.typeKey("a", modifierFlags: .command)
         childTitle.typeKey(.delete, modifierFlags: [])
@@ -453,6 +463,8 @@ final class AtticUITests: XCTestCase {
         app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(app.staticTexts["panel-error-message"].waitForExistence(timeout: 2))
         assertSectionCount("Done", count: 0)
+        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
         let secondRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Book accommodation")).firstMatch
         secondRow.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "complete-task-")).firstMatch
             .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
