@@ -386,7 +386,7 @@ struct SubtaskPanelContent: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Add subtask")
         .accessibilityIdentifier("add-subtask-\(parentID.uuidString)")
-        .id("subtask-entry-\(parentID.uuidString)")
+        .id("subtask-add-\(parentID.uuidString)")
     }
 
     private var entryRow: some View {
