@@ -5,24 +5,28 @@ implementer/reviewer pair. Update this file whenever the checkpoint moves.
 
 ## Coordination handshake (authoritative)
 
-- **Phase:** `LOCAL_FIXES_IN_PROGRESS` — implementer holds all
-  source/test/project write ownership; reviewer is read-only and owns ONLY
-  `.build/LocalAdversarialReview.md` (never edit that file from here).
-- **Reviewer input:** baseline review of immutable
-  `7535d0028b50c03fcd4532122ec078d5c8c35cb2` (not the working tree).
-- **Candidate SHA ready for review:** none yet — the F1–F4 fixes below are
-  uncommitted. After local build/test checks they will be committed and the
-  full SHA recorded here as `READY_FOR_REVIEW: <sha>`.
-- **Report SHA consumed:** none yet — `.build/LocalAdversarialReview.md`
-  baseline not yet published at this checkpoint's writing.
-- **Unresolved finding IDs:** F1, F2, F3, F4 (implementer pass-2 findings,
-  fixes in tree, tests added, build/test verification pending). Reviewer
-  baseline IDs TBD — must be read and addressed even where they overlap.
+- **Phase:** `READY_FOR_REVIEW`
+- **Candidate SHA:** `READY_FOR_REVIEW: 209a0eb20967c98770c2b7326b63e226f950cbe9`
+  ("Address local adversarial-review findings F1-F5", on top of `7535d00`).
+- **Report consumed:** `.build/LocalAdversarialReview.md` baseline verdict
+  on `7535d00` = NOT CLEAN, findings F1–F4 — all addressed by the candidate
+  (plus F5, a willSet-lag defect the first native test run exposed and the
+  baseline could not see: `.subtaskComposer` previously engaged/released one
+  change late). Reviewer refinement requests on F2 (same-click resign +
+  stale focus pointer) are implemented.
+- **Unresolved finding IDs:** none known pending re-review; reviewer's
+  remarks were no-action. F2's residual decisions taken: real teardowns
+  clear `focusedSubtaskParentID` (entry row + draft still survive);
+  same-click resign reuse window = 0.5 s.
+- **Verification at candidate SHA:** `verify_project_generation.rb` PASS;
+  `xcodebuild build -scheme Attic` PASS (Local config,
+  `CODE_SIGNING_ALLOWED=NO`); `xcodebuild test -only-testing:AtticTests`
+  PASS — 637 tests, 0 failures, 1 skipped. AtticUITests + manual UAT remain.
 - **Waking the reviewer:** this session CANNOT message the reviewer
-  directly; marking READY_FOR_REVIEW here is necessary but NOT sufficient —
-  a coordinating message to the reviewer session is required to trigger its
+  directly; READY_FOR_REVIEW here is necessary but NOT sufficient — a
+  coordinating message to the reviewer session is required to trigger its
   follow-up pass. Do not claim completion until the reviewer's report
-  names the same candidate SHA.
+  names `209a0eb`.
 
 ## Provenance
 
