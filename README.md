@@ -13,7 +13,7 @@ Attic lives in the menu bar and reveals a lightweight panel when the pointer res
 - Reveals from any screen corner after a configurable delay
 - Global `Control–Option–Space` shortcut for creating a task
 - Separate Tasks and Backlog scopes, with To do, In Progress and Done states
-- Indented subtasks with inline entry, a completion count, and collapsible families
+- Subtasks surfaced by a hover checklist beside the row and pinnable as an independent mini-window
 - None, Low, Medium and High priorities
 - Local-first SwiftData persistence
 - Automatic cleanup of completed tasks after the day changes
@@ -66,14 +66,25 @@ evidence of cross-device synchronization.
 - Drag a task into another app to insert its title as plain text.
 - Use the trailing ellipsis to edit, move, reprioritize or delete a task.
 
-### Subtasks and compact entry
+### Subtasks and pinned checklists
 
-Choose **Add subtask…** from a main task's ellipsis menu. Steps are saved inline,
-remain indented when completed, and can be shown or hidden with the chevron.
-The progress count stays visible while collapsed. Section totals count main
-tasks only; moving a main task between Tasks and Backlog carries its family.
-Subtasks support one level, their own title, status and priority, and reordering
-within the same parent/status/priority group.
+Hover a task that has steps: after a short dwell a compact glass checklist opens
+beside the row with the parent's progress, its steps, and a resting
+**+ Add subtask** action. The inline `N of M` count on a parent row toggles the
+same panel, and the ellipsis menu's **Show subtasks**/**Add subtask…** entries
+open it for click, keyboard and VoiceOver paths. Clicking the add action opens
+inline entry; Return saves, Escape cancels the entry, and an unsubmitted draft
+survives the panel dismissing or being pinned during the session.
+
+The pin control keeps the checklist onscreen as an independent draggable
+mini-window that stays after the main panel hides, loses focus or reopens. Its
+position is remembered per display, one family can be pinned at a time (the pin
+becomes an explicit *replace* when another family holds the pin), and unpin
+returns it to its row while the anchor is onscreen. Steps remain indented when
+completed. Section totals count main tasks only; moving a main task between
+Tasks and Backlog carries its family. Subtasks support one level, their own
+title, status and priority, and reordering within the same
+parent/status/priority group.
 
 Complete the steps before completing their parent. Finishing the last step does
 not complete the parent automatically. Reopen a completed parent before adding
@@ -86,8 +97,8 @@ their identities and content are preserved by normal local schema migration.
 The quick-entry composer stays one row tall while typing. Click **+** to reveal
 the slim priority strip and **×** to collapse it without clearing the title or
 priority. Return or the arrow saves the task. Unsaved subtask text survives
-collapsing its family and switching sections during the current app session;
-it is not a saved task until submitted.
+dismissing or repinning its checklist, and switching sections during the
+current app session; it is not a saved task until submitted.
 
 ## Agent access (MCP)
 

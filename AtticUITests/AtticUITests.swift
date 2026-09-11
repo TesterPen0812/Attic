@@ -431,15 +431,24 @@ final class AtticUITests: XCTestCase {
 
         childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         childTitle.typeText("Draft step")
-        // Finish text editing without submitting or discarding the draft.
-        childTitle.typeKey(.escape, modifierFlags: [])
-        // A latched panel dismisses on a click outside it; the draft lives in
-        // uiState so reopening restores it.
+        // Defocusing without Escape preserves the entry and its draft; the
+        // outside click that dismisses the latched panel must not discard it.
         title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         waitForChange("Outside click dismisses the latched panel") { !subtaskSurface("subtask-panel-\(parentID)").exists }
         progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
         XCTAssertEqual(childTitle.value as? String, "Draft step")
+
+        // Escape inside the entry is the deliberate cancel: it drops the
+        // draft and collapses the row back to the '+ Add subtask' affordance.
+        // (Window-level Escape dismissal is a separate path.)
+        childTitle.typeKey(.escape, modifierFlags: [])
+        let addAffordance = app.buttons.matching(NSPredicate(format: "identifier == %@", "add-subtask-\(parentID)")).firstMatch
+        XCTAssertTrue(addAffordance.waitForExistence(timeout: 2))
+        waitForChange("Escape collapses the entry row") { !childTitle.exists }
+        // The affordance deliberately reopens and focuses the entry.
+        addAffordance.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
 
         // Pin promotes the same checklist into the independent mini-window.
         app.buttons["subtask-pin-\(parentID)"].click()
@@ -454,12 +463,6 @@ final class AtticUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
 
-        // Clear the draft, then complete the remaining child before the
-        // manual parent completion that unfinished children must block.
-        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        childTitle.typeKey("a", modifierFlags: .command)
-        childTitle.typeKey(.delete, modifierFlags: [])
-        childTitle.typeKey(.escape, modifierFlags: [])
         app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(app.staticTexts["panel-error-message"].waitForExistence(timeout: 2))
         assertSectionCount("Done", count: 0)

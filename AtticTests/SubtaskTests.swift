@@ -259,26 +259,78 @@ final class SubtaskTests: XCTestCase {
         XCTAssertTrue(store.tasks.isEmpty)
     }
 
-    /// Drafts live in `uiState.subtaskDrafts`, independent of which surface
-    /// is presenting the family: closing a hover panel or the pinned window
-    /// must not discard typed text, and the draft still holds the panel open
-    /// while a task section is selected.
-    func testSubtaskDraftSurvivesSurfaceDismissalAndLocksOnlyTaskSections() throws {
+    /// Drafts live in `uiState.subtaskDrafts` and never own the main panel by
+    /// themselves: `.subtaskComposer` is a managed lock the surface controller
+    /// engages only while a transient surface holds the family's composer.
+    /// A draft retained after dismissal — or one inside the independent
+    /// pinned window — must never keep the main panel from auto-hiding.
+    func testSubtaskDraftSurvivesSurfaceDismissalWithoutLockingMain() throws {
         let state = PanelUIState()
         let id = UUID()
         state.subtaskDrafts[id] = "Unfinished thought"
         state.focusSubtaskEntry(for: id)
         XCTAssertEqual(state.focusedSubtaskParentID, id)
         XCTAssertEqual(state.subtaskDrafts[id], "Unfinished thought")
-        XCTAssertTrue(state.interactionLockReasons.contains(.subtaskComposer))
-        // The auxiliary surfaces manage their own visibility; the draft and
-        // its lock never depended on row expansion.
+        XCTAssertFalse(state.interactionLockReasons.contains(.subtaskComposer))
         state.focusedSubtaskParentID = nil
-        XCTAssertTrue(state.interactionLockReasons.contains(.subtaskComposer))
+        XCTAssertFalse(state.interactionLockReasons.contains(.subtaskComposer))
         state.selectSection(.notes)
+        XCTAssertEqual(state.subtaskDrafts[id], "Unfinished thought")
         XCTAssertFalse(state.interactionLockReasons.contains(.subtaskComposer))
         state.reconcileTaskIDs([])
         XCTAssertTrue(state.subtaskDrafts.isEmpty)
+    }
+
+    /// The Add entry is a deliberate state: activation opens it, an
+    /// unsubmitted draft re-shows it on any surface, deactivation without a
+    /// draft preserves the draft, and only the Escape-cancel path drops it.
+    func testSubtaskEntryStateLifecycle() throws {
+        let state = PanelUIState()
+        let id = UUID()
+        XCTAssertFalse(state.subtaskEntryActiveIDs.contains(id))
+
+        state.activateSubtaskEntry(for: id)
+        XCTAssertTrue(state.subtaskEntryActiveIDs.contains(id))
+        XCTAssertEqual(state.focusedSubtaskParentID, id)
+
+        state.subtaskDrafts[id] = "Typed"
+        state.deactivateSubtaskEntry(for: id)
+        XCTAssertEqual(state.subtaskDrafts[id], "Typed")
+        XCTAssertNil(state.focusedSubtaskParentID)
+
+        state.subtaskDrafts[id] = "Typed"
+        state.activateSubtaskEntry(for: id)
+        state.cancelSubtaskEntry(for: id)
+        XCTAssertFalse(state.subtaskEntryActiveIDs.contains(id))
+        XCTAssertNil(state.subtaskDrafts[id])
+        XCTAssertNil(state.focusedSubtaskParentID)
+    }
+
+    /// Rename drafts live in uiState so a row recreated mid-edit (pin
+    /// promotion, family swap) resumes with the user's typed text.
+    func testRenameDraftSeededByBeginEditingAndClearedOnEnd() throws {
+        let store = try makeStore()
+        let state = PanelUIState()
+        let task = try XCTUnwrap(store.create(title: "Original"))
+        state.beginEditing(task)
+        XCTAssertEqual(state.editingDraftTitle, "Original")
+        state.editingDraftTitle = "Typed rename"
+        XCTAssertEqual(state.editingDraftTitle, "Typed rename")
+        state.endEditing()
+        XCTAssertNil(state.editingTaskID)
+        XCTAssertEqual(state.editingDraftTitle, "")
+    }
+
+    /// A failed rename keeps the edit (and its draft) alive for retry.
+    func testRenameDraftSurvivesFailedSave() throws {
+        let store = try makeStore()
+        let state = PanelUIState()
+        let task = try XCTUnwrap(store.create(title: "Original"))
+        state.beginEditing(task)
+        state.editingDraftTitle = "   "
+        XCTAssertFalse(store.rename(task, to: state.editingDraftTitle))
+        XCTAssertEqual(state.editingTaskID, task.id)
+        XCTAssertEqual(state.editingDraftTitle, "   ")
     }
 
     func testFamilyDeleteConfirmationPreventsAutoHideAndReconcilesRemoval() {

@@ -27,8 +27,17 @@ enum PanelInteractionLockReason: Hashable, Sendable {
 final class PanelUIState: ObservableObject {
     @Published var isComposerPresented = false
     @Published var editingTaskID: UUID?
+    /// Rename text for `editingTaskID`, owned here rather than by the row view
+    /// so an in-flight rename survives surface promotion, family swaps, and
+    /// hosting-view replacement mid-edit.
+    @Published var editingDraftTitle = ""
     @Published var editingNoteID: UUID?
     @Published var subtaskDrafts: [UUID: String] = [:]
+    /// Families whose inline Add entry is activated. Separate from drafts: an
+    /// activated-but-empty entry stays visible, a draft reactivates the entry
+    /// on any surface that presents the family, and only an explicit cancel
+    /// (Escape) deactivates.
+    @Published private(set) var subtaskEntryActiveIDs: Set<UUID> = []
     @Published var focusedSubtaskParentID: UUID?
     @Published private(set) var subtaskEntryRequest: UInt64 = 0
     @Published var confirmingTaskDeletionID: UUID?
@@ -52,10 +61,10 @@ final class PanelUIState: ObservableObject {
             reasons.insert(.taskEditing)
         }
         if confirmingTaskDeletionID != nil { reasons.insert(.taskConfirmation) }
-        if selectedSection.taskScope != nil,
-           focusedSubtaskParentID != nil || subtaskDrafts.values.contains(where: { !$0.isEmpty }) {
-            reasons.insert(.subtaskComposer)
-        }
+        // .subtaskComposer is a managed lock owned by SubtaskPanelController:
+        // it only engages while a TRANSIENT surface holds a draft or focused
+        // entry — a draft typed into the independent pinned window, or one
+        // retained after dismissal, must never hold the main panel open.
         if isCanvasConfirmationPresented {
             reasons.insert(.canvasConfirmation)
         }
@@ -108,13 +117,38 @@ final class PanelUIState: ObservableObject {
         subtaskEntryRequest &+= 1
     }
 
+    /// The '+ Add subtask' affordance opens the entry field and focuses it.
+    func activateSubtaskEntry(for parentID: UUID) {
+        subtaskEntryActiveIDs.insert(parentID)
+        focusSubtaskEntry(for: parentID)
+    }
+
+    /// Commit/save paths keep the entry active for chain-adding; the focus
+    /// pointer simply moves on.
+    func deactivateSubtaskEntry(for parentID: UUID) {
+        subtaskEntryActiveIDs.remove(parentID)
+        if focusedSubtaskParentID == parentID {
+            focusedSubtaskParentID = nil
+        }
+    }
+
+    /// Escape cancels the entry deliberately: deactivates it and discards the
+    /// unsubmitted draft. Incidental focus loss, pin/unpin and surface hide
+    /// all preserve the draft — only this path drops it.
+    func cancelSubtaskEntry(for parentID: UUID) {
+        deactivateSubtaskEntry(for: parentID)
+        subtaskDrafts[parentID] = nil
+    }
+
     func selectSection(_ section: PanelSection) {
         guard selectedSection != section else { return }
         managedInteractionLocks.remove(.quickEntryFocus)
         managedInteractionLocks.remove(.notesEditorFocus)
         managedInteractionLocks.remove(.notesPopover)
+        managedInteractionLocks.remove(.subtaskComposer)
         isComposerPresented = false
         editingTaskID = nil
+        editingDraftTitle = ""
         editingNoteID = nil
         draggedTaskID = nil
         focusedSubtaskParentID = nil
@@ -132,10 +166,12 @@ final class PanelUIState: ObservableObject {
         isComposerPresented = false
         editingNoteID = nil
         editingTaskID = task.id
+        editingDraftTitle = task.title
     }
 
     func endEditing() {
         editingTaskID = nil
+        editingDraftTitle = ""
     }
 
     /// Editing a note reuses the composer slot so the panel reserves height
@@ -156,7 +192,9 @@ final class PanelUIState: ObservableObject {
         }
         if let editingTaskID, !availableIDs.contains(editingTaskID) {
             self.editingTaskID = nil
+            editingDraftTitle = ""
         }
+        subtaskEntryActiveIDs = subtaskEntryActiveIDs.intersection(availableIDs)
         if let draggedTaskID, !availableIDs.contains(draggedTaskID) {
             self.draggedTaskID = nil
         }

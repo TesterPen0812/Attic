@@ -19,7 +19,6 @@ struct TaskRowView: View {
     /// panel reads as anchored to the row.
     var isFamilyPresented = false
 
-    @State private var editTitle = ""
     @State private var isHovering = false
     @State private var isDropTargeted = false
     @FocusState private var isRenameFocused: Bool
@@ -42,7 +41,7 @@ struct TaskRowView: View {
 
             Group {
                 if isEditing {
-                    TextField("Task title", text: $editTitle, axis: .vertical)
+                    TextField("Task title", text: $uiState.editingDraftTitle, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...6)
                         .focused($isRenameFocused)
@@ -111,7 +110,15 @@ struct TaskRowView: View {
         .animation(reduceMotion ? nil : AtticMotion.quick, value: task.priorityRaw)
         .onChange(of: isEditing) { _, nowEditing in
             guard nowEditing else { return }
-            editTitle = task.title
+            // The draft text is seeded by PanelUIState.beginEditing so a row
+            // recreated mid-edit (pin promote, family switch) resumes with
+            // the user's typed text instead of a fresh empty field.
+            DispatchQueue.main.async { isRenameFocused = true }
+        }
+        .onAppear {
+            // A row born mid-edit (host swap on pin/unpin/family switch) never
+            // sees an isEditing transition — restore focus on appear too.
+            guard isEditing else { return }
             DispatchQueue.main.async { isRenameFocused = true }
         }
         .accessibilityElement(children: .contain)
@@ -148,8 +155,18 @@ struct TaskRowView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Show subtasks")
-        .accessibilityLabel("Show subtasks")
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: TaskSubtaskControlFramePreferenceKey.self,
+                    value: [task.id: proxy.frame(
+                        in: .named(AtticPanelCoordinateSpaceName.taskWorkspace)
+                    )]
+                )
+            }
+        }
+        .help(isFamilyPresented ? "Hide subtasks" : "Show subtasks")
+        .accessibilityLabel(isFamilyPresented ? "Hide subtasks" : "Show subtasks")
         .accessibilityValue("\(summary.done) of \(summary.total) complete")
         .accessibilityIdentifier("subtask-progress-\(task.id.uuidString)")
         .accessibilityAddTraits(isFamilyPresented ? .isSelected : [])
@@ -215,7 +232,7 @@ struct TaskRowView: View {
     }
 
     private func commitRename() {
-        if store.rename(task, to: editTitle) {
+        if store.rename(task, to: uiState.editingDraftTitle) {
             uiState.endEditing()
         }
     }

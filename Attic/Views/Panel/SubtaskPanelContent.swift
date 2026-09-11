@@ -49,8 +49,29 @@ struct SubtaskPanelContent: View {
         !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The entry is a deliberate state — opened by the '+ Add subtask'
+    /// affordance (or an Add subtask… menu command), kept alive by an
+    /// un-submitted draft, and closed only by an explicit Escape cancel.
+    /// Focus loss, pinning, and surface hides preserve both it and the draft.
+    private var entryActive: Bool {
+        uiState.subtaskEntryActiveIDs.contains(parentID)
+    }
+
+    private var hasDraft: Bool {
+        !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var showsEntry: Bool {
-        canAddSubtask
+        canAddSubtask && (entryActive || hasDraft)
+    }
+
+    /// v1 allows one pinned family: when a different family owns it, the pin
+    /// control is an explicit "Replace" affordance, not a silent swap.
+    private var replacingPinnedFamily: Bool {
+        if let pinned = subtaskPanels.pinnedFamilyID {
+            return pinned != parentID
+        }
+        return false
     }
 
     private var panelThemePalette: AtticPanelThemePalette {
@@ -91,13 +112,17 @@ struct SubtaskPanelContent: View {
                     .accessibilityHidden(true)
                 childList
             }
-            if showsEntry {
+            if canAddSubtask {
                 Rectangle()
                     .fill(panelThemePalette.secondaryForegroundColor.opacity(0.16))
                     .frame(height: 1)
                     .padding(.horizontal, 10)
                     .accessibilityHidden(true)
-                entryRow
+                if showsEntry {
+                    entryRow
+                } else {
+                    addAffordance
+                }
             }
             if let message = store.lastErrorMessage {
                 errorRow(message)
@@ -218,9 +243,10 @@ struct SubtaskPanelContent: View {
             Button {
                 subtaskPanels.pinFamily(parentID)
             } label: {
-                Image(systemName: "pin")
+                Image(systemName: replacingPinnedFamily ? "pin.fill" : "pin")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.primary.opacity(0.9))
+                    .foregroundStyle(replacingPinnedFamily
+                        ? panelAccentColor : Color.primary.opacity(0.9))
                     .atticClearGlassForegroundReadability()
                     .frame(width: 24, height: 24)
                     .atticGlassControl(in: Circle())
@@ -228,8 +254,12 @@ struct SubtaskPanelContent: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .help("Keep this list visible")
-            .accessibilityLabel("Pin subtask list")
+            .help(replacingPinnedFamily
+                ? "Replace the currently pinned list"
+                : "Keep this list visible")
+            .accessibilityLabel(replacingPinnedFamily
+                ? "Replace pinned subtask list"
+                : "Pin subtask list")
             .accessibilityIdentifier("subtask-pin-\(parentID.uuidString)")
         case .pinned:
             HStack(spacing: 6) {
@@ -312,6 +342,27 @@ struct SubtaskPanelContent: View {
         CGFloat(children.count) * AtticStyle.controlHitSize + 8
     }
 
+    /// Resting affordance: deliberately opens the entry, not a permanent
+    /// text field. Focus loss, pin/unpin, and hides keep the state alive.
+    private var addAffordance: some View {
+        Button {
+            uiState.activateSubtaskEntry(for: parentID)
+        } label: {
+            Label("Add subtask", systemImage: "plus")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(panelThemePalette.secondaryForegroundColor)
+                .atticClearGlassForegroundReadability()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add subtask")
+        .accessibilityIdentifier("add-subtask-\(parentID.uuidString)")
+        .id("subtask-entry-\(parentID.uuidString)")
+    }
+
     private var entryRow: some View {
         HStack(spacing: 8) {
             Button(action: addSubtask) {
@@ -321,15 +372,21 @@ struct SubtaskPanelContent: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Add subtask")
-            .accessibilityIdentifier("add-subtask-\(parentID.uuidString)")
+            .accessibilityLabel("Save subtask")
+            .accessibilityIdentifier("subtask-entry-submit-\(parentID.uuidString)")
             .disabled(!canSubmitDraft)
             TextField("Add subtask…", text: draft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .rounded))
                 .focused($isEntryFocused)
                 .onSubmit(addSubtask)
-                .onExitCommand { isEntryFocused = false }
+                // Escape cancels the entry deliberately (drops the draft).
+                // Window-level Escape dismissal stays a separate path that
+                // only fires when no field editor is active.
+                .onExitCommand {
+                    uiState.cancelSubtaskEntry(for: parentID)
+                    isEntryFocused = false
+                }
                 .accessibilityIdentifier("subtask-title-\(parentID.uuidString)")
         }
         .foregroundStyle(panelThemePalette.secondaryForegroundColor)
@@ -358,6 +415,7 @@ struct SubtaskPanelContent: View {
             return
         }
         uiState.subtaskDrafts[parentID] = nil
+        // Enter saves and keeps the entry active for chain-adding.
         uiState.focusSubtaskEntry(for: parentID)
         isEntryFocused = true
     }

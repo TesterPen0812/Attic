@@ -126,6 +126,28 @@ enum SubtaskPanelLayout {
         )
     }
 
+    /// Resizes a pinned surface while holding its top edge, then clamps the
+    /// result into the visible area of the screen hosting it. Growth near the
+    /// bottom of a display can no longer push controls offscreen — the frame
+    /// shifts up (and shrinks if it exceeds the safe area) instead.
+    static func pinnedResizedFrame(
+        _ frame: CGRect,
+        newHeight: CGFloat,
+        screenVisibleFrames: [CGRect]
+    ) -> CGRect? {
+        guard var resized = framePreservingTop(frame, height: newHeight) else {
+            return nil
+        }
+        let center = CGPoint(x: resized.midX, y: resized.midY)
+        let host = screenVisibleFrames.first(where: { $0.contains(center) })
+            ?? screenVisibleFrames.first(where: { $0.intersects(resized) })
+            ?? screenVisibleFrames.first
+        if let host {
+            resized = PanelGeometry.constrainedFrame(resized, to: host)
+        }
+        return resized
+    }
+
     private static func frameWithOrigin(
         _ origin: CGPoint,
         size: CGSize,
@@ -240,17 +262,27 @@ struct SubtaskPanelLifecycle: Equatable {
     }
 
     /// Explicit open (click/keyboard/VoiceOver/unpin) latches the surface so
-    /// it is not bound to pointer presence. A family with a pinned window
-    /// never gains a second surface.
-    mutating func openTransient(_ familyID: UUID, latched: Bool) {
-        guard mayOpenTransient(for: familyID) else { return }
+    /// it is not bound to pointer presence. Returns false when the family is
+    /// pinned — the pinned window is that family's only surface — or when the
+    /// requested state is already active. Callers must honor the result: a
+    /// rejected open presents nothing.
+    @discardableResult
+    mutating func openTransient(_ familyID: UUID, latched: Bool) -> Bool {
+        guard mayOpenTransient(for: familyID) else { return false }
         pendingOpen = nil
         pendingClose = nil
         guard transientFamilyID != familyID || transientOrigin != (latched ? .explicit : .hover) else {
-            return
+            return false
         }
         transientFamilyID = familyID
         transientOrigin = latched ? .explicit : .hover
+        return true
+    }
+
+    /// Drops a pending dwell claim without touching the current surface —
+    /// used when the open family's edits must not be replaced mid-interaction.
+    mutating func discardPendingOpen() {
+        pendingOpen = nil
     }
 
     mutating func closeTransient() {
@@ -287,6 +319,18 @@ struct SubtaskPanelLifecycle: Equatable {
 /// Each task row publishes its frame in the panel's root coordinate space so
 /// the auxiliary controller can anchor the transient surface to it.
 struct TaskRowAnchorPreferenceKey: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// The inline count control's own frame in the workspace space, published per
+/// family. Outside-click dismissal uses it to recognize the toggle's paired
+/// mousedown — only a press landing on this control suppresses the paired
+/// reopen, so deliberate clicks elsewhere followed by the control still work.
+struct TaskSubtaskControlFramePreferenceKey: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
 
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {

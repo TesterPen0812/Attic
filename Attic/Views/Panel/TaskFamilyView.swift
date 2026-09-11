@@ -22,10 +22,11 @@ struct TaskFamilyView: View {
     }
 
     /// Hover reporting is worth installing only when a panel could appear:
-    /// a family with children, or one holding an in-flight draft entry.
+    /// a family with children, an in-flight draft, or an activated entry.
     private var canPresentPanel: Bool {
         !children.isEmpty
             || !(uiState.subtaskDrafts[task.id] ?? "").isEmpty
+            || uiState.subtaskEntryActiveIDs.contains(task.id)
     }
 
     private var isFamilyPresented: Bool {

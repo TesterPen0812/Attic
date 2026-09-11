@@ -158,6 +158,9 @@ struct AtticPanelView: View {
         .onPreferenceChange(TaskRowAnchorPreferenceKey.self) { frames in
             subtaskPanels.updateTaskRowFrames(frames)
         }
+        .onPreferenceChange(TaskSubtaskControlFramePreferenceKey.self) { frames in
+            subtaskPanels.updateSubtaskControlFrames(frames)
+        }
         .onPreferenceChange(TaskListViewportPreferenceKey.self) { viewport in
             subtaskPanels.updateTaskListViewport(viewport)
         }
