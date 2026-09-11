@@ -195,7 +195,16 @@ struct SubtaskPanelContent: View {
         }
         .onChange(of: isEntryFocused) { _, focused in
             if focused {
-                uiState.focusedSubtaskParentID = parentID
+                // Only a key surface can host a live field editor. The shared
+                // transient host keeps this @FocusState alive across rootView
+                // swaps, so a dismissed surface's claim can resurrect on a
+                // plain hover reopen while the window isn't even key — that
+                // phantom must not re-arm the focus pointer, or the composer
+                // lock pins an unlatched surface open forever.
+                if uiState.focusedSubtaskParentID == parentID
+                    || subtaskPanels.isLiveSurfaceKey(for: parentID, mode: mode) {
+                    uiState.focusedSubtaskParentID = parentID
+                }
             } else if subtaskPanels.isLiveSurface(for: parentID, mode: mode) {
                 // A live host's resign reports through the controller, which
                 // records it so a same-click pin/unpin still restores focus.
@@ -207,6 +216,8 @@ struct SubtaskPanelContent: View {
         .onAppear {
             if uiState.focusedSubtaskParentID == parentID, showsEntry {
                 DispatchQueue.main.async { isEntryFocused = true }
+            } else if isEntryFocused {
+                isEntryFocused = false
             }
         }
         .accessibilityElement(children: .contain)
@@ -252,9 +263,11 @@ struct SubtaskPanelContent: View {
         .padding(.bottom, 9)
         .background {
             if mode == .pinned {
-                // The header is also the pinned window's drag handle; the
-                // window itself still honours movable-by-background.
-                SubtaskWindowDragHandle()
+                // The header is the pinned window's drag handle; the actual
+                // drag starts on the hosting view (empty header space
+                // hit-tests to it), and this view marks that region in the
+                // accessibility tree for tests and VoiceOver.
+                SubtaskWindowDragHandle(familyID: parentID)
             }
         }
     }
@@ -450,14 +463,26 @@ struct SubtaskPanelContent: View {
 /// Drags on unclaimed header space move the pinned window. Controls above it
 /// still take their own events, so this only owns empty surface.
 struct SubtaskWindowDragHandle: NSViewRepresentable {
+    let familyID: UUID
+
     func makeNSView(context: Context) -> DragHandleNSView {
-        DragHandleNSView()
+        let view = DragHandleNSView()
+        view.setAccessibilityIdentifier("subtask-drag-\(familyID.uuidString)")
+        return view
     }
 
     func updateNSView(_ nsView: DragHandleNSView, context: Context) {}
 
     final class DragHandleNSView: NSView {
         override var mouseDownCanMoveWindow: Bool { true }
+        // The pinned panel is nonactivating: without this, the first
+        // press-drag is spent making the window key and never reaches
+        // performDrag — the window looked undraggable on first touch.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .group }
+        override func accessibilityLabel() -> String? { "Drag window" }
 
         override func mouseDown(with event: NSEvent) {
             if let window { window.performDrag(with: event) }

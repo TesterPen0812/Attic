@@ -37,6 +37,49 @@ implementer/reviewer pair. Update this file whenever the checkpoint moves.
   regressions). AtticUITests (signed runner) + manual UAT remain with the
   user.
 
+## Round 4 — genuine macOS XCUITest + interaction-layer repair (2026-09-11)
+
+The user reported the pinned panel took control presses but not body
+interaction, text entry, or dragging — and required real XCUITest evidence.
+Root causes found on this worktree, all fixed (uncommitted on top of
+`9199ac9`):
+
+- **`SubtaskHostingView`** (new private `NSHostingView` subclass, both
+  surfaces): `acceptsFirstMouse` true (first click reaches content instead
+  of being spent on key-making) and `dragsWindowFromHeader` — a press that
+  hit-tests to the hosting view inside the top 44 pt calls
+  `window.performDrag(with:)`. The previous `.background` drag-handle
+  representable never landed in the hit-test chain, so header dragging was
+  dead for both real and synthetic input.
+- **`SubtaskWindowDragHandle`** now takes `familyID` and exposes
+  `subtask-drag-<id>` ("Drag window" AX group) — the drag affordance
+  landmark tests and VoiceOver can resolve.
+- **`makeKey()` before entry-focus assertions** in `raisePinned`,
+  `openFamilyPanel`, `pinFamily`/`unpinPinned` refocus — `.focused` cannot
+  land on a non-key nonactivating panel.
+- **Phantom focus gate:** `onChange(isEntryFocused)` only re-arms
+  `focusedSubtaskParentID` while the family is focused or its live surface
+  is key (`isLiveSurfaceKey`); stale `isEntryFocused` cleared on appear.
+- **`commitPendingOpen`** re-arms on `menuTrackingActive` and widened the
+  busy check to `shouldDeferPointerClose`.
+- `isMovableByWindowBackground` off — the explicit hosting-view path owns
+  header dragging; background dragging would claim presses on empty list
+  space.
+
+UI test repairs: `testPinnedReplacementDisabledWhilePinnedFamilyIsBusy`
+now creates a real in-flight rename (a draft alone is not "busy" —
+`familyEditBusy` covers editing/confirmation only), and
+`testPinnedWindowDragsAndRemembersPosition` presses the handle's left
+stretch — presses starting past x≈1292 on this desktop are claimed by a
+Supaste overlay's edge-activation region (automation-only limitation).
+
+**Result (genuine XCUITest, this worktree):**
+`SubtaskHoverPinnedUITests` **9/9 PASS**
+(`.build/DevinHoverUI-full.xcresult`, ~6.4 min); `AtticTests`
+**635/0 fail/1 skip**; `verify_project_generation.rb` current/repeatable.
+Bundle: `com.taha.Attic`, Local configuration, ad-hoc signed
+(`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`).
+
 ## Provenance
 
 - Writable checkout: `/Users/taha/Developer/attic-hover-pinned-subtasks`

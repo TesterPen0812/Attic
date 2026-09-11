@@ -112,17 +112,49 @@ Local Mac (this checkout, round-3 fixes on top of `7535d00`):
   covers local verification only — preview installs keep using
   `Scripts/launch_local_preview.zsh`'s ad-hoc path.
 
+## Review round 4 — real interaction layer (local Mac, 2026-09-11 evening)
+
+The user's report that the pinned panel accepted button presses but not body
+interaction, text entry, or dragging turned out to be three separate
+event-delivery problems, all found and fixed on this worktree.
+
+| # | Finding (cause) | Fix | Regression coverage | Actual result |
+|---|-----------------|-----|--------------------|---------------|
+| I1 | `NSHostingView.acceptsFirstMouse` returns false, so the first click on the nonactivating panel was consumed by key-making and never reached content — first-click focus into the entry looked dead. | `SubtaskHostingView` (both surfaces) answers `acceptsFirstMouse` true. | UI: entry click, child toggle, and controls all exercised by the passing class. | XCUITEST-PASS |
+| I2 | The header drag handle was a SwiftUI `.background` representable (`SubtaskWindowDragHandle`); NSHostingView hit-testing never descends into it — presses on empty header space resolve to the hosting view itself — so `performDrag` never ran and the window could not be dragged at all. | `SubtaskHostingView.mouseDown` calls `window.performDrag(with:)` when a press hit-tests to the hosting view inside the top 44 pt header strip (`dragsWindowFromHeader`, pinned only). Controls/fields keep their own presses. `isMovableByWindowBackground` is off — the explicit path only drags the header strip. The representable stays as the AX landmark (`subtask-drag-<id>`, "Drag window"). | `testPinnedWindowDragsAndRemembersPosition` — real press-drag moves the window by the asserted delta and re-pin restores the remembered frame. | XCUITEST-PASS |
+| I3 | Entry refocus after pin/unpin/raise asserted `.focused` while the surface wasn't key — no-op on nonactivating panels; a dying host's late resign could also clear `focusedSubtaskParentID` after the re-bump. | `makeKey()` before every entry-focus assertion (raisePinned, openFamilyPanel focusEntry, pin/unpin refocus); `onChange(isEntryFocused)` focus claim gated by `isLiveSurfaceKey`; stale `isEntryFocused` cleared on appear. | `testPinnedWindowSurvivesAppDeactivation`, entry-focus flows across pin/unpin in the class. | XCUITEST-PASS |
+| I4 | `commitPendingOpen` re-armed only on `surfaceInteractionBusy` — a live context menu's tracking lock didn't defer the pending open, so ordering a surface front mid-menu could tear the menu down. | Re-arm when `menuTrackingActive`; the busy branch widened to `shouldDeferPointerClose`. | Unit-covered earlier; UI class green. | XCUITEST-PASS |
+
+Environment note discovered during I2: XCUI press-drags starting past
+x≈1292 on this desktop never reached the app — a desktop overlay
+(Supaste, layer-25 window spanning x 508–1292 with an edge activation
+region) claims the press outside its visible bounds. Pressing the handle's
+left stretch (x≈1212) delivers the full down→drag→up stream. Real pointer
+input is unaffected — the overlay only intercepts during automation.
+
 ## UNRUN — macOS acceptance checklist (not passes)
 
 Unit coverage ran locally (see above). Remaining manual/native items:
 
-- AtticUITests `testCompactComposerAndSubtaskPanels` (signed UI runner,
-  `Scripts/run_local_ui_tests.zsh`) — not run; needs the signed host.
-- Hover dwell (300–400 ms) open; pointer travel across the row→panel gap;
-  close-grace timing; anchor disappearance on scroll.
-- Outside-click matrix: unrelated window dismisses; menu/sheet/count-control
-  clicks do not; a second family switch is deferred while editing.
-- Escape matrix: in-entry cancel vs. window dismissal, transient and pinned.
-- VoiceOver/Full Keyboard Access over affordance, entry, pin/replace, unpin,
-  close; Reduce Motion suppresses the fade.
-- Pinned window across main hide/reopen/space changes; multi-display clamp.
+Executed locally on this worktree (Local config, ad-hoc signed UI runner,
+`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` against the real desktop):
+
+- `AtticUITests/SubtaskHoverPinnedUITests` — **9/9 PASS**
+  (`.build/DevinHoverUI-full.xcresult`): hover dwell open/brief-hover
+  rejection, pointer-corridor persistence, rapid family switch, pinned
+  survival across app deactivation, header drag + remembered position
+  restore, pinned count-control announce, busy-family replace disabled,
+  Escape matrix (entry-cancel vs window dismiss, both surfaces), bounded
+  height on a 12-child family.
+- `AtticTests` — **635 pass / 0 fail / 1 skip**
+  (`.build/DevinHoverUI/Logs/Test/Test-Attic-2026.09.11_18-40-22-+0100.xcresult`).
+- `verify_project_generation.rb` — project current and repeatable.
+
+Still manual/native-only (human pointer, not automation):
+
+- Physical-pointer hover feel: dwell timing, corridor breadth, close grace.
+- VoiceOver rotor/FKA walk over affordance, entry, pin/replace, unpin,
+  close; Reduce Motion suppressing the fade.
+- Pinned window across real Space switches and multi-display clamps.
+- AtticUITests outside this class (main-panel, canvas, notes suites) —
+  untouched by this branch but unverified here.

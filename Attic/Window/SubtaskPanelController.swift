@@ -30,6 +30,36 @@ private final class SubtaskAuxiliaryPanel: SubtaskSurfacePanel {}
 /// quits the app nor touches task data.
 private final class SubtaskPinnedPanel: SubtaskSurfacePanel {}
 
+/// Hosts the checklist inside the auxiliary panels. A plain `NSHostingView`
+/// answers `acceptsFirstMouse` false, so the click that makes a nonactivating
+/// panel key never reaches the content — the entry field, controls, and the
+/// pinned window's drag all look dead on first interaction. Accepting it
+/// delivers the click alongside the key-making.
+private final class SubtaskHostingView: NSHostingView<SubtaskPanelContent> {
+    /// Pinned surfaces only: presses that hit-test down to this hosting view
+    /// inside the header strip drag the window. SwiftUI's empty header space
+    /// resolves to the hosting view itself, so the drag must start here —
+    /// a `.background` representable never lands in the hit-test chain.
+    /// Controls and fields claim their own presses before this view sees them.
+    var dragsWindowFromHeader = false
+
+    /// Top strip of the window treated as the drag handle (view coords).
+    private var headerDragLimit: CGFloat { 44 }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        let local = convert(event.locationInWindow, from: nil)
+        if dragsWindowFromHeader,
+           let window,
+           local.y >= 0, local.y < headerDragLimit {
+            window.performDrag(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+
 /// Owns the auxiliary subtask surfaces: a transient hover panel anchored to a
 /// task row, and at most one pinned mini-window that survives main-panel
 /// hides. SwiftUI rows report hover and anchor geometry; this controller
@@ -50,9 +80,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     private weak var hostView: NSView?
 
     private var transientPanel: SubtaskAuxiliaryPanel?
-    private var transientHost: NSHostingView<SubtaskPanelContent>?
+    private var transientHost: SubtaskHostingView?
     private var pinnedPanel: SubtaskPinnedPanel?
-    private var pinnedHost: NSHostingView<SubtaskPanelContent>?
+    private var pinnedHost: SubtaskHostingView?
 
     /// Row frames in the panel workspace coordinate space, republished on
     /// every scroll/layout pass by `TaskRowAnchorPreferenceKey`.
@@ -265,12 +295,23 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     }
 
     private func commitPendingOpen(for familyID: UUID) {
-        // While the open surface is edit/menu busy the pending claim
-        // re-arms for another dwell rather than being dropped — the pointer
-        // is still resting on the row and a leave event would cancel it.
+        // A live context menu owns the row's interaction: ordering a surface
+        // front mid-tracking would tear the menu down before its action can
+        // run. Re-arm so the open lands once the menu resolves — the leave
+        // event still cancels it if the pointer moved on.
+        if menuTrackingActive {
+            lifecycle.rearmPendingOpen(at: Self.now())
+            rescheduleTimers()
+            return
+        }
+        // While the open surface is busy — its family's edit/confirmation,
+        // a tracked menu, or its focused/drafting composer — a stale pending
+        // claim re-arms for another dwell rather than ripping the surface out
+        // from under in-flight work. The pointer is still resting on the row
+        // and a leave event cancels it.
         if lifecycle.pendingOpen?.familyID == familyID,
            let current = lifecycle.transientFamilyID, current != familyID,
-           surfaceInteractionBusy(current) {
+           shouldDeferPointerClose(for: current) {
             lifecycle.rearmPendingOpen(at: Self.now())
             rescheduleTimers()
             return
@@ -359,6 +400,20 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         }
     }
 
+    /// Whether the family's live surface is also the key window — the only
+    /// state in which its entry's `.focused` claim can be a real field
+    /// editor rather than a host-reuse leftover.
+    func isLiveSurfaceKey(for familyID: UUID, mode: SubtaskPanelContent.Mode) -> Bool {
+        switch mode {
+        case .transient:
+            return lifecycle.transientFamilyID == familyID
+                && transientPanel?.isKeyWindow == true
+        case .pinned:
+            return lifecycle.pinnedFamilyID == familyID
+                && pinnedPanel?.isKeyWindow == true
+        }
+    }
+
     /// When a LIVE surface's entry last resigned its field editor. A
     /// pin/unpin click resigns on mouse-down, before the button's action
     /// runs — recording the resign lets the swap still restore focus.
@@ -418,6 +473,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         pinnedPanel?.deminiaturize(nil)
         pinnedPanel?.orderFrontRegardless()
         if focusEntry, let familyID = lifecycle.pinnedFamilyID {
+            pinnedPanel?.makeKey()
             uiState.activateSubtaskEntry(for: familyID)
         }
     }
@@ -450,6 +506,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             transientPanel?.deminiaturize(nil)
             transientPanel?.orderFrontRegardless()
             if focusEntry {
+                // SwiftUI's .focused() can only land on a key window — the
+                // surface must take key status before the deferred assertion.
+                transientPanel?.makeKey()
                 uiState.activateSubtaskEntry(for: familyID)
             }
             return
@@ -458,6 +517,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         presentTransient(familyID)
         syncState()
         if focusEntry {
+            transientPanel?.makeKey()
             uiState.activateSubtaskEntry(for: familyID)
         }
     }
@@ -558,6 +618,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         if refocusEntry {
             // Re-bump after the host swap so the new surface's entry
             // refocuses regardless of when the old field editor resigns.
+            pinnedPanel?.makeKey()
             uiState.focusSubtaskEntry(for: familyID)
         }
         if let displaced {
@@ -583,6 +644,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         rescheduleTimers()
         syncState()
         if refocusEntry {
+            transientPanel?.makeKey()
             uiState.focusSubtaskEntry(for: familyID)
         }
         // Runs after any transient re-anchoring: the release only fires when
@@ -723,14 +785,14 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         guard presentationEnabled,
               resolvedParent(familyID) != nil,
               let panel = panelWindow, panel.isVisible else { return }
-        let host: NSHostingView<SubtaskPanelContent>
+        let host: SubtaskHostingView
         let surface: SubtaskAuxiliaryPanel
         if let existingPanel = transientPanel, let existingHost = transientHost {
             surface = existingPanel
             host = existingHost
             host.rootView = makeContent(familyID, mode: .transient)
         } else {
-            host = NSHostingView(rootView: makeContent(familyID, mode: .transient))
+            host = SubtaskHostingView(rootView: makeContent(familyID, mode: .transient))
             surface = SubtaskAuxiliaryPanel(
                 contentRect: CGRect(
                     origin: .zero,
@@ -801,14 +863,15 @@ final class SubtaskPanelController: NSObject, ObservableObject {
 
     private func presentPinned(_ familyID: UUID, promotedFrame: CGRect?) {
         guard presentationEnabled, resolvedParent(familyID) != nil else { return }
-        let host: NSHostingView<SubtaskPanelContent>
+        let host: SubtaskHostingView
         let surface: SubtaskPinnedPanel
         if let existingPanel = pinnedPanel, let existingHost = pinnedHost {
             surface = existingPanel
             host = existingHost
             host.rootView = makeContent(familyID, mode: .pinned)
         } else {
-            host = NSHostingView(rootView: makeContent(familyID, mode: .pinned))
+            host = SubtaskHostingView(rootView: makeContent(familyID, mode: .pinned))
+            host.dragsWindowFromHeader = true
             surface = SubtaskPinnedPanel(
                 contentRect: CGRect(
                     origin: .zero,
@@ -823,7 +886,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             surface.hasShadow = false
             surface.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
             surface.hidesOnDeactivate = false
-            surface.isMovableByWindowBackground = true
+            surface.isMovableByWindowBackground = false
             surface.acceptsMouseMovedEvents = true
             surface.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
             AtticPanelInteractionPolicy.configure(surface)
