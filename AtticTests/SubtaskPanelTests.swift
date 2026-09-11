@@ -106,11 +106,11 @@ final class SubtaskPanelTests: XCTestCase {
         )
     }
 
-    func testFramePreservingTopKeepsTopEdgeStationary() {
+    func testFramePreservingTopKeepsTopEdgeStationary() throws {
         let frame = CGRect(x: 100, y: 500, width: 292, height: 200)
-        let adjusted = SubtaskPanelLayout.framePreservingTop(frame, height: 260)
-        XCTAssertEqual(adjusted?.maxY, frame.maxY, accuracy: 0.001)
-        XCTAssertEqual(adjusted?.height, 260, accuracy: 0.001)
+        let adjusted = try XCTUnwrap(SubtaskPanelLayout.framePreservingTop(frame, height: 260))
+        XCTAssertEqual(adjusted.maxY, frame.maxY, accuracy: 0.001)
+        XCTAssertEqual(adjusted.height, 260, accuracy: 0.001)
         XCTAssertNil(SubtaskPanelLayout.framePreservingTop(frame, height: 200.2))
         XCTAssertNil(SubtaskPanelLayout.framePreservingTop(frame, height: 0))
     }
