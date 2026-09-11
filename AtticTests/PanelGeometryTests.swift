@@ -5,48 +5,232 @@ import XCTest
 @testable import Attic
 
 final class PanelGeometryTests: XCTestCase {
-    func testCollapseKeepsEveryAttachedCornerFixedInsideTheOriginalSurface() {
-        let native = CGRect(x: 0, y: 0, width: 492, height: 632)
-        let visible = native.insetBy(dx: 6, dy: 6)
-        let center = CGPoint(x: native.midX, y: native.midY)
+    // MARK: - Genie geometry
+
+    private let geniePanelSize = CGSize(width: 492, height: 644)
+
+    private func genieAnchor(
+        corner: ScreenCorner,
+        workArea: CGRect = CGRect(x: 0, y: 0, width: 1512, height: 945),
+        panelOrigin: CGPoint = .zero
+    ) -> CGPoint {
+        let anchor = PanelGenieGeometry.anchorPoint(in: workArea, corner: corner)
+        return CGPoint(x: anchor.x - panelOrigin.x, y: anchor.y - panelOrigin.y)
+    }
+
+    private func genieSamplePoints(in size: CGSize) -> [CGPoint] {
+        var points: [CGPoint] = []
+        for row in 0...6 {
+            for column in 0...6 {
+                points.append(CGPoint(
+                    x: size.width * CGFloat(column) / 6,
+                    y: size.height * CGFloat(row) / 6
+                ))
+            }
+        }
+        return points
+    }
+
+    func testGenieAnchorLandsOnTheConfiguredCornerInsideTheWorkArea() {
+        let workAreas = [
+            CGRect(x: 0, y: 0, width: 1512, height: 945),
+            CGRect(x: -1920, y: 24, width: 1920, height: 1040),
+            CGRect(x: 300, y: -700, width: 640, height: 480),
+        ]
+        let inset = PanelGenieGeometry.Spec.standard.anchorInset
+        for workArea in workAreas {
+            for corner in ScreenCorner.allCases {
+                let anchor = PanelGenieGeometry.anchorPoint(in: workArea, corner: corner)
+                XCTAssertTrue(workArea.contains(anchor))
+                let expectedX = [.topRight, .bottomRight].contains(corner)
+                    ? workArea.maxX - inset : workArea.minX + inset
+                let expectedY = [.topRight, .topLeft].contains(corner)
+                    ? workArea.maxY - inset : workArea.minY + inset
+                XCTAssertEqual(anchor.x, expectedX, accuracy: 0.001)
+                XCTAssertEqual(anchor.y, expectedY, accuracy: 0.001)
+            }
+        }
+    }
+
+    func testGenieWarpIsIdentityAtRestAndFullyConsumedAtThePoint() {
         for corner in ScreenCorner.allCases {
-            let anchor = CGPoint(
-                x: [.topRight, .bottomRight].contains(corner) ? visible.maxX : visible.minX,
-                y: [.topLeft, .topRight].contains(corner) ? visible.maxY : visible.minY
-            )
-            for progress in [CGFloat(0), 0.25, 0.65, 1] {
-                let transform = PanelCollapseGeometry.transform(
-                    progress: progress, visibleBounds: visible, layerBounds: native, corner: corner
+            let anchor = genieAnchor(corner: corner)
+            for point in genieSamplePoints(in: geniePanelSize) {
+                let rest = PanelGenieGeometry.warpedPoint(
+                    point, in: geniePanelSize, progress: 0,
+                    corner: corner, anchor: anchor
                 )
-                func presented(_ point: CGPoint) -> CGPoint {
-                    let relative = CGPoint(x: point.x - center.x, y: point.y - center.y).applying(transform)
-                    return CGPoint(x: relative.x + center.x, y: relative.y + center.y)
-                }
-                XCTAssertEqual(presented(anchor).x, anchor.x, accuracy: 0.001)
-                XCTAssertEqual(presented(anchor).y, anchor.y, accuracy: 0.001)
-                for point in [CGPoint(x: visible.minX, y: visible.minY), CGPoint(x: visible.maxX, y: visible.maxY)] {
-                    let result = presented(point)
-                    XCTAssertGreaterThanOrEqual(result.x, visible.minX - 0.001)
-                    XCTAssertLessThanOrEqual(result.x, visible.maxX + 0.001)
-                    XCTAssertGreaterThanOrEqual(result.y, visible.minY - 0.001)
-                    XCTAssertLessThanOrEqual(result.y, visible.maxY + 0.001)
+                XCTAssertEqual(rest, point)
+                let consumed = PanelGenieGeometry.warpedPoint(
+                    point, in: geniePanelSize, progress: 1,
+                    corner: corner, anchor: anchor
+                )
+                XCTAssertEqual(consumed.x, anchor.x, accuracy: 0.001)
+                XCTAssertEqual(consumed.y, anchor.y, accuracy: 0.001)
+            }
+        }
+    }
+
+    func testGenieWarpContractsMonotonicallyTowardTheAnchorAlongRays() {
+        for corner in ScreenCorner.allCases {
+            let anchor = genieAnchor(corner: corner)
+            for point in genieSamplePoints(in: geniePanelSize) {
+                var previousDistance = CGFloat.greatestFiniteMagnitude
+                for progress in stride(from: 0.0, through: 1.0, by: 0.05) {
+                    let warped = PanelGenieGeometry.warpedPoint(
+                        point, in: geniePanelSize, progress: progress,
+                        corner: corner, anchor: anchor
+                    )
+                    XCTAssertTrue(warped.x.isFinite && warped.y.isFinite)
+                    // Every destination stays on the segment source → anchor,
+                    // so the sheet can never fold, tear, or overshoot.
+                    let distance = hypot(warped.x - anchor.x, warped.y - anchor.y)
+                    let sourceDistance = hypot(point.x - anchor.x, point.y - anchor.y)
+                    XCTAssertLessThanOrEqual(distance, sourceDistance + 0.001)
+                    XCTAssertLessThanOrEqual(distance, previousDistance + 0.001)
+                    previousDistance = distance
                 }
             }
         }
-        XCTAssertTrue(PanelCollapseGeometry.transform(
-            progress: 1, visibleBounds: visible, layerBounds: native,
-            corner: .topRight, reduceMotion: true
-        ).isIdentity)
     }
 
-    func testInteractiveCollapseProgressIsBoundedAndReversible() {
-        let forward = PanelCollapseGeometry.progress(forSwipeDistance: 60, panelWidth: 332)
-        let reverse = PanelCollapseGeometry.progress(forSwipeDistance: 20, panelWidth: 332)
+    func testGenieWarpDoesNotCollapseDistinctRaysEarly() {
+        // Points on different rays from the anchor keep distinct destinations
+        // until fully consumed — the mesh is injective before the tip.
+        let corner = ScreenCorner.topRight
+        let anchor = genieAnchor(corner: corner)
+        let progress: CGFloat = 0.6
+        let sources = genieSamplePoints(in: geniePanelSize)
+        var destinations = Set<String>()
+        for point in sources {
+            let warped = PanelGenieGeometry.warpedPoint(
+                point, in: geniePanelSize, progress: progress,
+                corner: corner, anchor: anchor
+            )
+            destinations.insert("\(warped.x.rounded())-\(warped.y.rounded())")
+        }
+        XCTAssertGreaterThan(destinations.count, sources.count / 2)
+    }
+
+    func testGenieWarpFailsSafeOnInvalidInput() {
+        let point = CGPoint(x: 10, y: 10)
+        XCTAssertEqual(PanelGenieGeometry.warpedPoint(
+            point, in: .zero, progress: 0.5, corner: .topRight,
+            anchor: genieAnchor(corner: .topRight)
+        ), point)
+        XCTAssertEqual(PanelGenieGeometry.warpedPoint(
+            point, in: geniePanelSize, progress: .nan, corner: .topRight,
+            anchor: genieAnchor(corner: .topRight)
+        ), point)
+        XCTAssertEqual(PanelGenieGeometry.warpedPoint(
+            point, in: geniePanelSize, progress: 0.5, corner: .topRight,
+            anchor: CGPoint(x: .nan, y: 0)
+        ), point)
+    }
+
+    func testGenieDestinationGridIsIdentityAtRestAndMeshIsBounded() {
+        let divisions = PanelGenieGeometry.meshDivisions(for: geniePanelSize)
+        XCTAssertGreaterThanOrEqual(divisions.columns, 16)
+        XCTAssertLessThanOrEqual(divisions.columns, 56)
+        let sources = PanelGenieGeometry.sourcePositions(
+            columns: divisions.columns, rows: divisions.rows
+        )
+        XCTAssertEqual(sources.count, (divisions.columns + 1) * (divisions.rows + 1))
+        let rested = PanelGenieGeometry.destinationPositions(
+            columns: divisions.columns, rows: divisions.rows,
+            size: geniePanelSize, progress: 0,
+            corner: .topRight, anchor: genieAnchor(corner: .topRight)
+        )
+        XCTAssertEqual(rested, sources)
+        for size in [CGSize.zero, CGSize(width: -1, height: .infinity),
+                     CGSize(width: 4000, height: 3000)] {
+            let bounded = PanelGenieGeometry.meshDivisions(for: size)
+            XCTAssertLessThanOrEqual(bounded.columns, 56)
+            XCTAssertLessThanOrEqual(bounded.rows, 56)
+            XCTAssertGreaterThanOrEqual(bounded.columns, 16)
+            XCTAssertGreaterThanOrEqual(bounded.rows, 16)
+        }
+        // Degenerate size returns the identity field rather than NaNs.
+        XCTAssertEqual(
+            PanelGenieGeometry.destinationPositions(
+                columns: 4, rows: 4, size: .zero, progress: 0.5,
+                corner: .topRight, anchor: genieAnchor(corner: .topRight)
+            ).count,
+            25
+        )
+    }
+
+    func testGenieTimingCurvesAreBoundedMonotonicAndDirectional() {
+        for timing in [PanelGenieGeometry.CubicBezierTiming.conceal,
+                       .reveal] {
+            XCTAssertEqual(timing.solve(0), 0)
+            XCTAssertEqual(timing.solve(1), 1)
+            var previous: CGFloat = -0.001
+            for step in stride(from: 0.0, through: 1.0, by: 0.02) {
+                let y = timing.solve(CGFloat(step))
+                XCTAssertTrue(y.isFinite)
+                XCTAssertGreaterThanOrEqual(y, -0.001)
+                XCTAssertLessThanOrEqual(y, 1.001)
+                XCTAssertGreaterThanOrEqual(y, previous)
+                previous = y
+            }
+        }
+        // Reveal answers earlier than conceal through the whole middle.
+        for step in stride(from: 0.05, through: 0.95, by: 0.05) {
+            XCTAssertGreaterThan(
+                PanelGenieGeometry.CubicBezierTiming.reveal.solve(CGFloat(step)),
+                PanelGenieGeometry.CubicBezierTiming.conceal.solve(CGFloat(step))
+            )
+        }
+        XCTAssertEqual(
+            PanelGenieGeometry.CubicBezierTiming.conceal.solve(.nan), 0
+        )
+    }
+
+    func testGenieRunsAreDeterministicBoundedAndComplete() {
+        let run = PanelGenieGeometry.planRun(
+            from: 0.25, to: 1, direction: .conceal
+        )
+        XCTAssertNil(run.startTime)
+        XCTAssertGreaterThanOrEqual(run.duration, 0.09)
+        XCTAssertLessThanOrEqual(run.duration, 0.34)
+        var started = run
+        started.startTime = 100
+        XCTAssertEqual(started.progress(at: 99), 0.25)
+        XCTAssertEqual(started.progress(at: 100), 0.25, accuracy: 0.001)
+        XCTAssertEqual(started.progress(at: 100 + run.duration), 1, accuracy: 0.001)
+        XCTAssertTrue(started.isComplete(at: 100 + run.duration))
+        let mid = started.progress(at: 100 + run.duration / 2)
+        XCTAssertGreaterThan(mid, 0.25)
+        XCTAssertLessThan(mid, 1)
+        XCTAssertFalse(started.isComplete(at: 100 + run.duration / 2))
+        // A full hide is always within budget; a reversal scales down.
+        let full = PanelGenieGeometry.transitionDuration(distance: 1, direction: .conceal)
+        XCTAssertEqual(full, 0.34, accuracy: 0.001)
+        let reveal = PanelGenieGeometry.transitionDuration(distance: 1, direction: .reveal)
+        XCTAssertEqual(reveal, 0.38, accuracy: 0.001)
+        let partial = PanelGenieGeometry.transitionDuration(distance: 0.3, direction: .conceal)
+        XCTAssertLessThan(partial, full)
+        XCTAssertGreaterThanOrEqual(partial, 0.09)
+    }
+
+    func testGenieSwipeProgressIsBoundedAndReversible() {
+        let forward = PanelGenieGeometry.swipeProgress(forSwipeDistance: 60, panelWidth: 332)
+        let reverse = PanelGenieGeometry.swipeProgress(forSwipeDistance: 20, panelWidth: 332)
         XCTAssertGreaterThan(forward, reverse)
         XCTAssertGreaterThan(reverse, 0)
-        XCTAssertEqual(PanelCollapseGeometry.progress(forSwipeDistance: -10, panelWidth: 332), 0)
-        XCTAssertEqual(PanelCollapseGeometry.progress(forSwipeDistance: 10_000, panelWidth: 332), 0.95)
-        XCTAssertEqual(PanelCollapseGeometry.progress(forSwipeDistance: .infinity, panelWidth: 332), 0)
+        XCTAssertEqual(PanelGenieGeometry.swipeProgress(forSwipeDistance: -10, panelWidth: 332), 0)
+        XCTAssertEqual(PanelGenieGeometry.swipeProgress(forSwipeDistance: 10_000, panelWidth: 332), 0.95)
+        XCTAssertEqual(PanelGenieGeometry.swipeProgress(forSwipeDistance: .infinity, panelWidth: 332), 0)
+        XCTAssertEqual(PanelGenieGeometry.swipeProgress(forSwipeDistance: 10, panelWidth: .nan), 0)
+    }
+
+    func testGenieDisplayProgressNeverDegeneratesTheMesh() {
+        let ceiling = PanelGenieGeometry.Spec.standard.displayProgressCeiling
+        XCTAssertEqual(PanelGenieGeometry.displayProgress(1), ceiling)
+        XCTAssertEqual(PanelGenieGeometry.displayProgress(-2), 0)
+        XCTAssertEqual(PanelGenieGeometry.displayProgress(.nan), 0)
+        XCTAssertEqual(PanelGenieGeometry.displayProgress(0.4), 0.4, accuracy: 0.001)
     }
 
     func testVerySlowPreciseSwipeAccumulatesIntentAndReportsEveryLaterSample() {
@@ -187,26 +371,66 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     @MainActor
-    func testHostedCollapseNeverChangesNativeOrSwiftUILayoutBounds() throws {
+    func testHostedGenieSessionVirtualizesWithoutChangingNativeOrSwiftUILayout() throws {
         try withHiddenHostedPanel { panel, host in
             let container = try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
             let nativeFrame = panel.frame
             let hostingFrame = host.frame
             let hostingBounds = host.bounds
-            container.setCollapseProgress(0.6, corner: .bottomLeft, reduceMotion: false)
-            XCTAssertLessThan(container.presentationTransform.m11, 1)
+            let screen = try XCTUnwrap(NSScreen.main)
+            guard let session = PanelGenieSession.begin(
+                panel: panel, contentContainer: container,
+                motionView: container.motionView,
+                screen: screen, corner: .bottomLeft, initialProgress: 0
+            ) else {
+                XCTFail("Snapshot capture must succeed for hosted content")
+                return
+            }
+            XCTAssertTrue(session.isPresenting)
+            XCTAssertTrue(container.motionView.isHidden,
+                          "Virtualized content draws nothing while the snapshot presents")
+            session.applyImmediately(0.65)
+            XCTAssertEqual(session.progress, 0.65, accuracy: 0.001)
             XCTAssertEqual(panel.frame, nativeFrame)
             XCTAssertEqual(host.frame, hostingFrame)
             XCTAssertEqual(host.bounds, hostingBounds)
-            container.stopCollapseMotion()
-            container.setCollapseProgress(0, corner: .bottomLeft, reduceMotion: true)
-            XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
+            session.teardown()
+            XCTAssertFalse(container.motionView.isHidden)
+            XCTAssertFalse(session.isPresenting)
             XCTAssertEqual(host.bounds, hostingBounds)
         }
     }
 
     @MainActor
-    func testSettingsSizeAndCornerResetCollapsedPresentationBeforeReanchoring() throws {
+    func testGenieRunCompletionFiresExactlyOnceAndSupersessionDiscardsStale() throws {
+        try withHiddenHostedPanel { panel, host in
+            let container = try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
+            let screen = try XCTUnwrap(NSScreen.main)
+            let session = try XCTUnwrap(PanelGenieSession.begin(
+                panel: panel, contentContainer: container,
+                motionView: container.motionView,
+                screen: screen, corner: .topRight, initialProgress: 0.5
+            ))
+            var hides = 0
+            var reveals = 0
+            session.animate(to: 1, direction: .conceal) { hides += 1 }
+            XCTAssertTrue(session.isMotionActive)
+            // Rapid reversal: the newer run replaces the stale completion
+            // without firing it — the interruption contract.
+            session.animate(to: 0, direction: .reveal) { reveals += 1 }
+            session.finishImmediately()
+            XCTAssertEqual(session.progress, 0)
+            XCTAssertEqual(hides, 0, "The superseded hide must never complete")
+            XCTAssertEqual(reveals, 1)
+            XCTAssertFalse(session.isMotionActive)
+            session.finishImmediately()
+            XCTAssertEqual(reveals, 1, "A finished session has nothing left to complete")
+            session.teardown()
+        }
+    }
+
+    @MainActor
+    func testSettingsSizeAndCornerResetWarpedPresentationBeforeReanchoring() throws {
         let suite = "AtticPanelMotionSettingsTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -226,16 +450,28 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertFalse(panel.isVisible, "This regression must not display a test window")
         let screen = try XCTUnwrap(controller.currentScreen)
         for corner in ScreenCorner.allCases {
-            container.setCollapseProgress(0.65, corner: controller.currentCorner, reduceMotion: false)
+            controller.genieSession = PanelGenieSession.begin(
+                panel: panel, contentContainer: container,
+                motionView: container.motionView,
+                screen: screen, corner: controller.currentCorner, initialProgress: 0.5
+            )
+            XCTAssertTrue(container.motionView.isHidden)
             settings.corner = corner
-            XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
+            XCTAssertNil(controller.genieSession,
+                         "Re-anchoring must tear down the in-flight presentation")
+            XCTAssertFalse(container.motionView.isHidden)
             XCTAssertEqual(controller.currentCorner, corner)
-            container.setCollapseProgress(0.65, corner: corner, reduceMotion: false)
+            controller.genieSession = PanelGenieSession.begin(
+                panel: panel, contentContainer: container,
+                motionView: container.motionView,
+                screen: screen, corner: corner, initialProgress: 0.5
+            )
             settings.persistPanelSize(CGSize(
                 width: settings.panelContentSize == 480 ? 420 : 480,
                 height: settings.panelHeight == 620 ? 600 : 620
             ))
-            XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
+            XCTAssertNil(controller.genieSession)
+            XCTAssertFalse(container.motionView.isHidden)
             let expected = PanelGeometry.workAreaPlacement(
                 preferredSize: CGSize(width: settings.panelContentSize, height: settings.panelHeight),
                 in: screen.visibleFrame, corner: corner
@@ -248,35 +484,29 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     @MainActor
-    func testHideWaitsForPresentationAndStaleHideCannotCompleteAfterReveal() {
+    func testStaleHideCannotCompleteAfterReveal() {
         var transitions = PanelVisibilityTransitionState()
         var hidden = 0
         var superseded = 0
         let hide = transitions.beginHideTransition { result in
             if result == .hidden { hidden += 1 } else { superseded += 1 }
         }
-        let completion = PanelMotionCompletionBarrier { _ = transitions.completeHideTransition(hide) }
-        completion.finishFrame()
-        XCTAssertEqual(hidden, 0, "An unchanged native frame must not order out the collapsing surface early")
-        transitions.invalidatePendingTransition()
-        completion.finishPresentation()
-        completion.finishPresentation()
-        XCTAssertEqual(hidden, 0)
+        _ = transitions.beginTransition()
         XCTAssertEqual(superseded, 1)
+        XCTAssertFalse(transitions.completeHideTransition(hide))
+        XCTAssertFalse(transitions.ownsCompletion(hide))
+        XCTAssertEqual(hidden, 0,
+                       "A stale hide completion can never order out a re-shown panel")
     }
 
     @MainActor
-    func testMotionCompletionBarrierFinishesExactlyOnceInEitherOrder() {
-        for frameFirst in [false, true] {
-            var count = 0
-            let completion = PanelMotionCompletionBarrier { count += 1 }
-            if frameFirst { completion.finishFrame() } else { completion.finishPresentation() }
-            XCTAssertEqual(count, 0)
-            completion.finishFrame()
-            completion.finishPresentation()
-            completion.finishFrame()
-            XCTAssertEqual(count, 1)
-        }
+    func testHideCompletionStillFiresThroughItsOwnGeneration() {
+        var transitions = PanelVisibilityTransitionState()
+        var results: [PanelHideCompletion] = []
+        let hide = transitions.beginHideTransition { results.append($0) }
+        XCTAssertTrue(transitions.ownsCompletion(hide))
+        XCTAssertTrue(transitions.completeHideTransition(hide))
+        XCTAssertEqual(results, [.hidden])
     }
 
     @MainActor

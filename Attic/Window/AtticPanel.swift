@@ -785,8 +785,11 @@ final class PanelChromeInteractionState {
 /// squircle so transparent corner pixels cannot obstruct the app behind it.
 final class AtticPanelContentContainer: NSView {
     let hostingView: AtticPanelHostingView
-    private let motionView = NSView()
-    private static let collapseAnimationKey = "attic.panel.collapse"
+    /// The presentation subtree a visibility transition can virtualize:
+    /// hiding it keeps layout, sizing and event delivery intact while a
+    /// snapshot carries the pixels. Never resizes or transforms — those
+    /// would disturb the native layout the animation must preserve.
+    let motionView = NSView()
     var allowsContentInteraction = true
 
     init(hostingView: AtticPanelHostingView, visibleSize: CGSize, perimeter: CGFloat) {
@@ -813,51 +816,10 @@ final class AtticPanelContentContainer: NSView {
         return hostingView.hitTest(convert(point, from: superview))
     }
 
-    var presentationTransform: CATransform3D {
-        motionView.layer?.presentation()?.transform ?? motionView.layer?.transform ?? CATransform3DIdentity
-    }
-
-    func stopCollapseMotion() {
-        guard let layer = motionView.layer else { return }
-        let current = presentationTransform
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.transform = current
-        layer.removeAnimation(forKey: Self.collapseAnimationKey)
-        CATransaction.commit()
-    }
-
-    func setCollapseProgress(
-        _ progress: CGFloat, corner: ScreenCorner, reduceMotion: Bool,
-        duration: TimeInterval = 0, completion: (() -> Void)? = nil
-    ) {
-        guard let layer = motionView.layer else { completion?(); return }
-        let from = presentationTransform
-        let target = CATransform3DMakeAffineTransform(PanelCollapseGeometry.transform(
-            progress: progress, visibleBounds: hostingView.frame,
-            layerBounds: motionView.bounds, corner: corner, reduceMotion: reduceMotion,
-            layerAnchor: CGPoint(
-                x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
-                y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height
-            )
-        ))
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.removeAnimation(forKey: Self.collapseAnimationKey)
-        layer.transform = target
-        if duration > 0, !reduceMotion, !CATransform3DEqualToTransform(from, target) {
-            let animation = CABasicAnimation(keyPath: "transform")
-            animation.fromValue = NSValue(caTransform3D: from)
-            animation.toValue = NSValue(caTransform3D: target)
-            animation.duration = duration
-            animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
-            CATransaction.setCompletionBlock(completion)
-            layer.add(animation, forKey: Self.collapseAnimationKey)
-            CATransaction.commit()
-        } else {
-            CATransaction.commit()
-            completion?()
-        }
+    /// Virtualized content draws nothing but still owns its layout and
+    /// window-region role; the snapshot overlay supplies the pixels.
+    func setPresentationVirtualized(_ isVirtualized: Bool) {
+        motionView.isHidden = isVirtualized
     }
 }
 

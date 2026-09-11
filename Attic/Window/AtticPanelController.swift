@@ -52,25 +52,7 @@ enum PanelHideCompletion: Equatable {
     case superseded
 }
 
-/// A stationary window can finish its AppKit frame animation before the live
-/// subtree finishes collapsing. Order-out must wait for both, exactly once.
-@MainActor
-final class PanelMotionCompletionBarrier {
-    private var frameFinished = false
-    private var presentationFinished = false
-    private var completion: (() -> Void)?
 
-    init(completion: @escaping () -> Void) { self.completion = completion }
-
-    func finishFrame() { frameFinished = true; finishIfReady() }
-    func finishPresentation() { presentationFinished = true; finishIfReady() }
-
-    private func finishIfReady() {
-        guard frameFinished, presentationFinished, let completion else { return }
-        self.completion = nil
-        completion()
-    }
-}
 
 struct PanelVisibilityTransitionState {
     private(set) var generation = 0
@@ -177,6 +159,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var globalPointerMonitor: Any?
     private var isDisplayingResizeCursor = false
     private var visibilityTransition = PanelVisibilityTransitionState()
+    /// Live snapshot-warp presentation while a visibility transition runs;
+    /// nil whenever the panel is at rest or hidden. Internal so tests can
+    /// install a session directly without displaying a test window.
+    var genieSession: PanelGenieSession?
+    private var interactiveCaptureFailed = false
     private(set) var currentScreen: NSScreen?
     private var lastUsableFrame: CGRect?
     private(set) var currentCorner: ScreenCorner = .topRight
@@ -330,6 +317,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         stopPanelMotion()
         let frameBeforeWorkAreaRefresh = panel.visibleContentFrame
         guard let workArea = refreshCurrentWorkArea(preferredScreen: screen) else {
+            // No usable display: hand pixels back to the live subtree rather
+            // than leaving a frozen snapshot overlay behind.
+            restoreFullPresentation()
             return
         }
         let visibleFrame = workArea.visibleFrame
@@ -366,7 +356,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
             if mustEstablishOnTargetDisplay {
                 panel.setVisibleContentFrame(finalFrame, display: true)
-                contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
+                // A new anchor invalidates any in-flight presentation: it is
+                // restarted below, unfurling toward the new corner.
+                genieSession?.teardown()
+                genieSession = nil
             }
 
             if makeKey {
@@ -375,12 +368,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 panel.orderFrontRegardless()
             }
 
+            if mustEstablishOnTargetDisplay {
+                beginGenieReveal(on: screen, corner: corner)
+            }
             animateShow(to: finalFrame)
             return
         }
 
         panel.setVisibleContentFrame(finalFrame, display: true)
-        contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
         panel.alphaValue = 1
 
         if makeKey {
@@ -389,22 +384,84 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             panel.orderFrontRegardless()
         }
 
+        beginGenieReveal(on: screen, corner: corner)
         animateShow(to: finalFrame)
+    }
+
+    /// Installs the snapshot-warp presentation for an unfurl from the anchor
+    /// point. With Reduce Motion, or when the snapshot cannot be produced,
+    /// nothing is installed and the caller's restrained path runs instead.
+    private func beginGenieReveal(on screen: NSScreen, corner: ScreenCorner) {
+        guard genieSession == nil,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let container = contentContainer else { return }
+        genieSession = PanelGenieSession.begin(
+            panel: panel,
+            contentContainer: container,
+            motionView: container.motionView,
+            screen: screen,
+            corner: corner,
+            initialProgress: 1
+        )
+        // Capture failure degrades to the instant/fade paths inside
+        // animateShow — never a blink of the already-visible panel.
     }
 
     private func animateShow(to finalFrame: CGRect) {
         let generation = visibilityTransition.beginTransition()
         isShowing = true
-        animatePanel(to: finalFrame, collapseProgress: 0, duration: 0.24) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                guard self.visibilityTransition.completeTransition(generation) else { return }
-                self.isShowing = false
-                if self.needsResizeAfterShowing {
-                    self.needsResizeAfterShowing = false
-                    self.resizeAndReanchor()
+        if let session = genieSession {
+            isPanelMotionActive = true
+            session.animate(to: 0, direction: .reveal) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.visibilityTransition.completeTransition(generation) else { return }
+                    // Handoff at progress 0: sprite and live pixels are
+                    // identical, so removing the overlay is seamless.
+                    self.genieSession?.teardown()
+                    self.genieSession = nil
+                    self.finishShowTransition()
                 }
             }
+            return
+        }
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+           panel.alphaValue < 1 {
+            // Snapshot capture failed: restrained fade, no deformation.
+            animatePanelAlpha(to: 1) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.visibilityTransition.completeTransition(generation) else { return }
+                    self.finishShowTransition()
+                }
+            }
+            return
+        }
+        // No presentation change in flight: either an instant (Reduce Motion)
+        // establish or a plain dock move of a fully-presented panel.
+        if !framesMatch(panel.visibleContentFrame, finalFrame) {
+            animatePanelFrame(to: finalFrame, duration: 0.18) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.visibilityTransition.completeTransition(generation) else { return }
+                    self.finishShowTransition()
+                }
+            }
+        } else {
+            visibilityTransition.completeTransition(generation)
+            finishShowTransition()
+        }
+    }
+
+    private func finishShowTransition() {
+        isPanelMotionActive = false
+        // Interruption of a fade can leave the real window dimmed.
+        panel.alphaValue = 1
+        contentContainer?.allowsContentInteraction = true
+        isShowing = false
+        if needsResizeAfterShowing {
+            needsResizeAfterShowing = false
+            resizeAndReanchor()
         }
     }
 
@@ -442,23 +499,53 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if !framesMatch(panel.visibleContentFrame, safeFrame) {
             panel.setVisibleContentFrame(safeFrame, display: true)
         }
-        // A released window throw can start away from its attached corner.
-        // Move its fixed-size native frame back while the same live subtree
-        // collapses, so every hide reason converges on the actual dock anchor.
-        let targetFrame = PanelGeometry.panelFrame(
-            in: screen.visibleFrame, size: safeFrame.size, corner: currentCorner
-        )
-        animatePanel(to: targetFrame, collapseProgress: 1, duration: 0.22) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
-                self.panel.orderOut(nil)
-                self.panel.alphaValue = 1
-                self.stopPointerPassthroughMonitoring()
-                self.subtaskPanels.mainPanelDidHide()
-                self.visibilityTransition.completeHideTransition(generation)
+        // Every hide reason converges on the real work-area corner: the warp
+        // pulls the sheet into that anchor point from wherever the panel is —
+        // a released throw needs no native frame travel.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            finishHideTransition(generation: generation)
+            return .accepted
+        }
+        if genieSession == nil, let container = contentContainer {
+            genieSession = PanelGenieSession.begin(
+                panel: panel,
+                contentContainer: container,
+                motionView: container.motionView,
+                screen: screen,
+                corner: currentCorner,
+                initialProgress: 0
+            )
+        }
+        if let session = genieSession {
+            isPanelMotionActive = true
+            session.animate(to: 1, direction: .conceal) { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.finishHideTransition(generation: generation)
+                }
+            }
+        } else {
+            // Snapshot unavailable: restrained fade instead of deformation.
+            animatePanelAlpha(to: 0) { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.finishHideTransition(generation: generation)
+                }
             }
         }
         return .accepted
+    }
+
+    /// Shared hide terminal: runs only while `generation` still owns the
+    /// transition, so a stale completion can never order out a re-shown panel.
+    private func finishHideTransition(generation: Int) {
+        guard visibilityTransition.ownsCompletion(generation) else { return }
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+        isPanelMotionActive = false
+        genieSession?.teardown()
+        genieSession = nil
+        stopPointerPassthroughMonitoring()
+        subtaskPanels.mainPanelDidHide()
+        visibilityTransition.completeHideTransition(generation)
     }
 
     private func configurePanel() {
@@ -581,6 +668,14 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 }
             }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(
+            for: NSWorkspace.accessibilityDisplayShouldReduceMotionDidChangeNotification
+        )
+        .sink { [weak self] _ in
+            self?.settlePresentationForAccessibilityChange()
+        }
+        .store(in: &cancellables)
 
         settings.$panelCornerSize
             .sink { [weak self] cornerRadius in
@@ -854,24 +949,48 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func updateInteractiveDismissal(distance: CGFloat) {
         guard panel.isVisible else { return }
+        let spec = PanelGenieGeometry.Spec.standard
         if !isInteractiveDismissal {
             stopPanelMotion()
             isInteractiveDismissal = true
-            let scale = contentContainer?.presentationTransform.m11 ?? 1
-            interactiveSwipeStartProgress = min(1, max(0,
-                (1 - scale) / (1 - PanelCollapseGeometry.collapsedScale)
-            ))
+            interactiveCaptureFailed = false
+            // A swipe can begin while a timed run is in flight: the gesture
+            // takes over from exactly the progress on screen.
+            interactiveSwipeStartProgress = min(1, max(0, genieSession?.progress ?? 0))
             uiState.setInteractionLock(.panelSwipe, isActive: true)
         }
-        let progress = PanelCollapseGeometry.progress(
-            forSwipeDistance: distance, panelWidth: panel.visibleContentFrame.width
+        let progress = PanelGenieGeometry.swipeProgress(
+            forSwipeDistance: distance,
+            panelWidth: panel.visibleContentFrame.width,
+            spec: spec
         )
+        let target = interactiveSwipeStartProgress
+            + (1 - interactiveSwipeStartProgress) * progress
         contentContainer?.allowsContentInteraction = false
-        contentContainer?.setCollapseProgress(
-            interactiveSwipeStartProgress + (1 - interactiveSwipeStartProgress) * progress,
-            corner: currentCorner,
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        )
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            genieSession?.teardown()
+            genieSession = nil
+            panel.alphaValue = 1 - (1 - spec.reducedMotionSwipeFloor) * min(1, max(0, target))
+            return
+        }
+        if genieSession == nil, !interactiveCaptureFailed,
+           let container = contentContainer,
+           let screen = panel.screen ?? currentScreen {
+            genieSession = PanelGenieSession.begin(
+                panel: panel,
+                contentContainer: container,
+                motionView: container.motionView,
+                screen: screen,
+                corner: currentCorner,
+                initialProgress: interactiveSwipeStartProgress
+            )
+            if genieSession == nil { interactiveCaptureFailed = true }
+        }
+        if let session = genieSession {
+            session.applyImmediately(target)
+        } else {
+            panel.alphaValue = 1 - (1 - spec.reducedMotionSwipeFloor) * min(1, max(0, target))
+        }
     }
 
     private func clearInteractiveDismissal() {
@@ -890,8 +1009,28 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     private func restoreFullPresentation() {
         clearInteractiveDismissal()
-        contentContainer?.setCollapseProgress(0, corner: currentCorner, reduceMotion: true)
+        genieSession?.teardown()
+        genieSession = nil
+        interactiveCaptureFailed = false
+        panel.alphaValue = 1
+        contentContainer?.setPresentationVirtualized(false)
         contentContainer?.allowsContentInteraction = true
+    }
+
+    /// A Reduce Motion toggle mid-transition must land in a coherent end
+    /// state, not funnel slower. An in-flight run finishes instantly through
+    /// its own generation-guarded completion; a held presentation snaps back
+    /// to rest with the real content.
+    private func settlePresentationForAccessibilityChange() {
+        guard NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let session = genieSession else { return }
+        if session.isMotionActive {
+            session.finishImmediately()
+        } else {
+            session.teardown()
+            genieSession = nil
+            panel.alphaValue = 1
+        }
     }
 
     private func animateDock(
@@ -927,7 +1066,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             self?.uiState.dockingPreviewCorner = nil
             self?.uiState.setInteractionLock(.windowMove, isActive: false)
         })
-        animatePanel(to: targetFrame, collapseProgress: 0, duration: 0.18) { [weak self] in
+        animatePanelFrame(to: targetFrame, duration: 0.18) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.completeTransition(generation) else { return }
                 self.uiState.updatePanelSize(self.panel.visibleContentFrame.size)
@@ -937,58 +1076,67 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Native layout remains full size. Only the live presentation subtree is
-    /// transformed; no snapshot, opacity track, or per-frame SwiftUI layout is
-    /// involved. Both animation paths are bounded and generation-owned.
-    private func animatePanel(
+    /// Bounded native frame move (dock/re-anchor). Visibility deformation is
+    /// owned exclusively by PanelGenieSession — this never touches pixels.
+    private func animatePanelFrame(
         to frame: CGRect,
-        collapseProgress: CGFloat,
         duration: TimeInterval,
         completion: @escaping () -> Void
     ) {
         let generation = visibilityTransition.generation
         isPanelMotionActive = true
         contentContainer?.allowsContentInteraction = false
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let currentScale = contentContainer?.presentationTransform.m11 ?? 1
-        let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
-        let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))
-        let duration = reduceMotion ? 0 : remaining > 0.001 ? max(0.08, duration * sqrt(remaining)) : duration
-        let finishes = PanelMotionCompletionBarrier { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
-                self.isPanelMotionActive = false
-                self.contentContainer?.allowsContentInteraction = collapseProgress == 0
-                completion()
-            }
-        }
-        contentContainer?.setCollapseProgress(
-            collapseProgress, corner: currentCorner, reduceMotion: reduceMotion,
-            duration: duration, completion: {
-                MainActor.assumeIsolated { finishes.finishPresentation() }
-            }
-        )
-        if contentContainer == nil { finishes.finishPresentation() }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
             panel.animator().setFrame(panel.nativeFrame(forVisibleFrame: frame), display: true)
-        } completionHandler: {
+        } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                finishes.finishFrame()
+                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
+                self.isPanelMotionActive = false
+                self.contentContainer?.allowsContentInteraction = true
+                completion()
+            }
+        }
+    }
+
+    /// Restrained non-deforming fallback for Reduce Motion or a failed
+    /// snapshot: a bounded opacity transition on the real window.
+    private func animatePanelAlpha(
+        to alpha: CGFloat,
+        completion: @escaping () -> Void
+    ) {
+        let generation = visibilityTransition.generation
+        isPanelMotionActive = true
+        contentContainer?.allowsContentInteraction = false
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = PanelGenieGeometry.Spec.standard.fadeDuration
+            panel.animator().alphaValue = alpha
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
+                self.isPanelMotionActive = false
+                self.panel.alphaValue = 1
+                completion()
             }
         }
     }
 
     private func stopPanelMotion() {
         visibilityTransition.invalidatePendingTransition()
-        contentContainer?.stopCollapseMotion()
+        // Freeze the warp where it is — the session survives so the next
+        // transition continues from the visible state.
+        genieSession?.holdMotion()
         let currentFrame = panel.frame
         // NSAnimatablePropertyContainer documents a zero-duration animator
         // update as the way to stop an in-flight property animation.
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             panel.animator().setFrame(currentFrame, display: false)
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            panel.animator().alphaValue = panel.alphaValue
         }
         isShowing = false
         isPanelMotionActive = false
