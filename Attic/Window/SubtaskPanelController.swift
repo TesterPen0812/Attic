@@ -80,8 +80,13 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     }
     /// Guards the count-button toggle: an outside mouse-down dismisses the
     /// latched surface before the button's action fires, so reopening within
-    /// the same click is suppressed.
+    /// the same click is suppressed. Bounded to the mousedown→mouseup window;
+    /// cleared by every successful open so a stale record can't eat the next
+    /// deliberate toggle.
     private var lastOutsideDismissal: (familyID: UUID, at: TimeInterval)?
+    /// Set while a programmatic setFrame runs so windowDidMove doesn't
+    /// overwrite the user's remembered pinned position with a clamp.
+    private var suppressPinnedMovePersist = false
 
     init(store: TaskStore, uiState: PanelUIState, settings: AppSettings) {
         self.store = store
@@ -131,18 +136,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     func attach(panel: NSWindow, hostView: NSView) {
         panelWindow = panel
         self.hostView = hostView
-        notificationTokens.append(contentsOf: [
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.didMoveNotification, object: panel, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.repositionTransient() }
-            },
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.didResizeNotification, object: panel, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.repositionTransient() }
-            }
-        ])
+        // Panel move/resize re-anchoring comes through the main panel's
+        // NSWindowDelegate (AtticPanelController calls mainPanelFrameDidChange)
+        // — no duplicate observers here, or every drag would re-fit twice.
     }
 
     deinit {
@@ -207,12 +203,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     // MARK: - Hover-driven transient surface
 
     func noteRowHover(familyID: UUID, isHovering: Bool) {
-        // Hovering another row while the open surface has an in-flight edit
-        // or a tracked menu must not replace it mid-interaction.
-        if isHovering, let current = lifecycle.transientFamilyID,
-           current != familyID, surfaceInteractionBusy(current) {
-            return
-        }
+        // Hover enters always schedule; commitPendingOpen defers maturation
+        // while the open surface is edit/menu busy, so a resting pointer
+        // still opens once the interaction resolves instead of dying here.
         lifecycle.noteRowHover(familyID: familyID, isHovering: isHovering, at: Self.now())
         rescheduleTimers()
     }
@@ -250,13 +243,13 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     }
 
     private func commitPendingOpen(for familyID: UUID) {
-        // Defense in depth alongside the noteRowHover gate: if the current
-        // surface became edit/menu busy after the dwell was scheduled, drop
-        // the pending claim rather than swap families mid-interaction.
+        // While the open surface is edit/menu busy the pending claim
+        // re-arms for another dwell rather than being dropped — the pointer
+        // is still resting on the row and a leave event would cancel it.
         if lifecycle.pendingOpen?.familyID == familyID,
            let current = lifecycle.transientFamilyID, current != familyID,
            surfaceInteractionBusy(current) {
-            lifecycle.discardPendingOpen()
+            lifecycle.rearmPendingOpen(at: Self.now())
             rescheduleTimers()
             return
         }
@@ -268,6 +261,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             syncState()
             return
         }
+        lastOutsideDismissal = nil
         presentTransient(familyID)
         syncState()
     }
@@ -277,13 +271,23 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         // locks — pointer position alone must not close the surface
         // underneath them mid-action. Retry rather than drop: once the lock
         // clears, the overdue leave closes it without needing new hover.
-        if uiState.isInteractionLocked {
+        if shouldDeferPointerClose(for: familyID) {
             lifecycle.noteRowHover(familyID: familyID, isHovering: false, at: Self.now())
             rescheduleTimers()
             return
         }
         guard lifecycle.maturePendingClose(for: familyID, at: Self.now()) else { return }
         syncState()
+        releaseFamilyInteractionState(familyID)
+    }
+
+    /// Pointer-leave close only defers for locks that actually belong to this
+    /// surface — its family's edit/confirmation, a tracked menu, or the
+    /// surface's own focused/drafting composer. Unrelated panel work (the
+    /// main composer, notes, canvas dialogs) must not pin the surface open.
+    func shouldDeferPointerClose(for familyID: UUID) -> Bool {
+        surfaceInteractionBusy(familyID)
+            || uiState.interactionLockReasons.contains(.subtaskComposer)
     }
 
     /// A family is hover-presentable when it has children, an in-flight
@@ -357,12 +361,25 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         }
         guard mainPanelVisible else { return }
         // An in-flight edit or confirmation inside the current surface takes
-        // precedence over switching it to another family.
+        // precedence over switching it to another family. Deliberate opens
+        // (menu commands, count control, keyboard/VoiceOver) are never
+        // blocked by menuTracking — the lock protects pointer-driven paths,
+        // and a menu's own action would otherwise eat the user's choice.
         if let current = lifecycle.transientFamilyID, current != familyID,
-           surfaceInteractionBusy(current) {
+           familyEditBusy(current) {
             return
         }
-        guard lifecycle.openTransient(familyID, latched: true) else { return }
+        if !lifecycle.openTransient(familyID, latched: true) {
+            // Already latched open for this family: the action still means
+            // "bring it forward" — raise it and honor the entry request.
+            transientPanel?.deminiaturize(nil)
+            transientPanel?.orderFrontRegardless()
+            if focusEntry {
+                uiState.activateSubtaskEntry(for: familyID)
+            }
+            return
+        }
+        lastOutsideDismissal = nil
         presentTransient(familyID)
         syncState()
         if focusEntry {
@@ -385,10 +402,11 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         }
         // The outside-click monitor dismisses on mouse-down, one beat before
         // this action arrives on mouse-up; that dismissal is the close half
-        // of the toggle, not a cue to reopen.
+        // of the toggle, not a cue to reopen. The window covers one click's
+        // down→up span, not any later deliberate press.
         if let last = lastOutsideDismissal,
            last.familyID == familyID,
-           Self.now() - last.at < 0.5 {
+           Self.now() - last.at < 0.3 {
             lastOutsideDismissal = nil
             return
         }
@@ -396,25 +414,49 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     }
 
     func dismissTransient() {
+        let closing = lifecycle.transientFamilyID
         lifecycle.closeTransient()
         rescheduleTimers()
         syncState()
+        if let closing {
+            releaseFamilyInteractionState(closing)
+        }
     }
 
-    /// The transient surface's geometric hit test, used to extend the main
-    /// panel's "pointer inside" coverage so hovering the open checklist never
-    /// fights auto-hide. The pinned window is deliberately excluded: it lives
-    /// independently of the main panel.
+    /// The transient surface's geometric hit test, used both by the main
+    /// panel's "pointer inside" coverage (hovering the open checklist never
+    /// fights auto-hide) and by latched outside-click dismissal — one
+    /// predicate keeps those paths consistent. The pointer-travel corridor
+    /// between the panel and the surface counts as inside so crossing the
+    /// gap can't trip either. The pinned window is deliberately excluded:
+    /// it lives independently of the main panel.
     func containsTransientPoint(_ point: CGPoint) -> Bool {
-        guard let panel = transientPanel, panel.isVisible,
-              panel.frame.contains(point) else { return false }
+        guard let panel = transientPanel, panel.isVisible else { return false }
         let local = CGPoint(x: point.x - panel.frame.minX, y: point.y - panel.frame.minY)
-        return Squircle.contains(
+        if Squircle.contains(
             local,
             in: CGRect(origin: .zero, size: panel.frame.size),
             cornerRadius: AtticStyle.panelCornerRadius,
             exponent: AtticStyle.panelSquircleExponent
-        )
+        ) {
+            return true
+        }
+        guard let main = panelWindow, main.isVisible else { return false }
+        let mainFrame = (main as? AtticPanel)?.visibleContentFrame ?? main.frame
+        let surface = panel.frame
+        let spanMinY = min(mainFrame.minY, surface.minY)
+        let spanMaxY = max(mainFrame.maxY, surface.maxY)
+        if surface.minX >= mainFrame.maxX {
+            return CGRect(x: mainFrame.maxX, y: spanMinY,
+                          width: surface.minX - mainFrame.maxX,
+                          height: spanMaxY - spanMinY).contains(point)
+        }
+        if surface.maxX <= mainFrame.minX {
+            return CGRect(x: surface.maxX, y: spanMinY,
+                          width: mainFrame.minX - surface.maxX,
+                          height: spanMaxY - spanMinY).contains(point)
+        }
+        return false
     }
 
     // MARK: - Pin / unpin
@@ -424,6 +466,12 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     /// one — and drafts live in `uiState.subtaskDrafts`, so they follow.
     func pinFamily(_ familyID: UUID) {
         guard resolvedParent(familyID) != nil else { return }
+        let displaced = lifecycle.pinnedFamilyID.flatMap { $0 == familyID ? nil : $0 }
+        // An in-flight edit or confirmation inside the live pinned window
+        // survives the replacement affordance's deliberate wording but not
+        // a silent swap — refuse while the displaced family is mid-action.
+        if let displaced, familyEditBusy(displaced) { return }
+        let refocusEntry = uiState.focusedSubtaskParentID == familyID
         let promotedFrame = lifecycle.transientFamilyID == familyID
             && transientPanel?.isVisible == true
             ? transientPanel?.frame
@@ -432,6 +480,14 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         presentPinned(familyID, promotedFrame: promotedFrame)
         rescheduleTimers()
         syncState()
+        if refocusEntry {
+            // Re-bump after the host swap so the new surface's entry
+            // refocuses regardless of when the old field editor resigns.
+            uiState.focusSubtaskEntry(for: familyID)
+        }
+        if let displaced {
+            releaseFamilyInteractionState(displaced)
+        }
     }
 
     /// Unpin returns to transient behaviour when a live row anchor exists;
@@ -439,19 +495,32 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     func unpinPinned() {
         guard let familyID = lifecycle.unpin() else { return }
         pinnedPanel?.orderOut(nil)
-        if mainPanelVisible, screenAnchorRect(for: familyID) != nil {
+        // Re-anchoring must not evict a different family that's mid-edit —
+        // in that case unpin behaves like a plain close of the pinned window.
+        let evictionBusy = lifecycle.transientFamilyID.map {
+            $0 != familyID && surfaceInteractionBusy($0)
+        } ?? false
+        let refocusEntry = uiState.focusedSubtaskParentID == familyID
+        if mainPanelVisible, screenAnchorRect(for: familyID) != nil, !evictionBusy {
             lifecycle.openTransient(familyID, latched: true)
             presentTransient(familyID)
         }
         rescheduleTimers()
         syncState()
+        if refocusEntry {
+            uiState.focusSubtaskEntry(for: familyID)
+        }
+        // Runs after any transient re-anchoring: the release only fires when
+        // no surface still hosts the family.
+        releaseFamilyInteractionState(familyID)
     }
 
     func closePinned() {
-        guard lifecycle.unpin() != nil else { return }
+        guard let familyID = lifecycle.unpin() else { return }
         pinnedPanel?.orderOut(nil)
         rescheduleTimers()
         syncState()
+        releaseFamilyInteractionState(familyID)
     }
 
     // MARK: - Main-panel lifecycle
@@ -471,13 +540,20 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         pendingCloseWork = nil
         outsideClickMonitors.forEach { NSEvent.removeMonitor($0) }
         outsideClickMonitors.removeAll()
-        _ = lifecycle.unpin()
+        let released = lifecycle.unpin()
+        let transientWas = lifecycle.transientFamilyID
         lifecycle.closeTransient()
         transientPanel?.orderOut(nil)
         pinnedPanel?.orderOut(nil)
         transientFamilyID = nil
         pinnedFamilyID = nil
         uiState.setInteractionLock(.subtaskComposer, isActive: false)
+        if let transientWas {
+            releaseFamilyInteractionState(transientWas)
+        }
+        if let released {
+            releaseFamilyInteractionState(released)
+        }
     }
 
     // MARK: - Content metrics
@@ -516,10 +592,35 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         updateOutsideClickMonitoring()
     }
 
+    /// Called when a family's last surface is torn down: an in-flight rename
+    /// or delete confirmation hosted by that surface must not outlive it —
+    /// the orphaned lock would hold the main panel open and stall every
+    /// future hover-close retry. Ends the interaction the same way a section
+    /// switch does; subtask drafts are unaffected and keep surviving.
+    private func releaseFamilyInteractionState(_ familyID: UUID) {
+        guard lifecycle.transientFamilyID != familyID,
+              lifecycle.pinnedFamilyID != familyID else { return }
+        func belongsToFamily(_ id: UUID?) -> Bool {
+            guard let id else { return false }
+            return id == familyID
+                || store.tasks.contains { $0.id == id && $0.parentID == familyID }
+        }
+        if belongsToFamily(uiState.editingTaskID) {
+            uiState.endEditing()
+        }
+        if belongsToFamily(uiState.confirmingTaskDeletionID) {
+            uiState.confirmingTaskDeletionID = nil
+        }
+    }
+
     private func closeTransientSurface() {
+        let closing = lifecycle.transientFamilyID
         lifecycle.closeTransient()
         rescheduleTimers()
         syncState()
+        if let closing {
+            releaseFamilyInteractionState(closing)
+        }
     }
 
     private func makeContent(_ familyID: UUID, mode: SubtaskPanelContent.Mode)
@@ -592,15 +693,26 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     }
 
     /// Subtle fade-in honoring the user's reduced-motion preference — the
-    /// surfaces intentionally skip the main panel's genie-style motion.
+    /// surfaces intentionally skip the main panel's genie-style motion. An
+    /// already-visible surface (family swap, pin replace) never fades.
     private func orderSurfaceFront(_ surface: NSWindow) {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        if surface.isVisible
+            || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            surface.alphaValue = 1
             surface.orderFrontRegardless()
         } else {
             surface.alphaValue = 0
             surface.orderFrontRegardless()
             surface.animator().alphaValue = 1
         }
+    }
+
+    /// Programmatic frame writes must not overwrite the user's remembered
+    /// pinned position — windowDidMove saves only genuine user drags.
+    private func setPinnedFrameProgrammatically(_ surface: NSWindow, _ frame: CGRect) {
+        suppressPinnedMovePersist = true
+        surface.setFrame(frame, display: true)
+        suppressPinnedMovePersist = false
     }
 
     private func presentPinned(_ familyID: UUID, promotedFrame: CGRect?) {
@@ -645,7 +757,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             screenVisibleFrames: NSScreen.screens.map(\.visibleFrame),
             fallback: promotedFrame ?? screenAnchorRect(for: familyID)
         )
-        surface.setFrame(frame, display: false)
+        setPinnedFrameProgrammatically(surface, frame)
         orderSurfaceFront(surface)
     }
 
@@ -688,7 +800,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
                 newHeight: fitting.height,
                 screenVisibleFrames: NSScreen.screens.map(\.visibleFrame)
             ), adjusted != surface.frame {
-                surface.setFrame(adjusted, display: true)
+                setPinnedFrameProgrammatically(surface, adjusted)
             }
         }
     }
@@ -736,7 +848,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         guard let openFamily = lifecycle.transientFamilyID,
               let surface = transientPanel, surface.isVisible else { return }
         let location = NSEvent.mouseLocation
-        if surface.frame.contains(location) { return }
+        // Same predicate as auto-hide coverage: the rounded corner wedges
+        // and the panel↔surface corridor are inside for both paths.
+        if containsTransientPoint(location) { return }
         // Windows owned by the surface extend beyond its frame — a context
         // menu (popUpMenu-level window) or a sheet/alert hanging off it must
         // count as inside so their clicks don't dismiss the host.
@@ -774,7 +888,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
                     to: host.visibleFrame
                 )
                 if clamped != surface.frame {
-                    surface.setFrame(clamped, display: true)
+                    setPinnedFrameProgrammatically(surface, clamped)
                 }
             }
         }
@@ -788,7 +902,14 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         if let pinned = lifecycle.pinnedFamilyID, resolvedParent(pinned) == nil {
             _ = lifecycle.unpin()
             syncState()
+            releaseFamilyInteractionState(pinned)
         }
+        // Prune cached geometry for deleted families so the maps stay
+        // bounded by live tasks only.
+        let liveIDs = Set(store.tasks.map(\.id))
+        listHeights = listHeights.filter { liveIDs.contains($0.key) }
+        rowFrames = rowFrames.filter { liveIDs.contains($0.key) }
+        controlFrames = controlFrames.filter { liveIDs.contains($0.key) }
         // Child adds/removals, status changes, and error rows all change the
         // content height — re-fit (and re-clamp) on every store revision.
         refreshSurfaceSizes()
@@ -804,7 +925,8 @@ extension SubtaskPanelController: NSWindowDelegate {
     /// pin restores here instead of beside the panel.
     func windowDidMove(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              window === pinnedPanel else { return }
+              window === pinnedPanel,
+              !suppressPinnedMovePersist else { return }
         settings.pinnedSubtaskWindowFrame = window.frame
     }
 
@@ -813,7 +935,9 @@ extension SubtaskPanelController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
               window === pinnedPanel else { return }
-        _ = lifecycle.unpin()
-        syncState()
+        if let released = lifecycle.unpin() {
+            syncState()
+            releaseFamilyInteractionState(released)
+        }
     }
 }

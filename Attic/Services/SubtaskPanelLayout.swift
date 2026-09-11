@@ -279,10 +279,14 @@ struct SubtaskPanelLifecycle: Equatable {
         return true
     }
 
-    /// Drops a pending dwell claim without touching the current surface —
-    /// used when the open family's edits must not be replaced mid-interaction.
-    mutating func discardPendingOpen() {
-        pendingOpen = nil
+    /// Re-arms the pending dwell for another interval — the row stays hovered
+    /// but the current surface is mid-interaction; a leave event still cancels.
+    mutating func rearmPendingOpen(at now: TimeInterval) {
+        guard let pending = pendingOpen else { return }
+        pendingOpen = PendingOpen(
+            familyID: pending.familyID,
+            deadline: now + SubtaskPanelLayout.openDwell
+        )
     }
 
     mutating func closeTransient() {

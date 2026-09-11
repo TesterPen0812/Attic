@@ -18,6 +18,9 @@ struct TaskRowView: View {
     /// presenting this row's checklist — keeps a soft highlight so the open
     /// panel reads as anchored to the row.
     var isFamilyPresented = false
+    /// True while the family's PINNED window is up — the count control then
+    /// raises (never hides) so its label and selection state stay truthful.
+    var isFamilyPinned = false
 
     @State private var isHovering = false
     @State private var isDropTargeted = false
@@ -165,11 +168,13 @@ struct TaskRowView: View {
                 )
             }
         }
-        .help(isFamilyPresented ? "Hide subtasks" : "Show subtasks")
-        .accessibilityLabel(isFamilyPresented ? "Hide subtasks" : "Show subtasks")
+        .help(countControlLabel)
+        .accessibilityLabel(countControlLabel)
         .accessibilityValue("\(summary.done) of \(summary.total) complete")
         .accessibilityIdentifier("subtask-progress-\(task.id.uuidString)")
-        .accessibilityAddTraits(isFamilyPresented ? .isSelected : [])
+        .accessibilityAddTraits(
+            isFamilyPresented && !isFamilyPinned ? .isSelected : []
+        )
     }
 
     @ViewBuilder
@@ -244,6 +249,11 @@ struct TaskRowView: View {
     private func handleDoubleClick() {
         guard !isEditing else { return }
         store.performDoubleClickAction(task)
+    }
+
+    private var countControlLabel: String {
+        if isFamilyPinned { return "Reveal pinned subtasks" }
+        return isFamilyPresented ? "Hide subtasks" : "Show subtasks"
     }
 
     private var progressToggleHelp: String {

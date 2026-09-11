@@ -30,6 +30,34 @@ macOS build to confirm.
 - README updated (chevron/collapsible wording removed; hover/pin/replace
   documented). Handoff spec remains the design source.
 
+## Review round 2 — dedicated adversarial reviewer (session `dbe59721`)
+
+A separate Devin reviewer audited `23ede87..c59e4e5` against the handoff and
+the R1–R7 claims. All seven fixes verified; it filed 14 findings. Resolution:
+
+| # | Severity | Verdict | Resolution |
+|---|----------|---------|------------|
+| 1 | P2 | Fixed | `openFamilyPanel` rejected-open path now raises the surface and honors `focusEntry` — repeated "Add subtask…" on an open family works. |
+| 2 | P2 | Fixed | `releaseFamilyInteractionState(_:)` runs on every teardown (transient close, pinned close/unpin, Cmd-W, scroll-out, tearDown) — orphaned `taskEditing`/`taskConfirmation` locks can no longer hold the main panel. |
+| 3 | P2 (suspicion) | Fixed proactively | Explicit opens now gate on `familyEditBusy` only — a menu's own tracking lock can never eat its menu command. menuTracking still defers pointer-driven paths only. |
+| 4 | P3 | Fixed | Hover-enter always schedules; `commitPendingOpen` re-arms via `rearmPendingOpen` while busy — resting pointer opens once the interaction resolves. |
+| 5 | P3 | Fixed (residual noted) | Suppression TTL tightened to the click's down→up span (0.3 s) and cleared on every successful open; a stale record can still only affect a same-family toggle inside 300 ms — native UAT to confirm no user-visible residue. |
+| 6 | P3 | Fixed | Pointer-leave retry now consults `shouldDeferPointerClose` (surface-owned locks only) instead of global `isInteractionLocked`. |
+| 7 | P3 | Fixed | `unpinPinned` skips the transient restore while another family is edit-busy (pinned simply dissolves); `pinFamily` refuses replacement while the displaced family is mid-edit and releases its state otherwise. |
+| 8 | P3 | Fixed | `orderSurfaceFront` skips the fade when the surface is already visible. |
+| 9 | P3 | Fixed | `setPinnedFrameProgrammatically` suppresses `windowDidMove` persistence during clamps/resizes — position memory only records user drags. |
+| 10 | P3 | Fixed | One containment predicate (`containsTransientPoint`) shared by auto-hide coverage and outside-dismissal, extended with the panel↔surface corridor so gap travel counts inside for both. |
+| 11 | P3 | Fixed | Count control announces "Reveal pinned subtasks" (no `.isSelected`) when the family's surface is the pinned window. |
+| 12 | P3 (suspicion) | Fixed proactively | `pinFamily`/`unpinPinned` re-bump `focusSubtaskEntry` when the family was focused — refocus survives either resign/onAppear ordering. |
+| 13 | P3 | Fixed | Removed duplicate didMove/didResize observers in `attach()`; the main panel's delegate path is canonical. |
+| 14 | P3 | Partially fixed | Geometry caches now prune on store revisions. Acknowledged: surface error row reflects the global `lastErrorMessage` (store errors carry no provenance); very short displays (<~200 pt usable) can still clip header+entry — extreme edge, documented here rather than chased. |
+
+New controller tests cover: same-family re-open activating the entry,
+teardown lock release (transient/pinned/confirmation), unpin re-anchor keeping
+the edit, hover re-arm while busy then open, unrelated locks not deferring
+close, unpin not evicting a busy surface, pin-replace refusal while busy and
+success when idle.
+
 ## Checks actually run in this environment
 
 - `ruby Scripts/generate_project.rb` — project regenerated; new controller

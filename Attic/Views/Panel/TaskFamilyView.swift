@@ -41,7 +41,8 @@ struct TaskFamilyView: View {
             subtaskPanels: subtaskPanels,
             task: task,
             subtaskSummary: summary,
-            isFamilyPresented: isFamilyPresented
+            isFamilyPresented: isFamilyPresented,
+            isFamilyPinned: subtaskPanels.pinnedFamilyID == task.id
         )
         .background {
             GeometryReader { proxy in
