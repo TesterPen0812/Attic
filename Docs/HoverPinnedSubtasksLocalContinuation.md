@@ -5,28 +5,37 @@ implementer/reviewer pair. Update this file whenever the checkpoint moves.
 
 ## Coordination handshake (authoritative)
 
-- **Phase:** `READY_FOR_REVIEW`
-- **Candidate SHA:** `READY_FOR_REVIEW: 209a0eb20967c98770c2b7326b63e226f950cbe9`
-  ("Address local adversarial-review findings F1-F5", on top of `7535d00`).
-- **Report consumed:** `.build/LocalAdversarialReview.md` baseline verdict
-  on `7535d00` = NOT CLEAN, findings F1–F4 — all addressed by the candidate
-  (plus F5, a willSet-lag defect the first native test run exposed and the
-  baseline could not see: `.subtaskComposer` previously engaged/released one
-  change late). Reviewer refinement requests on F2 (same-click resign +
-  stale focus pointer) are implemented.
-- **Unresolved finding IDs:** none known pending re-review; reviewer's
-  remarks were no-action. F2's residual decisions taken: real teardowns
-  clear `focusedSubtaskParentID` (entry row + draft still survive);
-  same-click resign reuse window = 0.5 s.
-- **Verification at candidate SHA:** `verify_project_generation.rb` PASS;
-  `xcodebuild build -scheme Attic` PASS (Local config,
-  `CODE_SIGNING_ALLOWED=NO`); `xcodebuild test -only-testing:AtticTests`
-  PASS — 637 tests, 0 failures, 1 skipped. AtticUITests + manual UAT remain.
-- **Waking the reviewer:** this session CANNOT message the reviewer
-  directly; READY_FOR_REVIEW here is necessary but NOT sufficient — a
-  coordinating message to the reviewer session is required to trigger its
-  follow-up pass. Do not claim completion until the reviewer's report
-  names `209a0eb`.
+- **Phase:** `REVIEW_CONVERGED` — local adversarial loop ran in-session
+  (spawned reviewer subagent, iterated fixes) and returned **CLEAN on
+  `b2453087d3b1279a86198e519b8950ba764ee9db`**. The file-based handshake
+  below is kept for audit; the separate `.build/LocalAdversarialReview.md`
+  reviewer reviewed only immutable `7535d00` (baseline) — its findings map
+  1:1 onto the F-ids fixed here.
+- **Baseline report consumed:** `.build/LocalAdversarialReview.md` verdict
+  on `7535d00` = NOT CLEAN, findings F1–F4 (confirmed by both reviewers).
+- **Fix commit:** `209a0eb20967c98770c2b7326b63e226f950cbe9` ("Address
+  local adversarial-review findings F1-F5") — F1 child-keyed release,
+  F2 host-aware focus handoff + resign-reuse window + stale-pointer clear,
+  F3 disabled Replace affordance, F4 uniform teardown, F5 @Published
+  willSet lag (`.subtaskComposer` engaged/released one change late — the
+  R1 mechanism never actually worked; exposed by the first native run).
+- **Review pass 1 on `209a0eb`:** all five fixes verified; one new P3
+  found — N1: duplicate `.id("subtask-entry-…")` shared by the
+  `+ Add subtask` Button and the entry HStack.
+- **N1 fix commit:** `b2453087d3b1279a86198e519b8950ba764ee9db` — distinct
+  `.id("subtask-add-…")` on the affordance.
+- **Review pass 2 on `b245308`:** **CLEAN** — N1 resolved, `unpinPinned`
+  ordering confirmed, `noteSubtaskEntryResigned` guard confirmed safe in
+  all interleavings, no new P1–P3 issues on a full feature-surface sweep.
+- **Unresolved finding IDs:** none. Residual decisions taken: real
+  teardowns clear `focusedSubtaskParentID` (entry row + draft survive);
+  same-click resign reuse window = 0.5 s; family-swap leaves focus memory
+  for the displaced family (baseline "arguably desirable" remark).
+- **Verification at HEAD (`b245308`):** `verify_project_generation.rb`
+  PASS; `xcodebuild build -scheme Attic` PASS; AtticTests 637 pass /
+  0 fail / 1 skip (includes all 37 controller tests, 9 of them round-3
+  regressions). AtticUITests (signed runner) + manual UAT remain with the
+  user.
 
 ## Provenance
 

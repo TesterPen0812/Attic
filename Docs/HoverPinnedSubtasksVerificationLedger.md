@@ -80,6 +80,11 @@ across pin/unpin/dismiss, same-click resign refocus, aged resign not
 refocusing, teardown clearing the stale focus pointer, and anchor-nil
 maturation releasing the family's state.
 
+Round-3 review loop converged: the spawned adversarial reviewer verified
+F1–F5, found N1 (duplicate `.id("subtask-entry-…")` on the `+ Add subtask`
+Button and entry HStack — fixed by giving the affordance
+`.id("subtask-add-…")`), and returned **CLEAN** on `b245308`.
+
 ## Checks actually run
 
 Cloud environment (`7535d00` and earlier):
