@@ -1,0 +1,30 @@
+label=promotion-perf-agent-isolated-20260916 limit=60s started=2026-09-16T17:04:44Z
+tests=TaskPerformanceGateTests
+products=/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local
+host_sha256=2287db132ef1900a23f1352289411bd47c6c755e9e2bbc7bfb59af32b7a39e2d
+host_debug_dylib_sha256=5a3708d2d50385ece573251646aac6d5eb800c65875be98279c61898c1516f8b
+bundle_binary_sha256=71a8c64edabf3e9054335c33156326779b1f3884e92e80e6ce82e711e06b029e
+sandbox_extension_issue_file_to_process failed for /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app: 1 (Operation not permitted)
+Test Suite 'Selected tests' started at 2026-09-16 18:04:45.521.
+Test Suite 'AtticTests.xctest' started at 2026-09-16 18:04:45.522.
+Test Suite 'TaskPerformanceGateTests' started at 2026-09-16 18:04:45.523.
+Test Case '-[AtticTests.TaskPerformanceGateTests testAttachmentMemoFollowsThePayload]' started.
+Test Case '-[AtticTests.TaskPerformanceGateTests testAttachmentMemoFollowsThePayload]' passed (0.005 seconds).
+Test Case '-[AtticTests.TaskPerformanceGateTests testFamilySummaryPassAtSixThousandTasksIsMilliseconds]' started.
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskPerformanceGateTests.swift:60: error: -[AtticTests.TaskPerformanceGateTests testFamilySummaryPassAtSixThousandTasksIsMilliseconds] : XCTAssertLessThan failed: ("28.837792") is not less than ("25.0") - family lookups must stay near-constant per row (median 28.837792 ms)
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskPerformanceGateTests.swift:61: Test Case '-[AtticTests.TaskPerformanceGateTests testFamilySummaryPassAtSixThousandTasksIsMilliseconds]' measured [Clock Monotonic Time, s] average: 0.002, relative standard deviation: 8.977%, values: [0.001637, 0.002105, 0.001739, 0.001934, 0.001977], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.TaskPerformanceGateTests testFamilySummaryPassAtSixThousandTasksIsMilliseconds]' failed (7.692 seconds).
+Test Case '-[AtticTests.TaskPerformanceGateTests testRepeatedAttachmentReadsAreMemoizedPerPayload]' started.
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskPerformanceGateTests.swift:104: Test Case '-[AtticTests.TaskPerformanceGateTests testRepeatedAttachmentReadsAreMemoizedPerPayload]' measured [Clock Monotonic Time, s] average: 0.000, relative standard deviation: 2.210%, values: [0.000411, 0.000393, 0.000403, 0.000388, 0.000390], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.TaskPerformanceGateTests testRepeatedAttachmentReadsAreMemoizedPerPayload]' passed (0.103 seconds).
+Test Case '-[AtticTests.TaskPerformanceGateTests testStatusToggleAtSixThousandTasksStaysBounded]' started.
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskPerformanceGateTests.swift:87: error: -[AtticTests.TaskPerformanceGateTests testStatusToggleAtSixThousandTasksStaysBounded] : XCTAssertLessThan failed: ("202.667208") is not less than ("120.0") - a single toggle must not rescan or refetch the whole store (median 202.667208 ms)
+Test Case '-[AtticTests.TaskPerformanceGateTests testStatusToggleAtSixThousandTasksStaysBounded]' failed (2.777 seconds).
+Test Suite 'TaskPerformanceGateTests' failed at 2026-09-16 18:04:56.102.
+	 Executed 4 tests, with 2 failures (0 unexpected) in 10.578 (10.579) seconds
+Test Suite 'AtticTests.xctest' failed at 2026-09-16 18:04:56.102.
+	 Executed 4 tests, with 2 failures (0 unexpected) in 10.578 (10.580) seconds
+Test Suite 'Selected tests' failed at 2026-09-16 18:04:56.102.
+	 Executed 4 tests, with 2 failures (0 unexpected) in 10.578 (10.581) seconds
+PERFGATE toggle=38.97024428571428 snapshot=157.9584942857143 lookup=0.023606857142857148
+exit_status=1 finished=2026-09-16T17:04:56Z
