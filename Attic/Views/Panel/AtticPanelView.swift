@@ -100,6 +100,10 @@ struct AtticPanelView: View {
     }
 
     var body: some View {
+        themedPanel
+    }
+
+    private var panelContent: some View {
         ZStack {
             sectionWorkspace
         }
@@ -141,6 +145,10 @@ struct AtticPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var surfacedPanel: some View {
+        panelContent
         .environment(\.colorScheme, systemColorScheme)
         .foregroundStyle(panelThemePalette.primaryForegroundColor, panelThemePalette.secondaryForegroundColor)
         .environment(\.atticPanelGlassStyle, effectiveGlassStyle)
@@ -169,6 +177,10 @@ struct AtticPanelView: View {
                 uiState.isPanelPinned.toggle()
             }
         }
+    }
+
+    private var storeObservedPanel: some View {
+        surfacedPanel
         .onChange(of: uiState.selectedSection) { _, _ in
             syncComposerInteractionHeight()
             syncTaskEntryInteractionLocks()
@@ -195,6 +207,10 @@ struct AtticPanelView: View {
             reconcileNoteDraft()
             openMostRecentNoteIfNeeded()
         }
+    }
+
+    private var interactionObservedPanel: some View {
+        storeObservedPanel
         .onAppear {
             syncModeDockInteractionWidth()
             syncComposerInteractionHeight()
@@ -235,6 +251,10 @@ struct AtticPanelView: View {
                 errorBannerHeight = resolvedHeight
             }
         }
+    }
+
+    private var themedPanel: some View {
+        interactionObservedPanel
         .environment(\.atticPanelThemePalette, panelThemePalette)
         .environment(
             \.atticPanelUsesSystemAccent,
