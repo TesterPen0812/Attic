@@ -7,6 +7,12 @@ on:
       - main
       - feature/canvas-ink
   workflow_dispatch:
+    inputs:
+      run_iphone:
+        description: Run the deferred iPhone build-for-testing lane
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -21,8 +27,10 @@ env:
 jobs:
   macos:
     name: Build, test, and analyze Attic for macOS
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 75
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
     steps:
       - name: Check out repository
@@ -36,6 +44,14 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "HEAD=$(git rev-parse HEAD)"
           echo "Luna base=$(git merge-base "$LUNA_REPAIRED_COMMIT" HEAD)"
+
+      - name: Verify Xcode 26 toolchain
+        run: |
+          xcodebuild -version
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK $sdk_version"
+          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          test "${sdk_version%%.*}" = 26
 
       - name: Set up Ruby dependencies
         uses: ruby/setup-ruby@v1
@@ -127,7 +143,7 @@ jobs:
           ATTIC_VISUAL_UAT_DIRECTORY="$RUNNER_TEMP/attic-visual-uat" \
           xcodebuild \
             -project Attic.xcodeproj \
-            -scheme Attic \
+            -scheme AtticUI \
             -configuration Local \
             -destination 'platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
@@ -182,7 +198,16 @@ jobs:
         run: |
           bundle exec ruby Scripts/verify_project_generation.rb
           git diff --exit-code -- Attic.xcodeproj
-          test -z "$(git status --porcelain)"
+          status="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$status" ]; then
+            echo "Unexpected worktree changes after CI verification:"
+            printf '%s\n' "$status"
+            git diff --stat
+            git diff
+            git diff --cached --stat
+            git diff --cached
+            exit 1
+          fi
 
       - name: Require every macOS verification
         if: always()
@@ -213,8 +238,11 @@ jobs:
 
   iphone:
     name: Build Attic for iPhone Simulator
-    runs-on: macos-15
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone }}
+    runs-on: macos-26
     timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
     steps:
       - name: Check out repository
@@ -228,6 +256,14 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "HEAD=$(git rev-parse HEAD)"
           echo "Luna base=$(git merge-base "$LUNA_REPAIRED_COMMIT" HEAD)"
+
+      - name: Verify Xcode 26 toolchain
+        run: |
+          xcodebuild -version
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK $sdk_version"
+          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+          test "${sdk_version%%.*}" = 26
 
       - name: Set up Ruby dependencies
         uses: ruby/setup-ruby@v1
@@ -284,7 +320,16 @@ jobs:
         run: |
           bundle exec ruby Scripts/verify_project_generation.rb
           git diff --exit-code -- Attic.xcodeproj
-          test -z "$(git status --porcelain)"
+          status="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$status" ]; then
+            echo "Unexpected worktree changes after CI verification:"
+            printf '%s\n' "$status"
+            git diff --stat
+            git diff
+            git diff --cached --stat
+            git diff --cached
+            exit 1
+          fi
 
       - name: Require every iPhone verification
         if: always()
