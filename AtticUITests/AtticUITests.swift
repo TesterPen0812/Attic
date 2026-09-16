@@ -68,6 +68,15 @@ final class AtticUITests: XCTestCase {
         return settings
     }
 
+    private func setTaskOptionsExpanded(_ expanded: Bool) {
+        let menu = app.descendants(matching: .any)["add-task-button"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 3))
+        menu.click()
+        let action = app.menuItems[expanded ? "Task options" : "Close task options"]
+        XCTAssertTrue(action.waitForExistence(timeout: 2))
+        action.click()
+    }
+
     override func tearDownWithError() throws {
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
@@ -344,7 +353,7 @@ final class AtticUITests: XCTestCase {
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
         let addButton = app.descendants(matching: .any)["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
-        addButton.click()
+        setTaskOptionsExpanded(true)
 
         let composer = app.descendants(matching: .any)["task-entry-bar"]
         let submit = app.buttons["quick-entry-submit"]
@@ -426,12 +435,12 @@ final class AtticUITests: XCTestCase {
         title.typeText("Plan weekend trip")
         XCTAssertFalse(app.buttons["task-priority-high"].exists, "Typing should keep the composer compact")
         XCTAssertEqual(composer.frame.height, collapsedHeight, accuracy: 1)
-        app.descendants(matching: .any)["add-task-button"].click()
+        setTaskOptionsExpanded(true)
         let high = app.buttons["task-priority-high"]
         XCTAssertTrue(high.waitForExistence(timeout: 2))
         XCTAssertLessThanOrEqual(composer.frame.height - collapsedHeight, 35)
         high.click()
-        app.descendants(matching: .any)["add-task-button"].click()
+        setTaskOptionsExpanded(false)
         XCTAssertEqual(title.value as? String, "Plan weekend trip")
         XCTAssertFalse(high.exists)
         app.buttons["quick-entry-submit"].click()
@@ -631,8 +640,6 @@ final class AtticUITests: XCTestCase {
     /// (it fades at the trailing edge instead of wrapping), while the full
     /// text remains available as the row's accessibility label.
     func testLongTaskTitleStaysOnOneLineAndKeepsFullTextAccessible() throws {
-        app.descendants(matching: .any)["add-task-button"].click()
-
         let shortTitle = "Short"
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
         let titleField = app.textFields["quick-entry-title"]

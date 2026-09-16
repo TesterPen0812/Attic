@@ -10,7 +10,7 @@ The first complete Xcode 26.6 run, [35126949864](https://github.com/TesterPen081
 
 ## UI harness corrections
 
-- Query `add-task-button` by identifier across roles because its native role is MenuButton.
+- Query `add-task-button` by identifier across roles because its native role is MenuButton, then select Task options or Close task options from its menu before asserting expansion or collapse. The title-layout test uses the already-visible entry field directly.
 - Use the current `subtask-composer-action-<UUID>` identifier.
 - Move Settings clear of the always-visible test panel before interacting with occluded controls.
 - Assert the documented 320×460 visible-content minimum, which is the accessibility frame; native resize borders are outside that frame.
