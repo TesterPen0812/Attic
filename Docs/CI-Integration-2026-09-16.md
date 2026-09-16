@@ -35,6 +35,22 @@ lists `macos-26` as the ARM64 YAML label and Xcode 26.6 as its default, with a
 macOS 26 SDK. The workflow also prints and asserts the Xcode and SDK major
 versions before building.
 
+The first Xcode 26 rerun, Actions run
+[`35124798381`](https://github.com/TesterPen0812/Attic/actions/runs/35124798381),
+confirmed that toolchain selection, project generation, and the corrected UI
+scheme routing worked. It then exposed one app-source compiler blocker common
+to the normal build, strict build, unit-test build, UI-test build, and analyzer:
+Xcode 26.6 could not type-check the expression at
+`Attic/Views/Panel/AtticPanelView.swift:234` in reasonable time. The workflow
+kept every affected gate failed; this is a product-source issue rather than a
+CI suppression candidate.
+
+That rerun also identified the previously hidden cleanliness residue.
+`ruby/setup-ruby`'s dependency cache created `.bundle/config` and
+`vendor/bundle/` inside the checkout. Ruby setup now installs dependencies with
+`BUNDLE_PATH` and `BUNDLE_USER_CONFIG` rooted under `RUNNER_TEMP`, preserving a
+strictly clean checkout without ignoring generated files.
+
 The macOS build, strict-concurrency build, unit tests, UI tests, analyzer, and
 final cleanliness check remain required. UI tests now use `AtticUI`. Final
 cleanliness failures print the complete porcelain status plus staged and
@@ -49,5 +65,7 @@ until iPhone development is deliberately reactivated.
 
 - Workflow diff passed `git diff --check`.
 - The workflow parsed as YAML locally.
-- A real pull-request CI rerun is required to validate the hosted runner,
-  build, tests, analyzer, UI-test scheme, and exact final-worktree state.
+- Pull-request run `35124798381` verified hosted Xcode 26 routing and exposed
+  the app-source compiler blocker and dependency-cache residue above.
+- Another real pull-request CI rerun is required after the source compiler
+  blocker is resolved.

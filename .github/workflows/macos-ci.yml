@@ -53,11 +53,18 @@ jobs:
           xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
           test "${sdk_version%%.*}" = 26
 
-      - name: Set up Ruby dependencies
+      - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-          bundler-cache: true
+
+      - name: Install Ruby dependencies outside the checkout
+        run: |
+          echo "BUNDLE_PATH=$RUNNER_TEMP/AtticBundle" >> "$GITHUB_ENV"
+          echo "BUNDLE_USER_CONFIG=$RUNNER_TEMP/AtticBundleConfig" >> "$GITHUB_ENV"
+          export BUNDLE_PATH="$RUNNER_TEMP/AtticBundle"
+          export BUNDLE_USER_CONFIG="$RUNNER_TEMP/AtticBundleConfig"
+          bundle install --jobs 4 --retry 3
 
       - name: Regenerate checked-in Xcode project
         run: bundle exec ruby Scripts/generate_project.rb
@@ -198,10 +205,10 @@ jobs:
         run: |
           bundle exec ruby Scripts/verify_project_generation.rb
           git diff --exit-code -- Attic.xcodeproj
-          status="$(git status --porcelain --untracked-files=all)"
-          if [ -n "$status" ]; then
+          worktree_status="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$worktree_status" ]; then
             echo "Unexpected worktree changes after CI verification:"
-            printf '%s\n' "$status"
+            printf '%s\n' "$worktree_status"
             git diff --stat
             git diff
             git diff --cached --stat
@@ -265,11 +272,18 @@ jobs:
           xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
           test "${sdk_version%%.*}" = 26
 
-      - name: Set up Ruby dependencies
+      - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-          bundler-cache: true
+
+      - name: Install Ruby dependencies outside the checkout
+        run: |
+          echo "BUNDLE_PATH=$RUNNER_TEMP/AtticBundle" >> "$GITHUB_ENV"
+          echo "BUNDLE_USER_CONFIG=$RUNNER_TEMP/AtticBundleConfig" >> "$GITHUB_ENV"
+          export BUNDLE_PATH="$RUNNER_TEMP/AtticBundle"
+          export BUNDLE_USER_CONFIG="$RUNNER_TEMP/AtticBundleConfig"
+          bundle install --jobs 4 --retry 3
 
       - name: Regenerate checked-in Xcode project
         run: bundle exec ruby Scripts/generate_project.rb
@@ -320,10 +334,10 @@ jobs:
         run: |
           bundle exec ruby Scripts/verify_project_generation.rb
           git diff --exit-code -- Attic.xcodeproj
-          status="$(git status --porcelain --untracked-files=all)"
-          if [ -n "$status" ]; then
+          worktree_status="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$worktree_status" ]; then
             echo "Unexpected worktree changes after CI verification:"
-            printf '%s\n' "$status"
+            printf '%s\n' "$worktree_status"
             git diff --stat
             git diff
             git diff --cached --stat
