@@ -53,6 +53,53 @@ final class DailyCleanupServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testCleanupPurgesOnlyCompletionStrictlyBeforeCutoff() throws {
+        let cutoff = Date(timeIntervalSince1970: 500_000)
+        let createdAt = cutoff.addingTimeInterval(-100)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let missingCompletion = TaskItem(
+            title: "Missing completion date",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: nil
+        )
+        let atCutoff = TaskItem(
+            title: "Completed at cutoff",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff
+        )
+        let beforeCutoff = TaskItem(
+            title: "Completed before cutoff",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff.addingTimeInterval(-1)
+        )
+        let afterCutoff = TaskItem(
+            title: "Completed after cutoff",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff.addingTimeInterval(1)
+        )
+        [missingCompletion, atCutoff, beforeCutoff, afterCutoff].forEach(context.insert)
+        try context.save()
+
+        let store = TaskStore(container: container)
+        XCTAssertEqual(store.purgeCompleted(before: cutoff), 1)
+
+        let expectedRemainingIDs: Set<UUID> = [
+            missingCompletion.id,
+            atCutoff.id,
+            afterCutoff.id,
+        ]
+        XCTAssertEqual(Set(store.tasks.map(\.id)), expectedRemainingIDs)
+        let persisted = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(Set(persisted.map(\.id)), expectedRemainingIDs)
+        XCTAssertFalse(persisted.contains { $0.id == beforeCutoff.id })
+    }
+
+    @MainActor
     func testCleanupPreservesDivergentDuplicateButDeletesOldDoneAfterRecentEdit() throws {
         let now = Date(timeIntervalSince1970: 500_000)
         let old = now.addingTimeInterval(-3 * 24 * 60 * 60)

@@ -3530,6 +3530,114 @@ final class CanvasDomainTests: XCTestCase {
         XCTAssertEqual(session.interactionCancellationEpoch, epoch + 1)
     }
 
+    @MainActor
+    func testDismantleDefersDraftPublicationUntilAfterSwiftUIGraphTeardown() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        let replacementSession = CanvasSession(store: try makeTestCanvasStore())
+        let replacementPlaced = await replacementSession.insertText(
+            "Other",
+            at: .zero,
+            prefersDarkSurface: false
+        )
+        XCTAssertTrue(replacementPlaced)
+        let object = try XCTUnwrap(session.semanticObjects.first)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let bridge = CanvasNSViewRepresentable(
+            session: session,
+            selectionAccentColor: .systemBlue,
+            clearReadabilityEnabled: false
+        )
+        bridge.configure(view)
+        view.beginSemanticTextEditing(object)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" edited", replacementRange: NSRange(location: 4, length: 0))
+        let availabilityBeforeDismantle = session.editingAvailabilityToken
+
+        CanvasNSViewRepresentable.dismantleNSView(view, coordinator: ())
+        CanvasNSViewRepresentable.dismantleNSView(view, coordinator: ())
+
+        XCTAssertFalse(view.isRepresentationActive)
+        XCTAssertEqual(session.editingAvailabilityToken, availabilityBeforeDismantle)
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Keep")
+
+        view.activateRepresentation()
+        CanvasNSViewRepresentable(
+            session: replacementSession,
+            selectionAccentColor: .systemBlue,
+            clearReadabilityEnabled: false
+        ).configure(view)
+        XCTAssertTrue(view.isRepresentationActive)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertNil(view.semanticTextEditor)
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Keep edited")
+        XCTAssertGreaterThan(session.editingAvailabilityToken, availabilityBeforeDismantle)
+        XCTAssertEqual(replacementSession.semanticObjects.first?.content?.text, "Other")
+    }
+
+    @MainActor
+    func testPreparedDeactivationRetainsSessionUntilDeferredDraftCommit() async throws {
+        let store = try makeTestCanvasStore()
+        var session: CanvasSession? = CanvasSession(store: store)
+        let placed = await session?.insertText("Keep", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed == true)
+        let object = try XCTUnwrap(session?.semanticObjects.first)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        CanvasNSViewRepresentable(
+            session: try XCTUnwrap(session),
+            selectionAccentColor: .systemBlue,
+            clearReadabilityEnabled: false
+        ).configure(view)
+        view.beginSemanticTextEditing(object)
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" edited", replacementRange: NSRange(location: 4, length: 0))
+
+        var completion = view.prepareForDeferredDeactivation()
+        weak let retainedSession = session
+        session = nil
+
+        XCTAssertNotNil(completion)
+        XCTAssertNotNil(retainedSession)
+        completion?()
+        completion = nil
+        XCTAssertNil(retainedSession)
+        XCTAssertEqual(
+            CanvasStore(container: store.container).semanticObjects.first?.content?.text,
+            "Keep edited"
+        )
+    }
+
+    @MainActor
+    func testReentrantDismantleDoesNotDuplicateAnInProgressTextCommit() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        CanvasNSViewRepresentable(
+            session: session,
+            selectionAccentColor: .systemBlue,
+            clearReadabilityEnabled: false
+        ).configure(view)
+        view.beginSemanticTextEditing(try XCTUnwrap(session.semanticObjects.first))
+        let editor = try XCTUnwrap(view.semanticTextEditor)
+        editor.insertText(" edited", replacementRange: NSRange(location: 4, length: 0))
+        editor.isFinishing = true
+        let availabilityBeforeDismantle = session.editingAvailabilityToken
+
+        let completion = view.prepareForDeferredDeactivation()
+        completion?()
+
+        XCTAssertTrue(view.semanticTextEditor === editor)
+        XCTAssertEqual(session.editingAvailabilityToken, availabilityBeforeDismantle)
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Keep")
+
+        editor.isFinishing = false
+        XCTAssertTrue(view.finishSemanticTextEditing(commit: true))
+        XCTAssertNil(view.semanticTextEditor)
+        XCTAssertEqual(session.semanticObjects.first?.content?.text, "Keep edited")
+    }
+
     private func canvasScrollEvent(
         deltaX: Int32 = 0,
         deltaY: Int32,

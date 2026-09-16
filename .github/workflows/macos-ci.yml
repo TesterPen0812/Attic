@@ -23,6 +23,7 @@ concurrency:
 
 env:
   LUNA_REPAIRED_COMMIT: 8063d92c995015b77a0493723270b6c183adb784
+  BUNDLE_FROZEN: "true"
 
 jobs:
   macos:
@@ -118,6 +119,7 @@ jobs:
       - name: Run macOS unit tests
         id: unit_tests
         continue-on-error: true
+        timeout-minutes: 20
         run: |
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
           xcodebuild \
@@ -140,9 +142,19 @@ jobs:
               --format json
           fi
 
+      - name: Upload macOS unit-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-unit-test-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticUnitTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Run macOS UI tests
         id: ui_tests
         continue-on-error: true
+        timeout-minutes: 30
         run: |
           rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
           rm -rf "$RUNNER_TEMP/attic-visual-uat"

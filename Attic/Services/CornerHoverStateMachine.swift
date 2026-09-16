@@ -1,19 +1,40 @@
 import Foundation
 
 enum MainPanelAutoHidePolicy {
+    private static let focusExpirationDelay: TimeInterval = 1.5
+    private static let temporaryFocusReasons: Set<PanelInteractionLockReason> = [
+        .quickEntryFocus,
+        .notesEditorFocus,
+    ]
+
     static func isInteractionLocked(
         reasons: Set<PanelInteractionLockReason>, pointerInside: Bool,
         secondsSinceKeyboardInput: TimeInterval
     ) -> Bool {
         var effective = reasons
-        if !pointerInside, secondsSinceKeyboardInput >= 1.5 {
+        if !pointerInside, secondsSinceKeyboardInput >= focusExpirationDelay {
             // A clean, idle main editor retaining first responder is not a
             // permanent pin. Drafts, menus, selections and auxiliary editors
             // retain their independent protection.
-            effective.remove(.quickEntryFocus)
-            effective.remove(.notesEditorFocus)
+            effective.subtract(temporaryFocusReasons)
         }
         return !effective.isEmpty
+    }
+
+    /// The one moment a temporary focus lock can expire without another UI
+    /// event. Persistent locks need no timer because elapsed time cannot make
+    /// them eligible for auto-hide.
+    static func focusExpirationDeadline(
+        reasons: Set<PanelInteractionLockReason>,
+        pointerInside: Bool,
+        lastKeyboardInputAt: TimeInterval,
+        timestamp: TimeInterval
+    ) -> TimeInterval? {
+        guard !pointerInside,
+              !reasons.isDisjoint(with: temporaryFocusReasons),
+              reasons.isSubset(of: temporaryFocusReasons) else { return nil }
+        let deadline = lastKeyboardInputAt + focusExpirationDelay
+        return deadline > timestamp ? deadline : nil
     }
 }
 

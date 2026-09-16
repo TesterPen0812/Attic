@@ -339,20 +339,31 @@ final class CornerHoverMonitor {
         }
     }
 
-    /// The only timed work while visible: a single follow-up at the moment
-    /// the hide delay (or reveal grace) elapses for a pointer already away.
-    /// Locks and pins are event-driven (see `scheduleLockSample`); a pressed
-    /// button is followed by its mouse-up event.
+    /// The only timed work while visible: a single follow-up at the next
+    /// decision deadline. This is normally the hide delay or reveal grace;
+    /// clean editor focus also gets one deadline because keyboard-idle time
+    /// can expire that lock without another event. Persistent locks and pins
+    /// remain event-driven (see `scheduleLockSample`), and a pressed button is
+    /// followed by its mouse-up event.
     private func scheduleFollowUp(
         at uptime: TimeInterval, isInPanel: Bool, isInteractionLocked: Bool, isMouseButtonPressed: Bool
     ) {
         followUpWork?.cancel()
         followUpWork = nil
-        guard !isMouseButtonPressed,
-              let deadline = stateMachine.nextTimedDecision(
-                at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
-                isPinned: uiState.isPanelPinned, hideDelay: settings.hideDelay
-              ) else { return }
+        let isPinned = uiState.isPanelPinned
+        guard stateMachine.isVisible, !stateMachine.isHidePending,
+              !isMouseButtonPressed, !isPinned else { return }
+        let stateDeadline = stateMachine.nextTimedDecision(
+            at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
+            isPinned: isPinned, hideDelay: settings.hideDelay
+        )
+        let focusDeadline = MainPanelAutoHidePolicy.focusExpirationDeadline(
+            reasons: uiState.interactionLockReasons,
+            pointerInside: isInPanel,
+            lastKeyboardInputAt: lastKeyboardInputAt,
+            timestamp: uptime
+        )
+        guard let deadline = [stateDeadline, focusDeadline].compactMap({ $0 }).min() else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning else { return }
             self.followUpWork = nil
@@ -450,7 +461,11 @@ final class CornerHoverMonitor {
         localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask.union(.keyDown)) {
             [weak self] event in
             MainActor.assumeIsolated {
-                if event.type == .keyDown { self?.lastKeyboardInputAt = ProcessInfo.processInfo.systemUptime }
+                if event.type == .keyDown {
+                    self?.lastKeyboardInputAt = ProcessInfo.processInfo.systemUptime
+                    self?.followUpWork?.cancel()
+                    self?.followUpWork = nil
+                }
                 self?.pointerActivityObserved(at: NSEvent.mouseLocation)
             }
             return event

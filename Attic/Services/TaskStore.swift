@@ -848,9 +848,12 @@ final class TaskStore: ObservableObject {
         let stored: [TaskItem]
         do {
             let doneRaw = TaskStatus.done.rawValue
-            let farFuture = Date.distantFuture
             let candidates = try context.fetch(FetchDescriptor<TaskItem>(
-                predicate: #Predicate { $0.statusRaw == doneRaw && ($0.completedAt ?? farFuture) < cutoff }
+                predicate: #Predicate {
+                    $0.statusRaw == doneRaw
+                        && $0.completedAt != nil
+                        && $0.completedAt! < cutoff
+                }
             ))
             guard !candidates.isEmpty else { return 0 }
             let candidateIDs = Array(Set(candidates.map(\.id)))

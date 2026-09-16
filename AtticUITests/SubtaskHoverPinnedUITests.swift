@@ -181,12 +181,11 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
         app.menuItems["Add subtask…"].click()
         let field = app.textFields["subtask-title-\(id)"]
         XCTAssertTrue(field.waitForExistence(timeout: 2))
-        focusEntryField(field)
         for child in children {
+            focusEntryField(field)
             field.typeText(child)
-            // App-level Return targets the live field editor: the focused
-            // TextField's AX element is replaced whenever its editor
-            // attaches/detaches, so element-scoped typeKey can race it.
+            // Reacquire the live field editor for every row, then keep the
+            // documented Enter-to-save path under test at every list size.
             app.typeKey(.return, modifierFlags: [])
             XCTAssertTrue(
                 app.staticTexts[child].waitForExistence(timeout: 2),
@@ -680,7 +679,7 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
         add.click()
         XCTAssertTrue(app.textFields["subtask-title-\(a)"].waitForExistence(timeout: 2))
         app.typeText("Third child")
-        app.buttons["subtask-entry-submit-\(a)"].click()
+        app.buttons["subtask-composer-action-\(a)"].click()
         XCTAssertTrue(row(titled: "Third child").waitForExistence(timeout: 2))
     }
 

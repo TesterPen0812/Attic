@@ -39,6 +39,35 @@ final class AtticUITests: XCTestCase {
         ] = token
     }
 
+    /// The main Attic panel stays visible under UI testing and is docked over
+    /// the right side of the default 1024pt CI display. Move Settings into the
+    /// clear work area before interacting with controls that otherwise exist
+    /// but are correctly reported as not hittable behind that panel.
+    private func openSettings(section identifier: String) -> XCUIElement {
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Attic Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        let distanceToLeftInset = max(0, settings.frame.minX - 12)
+        if distanceToLeftInset > 1 {
+            let titleBar = settings.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.25, dy: 0.02)
+            )
+            titleBar.click(
+                forDuration: 0.1,
+                thenDragTo: titleBar.withOffset(
+                    CGVector(dx: -distanceToLeftInset, dy: 0)
+                ),
+                withVelocity: .slow,
+                thenHoldForDuration: 0.1
+            )
+        }
+        let section = settings.descendants(matching: .any)[identifier]
+        XCTAssertTrue(section.waitForExistence(timeout: 3))
+        XCTAssertTrue(section.isHittable)
+        section.click()
+        return settings
+    }
+
     override func tearDownWithError() throws {
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
@@ -80,10 +109,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testAgentAccessConnectionDetailsRemainAccessible() throws {
-        app.typeKey(",", modifierFlags: .command)
-        let settings = app.windows["Attic Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
-        settings.descendants(matching: .any)["settings-nav-agentAccess"].click()
+        let settings = openSettings(section: "settings-nav-agentAccess")
         let toggle = settings.descendants(matching: .any)["setting-agent-access"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 3))
         if settings.descendants(matching: .any)["settings-agent-disabled-message"].exists {
@@ -103,10 +129,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testAppearanceThemesResolveClearAndGradientControls() throws {
-        app.typeKey(",", modifierFlags: .command)
-        let settings = app.windows["Attic Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
-        settings.descendants(matching: .any)["settings-nav-appearance"].click()
+        let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         let appearance = settings.descendants(matching: .any)["setting-appearance"]
@@ -218,10 +241,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testAppearancePickerSelectionTransitions() throws {
-        app.typeKey(",", modifierFlags: .command)
-        let settings = app.windows["Attic Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
-        settings.descendants(matching: .any)["settings-nav-appearance"].click()
+        let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         let appearance = settings.descendants(matching: .any)["setting-appearance"]
@@ -271,10 +291,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testGradientCoverageReachesExactEndpoints() throws {
-        app.typeKey(",", modifierFlags: .command)
-        let settings = app.windows["Attic Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 3))
-        settings.descendants(matching: .any)["settings-nav-appearance"].click()
+        let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         // Light makes the gradient available even if the previous run stored
@@ -325,7 +342,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
-        let addButton = app.buttons["add-task-button"]
+        let addButton = app.descendants(matching: .any)["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
         addButton.click()
 
@@ -409,12 +426,12 @@ final class AtticUITests: XCTestCase {
         title.typeText("Plan weekend trip")
         XCTAssertFalse(app.buttons["task-priority-high"].exists, "Typing should keep the composer compact")
         XCTAssertEqual(composer.frame.height, collapsedHeight, accuracy: 1)
-        app.buttons["add-task-button"].click()
+        app.descendants(matching: .any)["add-task-button"].click()
         let high = app.buttons["task-priority-high"]
         XCTAssertTrue(high.waitForExistence(timeout: 2))
         XCTAssertLessThanOrEqual(composer.frame.height - collapsedHeight, 35)
         high.click()
-        app.buttons["add-task-button"].click()
+        app.descendants(matching: .any)["add-task-button"].click()
         XCTAssertEqual(title.value as? String, "Plan weekend trip")
         XCTAssertFalse(high.exists)
         app.buttons["quick-entry-submit"].click()
@@ -614,7 +631,7 @@ final class AtticUITests: XCTestCase {
     /// (it fades at the trailing edge instead of wrapping), while the full
     /// text remains available as the row's accessibility label.
     func testLongTaskTitleStaysOnOneLineAndKeepsFullTextAccessible() throws {
-        app.buttons["add-task-button"].click()
+        app.descendants(matching: .any)["add-task-button"].click()
 
         let shortTitle = "Short"
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
@@ -765,8 +782,10 @@ final class AtticUITests: XCTestCase {
         corner.click(forDuration: 0.1,
                      thenDragTo: corner.withOffset(CGVector(dx: 240, dy: -240)),
                      withVelocity: .slow, thenHoldForDuration: 0.1)
-        XCTAssertEqual(panel.frame.width, 332, accuracy: 1)
-        XCTAssertEqual(panel.frame.height, 480, accuracy: 1)
+        // AX exposes AtticPanel.visibleContentFrame. Its current minimum is
+        // PanelContentSize.min (320) by PanelGeometry.minimumHeight (460).
+        XCTAssertEqual(panel.frame.width, 320, accuracy: 1)
+        XCTAssertEqual(panel.frame.height, 460, accuracy: 1)
         XCTAssertEqual(panel.frame.maxX, initial.maxX, accuracy: 1)
         XCTAssertEqual(panel.frame.minY, initial.minY, accuracy: 1)
         XCTAssertTrue(app.buttons["panel-pin-button"].isSelected)

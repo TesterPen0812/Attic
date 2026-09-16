@@ -32,10 +32,23 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         _ nsView: CanvasNSView,
         coordinator: ()
     ) {
-        nsView.deactivateRepresentation()
+        guard let completeDeactivation = nsView.prepareForDeferredDeactivation() else { return }
+        // Dismantling runs while SwiftUI invalidates its graph. Finishing an
+        // open editor publishes its retained draft and history availability,
+        // which must happen after that graph update has completed.
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated {
+                completeDeactivation()
+            }
+        }
     }
 
     func configure(_ view: CanvasNSView) {
+        // The native view represents this session for its whole active
+        // lifetime. Dismantling may defer the final draft commit until after
+        // SwiftUI graph teardown, so the view must keep that session alive
+        // until the deferred completion has captured it.
+        view.representedSessionLifetime = session
         if view.excludedControlRects != excludedRects {
             view.excludedControlRects = excludedRects
             view.window?.invalidateCursorRects(for: view)
@@ -317,6 +330,7 @@ final class CanvasNSView: NSView {
     var suppressesScrollSequence = false
     var suppressesMagnification = false
     private(set) var isRepresentationActive = true
+    var representedSessionLifetime: CanvasSession?
     var trackingAreaReference: NSTrackingArea?
     var canvasAccessibilityElements: [
         CanvasAccessibilityObjectKey: CanvasAccessibilityObjectElement
@@ -1309,13 +1323,53 @@ final class CanvasNSView: NSView {
     /// cancellation or the session's lifecycle cancellation, so replacing
     /// the view (for example, on a section change) cannot abort them.
     func deactivateRepresentation() {
-        if !finishSemanticTextEditing(commit: true) { suspendSemanticTextEditing() }
+        prepareForDeferredDeactivation()?()
+    }
+
+    @discardableResult
+    func prepareForDeferredDeactivation() -> (@MainActor () -> Void)? {
+        guard isRepresentationActive else { return nil }
+        let sessionLifetime = representedSessionLifetime
+        representedSessionLifetime = nil
+        let semanticCompletion: (@MainActor () -> Void)?
+        if let editor = semanticTextEditor,
+           let baseline = editingSemanticBaseline,
+           !editor.isFinishing {
+            let draft = CanvasSemanticTextDraft(
+                baseline: baseline,
+                text: editor.string,
+                isInsertion: editingSemanticIsInsertion
+            )
+            let retainedDraft = editor.string == baseline.content?.text ? nil : draft
+            let preserveDraft = onPreserveSemanticDraft
+            let commitDraft = onCommitSemanticText
+            semanticCompletion = { [sessionLifetime] in
+                withExtendedLifetime(sessionLifetime) {
+                    preserveDraft(draft.key, retainedDraft)
+                    if commitDraft(draft) {
+                        preserveDraft(draft.key, nil)
+                    } else {
+                        preserveDraft(draft.key, retainedDraft)
+                    }
+                }
+            }
+            editor.isFinishing = true
+            semanticTextEditor = nil
+            editingSemanticObjectID = nil
+            editingSemanticBaseline = nil
+            editingSemanticIsInsertion = false
+            editor.removeFromSuperview()
+            needsDisplay = true
+        } else {
+            semanticCompletion = nil
+        }
         isRepresentationActive = false
         interactionInterruptionObservation = nil
         gestureRecognizers.forEach { $0.isEnabled = false }
         cancelInteraction()
         cancelFilePromiseBatches()
         onViewportChange = { _ in }
+        return { semanticCompletion?() }
     }
 
 }

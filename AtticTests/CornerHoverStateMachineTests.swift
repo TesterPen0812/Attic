@@ -17,6 +17,80 @@ final class CornerHoverStateMachineTests: XCTestCase {
                 reasons: [reason], pointerInside: false, secondsSinceKeyboardInput: 20))
         }
     }
+
+    func testTemporaryFocusNamesOneExpiryDeadlineAndPersistentLocksNameNone() {
+        XCTAssertEqual(MainPanelAutoHidePolicy.focusExpirationDeadline(
+            reasons: [.quickEntryFocus], pointerInside: false,
+            lastKeyboardInputAt: 10, timestamp: 10.25
+        ), 11.5)
+        XCTAssertEqual(MainPanelAutoHidePolicy.focusExpirationDeadline(
+            reasons: [.notesEditorFocus], pointerInside: false,
+            lastKeyboardInputAt: 10.75, timestamp: 11
+        ), 12.25, "new keyboard input moves the one-shot deadline")
+        XCTAssertNil(MainPanelAutoHidePolicy.focusExpirationDeadline(
+            reasons: [.quickEntryFocus], pointerInside: true,
+            lastKeyboardInputAt: 10, timestamp: 10.25
+        ))
+
+        for persistentReason in [
+            PanelInteractionLockReason.taskComposer,
+            .notesDirty,
+            .menuTracking,
+            .taskConfirmation,
+        ] {
+            XCTAssertNil(MainPanelAutoHidePolicy.focusExpirationDeadline(
+                reasons: [.quickEntryFocus, persistentReason], pointerInside: false,
+                lastKeyboardInputAt: 10, timestamp: 10.25
+            ), "Expected \(persistentReason) to require no timed work")
+        }
+    }
+
+    func testStationaryOutsideFocusExpiresThenUsesExistingHideDeadline() throws {
+        var machine = CornerHoverStateMachine()
+        machine.forceVisible(at: 10, grace: 0)
+        let reasons: Set<PanelInteractionLockReason> = [.quickEntryFocus]
+        let lastKeyboardInputAt: TimeInterval = 10
+        let firstSample: TimeInterval = 10.25
+        let initiallyLocked = MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: reasons,
+            pointerInside: false,
+            secondsSinceKeyboardInput: firstSample - lastKeyboardInputAt
+        )
+        XCTAssertTrue(initiallyLocked)
+        XCTAssertEqual(machine.update(
+            at: firstSample, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: initiallyLocked, revealDelay: 0.2, hideDelay: 0.3
+        ), .none)
+
+        let focusDeadline = try XCTUnwrap(MainPanelAutoHidePolicy.focusExpirationDeadline(
+            reasons: reasons,
+            pointerInside: false,
+            lastKeyboardInputAt: lastKeyboardInputAt,
+            timestamp: firstSample
+        ))
+        XCTAssertEqual(focusDeadline, 11.5)
+
+        let focusFollowUp = focusDeadline + 0.02
+        let lockedAfterDeadline = MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: reasons,
+            pointerInside: false,
+            secondsSinceKeyboardInput: focusFollowUp - lastKeyboardInputAt
+        )
+        XCTAssertFalse(lockedAfterDeadline)
+        XCTAssertEqual(machine.update(
+            at: focusFollowUp, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: lockedAfterDeadline, revealDelay: 0.2, hideDelay: 0.3
+        ), .none)
+        XCTAssertEqual(machine.nextTimedDecision(
+            at: focusFollowUp, isInPanel: false, isInteractionLocked: false,
+            isPinned: false, hideDelay: 0.3
+        ), focusFollowUp + 0.3)
+        XCTAssertEqual(machine.update(
+            at: focusFollowUp + 0.31, isInHotspot: false, isInPanel: false,
+            isInteractionLocked: false, revealDelay: 0.2, hideDelay: 0.3
+        ), .requestHide)
+    }
+
     func testPointerMonitoringCoversOwnAppAndOtherApplicationDomains() {
         XCTAssertEqual(
             CornerHoverPointerMonitorDomains.required,

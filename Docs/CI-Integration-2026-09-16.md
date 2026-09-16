@@ -56,6 +56,27 @@ final cleanliness check remain required. UI tests now use `AtticUI`. Final
 cleanliness failures print the complete porcelain status plus staged and
 unstaged diffs before failing.
 
+## Full Xcode 26 gate result
+
+Pull-request run
+[`35126949864`](https://github.com/TesterPen0812/Attic/actions/runs/35126949864)
+completed every macOS gate. Project generation, the normal build, the
+strict-concurrency build, and the static analyzer passed. The unit-test gate
+reported 10 failures and the UI-test gate reported 13 failures; both remain
+required failures while their source and test fixes are handled separately.
+
+The final-worktree gate found one additional deterministic dependency change:
+Bundler 4.0.11 added its own missing checksum to `Gemfile.lock`. The checksum,
+`5bcec0fb78302e48d02ee46f10ee6e6942be647ba5b44a6d1ddfda9a240ce785`,
+matches the SHA-256 digest of `bundler-4.0.11.gem` fetched directly from
+RubyGems. It is now checked in, and CI sets `BUNDLE_FROZEN=true` so dependency
+installation fails instead of modifying the lockfile.
+
+Unit and UI `xcodebuild` invocations remain complete required suites. They now
+have 20-minute and 30-minute step limits respectively; reaching either limit
+fails that gate. CI uploads both test result bundles on success or failure so
+crashes and test diagnostics are retained for seven days.
+
 The deferred iPhone job no longer runs on pull requests or pushes. It is
 available only through `workflow_dispatch` when the caller explicitly enables
 the `run_iphone` boolean input. Its known target-membership errors remain open
@@ -67,5 +88,8 @@ until iPhone development is deliberately reactivated.
 - The workflow parsed as YAML locally.
 - Pull-request run `35124798381` verified hosted Xcode 26 routing and exposed
   the app-source compiler blocker and dependency-cache residue above.
-- Another real pull-request CI rerun is required after the source compiler
-  blocker is resolved.
+- Pull-request run `35126949864` passed project generation, the normal build,
+  strict-concurrency build, and analyzer, then reported the required unit-test,
+  UI-test, and final-worktree failures described above.
+- Another real pull-request CI run is required after the combined source,
+  test, lockfile, and workflow fixes are pushed.
