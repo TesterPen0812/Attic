@@ -1,5 +1,22 @@
 import Foundation
 
+enum MainPanelAutoHidePolicy {
+    static func isInteractionLocked(
+        reasons: Set<PanelInteractionLockReason>, pointerInside: Bool,
+        secondsSinceKeyboardInput: TimeInterval
+    ) -> Bool {
+        var effective = reasons
+        if !pointerInside, secondsSinceKeyboardInput >= 1.5 {
+            // A clean, idle main editor retaining first responder is not a
+            // permanent pin. Drafts, menus, selections and auxiliary editors
+            // retain their independent protection.
+            effective.remove(.quickEntryFocus)
+            effective.remove(.notesEditorFocus)
+        }
+        return !effective.isEmpty
+    }
+}
+
 struct CornerHoverPointerMonitorDomains: OptionSet, Equatable {
     let rawValue: Int
 
@@ -8,14 +25,25 @@ struct CornerHoverPointerMonitorDomains: OptionSet, Equatable {
     static let required: Self = [.local, .global]
 }
 
+/// How the corner monitor samples the pointer.
+///
+/// - `idle`: hidden and far from the corner — a slow safety-net timer.
+/// - `responsive`: hidden and near the corner — the reveal decision window,
+///   the only time a fast timer and an App Nap exemption are justified.
+/// - `eventDriven`: the panel is visible — no timer at all. Pointer events,
+///   lock changes and a one-shot follow-up for the hide delay drive every
+///   sample, so an idle visible panel does no periodic work.
 enum CornerHoverSamplingCadence: Equatable {
     case idle
     case responsive
+    case eventDriven
 
-    var intervalMilliseconds: Int {
+    /// nil means no repeating timer.
+    var intervalMilliseconds: Int? {
         switch self {
         case .idle: 1_000
         case .responsive: 50
+        case .eventDriven: nil
         }
     }
 
@@ -23,13 +51,15 @@ enum CornerHoverSamplingCadence: Equatable {
         switch self {
         case .idle: 250
         case .responsive: 15
+        case .eventDriven: 0
         }
     }
 
     var holdsResponsivenessActivity: Bool { self == .responsive }
 
     var nominalSamplesPerMinute: Int {
-        60_000 / intervalMilliseconds
+        guard let intervalMilliseconds else { return 0 }
+        return 60_000 / intervalMilliseconds
     }
 }
 
@@ -83,10 +113,17 @@ struct CornerHoverSamplingState {
                 distance: proximityDistance
             )
         } ?? false
-        cadence = isPanelVisible || isNearConfiguredCorner ? .responsive : .idle
+        if isPanelVisible {
+            cadence = .eventDriven
+        } else {
+            cadence = isNearConfiguredCorner ? .responsive : .idle
+        }
+        // A visible panel samples on every pointer event (the monitor
+        // coalesces bursts); hidden cadences sample only on a boundary
+        // crossing and otherwise leave the work to their timer.
         return CornerHoverSamplingDecision(
             cadence: cadence,
-            shouldSampleImmediately: cadence != previousCadence
+            shouldSampleImmediately: cadence != previousCadence || cadence == .eventDriven
         )
     }
 
@@ -153,6 +190,25 @@ struct CornerHoverStateMachine {
     private var panelHasBeenEntered = false
     private var leaveBeganAt: TimeInterval?
     private var requiresHotspotExitBeforeReveal = false
+
+    /// While visible without a timer, the next moment a sample could change
+    /// the outcome: when the hide delay (or the reveal grace) elapses for a
+    /// pointer already away from the panel. nil when the next change can
+    /// only come from an event — the pointer moving, a lock lifting, a pin.
+    func nextTimedDecision(
+        at timestamp: TimeInterval,
+        isInPanel: Bool,
+        isInteractionLocked: Bool,
+        isPinned: Bool,
+        hideDelay: TimeInterval
+    ) -> TimeInterval? {
+        guard isVisible, !isHidePending, !isPinned, !isInteractionLocked, !isInPanel else { return nil }
+        if !panelHasBeenEntered, let revealedAt, timestamp - revealedAt < revealGrace {
+            return revealedAt + revealGrace
+        }
+        guard let leaveBeganAt else { return timestamp }
+        return leaveBeganAt + max(0, hideDelay)
+    }
 
     mutating func update(
         at timestamp: TimeInterval,

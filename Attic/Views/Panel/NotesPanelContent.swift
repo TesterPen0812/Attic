@@ -157,6 +157,10 @@ struct NoteComposerView: View {
     @State private var isLibraryPresented = false
     @State private var isBlockingSave = false
     @State private var attachmentImportTask: Task<Void, Never>?
+    /// Resolves inline cards and tray rows once per meaningful change rather
+    /// than once per draft publish, and carries the editor's edit ledger so
+    /// anchors rebase from the real keystroke delta (PERF-12).
+    @State private var inlineCardResolver = NoteInlineCardResolver()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(noteDraft: NoteDraftController, uiState: PanelUIState,
@@ -283,6 +287,7 @@ struct NoteComposerView: View {
                 },
                 onViewStateCommit: noteDraft.persistEditorSession,
                 captureImportReceiver: captureImportReceiver,
+                importUnavailableMessage: importUnavailableMessage,
                 documentAccessories: AnyView(documentAccessories),
                 hasDocumentAccessories: hasDocumentAttachments || noteDraft.conflictMessage != nil
                     || noteDraft.saveErrorMessage != nil || noteDraft.recoveryErrorMessage != nil,
@@ -290,7 +295,13 @@ struct NoteComposerView: View {
                 documentHeader: AnyView(noteHeader),
                 hasDocumentHeader: true,
                 topContentInset: topContentInset,
-                bottomContentInset: bottomContentInset + AtticStyle.composerControlHeight + 14
+                bottomContentInset: bottomContentInset + AtticStyle.composerControlHeight + 14,
+                inlineCards: inlineResolution.cards,
+                bodyEditLedger: noteDraft.bodyEditLedger,
+                onMoveAttachment: { id, offset in
+                    guard noteDraft.flush(), let noteID = noteDraft.activeNoteID else { return false }
+                    return noteStore.placeAttachment(id, in: noteID, offset: offset)
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 4)
@@ -300,12 +311,17 @@ struct NoteComposerView: View {
         }
     }
 
+    private var inlineResolution: NoteInlineCardResolver.Resolution {
+        inlineCardResolver.resolve(noteStore: noteStore, noteDraft: noteDraft)
+    }
+
     private var documentAccessories: some View {
         VStack(alignment: .leading, spacing: 12) {
             if hasDocumentAttachments {
                 NoteAttachmentTray(
                     noteStore: noteStore,
                     noteDraft: noteDraft,
+                    trayAttachments: inlineResolution.trayAttachments,
                     onCancelImport: cancelAttachmentImport,
                     onImportFiles: importURLs
                 )
@@ -345,7 +361,7 @@ struct NoteComposerView: View {
             TextField("Untitled note", text: $noteDraft.title,
                       prompt: Text("Untitled note").foregroundStyle(palette.secondaryForegroundColor))
                 .textFieldStyle(.plain)
-                .font(.system(size: 21, weight: .medium, design: .rounded))
+                .font(.system(size: 19, weight: .medium, design: .rounded))
                 .foregroundStyle(palette.primaryForegroundColor)
                 .atticClearGlassForegroundReadability()
                 .focused($isTitleFocused)
@@ -380,88 +396,41 @@ struct NoteComposerView: View {
     }
 
     private var bottomComposer: some View {
-        HStack(spacing: 2) {
-            Button(action: beginNewNote) {
-                Image(systemName: "plus")
-                    .font(.system(size: 13, weight: .medium))
-                    .atticClearGlassForegroundReadability()
-                    .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
-                    .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-                    .contentShape(Circle())
+        HStack(spacing: 8) {
+            noteControl("Saved notes", symbol: "rectangle.stack", identifier: "browse-saved-notes") {
+                isLibraryPresented ? closeLibrary() : openLibrary()
             }
-            .buttonStyle(.plain)
-            .help("New note")
-            .accessibilityLabel("New note")
-            .accessibilityIdentifier("new-note-from-editor")
-
-            Button {
-                isImporterPresented = true
-            } label: {
-                Image(systemName: "paperclip")
-                    .font(.system(size: 12, weight: .medium))
-                    .atticClearGlassForegroundReadability()
-                    .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
-                    .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isImporting)
-            .help("Attach files")
-            .accessibilityLabel("Attach files")
-            .accessibilityIdentifier("add-note-attachment")
-
-            Button(action: { isLibraryPresented ? closeLibrary() : openLibrary() }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "rectangle.stack")
-                        .font(.system(size: 10, weight: .medium))
-                    Text(libraryLabel)
-                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(palette.secondaryForegroundColor)
-                .atticClearGlassForegroundReadability()
-                .frame(maxWidth: .infinity)
-                .frame(height: AtticStyle.entryControlHeight)
-                .contentShape(Capsule(style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .help("Browse saved notes")
-            .accessibilityLabel(libraryLabel)
-            .accessibilityIdentifier("browse-saved-notes")
             .keyboardShortcut("l", modifiers: [.command, .shift])
-
-            Button(action: saveInPlace) {
-                Image(systemName: noteDraft.isDirty ? "arrow.up" : "checkmark")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(palette.primaryForegroundColor.opacity(noteDraft.canPersist ? 1 : 0.34))
-                    .atticClearGlassForegroundReadability()
-                    .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
-                    .background(
-                        Color.primary.opacity(noteDraft.canPersist ? 0.08 : 0.035),
-                        in: Circle()
-                    )
-                    .overlay {
-                        Circle().stroke(Color.primary.opacity(0.07), lineWidth: 0.75)
-                    }
-                    .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-                    .contentShape(Circle())
+            Spacer(minLength: 8)
+            noteControl("Attach files", symbol: "plus", identifier: "add-note-attachment") {
+                isImporterPresented = true
             }
-            .buttonStyle(.plain)
-            .disabled(!noteDraft.canPersist)
-            .help("Save note")
-            .accessibilityLabel("Save note")
-            .accessibilityIdentifier("save-note")
-            .keyboardShortcut("s", modifiers: [.command])
+            .disabled(isImporting)
+            noteControl("New note", symbol: "square.and.pencil", identifier: "new-note-from-editor",
+                        action: beginNewNote)
         }
-        .padding(.horizontal, 2)
-        .frame(height: AtticStyle.composerControlHeight)
-        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
-        .contentShape(Capsule(style: .continuous))
-        .padding(.horizontal, 2)
+        .padding(.horizontal, 6)
         .padding(.top, 6)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Note controls")
         .accessibilityIdentifier("note-entry-bar")
+    }
+
+    private func noteControl(_ title: String, symbol: String, identifier: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .medium))
+                .atticClearGlassForegroundReadability()
+                .frame(width: 34, height: 34)
+                .atticGlassControl(in: Circle(), interactive: true)
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(identifier)
     }
 
     private var libraryLabel: String {
@@ -493,6 +462,7 @@ struct NoteComposerView: View {
             return "New note"
         }
 
+        if Date().timeIntervalSince(note.updatedAt) < 2 { return "Saved just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         let relative = formatter.localizedString(for: note.updatedAt, relativeTo: Date())
@@ -580,6 +550,17 @@ struct NoteComposerView: View {
         }
 
         startAttachmentImport(request, cleanupDirectories: cleanupDirectories)
+    }
+
+    /// Why a paste or promised drop could not start an import, in the same
+    /// words the URL path uses (DATA-003).
+    private func importUnavailableMessage() -> String {
+        if isImporting { return AttachmentAcceptingTextView.busyImportMessage }
+        if let conflictMessage = noteDraft.conflictMessage { return conflictMessage }
+        if let saveError = noteDraft.saveErrorMessage {
+            return "This note could not be saved, so the file was not attached: \(saveError)"
+        }
+        return "This note could not be saved, so the file was not attached. Retry the save and try again."
     }
 
     /// File-provider delivery may arrive after the native editor has switched
@@ -741,101 +722,60 @@ private struct SavedNotesDrawer: View {
     let onClose: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Saved Notes")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .atticClearGlassForegroundReadability()
-                    Text(summary)
-                        .font(.system(size: 9.5, design: .rounded))
-                        .foregroundStyle(palette.secondaryForegroundColor)
-                        .atticClearGlassForegroundReadability()
-                }
-
-                Spacer()
-
-                Button(action: onNew) {
-                    Image(systemName: "square.and.pencil")
-                        .atticClearGlassForegroundReadability()
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help("New note")
-                .accessibilityLabel("New note")
-
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .atticClearGlassForegroundReadability()
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Return to note")
-                .accessibilityLabel("Return to note")
-                .accessibilityIdentifier("close-saved-notes")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            Divider()
-                .opacity(0.28)
-
-            if noteStore.notes.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "note.text")
-                        .font(.system(size: 20, weight: .light))
-                        .foregroundStyle(palette.secondaryForegroundColor)
-                        .atticClearGlassForegroundReadability()
+        ZStack {
+            ScrollView {
+                if noteStore.notes.isEmpty {
                     Text("No saved notes yet")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .atticClearGlassForegroundReadability()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(palette.secondaryForegroundColor)
+                        .padding(.top, 64)
+                } else {
                     LazyVStack(spacing: 5) {
                         ForEach(noteStore.orderedNotes()) { note in
-                            SavedNoteRow(
-                                noteStore: noteStore,
-                                note: note,
-                                isSelected: note.id == selectedNoteID,
-                                onSelect: { onSelect(note) }
-                            )
+                            SavedNoteRow(noteStore: noteStore, note: note,
+                                isSelected: note.id == selectedNoteID, onSelect: { onSelect(note) })
                         }
                     }
-                    .padding(8)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 58)
+                    .padding(.bottom, 58)
                 }
-                .scrollIndicators(.never)
             }
-
-            Button(action: onClose) {
-                Label("Return to writing", systemImage: "arrow.left")
-                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                    .atticClearGlassForegroundReadability()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 32)
+            .scrollIndicators(.never)
+            HStack {
+                drawerButton("New note", symbol: "square.and.pencil", id: "new-saved-note", action: onNew)
+                Spacer()
+                drawerButton("Return to note", symbol: "xmark", id: "close-saved-notes", action: onClose)
             }
-            .buttonStyle(.plain)
-            .background(Color.primary.opacity(0.045), in: Capsule())
-            .padding(10)
-            .accessibilityIdentifier("return-to-writing")
+            .padding(14)
+            .frame(maxHeight: .infinity, alignment: .top)
+            drawerButton("Return to writing", symbol: "arrow.left", id: "return-to-writing", action: onClose)
+                .padding(14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
-        .atticGlassControl(
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous),
-            interactive: false
-        )
-        .shadow(color: .black.opacity(0.16), radius: 18, y: 7)
+        .atticGlassControl(in: Squircle(cornerRadius: 36, exponent: AtticStyle.panelSquircleExponent), interactive: false)
+        .clipShape(Squircle(cornerRadius: 36, exponent: AtticStyle.panelSquircleExponent))
         .padding(2)
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Saved notes")
         .accessibilityIdentifier("saved-notes-drawer")
     }
 
-    private var summary: String {
-        let count = noteStore.notes.count
-        return count == 1 ? "1 note · swipe to return" : "\(count) notes · swipe to return"
+    private func drawerButton(_ title: String, symbol: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 32, height: 32)
+                .atticGlassControl(in: Circle())
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(id)
     }
+
 }
 
 private struct SavedNoteRow: View {

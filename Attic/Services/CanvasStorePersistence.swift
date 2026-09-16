@@ -21,8 +21,13 @@ extension CanvasStore {
         }
     }
 
+    /// - Parameter previousSelection: The selection to reinstate when the save
+    ///   fails. Board create/delete move `selectedCanvasID` before saving so the
+    ///   saved presentation resolves the new board; a failed save must return
+    ///   to the prior board rather than let reload fall back to the first live
+    ///   board. Reload still falls back if that board is no longer live.
     @discardableResult
-    func save() -> CanvasSaveOutcome {
+    func save(restoringSelectionOnFailure previousSelection: UUID? = nil) -> CanvasSaveOutcome {
         let savedPresentation: CanvasPresentationSnapshot
         do {
             // Resolve the pending mutation while the saved context is still
@@ -37,7 +42,7 @@ extension CanvasStore {
         } catch {
             let preparationError = "Canvas could not prepare its saved presentation: "
                 + error.localizedDescription
-            context.rollback()
+            rollBackFailedSave(restoringSelection: previousSelection)
             do {
                 let warning = try reloadCanvas()
                 lastErrorMessage = warning.map {
@@ -72,7 +77,7 @@ extension CanvasStore {
             }
         } catch {
             let saveError = error.localizedDescription
-            context.rollback()
+            rollBackFailedSave(restoringSelection: previousSelection)
             do {
                 let warning = try reloadCanvas()
                 lastErrorMessage = warning.map { "\(saveError) · \($0)" } ?? saveError
@@ -80,6 +85,13 @@ extension CanvasStore {
                 lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
             }
             return .failed(lastErrorMessage ?? saveError)
+        }
+    }
+
+    private func rollBackFailedSave(restoringSelection previousSelection: UUID?) {
+        context.rollback()
+        if let previousSelection, selectedCanvasID != previousSelection {
+            selectedCanvasID = previousSelection
         }
     }
 
@@ -107,13 +119,8 @@ extension CanvasStore {
         imageCache sourceImageCache: [CanvasReplicaKey: CanvasImageCacheEntry],
         permitsEquivalentSourceReuse: Bool
     ) throws -> CanvasPresentationSnapshot {
-        let replicas = try loadReplicas(sourceContext)
+        var replicas = try loadReplicas(sourceContext, selectedCanvasID)
         let boardReplicas = replicas.boards
-        let strokeReplicas = replicas.strokes
-        let imageReplicas = replicas.images
-        #if os(macOS)
-        let semanticReplicas = replicas.semanticObjects
-        #endif
 
         var warnings: [String] = []
         var omittedWarningCount = 0
@@ -143,19 +150,9 @@ extension CanvasStore {
         // row exists. Materialise a virtual default only for live legacy
         // content. An explicit board tombstone must continue to win; otherwise
         // deleting the default canvas would make it reappear on refresh.
-        var hasLiveLegacyDefaultContent = strokeReplicas.contains {
-            $0.canvasID == CanvasBoardItem.logicalBoardID && !$0.tombstoned
-        } || imageReplicas.contains {
-            $0.canvasID == CanvasBoardItem.logicalBoardID && !$0.tombstoned
-        }
-        #if os(macOS)
-        hasLiveLegacyDefaultContent = hasLiveLegacyDefaultContent || semanticReplicas.contains {
-            $0.canvasID == CanvasBoardItem.logicalBoardID && !$0.tombstoned
-        }
-        #endif
         if !resolvedBoards.contains(where: { $0.id == CanvasBoardItem.logicalBoardID }),
            boardWinnerByID[CanvasBoardItem.logicalBoardID] == nil,
-           hasLiveLegacyDefaultContent {
+           replicas.hasUnboardedLegacyDefaultContent {
             resolvedBoards.append(.defaultBoard)
         }
         if resolvedBoards.isEmpty {
@@ -175,6 +172,17 @@ extension CanvasStore {
         let resolvedBoard = resolvedBoards.first { $0.id == resolvedSelectedCanvasID }
             ?? resolvedBoards[0]
         let resolvedGeneration = resolvedBoard.clearGeneration
+        if resolvedSelectedCanvasID != selectedCanvasID {
+            // The requested canvas is not live, so its content is not what will
+            // be shown. The boards are re-read from the same context and resolve
+            // identically; only the content rows differ.
+            replicas = try loadReplicas(sourceContext, resolvedSelectedCanvasID)
+        }
+        let strokeReplicas = replicas.strokes
+        let imageReplicas = replicas.images
+        #if os(macOS)
+        let semanticReplicas = replicas.semanticObjects
+        #endif
 
         if let selectedReplica = boardWinnerByID[resolvedSelectedCanvasID],
            selectedReplica.formatVersion != CanvasStrokeCodec.currentVersion {
@@ -280,12 +288,16 @@ extension CanvasStore {
                 height: replica.height,
                 zIndex: replica.zIndex
             )
-            guard !replica.encodedData.isEmpty,
-                  replica.pixelWidth > 0,
+            // Validate the row through its scalar columns. The previous
+            // `replica.encodedData.isEmpty` check ran before the cache lookup
+            // below and therefore faulted every image blob on the board on
+            // every save (CANVAS-016/PERF-08).
+            guard replica.pixelWidth > 0,
                   replica.pixelHeight > 0,
                   transform.isValid,
                   replica.pixelWidth <= Int64(Int.max),
-                  replica.pixelHeight <= Int64(Int.max) else {
+                  replica.pixelHeight <= Int64(Int.max),
+                  replica.hasEncodedPayload else {
                 recordWarning("Image \(replica.id.uuidString) was retained but has invalid data.")
                 continue
             }
@@ -305,20 +317,29 @@ extension CanvasStore {
                     continue
                 }
             }
-            let contentToken = sourceImageCache[key]
-                .flatMap {
-                    if $0.contentMatches(replica)
-                        || (permitsEquivalentSourceReuse && $0.contentValueMatches(replica)) {
-                        return $0.image.contentToken
-                    }
-                    return nil
+            // The transform or version changed, but the payload may not have.
+            // When the cached entry proves the bytes are the same, reuse the
+            // resident payload instead of faulting external storage again: a
+            // move or resize must cost no image I/O (CANVAS-016/PERF-08).
+            let reusablePayloadSource = sourceImageCache[key].flatMap {
+                entry -> CanvasImageCacheEntry? in
+                if entry.contentMatches(replica)
+                    || (permitsEquivalentSourceReuse && entry.contentValueMatches(replica)) {
+                    return entry
                 }
-                ?? UUID()
+                return nil
+            }
+            let contentToken = reusablePayloadSource?.image.contentToken ?? UUID()
+            let payload = reusablePayloadSource?.image.encodedData
+                ?? replica.materialisedPayload
+            let payloadMetadata = reusablePayloadSource?.payloadMetadata
+                ?? replica.resolvedPayloadMetadata
+                ?? .compute(for: payload)
             let image = CanvasPlacedImage(
                 id: replica.id,
                 canvasID: replica.canvasID,
                 contentToken: contentToken,
-                encodedData: replica.encodedData,
+                encodedData: payload,
                 contentType: replica.contentType,
                 pixelWidth: Int(replica.pixelWidth),
                 pixelHeight: Int(replica.pixelHeight),
@@ -326,11 +347,12 @@ extension CanvasStore {
                 boardGeneration: replica.boardGeneration,
                 mutationVersion: replica.mutationVersion,
                 createdAt: replica.createdAt,
-                updatedAt: replica.updatedAt
+                updatedAt: replica.updatedAt,
+                payloadMetadata: payloadMetadata
             )
             nextImageCache[key] = CanvasImageCacheEntry(
                 sourceReplicaID: String(reflecting: replica.persistentModelID),
-                encodedByteCount: replica.encodedData.count,
+                payloadMetadata: payloadMetadata,
                 contentType: replica.contentType,
                 pixelWidth: replica.pixelWidth,
                 pixelHeight: replica.pixelHeight,
@@ -397,6 +419,25 @@ extension CanvasStore {
         if let replacementContext {
             context = replacementContext
         }
+        let strokeFingerprint = CanvasStrokeCollectionFingerprint.value(
+            for: presentation.strokes
+        )
+        var change = CanvasStoreContentChange.unchanged
+        change.boardsChanged = canvases != presentation.canvases
+        change.selectionChanged = selectedCanvasID != presentation.selectedCanvasID
+        change.boardGenerationChanged = boardGeneration != presentation.boardGeneration
+        change.strokesChanged = publishedStrokeFingerprint != strokeFingerprint
+        // `CanvasPlacedImage` equality compares scalar payload metadata rather
+        // than the payload itself, so this stays a cheap per-element compare.
+        change.imagesChanged = images != presentation.images
+        #if os(macOS)
+        change.semanticObjectsChanged = semanticObjects != presentation.semanticObjects
+        #endif
+        if requiresFullContentComparison {
+            change = .unknown
+            requiresFullContentComparison = false
+        }
+
         canvases = presentation.canvases
         selectedCanvasID = presentation.selectedCanvasID
         boardGeneration = presentation.boardGeneration
@@ -404,10 +445,40 @@ extension CanvasStore {
         visibleImageCache = presentation.imageCache
         strokes = presentation.strokes
         images = presentation.images
+        publishedStrokeFingerprint = strokeFingerprint
         #if os(macOS)
         semanticObjects = presentation.semanticObjects
         #endif
+        lastContentChange = change
+        if change.hasAnyChange {
+            contentRevision &+= 1
+        }
         revision &+= 1
+    }
+
+    /// Gives legacy image rows their scalar payload metadata so later resolves
+    /// can validate them without faulting the external-storage blob.
+    ///
+    /// This writes derived columns only: it never touches `mutationVersion`,
+    /// `updatedAt`, `boardGeneration` or `tombstoned`, so it cannot change which
+    /// replica wins, make two replicas look divergent, or alter user content.
+    /// Failure is not reported: the store simply keeps using the slower
+    /// byte-comparison path for those rows.
+    func backfillLegacyImagePayloadMetadata() {
+        guard !context.hasChanges else { return }
+        do {
+            let rows = try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
+                predicate: #Predicate { $0.contentDigest == "" }
+            ))
+            var changed = false
+            for row in rows where row.backfillPayloadMetadataIfNeeded() {
+                changed = true
+            }
+            guard changed else { return }
+            try persist(context)
+        } catch {
+            context.rollback()
+        }
     }
 
     func ensureSelectedBoardReplicaExists(at timestamp: Date) throws {
@@ -429,17 +500,33 @@ extension CanvasStore {
     }
 
     func storedBoardReplicas(matching id: UUID) throws -> [CanvasBoardItem] {
-        try context.fetch(FetchDescriptor<CanvasBoardItem>()).filter { $0.id == id }
+        try context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(
+            predicate: #Predicate { $0.id == id }
+        ))
     }
+
+    /// Above this many identifiers a mutation reads the selected canvas and
+    /// filters in memory, keeping the SQL `IN` list well under SQLite's bound
+    /// variable limit. Either way every physical replica of each id is found.
+    static let replicaIdentifierPredicateLimit = 512
 
     func storedStrokeReplicas(
         matching ids: Set<UUID>
     ) throws -> [UUID: [CanvasStrokeItem]] {
         guard !ids.isEmpty else { return [:] }
-        let stored = try context.fetch(FetchDescriptor<CanvasStrokeItem>())
+        let canvasID = selectedCanvasID
+        let descriptor: FetchDescriptor<CanvasStrokeItem>
+        if ids.count <= Self.replicaIdentifierPredicateLimit {
+            let idList = Array(ids)
+            descriptor = FetchDescriptor(predicate: #Predicate {
+                $0.canvasID == canvasID && idList.contains($0.id)
+            })
+        } else {
+            descriptor = FetchDescriptor(predicate: #Predicate { $0.canvasID == canvasID })
+        }
         return Dictionary(
-            grouping: stored.filter {
-                $0.canvasID == selectedCanvasID && ids.contains($0.id)
+            grouping: try context.fetchCanvasReplicas(descriptor).filter {
+                $0.canvasID == canvasID && ids.contains($0.id)
             },
             by: \.id
         )
@@ -449,10 +536,19 @@ extension CanvasStore {
         matching ids: Set<UUID>
     ) throws -> [UUID: [CanvasImageItem]] {
         guard !ids.isEmpty else { return [:] }
-        let stored = try context.fetch(FetchDescriptor<CanvasImageItem>())
+        let canvasID = selectedCanvasID
+        let descriptor: FetchDescriptor<CanvasImageItem>
+        if ids.count <= Self.replicaIdentifierPredicateLimit {
+            let idList = Array(ids)
+            descriptor = FetchDescriptor(predicate: #Predicate {
+                $0.canvasID == canvasID && idList.contains($0.id)
+            })
+        } else {
+            descriptor = FetchDescriptor(predicate: #Predicate { $0.canvasID == canvasID })
+        }
         return Dictionary(
-            grouping: stored.filter {
-                $0.canvasID == selectedCanvasID && ids.contains($0.id)
+            grouping: try context.fetchCanvasReplicas(descriptor).filter {
+                $0.canvasID == canvasID && ids.contains($0.id)
             },
             by: \.id
         )
@@ -463,8 +559,9 @@ extension CanvasStore {
         try tombstoneSemanticObjects(canvasID: canvasID, at: timestamp)
         #endif
         let strokeGroups = Dictionary(
-            grouping: try context.fetch(FetchDescriptor<CanvasStrokeItem>())
-                .filter { $0.canvasID == canvasID },
+            grouping: try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
+                predicate: #Predicate { $0.canvasID == canvasID }
+            )),
             by: \.id
         )
         for (id, replicas) in strokeGroups {
@@ -486,8 +583,9 @@ extension CanvasStore {
         }
 
         let imageGroups = Dictionary(
-            grouping: try context.fetch(FetchDescriptor<CanvasImageItem>())
-                .filter { $0.canvasID == canvasID },
+            grouping: try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
+                predicate: #Predicate { $0.canvasID == canvasID }
+            )),
             by: \.id
         )
         for (id, replicas) in imageGroups {

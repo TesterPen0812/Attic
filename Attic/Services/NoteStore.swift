@@ -55,6 +55,12 @@ private struct NoteReplicaSnapshot: Equatable {
     }
 }
 
+private struct PresentationIndex {
+    let revision: UInt64
+    let ordered: [NoteItem]
+    let byID: [UUID: NoteItem]
+}
+
 private enum NoteReplicaMutationError: LocalizedError {
     case missingReplica(UUID)
 
@@ -87,9 +93,14 @@ private enum NotePersistenceRefreshOutcome {
 /// `LSUIElement` Mac app does not nap while Core Data is mirroring.
 @MainActor
 final class NoteStore: ObservableObject {
-    @Published private(set) var notes: [NoteItem] = []
+    @Published private(set) var notes: [NoteItem] = [] {
+        didSet { presentationIndex = nil }
+    }
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var revision: UInt64 = 0
+    /// Test/diagnostic seam for PERF-A3: body-only callers derive at most once
+    /// per update, while editor-originated saves can supply the exact batch.
+    private(set) var attachmentAnchorFallbackDerivations = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 #if os(macOS)
     @Published private(set) var attachmentsByNoteID: [UUID: [NoteAttachment]] = [:]
@@ -108,6 +119,7 @@ final class NoteStore: ObservableObject {
     private let attachmentImporter: any NoteAttachmentFileImporting
 #endif
     private var context: ModelContext
+    private var presentationIndex: PresentationIndex?
     private let now: () -> Date
     private let persist: (ModelContext) throws -> Void
     private let makeFreshContext: () throws -> ModelContext
@@ -124,6 +136,9 @@ final class NoteStore: ObservableObject {
     private var invalidatedAttachmentImportIDs = Set<UUID>()
     private var attachmentReconciliationTask: Task<Void, Never>?
     private var attachmentReconciliationGeneration: UInt64 = 0
+    private var reconciledAttachmentSignature: Int?
+    /// Test/diagnostic seam: how many full metadata reconciliations ran.
+    private(set) var attachmentReconciliationPasses = 0
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
 
@@ -176,7 +191,8 @@ final class NoteStore: ObservableObject {
     func update(
         _ note: NoteItem,
         title: String? = nil,
-        body: String? = nil
+        body: String? = nil,
+        bodyEditBatch: NoteBodyEditBatch? = nil
     ) -> Bool {
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
         let replicas: [NoteItem]
@@ -191,12 +207,42 @@ final class NoteStore: ObservableObject {
         guard !destinationTitle.isEmpty || Self.hasMeaningfulBody(destinationBody) else { return false }
 
         let titleChanged = destinationTitle != note.title
-        let bodyChanged = destinationBody != note.body
+        let bodyChanged = !NoteTextReplacement.utf16Equal(destinationBody, note.body)
         let visibleSnapshot = NoteReplicaSnapshot(note)
         let replicasNeedRepair = replicas.contains { NoteReplicaSnapshot($0) != visibleSnapshot }
         guard titleChanged || bodyChanged || replicasNeedRepair else { return true }
 
         let timestamp = now()
+        if bodyChanged {
+            do {
+                let attachments = try storedAttachments(forNoteID: note.id)
+                // One ordered edit list per save: paragraphs that survive
+                // between disjoint edits keep their anchors instead of
+                // collapsing into one spanning replacement.
+                let hasInlineAttachments = attachments.contains { $0.inlineOffset != nil }
+                let edits: [NoteTextReplacement]
+                if !hasInlineAttachments {
+                    edits = []
+                } else if let supplied = bodyEditBatch?.validatedEdits(
+                    from: note.body,
+                    to: destinationBody
+                ) {
+                    edits = supplied
+                } else {
+                    attachmentAnchorFallbackDerivations += 1
+                    edits = NoteTextReplacement.edits(from: note.body, to: destinationBody)
+                }
+                for attachment in attachments {
+                    if let offset = attachment.inlineOffset {
+                        attachment.inlineOffset = NoteInlineAnchor.moved(offset, by: edits, in: destinationBody)
+                    }
+                }
+            } catch {
+                context.rollback()
+                lastErrorMessage = error.localizedDescription
+                return false
+            }
+        }
         for replica in replicas {
             replica.title = destinationTitle
             replica.body = destinationBody
@@ -451,6 +497,41 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    /// Changes presentation metadata only; image bytes are never decoded or copied here.
+    @discardableResult
+    func placeAttachment(_ id: UUID, in noteID: UUID, offset: Int?, before targetID: UUID? = nil,
+                         size: CGSize? = nil) -> Bool {
+        do {
+            let all = try storedAttachments(forNoteID: noteID)
+            guard all.contains(where: { $0.id == id }) else { return false }
+            let note = notes.first { $0.id == noteID }
+            let anchor = offset.map { NoteInlineAnchor.paragraphStart($0, in: note?.body ?? "") }
+            for replica in all where replica.id == id {
+                replica.inlineOffset = anchor
+                if let size {
+                    replica.displayWidth = min(600, max(150, size.width.isFinite ? size.width : 250))
+                    replica.displayHeight = min(400, max(56, size.height.isFinite ? size.height : 56))
+                }
+                replica.updatedAt = now()
+            }
+            if size == nil || targetID != nil {
+                var order = attachments(for: noteID).map(\.id).filter { $0 != id }
+                let index = targetID.flatMap { order.firstIndex(of: $0) } ?? order.endIndex
+                order.insert(id, at: index)
+                let indices = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, Int64($0.offset)) })
+                for replica in all { replica.sortIndex = indices[replica.id] ?? replica.sortIndex }
+            }
+            for owner in try storedNotesIfPresent(matching: noteID) { owner.updatedAt = now() }
+            guard save() else { return false }
+            attachmentsByNoteID[noteID] = visibleUniqueAttachments(from: all)[noteID]
+            return true
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     @discardableResult
     func removeAttachment(_ attachment: NoteAttachment) -> Bool {
         let replicas: [NoteAttachment]
@@ -585,6 +666,12 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    /// The user dismissed the notice; the next save clears it anyway.
+    func dismissError() {
+        guard lastErrorMessage != nil else { return }
+        lastErrorMessage = nil
+    }
+
     func setAttachmentError(_ message: String) {
         lastErrorMessage = message
     }
@@ -592,13 +679,41 @@ final class NoteStore: ObservableObject {
 
     /// Newest first, with a deterministic tiebreak so a refreshed duplicate
     /// keeps its position instead of flickering between physical rows.
+    ///
+    /// The panel asks for this list several times per note revision and once
+    /// per body evaluation, and every read touches persistent-store backed
+    /// properties. Memoizing per `revision` — the same pattern as
+    /// `TaskStore.snapshotCache` — keeps the sort to once per change
+    /// (PERF-14/PERF-008). `notes` invalidates the index on assignment, so a
+    /// mutation that fails before its revision bump cannot serve stale rows.
     func orderedNotes() -> [NoteItem] {
-        notes.sorted { lhs, rhs in
+        currentPresentationIndex().ordered
+    }
+
+    /// Presentation lookup by app-level UUID. `notes` already holds one
+    /// visible row per UUID, so this is the deduplicated presentation record —
+    /// never a substitute for the replica fetches that mutations use.
+    func note(withID id: UUID) -> NoteItem? {
+        currentPresentationIndex().byID[id]
+    }
+
+    private func currentPresentationIndex() -> PresentationIndex {
+        if let presentationIndex, presentationIndex.revision == revision {
+            return presentationIndex
+        }
+        let ordered = notes.sorted { lhs, rhs in
             if lhs.updatedAt != rhs.updatedAt {
                 return lhs.updatedAt > rhs.updatedAt
             }
             return lhs.id.uuidString > rhs.id.uuidString
         }
+        let index = PresentationIndex(
+            revision: revision,
+            ordered: ordered,
+            byID: Dictionary(notes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        )
+        presentationIndex = index
+        return index
     }
 
     func refresh() {
@@ -887,7 +1002,29 @@ final class NoteStore: ObservableObject {
             }
     }
 
+    /// Metadata reconciliation only reads id, digest, filename and byte count.
+    /// An unchanged attachment set therefore cannot produce a different report,
+    /// so a note-body edit no longer re-runs the full pass (PERF-14/PERF-008).
+    /// The first load and every attachment change still reconcile completely,
+    /// and a failed or cancelled pass clears the signature so the next
+    /// revision retries.
+    private func attachmentReconciliationSignature(_ attachments: [NoteAttachment]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(attachments.count)
+        for attachment in attachments {
+            hasher.combine(attachment.id)
+            hasher.combine(attachment.contentDigest)
+            hasher.combine(attachment.originalFilename)
+            hasher.combine(attachment.byteCount)
+        }
+        return hasher.finalize()
+    }
+
     private func reconcileFileStorage(with attachments: [NoteAttachment]) {
+        let signature = attachmentReconciliationSignature(attachments)
+        guard reconciledAttachmentSignature != signature else { return }
+        reconciledAttachmentSignature = signature
+        attachmentReconciliationPasses += 1
         attachmentReconciliationTask?.cancel()
         attachmentReconciliationGeneration &+= 1
         let generation = attachmentReconciliationGeneration
@@ -918,6 +1055,9 @@ final class NoteStore: ObservableObject {
                     )
                 }
             } catch {
+                // Let the next revision try again rather than trusting a
+                // signature whose pass never completed.
+                reconciledAttachmentSignature = nil
                 NSLog("Attic attachment reconciliation failed: %@", error.localizedDescription)
             }
         }

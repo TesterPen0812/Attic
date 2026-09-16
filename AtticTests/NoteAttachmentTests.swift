@@ -231,6 +231,114 @@ final class NoteAttachmentTests: XCTestCase {
         ))
     }
 
+    // MARK: - DATA-002: Open never exposes the private materialization
+
+    @MainActor
+    func testOpenHandsOutADisposableReadOnlyCopyNotThePrivateMaterialization() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = Data("editable contents".utf8)
+        let source = try write(payload, named: "original.txt", in: directory)
+        let attachmentRoot = directory.appendingPathComponent("Attachments", isDirectory: true)
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore(rootURL: attachmentRoot)
+        )
+        let note = try XCTUnwrap(store.create(body: "Note"))
+        let request = makeStoreImportRequest(from: [source], noteID: note.id)
+        let outcome = await store.importAttachments(request)
+        XCTAssertEqual(outcome, .imported(noteID: note.id))
+        let attachment = try XCTUnwrap(store.attachments(for: note.id).first)
+        let materialized = await store.materializedURL(for: attachment)
+        let privateURL = try XCTUnwrap(materialized)
+
+        let copyURL = try NoteAttachmentActions.openableCopy(
+            of: privateURL, named: attachment.originalFilename
+        )
+        defer { try? FileManager.default.removeItem(at: copyURL.deletingLastPathComponent()) }
+        XCTAssertNotEqual(copyURL.standardizedFileURL, privateURL.standardizedFileURL)
+        XCTAssertFalse(
+            copyURL.standardizedFileURL.path.hasPrefix(attachmentRoot.standardizedFileURL.path),
+            "The opened file must live outside the private attachment store"
+        )
+        XCTAssertEqual(try Data(contentsOf: copyURL), payload)
+        let permissions = try FileManager.default
+            .attributesOfItem(atPath: copyURL.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(permissions?.int16Value, 0o444, "An editor must not save over the copy")
+        XCTAssertNil(
+            FileHandle(forWritingAtPath: copyURL.path),
+            "The disposable copy must not be writable"
+        )
+        // The private materialization is untouched and still openable-from.
+        XCTAssertEqual(try Data(contentsOf: privateURL), payload)
+    }
+
+    // MARK: - DATA-003: rejected pastes and promised drops are reported
+
+    @MainActor
+    func testRejectedPastedImageReportsTheBusyMessageInsteadOfVanishing() throws {
+        let view = AttachmentAcceptingTextView()
+        view.captureImportReceiver = { nil }
+        view.onImportFiles = { _, _ in XCTFail("A refused capture must not import anywhere") }
+        var reported: [String] = []
+        view.onImportError = { reported.append($0) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("AtticNotePasteTests-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setData(try makePNGData(), forType: .png)
+
+        XCTAssertTrue(
+            view.handleAttachmentPasteboard(pasteboard),
+            "The editor still owns the paste; it must not fall through to inserting bytes as text"
+        )
+        XCTAssertEqual(reported, [AttachmentAcceptingTextView.busyImportMessage])
+    }
+
+    @MainActor
+    func testRejectedPastedImageUsesTheComposerSuppliedReason() throws {
+        let view = AttachmentAcceptingTextView()
+        view.captureImportReceiver = { nil }
+        view.importUnavailableMessage = { "This note could not be saved, so the file was not attached." }
+        var reported: [String] = []
+        view.onImportError = { reported.append($0) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("AtticNotePasteTests-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setData(try makePNGData(), forType: .tiff)
+
+        XCTAssertTrue(view.handleAttachmentPasteboard(pasteboard))
+        XCTAssertEqual(reported, ["This note could not be saved, so the file was not attached."])
+    }
+
+    @MainActor
+    func testAcceptedPastedImageReportsNothingAndReachesTheCapturedOwner() throws {
+        let view = AttachmentAcceptingTextView()
+        var delivered: [URL] = []
+        var cleanup: [URL] = []
+        view.captureImportReceiver = {
+            { urls, directories in
+                delivered = urls
+                cleanup = directories
+            }
+        }
+        view.onImportError = { XCTFail("An accepted paste must stay silent, got: \($0)") }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("AtticNotePasteTests-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setData(try makePNGData(), forType: .png)
+
+        XCTAssertTrue(view.handleAttachmentPasteboard(pasteboard))
+        defer { cleanup.forEach { try? FileManager.default.removeItem(at: $0) } }
+        XCTAssertEqual(delivered.count, 1)
+        XCTAssertEqual(delivered.first?.lastPathComponent, "Pasted image.png")
+        XCTAssertEqual(cleanup.count, 1)
+    }
+
+    private func makePNGData() throws -> Data {
+        let representation = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        return try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticAttachmentTests-\(UUID().uuidString)", isDirectory: true)

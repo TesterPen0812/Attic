@@ -30,6 +30,16 @@
 	<true/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.taha.attic.task-attachment</string>
+            <key>UTTypeDescription</key><string>Attic Task Attachment</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.taha.Attic.note-attachment-move</string>
+            <key>UTTypeDescription</key><string>Attic Note Attachment</string>
+            <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+        </dict>
 		<dict>
 			<key>UTTypeConformsTo</key>
 			<array>

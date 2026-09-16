@@ -92,7 +92,7 @@ enum PanelCornerSize: Double, CaseIterable, Identifiable {
 
 /// User-adjustable and live-resizable width of the panel, in points.
 enum PanelContentSize: Double, CaseIterable, Identifiable {
-    case standard = 332
+    case standard = 320
     case large = 360
     case extraLarge = 380
 

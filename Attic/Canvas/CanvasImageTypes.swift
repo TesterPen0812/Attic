@@ -1,7 +1,7 @@
 import Foundation
 
 struct CanvasImageDecodeRetryRequest: Equatable {
-    let imageID: UUID
+    let imageIDs: Set<UUID>
     let attemptID = UUID()
 }
 
@@ -10,17 +10,31 @@ struct CanvasPreparedImage: Equatable, Sendable {
     let contentType: String
     let pixelWidth: Int
     let pixelHeight: Int
+    /// Computed once, off the main actor, while the bytes are already hot from
+    /// preparation. Persistence reuses it instead of re-digesting the payload
+    /// on the main actor during a save.
+    let payloadMetadata: CanvasImagePayloadMetadata
 
     init(
         encodedData: Data,
         contentType: String,
         pixelWidth: Int,
-        pixelHeight: Int
+        pixelHeight: Int,
+        payloadMetadata: CanvasImagePayloadMetadata? = nil
     ) {
         self.encodedData = encodedData
         self.contentType = contentType
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
+        self.payloadMetadata = payloadMetadata ?? .compute(for: encodedData)
+    }
+
+    static func == (lhs: CanvasPreparedImage, rhs: CanvasPreparedImage) -> Bool {
+        lhs.contentType == rhs.contentType
+            && lhs.pixelWidth == rhs.pixelWidth
+            && lhs.pixelHeight == rhs.pixelHeight
+            && lhs.payloadMetadata == rhs.payloadMetadata
+            && lhs.encodedData == rhs.encodedData
     }
 }
 
@@ -213,6 +227,11 @@ struct CanvasPlacedImage: Identifiable, Equatable {
     /// comparing multi-megabyte Data values on the main actor.
     let contentToken: UUID
     let encodedData: Data
+    /// Scalar identity of `encodedData`. Comparisons use this instead of the
+    /// payload so no code path on the main actor compares multi-megabyte
+    /// `Data` values, and so history accounting can size a command without
+    /// walking its bytes.
+    let payloadMetadata: CanvasImagePayloadMetadata
     let contentType: String
     let pixelWidth: Int
     let pixelHeight: Int
@@ -235,13 +254,15 @@ struct CanvasPlacedImage: Identifiable, Equatable {
         boardGeneration: Int64 = 0,
         mutationVersion: Int64 = 1,
         createdAt: Date = Date(),
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        payloadMetadata: CanvasImagePayloadMetadata? = nil
     ) {
         self.id = id
         self.canvasID = canvasID
         self.renderToken = renderToken
         self.contentToken = contentToken
         self.encodedData = encodedData
+        self.payloadMetadata = payloadMetadata ?? .compute(for: encodedData)
         self.contentType = contentType
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -252,10 +273,13 @@ struct CanvasPlacedImage: Identifiable, Equatable {
         self.updatedAt = updatedAt ?? createdAt
     }
 
+    /// Encoded payload size without touching the payload.
+    var encodedByteCount: Int { payloadMetadata.byteCount }
+
     static func == (lhs: CanvasPlacedImage, rhs: CanvasPlacedImage) -> Bool {
         lhs.id == rhs.id
             && lhs.canvasID == rhs.canvasID
-            && lhs.encodedData == rhs.encodedData
+            && lhs.payloadMetadata == rhs.payloadMetadata
             && lhs.contentType == rhs.contentType
             && lhs.pixelWidth == rhs.pixelWidth
             && lhs.pixelHeight == rhs.pixelHeight
@@ -314,8 +338,73 @@ struct CanvasPlacedImage: Identifiable, Equatable {
             boardGeneration: boardGeneration,
             mutationVersion: mutationVersion,
             createdAt: createdAt,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            payloadMetadata: payloadMetadata
         )
+    }
+}
+
+/// A z-ordered, bounds-indexed view of the images currently on display.
+///
+/// `CanvasImagePlacement.topmostImage` sorts the whole array on every call,
+/// which the select-tool cursor path used to pay per `mouseMoved` event
+/// (PERF-10/CANVAS-018). Building this order once per content change turns each
+/// pointer event into a front-to-back walk that stops at the first hit, with a
+/// cheap bounding-box rejection before the per-image rectangle test.
+struct CanvasImageHitTestOrder {
+    /// Front-to-back: index 0 is the topmost image.
+    let frontToBack: [CanvasPlacedImage]
+    /// Back-to-front, which is painter's order and the order accessibility
+    /// navigation uses. Stored rather than derived so drawing does not
+    /// allocate a reversed copy per frame.
+    let backToFront: [CanvasPlacedImage]
+    private let unionRect: CGRect
+
+    init(images: [CanvasPlacedImage]) {
+        let sorted = images.sorted(by: CanvasImagePlacement.imageIsInFront)
+        self.init(frontToBack: sorted)
+    }
+
+    private init(frontToBack: [CanvasPlacedImage]) {
+        self.frontToBack = frontToBack
+        backToFront = frontToBack.reversed()
+        unionRect = frontToBack.reduce(CGRect.null) { union, image in
+            let rect = image.worldRect
+            return rect.isNull ? union : union.union(rect)
+        }
+    }
+
+    /// Applies a live move/resize preview without re-sorting.
+    ///
+    /// A preview never changes an image's `zIndex`, `createdAt` or identity, so
+    /// the existing order still holds. Re-sorting every pointer frame during a
+    /// drag would reintroduce exactly the cost this structure removes.
+    func applyingPreview(
+        id: UUID,
+        transform: CanvasImageTransform
+    ) -> CanvasImageHitTestOrder {
+        CanvasImageHitTestOrder(frontToBack: frontToBack.map {
+            $0.id == id ? $0.replacingTransform(transform) : $0
+        })
+    }
+
+    var isEmpty: Bool { frontToBack.isEmpty }
+
+    /// Zero-based depth of each image, front-to-back. Precomputing this removes
+    /// the per-object `contains` scans the accessibility rebuild used to run.
+    func depthIndices() -> [UUID: Int] {
+        var indices: [UUID: Int] = [:]
+        indices.reserveCapacity(frontToBack.count)
+        for (index, image) in frontToBack.enumerated() where indices[image.id] == nil {
+            indices[image.id] = index
+        }
+        return indices
+    }
+
+    func topmostImage(at worldPoint: CanvasPoint) -> CanvasPlacedImage? {
+        let point = worldPoint.cgPoint
+        guard !unionRect.isNull, unionRect.contains(point) else { return nil }
+        return frontToBack.first { $0.worldRect.contains(point) }
     }
 }
 

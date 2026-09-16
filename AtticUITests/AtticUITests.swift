@@ -7,6 +7,9 @@ final class AtticUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        if name.contains("testMainPanelIdle") {
+            app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+        }
         if name.contains("testAppearanceThemesResolveClearAndGradientControls")
             || name.contains("testGradientCoverageReachesExactEndpoints") {
             // Seed only the gradient tests. The model still changes in
@@ -40,6 +43,40 @@ final class AtticUITests: XCTestCase {
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
         app = nil
+    }
+
+    func testMainPanelIdleRetainsTaskDraftThenHidesCleanEditor() throws {
+        let field = app.textFields["quick-entry-title"]
+        XCTAssertTrue(field.waitForExistence(timeout: 3))
+        field.click()
+        field.typeText("Keep this unfinished draft")
+        let outside = app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: -100, dy: 220))
+        outside.hover()
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !field.exists }, object: nil)
+        hidden.isInverted = true
+        wait(for: [hidden], timeout: 4)
+        XCTAssertEqual(field.value as? String, "Keep this unfinished draft")
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeKey(.delete, modifierFlags: [])
+        outside.hover()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 8), "A clean idle main entry must stop acting as a pin")
+    }
+
+    func testMainPanelIdleHidesAutosavedNoteWithEditorFocus() throws {
+        app.textFields["quick-entry-title"].click()
+        app.typeKey("3", modifierFlags: .command)
+        let newNote = app.buttons["new-note-empty-state"]
+        XCTAssertTrue(newNote.waitForExistence(timeout: 3))
+        newNote.click()
+        let body = app.textViews["note-body"]
+        XCTAssertTrue(body.waitForExistence(timeout: 3))
+        body.click()
+        body.typeText("An autosaved note can rest.")
+        app.dialogs.firstMatch.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: -100, dy: 220)).hover()
+        XCTAssertTrue(body.waitForNonExistence(timeout: 8), "Autosaved Notes focus must not permanently pin the main panel")
     }
 
     func testAgentAccessConnectionDetailsRemainAccessible() throws {
@@ -340,6 +377,8 @@ final class AtticUITests: XCTestCase {
         let doneSection = app.staticTexts["task-section-done"]
         XCTAssertTrue(doneSection.waitForExistence(timeout: 2))
 
+        // The row menu is revealed (and exposed) only on row hover or focus.
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
         let actions = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "task-actions-")
         ).firstMatch
@@ -396,8 +435,12 @@ final class AtticUITests: XCTestCase {
 
         // The menu's explicit open is the click/keyboard/VoiceOver path: it
         // latches the panel and focuses the inline entry field.
-        let actions = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "task-actions-")).firstMatch
-        let parentID = actions.identifier.replacingOccurrences(of: "task-actions-", with: "")
+        let taskRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Plan weekend trip")).firstMatch
+        let parentID = taskRow.identifier.replacingOccurrences(of: "task-row-", with: "")
+        // The row menu is revealed (and exposed) only on row hover or focus.
+        taskRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+        let actions = app.descendants(matching: .any)["task-actions-\(parentID)"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 2))
         actions.click()
         app.menuItems["Add subtask…"].click()
         let hoverPanel = subtaskSurface("subtask-panel-\(parentID)")
@@ -411,9 +454,12 @@ final class AtticUITests: XCTestCase {
         childTitle.typeText("Book accommodation")
         childTitle.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(app.staticTexts["Book accommodation"].waitForExistence(timeout: 2))
-        // The compact parent row keeps an inline N/M count control; its
-        // accessibility value still reports "N of M complete".
-        let progress = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-progress-\(parentID)")).firstMatch
+        // The compact parent row shows passive N/M progress metadata; its
+        // accessibility value still reports "N of M complete". The row
+        // itself (not the metadata) opens the family panel.
+        let progress = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "subtask-progress-\(parentID)")).firstMatch
+        XCTAssertFalse(app.buttons["subtask-progress-\(parentID)"].exists, "progress is metadata, not a button")
+        let parentRow = app.descendants(matching: .any)["task-row-\(parentID)"]
         func assertProgress(_ text: String) {
             // SwiftUI's AX value can lag the visible status animation by a
             // snapshot. Wait for the same exact result, rather than sleeping.
@@ -431,17 +477,44 @@ final class AtticUITests: XCTestCase {
 
         childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         childTitle.typeText("Draft step")
+
+        // The switch beside the composer names its destination. Attachments
+        // replace the list in the same panel; neutral hover and a click on the
+        // family's own row keep the chosen view.
+        let viewSwitch = app.buttons["subtask-view-switch-\(parentID)"]
+        XCTAssertTrue(viewSwitch.waitForExistence(timeout: 2))
+        XCTAssertEqual(viewSwitch.label, "Show attachments")
+        viewSwitch.click()
+        let addAttachment = app.buttons["add-attachment-\(parentID)"]
+        XCTAssertTrue(addAttachment.waitForExistence(timeout: 2))
+        waitForChange("Attachments replace the subtask list") { !childTitle.exists }
+        XCTAssertTrue(subtaskSurface("subtask-attachments-\(parentID)").exists)
+        waitForChange("The switch now names Subtasks") { viewSwitch.label == "Show subtasks" }
+        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+        XCTAssertFalse(childTitle.waitForExistence(timeout: 1), "hover must not reset the view")
+        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertFalse(childTitle.waitForExistence(timeout: 1), "re-activating an open panel keeps its view")
+        XCTAssertTrue(addAttachment.exists)
+
         // Defocusing without Escape preserves the entry and its draft; the
         // outside click that dismisses the latched panel must not discard it.
         title.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         waitForChange("Outside click dismisses the latched panel") { !subtaskSurface("subtask-panel-\(parentID)").exists }
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
+        // A fresh open starts on Subtasks, with the retained draft.
+        XCTAssertTrue(childTitle.waitForExistence(timeout: 2))
+        XCTAssertFalse(addAttachment.exists)
         XCTAssertEqual(childTitle.value as? String, "Draft step")
 
         // Escape inside the entry is the deliberate cancel: it drops the
         // draft and collapses the row back to the '+ Add subtask' affordance.
-        // (Window-level Escape dismissal is a separate path.)
+        // (Window-level Escape dismissal is a separate path.) Reopening from
+        // the row keeps the draft but deliberately does not steal keyboard
+        // focus (focusEntry: false), so the quick-entry field clicked above
+        // still owns it; return to the entry first, as a user would.
+        childTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertEqual(childTitle.value as? String, "Draft step")
         childTitle.typeKey(.escape, modifierFlags: [])
         let addAffordance = app.buttons.matching(NSPredicate(format: "identifier == %@", "add-subtask-\(parentID)")).firstMatch
         XCTAssertTrue(addAffordance.waitForExistence(timeout: 2))
@@ -463,10 +536,46 @@ final class AtticUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
 
-        app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        XCTAssertTrue(app.staticTexts["panel-error-message"].waitForExistence(timeout: 2))
+        // Completing a parent with an unfinished child asks first; it is a
+        // confirmation, not a persistence error banner.
+        let parentStatus = app.buttons["complete-task-\(parentID)"]
+        let confirmationTitle = app.staticTexts["Complete this task?"]
+        let confirmationMessage = app.staticTexts["Some subtasks are unfinished. They will stay unfinished if you complete this task."]
+        let completeAnyway = app.buttons["Complete anyway"]
+        let cancelCompletion = app.buttons["Cancel"]
+        func requestParentCompletion() {
+            parentStatus.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+            XCTAssertTrue(confirmationTitle.waitForExistence(timeout: 2))
+            XCTAssertTrue(confirmationMessage.exists)
+            XCTAssertTrue(completeAnyway.exists)
+            XCTAssertTrue(cancelCompletion.exists)
+            XCTAssertFalse(app.staticTexts["panel-error-message"].exists)
+        }
+
+        // Cancel leaves the parent in To do and the child state untouched.
+        requestParentCompletion()
+        cancelCompletion.click()
+        waitForChange("Cancel dismisses the confirmation") { !confirmationTitle.exists }
+        assertSectionCount("To do", count: 1)
         assertSectionCount("Done", count: 0)
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        assertProgress("1 of 2 complete")
+
+        // Complete anyway moves the parent to Done; the unfinished child stays
+        // unfinished.
+        requestParentCompletion()
+        completeAnyway.click()
+        waitForChange("Complete anyway dismisses the confirmation") { !confirmationTitle.exists }
+        assertSectionCount("Done", count: 1)
+        assertSectionCount("To do", count: 0)
+        assertProgress("1 of 2 complete")
+        XCTAssertTrue(app.staticTexts["Book accommodation"].exists)
+
+        // Reopen the parent, then finish the family normally.
+        parentStatus.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        assertSectionCount("To do", count: 1)
+        assertSectionCount("Done", count: 0)
+        assertProgress("1 of 2 complete")
+        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(subtaskSurface("subtask-panel-\(parentID)").waitForExistence(timeout: 2))
         let secondRow = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", "Book accommodation")).firstMatch
         secondRow.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "complete-task-")).firstMatch
@@ -477,7 +586,9 @@ final class AtticUITests: XCTestCase {
         assertSectionCount("Done", count: 1)
         app.buttons["complete-task-\(parentID)"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         assertSectionCount("To do", count: 1)
+        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
         let parentMenu = app.descendants(matching: .any)["task-actions-\(parentID)"]
+        XCTAssertTrue(parentMenu.waitForExistence(timeout: 2))
         parentMenu.click()
         app.menuItems["Delete task and subtasks"].click()
         XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 2))
@@ -499,20 +610,39 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(header.waitForExistence(timeout: 2), "Expected \(text)", file: file, line: line)
     }
 
-    func testLongTaskTitleWrapsInsteadOfTruncating() throws {
+    /// TASK-003: a long title stays on one line at the row's normal height
+    /// (it fades at the trailing edge instead of wrapping), while the full
+    /// text remains available as the row's accessibility label.
+    func testLongTaskTitleStaysOnOneLineAndKeepsFullTextAccessible() throws {
         app.buttons["add-task-button"].click()
 
-        let longTitle = "A long task title that should wrap onto multiple lines instead of being cut off"
+        let shortTitle = "Short"
+        let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
         let titleField = app.textFields["quick-entry-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
+        titleField.typeText(shortTitle)
+        app.typeKey(.return, modifierFlags: [])
         titleField.typeText(longTitle)
-        titleField.typeKey(.return, modifierFlags: [])
+        app.typeKey(.return, modifierFlags: [])
+
+        func row(_ title: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@", "task-row-", title
+            )).firstMatch
+        }
+        let shortRow = row(shortTitle)
+        let longRow = row(longTitle)
+        XCTAssertTrue(shortRow.waitForExistence(timeout: 2))
+        XCTAssertTrue(longRow.waitForExistence(timeout: 2), "the full title is the row's accessibility label")
+        XCTAssertEqual(longRow.frame.height, shortRow.frame.height, accuracy: 1,
+                       "a long title never increases the row height")
 
         let title = app.staticTexts.matching(
             NSPredicate(format: "value BEGINSWITH %@", "A long task title")
         ).firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 2))
-        XCTAssertGreaterThan(title.frame.height, 20)
+        XCTAssertLessThanOrEqual(title.frame.height, 20, "the title renders as a single line")
+        XCTAssertLessThan(title.frame.width, longRow.frame.width, "the visible title is clipped inside the row")
     }
 
     func testDragReordersTasksWithMatchingPriority() throws {
@@ -577,10 +707,8 @@ final class AtticUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(body.exists)
 
-        let save = app.buttons["save-note"]
-        XCTAssertTrue(save.waitForExistence(timeout: 2))
-        save.click()
-        XCTAssertTrue(body.exists, "Saving in place must keep the focused workspace open")
+        XCTAssertFalse(app.buttons["save-note"].exists, "Autosave needs no redundant save control")
+        XCTAssertTrue(body.exists, "Autosaving must keep the focused workspace open")
 
         let browse = app.buttons["browse-saved-notes"]
         XCTAssertTrue(browse.waitForExistence(timeout: 2))

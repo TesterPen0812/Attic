@@ -119,6 +119,12 @@ final class NoteDraftController: ObservableObject {
         let noteID: UUID
         let title: String
         let body: String
+
+        static func == (lhs: PersistedSnapshot, rhs: PersistedSnapshot) -> Bool {
+            lhs.noteID == rhs.noteID
+                && lhs.title == rhs.title
+                && NoteTextReplacement.utf16Equal(lhs.body, rhs.body)
+        }
     }
 
     @Published var title = "" {
@@ -145,6 +151,7 @@ final class NoteDraftController: ObservableObject {
     /// and library changes without threading a second store through the shared
     /// panel shell.
     let noteStore: NoteStore
+    let bodyEditLedger = NoteBodyEditLedger()
     private let autosaveDelay: Duration
     private let maximumAutosaveDelay: Duration
     private let sessionDefaults: UserDefaults?
@@ -420,10 +427,17 @@ final class NoteDraftController: ObservableObject {
                 return true
             }
 
-            guard noteStore.update(note, title: title, body: body) else {
+            let editBatch = bodyEditLedger.batch(from: note.body, to: body)
+            guard noteStore.update(
+                note,
+                title: title,
+                body: body,
+                bodyEditBatch: editBatch
+            ) else {
                 recordSaveFailure()
                 return false
             }
+            bodyEditLedger.reset(to: body)
             persistedSnapshot = Self.snapshot(for: note)
             isDirty = false
             saveErrorMessage = nil
@@ -442,7 +456,13 @@ final class NoteDraftController: ObservableObject {
             // The attachment transaction may have committed the reserved blank
             // note immediately before this autosave runs. Merge text into that
             // logical origin instead of inserting a duplicate physical row.
-            guard noteStore.update(attachmentOnlyNote, title: title, body: body) else {
+            let editBatch = bodyEditLedger.batch(from: attachmentOnlyNote.body, to: body)
+            guard noteStore.update(
+                attachmentOnlyNote,
+                title: title,
+                body: body,
+                bodyEditBatch: editBatch
+            ) else {
                 recordSaveFailure()
                 return false
             }
@@ -462,6 +482,7 @@ final class NoteDraftController: ObservableObject {
         lastEditedNoteID = persistedNote.id
         attachmentImportOrigin = .note(persistedNote.id)
         persistedSnapshot = Self.snapshot(for: persistedNote)
+        bodyEditLedger.reset(to: body)
         isDirty = false
         saveErrorMessage = nil
         return true
@@ -538,10 +559,16 @@ final class NoteDraftController: ObservableObject {
               let activeNoteID,
               let note = noteStore.notes.first(where: { $0.id == activeNoteID }),
               Self.hasContent(title: title, body: body),
-              noteStore.update(note, title: title, body: body) else {
+              noteStore.update(
+                note,
+                title: title,
+                body: body,
+                bodyEditBatch: bodyEditLedger.batch(from: note.body, to: body)
+              ) else {
             return false
         }
         persistedSnapshot = Self.snapshot(for: note)
+        bodyEditLedger.reset(to: body)
         conflict = nil
         isDirty = false
         saveErrorMessage = nil
@@ -702,6 +729,7 @@ final class NoteDraftController: ObservableObject {
         if let noteID { lastEditedNoteID = noteID }
         self.title = title
         self.body = body
+        bodyEditLedger.reset(to: body)
         self.isActive = isActive
         persistedSnapshot = noteID.map {
             PersistedSnapshot(noteID: $0, title: title, body: body)

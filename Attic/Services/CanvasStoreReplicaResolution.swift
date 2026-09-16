@@ -8,7 +8,23 @@ extension CanvasStore {
         from source: CanvasImageItem,
         to destination: CanvasImageItem
     ) {
-        destination.encodedData = source.encodedData
+        // A transform-only mutation runs this for every replica, including the
+        // winner against itself. Assigning `encodedData` there faulted the blob
+        // in and marked it dirty, so moving an image rewrote its external
+        // storage (CANVAS-016/PERF-08). Prove equality through the scalar
+        // columns first and only touch the payload when it really differs.
+        if source !== destination {
+            let sourceMetadata = source.resolvedPayloadMetadata
+            let destinationMetadata = destination.resolvedPayloadMetadata
+            if sourceMetadata == nil
+                || destinationMetadata == nil
+                || sourceMetadata != destinationMetadata {
+                destination.applyEncodedPayload(
+                    source.materialisedPayload,
+                    metadata: sourceMetadata
+                )
+            }
+        }
         destination.contentType = source.contentType
         destination.pixelWidth = source.pixelWidth
         destination.pixelHeight = source.pixelHeight
@@ -102,8 +118,16 @@ extension CanvasStore {
         if candidate.updatedAt != existing.updatedAt {
             return candidate.updatedAt > existing.updatedAt
         }
-        if candidate.encodedData != existing.encodedData {
-            return existing.encodedData.lexicographicallyPrecedes(candidate.encodedData)
+        // Two replicas that agree on their scalar payload identity cannot
+        // differ in bytes, so the ordering falls through without faulting
+        // either blob. Divergent replicas still order by byte content exactly
+        // as before, which keeps duplicate-UUID winner selection deterministic.
+        if !imagePayloadsAreKnownEqual(candidate, existing) {
+            let candidatePayload = candidate.materialisedPayload
+            let existingPayload = existing.materialisedPayload
+            if candidatePayload != existingPayload {
+                return existingPayload.lexicographicallyPrecedes(candidatePayload)
+            }
         }
         if candidate.zIndex != existing.zIndex {
             return candidate.zIndex > existing.zIndex
@@ -117,6 +141,20 @@ extension CanvasStore {
         }
         return String(reflecting: candidate.persistentModelID)
             > String(reflecting: existing.persistentModelID)
+    }
+
+    /// True only when both rows carry scalar payload metadata and it agrees.
+    /// A legacy row answers `false`, which sends the caller to the exact byte
+    /// comparison rather than guessing.
+    static func imagePayloadsAreKnownEqual(
+        _ lhs: CanvasImageItem,
+        _ rhs: CanvasImageItem
+    ) -> Bool {
+        guard let lhsMetadata = lhs.resolvedPayloadMetadata,
+              let rhsMetadata = rhs.resolvedPayloadMetadata else {
+            return false
+        }
+        return lhsMetadata == rhsMetadata
     }
 
     static func prefersBoard(

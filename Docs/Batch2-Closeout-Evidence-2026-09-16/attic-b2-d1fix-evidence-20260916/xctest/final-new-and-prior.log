@@ -1,0 +1,57 @@
+label=final-new-and-prior limit=600s started=2026-09-16T13:01:27Z
+tests=CanvasAccessibilityTests/testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo CanvasAccessibilityTests/testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory CanvasAccessibilityTests/testRestyleThatClearsEditorHistoryRerendersUndoRedo CanvasAccessibilityTests/testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu CanvasAccessibilityTests/testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto CanvasAccessibilityTests/testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft CanvasAccessibilityTests/testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo CanvasAccessibilityTests/testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory CanvasAccessibilityTests/testAddMenuUndoRoutesToFocusedTextEditor CanvasAccessibilityTests/testAddMenuRedoRoutesToFocusedTextEditor CanvasRenderCacheTests/testRetryDecodeRequeuesOffScreenFailureAcrossCandidatePruning CanvasSessionTests/testNarrowingTextResizeGrowsHeightSoPersistedTextIsNotClipped CanvasSessionTests/testKeyboardSemanticResizeSharesPointerMinimumDimension CanvasAccessibilityTests/testRetryFailedImageDecodesRequeuesEveryVisibleFailure CanvasAccessibilityTests/testRetryFailedImageDecodesRequeuesOffScreenFailure CanvasAccessibilityTests/testToolbarUndoRedoFollowFocusedTextEditor CanvasAccessibilityTests/testPointerNarrowingTextResizeGrowsHeightToFitCommittedText
+products=/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local
+host_sha256=2287db132ef1900a23f1352289411bd47c6c755e9e2bbc7bfb59af32b7a39e2d
+host_debug_dylib_sha256=5a3708d2d50385ece573251646aac6d5eb800c65875be98279c61898c1516f8b
+bundle_binary_sha256=71a8c64edabf3e9054335c33156326779b1f3884e92e80e6ce82e711e06b029e
+sandbox_extension_issue_file_to_process failed for /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app: 1 (Operation not permitted)
+Test Suite 'Selected tests' started at 2026-09-16 14:01:28.482.
+Test Suite 'AtticTests.xctest' started at 2026-09-16 14:01:28.483.
+Test Suite 'CanvasAccessibilityTests' started at 2026-09-16 14:01:28.483.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' passed (2.897 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' passed (2.314 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' passed (2.101 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' passed (5.694 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' passed (7.101 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' passed (4.142 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testPointerNarrowingTextResizeGrowsHeightToFitCommittedText]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testPointerNarrowingTextResizeGrowsHeightToFitCommittedText]' passed (0.015 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' passed (5.551 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesEveryVisibleFailure]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesEveryVisibleFailure]' passed (0.033 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesOffScreenFailure]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesOffScreenFailure]' passed (0.024 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' passed (6.717 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' passed (6.036 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' passed (2.306 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' passed (2.830 seconds).
+Test Suite 'CanvasAccessibilityTests' passed at 2026-09-16 14:02:16.246.
+	 Executed 14 tests, with 0 failures (0 unexpected) in 47.761 (47.763) seconds
+Test Suite 'CanvasRenderCacheTests' started at 2026-09-16 14:02:16.246.
+Test Case '-[AtticTests.CanvasRenderCacheTests testRetryDecodeRequeuesOffScreenFailureAcrossCandidatePruning]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testRetryDecodeRequeuesOffScreenFailureAcrossCandidatePruning]' passed (0.004 seconds).
+Test Suite 'CanvasRenderCacheTests' passed at 2026-09-16 14:02:16.251.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.004 (0.005) seconds
+Test Suite 'CanvasSessionTests' started at 2026-09-16 14:02:16.251.
+Test Case '-[AtticTests.CanvasSessionTests testKeyboardSemanticResizeSharesPointerMinimumDimension]' started.
+Test Case '-[AtticTests.CanvasSessionTests testKeyboardSemanticResizeSharesPointerMinimumDimension]' passed (0.035 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testNarrowingTextResizeGrowsHeightSoPersistedTextIsNotClipped]' started.
+Test Case '-[AtticTests.CanvasSessionTests testNarrowingTextResizeGrowsHeightSoPersistedTextIsNotClipped]' passed (0.103 seconds).
+Test Suite 'CanvasSessionTests' passed at 2026-09-16 14:02:16.389.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.138 (0.138) seconds
+Test Suite 'AtticTests.xctest' passed at 2026-09-16 14:02:16.389.
+	 Executed 17 tests, with 0 failures (0 unexpected) in 47.902 (47.907) seconds
+Test Suite 'Selected tests' passed at 2026-09-16 14:02:16.389.
+	 Executed 17 tests, with 0 failures (0 unexpected) in 47.902 (47.907) seconds
+exit_status=0 finished=2026-09-16T13:02:16Z

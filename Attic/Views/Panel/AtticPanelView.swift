@@ -16,6 +16,10 @@ struct AtticPanelView: View {
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var quickEntryTitle = ""
     @State private var quickEntryPriority: TaskPriority = .none
+    /// Pending attachments for the task being written; same lifetime as the
+    /// draft title above.
+    @StateObject private var composerAttachments = TaskComposerAttachments()
+    @State private var isComposerFileDropTargeted = false
     @State private var isModeDockHovered = false
     @State private var hoveredModeSection: PanelSection?
     @State private var isQuickSubmitHovered = false
@@ -52,7 +56,10 @@ struct AtticPanelView: View {
         isModeDockHovered || focusedModeSection != nil
     }
     private var canSaveQuickTask: Bool {
-        !quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        composerAttachments.canSubmit(title: quickEntryTitle)
+    }
+    private var canAddComposerAttachments: Bool {
+        composerAttachments.canAdd && !TaskAttachmentPicker.isPresenting(uiState)
     }
     private var isTaskEntryExpanded: Bool {
         uiState.isComposerPresented
@@ -60,6 +67,7 @@ struct AtticPanelView: View {
     private var taskEntryHeight: CGFloat {
         AtticStyle.taskComposerRowHeight
             + (isTaskEntryExpanded ? AtticStyle.taskComposerOptionsHeight : 0)
+            + (composerAttachments.isEmpty ? 0 : TaskComposerLayout.pendingStripHeight)
     }
     private var panelThemePalette: AtticPanelThemePalette {
         settings.panelTheme.palette(
@@ -96,6 +104,28 @@ struct AtticPanelView: View {
             sectionWorkspace
         }
         .coordinateSpace(name: AtticPanelCoordinateSpaceName.taskWorkspace)
+        // Rows hidden or fading under the chrome bands are inert as well as
+        // dimmed: these shields sit between the list and the controls, so a
+        // press or hover landing beside the pin button, in the fade, or on
+        // the composer can never reach a row the mask has faded out. Scroll
+        // wheel events still reach the list, which AppKit hit-tests
+        // independently of these shapes.
+        .overlay(alignment: .top) {
+            if uiState.selectedSection.isTaskBased {
+                Color.clear
+                    .frame(height: taskTopObscuredHeight + TaskScrollMaskLayout.fadeLength)
+                    .contentShape(Rectangle())
+                    .accessibilityHidden(true)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if uiState.selectedSection.isTaskBased {
+                Color.clear
+                    .frame(height: taskBottomObscuredHeight + TaskScrollMaskLayout.fadeLength)
+                    .contentShape(Rectangle())
+                    .accessibilityHidden(true)
+            }
+        }
         .overlay(alignment: .top) {
             topChrome
         }
@@ -130,9 +160,6 @@ struct AtticPanelView: View {
             gradientCoverage: settings.panelGradientCoverage,
             gradientColorHex: settings.panelGradientColorHex
         )
-        .overlay {
-            dockingPreview
-        }
         .contextMenu {
             Button("Settings…", systemImage: "gearshape") {
                 AppCoordinator.shared.openSettings()
@@ -180,6 +207,10 @@ struct AtticPanelView: View {
         .onChange(of: isTaskEntryExpanded) { _, _ in
             syncComposerInteractionHeight()
         }
+        .onChange(of: composerAttachments.isEmpty) { _, _ in
+            syncComposerInteractionHeight()
+            syncTaskEntryInteractionLocks()
+        }
         .onChange(of: isQuickEntryFocused) { _, _ in
             syncTaskEntryInteractionLocks()
         }
@@ -215,25 +246,6 @@ struct AtticPanelView: View {
         )
         .tint(panelAccentColor)
         .accentColor(panelAccentColor)
-    }
-
-    @ViewBuilder
-    private var dockingPreview: some View {
-        if let corner = uiState.dockingPreviewCorner {
-            ZStack(alignment: dockingAlignment(for: corner)) {
-                Color.clear
-                Image(systemName: dockingSymbol(for: corner))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.primary.opacity(0.72))
-                    .frame(width: 28, height: 28)
-                    .atticGlassControl(in: Circle(), interactive: false)
-                    .padding(14)
-            }
-            .allowsHitTesting(false)
-            .transition(.opacity)
-            .animation(reduceMotion ? nil : AtticMotion.quick, value: corner)
-            .accessibilityHidden(true)
-        }
     }
 
     private var topChrome: some View {
@@ -380,7 +392,8 @@ struct AtticPanelView: View {
         )
         uiState.setInteractionLock(
             .taskComposer,
-            isActive: isTaskSection && (!quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || quickEntryPriority != .none)
+            isActive: isTaskSection && (!quickEntryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || quickEntryPriority != .none || !composerAttachments.isEmpty)
         )
     }
 
@@ -396,15 +409,30 @@ struct AtticPanelView: View {
                 isClearConfirmationPresented: $uiState.isCanvasConfirmationPresented,
                 bottomOverlayInset: PanelGeometry.canvasErrorBannerOffset(
                     measuredHeight: errorBannerHeight
-                )
+                ) + contentInsets.bottom,
+                topOverlayInset: chromeInsets.top + AtticStyle.controlHitSize,
+                mainControlRects: [
+                    CGRect(x: chromeInset, y: chromeInsets.top, width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize),
+                    CGRect(x: panelSize.width - chromeInset - PanelModeDockLayout.width(isExpanded: isModeDockExpanded),
+                           y: chromeInsets.top, width: PanelModeDockLayout.width(isExpanded: isModeDockExpanded), height: AtticStyle.controlHitSize)
+                ]
             )
-            .padding(.top, contentInsets.top + 62)
-            .padding(.bottom, contentInsets.bottom)
             .transition(.opacity)
         } else {
             notesWorkspace
                 .transition(.opacity)
         }
+    }
+
+    /// The band at the top of the workspace the pin button and mode dock
+    /// occupy, plus a little breathing room below them.
+    private var taskTopObscuredHeight: CGFloat {
+        chromeInsets.top + AtticStyle.controlHitSize + 6
+    }
+
+    /// The band the composer shell occupies, plus its bottom inset.
+    private var taskBottomObscuredHeight: CGFloat {
+        chromeInsets.bottom + taskEntryHeight + 6
     }
 
     private var taskWorkspace: some View {
@@ -450,16 +478,13 @@ struct AtticPanelView: View {
 
     private var taskScrollMask: some View {
         let stops = TaskScrollMaskLayout.stops(
-            panelHeight: panelSize.height,
-            bottomObscuredHeight: taskEntryHeight + 34
+            height: panelSize.height,
+            topObscuredHeight: taskTopObscuredHeight,
+            bottomObscuredHeight: taskBottomObscuredHeight
         )
         return LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0),
-                .init(color: .black, location: stops.topFadeEnd),
-                .init(color: .black, location: stops.bottomFadeStart),
-                .init(color: .clear, location: 1)
-            ],
+            stops: TaskScrollMaskLayout.gradientStops(stops, underChromeOpacity: TaskScrollMaskLayout.underChromeOpacity(
+                reduceTransparency: reduceTransparency, increasedContrast: hasIncreasedContrast)),
             startPoint: .top,
             endPoint: .bottom
         )
@@ -488,52 +513,61 @@ struct AtticPanelView: View {
 
     private var taskEntryBar: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Button {
-                    withAnimation(reduceMotion ? nil : AtticMotion.spring) {
-                        if uiState.isComposerPresented {
-                            isQuickEntryFocused = false
-                            uiState.endAdding()
-                        } else {
-                            uiState.beginAdding()
+            // Pending items sit above the text row, so the bottom-anchored
+            // shell grows upward and the text row never moves.
+            if !composerAttachments.isEmpty {
+                TaskComposerAttachmentStrip(attachments: composerAttachments, store: store)
+                    .transition(.opacity)
+            }
+            HStack(spacing: 8) {
+                HStack(spacing: 0) {
+                    Menu {
+                        Button("Attach images or files…", systemImage: "paperclip", action: chooseComposerAttachments)
+                            .disabled(!canAddComposerAttachments)
+                            .accessibilityIdentifier("quick-entry-attach")
+                        Button(isTaskEntryExpanded ? "Close task options" : "Task options", systemImage: "flag") {
+                            withAnimation(reduceMotion ? nil : AtticMotion.quick) {
+                                if isTaskEntryExpanded { uiState.endAdding() }
+                                else { uiState.beginAdding() }
+                            }
                             isQuickEntryFocused = true
                         }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(panelThemePalette.primaryForegroundColor)
+                            .frame(width: AtticStyle.taskComposerControlSize, height: AtticStyle.taskComposerControlSize)
+                            .contentShape(Circle())
                     }
-                } label: {
-                    Image(systemName: uiState.isComposerPresented ? "xmark" : "plus")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.primary.opacity(0.92))
-                        .atticClearGlassForegroundReadability()
-                        .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
-                        .background(
-                            Color.primary.opacity(uiState.isComposerPresented ? 0.10 : 0),
-                            in: Circle()
-                        )
-                        .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help(uiState.isComposerPresented ? "Close task options" : "Task options")
-                .accessibilityLabel(uiState.isComposerPresented ? "Close task options" : "Task options")
-                .accessibilityIdentifier("add-task-button")
-
-                TextField("Add a task, note, or idea", text: $quickEntryTitle,
-                          prompt: Text("Add a task, note, or idea")
-                            .foregroundStyle(panelThemePalette.secondaryForegroundColor))
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13, design: .rounded))
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: AtticStyle.taskComposerControlSize, height: AtticStyle.taskComposerControlSize)
+                    .tint(panelThemePalette.primaryForegroundColor)
+                    .accentColor(panelThemePalette.primaryForegroundColor)
                     .foregroundStyle(panelThemePalette.primaryForegroundColor)
-                    .atticClearGlassForegroundReadability()
-                    .padding(.horizontal, 5)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: AtticStyle.entryControlHeight)
-                    .focused($isQuickEntryFocused)
-                    .onSubmit(saveQuickTask)
-                    .onExitCommand {
-                        isQuickEntryFocused = false
-                        uiState.endAdding()
-                    }
-                    .accessibilityIdentifier("quick-entry-title")
+                    .help("Attachments and task options")
+                    .accessibilityLabel("Attachments and task options")
+                    .accessibilityIdentifier("add-task-button")
+
+                    TextField("Add a task…", text: $quickEntryTitle,
+                              prompt: Text("Add a task…")
+                                .foregroundStyle(panelThemePalette.secondaryForegroundColor))
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundStyle(panelThemePalette.primaryForegroundColor)
+                        .atticClearGlassForegroundReadability()
+                        .padding(.trailing, 12)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: AtticStyle.taskComposerControlSize)
+                        .focused($isQuickEntryFocused)
+                        .onSubmit(saveQuickTask)
+                        .onExitCommand {
+                            isQuickEntryFocused = false
+                            uiState.endAdding()
+                        }
+                        .accessibilityIdentifier("quick-entry-title")
+                }
+                .atticGlassControl(in: Capsule(), interactive: false)
 
                 Button(action: saveQuickTask) {
                     Image(systemName: "arrow.up")
@@ -542,29 +576,18 @@ struct AtticPanelView: View {
                             quickSubmitForegroundColor
                         )
                         .atticClearGlassForegroundReadability()
-                        .frame(width: AtticStyle.composerActionSize, height: AtticStyle.composerActionSize)
-                        .background(
-                            quickSubmitBackgroundColor,
-                            in: Circle()
-                        )
-                        .overlay {
-                            Circle().stroke(
-                                quickSubmitStrokeColor,
-                                lineWidth: (isQuickSubmitFocused || hasIncreasedContrast) ? 1 : 0.75
-                            )
-                        }
-                        .frame(width: AtticStyle.controlHitSize, height: AtticStyle.controlHitSize)
+                        .frame(width: AtticStyle.taskComposerControlSize, height: AtticStyle.taskComposerControlSize)
+                        .atticGlassControl(in: Circle())
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSaveQuickTask)
                 .focused($isQuickSubmitFocused)
                 .onHover { isQuickSubmitHovered = $0 }
-                .help("Add task")
+                .help(composerAttachments.isImporting ? "Add task when attachments finish copying" : "Add task")
                 .accessibilityLabel("Add task")
                 .accessibilityIdentifier("quick-entry-submit")
             }
-            .padding(.horizontal, 8)
             .frame(height: AtticStyle.taskComposerRowHeight)
             if isTaskEntryExpanded {
                 HStack(spacing: 4) {
@@ -608,14 +631,36 @@ struct AtticPanelView: View {
                 .transition(.opacity)
             }
         }
-        .atticGlassControl(
-            in: RoundedRectangle(cornerRadius: AtticStyle.taskComposerRowHeight / 2, style: .continuous),
-            interactive: false
-        )
         .contentShape(
             RoundedRectangle(cornerRadius: AtticStyle.taskComposerRowHeight / 2, style: .continuous)
         )
+        .overlay {
+            if isComposerFileDropTargeted {
+                TaskDropOverlay(
+                    message: "Drop to attach to the new task",
+                    shape: RoundedRectangle(cornerRadius: AtticStyle.taskComposerRowHeight / 2, style: .continuous),
+                    compact: true
+                )
+            }
+        }
+        .onDrop(of: TaskDropContent.dropTypes, delegate: TaskFileDropDelegate(
+            // The new task has no owner yet, so a card from any task copies in.
+            canAccept: { content in
+                canAddComposerAttachments && (content == .files || TaskAttachmentCardDrag.canCopy(toOwner: nil))
+            },
+            setTargeted: { targeted in
+                withAnimation(reduceMotion ? nil : AtticMotion.quick) { isComposerFileDropTargeted = targeted }
+            },
+            perform: { content, providers in
+                if content == .attachmentCard {
+                    addComposerCopies(of: providers)
+                } else {
+                    addComposerAttachments(count: providers.count) { try await TaskDroppedFiles.stage(providers) }
+                }
+            }
+        ))
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isTaskEntryExpanded)
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: composerAttachments.isEmpty)
         .padding(.horizontal, chromeInset)
         .padding(.bottom, chromeInsets.bottom)
         .frame(maxWidth: .infinity)
@@ -640,17 +685,38 @@ struct AtticPanelView: View {
         .padding(.horizontal, horizontalInset)
     }
 
+    /// A compact, dismissible notice above the composer. It clears itself on
+    /// the next successful save and never grows past two lines.
     private func errorBanner(_ error: String) -> some View {
-        Text(error)
-            .font(.caption2)
-            .foregroundStyle(.primary)
-            .atticClearGlassForegroundReadability()
-            .lineLimit(2)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .atticGlassControl(in: Capsule(), interactive: false)
-            .padding(.horizontal, chromeInset)
-            .padding(.bottom, uiState.selectedSection.isTaskBased ? 118 : 20)
+        HStack(alignment: .center, spacing: 8) {
+            Text(error)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .atticClearGlassForegroundReadability()
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: dismissCurrentError) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Color.primary.opacity(0.9))
+                    .frame(width: 18, height: 18)
+                    .atticGlassControl(in: Circle())
+                    .frame(width: 24, height: 24)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss message")
+            .accessibilityIdentifier("panel-error-dismiss")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 5)
+        .atticGlassControl(in: Capsule(), interactive: false)
+        .padding(.horizontal, chromeInset)
+            .padding(.bottom, uiState.selectedSection.isTaskBased
+                ? 118 + (composerAttachments.isEmpty ? 0 : TaskComposerLayout.pendingStripHeight) : 20)
             .background {
                 GeometryReader { proxy in
                     Color.clear.preference(
@@ -662,20 +728,66 @@ struct AtticPanelView: View {
             .accessibilityIdentifier("panel-error-message")
     }
 
+    /// Task errors that concern one family's panel show inside that panel
+    /// only; the main banner carries general and composer errors.
     private var currentErrorMessage: String? {
         if uiState.selectedSection.isCanvas { return canvasSession.lastErrorMessage }
-        return uiState.selectedSection.isNotes ? noteStore.lastErrorMessage : store.lastErrorMessage
+        if uiState.selectedSection.isNotes { return noteStore.lastErrorMessage }
+        guard store.lastErrorOwnerID == nil else { return nil }
+        return store.lastErrorMessage
     }
 
+    private func dismissCurrentError() {
+        if uiState.selectedSection.isCanvas { canvasSession.dismissErrorMessage(); return }
+        if uiState.selectedSection.isNotes { noteStore.dismissError(); return }
+        store.dismissError()
+    }
+
+    /// One save creates the task with its pending attachments. On failure
+    /// the store reports it and the title, priority and pending items stay
+    /// for a retry.
     private func saveQuickTask() {
+        guard canSaveQuickTask else { return }
         guard store.create(
             title: quickEntryTitle,
             priority: quickEntryPriority,
-            status: uiState.selectedScope.creationStatus
+            status: uiState.selectedScope.creationStatus,
+            attachments: composerAttachments.pending
         ) != nil else { return }
+        composerAttachments.didBind()
         quickEntryTitle = ""
         quickEntryPriority = .none
         DispatchQueue.main.async { isQuickEntryFocused = true }
+    }
+
+    private func chooseComposerAttachments() {
+        guard canAddComposerAttachments else { return }
+        TaskAttachmentPicker.chooseForComposer(uiState: uiState) { urls in
+            addComposerAttachments(count: urls.count) { TaskAttachmentStaging(urls: urls) }
+        }
+    }
+
+    private func addComposerAttachments(count: Int,
+                                        stage: @escaping @MainActor () async throws -> TaskAttachmentStaging) {
+        let store = store
+        composerAttachments.add(count: count, files: store.taskImageFiles, stage: stage,
+                                succeeded: { store.dismissError() }) { error in
+            store.reportAttachmentImportFailure(error)
+        }
+    }
+
+    /// A gallery card dropped on the composer: a private copy of the
+    /// verified source becomes a pending item like any other.
+    private func addComposerCopies(of providers: [NSItemProvider]) {
+        let store = store
+        let card = TaskAttachmentCardDrag.current
+        composerAttachments.add(count: providers.count, files: store.taskImageFiles, importing: { existing in
+            let sources = try await TaskAttachmentCardDrag.sources(from: providers, expected: card)
+            let references = try store.verifiedCopySources(sources, excludingOwner: nil)
+            return try await store.taskImageFiles.importCopies(of: references, existing: existing)
+        }, succeeded: { store.dismissError() }) { error in
+            store.reportAttachmentImportFailure(error)
+        }
     }
 
     private func selectSection(_ section: PanelSection) {
@@ -686,13 +798,15 @@ struct AtticPanelView: View {
             focusedModeSection = nil
         }
         guard uiState.selectedSection != section else { return }
-        isQuickEntryFocused = false
-        uiState.setInteractionLock(.quickEntryFocus, isActive: false)
+        // A refused Notes close must leave every other state untouched, so
+        // the refusal is decided before any focus or lock changes.
         if uiState.selectedSection.isNotes, noteDraft.isActive {
             guard noteDraft.close() else { return }
         }
+        isQuickEntryFocused = false
+        uiState.setInteractionLock(.quickEntryFocus, isActive: false)
         if uiState.selectedSection.isCanvas {
-            canvasSession.cancelActiveInteraction()
+            canvasSession.interruptActiveInteraction()
         }
 
         let selection = {
@@ -868,23 +982,9 @@ struct AtticPanelView: View {
         }
     }
 
-    private func dockingAlignment(for corner: ScreenCorner) -> Alignment {
-        switch corner {
-        case .topLeft: .topLeading
-        case .topRight: .topTrailing
-        case .bottomLeft: .bottomLeading
-        case .bottomRight: .bottomTrailing
-        }
-    }
 
-    private func dockingSymbol(for corner: ScreenCorner) -> String {
-        switch corner {
-        case .topLeft: "arrow.up.left"
-        case .topRight: "arrow.up.right"
-        case .bottomLeft: "arrow.down.left"
-        case .bottomRight: "arrow.down.right"
-        }
-    }
+
+
 }
 
 private struct PanelErrorBannerHeightPreferenceKey: PreferenceKey {

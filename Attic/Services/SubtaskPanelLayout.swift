@@ -7,18 +7,17 @@ import SwiftUI
 /// logic so placement, flip/clamp behaviour and the open/close state machine
 /// stay unit-testable without AppKit.
 enum SubtaskPanelLayout {
-    /// Inside the handoff's 260–310 point range; wide enough for a checklist
-    /// row and its actions, narrow enough to sit beside the main panel.
-    static let panelWidth: CGFloat = 292
+    /// Inside the handoff's 260–310 point range, at its narrow end: the
+    /// surface is a glance-sized companion to the row, not a second panel.
+    /// The trade-off is title width — see `surfaceInsets`, which keeps a
+    /// readable title column even at the largest configured corner.
+    static let panelWidth: CGFloat = 272
     /// The child list is the only scrolling region; the header and entry row
     /// stay fixed. Tall families bound the surface instead of growing it.
-    static let maximumListHeight: CGFloat = 264
+    /// Short families still size to their content (`clampedListHeight`), so
+    /// this is a ceiling, never a forced aspect ratio.
+    static let maximumListHeight: CGFloat = 240
     static let minimumListHeight: CGFloat = AtticStyle.rowHeight
-    /// Open only after a settled hover; brief row crossings stay closed.
-    static let openDwell: TimeInterval = 0.35
-    /// Grace for pointer travel across the row-to-panel gap before the
-    /// transient surface dismisses.
-    static let closeGrace: TimeInterval = 0.45
     /// A pin/unpin press resigns the entry's field editor on mouse-down —
     /// before the button's action runs — so a resign inside this window
     /// still counts as "the entry was engaged" for the host swap.
@@ -30,10 +29,230 @@ enum SubtaskPanelLayout {
     /// Lower bound for the surface height even when a family has no rows.
     static let minimumContentHeight: CGFloat = 112
 
+    /// Corner-aware content padding for the auxiliary surfaces. The squircle
+    /// curve moves inward by `cornerInsetFactor` of its radius, so padding
+    /// must clear that or content corners clip; each value keeps its original
+    /// compact spacing as a floor. Clamping the radius to half the panel
+    /// WIDTH (never its height) can only over-pad a very short surface — it
+    /// can never under-pad into the curve.
+    static func surfaceInsets(cornerSize: CGFloat) -> SurfaceInsets {
+        let clearance = min(max(0, cornerSize), panelWidth / 2)
+            * Squircle.cornerInsetFactor(exponent: PanelGeometry.squircleExponent)
+        return SurfaceInsets(
+            cornerClearance: clearance,
+            horizontal: max(14, clearance + 6),
+            top: max(11, clearance + 4),
+            bottom: max(8, clearance + 6),
+            row: max(4, clearance + 2)
+        )
+    }
+
+    /// Room around the source row and the surface inside which a hand
+    /// travelling between them still reads as transit.
+    static let corridorVerticalPadding: CGFloat = AtticStyle.rowHeight
+
+    /// Where a screen point sits relative to an open transient surface.
+    /// `.surface` is the drawn squircle itself; `.transit` is the corridor
+    /// from the source row to wherever the surface was actually placed. The
+    /// main panel's auto-hide treats both as "inside" so a hand moving
+    /// between the row and its open panel never hides the panel underneath;
+    /// outside-click dismissal counts only the narrow gap beside the surface.
+    enum PointerCoverage: Equatable {
+        case outside
+        case transit
+        case surface
+    }
+
+    /// Classifies a screen point. The corridor is the convex hull of the
+    /// padded source row and the padded surface, so it follows the surface
+    /// wherever placement put it — beside the panel, or moved clear of a
+    /// pinned window. Only its source-facing half counts: past the surface's
+    /// centre, away from the row, the pointer is leaving, not arriving. A
+    /// pinned Attic panel lying across that route is transit too, so crossing
+    /// it does not dismiss. Without a main panel (a detached surface) there is
+    /// no route; without a live row the panel's facing edge stands in for it.
+    static func pointerCoverage(
+        _ point: CGPoint,
+        surfaceFrame: CGRect,
+        cornerSize: CGFloat,
+        mainPanelFrame: CGRect?,
+        anchorRect: CGRect?,
+        crossingFrames: [CGRect] = []
+    ) -> PointerCoverage {
+        let local = CGPoint(
+            x: point.x - surfaceFrame.minX,
+            y: point.y - surfaceFrame.minY
+        )
+        if surfaceContains(
+            local,
+            in: CGRect(origin: .zero, size: surfaceFrame.size),
+            cornerSize: cornerSize
+        ) {
+            return .surface
+        }
+        guard let main = mainPanelFrame else { return .outside }
+        let source: CGRect
+        if let anchorRect, !anchorRect.isNull, !anchorRect.isEmpty {
+            source = anchorRect
+        } else {
+            let edgeX = surfaceFrame.midX >= main.midX ? main.maxX : main.minX
+            source = CGRect(x: edgeX, y: surfaceFrame.minY, width: 0, height: surfaceFrame.height)
+        }
+        let toSource = CGPoint(x: source.midX - surfaceFrame.midX, y: source.midY - surfaceFrame.midY)
+        let fromSurface = CGPoint(x: point.x - surfaceFrame.midX, y: point.y - surfaceFrame.midY)
+        guard fromSurface.x * toSource.x + fromSurface.y * toSource.y > 0 else { return .outside }
+        let hull = corridorHull(source: source, surface: surfaceFrame)
+        if convexPolygon(hull, contains: point) { return .transit }
+        let crossesRoute = crossingFrames.contains { frame in
+            !frame.isEmpty && frame.contains(point) && convexPolygons(hull, intersect: corners(of: frame))
+        }
+        return crossesRoute ? .transit : .outside
+    }
+
+    /// Counter-clockwise hull of the padded source and surface rectangles.
+    static func corridorHull(source: CGRect, surface: CGRect) -> [CGPoint] {
+        let padding = corridorVerticalPadding
+        return convexHull(
+            corners(of: source.insetBy(dx: -padding, dy: -padding))
+                + corners(of: surface.insetBy(dx: -padding, dy: -padding))
+        )
+    }
+
+    /// Distance from a point to the nearest point of a rectangle; zero inside.
+    static func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        return hypot(dx, dy)
+    }
+
+    private static func corners(of rect: CGRect) -> [CGPoint] {
+        [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
+         CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
+    }
+
+    private static func cross(_ o: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+    }
+
+    /// Monotone chain; eight points at most, so no allocation concerns.
+    private static func convexHull(_ points: [CGPoint]) -> [CGPoint] {
+        let sorted = points.sorted { $0.x == $1.x ? $0.y < $1.y : $0.x < $1.x }
+        guard sorted.count > 2 else { return sorted }
+        var lower: [CGPoint] = []
+        for point in sorted {
+            while lower.count >= 2, cross(lower[lower.count - 2], lower[lower.count - 1], point) <= 0 {
+                lower.removeLast()
+            }
+            lower.append(point)
+        }
+        var upper: [CGPoint] = []
+        for point in sorted.reversed() {
+            while upper.count >= 2, cross(upper[upper.count - 2], upper[upper.count - 1], point) <= 0 {
+                upper.removeLast()
+            }
+            upper.append(point)
+        }
+        return Array(lower.dropLast() + upper.dropLast())
+    }
+
+    private static func convexPolygon(_ polygon: [CGPoint], contains point: CGPoint) -> Bool {
+        guard polygon.count >= 3 else { return false }
+        for index in polygon.indices {
+            let next = polygon[(index + 1) % polygon.count]
+            if cross(polygon[index], next, point) < 0 { return false }
+        }
+        return true
+    }
+
+    /// Separating-axis test for two convex polygons.
+    private static func convexPolygons(_ a: [CGPoint], intersect b: [CGPoint]) -> Bool {
+        for polygon in [a, b] {
+            for index in polygon.indices {
+                let next = polygon[(index + 1) % polygon.count]
+                let axis = CGPoint(x: polygon[index].y - next.y, y: next.x - polygon[index].x)
+                func project(_ points: [CGPoint]) -> ClosedRange<CGFloat> {
+                    let values = points.map { $0.x * axis.x + $0.y * axis.y }
+                    return (values.min() ?? 0)...(values.max() ?? 0)
+                }
+                if !project(a).overlaps(project(b)) { return false }
+            }
+        }
+        return true
+    }
+
+    /// One geometry definition for the surfaces' visible shape, shared by the
+    /// AppKit hit test, the auto-hide coverage predicate and outside-click
+    /// dismissal so all three agree with what is actually drawn.
+    static func surfaceContains(
+        _ point: CGPoint,
+        in bounds: CGRect,
+        cornerSize: CGFloat
+    ) -> Bool {
+        Squircle.contains(
+            point,
+            in: bounds,
+            cornerRadius: cornerSize,
+            exponent: PanelGeometry.squircleExponent
+        )
+    }
+
     static func clampedListHeight(_ measured: CGFloat) -> CGFloat {
         guard measured.isFinite, measured > 0 else { return minimumListHeight }
         return min(max(measured, minimumListHeight), maximumListHeight)
     }
+
+    // MARK: Attachments gallery
+
+    /// Two compact columns: one image takes half the width and a short card,
+    /// so it can never dominate the panel.
+    static let galleryColumns = 2
+    static let galleryCardHeight: CGFloat = 100
+    static let galleryPreviewHeight: CGFloat = 56
+    static let gallerySpacing: CGFloat = 8
+    static let galleryVerticalPadding: CGFloat = 4
+    static let galleryEmptyHeight: CGFloat = 40
+
+    /// The gallery's natural height is pure arithmetic over a fixed card
+    /// size, so switching views knows its target before anything renders.
+    static func galleryContentHeight(itemCount: Int) -> CGFloat {
+        guard itemCount > 0 else { return galleryEmptyHeight }
+        let rows = CGFloat((itemCount + galleryColumns - 1) / galleryColumns)
+        return rows * galleryCardHeight + (rows - 1) * gallerySpacing + 2 * galleryVerticalPadding
+    }
+
+    /// Both views share one sizing rule: their natural height, bounded by the
+    /// existing subtask list maximum, after which the content scrolls.
+    static func contentHeight(for view: FamilyPanelView, childCount: Int,
+                              measuredListHeight: CGFloat?, attachmentCount: Int) -> CGFloat {
+        switch view {
+        case .subtasks:
+            guard childCount > 0 else { return 0 }
+            return clampedListHeight(measuredListHeight
+                ?? CGFloat(childCount) * AtticStyle.controlHitSize + 8)
+        case .attachments:
+            return min(galleryContentHeight(itemCount: attachmentCount), maximumListHeight)
+        }
+    }
+
+    /// Short and anchored: content slides a few points and crossfades while
+    /// the surface's top edge stays put and its height follows the content.
+    static let viewSwitchDuration: TimeInterval = 0.22
+    static let viewSwitchSlide: CGFloat = 18
+
+    /// Horizontal offset of a view's own side: Subtasks left, Attachments
+    /// right. A view enters from and leaves toward this offset, so on a switch
+    /// the outgoing and incoming views move in the same direction.
+    static func viewSwitchOffset(for view: FamilyPanelView) -> CGFloat {
+        view == .attachments ? viewSwitchSlide : -viewSwitchSlide
+    }
+    /// Newly imported cards enter just after the view switch settles, a few
+    /// hundredths apart; their fresh mark is dropped once that has played.
+    static let freshAttachmentEntranceDelay: TimeInterval = 0.12
+    static let freshAttachmentStagger: TimeInterval = 0.035
+    static let freshAttachmentLifetime: TimeInterval = 1.2
+
+    /// Composer capsule minimum height and the view switch's diameter.
+    static let footerControlSize: CGFloat = 32
 
     /// The transient panel hangs off the side of the main panel toward the
     /// screen's interior and top-aligns with the hovered row. When the
@@ -44,6 +263,7 @@ enum SubtaskPanelLayout {
         anchorScreenRect: CGRect?,
         panelScreenFrame: CGRect,
         screenVisibleFrame: CGRect,
+        occupiedFrames: [CGRect] = [],
         gap: CGFloat = sideGap,
         inset: CGFloat = screenInset
     ) -> CGRect {
@@ -73,7 +293,41 @@ enum SubtaskPanelLayout {
             max(desiredTop - height, safe.minY),
             max(safe.minY, safe.maxY - height)
         )
-        return CGRect(origin: CGPoint(x: x, y: y), size: sizeClamped)
+        let proposed = CGRect(origin: CGPoint(x: x, y: y), size: sizeClamped)
+        return avoidingOverlap(proposed, occupied: occupiedFrames + [panelScreenFrame], within: safe, gap: gap)
+    }
+
+    /// Prefer the closest free position at an obstacle edge. The candidate
+    /// count depends on open windows, never on screen pixels or a timer.
+    static func avoidingOverlap(_ preferred: CGRect, occupied: [CGRect], within safe: CGRect, gap: CGFloat = sideGap) -> CGRect {
+        let proposed = CGRect(x: min(max(safe.minX, preferred.minX), max(safe.minX, safe.maxX - preferred.width)),
+                              y: min(max(safe.minY, preferred.minY), max(safe.minY, safe.maxY - preferred.height)),
+                              width: preferred.width, height: preferred.height)
+        let obstacles = occupied.filter { !$0.isEmpty && $0.intersects(safe) }
+        guard obstacles.contains(where: { $0.insetBy(dx: -gap, dy: -gap).intersects(proposed) }) else { return proposed }
+        let xs = [proposed.minX, safe.minX, safe.maxX - proposed.width]
+            + obstacles.flatMap { [$0.minX - gap - proposed.width, $0.maxX + gap] }
+        let ys = [proposed.minY, safe.minY, safe.maxY - proposed.height]
+            + obstacles.flatMap { [$0.minY - gap - proposed.height, $0.maxY + gap] }
+        var best = proposed
+        var bestOverlap = CGFloat.greatestFiniteMagnitude
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for x in xs {
+            for y in ys {
+                let candidate = CGRect(x: min(max(safe.minX, x), max(safe.minX, safe.maxX - proposed.width)),
+                                       y: min(max(safe.minY, y), max(safe.minY, safe.maxY - proposed.height)),
+                                       width: proposed.width, height: proposed.height)
+                let overlap = obstacles.reduce(CGFloat.zero) { sum, obstacle in
+                    let intersection = candidate.intersection(obstacle.insetBy(dx: -gap / 2, dy: -gap / 2))
+                    return sum + (intersection.isNull ? 0 : intersection.width * intersection.height)
+                }
+                let distance = hypot(candidate.minX - proposed.minX, candidate.minY - proposed.minY)
+                if overlap < bestOverlap || (overlap == bestOverlap && distance < bestDistance) {
+                    best = candidate; bestOverlap = overlap; bestDistance = distance
+                }
+            }
+        }
+        return best
     }
 
     /// Keeps the surface's top edge stationary while its height follows
@@ -170,157 +424,86 @@ enum SubtaskPanelLayout {
     }
 }
 
-/// Tracks which family a transient hover surface may show and when pending
-/// opens/closes mature. The AppKit controller owns timers and hit tests;
-/// this value type owns the decisions so they stay deterministic in tests.
+/// The two views of a family panel. Each family's panel opens on Subtasks;
+/// the user switches deliberately with the control beside the composer.
+enum FamilyPanelView: Equatable, Sendable {
+    case subtasks
+    case attachments
+
+    var destination: FamilyPanelView { self == .subtasks ? .attachments : .subtasks }
+
+    /// The switch shows where it goes, not where the user is.
+    var switchSymbol: String { destination == .attachments ? "photo.on.rectangle" : "checklist" }
+    var switchLabel: String { destination == .attachments ? "Show attachments" : "Show subtasks" }
+}
+
+/// Corner-aware spacing for one auxiliary surface. Pure geometry so the
+/// relationship between the user's corner setting and the padding that keeps
+/// content clear of the curve is unit-testable without a view.
+struct SurfaceInsets: Equatable {
+    /// Deepest inward deviation of the corner curve at this radius.
+    let cornerClearance: CGFloat
+    let horizontal: CGFloat
+    let top: CGFloat
+    let bottom: CGFloat
+    let row: CGFloat
+
+    /// Width left for the header's title column beside its control cluster.
+    func titleWidth(panelWidth: CGFloat, controlWidth: CGFloat, spacing: CGFloat) -> CGFloat {
+        panelWidth - 2 * horizontal - controlWidth - spacing
+    }
+}
+
+/// Tracks which family the transient surface shows and which families own
+/// pinned windows. Every transient is opened deliberately (row click,
+/// keyboard, VoiceOver, menu command, unpin) and stays until an outside
+/// click, an explicit close, or a family change — pointer position never
+/// opens or closes a surface. The AppKit controller owns windows and hit
+/// tests; this value type owns the decisions so they stay deterministic.
 struct SubtaskPanelLifecycle: Equatable {
-    enum TransientOrigin: Equatable {
-        /// Hover-dwell open: pointer-leave rules close it.
-        case hover
-        /// Explicit open (count control, menu, VoiceOver, unpin): stays until
-        /// an outside click, an explicit close, or a family change.
-        case explicit
-    }
-
-    struct PendingOpen: Equatable {
-        let familyID: UUID
-        let deadline: TimeInterval
-    }
-
-    struct PendingClose: Equatable {
-        let familyID: UUID
-        let deadline: TimeInterval
-    }
-
     private(set) var transientFamilyID: UUID?
-    private(set) var transientOrigin: TransientOrigin = .hover
-    private(set) var pinnedFamilyID: UUID?
-    private(set) var pendingOpen: PendingOpen?
-    private(set) var pendingClose: PendingClose?
+    private(set) var pinnedFamilyIDs: Set<UUID> = []
+    /// Dragged away from its row: it stays where it was put and only follows
+    /// its content height.
+    private(set) var isTransientDetached = false
 
-    var isTransientLatched: Bool { transientOrigin == .explicit }
-    var hasPendingTransient: Bool { transientFamilyID != nil || pendingOpen != nil }
-
-    mutating func noteRowHover(familyID: UUID, isHovering: Bool, at now: TimeInterval) {
-        if isHovering {
-            if let close = pendingClose, close.familyID == familyID {
-                pendingClose = nil
-            }
-            guard transientFamilyID != familyID,
-                  pinnedFamilyID != familyID else { return }
-            pendingOpen = PendingOpen(
-                familyID: familyID,
-                deadline: now + SubtaskPanelLayout.openDwell
-            )
-        } else {
-            if pendingOpen?.familyID == familyID {
-                pendingOpen = nil
-            }
-            if transientFamilyID == familyID, !isTransientLatched {
-                pendingClose = PendingClose(
-                    familyID: familyID,
-                    deadline: now + SubtaskPanelLayout.closeGrace
-                )
-            }
-        }
-    }
-
-    /// Pointer crossed into the transient surface itself: any close is
-    /// cancelled and a pending open for a different family loses its claim.
-    mutating func noteTransientPointer(inside: Bool, at now: TimeInterval) {
-        if inside {
-            pendingClose = nil
-            if let pending = pendingOpen, pending.familyID != transientFamilyID {
-                pendingOpen = nil
-            }
-        } else if let open = transientFamilyID, !isTransientLatched {
-            pendingClose = PendingClose(
-                familyID: open,
-                deadline: now + SubtaskPanelLayout.closeGrace
-            )
-        }
-    }
-
-    /// A pending dwell matures into an open only when the same family is
-    /// still the request and nothing newer superseded it.
-    mutating func maturePendingOpen(for familyID: UUID, at now: TimeInterval) -> Bool {
-        guard let pending = pendingOpen,
-              pending.familyID == familyID,
-              now >= pending.deadline else { return false }
-        pendingOpen = nil
-        transientFamilyID = familyID
-        transientOrigin = .hover
-        pendingClose = nil
-        return true
-    }
-
-    mutating func maturePendingClose(for familyID: UUID, at now: TimeInterval) -> Bool {
-        guard let pending = pendingClose,
-              pending.familyID == familyID,
-              now >= pending.deadline else { return false }
-        pendingClose = nil
-        if transientFamilyID == familyID {
-            transientFamilyID = nil
-        }
-        return true
-    }
-
-    /// Explicit open (click/keyboard/VoiceOver/unpin) latches the surface so
-    /// it is not bound to pointer presence. Returns false when the family is
-    /// pinned — the pinned window is that family's only surface — or when the
-    /// requested state is already active. Callers must honor the result: a
-    /// rejected open presents nothing.
+    /// Deliberate open. Returns false when the family is pinned — the pinned
+    /// window is that family's only surface — or when it is already the
+    /// transient. Callers must honor the result: a rejected open presents
+    /// nothing new.
     @discardableResult
-    mutating func openTransient(_ familyID: UUID, latched: Bool) -> Bool {
-        guard mayOpenTransient(for: familyID) else { return false }
-        pendingOpen = nil
-        pendingClose = nil
-        guard transientFamilyID != familyID || transientOrigin != (latched ? .explicit : .hover) else {
-            return false
-        }
+    mutating func openTransient(_ familyID: UUID) -> Bool {
+        guard mayOpenTransient(for: familyID), transientFamilyID != familyID else { return false }
         transientFamilyID = familyID
-        transientOrigin = latched ? .explicit : .hover
+        isTransientDetached = false
         return true
-    }
-
-    /// Re-arms the pending dwell for another interval — the row stays hovered
-    /// but the current surface is mid-interaction; a leave event still cancels.
-    mutating func rearmPendingOpen(at now: TimeInterval) {
-        guard let pending = pendingOpen else { return }
-        pendingOpen = PendingOpen(
-            familyID: pending.familyID,
-            deadline: now + SubtaskPanelLayout.openDwell
-        )
     }
 
     mutating func closeTransient() {
         transientFamilyID = nil
-        pendingOpen = nil
-        pendingClose = nil
+        isTransientDetached = false
     }
 
-    /// Pinning is an explicit action: any other pinned window resolves to the
-    /// newly pinned family and a same-family transient is promoted, never
-    /// duplicated.
+    /// Dragging detaches the transient from its row. Pinning remains a
+    /// separate choice to survive main-panel hide.
+    mutating func detachTransient() {
+        guard transientFamilyID != nil else { return }
+        isTransientDetached = true
+    }
+
     mutating func pin(_ familyID: UUID) {
-        pinnedFamilyID = familyID
-        if transientFamilyID == familyID {
-            transientFamilyID = nil
-        }
-        pendingOpen = nil
-        pendingClose = nil
+        pinnedFamilyIDs.insert(familyID)
+        if transientFamilyID == familyID { closeTransient() }
     }
 
-    mutating func unpin() -> UUID? {
-        let released = pinnedFamilyID
-        pinnedFamilyID = nil
-        return released
+    @discardableResult
+    mutating func unpin(_ familyID: UUID) -> UUID? {
+        pinnedFamilyIDs.remove(familyID)
     }
 
-    /// Idle hovers may coexist with the pinned window but never open a second
-    /// surface for the already-pinned family.
+    /// A pinned family never gets a second surface.
     func mayOpenTransient(for familyID: UUID) -> Bool {
-        pinnedFamilyID != familyID
+        !pinnedFamilyIDs.contains(familyID)
     }
 }
 

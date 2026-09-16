@@ -10,6 +10,10 @@ final class NoteAttachment {
     var contentTypeIdentifier: String = UTType.data.identifier
     var byteCount: Int64 = 0
     var sortIndex: Int64 = 0
+    /// UTF-16 body offset at a paragraph boundary; nil keeps the card in the tray.
+    var inlineOffset: Int? = nil
+    var displayWidth: Double? = nil
+    var displayHeight: Double? = nil
     var contentDigest: String = ""
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
@@ -80,7 +84,8 @@ struct ImportedAttachment: Sendable {
     let sortIndex: Int64
     let digest: String
     let createdAt: Date
-    let payload: Data
+    /// Nil when the importer was asked not to read the file back.
+    let payload: Data?
 }
 
 struct AttachmentReconciliationFailure: Sendable, Equatable {

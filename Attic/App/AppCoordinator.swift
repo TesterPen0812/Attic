@@ -333,13 +333,23 @@ final class AppCoordinator {
             // key panel so AppKit, not a test-only model shortcut, owns mouse
             // and keyboard delivery through the installed UI hierarchy.
             NSApp.activate()
-            hoverMonitor.keepVisibleForUITesting()
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {
+                hoverMonitor.start()
+                hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
+            } else {
+                hoverMonitor.keepVisibleForUITesting()
+            }
             return
         }
 
         newTaskHotKey.register()
         hoverMonitor.start()
         if !isRunningTests {
+            // Once per launch, on the persistent store only (tests and UI
+            // tests use an in-memory store, whose empty reference set must
+            // never judge real files).
+            let store = store
+            Task { await store.sweepUnreferencedAttachmentStorage() }
             agentAccessObservation = settings.$isAgentAccessEnabled.sink { [weak self] isEnabled in
                 guard let self else { return }
                 if isEnabled {

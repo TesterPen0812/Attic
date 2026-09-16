@@ -3,6 +3,8 @@ import SwiftUI
 
 enum AppearanceSettingsPresentation {
     static let themeChooserAccessibilityIdentifier = "setting-panel-theme"
+    /// Translucency is a surface setting; controls keep Liquid Glass either way.
+    static let translucencyDescription = "Changes the panel surface. Controls always use Liquid Glass."
     static let themeChoiceHeight: CGFloat = 74
     static let themeTitleLineLimit = 2
 
@@ -96,7 +98,7 @@ struct AppearanceSettingsView: View {
             SettingsGroup("Panel surface") {
                 SettingsRow(
                     title: "Translucent panel",
-                    description: "Let the desktop show naturally through Attic's surface.",
+                    description: AppearanceSettingsPresentation.translucencyDescription,
                     systemImage: "circle.lefthalf.filled"
                 ) {
                     Toggle("Use a translucent panel", isOn: $settings.isTranslucent)
@@ -267,7 +269,7 @@ struct AppearanceSettingsView: View {
     private var glassDescription: String {
         settings.isTranslucent
             ? settings.panelGlassStyle.resolved(for: settings.panelTheme, colorScheme: effectiveColorScheme).detail
-            : "The solid surface is active while translucency is off."
+            : "The solid surface is active while translucency is off. Controls still use Liquid Glass."
     }
 }
 

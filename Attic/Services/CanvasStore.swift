@@ -63,11 +63,72 @@ enum CanvasSaveOutcome: Equatable {
     }
 }
 
+#if DEBUG
+/// Counts every Canvas replica fetch and the rows it materialised.
+///
+/// Every save resolves the presentation twice and each mutation looks up the
+/// replicas it changes. A fetch without a predicate turns each of those into a
+/// read of every board's rows, including every stroke payload, so tests assert
+/// the row counts directly instead of inferring them from wall-clock timing.
+///
+/// Test instrumentation only: it is compiled out of builds without `DEBUG`,
+/// where the fetch helpers below are plain `fetch`/`fetchCount` calls.
+enum CanvasReplicaFetchCounter {
+    static private(set) var fetches = 0
+    static private(set) var rows = 0
+
+    static func reset() {
+        fetches = 0
+        rows = 0
+    }
+
+    static func note(rows count: Int) {
+        fetches &+= 1
+        rows &+= count
+    }
+}
+#endif
+
+extension ModelContext {
+    /// The only way the Canvas store reads replica rows, so
+    /// `CanvasReplicaFetchCounter` sees every one of them in `DEBUG` builds.
+    func fetchCanvasReplicas<Model: PersistentModel>(
+        _ descriptor: FetchDescriptor<Model>
+    ) throws -> [Model] {
+        #if DEBUG
+        let rows = try fetch(descriptor)
+        CanvasReplicaFetchCounter.note(rows: rows.count)
+        return rows
+        #else
+        return try fetch(descriptor)
+        #endif
+    }
+
+    func countCanvasReplicas<Model: PersistentModel>(
+        _ descriptor: FetchDescriptor<Model>
+    ) throws -> Int {
+        #if DEBUG
+        let count = try fetchCount(descriptor)
+        CanvasReplicaFetchCounter.note(rows: 0)
+        return count
+        #else
+        return try fetchCount(descriptor)
+        #endif
+    }
+}
+
 struct CanvasReplicaKey: Hashable {
     let canvasID: UUID
     let id: UUID
 }
 
+/// Every board replica, plus the content replicas of one canvas.
+///
+/// Presentation only ever shows the selected canvas, so content rows claiming
+/// any other canvas are not fetched: loading them materialised every stroke
+/// payload on every board twice per save (PERF-A1). Tombstones and duplicate
+/// replicas of the loaded canvas are all present, so winner resolution is
+/// unchanged.
 struct CanvasStoredReplicas {
     let boards: [CanvasBoardItem]
     let strokes: [CanvasStrokeItem]
@@ -75,6 +136,10 @@ struct CanvasStoredReplicas {
     #if os(macOS)
     var semanticObjects: [CanvasSemanticObjectItem] = []
     #endif
+    /// True when no physical default board row exists but live content still
+    /// claims the default canvas, so presentation must show a virtual default
+    /// board for it.
+    var hasUnboardedLegacyDefaultContent = false
 
     init(boards: [CanvasBoardItem], strokes: [CanvasStrokeItem], images: [CanvasImageItem]) {
         self.boards = boards
@@ -82,17 +147,66 @@ struct CanvasStoredReplicas {
         self.images = images
     }
 
-    static func load(from context: ModelContext) throws -> CanvasStoredReplicas {
-        var replicas = CanvasStoredReplicas(
-            boards: try context.fetch(FetchDescriptor<CanvasBoardItem>()),
-            strokes: try context.fetch(FetchDescriptor<CanvasStrokeItem>()),
-            images: try context.fetch(FetchDescriptor<CanvasImageItem>())
-        )
+    static func load(
+        from context: ModelContext,
+        contentCanvasID canvasID: UUID
+    ) throws -> CanvasStoredReplicas {
         #if os(macOS)
-        if context.container.schema.entities.contains(where: { $0.name == "CanvasSemanticObjectItem" }) {
-            replicas.semanticObjects = try context.fetch(FetchDescriptor<CanvasSemanticObjectItem>())
+        let supportsSemanticObjects = context.container.schema.entities.contains {
+            $0.name == "CanvasSemanticObjectItem"
         }
         #endif
+        var replicas = CanvasStoredReplicas(
+            boards: try context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>()),
+            strokes: try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
+                predicate: #Predicate { $0.canvasID == canvasID }
+            )),
+            images: try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
+                predicate: #Predicate { $0.canvasID == canvasID }
+            ))
+        )
+        #if os(macOS)
+        if supportsSemanticObjects {
+            replicas.semanticObjects = try context.fetchCanvasReplicas(
+                FetchDescriptor<CanvasSemanticObjectItem>(
+                    predicate: #Predicate { $0.canvasID == canvasID }
+                )
+            )
+        }
+        #endif
+
+        let defaultID = CanvasBoardItem.logicalBoardID
+        guard !replicas.boards.contains(where: { $0.id == defaultID }) else {
+            return replicas
+        }
+        if canvasID == defaultID {
+            replicas.hasUnboardedLegacyDefaultContent = replicas.strokes.contains { !$0.tombstoned }
+                || replicas.images.contains { !$0.tombstoned }
+            #if os(macOS)
+            replicas.hasUnboardedLegacyDefaultContent = replicas.hasUnboardedLegacyDefaultContent
+                || replicas.semanticObjects.contains { !$0.tombstoned }
+            #endif
+        } else {
+            // Counting leaves the default canvas's payloads on disk.
+            replicas.hasUnboardedLegacyDefaultContent = try context.countCanvasReplicas(
+                FetchDescriptor<CanvasStrokeItem>(
+                    predicate: #Predicate { $0.canvasID == defaultID && !$0.tombstoned }
+                )
+            ) > 0 || context.countCanvasReplicas(
+                FetchDescriptor<CanvasImageItem>(
+                    predicate: #Predicate { $0.canvasID == defaultID && !$0.tombstoned }
+                )
+            ) > 0
+            #if os(macOS)
+            if !replicas.hasUnboardedLegacyDefaultContent, supportsSemanticObjects {
+                replicas.hasUnboardedLegacyDefaultContent = try context.countCanvasReplicas(
+                    FetchDescriptor<CanvasSemanticObjectItem>(
+                        predicate: #Predicate { $0.canvasID == defaultID && !$0.tombstoned }
+                    )
+                ) > 0
+            }
+            #endif
+        }
         return replicas
     }
 }
@@ -109,6 +223,78 @@ struct CanvasPresentationSnapshot {
     var semanticObjects: [CanvasSemanticObject] = []
     #endif
     let warning: String?
+}
+
+/// Per-collection description of what changed between two published canvas
+/// presentations (PERF-13 / PERF-007).
+///
+/// `CanvasSession` used to rebuild a full signature snapshot of every board,
+/// stroke, image and semantic object on every store revision and compare it
+/// element by element, purely to decide whether the change came from outside
+/// the session. The store already walks those collections while resolving, so
+/// it publishes the answer instead.
+struct CanvasStoreContentChange: Equatable {
+    /// `false` means the descriptor could not be derived and an observer must
+    /// fall back to comparing the published collections itself.
+    var isIncremental: Bool
+    var boardsChanged: Bool
+    var selectionChanged: Bool
+    var boardGenerationChanged: Bool
+    var strokesChanged: Bool
+    var imagesChanged: Bool
+    var semanticObjectsChanged: Bool
+
+    static let unchanged = CanvasStoreContentChange(
+        isIncremental: true,
+        boardsChanged: false,
+        selectionChanged: false,
+        boardGenerationChanged: false,
+        strokesChanged: false,
+        imagesChanged: false,
+        semanticObjectsChanged: false
+    )
+
+    /// The conservative fallback: everything may have changed and the
+    /// descriptor carries no usable delta.
+    static let unknown = CanvasStoreContentChange(
+        isIncremental: false,
+        boardsChanged: true,
+        selectionChanged: true,
+        boardGenerationChanged: true,
+        strokesChanged: true,
+        imagesChanged: true,
+        semanticObjectsChanged: true
+    )
+
+    var hasAnyChange: Bool {
+        boardsChanged
+            || selectionChanged
+            || boardGenerationChanged
+            || strokesChanged
+            || imagesChanged
+            || semanticObjectsChanged
+    }
+}
+
+/// Order-sensitive hash of the semantic fields of a stroke collection.
+///
+/// Stroke equality compares every point, so an exact array comparison per
+/// revision is O(total points). The presentation only needs to know whether the
+/// committed identity of the collection changed, which these scalar fields
+/// already determine.
+enum CanvasStrokeCollectionFingerprint {
+    static func value(for strokes: [CanvasStroke]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(strokes.count)
+        for stroke in strokes {
+            hasher.combine(stroke.id)
+            hasher.combine(stroke.canvasID)
+            hasher.combine(stroke.boardGeneration)
+            hasher.combine(stroke.mutationVersion)
+            hasher.combine(stroke.updatedAt)
+        }
+        return hasher.finalize()
+    }
 }
 
 struct CanvasStrokeCacheEntry {
@@ -151,7 +337,7 @@ struct CanvasStrokeCacheEntry {
 
 struct CanvasImageCacheEntry {
     let sourceReplicaID: String
-    let encodedByteCount: Int
+    let payloadMetadata: CanvasImagePayloadMetadata
     let contentType: String
     let pixelWidth: Int64
     let pixelHeight: Int64
@@ -172,15 +358,34 @@ struct CanvasImageCacheEntry {
     }
 
     func contentValueMatches(_ replica: CanvasImageItem) -> Bool {
-        encodedByteCount == replica.encodedData.count
-            && contentType == replica.contentType
-            && pixelWidth == replica.pixelWidth
-            && pixelHeight == replica.pixelHeight
-            // The cache token must change when the bitmap changes even if its
-            // dimensions and encoded byte count happen to remain identical.
-            // `image` already owns the prior bytes, so this exact comparison
-            // does not duplicate the payload in the cache.
-            && image.encodedData == replica.encodedData
+        guard contentType == replica.contentType,
+              pixelWidth == replica.pixelWidth,
+              pixelHeight == replica.pixelHeight else {
+            return false
+        }
+        // The cache token must change when the bitmap changes even if its
+        // dimensions and encoded byte count happen to remain identical, so the
+        // comparison has to be content-sensitive. The scalar digest column
+        // makes that comparison exact without faulting the external-storage
+        // payload (CANVAS-016/PERF-08); only a legacy row that predates the
+        // column falls back to comparing the bytes.
+        guard let replicaMetadata = replica.resolvedPayloadMetadata else {
+            return payloadMetadata.byteCount == replica.materialisedPayload.count
+                && image.encodedData == replica.encodedData
+        }
+        guard payloadMetadata == replicaMetadata else { return false }
+        // A version bump with no transform change is not something this
+        // store writes for an unchanged bitmap: a writer that predates the
+        // digest column (or bypassed it) may have replaced the bytes and left
+        // the metadata stale. Only that anomaly pays for a byte comparison;
+        // moves and resizes still cost no image I/O.
+        let transformUnchanged = centerX == replica.centerX && centerY == replica.centerY
+            && width == replica.width && height == replica.height && zIndex == replica.zIndex
+        let versionChanged = mutationVersion != replica.mutationVersion || updatedAt != replica.updatedAt
+        if transformUnchanged, versionChanged {
+            return image.encodedData == replica.encodedData
+        }
+        return true
     }
 
     func matches(_ replica: CanvasImageItem) -> Bool {
@@ -204,7 +409,10 @@ struct CanvasImageCacheEntry {
     func rebound(to replica: CanvasImageItem) -> CanvasImageCacheEntry {
         CanvasImageCacheEntry(
             sourceReplicaID: String(reflecting: replica.persistentModelID),
-            encodedByteCount: replica.encodedData.count,
+            // `contentValueMatches` has already proved the payload is the same,
+            // so the cached scalar identity is carried over rather than
+            // recomputed from the blob.
+            payloadMetadata: payloadMetadata,
             contentType: replica.contentType,
             pixelWidth: replica.pixelWidth,
             pixelHeight: replica.pixelHeight,
@@ -251,10 +459,21 @@ final class CanvasStore: ObservableObject {
     let now: () -> Date
     let persist: (ModelContext) throws -> Void
     let makeFreshContext: () throws -> ModelContext
-    let loadReplicas: (ModelContext) throws -> CanvasStoredReplicas
+    /// Loads every board replica and the content replicas of the given canvas.
+    let loadReplicas: (ModelContext, UUID) throws -> CanvasStoredReplicas
     let decodeStroke: (Data, Int) throws -> CanvasStrokeGeometry
     var visibleStrokeCache: [CanvasReplicaKey: CanvasStrokeCacheEntry] = [:]
     var visibleImageCache: [CanvasReplicaKey: CanvasImageCacheEntry] = [:]
+    /// What the most recent published presentation changed. Observers read it
+    /// alongside `revision` to skip work for collections that did not move.
+    var lastContentChange = CanvasStoreContentChange.unknown
+    /// Bumped only when a published presentation actually changed content, so
+    /// an observer can detect a no-op revision in constant time.
+    var contentRevision: UInt64 = 0
+    var publishedStrokeFingerprint = CanvasStrokeCollectionFingerprint.value(for: [])
+    /// Forces the next published presentation to report `.unknown`, which makes
+    /// observers take their full comparison path.
+    var requiresFullContentComparison = true
     var remoteChangeObservation: AnyCancellable?
     var cloudKitEventObservation: AnyCancellable?
     var cloudImportRefreshTask: Task<Void, Never>?
@@ -272,8 +491,8 @@ final class CanvasStore: ObservableObject {
         now: @escaping () -> Date = Date.init,
         persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
         makeFreshContext: (() throws -> ModelContext)? = nil,
-        loadReplicas: @escaping (ModelContext) throws -> CanvasStoredReplicas = {
-            try CanvasStoredReplicas.load(from: $0)
+        loadReplicas: @escaping (ModelContext, UUID) throws -> CanvasStoredReplicas = {
+            try CanvasStoredReplicas.load(from: $0, contentCanvasID: $1)
         },
         decodeStroke: @escaping (Data, Int) throws -> CanvasStrokeGeometry = { data, version in
             try CanvasStrokeCodec.decode(data, expectedVersion: version)

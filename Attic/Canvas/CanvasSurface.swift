@@ -5,6 +5,10 @@ import SwiftUI
 
 struct CanvasSurface: View {
     @ObservedObject var session: CanvasSession
+    var excludedRects: [CGRect] = []
+    /// Raised when a recovery affordance on the surface asks to export an
+    /// image's original bytes. The owning view presents the file exporter.
+    var onRequestImageExport: (CanvasPlacedImage) -> Void = { _ in }
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
 #if os(macOS)
     @Environment(\.atticPanelThemePalette) private var panelThemePalette
@@ -13,9 +17,11 @@ struct CanvasSurface: View {
 
     var body: some View {
         platformSurface
-            // Rebuild the native bridge only for an explicit lifecycle
-            // cancellation. Dismantling discards unfinished input without
-            // changing completed strokes, images, or viewport state.
+            // Rebuild the native bridge only for board lifecycle or
+            // termination cancellation. Transient interruptions (zoom, hide,
+            // section change) reach the live view through
+            // `interactionInterruptions` instead, so they keep its caches and
+            // in-flight imports.
             .id(session.interactionCancellationEpoch)
             #if os(macOS)
             .accessibilityElement(children: .contain)
@@ -36,7 +42,9 @@ struct CanvasSurface: View {
         CanvasNSViewRepresentable(
             session: session,
             selectionAccentColor: canvasSelectionAccentColor,
-            clearReadabilityEnabled: clearReadabilityEnabled
+            clearReadabilityEnabled: clearReadabilityEnabled,
+            excludedRects: excludedRects,
+            onRequestImageExport: onRequestImageExport
         )
 #elseif os(iOS)
         CanvasUIViewRepresentable(session: session)

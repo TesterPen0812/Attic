@@ -1,0 +1,31 @@
+M1-shared-window-undo-manager: executed/failures=('11', '18'); failing tests=3
+    FAIL testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu at lines 1706,1708,1709,1711,1712,1722,1728,1734
+    FAIL testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo at lines 1504,1506,1512,1534,1539
+    FAIL testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft at lines 1871,1881
+M2-no-focus-refresh: executed/failures=('11', '6'); failing tests=3
+    FAIL testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo at lines 1512,1514
+    FAIL testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto at lines 1796,1798
+    FAIL testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory at lines 1584,1586
+M3-no-reconcile-refresh: executed/failures=('11', '1'); failing tests=1
+    FAIL testRestyleThatClearsEditorHistoryRerendersUndoRedo at lines 1666
+M4-no-plain-edit-responders: executed/failures=('11', '6'); failing tests=2
+    FAIL testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu at lines 1706,1708,1709,1711,1712
+    FAIL testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo at lines 1534
+M6-no-undo-redo-history-report: executed/failures=('11', '3'); failing tests=1
+    FAIL testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft at lines 1872,1876,1880
+M5-key-window-only-resolver: executed/failures=('11', '13'); failing tests=1
+    FAIL testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto at lines 1793,1794,1795,1796,1798,1804,1816,1817
+MA-prior-composite-predicate: executed/failures=('11', '10'); failing tests=6
+    FAIL testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo at lines 1368,1370
+    FAIL testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo at lines 1512,1514
+    FAIL testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft at lines 1876
+    FAIL testRestyleThatClearsEditorHistoryRerendersUndoRedo at lines 1666
+    FAIL testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto at lines 1796,1798
+    FAIL testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory at lines 1584,1586
+MB-prior-no-draft-refresh: executed/failures=('11', '11'); failing tests=5
+    FAIL testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo at lines 1538,1539
+    FAIL testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft at lines 1876,1880,1881
+    FAIL testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto at lines 1816,1826
+    FAIL testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory at lines 1607,1608
+    FAIL testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory at lines 1435,1445
+restored mut tree to mut-base

@@ -1,0 +1,512 @@
+label=final-focused limit=1200s started=2026-09-16T13:02:59Z
+tests=CanvasAccessibilityTests CanvasAffordanceTruthTests CanvasDocumentStoreTests CanvasDomainTests CanvasImageDomainTests CanvasImageDropBatchTests CanvasImageImportBatchTests CanvasImageImportTests CanvasImageInteractionTests CanvasImageSessionTests CanvasImageStoreTests CanvasPerformanceGateTests CanvasPrecisionTests CanvasRenderCacheTests CanvasSessionTests CanvasStoreTests CanvasUITestStoreTests
+products=/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local
+host_sha256=2287db132ef1900a23f1352289411bd47c6c755e9e2bbc7bfb59af32b7a39e2d
+host_debug_dylib_sha256=5a3708d2d50385ece573251646aac6d5eb800c65875be98279c61898c1516f8b
+bundle_binary_sha256=71a8c64edabf3e9054335c33156326779b1f3884e92e80e6ce82e711e06b029e
+sandbox_extension_issue_file_to_process failed for /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app: 1 (Operation not permitted)
+Test Suite 'Selected tests' started at 2026-09-16 14:02:59.501.
+Test Suite 'AtticTests.xctest' started at 2026-09-16 14:02:59.501.
+Test Suite 'CanvasAccessibilityTests' started at 2026-09-16 14:02:59.502.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAccessibilityTraversalAndActionsOperateOnTheOwnedObject]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAccessibilityTraversalAndActionsOperateOnTheOwnedObject]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' passed (2.424 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' passed (2.279 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testCanvasKeyboardTraversalMovesResizesAndDeletesSelectedImage]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testCanvasKeyboardTraversalMovesResizesAndDeletesSelectedImage]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testCanvasVendsDeterministicObjectChildrenWithMeaningfulState]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testCanvasVendsDeterministicObjectChildrenWithMeaningfulState]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testClearReadabilityPaintsSemanticTextAndShapesWithoutLeakingOntoImagesOrCache]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testClearReadabilityPaintsSemanticTextAndShapesWithoutLeakingOntoImagesOrCache]' passed (0.014 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testClearReadabilityUsesOppositeResolvedInkAndPreservesInlineDraftSelection]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testClearReadabilityUsesOppositeResolvedInkAndPreservesInlineDraftSelection]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' passed (2.097 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testDirectTextInsertionUsesClickedOriginAndOneDurableUndoableCommit]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testDirectTextInsertionUsesClickedOriginAndOneDurableUndoableCommit]' passed (0.017 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testDirtySemanticEditorFencesExternalAndUnsupportedPayloadChanges]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testDirtySemanticEditorFencesExternalAndUnsupportedPayloadChanges]' passed (0.014 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testEmptyOrCancelledInsertionNeverCreatesPersistentObject]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testEmptyOrCancelledInsertionNeverCreatesPersistentObject]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testFailedInsertionOnVirtualFirstPageCannotBeStrandedByCreatingCanvas]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testFailedInsertionOnVirtualFirstPageCannotBeStrandedByCreatingCanvas]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' passed (5.657 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testHostedCanvasTabTraversalExitsInBothDirections]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testHostedCanvasTabTraversalExitsInBothDirections]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testHostedNativeMouseSequenceCompletesInkAfterFocusAndSelectionRefresh]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testHostedNativeMouseSequenceCompletesInkAfterFocusAndSelectionRefresh]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testInlineEscapeCancelsDraftWithoutDeletingObjectAndNativeUndoStaysInEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testInlineEscapeCancelsDraftWithoutDeletingObjectAndNativeUndoStaysInEditor]' passed (0.024 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' passed (7.009 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' passed (4.174 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testLiveInsertionUsesNativeLayoutForLongTextTrailingLinesAndViewportResize]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testLiveInsertionUsesNativeLayoutForLongTextTrailingLinesAndViewportResize]' passed (0.030 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testPointerNarrowingTextResizeGrowsHeightToFitCommittedText]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testPointerNarrowingTextResizeGrowsHeightToFitCommittedText]' passed (0.011 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' passed (5.577 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesEveryVisibleFailure]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesEveryVisibleFailure]' passed (0.035 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesOffScreenFailure]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRetryFailedImageDecodesRequeuesOffScreenFailure]' passed (0.030 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testSemanticDraftKeysSeparateSameUUIDOnDifferentPages]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testSemanticDraftKeysSeparateSameUUIDOnDifferentPages]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testSemanticObjectKeyboardSelectionEditingAndFailedDraftSurviveRecreation]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testSemanticObjectKeyboardSelectionEditingAndFailedDraftSurviveRecreation]' passed (0.015 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' passed (6.724 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorResignationCommitsWithoutKeyboardFocusCallback]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorResignationCommitsWithoutKeyboardFocusCallback]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' passed (5.999 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' passed (2.236 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' passed (2.718 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testUnifiedPlacedObjectOrderPreservesLegacyImageDateTieBreak]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testUnifiedPlacedObjectOrderPreservesLegacyImageDateTieBreak]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testUnsavedTextInsertionRetainsFailureAcrossRecreationAndFencesPageGeneration]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testUnsavedTextInsertionRetainsFailureAcrossRecreationAndFencesPageGeneration]' passed (0.026 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testUntouchedSemanticEditorRefreshesExternalTextWithoutOverwritingIt]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testUntouchedSemanticEditorRefreshesExternalTextWithoutOverwritingIt]' passed (0.014 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testViewportKeysWorkAfterInlineCommitWithoutOpeningMenuAndRespectFocusAndSaveVeto]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testViewportKeysWorkAfterInlineCommitWithoutOpeningMenuAndRespectFocusAndSaveVeto]' passed (0.032 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testViewportShortcutAfterSectionReplacementClaimsOnlyUnassignedWindowFocus]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testViewportShortcutAfterSectionReplacementClaimsOnlyUnassignedWindowFocus]' passed (0.013 seconds).
+Test Suite 'CanvasAccessibilityTests' passed at 2026-09-16 14:03:46.726.
+	 Executed 35 tests, with 0 failures (0 unexpected) in 47.218 (47.224) seconds
+Test Suite 'CanvasAffordanceTruthTests' started at 2026-09-16 14:03:46.726.
+Test Case '-[AtticTests.CanvasAffordanceTruthTests testLegacyObjectAffordancesNameTheActuallyEditableRepresentation]' started.
+Test Case '-[AtticTests.CanvasAffordanceTruthTests testLegacyObjectAffordancesNameTheActuallyEditableRepresentation]' passed (0.000 seconds).
+Test Suite 'CanvasAffordanceTruthTests' passed at 2026-09-16 14:03:46.726.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'CanvasDocumentStoreTests' started at 2026-09-16 14:03:46.726.
+Test Case '-[AtticTests.CanvasDocumentStoreTests testCanvasSwitchFlushesPendingHistoryAndSelection]' started.
+Test Case '-[AtticTests.CanvasDocumentStoreTests testCanvasSwitchFlushesPendingHistoryAndSelection]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasDocumentStoreTests testCreateRenameSwitchDeletePersistsAndIsolatesContent]' started.
+Test Case '-[AtticTests.CanvasDocumentStoreTests testCreateRenameSwitchDeletePersistsAndIsolatesContent]' passed (0.026 seconds).
+Test Case '-[AtticTests.CanvasDocumentStoreTests testDeletingOnlyCanvasIsRejectedWithoutDataLoss]' started.
+Test Case '-[AtticTests.CanvasDocumentStoreTests testDeletingOnlyCanvasIsRejectedWithoutDataLoss]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasDocumentStoreTests testDuplicateBoardTombstoneWinsWithoutDeletingPhysicalReplica]' started.
+Test Case '-[AtticTests.CanvasDocumentStoreTests testDuplicateBoardTombstoneWinsWithoutDeletingPhysicalReplica]' passed (0.011 seconds).
+Test Case '-[AtticTests.CanvasDocumentStoreTests testExplicitDefaultTombstoneDoesNotResurrectDeletedIdentity]' started.
+Test Case '-[AtticTests.CanvasDocumentStoreTests testExplicitDefaultTombstoneDoesNotResurrectDeletedIdentity]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasDocumentStoreTests testTransformInvalidatesRenderTokenButRetainsContentToken]' started.
+Test Case '-[AtticTests.CanvasDocumentStoreTests testTransformInvalidatesRenderTokenButRetainsContentToken]' passed (0.009 seconds).
+Test Suite 'CanvasDocumentStoreTests' passed at 2026-09-16 14:03:46.802.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.075 (0.076) seconds
+Test Suite 'CanvasDomainTests' started at 2026-09-16 14:03:46.802.
+Test Case '-[AtticTests.CanvasDomainTests testAppendInkRejectsNonFiniteWorldPointWithoutPoisoningStroke]' started.
+Test Case '-[AtticTests.CanvasDomainTests testAppendInkRejectsNonFiniteWorldPointWithoutPoisoningStroke]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testArrowGeometryPreservesUserChosenDirection]' started.
+Test Case '-[AtticTests.CanvasDomainTests testArrowGeometryPreservesUserChosenDirection]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testCancellationKeepsIncidentalPinchTailSuppressedUntilANewPinch]' started.
+Test Case '-[AtticTests.CanvasDomainTests testCancellationKeepsIncidentalPinchTailSuppressedUntilANewPinch]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testCancellationKeepsIncidentalScrollTailSuppressedUntilItsSequenceEnds]' started.
+Test Case '-[AtticTests.CanvasDomainTests testCancellationKeepsIncidentalScrollTailSuppressedUntilItsSequenceEnds]' passed (0.002 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testCancelledMagnificationTailCannotRestartUntilNewBegan]' started.
+Test Case '-[AtticTests.CanvasDomainTests testCancelledMagnificationTailCannotRestartUntilNewBegan]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testCanvasCursorRoleFollowsToolAndPlacementMode]' started.
+Test Case '-[AtticTests.CanvasDomainTests testCanvasCursorRoleFollowsToolAndPlacementMode]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testCanvasOwnsReentrantPinchRecognitionAcrossInteractionLifecycle]' started.
+Test Case '-[AtticTests.CanvasDomainTests testCanvasOwnsReentrantPinchRecognitionAcrossInteractionLifecycle]' passed (0.002 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testChangedReplicaInvalidatesOnlyItsRenderToken]' started.
+Test Case '-[AtticTests.CanvasDomainTests testChangedReplicaInvalidatesOnlyItsRenderToken]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testCodecRejectsPointCountsAboveTheInteractiveBufferLimit]' started.
+Test Case '-[AtticTests.CanvasDomainTests testCodecRejectsPointCountsAboveTheInteractiveBufferLimit]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testCommandScrollUsesReentrantCanvasZoomPath]' started.
+Test Case '-[AtticTests.CanvasDomainTests testCommandScrollUsesReentrantCanvasZoomPath]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testDetachedCanvasRecognizerCannotPublishViewportTail]' started.
+Test Case '-[AtticTests.CanvasDomainTests testDetachedCanvasRecognizerCannotPublishViewportTail]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testFitCentersBoundsAndUsesAvailableViewport]' started.
+Test Case '-[AtticTests.CanvasDomainTests testFitCentersBoundsAndUsesAvailableViewport]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testFocusLossCancellationCannotCancelANewerViewportGesture]' started.
+Test Case '-[AtticTests.CanvasDomainTests testFocusLossCancellationCannotCancelANewerViewportGesture]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testHitTestingErasesWholeIntersectedStrokeOnly]' started.
+Test Case '-[AtticTests.CanvasDomainTests testHitTestingErasesWholeIntersectedStrokeOnly]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testIncidentalPinchCannotDiscardBufferedInk]' started.
+Test Case '-[AtticTests.CanvasDomainTests testIncidentalPinchCannotDiscardBufferedInk]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testIncidentalScrollCannotDiscardBufferedInk]' started.
+Test Case '-[AtticTests.CanvasDomainTests testIncidentalScrollCannotDiscardBufferedInk]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedDirectScrollTailCannotReacquireNewInk]' started.
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedDirectScrollTailCannotReacquireNewInk]' passed (0.002 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedEraseIsDiscardedDeterministically]' started.
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedEraseIsDiscardedDeterministically]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedScrollMomentumCannotDiscardImagePointerPreview]' started.
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedScrollMomentumCannotDiscardImagePointerPreview]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedScrollMomentumCannotDiscardShapePointerPreview]' started.
+Test Case '-[AtticTests.CanvasDomainTests testInterruptedScrollMomentumCannotDiscardShapePointerPreview]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testLateZeroAndMomentumTailCannotCancelNewInk]' started.
+Test Case '-[AtticTests.CanvasDomainTests testLateZeroAndMomentumTailCannotCancelNewInk]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testLongGestureCompactsWithoutLosingItsEndpoints]' started.
+Test Case '-[AtticTests.CanvasDomainTests testLongGestureCompactsWithoutLosingItsEndpoints]' passed (0.014 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testNewCommandScrollTakesOwnershipAfterMissingPinchTerminalEvent]' started.
+Test Case '-[AtticTests.CanvasDomainTests testNewCommandScrollTakesOwnershipAfterMissingPinchTerminalEvent]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testNewPinchTakesOverScrollWithoutTerminalEventAndIgnoresMomentumTail]' started.
+Test Case '-[AtticTests.CanvasDomainTests testNewPinchTakesOverScrollWithoutTerminalEventAndIgnoresMomentumTail]' passed (0.006 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testPanOverflowLeavesViewportUnchanged]' started.
+Test Case '-[AtticTests.CanvasDomainTests testPanOverflowLeavesViewportUnchanged]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testPanTakeoverDiscardsInProgressInkAndNeverCompletesStroke]' started.
+Test Case '-[AtticTests.CanvasDomainTests testPanTakeoverDiscardsInProgressInkAndNeverCompletesStroke]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testPanUsesViewTranslationWithoutMutatingWorldGeometry]' started.
+Test Case '-[AtticTests.CanvasDomainTests testPanUsesViewTranslationWithoutMutatingWorldGeometry]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testPointerUpCompletesExactlyOneBufferedOperation]' started.
+Test Case '-[AtticTests.CanvasDomainTests testPointerUpCompletesExactlyOneBufferedOperation]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testScrollSequenceLatchesModeThroughMomentumAndModifierChanges]' started.
+Test Case '-[AtticTests.CanvasDomainTests testScrollSequenceLatchesModeThroughMomentumAndModifierChanges]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testSelectToolNeverStartsAnInkOperation]' started.
+Test Case '-[AtticTests.CanvasDomainTests testSelectToolNeverStartsAnInkOperation]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testShapeGeometryRejectsClickWithoutDrag]' started.
+Test Case '-[AtticTests.CanvasDomainTests testShapeGeometryRejectsClickWithoutDrag]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testShapeGeometryUsesTheChosenDragInsteadOfViewportCentre]' started.
+Test Case '-[AtticTests.CanvasDomainTests testShapeGeometryUsesTheChosenDragInsteadOfViewportCentre]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testStrokeCodecRejectsEmptyOrInvalidGeometry]' started.
+Test Case '-[AtticTests.CanvasDomainTests testStrokeCodecRejectsEmptyOrInvalidGeometry]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testStrokeCodecRejectsUnsupportedArchiveVersion]' started.
+Test Case '-[AtticTests.CanvasDomainTests testStrokeCodecRejectsUnsupportedArchiveVersion]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testStrokeCodecRoundTripsVersionedPlatformNeutralArchive]' started.
+Test Case '-[AtticTests.CanvasDomainTests testStrokeCodecRoundTripsVersionedPlatformNeutralArchive]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testTrackpadDoesNotStealRightOrOtherPointerPan]' started.
+Test Case '-[AtticTests.CanvasDomainTests testTrackpadDoesNotStealRightOrOtherPointerPan]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testTrackpadDoesNotStealSpaceHeldPointerPan]' started.
+Test Case '-[AtticTests.CanvasDomainTests testTrackpadDoesNotStealSpaceHeldPointerPan]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testTrackpadViewportDeltaCannotLeaveCanvasInputCaptured]' started.
+Test Case '-[AtticTests.CanvasDomainTests testTrackpadViewportDeltaCannotLeaveCanvasInputCaptured]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testTransientInterruptionReachesLiveSurfaceWithoutRebuildingIt]' started.
+Test Case '-[AtticTests.CanvasDomainTests testTransientInterruptionReachesLiveSurfaceWithoutRebuildingIt]' passed (0.028 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testUnchangedRefreshReusesDecodedStrokeAndRenderToken]' started.
+Test Case '-[AtticTests.CanvasDomainTests testUnchangedRefreshReusesDecodedStrokeAndRenderToken]' passed (0.014 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testViewportWorldViewRoundTripSurvivesResize]' started.
+Test Case '-[AtticTests.CanvasDomainTests testViewportWorldViewRoundTripSurvivesResize]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testWorldPointRejectsInvalidViewportGeometry]' started.
+Test Case '-[AtticTests.CanvasDomainTests testWorldPointRejectsInvalidViewportGeometry]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testWorldRectTracksZoomAndPanForRenderCulling]' started.
+Test Case '-[AtticTests.CanvasDomainTests testWorldRectTracksZoomAndPanForRenderCulling]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testZoomKeepsAnchorWorldPointStationaryAndClampsScale]' started.
+Test Case '-[AtticTests.CanvasDomainTests testZoomKeepsAnchorWorldPointStationaryAndClampsScale]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testZoomOverflowClampsToMaximumInsteadOfResettingToOne]' started.
+Test Case '-[AtticTests.CanvasDomainTests testZoomOverflowClampsToMaximumInsteadOfResettingToOne]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasDomainTests testZoomWithInvalidViewportRestoresScaleAndCenter]' started.
+Test Case '-[AtticTests.CanvasDomainTests testZoomWithInvalidViewportRestoresScaleAndCenter]' passed (0.000 seconds).
+Test Suite 'CanvasDomainTests' passed at 2026-09-16 14:03:46.924.
+	 Executed 46 tests, with 0 failures (0 unexpected) in 0.113 (0.122) seconds
+Test Suite 'CanvasImageDomainTests' started at 2026-09-16 14:03:46.925.
+Test Case '-[AtticTests.CanvasImageDomainTests testCustomMaximumCannotShrinkPlacementBelowInteractionMinimum]' started.
+Test Case '-[AtticTests.CanvasImageDomainTests testCustomMaximumCannotShrinkPlacementBelowInteractionMinimum]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasImageDomainTests testDefaultPlacementIsBoundedAndPreservesAspectRatio]' started.
+Test Case '-[AtticTests.CanvasImageDomainTests testDefaultPlacementIsBoundedAndPreservesAspectRatio]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasImageDomainTests testDropCoordinatesRemainCorrectUnderZoomAndPan]' started.
+Test Case '-[AtticTests.CanvasImageDomainTests testDropCoordinatesRemainCorrectUnderZoomAndPan]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasImageDomainTests testResizeOverflowKeepsOriginalTransform]' started.
+Test Case '-[AtticTests.CanvasImageDomainTests testResizeOverflowKeepsOriginalTransform]' passed (0.000 seconds).
+Test Suite 'CanvasImageDomainTests' passed at 2026-09-16 14:03:46.926.
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.001 (0.002) seconds
+Test Suite 'CanvasImageDropBatchTests' started at 2026-09-16 14:03:46.926.
+Test Case '-[AtticTests.CanvasImageDropBatchTests testFilePromiseCoordinatorKeepsSlotOrderAndRejectsLateDelivery]' started.
+Test Case '-[AtticTests.CanvasImageDropBatchTests testFilePromiseCoordinatorKeepsSlotOrderAndRejectsLateDelivery]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasImageDropBatchTests testFileURLDropAdvertisesCopyAndImportsOnlySupportedImages]' started.
+sandbox_extension_consume failed: 1 (Operation not permitted)
+sandbox_extension_consume failed: 1 (Operation not permitted)
+sandbox_extension_consume failed: 1 (Operation not permitted)
+Test Case '-[AtticTests.CanvasImageDropBatchTests testFileURLDropAdvertisesCopyAndImportsOnlySupportedImages]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasImageDropBatchTests testPromisedFileTypeIsFilteredBeforeAdvertisingCopy]' started.
+Test Case '-[AtticTests.CanvasImageDropBatchTests testPromisedFileTypeIsFilteredBeforeAdvertisingCopy]' passed (0.003 seconds).
+Test Suite 'CanvasImageDropBatchTests' passed at 2026-09-16 14:03:46.940.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.014 (0.014) seconds
+Test Suite 'CanvasImageImportBatchTests' started at 2026-09-16 14:03:46.940.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testBoardLifecycleCancellationStillCancelsSessionImports]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testBoardLifecycleCancellationStillCancelsSessionImports]' passed (0.116 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testCancellationStopsInFlightPreparationCleansTemporaryFilesAndDoesNotSave]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testCancellationStopsInFlightPreparationCleansTemporaryFilesAndDoesNotSave]' passed (0.082 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDecodeCompletionAfterClearRejectsStaleGeneration]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDecodeCompletionAfterClearRejectsStaleGeneration]' passed (0.013 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDecodeCompletionAfterPageSwitchPersistsOnlyToCapturedTarget]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDecodeCompletionAfterPageSwitchPersistsOnlyToCapturedTarget]' passed (0.016 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDecodeCompletionAfterTargetPageDeletionDoesNotPersist]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDecodeCompletionAfterTargetPageDeletionDoesNotPersist]' passed (0.015 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDeliveryFailureKeepsStablePerItemResultAndCleansBatchResources]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testDeliveryFailureKeepsStablePerItemResultAndCleansBatchResources]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testFailedBoardSavesKeepSelectionHistoryEpochAndSessionImports]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testFailedBoardSavesKeepSelectionHistoryEpochAndSessionImports]' passed (0.146 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testFailedBoardSaveThatLosesItsBoardStillClearsStaleHistoryAndImports]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testFailedBoardSaveThatLosesItsBoardStillClearsStaleHistoryAndImports]' passed (0.059 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testOutOfOrderCompletionIsBoundedStableAndPersistsSuccessfulItemsOnce]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testOutOfOrderCompletionIsBoundedStableAndPersistsSuccessfulItemsOnce]' passed (0.116 seconds).
+Test Case '-[AtticTests.CanvasImageImportBatchTests testSessionImportSurvivesTransientInterruptionAndSurfaceDismantle]' started.
+Test Case '-[AtticTests.CanvasImageImportBatchTests testSessionImportSurvivesTransientInterruptionAndSurfaceDismantle]' passed (0.124 seconds).
+Test Suite 'CanvasImageImportBatchTests' passed at 2026-09-16 14:03:47.640.
+	 Executed 10 tests, with 0 failures (0 unexpected) in 0.698 (0.700) seconds
+Test Suite 'CanvasImageImportTests' started at 2026-09-16 14:03:47.640.
+Test Case '-[AtticTests.CanvasImageImportTests testCorruptImageInputIsRejectedWithoutCreatingAnAsset]' started.
+Test Case '-[AtticTests.CanvasImageImportTests testCorruptImageInputIsRejectedWithoutCreatingAnAsset]' passed (0.011 seconds).
+Test Case '-[AtticTests.CanvasImageImportTests testFileImportStoresCanonicalBytesRatherThanSourcePath]' started.
+Test Case '-[AtticTests.CanvasImageImportTests testFileImportStoresCanonicalBytesRatherThanSourcePath]' passed (0.019 seconds).
+Test Case '-[AtticTests.CanvasImageImportTests testInputLargerThanTheReadBudgetIsRejectedBeforeDecode]' started.
+Test Case '-[AtticTests.CanvasImageImportTests testInputLargerThanTheReadBudgetIsRejectedBeforeDecode]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasImageImportTests testLargeImageIsDownsampledAndAspectRatioIsPreserved]' started.
+Test Case '-[AtticTests.CanvasImageImportTests testLargeImageIsDownsampledAndAspectRatioIsPreserved]' passed (0.053 seconds).
+Test Case '-[AtticTests.CanvasImageImportTests testSmallImageIsAcceptedEvenWhenItsMaximumDimensionIsBelowRetryFloor]' started.
+Test Case '-[AtticTests.CanvasImageImportTests testSmallImageIsAcceptedEvenWhenItsMaximumDimensionIsBelowRetryFloor]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasImageImportTests testTextRendererProducesAReusableTransparentPNG]' started.
+Test Case '-[AtticTests.CanvasImageImportTests testTextRendererProducesAReusableTransparentPNG]' passed (0.013 seconds).
+Test Case '-[AtticTests.CanvasImageImportTests testTextRendererRejectsWhitespaceOnlyContent]' started.
+Test Case '-[AtticTests.CanvasImageImportTests testTextRendererRejectsWhitespaceOnlyContent]' passed (0.000 seconds).
+Test Suite 'CanvasImageImportTests' passed at 2026-09-16 14:03:47.738.
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.097 (0.098) seconds
+Test Suite 'CanvasImageInteractionTests' started at 2026-09-16 14:03:47.738.
+Test Case '-[AtticTests.CanvasImageInteractionTests testDefaultPlacementPreservesExtremeAspectRatio]' started.
+Test Case '-[AtticTests.CanvasImageInteractionTests testDefaultPlacementPreservesExtremeAspectRatio]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasImageInteractionTests testImageHitTestingSelectsOnlyTopmostClickedImage]' started.
+Test Case '-[AtticTests.CanvasImageInteractionTests testImageHitTestingSelectsOnlyTopmostClickedImage]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasImageInteractionTests testResizeHandleHitTestingUsesViewCoordinatesAfterZoomAndPan]' started.
+Test Case '-[AtticTests.CanvasImageInteractionTests testResizeHandleHitTestingUsesViewCoordinatesAfterZoomAndPan]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasImageInteractionTests testResizePreservesAspectRatioAndOppositeCorner]' started.
+Test Case '-[AtticTests.CanvasImageInteractionTests testResizePreservesAspectRatioAndOppositeCorner]' passed (0.000 seconds).
+Test Suite 'CanvasImageInteractionTests' passed at 2026-09-16 14:03:47.740.
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.001 (0.002) seconds
+Test Suite 'CanvasImageSessionTests' started at 2026-09-16 14:03:47.740.
+Test Case '-[AtticTests.CanvasImageSessionTests testBottommostImageCannotMoveBackwardOrCreatePersistenceOrHistory]' started.
+Test Case '-[AtticTests.CanvasImageSessionTests testBottommostImageCannotMoveBackwardOrCreatePersistenceOrHistory]' passed (0.011 seconds).
+Test Case '-[AtticTests.CanvasImageSessionTests testClearUndoRestoresInkAndImagesIntoCurrentGeneration]' started.
+Test Case '-[AtticTests.CanvasImageSessionTests testClearUndoRestoresInkAndImagesIntoCurrentGeneration]' passed (0.015 seconds).
+Test Case '-[AtticTests.CanvasImageSessionTests testImportMoveResizeDeleteUndoRedo]' started.
+Test Case '-[AtticTests.CanvasImageSessionTests testImportMoveResizeDeleteUndoRedo]' passed (0.030 seconds).
+Test Case '-[AtticTests.CanvasImageSessionTests testTopmostImageCannotMoveForwardOrCreatePersistenceOrHistory]' started.
+Test Case '-[AtticTests.CanvasImageSessionTests testTopmostImageCannotMoveForwardOrCreatePersistenceOrHistory]' passed (0.020 seconds).
+Test Suite 'CanvasImageSessionTests' passed at 2026-09-16 14:03:47.817.
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.076 (0.077) seconds
+Test Suite 'CanvasImageStoreTests' started at 2026-09-16 14:03:47.817.
+Test Case '-[AtticTests.CanvasImageStoreTests testAddingAnExistingImageIDUpdatesEveryReplicaInsteadOfCreatingAHiddenDuplicate]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testAddingAnExistingImageIDUpdatesEveryReplicaInsteadOfCreatingAHiddenDuplicate]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testChangedImagePayloadWithSameMetadataInvalidatesContentToken]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testChangedImagePayloadWithSameMetadataInvalidatesContentToken]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testDuplicateImageTombstoneWinsAndMutationsTouchEveryReplica]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testDuplicateImageTombstoneWinsAndMutationsTouchEveryReplica]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testImageBytesAndTransformPersistAcrossFreshStore]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testImageBytesAndTransformPersistAcrossFreshStore]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testInvalidImageSnapshotIsRejectedWithoutPersistingIt]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testInvalidImageSnapshotIsRejectedWithoutPersistingIt]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testUnchangedImageRefreshRetainsRenderTokenButTransformInvalidatesIt]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testUnchangedImageRefreshRetainsRenderTokenButTransformInvalidatesIt]' passed (0.009 seconds).
+Test Suite 'CanvasImageStoreTests' passed at 2026-09-16 14:03:47.868.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.050 (0.051) seconds
+Test Suite 'CanvasPerformanceGateTests' started at 2026-09-16 14:03:47.869.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testAccessibilityFramesFollowTheViewportWithoutARebuild]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testAccessibilityFramesFollowTheViewportWithoutARebuild]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testBackfillLeavesReplicaResolutionFieldsAlone]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testBackfillLeavesReplicaResolutionFieldsAlone]' passed (0.036 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testChangedImageMaterialisesOnlyItsOwnBytes]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testChangedImageMaterialisesOnlyItsOwnBytes]' passed (0.067 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testCoalescedAccessibilityRebuildRunsOncePerRunLoopTurn]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testCoalescedAccessibilityRebuildRunsOncePerRunLoopTurn]' passed (0.002 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testDisplayOrderIsReusedAcrossPointerEventsDuringATransform]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testDisplayOrderIsReusedAcrossPointerEventsDuringATransform]' passed (0.002 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testErrorBannerCanBeDismissedAndReturnsOnTheNextFailure]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testErrorBannerCanBeDismissedAndReturnsOnTheNextFailure]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testHistoryAlwaysKeepsTheNewestCommandEvenWhenItExceedsTheBudget]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testHistoryAlwaysKeepsTheNewestCommandEvenWhenItExceedsTheBudget]' passed (0.013 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testHistoryByteBudgetEvictsOldestCommandsFirst]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testHistoryByteBudgetEvictsOldestCommandsFirst]' passed (0.030 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testImageHistoryRetentionStaysWithinItsByteBudget]' started.
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:468: Test Case '-[AtticTests.CanvasPerformanceGateTests testImageHistoryRetentionStaysWithinItsByteBudget]' measured [Memory Peak Physical, kB] average: 181896.526, relative standard deviation: 7.236%, values: [164398.400000, 167265.600000, 191923.544000, 192169.304000, 193725.784000], performanceMetricID:com.apple.dt.XCTMetric_Memory.physical_peak, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:468: Test Case '-[AtticTests.CanvasPerformanceGateTests testImageHistoryRetentionStaysWithinItsByteBudget]' measured [Memory Physical, kB] average: 10456.283, relative standard deviation: 104.671%, values: [22954.032000, 2867.200000, 24657.944000, 245.760000, 1556.480000], performanceMetricID:com.apple.dt.XCTMetric_Memory.physical, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:468: Test Case '-[AtticTests.CanvasPerformanceGateTests testImageHistoryRetentionStaysWithinItsByteBudget]' measured [Clock Monotonic Time, s] average: 0.154, relative standard deviation: 19.112%, values: [0.109494, 0.187946, 0.184265, 0.137342, 0.151214], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.CanvasPerformanceGateTests testImageHistoryRetentionStaysWithinItsByteBudget]' passed (1.865 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testLegacyImageRowsAreBackfilledWithScalarPayloadMetadata]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testLegacyImageRowsAreBackfilledWithScalarPayloadMetadata]' passed (0.069 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testLongChainedErrorsAreCompactedForTheBanner]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testLongChainedErrorsAreCompactedForTheBanner]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeHistoryStaysWithinItsByteBudget]' started.
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:492: Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeHistoryStaysWithinItsByteBudget]' measured [Clock Monotonic Time, s] average: 0.129, relative standard deviation: 40.626%, values: [0.216293, 0.161933, 0.099538, 0.084983, 0.081978], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeHistoryStaysWithinItsByteBudget]' passed (0.912 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeMutationsReadOnlyTheSelectedCanvasReplicas]' started.
+CoreData: debug: WAL checkpoint: Database did checkpoint. Log size: 1245 checkpointed: 1245
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:648: Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeMutationsReadOnlyTheSelectedCanvasReplicas]' measured [Clock Monotonic Time, s] average: 0.006, relative standard deviation: 64.173%, values: [0.012406, 0.005492, 0.003796, 0.003369, 0.002650], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeMutationsReadOnlyTheSelectedCanvasReplicas]' passed (0.874 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeOnlyChangeDoesNotRepublishImages]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeOnlyChangeDoesNotRepublishImages]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeSaveOnImageHeavyBoardDoesNotReadImageBytes]' started.
+CoreData: debug: WAL checkpoint: Database did checkpoint. Log size: 1033 checkpointed: 1033
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:38: Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeSaveOnImageHeavyBoardDoesNotReadImageBytes]' measured [Clock Monotonic Time, s] average: 0.007, relative standard deviation: 5.418%, values: [0.007606, 0.007102, 0.006980, 0.007051, 0.008013], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.CanvasPerformanceGateTests testStrokeSaveOnImageHeavyBoardDoesNotReadImageBytes]' passed (0.422 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testTopmostImageHitTestingOverTwoHundredImages]' started.
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:350: Test Case '-[AtticTests.CanvasPerformanceGateTests testTopmostImageHitTestingOverTwoHundredImages]' measured [Clock Monotonic Time, s] average: 0.006, relative standard deviation: 0.347%, values: [0.005660, 0.005694, 0.005713, 0.005665, 0.005673], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.CanvasPerformanceGateTests testTopmostImageHitTestingOverTwoHundredImages]' passed (0.062 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testTransformOnlySaveDoesNotTouchImagePayloads]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testTransformOnlySaveDoesNotTouchImagePayloads]' passed (0.024 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testTransformOnlySaveMeasuresImageHeavyBoardCost]' started.
+CoreData: debug: WAL checkpoint: Database did checkpoint. Log size: 1033 checkpointed: 1033
+CoreData: debug: WAL checkpoint: Database did checkpoint. Log size: 1000 checkpointed: 1000
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:112: Test Case '-[AtticTests.CanvasPerformanceGateTests testTransformOnlySaveMeasuresImageHeavyBoardCost]' measured [Clock Monotonic Time, s] average: 0.010, relative standard deviation: 38.769%, values: [0.007900, 0.007401, 0.008652, 0.007274, 0.017095], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.CanvasPerformanceGateTests testTransformOnlySaveMeasuresImageHeavyBoardCost]' passed (0.390 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testUnchangedStoreRevisionDoesNotResynchroniseSession]' started.
+Test Case '-[AtticTests.CanvasPerformanceGateTests testUnchangedStoreRevisionDoesNotResynchroniseSession]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasPerformanceGateTests testViewportOnlyConfigureDoesNotRebuildAccessibilityElements]' started.
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift:202: Test Case '-[AtticTests.CanvasPerformanceGateTests testViewportOnlyConfigureDoesNotRebuildAccessibilityElements]' measured [Clock Monotonic Time, s] average: 0.006, relative standard deviation: 3.636%, values: [0.005932, 0.005932, 0.005670, 0.005461, 0.005479], performanceMetricID:com.apple.dt.XCTMetric_Clock.time.monotonic, baselineName: "", baselineAverage: , polarity: prefers smaller, maxPercentRegression: 10.000%, maxPercentRelativeStandardDeviation: 10.000%, maxRegression: 0.000, maxStandardDeviation: 0.000
+Test Case '-[AtticTests.CanvasPerformanceGateTests testViewportOnlyConfigureDoesNotRebuildAccessibilityElements]' passed (0.048 seconds).
+Test Suite 'CanvasPerformanceGateTests' passed at 2026-09-16 14:03:52.705.
+	 Executed 20 tests, with 0 failures (0 unexpected) in 4.834 (4.836) seconds
+Test Suite 'CanvasPrecisionTests' started at 2026-09-16 14:03:52.705.
+Test Case '-[AtticTests.CanvasPrecisionTests testSemanticShapeResizesFreelyAndShiftPreservesAspectRatio]' started.
+Test Case '-[AtticTests.CanvasPrecisionTests testSemanticShapeResizesFreelyAndShiftPreservesAspectRatio]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasPrecisionTests testToolbarUsesArrowAndRejectsDrawingEvenWhenPenIsSelected]' started.
+Test Case '-[AtticTests.CanvasPrecisionTests testToolbarUsesArrowAndRejectsDrawingEvenWhenPenIsSelected]' passed (0.000 seconds).
+Test Suite 'CanvasPrecisionTests' passed at 2026-09-16 14:03:52.705.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'CanvasRenderCacheTests' started at 2026-09-16 14:03:52.705.
+Test Case '-[AtticTests.CanvasRenderCacheTests testDecodeFailureIsMemoizedAndRetryInvalidatesStablePlaceholder]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testDecodeFailureIsMemoizedAndRetryInvalidatesStablePlaceholder]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testDecodeSchedulerStressKeepsNinetySixImagesWithinFourWorkers]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testDecodeSchedulerStressKeepsNinetySixImagesWithinFourWorkers]' passed (0.071 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testDefaultImageIODecoderMemoizesCorruptBytes]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testDefaultImageIODecoderMemoizesCorruptBytes]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testDefaultPolicyStillCancelsRemovedActiveAndQueuedDecodes]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testDefaultPolicyStillCancelsRemovedActiveAndQueuedDecodes]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testFailureMemoDoesNotEvictCurrentlyVisibleCorruptImages]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testFailureMemoDoesNotEvictCurrentlyVisibleCorruptImages]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testFreshRenderTokenInvalidatesCacheWithoutChangingStrokeSemantics]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testFreshRenderTokenInvalidatesCacheWithoutChangingStrokeSemantics]' passed (0.000 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testImageDecodeSchedulerBoundsConcurrencyAndPreservesInputPriority]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testImageDecodeSchedulerBoundsConcurrencyAndPreservesInputPriority]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testMacViewportCandidatesPreventOffscreenRedecodeChurn]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testMacViewportCandidatesPreventOffscreenRedecodeChurn]' passed (0.109 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testPreparingNewVisibleSetPrunesQueuedAndRetainsActiveResults]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testPreparingNewVisibleSetPrunesQueuedAndRetainsActiveResults]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testReappearingTokenReusesNonCooperativeDecodeResult]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testReappearingTokenReusesNonCooperativeDecodeResult]' passed (0.001 seconds).
+Test Case '-[AtticTests.CanvasRenderCacheTests testRetryDecodeRequeuesOffScreenFailureAcrossCandidatePruning]' started.
+Test Case '-[AtticTests.CanvasRenderCacheTests testRetryDecodeRequeuesOffScreenFailureAcrossCandidatePruning]' passed (0.001 seconds).
+Test Suite 'CanvasRenderCacheTests' passed at 2026-09-16 14:03:52.895.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.189 (0.190) seconds
+Test Suite 'CanvasSessionTests' started at 2026-09-16 14:03:52.895.
+Test Case '-[AtticTests.CanvasSessionTests testClearUndoRestoresAlreadyVisibleLegacyImageAboveCurrentImportCap]' started.
+Test Case '-[AtticTests.CanvasSessionTests testClearUndoRestoresAlreadyVisibleLegacyImageAboveCurrentImportCap]' passed (0.061 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testClearUndoRestoresInkWithoutDecrementingGeneration]' started.
+Test Case '-[AtticTests.CanvasSessionTests testClearUndoRestoresInkWithoutDecrementingGeneration]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testCompletedStrokeSupportsUndoAndRedo]' started.
+Test Case '-[AtticTests.CanvasSessionTests testCompletedStrokeSupportsUndoAndRedo]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testFailedPersistenceDoesNotCreateUndoHistory]' started.
+Test Case '-[AtticTests.CanvasSessionTests testFailedPersistenceDoesNotCreateUndoHistory]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testFailedSemanticPlacementRetainsTextAndCanRetryWithoutDuplicate]' started.
+Test Case '-[AtticTests.CanvasSessionTests testFailedSemanticPlacementRetainsTextAndCanRetryWithoutDuplicate]' passed (0.107 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testImageBatchAndHistoryKeepOneSelectionKind]' started.
+Test Case '-[AtticTests.CanvasSessionTests testImageBatchAndHistoryKeepOneSelectionKind]' passed (0.116 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testImageReplacementRollsBackOnSaveFailureAndUndoRestoresOriginalBytes]' started.
+Test Case '-[AtticTests.CanvasSessionTests testImageReplacementRollsBackOnSaveFailureAndUndoRestoresOriginalBytes]' passed (0.120 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testImportedSemanticChangeInvalidatesSessionHistory]' started.
+Test Case '-[AtticTests.CanvasSessionTests testImportedSemanticChangeInvalidatesSessionHistory]' passed (0.011 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testInsertedShapeRemainsSemanticAndUsesHistoryAndCurrentStyle]' started.
+Test Case '-[AtticTests.CanvasSessionTests testInsertedShapeRemainsSemanticAndUsesHistoryAndCurrentStyle]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testKeyboardSemanticResizeSharesPointerMinimumDimension]' started.
+Test Case '-[AtticTests.CanvasSessionTests testKeyboardSemanticResizeSharesPointerMinimumDimension]' passed (0.029 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testMixedClearUndoRestoresStrokeAndImageWithOnePersistenceSave]' started.
+Test Case '-[AtticTests.CanvasSessionTests testMixedClearUndoRestoresStrokeAndImageWithOnePersistenceSave]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testMixedClearUndoRollsBackBothKindsWhenPersistenceFailsAfterStaging]' started.
+Test Case '-[AtticTests.CanvasSessionTests testMixedClearUndoRollsBackBothKindsWhenPersistenceFailsAfterStaging]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testMixedClearUndoRollsBackStrokeWhenImageRestoreStageFails]' started.
+Test Case '-[AtticTests.CanvasSessionTests testMixedClearUndoRollsBackStrokeWhenImageRestoreStageFails]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testMixedSemanticClearUndoIsAtomicAndFailedUndoCanBeRetried]' started.
+Test Case '-[AtticTests.CanvasSessionTests testMixedSemanticClearUndoIsAtomicAndFailedUndoCanBeRetried]' passed (0.117 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testNarrowingTextResizeGrowsHeightSoPersistedTextIsNotClipped]' started.
+Test Case '-[AtticTests.CanvasSessionTests testNarrowingTextResizeGrowsHeightSoPersistedTextIsNotClipped]' passed (0.118 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testNewOperationClearsRedoStack]' started.
+Test Case '-[AtticTests.CanvasSessionTests testNewOperationClearsRedoStack]' passed (0.015 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testOneEraseGestureIsOneHistoryCommandForEveryHitStroke]' started.
+Test Case '-[AtticTests.CanvasSessionTests testOneEraseGestureIsOneHistoryCommandForEveryHitStroke]' passed (0.013 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testPreparingTextDefersInsertionAndToolSelectionCancelsPlacement]' started.
+Test Case '-[AtticTests.CanvasSessionTests testPreparingTextDefersInsertionAndToolSelectionCancelsPlacement]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testRefusedBoardOperationsKeepHistoryPlacementAndSurface]' started.
+Test Case '-[AtticTests.CanvasSessionTests testRefusedBoardOperationsKeepHistoryPlacementAndSurface]' passed (0.011 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testRestoresViewportAndToolPerBoardWithoutHistoryOrSelection]' started.
+Test Case '-[AtticTests.CanvasSessionTests testRestoresViewportAndToolPerBoardWithoutHistoryOrSelection]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testSemanticTextPlacementTransformsLayersAndHistoryPreserveCharacters]' started.
+Test Case '-[AtticTests.CanvasSessionTests testSemanticTextPlacementTransformsLayersAndHistoryPreserveCharacters]' passed (0.033 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testShapePlacementMustBeArmedAndUsesDraggedEndpoints]' started.
+Test Case '-[AtticTests.CanvasSessionTests testShapePlacementMustBeArmedAndUsesDraggedEndpoints]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testStableEditCommandRouteIsCanvasScopedAndToolbarIndependent]' started.
+Test Case '-[AtticTests.CanvasSessionTests testStableEditCommandRouteIsCanvasScopedAndToolbarIndependent]' passed (0.014 seconds).
+Test Case '-[AtticTests.CanvasSessionTests testWidthRemainsContinuousButClampedToSupportedRange]' started.
+Test Case '-[AtticTests.CanvasSessionTests testWidthRemainsContinuousButClampedToSupportedRange]' passed (0.030 seconds).
+Test Suite 'CanvasSessionTests' passed at 2026-09-16 14:03:53.767.
+	 Executed 24 tests, with 0 failures (0 unexpected) in 0.869 (0.872) seconds
+Test Suite 'CanvasStoreTests' started at 2026-09-16 14:03:53.768.
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokePersistsOneArchiveWithOneSave]' started.
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokePersistsOneArchiveWithOneSave]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokeReturnsPersistedObjectWithoutDuplicateRetryWhenPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokeReturnsPersistedObjectWithoutDuplicateRetryWhenPostSaveReloadFails]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testCanvasScopedReplicaReadsSeeUnsavedChangesInTheContext]' started.
+Test Case '-[AtticTests.CanvasStoreTests testCanvasScopedReplicaReadsSeeUnsavedChangesInTheContext]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearAdvancesEveryBoardReplicaToOneGeneration]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearAdvancesEveryBoardReplicaToOneGeneration]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearAppliesPersistedPresentationWhenEveryPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearAppliesPersistedPresentationWhenEveryPostSaveReloadFails]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearGenerationHidesStaleReplicaImportedLater]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearGenerationHidesStaleReplicaImportedLater]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearReportsPersistedWhenFreshContextReloadFailsWithoutRetry]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearReportsPersistedWhenFreshContextReloadFailsWithoutRetry]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testCopiedLegacyStoreOpensAdditivelyWithoutRewritingInkOrImages]' started.
+Test Case '-[AtticTests.CanvasStoreTests testCopiedLegacyStoreOpensAdditivelyWithoutRewritingInkOrImages]' passed (0.617 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testCreateCanvasReturnsPersistedBoardWithoutDuplicateRetryWhenPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testCreateCanvasReturnsPersistedBoardWithoutDuplicateRetryWhenPostSaveReloadFails]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testDeletingMoreStrokesThanTheIdentifierPredicateLimitTouchesEveryReplica]' started.
+Test Case '-[AtticTests.CanvasStoreTests testDeletingMoreStrokesThanTheIdentifierPredicateLimitTouchesEveryReplica]' passed (0.385 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testEraseAndRestoreMutateEveryPhysicalReplica]' started.
+Test Case '-[AtticTests.CanvasStoreTests testEraseAndRestoreMutateEveryPhysicalReplica]' passed (0.006 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedAddRollsBackAndDoesNotExposeUnpersistedInk]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedAddRollsBackAndDoesNotExposeUnpersistedInk]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedBoardSaveFallsBackWhenPreviousSelectionIsNoLongerLive]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedBoardSaveFallsBackWhenPreviousSelectionIsNoLongerLive]' passed (0.012 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedClearReloadsPersistedGenerationAndInk]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedClearReloadsPersistedGenerationAndInk]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedCreateAndDeleteSavesRestorePreviousSelectionAndKeepSaveError]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedCreateAndDeleteSavesRestorePreviousSelectionAndKeepSaveError]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedMultiStrokeRestoreRollsBackEarlierInserts]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedMultiStrokeRestoreRollsBackEarlierInserts]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnCreateCanvasRestoresPreviousSelectionAndKeepsPreparationError]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnCreateCanvasRestoresPreviousSelectionAndKeepsPreparationError]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnDeleteCanvasRestoresPreviousSelectionAndKeepsPreparationError]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnDeleteCanvasRestoresPreviousSelectionAndKeepsPreparationError]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testLocalOnlyStoreCreatesNoDeferredCloudInfrastructure]' started.
+Test Case '-[AtticTests.CanvasStoreTests testLocalOnlyStoreCreatesNoDeferredCloudInfrastructure]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testMalformedPayloadIsRetainedButNotRendered]' started.
+Test Case '-[AtticTests.CanvasStoreTests testMalformedPayloadIsRetainedButNotRendered]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testMultiImageRestoreRollsBackEarlierImageWhenLaterImageIsInvalid]' started.
+Test Case '-[AtticTests.CanvasStoreTests testMultiImageRestoreRollsBackEarlierImageWhenLaterImageIsInvalid]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testNewImageImportStillRejectsPayloadAboveCurrentImportCap]' started.
+Test Case '-[AtticTests.CanvasStoreTests testNewImageImportStillRejectsPayloadAboveCurrentImportCap]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testRefreshAfterSelectedCanvasIsDeletedElsewhereShowsTheFallbackCanvasContent]' started.
+Test Case '-[AtticTests.CanvasStoreTests testRefreshAfterSelectedCanvasIsDeletedElsewhereShowsTheFallbackCanvasContent]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testRefreshChoosesOneDeterministicLogicalReplicaWithoutDeletingRows]' started.
+Test Case '-[AtticTests.CanvasStoreTests testRefreshChoosesOneDeterministicLogicalReplicaWithoutDeletingRows]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testRestoreAfterClearReplaysCapturedStrokeIntoCurrentGeneration]' started.
+Test Case '-[AtticTests.CanvasStoreTests testRestoreAfterClearReplaysCapturedStrokeIntoCurrentGeneration]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testSameIDReplicaOnAnotherCanvasIsNotShownOrRewrittenBySelectedCanvasMutations]' started.
+Test Case '-[AtticTests.CanvasStoreTests testSameIDReplicaOnAnotherCanvasIsNotShownOrRewrittenBySelectedCanvasMutations]' passed (0.006 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testSemanticDuplicateMutationFailureDeletionAndRestoreAffectEveryReplica]' started.
+Test Case '-[AtticTests.CanvasStoreTests testSemanticDuplicateMutationFailureDeletionAndRestoreAffectEveryReplica]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testSemanticTextAtAcceptedLimitSurvivesWorstCaseJSONEscaping]' started.
+Test Case '-[AtticTests.CanvasStoreTests testSemanticTextAtAcceptedLimitSurvivesWorstCaseJSONEscaping]' passed (0.012 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testUnboardedLegacyDefaultContentKeepsTheDefaultCanvasListedFromAnotherCanvas]' started.
+Test Case '-[AtticTests.CanvasStoreTests testUnboardedLegacyDefaultContentKeepsTheDefaultCanvasListedFromAnotherCanvas]' passed (0.019 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testUndoAppliesRestoredPresentationWhenEveryPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testUndoAppliesRestoredPresentationWhenEveryPostSaveReloadFails]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testUnknownSemanticPayloadIsRetainedThroughTransformDeleteAndUndo]' started.
+Test Case '-[AtticTests.CanvasStoreTests testUnknownSemanticPayloadIsRetainedThroughTransformDeleteAndUndo]' passed (0.007 seconds).
+Test Suite 'CanvasStoreTests' passed at 2026-09-16 14:03:54.953.
+	 Executed 31 tests, with 0 failures (0 unexpected) in 1.183 (1.185) seconds
+Test Suite 'CanvasUITestStoreTests' started at 2026-09-16 14:03:54.953.
+Test Case '-[AtticTests.CanvasUITestStoreTests testUITestStorePersistsAcrossReopenAndResetRemovesOnlyItsRows]' started.
+Test Case '-[AtticTests.CanvasUITestStoreTests testUITestStorePersistsAcrossReopenAndResetRemovesOnlyItsRows]' passed (0.022 seconds).
+Test Suite 'CanvasUITestStoreTests' passed at 2026-09-16 14:03:54.975.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.022 (0.022) seconds
+Test Suite 'AtticTests.xctest' passed at 2026-09-16 14:03:54.975.
+	 Executed 215 tests, with 0 failures (0 unexpected) in 55.441 (55.473) seconds
+Test Suite 'Selected tests' passed at 2026-09-16 14:03:54.975.
+	 Executed 215 tests, with 0 failures (0 unexpected) in 55.441 (55.474) seconds
+Canvas decode stress: 96 images in 0.069s, max active 4
+exit_status=0 finished=2026-09-16T13:03:55Z

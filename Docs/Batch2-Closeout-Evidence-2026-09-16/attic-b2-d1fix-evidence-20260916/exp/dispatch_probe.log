@@ -1,0 +1,16 @@
+=== dispatch_probe [] ===
+makeFirstResponder: true firstResponder is editor: true
+editor responds to undo: false window responds: true
+NSResponder responds to undo: (container) false
+private canUndo: true window UM canUndo: false
+validation target: NSWindow
+validateMenuItem: true title now: Undo Window Thing
+tryToPerform undo: handled=true editor='abc' windowActionRan=true privateCanUndo=true
+=== dispatch_probe [--responds] ===
+makeFirstResponder: true firstResponder is editor: true
+editor responds to undo: true window responds: true
+NSResponder responds to undo: (container) false
+private canUndo: true window UM canUndo: false
+validation target: RespondingEditor
+validateMenuItem: true title now: Undo
+tryToPerform undo: handled=true editor='' windowActionRan=false privateCanUndo=false

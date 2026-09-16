@@ -40,7 +40,7 @@ extension CanvasStore {
     func storedSemanticReplicas(canvasID: UUID) throws -> [CanvasSemanticObjectItem] {
         guard supportsSemanticObjects else { return [] }
         let targetID = canvasID
-        return try context.fetch(FetchDescriptor<CanvasSemanticObjectItem>(
+        return try context.fetchCanvasReplicas(FetchDescriptor<CanvasSemanticObjectItem>(
             predicate: #Predicate { $0.canvasID == targetID }
         ))
     }

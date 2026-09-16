@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The one checklist presentation shared by the transient hover panel and
-/// the pinned mini-window. It reads the live family from `store`, keeps
-/// drafts in `uiState.subtaskDrafts`, and leaves every mutation to the same
+/// The one family presentation shared by the transient hover panel and the
+/// pinned mini-window, with two views: Subtasks and Attachments. It reads the
+/// live family from `store`, keeps drafts in `uiState.subtaskDrafts`, reads
+/// its view from `panelViews`, and leaves every mutation to the same
 /// `TaskStore` APIs the main list uses — the surface is presentation only.
 struct SubtaskPanelContent: View {
     enum Mode {
@@ -14,20 +15,48 @@ struct SubtaskPanelContent: View {
     @ObservedObject var uiState: PanelUIState
     @ObservedObject var settings: AppSettings
     @ObservedObject var subtaskPanels: SubtaskPanelController
+    @ObservedObject var panelViews: FamilyPanelViewState
     let parentID: UUID
     let mode: Mode
 
+    /// File drops anywhere on the surface, including over child rows.
+    @StateObject private var fileDrop: TaskFileDropTarget
+    @State private var measuredHeaderHeight: CGFloat = 0
+    @State private var measuredFooterHeight: CGFloat = 0
     @FocusState private var isEntryFocused: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
+    init(store: TaskStore, uiState: PanelUIState, settings: AppSettings,
+         subtaskPanels: SubtaskPanelController, panelViews: FamilyPanelViewState,
+         parentID: UUID, mode: Mode) {
+        self.store = store
+        self.uiState = uiState
+        self.settings = settings
+        self.subtaskPanels = subtaskPanels
+        self.panelViews = panelViews
+        self.parentID = parentID
+        self.mode = mode
+        _fileDrop = StateObject(wrappedValue: TaskFileDropTarget())
+    }
+
     private var parent: TaskItem? {
-        store.tasks.first { $0.id == parentID && $0.parentID == nil }
+        guard let task = store.task(withID: parentID), task.parentID == nil else { return nil }
+        return task
     }
 
     private var children: [TaskItem] {
         store.subtasks(of: parentID)
+    }
+
+    private var activeView: FamilyPanelView {
+        panelViews.view(for: parentID)
+    }
+
+    private var attachments: [TaskImageReference] {
+        parent?.attachments ?? []
     }
 
     private var completedCount: Int {
@@ -49,6 +78,25 @@ struct SubtaskPanelContent: View {
         !draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The user's panel corner setting — the auxiliary surfaces share the
+    /// main panel's squircle language, so their radius follows the same
+    /// value and the Squircle itself clamps it to these smaller bounds. The
+    /// AppKit hit test reads the same setting, so the clickable shape and the
+    /// painted one can never diverge.
+    private var surfaceCornerRadius: CGFloat {
+        CGFloat(settings.panelCornerSize)
+    }
+
+    /// Corner-aware spacing (see `SubtaskPanelLayout.surfaceInsets`).
+    private var insets: SurfaceInsets {
+        SubtaskPanelLayout.surfaceInsets(cornerSize: surfaceCornerRadius)
+    }
+
+    private var contentHorizontalPadding: CGFloat { insets.horizontal }
+    private var contentTopPadding: CGFloat { insets.top }
+    private var contentBottomPadding: CGFloat { insets.bottom }
+    private var rowOuterPadding: CGFloat { insets.row }
+
     /// The entry is a deliberate state — opened by the '+ Add subtask'
     /// affordance (or an Add subtask… menu command), kept alive by an
     /// un-submitted draft, and closed only by an explicit Escape cancel.
@@ -63,34 +111,6 @@ struct SubtaskPanelContent: View {
 
     private var showsEntry: Bool {
         canAddSubtask && (entryActive || hasDraft)
-    }
-
-    /// v1 allows one pinned family: when a different family owns it, the pin
-    /// control is an explicit "Replace" affordance, not a silent swap.
-    private var replacingPinnedFamily: Bool {
-        if let pinned = subtaskPanels.pinnedFamilyID {
-            return pinned != parentID
-        }
-        return false
-    }
-
-    /// Replacement is refused while the pinned family is mid-edit or
-    /// mid-confirmation — shown as a disabled control with an explanatory
-    /// label rather than a click that silently does nothing.
-    private var pinReplacementBlocked: Bool {
-        guard let pinned = subtaskPanels.pinnedFamilyID, pinned != parentID else {
-            return false
-        }
-        return subtaskPanels.familyEditBusy(pinned)
-    }
-
-    private var pinButtonHelp: String {
-        if pinReplacementBlocked {
-            return "Finish the pinned list's current edit first"
-        }
-        return replacingPinnedFamily
-            ? "Replace the currently pinned list"
-            : "Keep this list visible"
     }
 
     private var panelThemePalette: AtticPanelThemePalette {
@@ -121,34 +141,62 @@ struct SubtaskPanelContent: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        ZStack(alignment: .top) {
+            viewContent
+                // A different task is a new list, not an animated insertion
+                // of every row into the previous task's scrolling state.
+                .id(parentID)
+                .mask(chromeMask)
+            // Rows faded out under the header and footer are inert too: the
+            // shields sit between the list and the chrome, so nothing hidden
+            // can take a press or a hover through the gaps between controls.
+            Color.clear
+                .frame(height: headerHeight + Self.chromeFadeLength)
+                .contentShape(Rectangle())
+                .accessibilityHidden(true)
+            Color.clear
+                .frame(height: footerHeight + contentBottomPadding + Self.chromeFadeLength)
+                .contentShape(Rectangle())
+                .accessibilityHidden(true)
+                .frame(maxHeight: .infinity, alignment: .bottom)
             header
-            if !children.isEmpty {
-                Rectangle()
-                    .fill(panelThemePalette.secondaryForegroundColor.opacity(0.16))
-                    .frame(height: 1)
-                    .padding(.horizontal, 10)
-                    .accessibilityHidden(true)
-                childList
-            }
-            if canAddSubtask {
-                Rectangle()
-                    .fill(panelThemePalette.secondaryForegroundColor.opacity(0.16))
-                    .frame(height: 1)
-                    .padding(.horizontal, 10)
-                    .accessibilityHidden(true)
-                if showsEntry {
-                    entryRow
-                } else {
-                    addAffordance
-                }
-            }
-            if let message = store.lastErrorMessage {
-                errorRow(message)
+                .background(chromeHeightReader("header"))
+            footer
+                .padding(.horizontal, rowOuterPadding)
+                .background(chromeHeightReader("footer"))
+                .padding(.bottom, contentBottomPadding)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+        // The ideal height is what the window fits to; the surface itself
+        // fills whatever frame the window has, so an animated window resize
+        // carries the painted shape, the hit shape and the footer together.
+        .frame(width: SubtaskPanelLayout.panelWidth)
+        .frame(minHeight: 0, idealHeight: panelHeight, maxHeight: .infinity, alignment: .top)
+        // Layout-neutral: the overlay never changes what the window fits to.
+        .overlay {
+            if fileDrop.isTargeted {
+                TaskDropOverlay(
+                    message: TaskFileDrop.message(for: parent?.title ?? "task"),
+                    shape: Squircle(cornerRadius: surfaceCornerRadius, exponent: AtticStyle.panelSquircleExponent)
+                )
             }
         }
-        .frame(width: SubtaskPanelLayout.panelWidth)
-        .fixedSize(horizontal: false, vertical: true)
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: fileDrop.isTargeted)
+        .environment(\.taskFileDropTarget, fileDrop)
+        .onDrop(of: TaskDropContent.dropTypes, delegate: TaskFileDropDelegate(
+            canAccept: { fileDrop.canAccept($0) },
+            setTargeted: { fileDrop.setTargeted($0, source: "surface") },
+            perform: { fileDrop.perform($0, $1) }
+        ))
+        .onAppear(perform: configureFileDrop)
+        .onPreferenceChange(SubtaskChromeHeightKey.self) { values in
+            var changed = false
+            if let height = values["header"], abs(height - measuredHeaderHeight) > 0.5 { measuredHeaderHeight = height; changed = true }
+            if let height = values["footer"], abs(height - measuredFooterHeight) > 0.5 { measuredFooterHeight = height; changed = true }
+            // The first fit used estimated chrome; re-fit once it is measured.
+            if changed { subtaskPanels.noteChromeMeasured(for: parentID, mode: mode) }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: showsEntry)
         .foregroundStyle(
             panelThemePalette.primaryForegroundColor,
             panelThemePalette.secondaryForegroundColor
@@ -173,15 +221,21 @@ struct SubtaskPanelContent: View {
         .tint(panelAccentColor)
         .atticPanelSurface(
             treatment: panelSurfaceTreatment,
-            cornerRadius: AtticStyle.panelCornerRadius,
+            cornerRadius: surfaceCornerRadius,
             gradientCoverage: settings.panelGradientCoverage,
             gradientColorHex: settings.panelGradientColorHex
         )
-        .onHover { hovering in
-            if mode == .transient {
-                subtaskPanels.noteTransientPointer(inside: hovering)
-            }
+        .coordinateSpace(name: Self.surfaceSpace)
+        .onPreferenceChange(PanelSurfaceDragGeometryPreferenceKey.self) { geometry in
+            subtaskPanels.noteSurfaceDragGeometry(geometry, for: parentID, mode: mode)
         }
+        // The transient host is reused across families: its drop target must
+        // follow the family it now shows and forget a stale highlight.
+        .onChange(of: parentID) { _, _ in
+            fileDrop.end()
+            configureFileDrop()
+        }
+        .onChange(of: mode) { _, _ in configureFileDrop() }
         .onChange(of: uiState.subtaskEntryRequest) { _, _ in
             guard uiState.focusedSubtaskParentID == parentID, showsEntry else { return }
             DispatchQueue.main.async { isEntryFocused = true }
@@ -221,8 +275,44 @@ struct SubtaskPanelContent: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Subtasks")
+        .accessibilityLabel(activeView == .subtasks ? "Subtasks" : "Attachments")
         .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    /// Named space shared by every measurement inside one surface; its
+    /// origin is the content's top-left, which is also the flipped hosting
+    /// view's origin.
+    fileprivate static let surfaceSpace = "attic.subtaskSurface"
+
+    /// Every file drop on this surface goes to the parent, and so does a
+    /// card from another family (never one of its own). The drop re-asserts
+    /// the open so the panel stays up while the files import.
+    private func configureFileDrop() {
+        Self.configureFileDrop(fileDrop, parentID: parentID, mode: mode, store: store, subtaskPanels: subtaskPanels)
+    }
+
+    /// The target stores these callbacks, so they hold it weakly: a strong
+    /// capture would keep the target, store and controller alive after the
+    /// surface releases it.
+    static func configureFileDrop(_ fileDrop: TaskFileDropTarget, parentID: UUID, mode: Mode,
+                                  store: TaskStore, subtaskPanels: SubtaskPanelController) {
+        fileDrop.canAccept = { TaskFileDrop.canAccept($0, onto: parentID, store: store) }
+        fileDrop.perform = { [weak fileDrop] content, providers in
+            fileDrop?.end()
+            if mode == .transient { subtaskPanels.openFamilyPanel(for: parentID, focusEntry: false) }
+            TaskFileDrop.attach(content, providers, to: parentID, store: store, subtaskPanels: subtaskPanels)
+        }
+    }
+
+    private func dragRegionReader(
+        _ make: @escaping (CGRect) -> PanelSurfaceDragGeometry
+    ) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: PanelSurfaceDragGeometryPreferenceKey.self,
+                value: make(proxy.frame(in: .named(Self.surfaceSpace)))
+            )
+        }
     }
 
     private var accessibilityIdentifier: String {
@@ -258,17 +348,12 @@ struct SubtaskPanelContent: View {
 
             headerControls
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 11)
+        .padding(.horizontal, contentHorizontalPadding)
+        .padding(.top, contentTopPadding)
         .padding(.bottom, 9)
         .background {
-            if mode == .pinned {
-                // The header is the pinned window's drag handle; the actual
-                // drag starts on the hosting view (empty header space
-                // hit-tests to it), and this view marks that region in the
-                // accessibility tree for tests and VoiceOver.
-                SubtaskWindowDragHandle(familyID: parentID)
-            }
+            SubtaskWindowDragHandle(familyID: parentID)
+            dragRegionReader { PanelSurfaceDragGeometry(headerFrame: $0) }
         }
     }
 
@@ -279,64 +364,264 @@ struct SubtaskPanelContent: View {
             Button {
                 subtaskPanels.pinFamily(parentID)
             } label: {
-                Image(systemName: replacingPinnedFamily ? "pin.fill" : "pin")
+                Image(systemName: "pin")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(replacingPinnedFamily
-                        ? panelAccentColor : Color.primary.opacity(0.9))
+                    .foregroundStyle(Color.primary.opacity(0.9))
                     .atticClearGlassForegroundReadability()
-                    .frame(width: 24, height: 24)
+                    .frame(width: SubtaskPanelLayout.footerControlSize, height: SubtaskPanelLayout.footerControlSize)
                     .atticGlassControl(in: Circle())
-                    .frame(width: 30, height: 30)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(pinReplacementBlocked)
-            .opacity(pinReplacementBlocked ? 0.35 : 1)
-            .help(pinButtonHelp)
-            .accessibilityLabel(replacingPinnedFamily
-                ? "Replace pinned subtask list"
-                : "Pin subtask list")
-            .accessibilityHint(pinReplacementBlocked
-                ? "Unavailable while the pinned list has an edit in progress"
-                : "")
+            .background { dragRegionReader { PanelSurfaceDragGeometry(controlFrames: [$0]) } }
+            .help("Keep this list visible")
+            .accessibilityLabel("Pin subtask list")
             .accessibilityIdentifier("subtask-pin-\(parentID.uuidString)")
         case .pinned:
             HStack(spacing: 6) {
                 Button {
-                    subtaskPanels.unpinPinned()
+                    subtaskPanels.unpinPinned(parentID)
                 } label: {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.primary.opacity(0.9))
                         .atticClearGlassForegroundReadability()
-                        .frame(width: 24, height: 24)
+                        .frame(width: SubtaskPanelLayout.footerControlSize, height: SubtaskPanelLayout.footerControlSize)
                         .atticGlassControl(in: Circle())
-                        .frame(width: 30, height: 30)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .background { dragRegionReader { PanelSurfaceDragGeometry(controlFrames: [$0]) } }
                 .help("Unpin subtask list")
                 .accessibilityLabel("Unpin subtask list")
                 .accessibilityAddTraits(.isSelected)
                 .accessibilityIdentifier("subtask-unpin-\(parentID.uuidString)")
 
                 Button {
-                    subtaskPanels.closePinned()
+                    subtaskPanels.closePinned(parentID)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.primary.opacity(0.9))
                         .atticClearGlassForegroundReadability()
-                        .frame(width: 24, height: 24)
+                        .frame(width: SubtaskPanelLayout.footerControlSize, height: SubtaskPanelLayout.footerControlSize)
                         .atticGlassControl(in: Circle())
-                        .frame(width: 30, height: 30)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .background { dragRegionReader { PanelSurfaceDragGeometry(controlFrames: [$0]) } }
                 .help("Close subtask list")
                 .accessibilityLabel("Close subtask list")
                 .accessibilityIdentifier("subtask-close-\(parentID.uuidString)")
             }
+        }
+    }
+
+    private var headerHeight: CGFloat { measuredHeaderHeight > 0 ? measuredHeaderHeight : contentTopPadding + 48 }
+    private var footerHeight: CGFloat { measuredFooterHeight > 0 ? measuredFooterHeight : SubtaskPanelLayout.footerControlSize }
+
+    private static let chromeFadeLength: CGFloat = 18
+
+    /// Scrolling content remains faintly visible behind chrome and becomes
+    /// fully readable in the workspace, matching the main task list.
+    private var chromeMask: some View {
+        let stops = TaskScrollMaskLayout.stops(
+            height: panelHeight,
+            topObscuredHeight: headerHeight,
+            bottomObscuredHeight: footerHeight + contentBottomPadding,
+            fadeLength: Self.chromeFadeLength
+        )
+        let underlay = TaskScrollMaskLayout.underChromeOpacity(
+            reduceTransparency: reduceTransparency, increasedContrast: colorSchemeContrast == .increased)
+        return LinearGradient(
+            stops: TaskScrollMaskLayout.gradientStops(
+                stops, underChromeOpacity: underlay,
+                // The header contains text as well as controls; keep its
+                // scrolling impression quieter than the composer underlay.
+                headerUnderChromeOpacity: underlay * 0.4),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private var panelHeight: CGFloat {
+        headerHeight + contentHeight + footerHeight + contentBottomPadding
+    }
+
+    /// Both views share one rule: natural height up to the list maximum.
+    private var contentHeight: CGFloat {
+        SubtaskPanelLayout.contentHeight(
+            for: activeView,
+            childCount: children.count,
+            measuredListHeight: subtaskPanels.measuredListHeight(for: parentID),
+            attachmentCount: attachments.count
+        )
+    }
+
+    /// Only the active view is in the hierarchy. A short directional slide
+    /// plus crossfade; Reduce Motion keeps just the fade.
+    @ViewBuilder
+    private var viewContent: some View {
+        ZStack(alignment: .top) {
+            switch activeView {
+            case .subtasks:
+                childList.transition(viewTransition(entering: .subtasks))
+            case .attachments:
+                gallery.transition(viewTransition(entering: .attachments))
+            }
+        }
+    }
+
+    private func viewTransition(entering view: FamilyPanelView) -> AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        // Attachments sit to the right of Subtasks. Each view enters from and
+        // leaves toward its own side, so both layers page the same way.
+        let slide = SubtaskPanelLayout.viewSwitchOffset(for: view)
+        return .offset(x: slide).combined(with: .opacity)
+    }
+
+    private var gallery: some View {
+        ScrollView {
+            TaskAttachmentGallery(attachments: attachments, store: store, owner: parentID,
+                                  freshIDs: panelViews.freshAttachments(for: parentID)) { reference in
+                store.removeAttachment(reference.id, from: parentID)
+            }
+            .padding(.horizontal, rowOuterPadding + 4)
+            .padding(.top, headerHeight)
+            .padding(.bottom, footerHeight + contentBottomPadding)
+        }
+        .scrollIndicators(.never)
+        .accessibilityIdentifier("subtask-attachments-\(parentID.uuidString)")
+    }
+
+    /// The composer for the active view beside the switch to the other view.
+    private var footer: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 7) {
+                HStack(spacing: 0) {
+                    if activeView == .attachments || canAddSubtask {
+                        Button {
+                            if activeView == .attachments { chooseAttachment() }
+                            else if showsEntry && canSubmitDraft { addSubtask() }
+                            else { uiState.activateSubtaskEntry(for: parentID) }
+                        } label: {
+                            Image(systemName: showsEntry && canSubmitDraft && activeView == .subtasks ? "arrow.up" : "plus")
+                                .font(.system(size: 13, weight: .medium))
+                                .frame(width: SubtaskPanelLayout.footerControlSize, height: SubtaskPanelLayout.footerControlSize)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(activeView == .attachments && !TaskAttachmentPicker.isAvailable(for: parentID, store: store, uiState: uiState))
+                        .accessibilityLabel(activeView == .attachments ? "Add attachment" : (showsEntry && canSubmitDraft ? "Save subtask" : "Add subtask"))
+                        .accessibilityIdentifier("subtask-composer-action-\(parentID.uuidString)")
+                    }
+                    composer
+                }
+                .atticGlassControl(in: Capsule(), interactive: false)
+                viewSwitch
+            }
+            if let message = panelErrorMessage { errorRow(message) }
+        }
+    }
+
+    @ViewBuilder
+    private var composer: some View {
+        Group {
+            switch activeView {
+            case .subtasks:
+                if canAddSubtask {
+                    if showsEntry { entryRow }
+                    else { addAffordance }
+                } else {
+                    Text("Task completed")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(panelThemePalette.secondaryForegroundColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                }
+            case .attachments:
+                addAttachmentButton
+            }
+        }
+        .frame(height: SubtaskPanelLayout.footerControlSize)
+    }
+
+    private func chooseAttachment() {
+        let atStart = subtaskPanels.revealContext
+        TaskAttachmentPicker.choose(for: parentID, store: store, uiState: uiState) { ids, ownerID in
+            subtaskPanels.revealImportedAttachments(ids, for: ownerID, since: atStart)
+        }
+    }
+
+    /// Only this family's own notice: general and composer errors belong to
+    /// the main panel, so one failure never shows in two places.
+    private var panelErrorMessage: String? {
+        guard store.lastErrorOwnerID == parentID else { return nil }
+        return store.lastErrorMessage
+    }
+
+    private var isImportingAttachments: Bool {
+        store.importingAttachmentTaskIDs.contains(parentID)
+    }
+
+    private var addAttachmentButton: some View {
+        Button(action: chooseAttachment) {
+            HStack(spacing: 8) {
+                if isImportingAttachments {
+                    ProgressView().controlSize(.mini)
+                }
+                Text(isImportingAttachments ? "Attaching…" : "Add attachment…")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+            }
+            .foregroundStyle(panelThemePalette.secondaryForegroundColor)
+            .atticClearGlassForegroundReadability()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 12)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!TaskAttachmentPicker.isAvailable(for: parentID, store: store, uiState: uiState))
+        .help("Add images or files")
+        .accessibilityLabel(isImportingAttachments ? "Attaching files" : "Add attachment")
+        .accessibilityIdentifier("add-attachment-\(parentID.uuidString)")
+    }
+
+    /// Shows the destination view's icon: attachments from Subtasks, the
+    /// checklist from Attachments.
+    private var viewSwitch: some View {
+        let destination = activeView.destination
+        // Files dropped while Subtasks shows are copying in: the switch to
+        // Attachments carries the progress until the gallery takes over.
+        let showsImport = isImportingAttachments && activeView == .subtasks
+        return Button {
+            subtaskPanels.showPanelView(destination, for: parentID)
+        } label: {
+            ZStack {
+                if showsImport {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: activeView.switchSymbol)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.primary.opacity(0.9))
+                        .atticClearGlassForegroundReadability()
+                        .contentTransition(.symbolEffect(.replace))
+                }
+            }
+            .frame(width: SubtaskPanelLayout.footerControlSize, height: SubtaskPanelLayout.footerControlSize)
+            .atticGlassControl(in: Circle())
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(showsImport ? "Attaching files. \(activeView.switchLabel)" : activeView.switchLabel)
+        .accessibilityLabel(activeView.switchLabel)
+        .accessibilityValue(showsImport ? "Attaching files" : "")
+        .accessibilityIdentifier("subtask-view-switch-\(parentID.uuidString)")
+    }
+
+    private func chromeHeightReader(_ part: String) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(key: SubtaskChromeHeightKey.self, value: [part: proxy.size.height])
         }
     }
 
@@ -348,11 +633,17 @@ struct SubtaskPanelContent: View {
                         store: store,
                         uiState: uiState,
                         subtaskPanels: subtaskPanels,
-                        task: child
+                        task: child,
+                        isEditing: uiState.editingTaskID == child.id,
+                        isConfirmingDeletion: uiState.confirmingTaskDeletionID == child.id,
+                        isImportingAttachments: store.importingAttachmentTaskIDs.contains(child.id)
                     )
-                    .padding(.horizontal, 4)
+                    .equatable()
+                    .padding(.horizontal, rowOuterPadding)
+                    .transition(.opacity.combined(with: .offset(y: -5)))
                 }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.20), value: children.map(\.id))
             .padding(.vertical, 4)
             .background {
                 GeometryReader { proxy in
@@ -362,23 +653,13 @@ struct SubtaskPanelContent: View {
                     )
                 }
             }
+            .padding(.top, headerHeight)
+            .padding(.bottom, footerHeight + contentBottomPadding)
         }
-        .frame(height: listHeight)
+        .scrollIndicators(.never)
         .onPreferenceChange(SubtaskListHeightPreferenceKey.self) { measured in
             subtaskPanels.noteMeasuredListHeight(for: parentID, height: measured)
         }
-    }
-
-    /// Cached per family by the controller so reopening never reflows.
-    private var listHeight: CGFloat {
-        SubtaskPanelLayout.clampedListHeight(
-            subtaskPanels.measuredListHeight(for: parentID)
-                ?? estimatedListHeight
-        )
-    }
-
-    private var estimatedListHeight: CGFloat {
-        CGFloat(children.count) * AtticStyle.controlHitSize + 8
     }
 
     /// Resting affordance: deliberately opens the entry, not a permanent
@@ -387,12 +668,12 @@ struct SubtaskPanelContent: View {
         Button {
             uiState.activateSubtaskEntry(for: parentID)
         } label: {
-            Label("Add subtask", systemImage: "plus")
+            Text("Add subtask…")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(panelThemePalette.secondaryForegroundColor)
                 .atticClearGlassForegroundReadability()
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
+                .padding(.trailing, 12)
                 .padding(.vertical, 7)
                 .contentShape(Rectangle())
         }
@@ -403,17 +684,7 @@ struct SubtaskPanelContent: View {
     }
 
     private var entryRow: some View {
-        HStack(spacing: 8) {
-            Button(action: addSubtask) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(width: 24, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Save subtask")
-            .accessibilityIdentifier("subtask-entry-submit-\(parentID.uuidString)")
-            .disabled(!canSubmitDraft)
+        HStack(spacing: 0) {
             TextField("Add subtask…", text: draft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, design: .rounded))
@@ -430,20 +701,49 @@ struct SubtaskPanelContent: View {
         }
         .foregroundStyle(panelThemePalette.secondaryForegroundColor)
         .atticClearGlassForegroundReadability()
-        .padding(.horizontal, 14)
+        .padding(.trailing, 12)
         .padding(.vertical, 4)
         .id("subtask-entry-\(parentID.uuidString)")
     }
 
+    /// A compact notice under the composer: two lines at most, quiet
+    /// colour, and a dismiss control. It also clears on the next successful
+    /// save, so it never lingers past the retry it invites.
     private func errorRow(_ message: String) -> some View {
-        Text(message)
-            .font(.system(size: 11, design: .rounded))
-            .foregroundStyle(Color(nsColor: .systemRed))
-            .lineLimit(3)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .accessibilityIdentifier("subtask-panel-error-\(parentID.uuidString)")
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(panelThemePalette.secondaryForegroundColor)
+                .padding(.top, 1)
+            Text(message)
+                .font(.system(size: 11, design: .rounded))
+                .foregroundStyle(panelThemePalette.secondaryForegroundColor)
+                .atticClearGlassForegroundReadability()
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(message)
+            Button(action: store.dismissError) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(Color.primary.opacity(0.9))
+                    .frame(width: 16, height: 16)
+                    .atticGlassControl(in: Circle())
+                    .frame(width: 24, height: 24)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss message")
+            .accessibilityIdentifier("subtask-panel-error-dismiss-\(parentID.uuidString)")
+        }
+        .padding(.leading, contentHorizontalPadding)
+        .padding(.trailing, 6)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(message)
+        .accessibilityIdentifier("subtask-panel-error-\(parentID.uuidString)")
     }
 
     private func addSubtask() {
@@ -471,7 +771,9 @@ struct SubtaskWindowDragHandle: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: DragHandleNSView, context: Context) {}
+    func updateNSView(_ nsView: DragHandleNSView, context: Context) {
+        nsView.setAccessibilityIdentifier("subtask-drag-\(familyID.uuidString)")
+    }
 
     final class DragHandleNSView: NSView {
         override var mouseDownCanMoveWindow: Bool { true }
@@ -484,9 +786,13 @@ struct SubtaskWindowDragHandle: NSViewRepresentable {
         override func accessibilityRole() -> NSAccessibility.Role? { .group }
         override func accessibilityLabel() -> String? { "Drag window" }
 
-        override func mouseDown(with event: NSEvent) {
-            if let window { window.performDrag(with: event) }
-            else { super.mouseDown(with: event) }
-        }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+private struct SubtaskChromeHeightKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }

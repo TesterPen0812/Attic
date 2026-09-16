@@ -13,8 +13,8 @@ struct PanelWorkAreaPlacement: Equatable {
 
 enum PanelGeometry {
     static let triggerSize: CGFloat = 16
-    static let panelWidth: CGFloat = 332
-    static let minimumHeight: CGFloat = 480
+    static let panelWidth: CGFloat = 320
+    static let minimumHeight: CGFloat = 460
     static let preferredHeightCeiling: CGFloat = 700
     static let screenInset: CGFloat = 12
 
@@ -318,9 +318,8 @@ enum PanelDockingPolicy {
         case dock(ScreenCorner)
     }
 
-    /// A deliberate flick back toward the already attached corner dismisses
-    /// the panel. Other flicks retain their existing role of moving it to a
-    /// different corner, while an ordinary release docks to the nearest one.
+    /// Header drags only reposition. Explicit dismissal belongs to the
+    /// two-finger swipe route, so even a fast return to the same corner docks.
     static func releaseAction(
         velocity: CGPoint,
         translation: CGPoint,
@@ -334,7 +333,7 @@ enum PanelDockingPolicy {
             panelFrame: panelFrame,
             in: visibleFrame
         ) {
-            return flick == attachedCorner ? .hide : .dock(flick)
+            return .dock(flick)
         }
         return .dock(nearestCorner(for: panelFrame, in: visibleFrame))
     }
@@ -564,24 +563,78 @@ enum TaskEntryBarLayout {
         max(
             0,
             width(panelWidth: panelWidth, chromeInsets: chromeInsets)
-                - (2 * AtticStyle.controlHitSize)
-                // Composer row: 8pt each side; text field: 5pt each side.
-                - 26
+                - (2 * AtticStyle.taskComposerControlSize)
+                // One 8pt action gap and the field’s 12pt trailing inset.
+                - 20
         )
     }
 }
 
+/// Fixed chrome retains a faint impression of the scrolling content beneath
+/// it. The mask is one static gradient: no per-frame snapshots or blur pass.
+/// Pointer shields remain separate so dimmed rows cannot receive clicks.
 enum TaskScrollMaskLayout {
-    /// Preserve short, optical fades as the panel grows rather than scaling
-    /// them into large translucent bands at taller user-selected sizes.
+    /// How far past the chrome the fade runs before content is fully opaque.
+    static let fadeLength: CGFloat = 26
+
+    struct Stops: Equatable {
+        /// Content is invisible from the top edge to here.
+        let topClearEnd: CGFloat
+        /// … and fully opaque from here on.
+        let topFadeEnd: CGFloat
+        /// Content starts fading here …
+        let bottomFadeStart: CGFloat
+        /// … and is invisible from here to the bottom edge.
+        let bottomClearStart: CGFloat
+    }
+
+    /// `topObscuredHeight` and `bottomObscuredHeight` are the chrome bands
+    /// measured from the scrolling area's own edges. Degenerate inputs
+    /// (non-finite, negative, or bands that overlap) collapse safely.
     static func stops(
-        panelHeight: CGFloat,
-        bottomObscuredHeight: CGFloat = 76
-    ) -> (topFadeEnd: CGFloat, bottomFadeStart: CGFloat) {
-        let height = panelHeight.isFinite ? max(panelHeight, 1) : 1
-        let obscuredHeight = bottomObscuredHeight.isFinite ? max(0, bottomObscuredHeight) : 76
-        let topFadeEnd = min(0.12, 18 / height)
-        let bottomFadeStart = max(topFadeEnd + 0.25, 1 - (obscuredHeight / height))
-        return (topFadeEnd, min(bottomFadeStart, 0.96))
+        height: CGFloat,
+        topObscuredHeight: CGFloat,
+        bottomObscuredHeight: CGFloat,
+        fadeLength: CGFloat = fadeLength
+    ) -> Stops {
+        let height = height.isFinite ? max(height, 1) : 1
+        func points(_ value: CGFloat) -> CGFloat { value.isFinite ? max(0, value) : 0 }
+        let fade = points(fadeLength)
+        let topClear = points(topObscuredHeight)
+        let bottomClear = points(bottomObscuredHeight)
+        // Keep at least a sliver of fully visible content between the bands.
+        let available = max(0, height - topClear - bottomClear)
+        let usableFade = min(fade, available / 2)
+        let topClearEnd = min(1, topClear / height)
+        let topFadeEnd = min(1, (topClear + usableFade) / height)
+        let bottomClearStart = max(topFadeEnd, 1 - bottomClear / height)
+        let bottomFadeStart = max(topFadeEnd, bottomClearStart - usableFade / height)
+        return Stops(
+            topClearEnd: topClearEnd,
+            topFadeEnd: topFadeEnd,
+            bottomFadeStart: bottomFadeStart,
+            bottomClearStart: bottomClearStart
+        )
+    }
+
+    static func underChromeOpacity(reduceTransparency: Bool, increasedContrast: Bool) -> Double {
+        reduceTransparency || increasedContrast ? 0 : 0.16
+    }
+
+    /// Fully readable in the workspace, subdued behind chrome, clear at the
+    /// outer edge. Accessibility contrast settings remove the underlay.
+    static func gradientStops(_ stops: Stops, underChromeOpacity: Double = 0.16, headerUnderChromeOpacity: Double? = nil) -> [Gradient.Stop] {
+        let header = Color.black.opacity(min(1, max(0, headerUnderChromeOpacity ?? underChromeOpacity)))
+        let underlay = Color.black.opacity(min(1, max(0, underChromeOpacity)))
+        return [
+            .init(color: .clear, location: 0),
+            .init(color: header, location: min(0.012, stops.topClearEnd)),
+            .init(color: header, location: stops.topClearEnd),
+            .init(color: .black, location: stops.topFadeEnd),
+            .init(color: .black, location: stops.bottomFadeStart),
+            .init(color: underlay, location: stops.bottomClearStart),
+            .init(color: underlay, location: max(0.988, stops.bottomClearStart)),
+            .init(color: .clear, location: 1)
+        ]
     }
 }

@@ -23,14 +23,25 @@ enum PanelInteractionLockReason: Hashable, Sendable {
     case blockingSave
 }
 
+/// The in-flight rename text. Observed only by the field that edits it.
+@MainActor
+final class TaskRenameDraft: ObservableObject {
+    @Published var title = ""
+}
+
 @MainActor
 final class PanelUIState: ObservableObject {
     @Published var isComposerPresented = false
     @Published var editingTaskID: UUID?
     /// Rename text for `editingTaskID`, owned here rather than by the row view
     /// so an in-flight rename survives surface promotion, family swaps, and
-    /// hosting-view replacement mid-edit.
-    @Published var editingDraftTitle = ""
+    /// hosting-view replacement mid-edit. It lives in its own observable so
+    /// each keystroke re-renders the editing field alone, never every row.
+    let renameDraft = TaskRenameDraft()
+    var editingDraftTitle: String {
+        get { renameDraft.title }
+        set { renameDraft.title = newValue }
+    }
     @Published var editingNoteID: UUID?
     @Published var subtaskDrafts: [UUID: String] = [:]
     /// Families whose inline Add entry is activated. Separate from drafts: an
@@ -41,6 +52,16 @@ final class PanelUIState: ObservableObject {
     @Published var focusedSubtaskParentID: UUID?
     @Published private(set) var subtaskEntryRequest: UInt64 = 0
     @Published var confirmingTaskDeletionID: UUID?
+    @Published var confirmingTaskCompletionID: UUID?
+    /// A child row's legacy attachments popover.
+    @Published var presentedTaskAttachmentsID: UUID?
+    /// The owner whose Add attachment picker is up. Kept apart from the
+    /// popover mark so neither interaction can overwrite the other's; only
+    /// the picker's own completion clears it, because the picker stays up
+    /// across section switches and task reconciliation.
+    @Published var taskAttachmentPickerOwnerID: UUID?
+    /// The main composer's Add attachment picker is up.
+    @Published var isComposerAttachmentPickerPresented = false
     @Published var isCanvasConfirmationPresented = false
     @Published var isPanelPinned = false
     @Published var dockingPreviewCorner: ScreenCorner?
@@ -60,7 +81,10 @@ final class PanelUIState: ObservableObject {
         if editingTaskID != nil {
             reasons.insert(.taskEditing)
         }
-        if confirmingTaskDeletionID != nil { reasons.insert(.taskConfirmation) }
+        if confirmingTaskDeletionID != nil || confirmingTaskCompletionID != nil || presentedTaskAttachmentsID != nil
+            || taskAttachmentPickerOwnerID != nil || isComposerAttachmentPickerPresented {
+            reasons.insert(.taskConfirmation)
+        }
         // .subtaskComposer is a managed lock owned by SubtaskPanelController:
         // it only engages while a TRANSIENT surface holds a draft or focused
         // entry — a draft typed into the independent pinned window, or one
@@ -153,6 +177,8 @@ final class PanelUIState: ObservableObject {
         draggedTaskID = nil
         focusedSubtaskParentID = nil
         confirmingTaskDeletionID = nil
+        confirmingTaskCompletionID = nil
+        presentedTaskAttachmentsID = nil
         isCanvasConfirmationPresented = false
         selectedSection = section
     }
@@ -183,6 +209,17 @@ final class PanelUIState: ObservableObject {
     }
 
     func reconcileTaskIDs(_ availableIDs: Set<UUID>) {
+        if let confirmingTaskCompletionID, !availableIDs.contains(confirmingTaskCompletionID) {
+            self.confirmingTaskCompletionID = nil
+        }
+        // A picker whose owner was deleted ends as a cancel; its own finish
+        // path clears the mark (never cleared directly, see the property).
+        if let taskAttachmentPickerOwnerID, !availableIDs.contains(taskAttachmentPickerOwnerID) {
+            TaskAttachmentPicker.cancelIfOwned(by: taskAttachmentPickerOwnerID)
+        }
+        if let presentedTaskAttachmentsID, !availableIDs.contains(presentedTaskAttachmentsID) {
+            self.presentedTaskAttachmentsID = nil
+        }
         if let confirmingTaskDeletionID, !availableIDs.contains(confirmingTaskDeletionID) {
             self.confirmingTaskDeletionID = nil
         }

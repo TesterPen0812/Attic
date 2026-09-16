@@ -1,0 +1,155 @@
+1. Main task panel
+- Overall Attic panel proportions, rounded silhouette, spacing, and dark visual language are preserved.
+- Interactive controls still use Liquid Glass styling.
+- Task-row hover uses the approved subtle superellipse / continuous-corner surface.
+- Task titles stay on one line only.
+- Long task titles use a soft trailing fade, not multi-line wrapping.
+- Long titles do not increase the height of a task row.
+- Full truncated text is still accessible through an intentional interaction such as hover/focus/editing.
+- Spacing between the task title and attachment/subtask metadata is compact and intentional.
+- Attachment metadata and subtask progress such as 2/11 remain visually secondary to the task title.
+- Attachment metadata and subtask progress are passive indicators, not buttons.
+- Passive metadata has no misleading pointer cursor or button-like hover treatment.
+2. Task-row actions
+- ••• is hidden at rest.
+- ••• appears when the task row is hovered.
+- ••• also appears for keyboard focus.
+- Showing ••• does not shift the task title, attachment indicator, or subtask count.
+- A stable trailing action area is reserved so hover causes no layout jitter.
+- The row hover surface and ••• appearance feel like one coordinated state change.
+- Repeated blue ••• controls are not permanently visible down the entire list.
+3. Task subpanel
+- A task uses one movable subpanel.
+- The subpanel can be pinned.
+- Opening a task subpanel starts on Subtasks by default.
+- The subpanel has exactly two primary views:
+  - Subtasks
+  - Attachments / Gallery
+- Users switch views deliberately from inside the subpanel.
+- Task-row attachment previews and 2/11 do not automatically switch panel views.
+- The approved view-switch control remains beside the bottom composer.
+- Subtasks composer says Add subtask…
+- Attachments composer says Add attachment…
+- The view-switch button/icon represents the destination view.
+4. Subtasks ↔ Attachments transition
+- Switching views starts immediately after the explicit switch action.
+- Content uses a short, smooth slide/crossfade rather than abruptly replacing.
+- The panel remains anchored while the body changes.
+- Panel height animates smoothly at the same time as the content transition.
+- Switching from many subtasks to few attachments smoothly shrinks the panel.
+- Switching from few attachments to many subtasks smoothly expands it.
+- No flashing, flickering, snap-back, or duplicated content occurs during transition.
+- Reduce Motion gets an appropriately simplified transition.
+5. Dynamic panel sizing
+- Subtasks and Attachments use the same sizing system.
+- Panel height follows the amount of content.
+- Small amounts of content produce a smaller panel.
+- More content grows the panel.
+- Growth stops at the existing approved maximum subpanel height.
+- Content scrolls once that maximum is reached.
+- Header/top area remains stable while body content scrolls.
+- Bottom composer/view-switch area remains stable while body content scrolls.
+6. Attachments view
+- Images and normal files live together in the same Attachments view.
+- Images are displayed as compact visual thumbnails.
+- Files are displayed as compact document/file cards.
+- A single image does not expand to dominate the panel.
+- File/image layout remains readable with both small and large attachment counts.
+- One Add attachment action handles both images and normal files.
+- Attachment hover may reveal a small contextual remove ×.
+- Remove controls are not permanently visible everywhere.
+- No unnecessary permanent Save / Remove / Quick Look toolbar has been introduced.
+- Clicking an attachment opens/previews it through the intended app behavior.
+- Attachments belong to the parent task only.
+7. Drag and drop
+- Tasks remain draggable/reorderable wherever task/subtask UI allows it.
+- Images/files remain draggable wherever attachments appear.
+- Dragging an image/file directly onto a task attaches it to that task.
+- Dragging an image/file anywhere over an open task subpanel attaches it to the parent task.
+- This works even when the subpanel is currently showing Subtasks.
+- While dragging over the subpanel, a restrained drop state appears.
+- Drop state clearly communicates something like Drop to attach to Plan weekend.
+- Existing panel content remains visible underneath the drop state.
+- Successful drop adds the attachment.
+- Successful drop then switches the panel to Attachments.
+- Newly added attachment appears/animates into the gallery cleanly.
+- Dragging does not break normal scrolling.
+- Dragging does not interfere with existing pointer interactions.
+8. Pinned panels
+- A pinned panel remains associated with its original task.
+- Moving the pinned panel preserves its location.
+- The task row shows a small muted pinned-state indicator.
+- The pinned indicator reads as status metadata, not a large action button.
+- Hovering the pinned indicator can explain Panel pinned.
+- Activating the pinned indicator brings/focuses the existing pinned panel.
+- The task row does not spawn a duplicate panel for a task that already has one pinned.
+- Actual pin/unpin controls remain available from the panel itself.
+- Pinned-state Liquid Glass styling is consistent with the approved design.
+9. Transient panel reachability bug
+- Opening a transient panel while another panel is pinned does not make the new panel impossible to reach.
+- User does not need to move the pointer unusually fast.
+- There is a safe pointer-travel corridor / hover-intent region between source and transient panel.
+- Crossing over an existing pinned panel does not dismiss the transient panel.
+- Entering the transient panel immediately cancels any pending dismissal.
+- Dismissal only begins after the pointer clearly moves away from both source and panel.
+- The fix still works with panels positioned above, below, or beside one another.
+10. Two-finger subpanel dismissal
+- Unpinned subpanels can be dismissed with the approved two-finger gesture.
+- Gesture makes the panel collapse/recede inward on itself.
+- Motion uses subtle scale and opacity.
+- No snapshot/funnel visual effect is used.
+- Gesture follows finger movement rather than triggering only after release.
+- Dismissal threshold is velocity-aware.
+- Cancelling the gesture smoothly restores the panel.
+- Pinned panels ignore this dismiss gesture.
+- Normal vertical scrolling does not accidentally trigger panel dismissal.
+- Reduce Motion gets a simplified equivalent.
+11. Main task composer attachments
+- User can add image/file attachments while creating a new task.
+- Attachment picker supports both images and normal files.
+- Dragging files/images into the composer adds them to the draft.
+- Composer expands upward when pending attachments exist.
+- Pending attachments are visible before the task is submitted.
+- Expanded composer still follows Attic’s design language.
+- Removing a pending attachment works before submission.
+- Composer returns cleanly to normal size when attachments are removed/cleared.
+12. Appearance settings
+- Appearance settings clearly separate panel surface from control styling.
+- Panel translucency affects only the main panel/subpanel surface.
+- Translucency ON gives the approved translucent panel surface.
+- Translucency OFF gives the approved solid panel surface.
+- Liquid Glass controls remain Liquid Glass in both modes.
+- This includes pin, completion, composer, submit, and subpanel view-switch controls.
+- Settings copy clearly explains this distinction.
+13. Visual hierarchy and polish
+- Task title is the most visually prominent information in each task row.
+- Attachment/subtask metadata is quieter than the title.
+- Menus/actions are hidden or subdued until needed.
+- Hover does not cause unexpected panel navigation.
+- Neutral task-row hover only highlights the row.
+- Padding between panel edges, top controls, section headings, task rows, and composer is deliberate and consistent.
+- No new control feels visually louder than the content it supports.
+- No new generic segmented controls, pills, or unrelated visual language has been introduced.
+14. Regression checks
+- Existing task completion still works.
+- Existing task reordering still works.
+- Existing subtask creation/completion still works.
+- Existing panel pin/unpin still works.
+- Existing panel movement still works.
+- Existing scrolling still works smoothly.
+- Existing task menus still work.
+- Existing attachment preview/open behavior still works.
+- No saved task/subtask/attachment data is lost during migration.
+- No duplicate panels are created unexpectedly.
+- No hover state causes layout jitter.
+- No new animation causes flicker or snap-back.
+15. Evidence the AI should provide
+For every section above, ask it to provide:
+- Pass / Fail / Partial
+- File(s) or component(s) responsible
+- Screenshot or native UI evidence where visual behavior matters
+- Automated test name where behavior is testable
+- Any remaining discrepancy
+- Any change it made that was not explicitly requested
+And give it this final instruction:
+Do not mark an item complete because the code appears to support it. Verify the actual rendered/native behavior. If an item is only partially implemented, mark it Partial rather than Pass. Do not silently reinterpret the UX requirements.

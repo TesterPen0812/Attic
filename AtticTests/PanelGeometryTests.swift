@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import QuartzCore
+import SwiftUI
 import XCTest
 @testable import Attic
 
@@ -203,6 +204,131 @@ final class PanelGeometryTests: XCTestCase {
             XCTAssertTrue(CATransform3DIsIdentity(container.presentationTransform))
             XCTAssertEqual(host.bounds, hostingBounds)
         }
+    }
+
+    @MainActor
+    func testSwipeReleasePreservesLatestFingerPositionBeforeNextDisplayFrame() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_MOTION_VISUAL_TEST"] == "1" else {
+            throw XCTSkip("Requires the exclusive desktop visual-test run")
+        }
+        try withHiddenHostedPanel { panel, _ in
+            let container = try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
+            panel.orderFrontRegardless()
+            defer { panel.orderOut(nil) }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            panel.onTrackpadDismissProgress = { distance in
+                container.setCollapseProgress(
+                    PanelCollapseGeometry.progress(forSwipeDistance: distance, panelWidth: panel.visibleContentFrame.width),
+                    corner: .topRight, reduceMotion: false
+                )
+            }
+            var releaseScale: CGFloat?
+            panel.onTrackpadDismissRequest = {
+                container.stopCollapseMotion()
+                releaseScale = container.presentationTransform.m11
+                container.setCollapseProgress(1, corner: .topRight, reduceMotion: false, duration: 0.22)
+            }
+            panel.sendEvent(try panelScrollEvent(deltaX: -20, deltaY: 0, phase: .began))
+            panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .changed))
+            // AppKit can deliver the last changed sample and finger lift in
+            // one run-loop turn, before Core Animation refreshes presentation.
+            panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+            let progress = PanelCollapseGeometry.progress(forSwipeDistance: 80, panelWidth: panel.visibleContentFrame.width)
+            let expected = 1 - progress * (1 - PanelCollapseGeometry.collapsedScale)
+            XCTAssertEqual(try XCTUnwrap(releaseScale), expected, accuracy: 0.0001,
+                           "Finger lift must not restore the previous display frame")
+        }
+    }
+
+    @MainActor
+    func testNativeSwipeCompletionCancellationAndResourceProfile() throws {
+        guard ProcessInfo.processInfo.environment["ATTIC_MOTION_VISUAL_TEST"] == "1" else {
+            throw XCTSkip("Requires the exclusive desktop visual-test run")
+        }
+        let suite = "AtticOriginalMotionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: persistence)
+        let notes = NoteStore(container: persistence, attachmentFileStore: makeTestAttachmentFileStore())
+        let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+        let controller = AtticPanelController(
+            store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: persistence)),
+            noteDraft: NoteDraftController(noteStore: notes), settings: AppSettings(defaults: defaults), uiState: PanelUIState()
+        )
+        let panel = try XCTUnwrap(NSApplication.shared.windows.compactMap { $0 as? AtticPanel }
+            .first { !existingWindows.contains(ObjectIdentifier($0)) })
+        let content = try XCTUnwrap(panel.contentView as? AtticPanelContentContainer)
+        let screen = try XCTUnwrap(controller.currentScreen)
+        defer { panel.orderOut(nil) }
+        func settle() { RunLoop.current.run(until: Date().addingTimeInterval(0.35)) }
+        func residentMB() -> Double {
+            var info = mach_task_basic_info()
+            var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                }
+            }
+            return result == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : -1
+        }
+        controller.show(on: screen, corner: .topRight)
+        settle()
+        panel.onTrackpadDismissProgress?(70)
+        panel.onTrackpadDismissCancelled?()
+        settle()
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(CATransform3DIsIdentity(content.presentationTransform))
+        XCTAssertTrue(content.allowsContentInteraction)
+        let nativeFrame = panel.frame
+        let hostBounds = content.hostingView.bounds
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOriginalMotionFrames")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for distance in [0, 45, 90, 150] {
+            panel.onTrackpadDismissProgress?(CGFloat(distance))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            let image = try XCTUnwrap(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber), [.boundsIgnoreFraming, .bestResolution]))
+            try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent("swipe-\(distance).png"))
+            XCTAssertEqual(panel.frame, nativeFrame)
+            XCTAssertEqual(content.hostingView.bounds, hostBounds)
+        }
+        panel.onTrackpadDismissCancelled?()
+        settle()
+        let cpuStart = clock()
+        let wallStart = ProcessInfo.processInfo.systemUptime
+        let before = residentMB()
+        var residentSamples: [Double] = []
+        for _ in 0..<12 {
+            controller.show(on: screen, corner: .topRight)
+            settle()
+            panel.onTrackpadDismissProgress?(80)
+            panel.onTrackpadDismissRequest?()
+            var priorScale = content.presentationTransform.m11
+            let deadline = Date().addingTimeInterval(0.6)
+            while panel.isVisible, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.008))
+                let scale = content.presentationTransform.m11
+                XCTAssertLessThanOrEqual(scale, priorScale + 0.001, "Committed dismissal must not jump back toward full size")
+                priorScale = scale
+            }
+            XCTAssertFalse(panel.isVisible, "The native hide completion must order out the panel")
+            residentSamples.append(residentMB())
+        }
+        let cpu = Double(clock() - cpuStart) / Double(CLOCKS_PER_SEC)
+        let wall = ProcessInfo.processInfo.systemUptime - wallStart
+        let idleStart = clock()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        let idleCPU = Double(clock() - idleStart) / Double(CLOCKS_PER_SEC)
+        let report: [String: Any] = ["cycles": 12, "wall_seconds": wall,
+            "process_cpu_seconds": cpu, "average_one_core_percent": cpu / wall * 100,
+            "idle_process_cpu_seconds_over_one_second": idleCPU,
+            "resident_mb_before": before, "resident_mb_after": residentMB(),
+            "resident_mb_after_each_cycle": residentSamples]
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            .write(to: directory.appendingPathComponent("resource-profile.json"))
+        withExtendedLifetime(controller) {}
     }
 
     @MainActor
@@ -627,7 +753,7 @@ final class PanelGeometryTests: XCTestCase {
         )
     }
 
-    func testFlickTowardAttachedCornerHidesForEveryCorner() {
+    func testHeaderFlickTowardAttachedCornerDocksForEveryCorner() {
         let visibleFrame = CGRect(x: 0, y: 25, width: 1_600, height: 900)
         let frame = CGRect(x: 500, y: 300, width: 332, height: 480)
         let cases: [(ScreenCorner, CGPoint)] = [
@@ -650,7 +776,7 @@ final class PanelGeometryTests: XCTestCase {
                     panelFrame: frame,
                     in: visibleFrame
                 ),
-                .hide
+                .dock(corner)
             )
         }
     }
@@ -954,13 +1080,13 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     func testLiveResizeLimitsAllowIndependentWidthAndHeightChanges() {
-        XCTAssertEqual(PanelGeometry.minimumPanelSize, CGSize(width: 332, height: 480))
-        XCTAssertEqual(PanelGeometry.defaultPanelSize.width, 332)
-        XCTAssertEqual(PanelGeometry.defaultPanelSize.height, 481.4, accuracy: 0.001)
+        XCTAssertEqual(PanelGeometry.minimumPanelSize, CGSize(width: 320, height: 460))
+        XCTAssertEqual(PanelGeometry.defaultPanelSize.width, 320)
+        XCTAssertEqual(PanelGeometry.defaultPanelSize.height, 464, accuracy: 0.001)
 
         XCTAssertEqual(
             PanelGeometry.clampedPanelSize(CGSize(width: 250, height: 620)),
-            CGSize(width: 332, height: 620)
+            CGSize(width: 320, height: 620)
         )
         XCTAssertEqual(
             PanelGeometry.clampedPanelSize(CGSize(width: 640, height: 900)),
@@ -1292,20 +1418,40 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     func testTaskScrollMaskUsesPointSizedFadesAcrossPanelHeights() {
-        let compact = TaskScrollMaskLayout.stops(panelHeight: 480)
-        let tall = TaskScrollMaskLayout.stops(panelHeight: 900)
-
-        XCTAssertEqual(compact.topFadeEnd * 480, 18, accuracy: 0.001)
-        XCTAssertEqual((1 - compact.bottomFadeStart) * 480, 76, accuracy: 0.001)
-        XCTAssertEqual(tall.topFadeEnd * 900, 18, accuracy: 0.001)
-        XCTAssertEqual((1 - tall.bottomFadeStart) * 900, 76, accuracy: 0.001)
-        let expanded = TaskScrollMaskLayout.stops(panelHeight: 480, bottomObscuredHeight: 122)
+        // Content is subdued for exactly the chrome band and fully visible
+        // one fade past it, at every panel height.
+        let compact = TaskScrollMaskLayout.stops(height: 480, topObscuredHeight: 70, bottomObscuredHeight: 76)
+        let tall = TaskScrollMaskLayout.stops(height: 900, topObscuredHeight: 70, bottomObscuredHeight: 76)
+        for (stops, height) in [(compact, CGFloat(480)), (tall, CGFloat(900))] {
+            XCTAssertEqual(stops.topClearEnd * height, 70, accuracy: 0.001)
+            XCTAssertEqual(stops.topFadeEnd * height, 70 + TaskScrollMaskLayout.fadeLength, accuracy: 0.001)
+            XCTAssertEqual((1 - stops.bottomClearStart) * height, 76, accuracy: 0.001)
+            XCTAssertEqual((1 - stops.bottomFadeStart) * height, 76 + TaskScrollMaskLayout.fadeLength, accuracy: 0.001)
+        }
+        // A taller composer pushes the bottom band up by exactly its growth.
+        let expanded = TaskScrollMaskLayout.stops(height: 480, topObscuredHeight: 70, bottomObscuredHeight: 122)
+        XCTAssertEqual((1 - expanded.bottomClearStart) * 480, 122, accuracy: 0.001)
         XCTAssertLessThan(expanded.bottomFadeStart, compact.bottomFadeStart)
-        XCTAssertEqual((1 - expanded.bottomFadeStart) * 480, 122, accuracy: 0.001)
-        XCTAssertEqual(
-            TaskScrollMaskLayout.stops(panelHeight: 480, bottomObscuredHeight: CGFloat.infinity).bottomFadeStart,
-            compact.bottomFadeStart
-        )
+        // Degenerate inputs never invert the gradient.
+        let squeezed = TaskScrollMaskLayout.stops(height: 120, topObscuredHeight: 70, bottomObscuredHeight: 76)
+        XCTAssertLessThanOrEqual(squeezed.topClearEnd, squeezed.topFadeEnd)
+        XCTAssertLessThanOrEqual(squeezed.topFadeEnd, squeezed.bottomFadeStart)
+        XCTAssertLessThanOrEqual(squeezed.bottomFadeStart, squeezed.bottomClearStart)
+        XCTAssertLessThanOrEqual(squeezed.bottomClearStart, 1)
+        let infinite = TaskScrollMaskLayout.stops(height: 480, topObscuredHeight: .infinity, bottomObscuredHeight: .nan)
+        XCTAssertEqual(infinite.topClearEnd, 0)
+        XCTAssertEqual(infinite.bottomClearStart, 1)
+        let gradient = TaskScrollMaskLayout.gradientStops(compact)
+        XCTAssertEqual(gradient.map(\.location), gradient.map(\.location).sorted(), "stops are monotone")
+    }
+
+    func testUnderChromeDepthRespectsContrastSettingsAndComposerTextSpace() {
+        XCTAssertGreaterThan(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: false, increasedContrast: false), 0)
+        XCTAssertLessThanOrEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: false, increasedContrast: false), 0.2)
+        XCTAssertEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: true, increasedContrast: false), 0)
+        XCTAssertEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: false, increasedContrast: true), 0)
+        let width = TaskEntryBarLayout.textFieldWidth(panelWidth: 320, chromeInsets: SwiftUI.EdgeInsets(top: 22, leading: 22, bottom: 22, trailing: 22))
+        XCTAssertGreaterThanOrEqual(width, 160, "The compact composer must leave space for a readable task title.")
     }
 
     @MainActor
@@ -1336,7 +1482,7 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     func testWorkspaceHeightIsStableAndResponsiveToConfiguredWidth() {
-        XCTAssertEqual(PanelGeometry.preferredWorkspaceHeight(contentWidth: 300), 480)
+        XCTAssertEqual(PanelGeometry.preferredWorkspaceHeight(contentWidth: 300), 460)
         XCTAssertEqual(
             PanelGeometry.preferredWorkspaceHeight(contentWidth: 332),
             481.4,
@@ -1347,6 +1493,22 @@ final class PanelGeometryTests: XCTestCase {
             PanelGeometry.preferredWorkspaceHeight(contentWidth: 1_000),
             PanelGeometry.preferredHeightCeiling
         )
+    }
+
+    @MainActor
+    func testMainPanelOwnsEveryPaintedInteriorPoint() throws {
+        try withHiddenHostedPanel { _, host in
+            host.layoutSubtreeIfNeeded()
+            for y in stride(from: 4.0, through: host.bounds.height - 4, by: 17) {
+                for x in stride(from: 4.0, through: host.bounds.width - 4, by: 17) {
+                    let local = CGPoint(x: x, y: y)
+                    guard Squircle.contains(local, in: host.bounds, cornerRadius: 80,
+                                            exponent: AtticStyle.panelSquircleExponent) else { continue }
+                    let input = host.convert(local, to: host.superview)
+                    XCTAssertNotNil(host.hitTest(input), "Main panel dropped a painted point: \(local)")
+                }
+            }
+        }
     }
 
     @MainActor

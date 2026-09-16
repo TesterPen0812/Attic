@@ -13,6 +13,7 @@ enum AtticStyle {
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4
+    static let bodyTextSize: CGFloat = 13
 
     // Keep the compact workboard visually light while preserving forgiving
     // pointer targets around the smaller rendered controls.
@@ -22,8 +23,11 @@ enum AtticStyle {
     static let entryControlHeight: CGFloat = 38
     static let controlSymbolSize: CGFloat = 14
     static let composerControlHeight: CGFloat = 42
+    static let taskComposerControlSize: CGFloat = 36
     static let composerActionSize: CGFloat = 34
-    static let taskComposerRowHeight: CGFloat = controlHitSize + 8
+    /// Width of the composer paperclip between the title field and submit.
+    static let composerAttachWidth: CGFloat = 28
+    static let taskComposerRowHeight: CGFloat = taskComposerControlSize
     static let taskComposerOptionsHeight: CGFloat = 34
 
     /// Permanent chrome keeps a calm, even optical margin from every panel
@@ -63,7 +67,9 @@ struct AtticPanelSurface: ViewModifier {
                     (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
                     value: surfaceAnimationIdentity
                 )
-                .allowsHitTesting(false)
+                // Keep the full glass surface in the native event region.
+                // Disabling background hit testing makes blank visible areas
+                // click through at WindowServer, before host.hitTest runs.
             }
             .overlay {
                 shape.stroke(
@@ -236,20 +242,43 @@ extension EnvironmentValues {
     }
 }
 
+/// How floating interactive controls (pin, mode dock, composers, view
+/// switches) are backed. Translucency and the glass style change the panel
+/// SURFACE only: every surface keeps its controls on Liquid Glass. Reduce
+/// Transparency is the accessibility override that makes controls opaque, and
+/// systems without native glass fall back to material.
+enum AtticGlassControlTreatment: Equatable {
+    case opaque
+    case material
+    case nativeGlass
+
+    static var systemSupportsNativeGlass: Bool {
+        if #available(macOS 26.0, *) { return true }
+        return false
+    }
+
+    static func resolve(reduceTransparency: Bool, supportsNativeGlass: Bool) -> Self {
+        if reduceTransparency { return .opaque }
+        return supportsNativeGlass ? .nativeGlass : .material
+    }
+}
+
 private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
     let shape: S
     let interactive: Bool
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.atticPanelGlassStyle) private var glassStyle
-    @Environment(\.atticPanelTranslucencyEnabled) private var isTranslucent
     @Environment(\.atticPanelThemePalette) private var palette
     @Environment(\.atticPanelUsesSystemOpaqueSurface) private var usesSystemOpaqueSurface
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if reduceTransparency || !isTranslucent {
+        switch AtticGlassControlTreatment.resolve(
+            reduceTransparency: reduceTransparency,
+            supportsNativeGlass: AtticGlassControlTreatment.systemSupportsNativeGlass
+        ) {
+        case .opaque:
             content
                 .background(opaqueControlColor, in: shape)
                 .overlay {
@@ -258,31 +287,30 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
                         lineWidth: colorSchemeContrast == .increased ? 1 : 0.75
                     )
                 }
-        } else if glassStyle == .glassmorphism {
-            content
-                .background(.thinMaterial, in: shape)
-                .overlay {
-                    shape.stroke(
-                        Color.primary.opacity(colorSchemeContrast == .increased ? 0.23 : 0.13),
-                        lineWidth: colorSchemeContrast == .increased ? 1 : 0.75
-                    )
+        case .material:
+            materialControl(content: content)
+        case .nativeGlass:
+            if #available(macOS 26.0, *) {
+                if interactive {
+                    nativeGlassControl(content: content, glass: .regular.interactive())
+                } else {
+                    nativeGlassControl(content: content, glass: .regular)
                 }
-        } else if #available(macOS 26.0, *) {
-            if interactive {
-                nativeGlassControl(content: content, glass: .regular.interactive())
             } else {
-                nativeGlassControl(content: content, glass: .regular)
+                materialControl(content: content)
             }
-        } else {
-            content
-                .background(.thinMaterial, in: shape)
-                .overlay {
-                    shape.stroke(
-                        Color.primary.opacity(colorSchemeContrast == .increased ? 0.23 : 0.13),
-                        lineWidth: colorSchemeContrast == .increased ? 1 : 0.75
-                    )
-                }
         }
+    }
+
+    private func materialControl(content: Content) -> some View {
+        content
+            .background(.thinMaterial, in: shape)
+            .overlay {
+                shape.stroke(
+                    Color.primary.opacity(colorSchemeContrast == .increased ? 0.23 : 0.13),
+                    lineWidth: colorSchemeContrast == .increased ? 1 : 0.75
+                )
+            }
     }
 
     @available(macOS 26.0, *)
@@ -319,15 +347,14 @@ private struct AtticGlassEffectContainerModifier: ViewModifier {
     let spacing: CGFloat
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.atticPanelGlassStyle) private var glassStyle
-    @Environment(\.atticPanelTranslucencyEnabled) private var isTranslucent
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *),
-           glassStyle != .glassmorphism,
-           isTranslucent,
-           !reduceTransparency {
+           AtticGlassControlTreatment.resolve(
+               reduceTransparency: reduceTransparency,
+               supportsNativeGlass: true
+           ) == .nativeGlass {
             GlassEffectContainer(spacing: spacing) {
                 content
             }

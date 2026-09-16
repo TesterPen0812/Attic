@@ -509,6 +509,31 @@ final class NoteDraftControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectionDeletionSurvivesReentrantRenderBeforeTextDidChange() throws {
+        let box = EditorTextBox("Keep this and delete that")
+        let session = NoteEditorSession(noteID: UUID(), generation: 1)
+        let editor = makeTestBodyEditor(text: box, session: session)
+        let coordinator = editor.makeCoordinator()
+        let (textView, window) = makeUndoTextView(coordinator: coordinator)
+        defer { tearDownHarnessWindow(window) }
+        _ = coordinator.synchronize(parent: editor, textView: textView)
+        textView.string = "Keep this"
+        XCTAssertEqual(coordinator.synchronize(parent: editor, textView: textView), .unchanged)
+        XCTAssertEqual(textView.string, "Keep this")
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        XCTAssertEqual(box.value, "Keep this")
+        _ = coordinator.synchronize(parent: editor, textView: textView)
+        box.value = "Deliberate replacement"
+        XCTAssertEqual(coordinator.synchronize(parent: editor, textView: textView), .replacedText)
+        XCTAssertEqual(textView.string, "Deliberate replacement")
+        textView.string = ""
+        _ = coordinator.synchronize(parent: editor, textView: textView)
+        XCTAssertEqual(textView.string, "")
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        XCTAssertEqual(box.value, "")
+    }
+
+    @MainActor
     func testBodyEditorKeepsFirstResponderAcrossDraftUpdates() throws {
         let store = try makeTestNoteStore(
             attachmentFileStore: makeTestAttachmentFileStore()
@@ -1060,7 +1085,8 @@ private func makeTestBodyEditor(
         session: draft.editorSession,
         onFocusChange: { _ in },
         onImportFiles: { _, _ in },
-        onImportError: { _ in }
+        onImportError: { _ in },
+        bodyEditLedger: draft.bodyEditLedger
     )
 }
 
@@ -1090,6 +1116,7 @@ private func makeUndoTextView(
 ) -> (NSTextView, NSWindow) {
     let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
     textView.delegate = coordinator
+    textView.textStorage?.delegate = coordinator
     textView.allowsUndo = true
     coordinator.textView = textView
     let window = NSWindow(

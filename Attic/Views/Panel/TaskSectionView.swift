@@ -8,6 +8,7 @@ struct TaskSectionView: View {
     let tasks: [TaskItem]
 
     @State private var isDropTargeted = false
+    @State private var completionDropID: UUID?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.atticClearGlassForegroundReadabilityEnabled) private var clearReadabilityEnabled
     @Environment(\.atticPanelThemePalette) private var palette
@@ -54,6 +55,17 @@ struct TaskSectionView: View {
             Color.accentColor.opacity(isDropTargeted ? 0.08 : 0),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
+        .alert("Complete this task?", isPresented: Binding(
+            get: { completionDropID != nil }, set: { if !$0 { completionDropID = nil } }
+        )) {
+            Button("Complete anyway") {
+                if let id = completionDropID { _ = store.drop(taskID: id, into: .done, allowingUnfinishedSubtasks: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Some subtasks are unfinished. They will stay unfinished if you complete this task.")
+        }
+        .onChange(of: completionDropID) { _, value in uiState.confirmingTaskCompletionID = value }
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isDropTargeted)
         .animation(reduceMotion ? nil : AtticMotion.spring, value: tasks.map(\.id))
     }
@@ -63,6 +75,12 @@ struct TaskSectionView: View {
             return false
         }
         uiState.endDragging()
+        if status == .done,
+           let source = store.tasks.first(where: { $0.id == draggedTaskID }), source.status != .done,
+           store.subtasks(of: draggedTaskID).contains(where: { $0.status != .done }) {
+            completionDropID = draggedTaskID
+            return true
+        }
         return store.drop(taskID: draggedTaskID, into: status)
     }
 }

@@ -109,6 +109,9 @@ final class CanvasImageDecodeCache {
     private var active: [UUID: ActiveDecode] = [:]
     private var failed: Set<UUID> = []
     private var failedOrder: [UUID] = []
+    /// Explicit retries of failures outside the current candidate set. They stay
+    /// queued and their result is kept until the retried attempt finishes.
+    private var retryKeys: Set<UUID> = []
 
     init(
         totalCostLimit: Int = 256 * 1_024 * 1_024,
@@ -136,9 +139,9 @@ final class CanvasImageDecodeCache {
         visibleKeys = Set(images.map(\.contentToken))
         trimFailureHistory()
 
-        queued = queued.filter { visibleKeys.contains($0.key) }
+        queued = queued.filter { visibleKeys.contains($0.key) || retryKeys.contains($0.key) }
         if cancelsActiveDecodesWhenRemoved {
-            for (key, decode) in active where !visibleKeys.contains(key) {
+            for (key, decode) in active where !visibleKeys.contains(key) && !retryKeys.contains(key) {
                 decode.task.cancel()
             }
         }
@@ -170,9 +173,10 @@ final class CanvasImageDecodeCache {
 
     func retryDecode(for image: CanvasPlacedImage) {
         let key = image.contentToken
-        guard visibleKeys.contains(key), failed.remove(key) != nil else { return }
+        guard failed.remove(key) != nil else { return }
         failedOrder.removeAll { $0 == key }
         enqueueIfNeeded(image)
+        if !visibleKeys.contains(key), queued[key] != nil { retryKeys.insert(key) }
         startQueuedDecodesIfPossible()
     }
 
@@ -184,6 +188,7 @@ final class CanvasImageDecodeCache {
         active.values.forEach { $0.task.cancel() }
         failed.removeAll()
         failedOrder.removeAll()
+        retryKeys.removeAll()
         cache.removeAllObjects()
     }
 
@@ -274,6 +279,7 @@ final class CanvasImageDecodeCache {
     ) {
         guard active[key]?.attemptID == attemptID else { return }
         active[key] = nil
+        let retried = retryKeys.remove(key) != nil
         defer { startQueuedDecodesIfPossible() }
 
         // macOS candidate-set changes prune queued work but can let bounded
@@ -283,7 +289,7 @@ final class CanvasImageDecodeCache {
         // clients retain the existing cancellation default, and removeAll()
         // always cancels active work for page/lifecycle teardown.
         guard !Task.isCancelled,
-              visibleKeys.contains(key) || !cancelsActiveDecodesWhenRemoved else {
+              visibleKeys.contains(key) || retried || !cancelsActiveDecodesWhenRemoved else {
             return
         }
         guard let decodedImage = decoded.image else {

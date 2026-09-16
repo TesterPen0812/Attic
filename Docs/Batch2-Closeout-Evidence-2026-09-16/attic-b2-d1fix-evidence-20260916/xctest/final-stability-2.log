@@ -1,0 +1,39 @@
+label=final-stability-2 limit=600s started=2026-09-16T13:06:02Z
+tests=CanvasAccessibilityTests/testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo CanvasAccessibilityTests/testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory CanvasAccessibilityTests/testRestyleThatClearsEditorHistoryRerendersUndoRedo CanvasAccessibilityTests/testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu CanvasAccessibilityTests/testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto CanvasAccessibilityTests/testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft CanvasAccessibilityTests/testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo CanvasAccessibilityTests/testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory CanvasAccessibilityTests/testAddMenuUndoRoutesToFocusedTextEditor CanvasAccessibilityTests/testAddMenuRedoRoutesToFocusedTextEditor CanvasAccessibilityTests/testToolbarUndoRedoFollowFocusedTextEditor
+products=/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local
+host_sha256=2287db132ef1900a23f1352289411bd47c6c755e9e2bbc7bfb59af32b7a39e2d
+host_debug_dylib_sha256=5a3708d2d50385ece573251646aac6d5eb800c65875be98279c61898c1516f8b
+bundle_binary_sha256=71a8c64edabf3e9054335c33156326779b1f3884e92e80e6ce82e711e06b029e
+sandbox_extension_issue_file_to_process failed for /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app: 1 (Operation not permitted)
+Test Suite 'Selected tests' started at 2026-09-16 14:06:02.658.
+Test Suite 'AtticTests.xctest' started at 2026-09-16 14:06:02.658.
+Test Suite 'CanvasAccessibilityTests' started at 2026-09-16 14:06:02.658.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' passed (2.411 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' passed (2.278 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' passed (2.076 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' passed (5.585 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' passed (7.077 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' passed (4.129 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' passed (5.542 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' passed (6.681 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' passed (6.012 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' passed (2.288 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' passed (2.813 seconds).
+Test Suite 'CanvasAccessibilityTests' passed at 2026-09-16 14:06:49.550.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 46.890 (46.892) seconds
+Test Suite 'AtticTests.xctest' passed at 2026-09-16 14:06:49.550.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 46.890 (46.892) seconds
+Test Suite 'Selected tests' passed at 2026-09-16 14:06:49.550.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 46.890 (46.893) seconds
+exit_status=0 finished=2026-09-16T13:06:49Z

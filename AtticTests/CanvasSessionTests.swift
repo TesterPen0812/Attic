@@ -1,3 +1,4 @@
+import CoreText
 import SwiftData
 import XCTest
 @testable import Attic
@@ -70,6 +71,43 @@ final class CanvasSessionTests: XCTestCase {
         XCTAssertEqual(session.semanticObjects.count, 1)
         XCTAssertEqual(session.semanticObjects.first?.transform.center, CanvasPoint(x: 34, y: 78))
         XCTAssertEqual(session.tool, .select)
+    }
+
+    @MainActor
+    func testRefusedBoardOperationsKeepHistoryPlacementAndSurface() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertTrue(session.completeStroke(points: [.zero, CanvasPoint(x: 20, y: 30)]))
+        XCTAssertTrue(session.prepareTextPlacement("Keep placing", prefersDarkSurface: false))
+        let placement = try XCTUnwrap(session.pendingPlacement)
+        let undoCount = session.undoCommandCount
+        let epoch = session.interactionCancellationEpoch
+        let boardID = session.selectedCanvasID
+        XCTAssertGreaterThan(undoCount, 0)
+
+        XCTAssertNil(session.createCanvas(name: "   "))
+        XCTAssertFalse(session.selectCanvas(UUID()))
+        XCTAssertFalse(session.deleteSelectedCanvas())
+        XCTAssertEqual(session.selectedCanvasID, boardID)
+        XCTAssertEqual(session.undoCommandCount, undoCount)
+        XCTAssertTrue(session.canUndo)
+        XCTAssertEqual(session.pendingPlacement, placement)
+        XCTAssertEqual(session.interactionCancellationEpoch, epoch)
+        XCTAssertTrue(session.undo())
+
+        // Real board changes still reset history, placement, and the surface.
+        let second = try XCTUnwrap(session.createCanvas(name: "Second"))
+        XCTAssertEqual(session.selectedCanvasID, second.id)
+        XCTAssertEqual(session.undoCommandCount, 0)
+        XCTAssertNil(session.pendingPlacement)
+        XCTAssertGreaterThan(session.interactionCancellationEpoch, epoch)
+        let changes: [() -> Bool] = [{ session.selectCanvas(boardID) }, { session.deleteSelectedCanvas() }]
+        for change in changes {
+            XCTAssertTrue(session.completeStroke(points: [.zero, CanvasPoint(x: 40, y: 10)]))
+            let before = session.interactionCancellationEpoch
+            XCTAssertTrue(change())
+            XCTAssertEqual(session.undoCommandCount, 0)
+            XCTAssertGreaterThan(session.interactionCancellationEpoch, before)
+        }
     }
 
     @MainActor
@@ -230,6 +268,90 @@ final class CanvasSessionTests: XCTestCase {
             section: .canvas
         ))
         XCTAssertEqual(session.strokes.count, 1)
+    }
+
+    @MainActor
+    func testNarrowingTextResizeGrowsHeightSoPersistedTextIsNotClipped() async throws {
+        let store = try makeTestCanvasStore()
+        let session = CanvasSession(store: store)
+        let placed = await session.insertText(
+            "Narrowing a text box must never hide the words that wrap onto later lines",
+            at: CanvasPoint(x: 10, y: 20),
+            prefersDarkSurface: false
+        )
+        XCTAssertTrue(placed)
+        let original = try XCTUnwrap(session.semanticObjects.first)
+        XCTAssertTrue(canvasSemanticTextIsFullyVisible(original))
+
+        var narrowed = original.transform
+        narrowed.width = 96
+        narrowed.center.x -= (original.transform.width - narrowed.width) / 2
+        XCTAssertFalse(canvasSemanticTextIsFullyVisible(original, transform: narrowed))
+        XCTAssertTrue(session.transformSemanticObject(original.id, to: narrowed))
+
+        let resized = try XCTUnwrap(session.semanticObjects.first)
+        XCTAssertEqual(resized.transform.width, 96)
+        XCTAssertEqual(resized.worldRect.minX, original.worldRect.minX, accuracy: 0.001)
+        XCTAssertEqual(resized.worldRect.minY, original.worldRect.minY, accuracy: 0.001)
+        XCTAssertGreaterThan(resized.transform.height, original.transform.height)
+        XCTAssertTrue(canvasSemanticTextIsFullyVisible(resized))
+        let persisted = try XCTUnwrap(CanvasStore(container: store.container).semanticObjects.first)
+        XCTAssertEqual(persisted.transform, resized.transform)
+        XCTAssertTrue(canvasSemanticTextIsFullyVisible(persisted))
+
+        XCTAssertTrue(session.undo())
+        XCTAssertEqual(session.semanticObjects.first?.transform, original.transform)
+        XCTAssertTrue(session.redo())
+        XCTAssertEqual(session.semanticObjects.first?.transform, resized.transform)
+
+        // Negative controls: a move keeps the fitted size, and a height-only
+        // shrink that would clip is refitted rather than persisted.
+        var moved = resized.transform
+        moved.center.x += 5
+        XCTAssertTrue(session.transformSemanticObject(original.id, to: moved))
+        XCTAssertEqual(session.semanticObjects.first?.transform, moved)
+        var squashed = moved
+        squashed.height = CanvasImagePlacement.minimumDimension
+        squashed.center.y -= (moved.height - squashed.height) / 2
+        XCTAssertFalse(session.transformSemanticObject(original.id, to: squashed))
+        XCTAssertEqual(session.semanticObjects.first?.transform, moved)
+        XCTAssertTrue(canvasSemanticTextIsFullyVisible(try XCTUnwrap(session.semanticObjects.first)))
+    }
+
+    @MainActor
+    func testKeyboardSemanticResizeSharesPointerMinimumDimension() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertTrue(session.insertShape(.rectangle, from: CanvasPoint(x: 0, y: 0), to: CanvasPoint(x: 100, y: 80)))
+        let shape = try XCTUnwrap(session.selectedSemanticObject)
+        XCTAssertNil(shape.content?.text)
+        let rect = shape.worldRect
+        let pointerFloor = CanvasImagePlacement.resizedTransform(
+            from: shape.transform,
+            handle: .bottomRight,
+            to: CanvasPoint(x: rect.minX, y: rect.minY),
+            preserveAspectRatio: false
+        )
+        XCTAssertEqual(pointerFloor.width, CanvasImagePlacement.minimumDimension)
+        XCTAssertEqual(pointerFloor.height, CanvasImagePlacement.minimumDimension)
+
+        for _ in 0..<12 { _ = session.resizeSelectedSemanticObject(by: 0.5) }
+        let keyboardFloor = try XCTUnwrap(session.selectedSemanticObject?.transform)
+        XCTAssertEqual(keyboardFloor.width, pointerFloor.width)
+        XCTAssertEqual(keyboardFloor.height, pointerFloor.height)
+        XCTAssertFalse(session.resizeSelectedSemanticObject(by: 0.5))
+
+        // Growth is unaffected by the floor.
+        XCTAssertTrue(session.resizeSelectedSemanticObject(by: 2))
+        XCTAssertEqual(session.selectedSemanticObject?.transform.width, CanvasImagePlacement.minimumDimension * 2)
+
+        // Keyboard narrowing of text honours the same floor and still fits.
+        let placed = await session.insertText("Keyboard shrink keeps every word", at: CanvasPoint(x: 400, y: 0), prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        for _ in 0..<12 { _ = session.resizeSelectedSemanticObject(by: 0.5) }
+        let text = try XCTUnwrap(session.selectedSemanticObject)
+        XCTAssertEqual(text.transform.width, CanvasImagePlacement.minimumDimension)
+        XCTAssertGreaterThanOrEqual(text.transform.height, CanvasImagePlacement.minimumDimension)
+        XCTAssertTrue(canvasSemanticTextIsFullyVisible(text))
     }
 
     @MainActor
@@ -637,4 +759,23 @@ final class CanvasSessionTests: XCTestCase {
         session.setWidth(-10)
         XCTAssertEqual(session.width, CanvasSession.minimumWidth)
     }
+}
+
+/// Mirrors `CanvasSemanticRenderer.draw`: text is laid out inside the object's
+/// world rect inset by 4 points and clipped to it.
+@MainActor
+func canvasSemanticTextIsFullyVisible(
+    _ object: CanvasSemanticObject,
+    transform: CanvasImageTransform? = nil
+) -> Bool {
+    guard let content = object.content, let text = content.text else { return false }
+    let geometry = transform ?? object.transform
+    let path = CGPath(
+        rect: CGRect(x: 0, y: 0, width: max(1, geometry.width - 8), height: max(1, geometry.height - 8)),
+        transform: nil
+    )
+    let frame = CTFramesetterCreateFrame(
+        CanvasSemanticRenderer.framesetter(content), CFRange(location: 0, length: 0), path, nil
+    )
+    return CTFrameGetVisibleStringRange(frame).length == (text as NSString).length
 }

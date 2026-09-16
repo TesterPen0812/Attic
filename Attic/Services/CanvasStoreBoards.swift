@@ -30,6 +30,7 @@ extension CanvasStore {
 
         let id = UUID()
         let timestamp = now()
+        let previousSelection = selectedCanvasID
         context.insert(CanvasBoardItem(
             id: id,
             name: name,
@@ -42,7 +43,7 @@ extension CanvasStore {
             updatedAt: timestamp
         ))
         selectedCanvasID = id
-        guard save().succeeded else { return nil }
+        guard save(restoringSelectionOnFailure: previousSelection).succeeded else { return nil }
         return canvases.first { $0.id == id }
     }
 
@@ -110,6 +111,7 @@ extension CanvasStore {
             return false
         }
 
+        let previousSelection = selectedCanvasID
         do {
             let timestamp = now()
             let boardReplicas = try storedBoardReplicas(matching: id)
@@ -158,7 +160,7 @@ extension CanvasStore {
             discardPendingChanges(after: error)
             return false
         }
-        return save().succeeded
+        return save(restoringSelectionOnFailure: previousSelection).succeeded
     }
 
 }

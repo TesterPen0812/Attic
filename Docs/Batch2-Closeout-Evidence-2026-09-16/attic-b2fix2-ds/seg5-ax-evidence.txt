@@ -1,0 +1,90 @@
+SEGMENT 5 verbatim AX evidence (cua_repl; app com.taha.Attic.b2fix2.ds3.20260916, PID 13672)
+
+T3.1 after Return on committed object (editor open)
+		20 button (disabled) Description: Undo, ID: canvas-undo
+		21 button (disabled) Description: Redo, ID: canvas-redo
+		27 text entry area (settable) Description: Edit canvas text, Help: Type directly on the canvas. Command-Return saves; Escape cancels., Value: gammax
+	Focused UI element: 27 text entry area ... Value: gammax
+
+T3.2 after typeText(" x")
+		20 button Description: Undo, ID: canvas-undo
+		21 button (disabled) Description: Redo, ID: canvas-redo
+		27 text entry area (settable) ... Value: gammax x
+	Focused UI element: 27 ... Value: gammax x
+
+T3.3 after cmd+z (super+z)
+		20 button (disabled) Description: Undo, ID: canvas-undo
+		21 button Description: Redo, ID: canvas-redo
+		27 text entry area (settable) ... Value: gammax
+	Focused UI element: 27 ... Value: gammax
+
+T3.4 after cmd+shift+z (super+shift+z)
+		20 button Description: Undo, ID: canvas-undo
+		21 button (disabled) Description: Redo, ID: canvas-redo
+		27 text entry area (settable) ... Value: gammax x
+	Focused UI element: 27 ... Value: gammax x
+
+Canvas throughout T3: "5 text seg4-fresh · 1 item"; object 26 (selected) Description: gammax, ID: canvas-object-D95822BF-8B5F-4171-BF60-6FED77E41F2A, Details: Editable text, center 60.7, -4
+
+T2 attempt 1 live draft confirmation (after Add Text placement + typeText("gamma") + typeText("x"))
+		27 text entry area (settable) Description: Edit canvas text, Help: Type directly on the canvas. Command-Return saves; Escape cancels., Value: gammax
+	18 container Description: Canvas drawing board, Details: 0 strokes, 0 images, 0 text and shape objects, no object selected, Text placement, ID: canvas-surface
+	14 button Description: Undo, ID: canvas-undo   (ENABLED)
+
+T2 Edit menu read (a) - committed object selected, canvas history non-empty:
+	0 Edit, Secondary Actions: Cancel, Pick
+		1 menu Secondary Actions: Cancel
+			2 Undo Canvas Change, ID: menuAction:
+			3 (disabled) Redo Canvas Change
+			4 (disabled) Undo, ID: undo:
+			5 (disabled) Redo, ID: redo:
+			6 (disabled) Cut, ID: cut:
+			7 (disabled) Copy, ID: copy:
+			8 Paste, ID: paste:
+			9 (disabled) Delete, ID: delete:
+			10 (disabled) Select All, ID: selectAll:
+			11 AutoFill
+				12 menu Secondary Actions: Cancel
+					13 (disabled) Contact…
+					14 (disabled) Passwords…
+					15 (disabled) Credit Card…
+			16 (disabled) Start Dictation, ID: startDictation:
+			17 Emoji & Symbols, ID: orderFrontCharacterPalette:
+
+T2 pre-menu state (b): live focused draft "gammax x", toolbar:
+		20 button Description: Undo, ID: canvas-undo   (ENABLED)
+		21 button (disabled) Description: Redo, ID: canvas-redo
+		27 text entry area (settable) ... Value: gammax x   (focused)
+
+T2 Edit menu read (b) - LIVE focused draft with Value "gammax x" (verbatim):
+	0 Edit, Secondary Actions: Cancel, Pick
+		1 menu Secondary Actions: Cancel
+			2 Undo Canvas Change, ID: menuAction:
+			3 (disabled) Redo Canvas Change
+			4 (disabled) Undo, ID: undo:
+			5 (disabled) Redo, ID: redo:
+			6 (disabled) Cut, ID: cut:
+			7 (disabled) Copy, ID: copy:
+			8 (disabled) Paste, ID: paste:
+			9 (disabled) Delete, ID: delete:
+			10 (disabled) Select All, ID: selectAll:
+			11 AutoFill
+				12 menu Secondary Actions: Cancel
+					13 (disabled) Contact…
+					14 (disabled) Passwords…
+					15 (disabled) Credit Card…
+			16 (disabled) Start Dictation, ID: startDictation:
+			17 Emoji & Symbols, ID: orderFrontCharacterPalette:
+
+T2 after menu dismiss (Cancel) - unchanged:
+		20 button Description: Undo, ID: canvas-undo   (ENABLED)
+		21 button (disabled) Description: Redo, ID: canvas-redo
+		27 text entry area (settable) ... Value: gammax x   (still live, focused)
+
+T2/T3 editor close (2nd Escape): editor gone; canvas "seg4-fresh · 1 item"; object 26 (selected) Description: gammax (draft cancelled; committed text unchanged)
+
+Provenance/tooling lines:
+	lsof PID 13672 txt inode 144152529 -> /private/tmp/attic-b2fix2-ds3-dd/Build/Products/Local/AtticB2Fix2DSS3.app/Contents/MacOS/AtticB2Fix2DSS3
+	lsof PID 13672 txt inode 144152523 -> /private/tmp/attic-b2fix2-ds3-dd/Build/Products/Local/AtticB2Fix2DSS3.app/Contents/MacOS/AtticB2Fix2DSS3.debug.dylib
+	lsof PID 13672 txt -> /Users/taha/Library/Containers/com.taha.Attic.b2fix2.ds3.20260916/Data/Library/Application Support/development.store-shm
+	lock: owner=b2fix2-ds-seg5 pid=13667 acquired=2026-09-16T15:15:04Z ; released via mv -> /tmp/attic-native-ui.lock.released-b2fix2-ds-seg5

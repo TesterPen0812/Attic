@@ -917,6 +917,179 @@ final class CanvasImageImportBatchTests: XCTestCase {
     }
 
     @MainActor
+    func testSessionImportSurvivesTransientInterruptionAndSurfaceDismantle() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(container: container, gate: gate)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 300, height: 380))
+        CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                  clearReadabilityEnabled: false).configure(view)
+        let batch = makeBatch(target: session.captureImageImportTarget(), indices: [0, 1])
+        let epoch = session.interactionCancellationEpoch
+
+        session.startImageImportBatch(batch)
+        await gate.waitUntilStarted(count: 2)
+        // Zoom and panel hide interrupt the live surface; a section change
+        // dismantles it. None of them owns the session's imports.
+        session.interruptActiveInteraction()
+        CanvasNSViewRepresentable.dismantleNSView(view, coordinator: ())
+        await gate.release(0)
+        await gate.release(1)
+        let imported = await waitUntil { session.images.count == 2 }
+
+        XCTAssertTrue(imported)
+        XCTAssertEqual(Set(session.images.map(\.id)), Set(batch.items.map(\.id)))
+        XCTAssertEqual(session.interactionCancellationEpoch, epoch)
+        let cancellations = await gate.cancellationCount()
+        XCTAssertEqual(cancellations, 0)
+    }
+
+    @MainActor
+    func testBoardLifecycleCancellationStillCancelsSessionImports() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(container: container, gate: gate)
+        _ = try XCTUnwrap(session.createCanvas(name: "First"))
+
+        session.startImageImportBatch(makeBatch(target: session.captureImageImportTarget(), indices: [0]))
+        await gate.waitUntilStarted(count: 1)
+        let switchEpoch = session.interactionCancellationEpoch
+        _ = try XCTUnwrap(session.createCanvas(name: "Second"))
+        XCTAssertGreaterThan(session.interactionCancellationEpoch, switchEpoch)
+        let cancelledBySwitch = await waitUntil { await gate.cancellationCount() == 1 }
+        XCTAssertTrue(cancelledBySwitch)
+
+        session.startImageImportBatch(makeBatch(target: session.captureImageImportTarget(), indices: [1]))
+        await gate.waitUntilStarted(count: 2)
+        let terminationEpoch = session.interactionCancellationEpoch
+        session.cancelActiveInteraction()
+        XCTAssertEqual(session.interactionCancellationEpoch, terminationEpoch + 1)
+        let cancelledByTermination = await waitUntil { await gate.cancellationCount() == 2 }
+        XCTAssertTrue(cancelledByTermination)
+        XCTAssertTrue(session.images.isEmpty)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<CanvasImageItem>())
+        XCTAssertTrue(rows.isEmpty)
+    }
+
+    @MainActor
+    func testFailedBoardSavesKeepSelectionHistoryEpochAndSessionImports() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let persistence = PersistenceGate()
+        let gate = ControlledCanvasImagePreparer()
+        let session = makeSession(container: container, gate: gate, persist: persistence.save)
+        let alpha = try XCTUnwrap(session.createCanvas(name: "Alpha"))
+        let beta = try XCTUnwrap(session.createCanvas(name: "Beta"))
+        XCTAssertTrue(session.completeStroke(points: [.zero, CanvasPoint(x: 20, y: 30)]))
+        XCTAssertTrue(session.importPreparedImage(CanvasPreparedImage(
+            encodedData: Data([9, 0x50, 0x4E, 0x47]),
+            contentType: UTType.png.identifier,
+            pixelWidth: 40,
+            pixelHeight: 20
+        ), at: CanvasPoint(x: 60, y: 60)))
+        let selectedImageID = try XCTUnwrap(session.selectedImageID)
+        let batch = makeBatch(target: session.captureImageImportTarget(), indices: [0])
+        session.startImageImportBatch(batch)
+        await gate.waitUntilStarted(count: 1)
+        let undoCount = session.undoCommandCount
+        let epoch = session.interactionCancellationEpoch
+        let strokeIDs = session.strokes.map(\.id)
+        let saveError = CanvasSession.compactErrorMessage(PersistenceGate.Failure().localizedDescription)
+        persistence.shouldFail = true
+
+        func assertUnchanged(_ label: String) {
+            XCTAssertEqual(session.selectedCanvasID, beta.id, label)
+            XCTAssertEqual(session.canvases.map(\.id), [alpha.id, beta.id], label)
+            XCTAssertEqual(session.strokes.map(\.id), strokeIDs, label)
+            XCTAssertEqual(session.undoCommandCount, undoCount, label)
+            XCTAssertTrue(session.canUndo, label)
+            XCTAssertEqual(session.interactionCancellationEpoch, epoch, label)
+            XCTAssertEqual(session.lastErrorMessage, saveError, label)
+        }
+
+        XCTAssertNil(session.createCanvas(name: "Gamma"))
+        assertUnchanged("failed create")
+        XCTAssertEqual(session.selectedImageID, selectedImageID)
+
+        XCTAssertTrue(session.prepareTextPlacement("Keep placing", prefersDarkSurface: false))
+        let placement = try XCTUnwrap(session.pendingPlacement)
+        XCTAssertFalse(session.deleteSelectedCanvas())
+        assertUnchanged("failed delete")
+        XCTAssertEqual(session.pendingPlacement, placement)
+
+        // The in-flight import was never cancelled and lands on its board.
+        persistence.shouldFail = false
+        await gate.release(0)
+        let imported = await waitUntil { session.images.contains { $0.id == batch.items[0].id } }
+        XCTAssertTrue(imported)
+        let cancellations = await gate.cancellationCount()
+        XCTAssertEqual(cancellations, 0)
+        XCTAssertTrue(session.images.allSatisfy { $0.canvasID == beta.id })
+
+        // Retained history still applies to the board it was recorded on.
+        for _ in 0...undoCount where session.canUndo { XCTAssertTrue(session.undo()) }
+        XCTAssertFalse(session.canUndo)
+        XCTAssertEqual(session.selectedCanvasID, beta.id)
+        XCTAssertTrue(session.strokes.isEmpty)
+        XCTAssertTrue(session.images.isEmpty)
+
+        // A successful create after the failures tears down exactly once.
+        let teardownEpoch = session.interactionCancellationEpoch
+        let gamma = try XCTUnwrap(session.createCanvas(name: "Gamma"))
+        XCTAssertEqual(session.selectedCanvasID, gamma.id)
+        XCTAssertEqual(session.interactionCancellationEpoch, teardownEpoch + 1)
+        XCTAssertEqual(session.undoCommandCount, 0)
+        XCTAssertNil(session.pendingPlacement)
+    }
+
+    @MainActor
+    func testFailedBoardSaveThatLosesItsBoardStillClearsStaleHistoryAndImports() async throws {
+        for operation in ["create", "delete"] {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let persistence = PersistenceGate()
+            let gate = ControlledCanvasImagePreparer()
+            let session = makeSession(container: container, gate: gate, persist: persistence.save)
+            let alpha = try XCTUnwrap(session.createCanvas(name: "Alpha"), operation)
+            let beta = try XCTUnwrap(session.createCanvas(name: "Beta"), operation)
+            XCTAssertTrue(session.completeStroke(points: [.zero, CanvasPoint(x: 20, y: 30)]), operation)
+            session.startImageImportBatch(makeBatch(target: session.captureImageImportTarget(), indices: [0]))
+            await gate.waitUntilStarted(count: 1)
+            let epoch = session.interactionCancellationEpoch
+
+            // Another writer removes the board before the failing save, so the
+            // store cannot restore it and must fall back to a live board.
+            let external = ModelContext(container)
+            let board = try XCTUnwrap(external.fetch(FetchDescriptor<CanvasBoardItem>()).first { $0.id == beta.id })
+            board.tombstoned = true
+            board.mutationVersion += 1
+            board.deletedAt = Date(timeIntervalSince1970: 2_000)
+            board.updatedAt = Date(timeIntervalSince1970: 2_000)
+            try external.save()
+            persistence.shouldFail = true
+
+            if operation == "create" {
+                XCTAssertNil(session.createCanvas(name: "Gamma"), operation)
+            } else {
+                XCTAssertFalse(session.deleteSelectedCanvas(), operation)
+            }
+            XCTAssertEqual(session.selectedCanvasID, alpha.id, operation)
+            XCTAssertEqual(session.undoCommandCount, 0, operation)
+            XCTAssertFalse(session.canUndo, operation)
+            XCTAssertEqual(session.interactionCancellationEpoch, epoch + 1, operation)
+            let cancelled = await waitUntil { await gate.cancellationCount() == 1 }
+            XCTAssertTrue(cancelled, operation)
+        }
+    }
+
+    @MainActor
+    private func waitUntil(_ condition: @MainActor () async -> Bool) async -> Bool {
+        for _ in 0..<500 {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await condition()
+    }
+
+    @MainActor
     private func makeSession(
         container: ModelContainer,
         gate: ControlledCanvasImagePreparer,

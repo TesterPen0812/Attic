@@ -142,6 +142,7 @@ private struct TaskReplicaSnapshot: Equatable {
     let completedAt: Date?
     let manualOrder: Int64?
     let parentID: UUID?
+    let imageReferencesData: Data?
 
     init(_ task: TaskItem) {
         id = task.id
@@ -153,6 +154,7 @@ private struct TaskReplicaSnapshot: Equatable {
         completedAt = task.completedAt
         manualOrder = task.manualOrder
         parentID = task.parentID
+        imageReferencesData = task.imageReferencesData
     }
 }
 
@@ -169,26 +171,70 @@ private enum TaskReplicaMutationError: LocalizedError {
 
 @MainActor
 final class TaskStore: ObservableObject {
-    @Published private(set) var tasks: [TaskItem] = []
-    @Published private(set) var lastErrorMessage: String?
+    @Published private(set) var tasks: [TaskItem] = [] {
+        // The family index follows the visible list itself, not only the
+        // revision counter: `$revision` sinks run in willSet, before the new
+        // value stores, and must already see a deleted task gone.
+        didSet { familyIndexCache = nil }
+    }
+    @Published private(set) var lastErrorMessage: String? {
+        didSet { if lastErrorMessage == nil { lastErrorOwnerID = nil } }
+    }
+    /// The family a task error concerns, when it concerns one: its panel
+    /// shows the message and the main panel stays quiet. nil is a general
+    /// or main-composer error, shown by the main panel alone.
+    @Published private(set) var lastErrorOwnerID: UUID?
+
+    /// The user dismissed the notice, or a later success made it stale.
+    func dismissError() {
+        guard lastErrorMessage != nil else { return }
+        lastErrorMessage = nil
+    }
+
+    private func report(_ message: String, owner: UUID?) {
+        lastErrorOwnerID = owner
+        lastErrorMessage = message
+    }
+
+    func reportUnavailableAttachment(named filename: String, owner: UUID? = nil) {
+        report("“\(filename)” is missing or changed in Attic’s private storage.", owner: owner)
+    }
+
+    func reportAttachmentOpenFailure(named filename: String, error: Error, owner: UUID? = nil) {
+        report("Couldn’t open “\(filename)”. \(error.localizedDescription)", owner: owner)
+    }
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 
     private let container: ModelContainer
     private var context: ModelContext
     private let now: () -> Date
+    let taskImageFiles: TaskImageFiles
+    @Published private(set) var importingAttachmentTaskIDs: Set<UUID> = []
     private let persist: (ModelContext) throws -> Void
-    private var remoteChangeObservation: AnyCancellable?
-    private var cloudKitEventObservation: AnyCancellable?
-    private var cloudImportRefreshTask: Task<Void, Never>?
+    private(set) var remoteChangeObservation: AnyCancellable?
+    private(set) var cloudKitEventObservation: AnyCancellable?
+    private(set) var cloudImportRefreshTask: Task<Void, Never>?
     private var cloudSyncProtection = CloudSyncProtectionState()
 #if os(macOS)
-    private var exportActivityToken: NSObjectProtocol?
-    private var importActivityToken: NSObjectProtocol?
-    private var exportActivityTimeoutTask: Task<Void, Never>?
-    private var importActivityTimeoutTask: Task<Void, Never>?
+    private(set) var exportActivityToken: NSObjectProtocol?
+    private(set) var importActivityToken: NSObjectProtocol?
+    private(set) var exportActivityTimeoutTask: Task<Void, Never>?
+    private(set) var importActivityTimeoutTask: Task<Void, Never>?
 #endif
     private var snapshotCache: [TaskScope: (revision: UInt64, snapshot: TaskScopeSnapshot)] = [:]
+    /// Family relationships indexed once per revision (see `familyIndex`).
+    private var familyIndexCache: FamilyIndex?
+
+    /// `id → task` and `parent → ordered children`, built in one pass over
+    /// the visible tasks and reused until the next mutation. Row bodies ask
+    /// for a family's children several times per evaluation, so each lookup
+    /// must be O(1) rather than a scan of every task.
+    private struct FamilyIndex {
+        let revision: UInt64
+        let byID: [UUID: TaskItem]
+        let childrenByParent: [UUID: [TaskItem]]
+    }
     private static let manualOrderStride: Int64 = 1_024
 #if os(macOS)
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
@@ -197,15 +243,120 @@ final class TaskStore: ObservableObject {
     init(
         container: ModelContainer,
         now: @escaping () -> Date = Date.init,
-        persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+        persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        taskImageFiles: TaskImageFiles = .shared
     ) {
         self.container = container
         context = ModelContext(container)
         self.now = now
         self.persist = persist
+        self.taskImageFiles = taskImageFiles
         refresh()
+        // Deferred iPhone/CloudKit work stays dormant in local-only builds,
+        // exactly as NoteStore and CanvasStore keep theirs: no observers, no
+        // event handling, no activity assertions.
+        #if !ATTIC_LOCAL_ONLY
         observeRemoteChanges()
         observeCloudKitEvents()
+        #endif
+    }
+
+    /// O(1) lookup of a visible task by application identity.
+    func task(withID id: UUID) -> TaskItem? {
+        familyIndex.byID[id]
+    }
+
+    private var familyIndex: FamilyIndex {
+        if let familyIndexCache, familyIndexCache.revision == revision {
+            return familyIndexCache
+        }
+        var byID: [UUID: TaskItem] = [:]
+        byID.reserveCapacity(tasks.count)
+        for task in tasks where byID[task.id] == nil {
+            byID[task.id] = task
+        }
+        // Sort keys are read once per task: every model property access
+        // goes through SwiftData's storage, so comparators must not re-read
+        // them O(n log n) times.
+        var childrenByParent: [UUID: [SubtaskSortKey]] = [:]
+        for task in tasks {
+            // Same root-validation rule as parent(of:): a child counts only
+            // under a live top-level parent; orphaned links stay visible as
+            // roots instead of vanishing.
+            guard let parentID = task.parentID, parentID != task.id,
+                  let parent = byID[parentID], parent.parentID == nil else { continue }
+            childrenByParent[parentID, default: []].append(SubtaskSortKey(task))
+        }
+        let index = FamilyIndex(
+            revision: revision, byID: byID,
+            childrenByParent: childrenByParent.mapValues { $0.sorted(by: SubtaskSortKey.comesBefore).map(\.task) }
+        )
+        familyIndexCache = index
+        return index
+    }
+
+    private struct SubtaskSortKey {
+        let task: TaskItem
+        let isDone: Bool
+        let manualOrder: Int64?
+        let createdAt: Date
+        let id: UUID
+
+        init(_ task: TaskItem) {
+            self.task = task
+            isDone = task.statusRaw == TaskStatus.done.rawValue
+            manualOrder = task.manualOrder
+            createdAt = task.createdAt
+            id = task.id
+        }
+
+        static func comesBefore(_ lhs: SubtaskSortKey, _ rhs: SubtaskSortKey) -> Bool {
+            if lhs.isDone != rhs.isDone { return !lhs.isDone }
+            if lhs.manualOrder != rhs.manualOrder {
+                return (lhs.manualOrder ?? 0) > (rhs.manualOrder ?? 0)
+            }
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+    }
+
+    /// Section ordering key, read once per task per rebuild.
+    private struct SectionSortKey {
+        let task: TaskItem
+        let statusRaw: String
+        let priorityRank: Int
+        let manualOrder: Int64?
+        let updatedAt: Date
+        let id: UUID
+
+        init(_ task: TaskItem) {
+            self.task = task
+            statusRaw = task.statusRaw
+            priorityRank = task.priority.sortRank
+            manualOrder = task.manualOrder
+            updatedAt = task.updatedAt
+            id = task.id
+        }
+
+        static func comesBefore(_ lhs: SectionSortKey, _ rhs: SectionSortKey) -> Bool {
+            if lhs.priorityRank != rhs.priorityRank {
+                return lhs.priorityRank > rhs.priorityRank
+            }
+            switch (lhs.manualOrder, rhs.manualOrder) {
+            case let (.some(lhsOrder), .some(rhsOrder)) where lhsOrder != rhsOrder:
+                return lhsOrder > rhsOrder
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            default:
+                break
+            }
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
     }
 
     @discardableResult
@@ -213,7 +364,8 @@ final class TaskStore: ObservableObject {
         title: String,
         priority: TaskPriority = .none,
         status: TaskStatus = .todo,
-        parentID: UUID? = nil
+        parentID: UUID? = nil,
+        attachments: [TaskImageReference] = []
     ) -> TaskItem? {
         let normalizedTitle = Self.normalized(title)
         guard !normalizedTitle.isEmpty else { return nil }
@@ -224,7 +376,7 @@ final class TaskStore: ObservableObject {
             if let parentID {
                 let parents = try storedTasks(matching: parentID)
                 guard parents.allSatisfy({ $0.parentID == nil && $0.status != .done }) else {
-                    lastErrorMessage = "Subtasks need an unfinished main task. Reopen the main task first."
+                    report("Subtasks need an unfinished main task. Reopen the main task first.", owner: parentID)
                     return nil
                 }
             }
@@ -247,6 +399,16 @@ final class TaskStore: ObservableObject {
             manualOrder: manualOrder,
             parentID: parentID
         )
+        // References the composer already imported are bound in this same
+        // save, so a new task never exists without them (or they without it).
+        if !attachments.isEmpty {
+            do {
+                task.imageReferencesData = try JSONEncoder().encode(attachments)
+            } catch {
+                lastErrorMessage = error.localizedDescription
+                return nil
+            }
+        }
         context.insert(task)
         tasks.append(task)
         guard save() else { return nil }
@@ -264,8 +426,8 @@ final class TaskStore: ObservableObject {
     }
 
     @discardableResult
-    func setStatus(_ status: TaskStatus, for task: TaskItem) -> Bool {
-        update(task, status: status)
+    func setStatus(_ status: TaskStatus, for task: TaskItem, allowingUnfinishedSubtasks: Bool = false) -> Bool {
+        update(task, status: status, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
     }
 
     /// Applies a task edit as one SwiftData transaction so callers never see
@@ -275,7 +437,8 @@ final class TaskStore: ObservableObject {
         _ task: TaskItem,
         title: String? = nil,
         priority: TaskPriority? = nil,
-        status: TaskStatus? = nil
+        status: TaskStatus? = nil,
+        allowingUnfinishedSubtasks: Bool = false
     ) -> Bool {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
         let replicas: [TaskItem]
@@ -291,21 +454,36 @@ final class TaskStore: ObservableObject {
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
         let destinationStatus = status ?? task.status
-        do {
-            let stored = try context.fetch(FetchDescriptor<TaskItem>())
-            if destinationStatus == .done,
-               stored.contains(where: { $0.parentID == task.id && $0.status != .done }) {
-                lastErrorMessage = "Finish the subtasks before completing this task."
+        // Status rules are checked against every stored replica, but only
+        // the rows they concern: a title or priority edit fetches nothing.
+        if destinationStatus != task.status {
+            do {
+                let doneRaw = TaskStatus.done.rawValue
+                if destinationStatus == .done, !allowingUnfinishedSubtasks {
+                    let taskID = task.id
+                    var unfinishedChildren = FetchDescriptor<TaskItem>(
+                        predicate: #Predicate { $0.parentID == taskID && $0.statusRaw != doneRaw }
+                    )
+                    unfinishedChildren.fetchLimit = 1
+                    if try !context.fetch(unfinishedChildren).isEmpty {
+                        lastErrorMessage = "Finish the subtasks before completing this task."
+                        return false
+                    }
+                }
+                if destinationStatus != .done, task.status == .done, let parentID = task.parentID {
+                    var doneParents = FetchDescriptor<TaskItem>(
+                        predicate: #Predicate { $0.id == parentID && $0.statusRaw == doneRaw }
+                    )
+                    doneParents.fetchLimit = 1
+                    if try !context.fetch(doneParents).isEmpty {
+                        lastErrorMessage = "Reopen the main task before reopening a subtask."
+                        return false
+                    }
+                }
+            } catch {
+                lastErrorMessage = error.localizedDescription
                 return false
             }
-            if destinationStatus != .done, let parentID = task.parentID,
-               stored.contains(where: { $0.id == parentID && $0.status == .done }) {
-                lastErrorMessage = "Reopen the main task before reopening a subtask."
-                return false
-            }
-        } catch {
-            lastErrorMessage = error.localizedDescription
-            return false
         }
         let titleChanged = destinationTitle != task.title
         let priorityChanged = destinationPriority != task.priority
@@ -349,6 +527,7 @@ final class TaskStore: ObservableObject {
             replica.status = destinationStatus
             replica.createdAt = task.createdAt
             replica.parentID = task.parentID
+            replica.imageReferencesData = task.imageReferencesData
             replica.manualOrder = destinationManualOrder
             replica.completedAt = destinationCompletedAt
             replica.updatedAt = timestamp
@@ -361,6 +540,227 @@ final class TaskStore: ObservableObject {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
         guard task.status == .todo else { return false }
         return setStatus(.inProgress, for: task)
+    }
+
+    /// Imports images and general files into the parent that owns them. A
+    /// child row resolves to its parent (subtasks are one level deep). Files
+    /// are copied into private storage first; the reference list is written to
+    /// every replica in one save, and a failed save removes the new copies.
+    @discardableResult
+    func attachFiles(_ urls: [URL], to taskID: UUID) async -> Bool {
+        guard !urls.isEmpty else { return false }
+        return await attachStagedFiles(to: taskID) { TaskAttachmentStaging(urls: urls) } != nil
+    }
+
+    /// The shared import path for pickers and drops. The owner is reserved
+    /// before `stage` runs, so loading dropped content, copying and binding
+    /// are one serialized operation: an overlapping import for the same owner
+    /// is refused with a message instead of silently doing nothing. Returns
+    /// the new attachment IDs, or nil after reporting why nothing attached.
+    /// Only the staging's owned directory is ever discarded, never originals.
+    /// A `stage` that throws must already have discarded any directory it
+    /// owns (`TaskDroppedFiles.stage` does); only a returned staging is
+    /// discarded here.
+    func attachStagedFiles(
+        to taskID: UUID,
+        stage: () async throws -> TaskAttachmentStaging
+    ) async -> [UUID]? {
+        await attachImported(to: taskID) { _, existing in
+            var staging = TaskAttachmentStaging()
+            defer { staging.discard() }
+            staging = try await stage()
+            return try await taskImageFiles.importAttachments(staging.urls, existing: existing)
+        }
+    }
+
+    /// Gallery cards dropped on another task: each source becomes a new,
+    /// separately owned private copy (see `TaskImageFiles.importCopies`),
+    /// under the same reservation, binding and rollback as any import.
+    /// `sources` runs inside the reservation, and its result is checked
+    /// against the store before anything is read.
+    func attachCopies(
+        to taskID: UUID,
+        of sources: () async throws -> [TaskAttachmentSource]
+    ) async -> [UUID]? {
+        await attachImported(to: taskID) { ownerID, existing in
+            let references = try verifiedCopySources(try await sources(), excludingOwner: ownerID)
+            return try await taskImageFiles.importCopies(of: references, existing: existing)
+        }
+    }
+
+    /// The owner and stored reference of an attachment, resolved from the
+    /// store alone. nil when no task holds it, more than one does, or its
+    /// subtask has no parent to resolve to.
+    func attachmentSource(for attachmentID: UUID) -> TaskAttachmentSource? {
+        var found: TaskAttachmentSource?
+        for task in tasks {
+            guard let reference = task.attachments.first(where: { $0.id == attachmentID }) else { continue }
+            guard found == nil, let ownerID = attachmentOwnerID(for: task.id) else { return nil }
+            found = TaskAttachmentSource(reference: reference, ownerID: ownerID)
+        }
+        return found
+    }
+
+    /// Dragged sources that still match the store exactly (same attachment,
+    /// digest and owner) and never belong to `excludedOwner`.
+    func verifiedCopySources(_ sources: [TaskAttachmentSource], excludingOwner excludedOwner: UUID?) throws -> [TaskImageReference] {
+        guard !sources.isEmpty else { throw TaskDropError.attachmentUnavailable }
+        return try sources.map { source in
+            guard attachmentSource(for: source.reference.id) == source else { throw TaskDropError.attachmentUnavailable }
+            guard source.ownerID != excludedOwner else { throw TaskDropError.alreadyAttached }
+            return source.reference
+        }
+    }
+
+    /// `importing` receives the owner and its current attachments, and on
+    /// throwing must leave no private copies behind (the importer rolls back
+    /// its own batch).
+    private func attachImported(
+        to taskID: UUID,
+        importing: (_ ownerID: UUID, _ existing: [TaskImageReference]) async throws -> [TaskImageReference]
+    ) async -> [UUID]? {
+        guard let ownerID = attachmentOwnerID(for: taskID),
+              let initial = tasks.first(where: { $0.id == ownerID }) else {
+            lastErrorMessage = "Couldn’t attach files. The task is no longer available."
+            return nil
+        }
+        guard !importingAttachmentTaskIDs.contains(ownerID) else {
+            report("Attic is still attaching files to “\(initial.title)”. Try again when it finishes.", owner: ownerID)
+            return nil
+        }
+        importingAttachmentTaskIDs.insert(ownerID)
+        defer { importingAttachmentTaskIDs.remove(ownerID) }
+        var imported: [TaskImageReference] = []
+        do {
+            imported = try await importing(ownerID, initial.attachments)
+            guard let current = tasks.first(where: { $0.id == ownerID }) else {
+                await taskImageFiles.remove(imported)
+                report("Couldn’t attach files. The task was deleted while they were copied.", owner: nil)
+                return nil
+            }
+            let data = try JSONEncoder().encode(current.attachments + imported)
+            for replica in try storedTasks(matching: ownerID) {
+                replica.imageReferencesData = data
+                replica.updatedAt = now()
+            }
+            guard save() else {
+                await taskImageFiles.remove(imported); return nil
+            }
+            return imported.map(\.id)
+        } catch {
+            await taskImageFiles.remove(imported)
+            reportAttachmentImportFailure(error, owner: ownerID)
+            return nil
+        }
+    }
+
+    private var hasSweptAttachmentStorage = false
+
+    /// Once per launch, before anything is being attached: removes private
+    /// attachment copies no stored task references, such as a composer's
+    /// pending items when Attic quit before the task was added, and drop
+    /// staging a quit left behind. References are collected from every
+    /// physical replica, so a duplicate that differs from the visible task
+    /// still keeps its files, and a replica whose references can't be read
+    /// stops the sweep. Anything created or modified within `minimumAge` is
+    /// kept, which also covers an import that starts while the sweep runs.
+    /// Only Attic's own storage is touched, never originals. Returns how many
+    /// copies were removed, or nil when the sweep did not run.
+    @discardableResult
+    func sweepUnreferencedAttachmentStorage(minimumAge: TimeInterval = 24 * 60 * 60,
+                                            dropStagingRoot: URL = TaskAttachmentStaging.ownedRootURL) async -> Int? {
+        guard !hasSweptAttachmentStorage, importingAttachmentTaskIDs.isEmpty else { return nil }
+        hasSweptAttachmentStorage = true
+        let referencedIDs: Set<UUID>
+        do {
+            referencedIDs = try storedAttachmentIDs(excludingTaskIDs: [])
+        } catch {
+            return nil
+        }
+        // File dates are wall-clock times, whatever clock the store was given.
+        let cutoff = Date().addingTimeInterval(-minimumAge)
+        TaskAttachmentStaging.removeAbandoned(modifiedBefore: cutoff, in: dropStagingRoot)
+        return await taskImageFiles.removeUnreferenced(keeping: referencedIDs, modifiedBefore: cutoff,
+                                                       limit: Self.attachmentSweepLimit)
+    }
+
+    private static let attachmentSweepLimit = 500
+
+    /// Calm, task-worded reason an import did not attach anything. `owner`
+    /// is the family whose panel should show it; nil for the main composer.
+    func reportAttachmentImportFailure(_ error: Error, owner: UUID? = nil) {
+        report("Couldn’t attach files. \(Self.attachmentErrorDescription(error))", owner: owner)
+    }
+
+    /// Attachments belong to a top-level task; a child resolves to its parent.
+    func attachmentOwnerID(for taskID: UUID) -> UUID? {
+        guard let task = task(withID: taskID) else { return nil }
+        guard let parentID = task.parentID else { return task.id }
+        return parent(of: task) != nil ? parentID : nil
+    }
+
+    private static func attachmentErrorDescription(_ error: Error) -> String {
+        switch error as? AttachmentFileStoreError {
+        case .tooManyAttachments:
+            "A task can hold at most \(AttachmentLimits.maxAttachmentsPerNote) attachments."
+        case .noteTooLarge:
+            "Attachments for a task cannot exceed 100 MiB."
+        default:
+            error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func removeAttachment(_ attachmentID: UUID, from taskID: UUID) -> Bool {
+        guard let task = tasks.first(where: { $0.id == taskID }),
+              let removed = task.attachments.first(where: { $0.id == attachmentID }) else { return false }
+        do {
+            let data = try JSONEncoder().encode(task.attachments.filter { $0.id != attachmentID })
+            for replica in try storedTasks(matching: taskID) {
+                replica.imageReferencesData = data; replica.updatedAt = now()
+            }
+            guard save() else { return false }
+            removeAttachmentFiles([removed], excludingTaskIDs: [])
+            return true
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Removes private files only for references no surviving replica still
+    /// holds. A crafted or corrupt store can share one attachment identity
+    /// across two logical tasks; deleting one must never break the other, so
+    /// the same replica-wide check the launch sweep performs runs here too.
+    /// A failed check keeps every file (the sweep reclaims true orphans later).
+    private func removeAttachmentFiles(_ references: [TaskImageReference], excludingTaskIDs deleted: Set<UUID>) {
+        guard !references.isEmpty else { return }
+        let survivingIDs: Set<UUID>
+        do {
+            survivingIDs = try storedAttachmentIDs(excludingTaskIDs: deleted)
+        } catch {
+            return
+        }
+        let removable = references.filter { !survivingIDs.contains($0.id) }
+        guard !removable.isEmpty else { return }
+        Task { await taskImageFiles.remove(removable) }
+    }
+
+    /// Attachment identities held by every stored replica (of any task not
+    /// in `deleted`). Only rows that carry attachments are fetched; a replica
+    /// whose references cannot be decoded aborts the query so callers keep
+    /// files rather than guess.
+    private func storedAttachmentIDs(excludingTaskIDs deleted: Set<UUID>) throws -> Set<UUID> {
+        let withAttachments = FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.imageReferencesData != nil }
+        )
+        var referencedIDs = Set<UUID>()
+        for replica in try context.fetch(withAttachments) where !deleted.contains(replica.id) {
+            guard let data = replica.imageReferencesData, !data.isEmpty else { continue }
+            let references = try JSONDecoder().decode([TaskImageReference].self, from: data)
+            referencedIDs.formUnion(references.map(\.id))
+        }
+        return referencedIDs
     }
 
     @discardableResult
@@ -388,18 +788,21 @@ final class TaskStore: ObservableObject {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
         let replicas: [TaskItem]
         do {
-            let stored = try context.fetch(FetchDescriptor<TaskItem>())
-            // Refuse ambiguous family ownership rather than deleting a peer's
-            // task through a conflicting imported parent link.
-            var familyIDs: Set<UUID> = [task.id]
-            var previousCount = 0
-            while familyIDs.count != previousCount {
-                previousCount = familyIDs.count
-                for item in stored where item.parentID.map(familyIDs.contains) == true {
-                    familyIDs.insert(item.id)
-                }
-            }
-            let family = stored.filter { familyIDs.contains($0.id) }
+            // Only the task's own replicas and its direct children are read;
+            // anything linked below a child is unsupported nesting, checked
+            // separately below. Refuse ambiguous family ownership rather than
+            // deleting a peer's task through a conflicting imported link.
+            let taskID = task.id
+            let linked = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.id == taskID || $0.parentID == taskID }
+            ))
+            // Every physical replica of each linked id, including a duplicate
+            // that claims a different parent: that conflict must refuse the
+            // deletion rather than slip past a parent-only predicate.
+            let linkedIDs = Array(Set(linked.map(\.id)))
+            let family = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { linkedIDs.contains($0.id) }
+            ))
             let groups = Dictionary(grouping: family, by: \.id)
             guard groups[task.id]?.isEmpty == false else {
                 throw TaskReplicaMutationError.missingReplica(task.id)
@@ -414,22 +817,53 @@ final class TaskStore: ObservableObject {
                 lastErrorMessage = "An unsupported nested or cyclic subtask link prevents safe deletion."
                 return false
             }
+            for childID in Set(family.map(\.id)).subtracting([task.id]) {
+                var nested = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == childID })
+                nested.fetchLimit = 1
+                if try !context.fetch(nested).isEmpty {
+                    lastErrorMessage = "An unsupported nested or cyclic subtask link prevents safe deletion."
+                    return false
+                }
+            }
             replicas = family
         } catch {
             lastErrorMessage = error.localizedDescription
             return false
         }
+        let removedImages = replicas.flatMap(\.attachments)
         replicas.forEach(context.delete)
         let deletedIDs = Set(replicas.map(\.id))
         tasks.removeAll { deletedIDs.contains($0.id) }
-        return save()
+        guard save() else { return false }
+        removeAttachmentFiles(removedImages, excludingTaskIDs: deletedIDs)
+        return true
     }
 
     @discardableResult
     func purgeCompleted(before cutoff: Date) -> Int {
+        // Only expiry candidates and their immediate family are read: every
+        // replica of each candidate (so divergent duplicates still refuse
+        // cleanup), the candidates' children, and their parents. Rows that
+        // are neither can't change which candidates expire.
         let stored: [TaskItem]
         do {
-            stored = try context.fetch(FetchDescriptor<TaskItem>())
+            let doneRaw = TaskStatus.done.rawValue
+            let farFuture = Date.distantFuture
+            let candidates = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.statusRaw == doneRaw && ($0.completedAt ?? farFuture) < cutoff }
+            ))
+            guard !candidates.isEmpty else { return 0 }
+            let candidateIDs = Array(Set(candidates.map(\.id)))
+            let parentIDs = Array(Set(candidates.compactMap(\.parentID)))
+            let relatedIDs = candidateIDs + parentIDs
+            let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { relatedIDs.contains($0.id) }
+            ))
+            let children = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.parentID != nil && candidateIDs.contains($0.parentID!) }
+            ))
+            var seen = Set<PersistentIdentifier>()
+            stored = (replicas + children).filter { seen.insert($0.persistentModelID).inserted }
         } catch {
             lastErrorMessage = error.localizedDescription
             return 0
@@ -460,50 +894,40 @@ final class TaskStore: ObservableObject {
             }
         }
         guard !expiredIDs.isEmpty else { return 0 }
-        stored.filter { expiredIDs.contains($0.id) }.forEach(context.delete)
+        let expired = stored.filter { expiredIDs.contains($0.id) }
+        let removedImages = expired.flatMap(\.attachments)
+        expired.forEach(context.delete)
         tasks.removeAll { expiredIDs.contains($0.id) }
-        return save() ? expiredIDs.count : 0
+        guard save() else { return 0 }
+        removeAttachmentFiles(removedImages, excludingTaskIDs: expiredIDs)
+        return expiredIDs.count
     }
 
     func orderedTasks(for status: TaskStatus) -> [TaskItem] {
-        tasks
-            .filter { $0.status == status }
-            .sorted { lhs, rhs in
-                if lhs.priority.sortRank != rhs.priority.sortRank {
-                    return lhs.priority.sortRank > rhs.priority.sortRank
-                }
-                switch (lhs.manualOrder, rhs.manualOrder) {
-                case let (.some(lhsOrder), .some(rhsOrder)) where lhsOrder != rhsOrder:
-                    return lhsOrder > rhsOrder
-                case (.some, .none):
-                    return true
-                case (.none, .some):
-                    return false
-                default:
-                    break
-                }
-                if lhs.updatedAt != rhs.updatedAt {
-                    return lhs.updatedAt > rhs.updatedAt
-                }
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
+        let raw = status.rawValue
+        return tasks
+            .filter { $0.statusRaw == raw }
+            .map(SectionSortKey.init)
+            .sorted(by: SectionSortKey.comesBefore)
+            .map(\.task)
     }
 
     /// Invalid/orphaned imported links remain visible as roots; never hide data.
     func parent(of task: TaskItem) -> TaskItem? {
-        guard let parentID = task.parentID, parentID != task.id else { return nil }
-        return tasks.first { $0.id == parentID && $0.parentID == nil }
+        guard let parentID = task.parentID, parentID != task.id,
+              let parent = familyIndex.byID[parentID], parent.parentID == nil else { return nil }
+        return parent
     }
 
+    /// The family's children in display order — unfinished first, then
+    /// manual order, then creation. O(1) per call between mutations.
     func subtasks(of parentID: UUID) -> [TaskItem] {
-        tasks.filter { $0.parentID == parentID && parent(of: $0)?.id == parentID }
-            .sorted {
-                if $0.manualOrder != $1.manualOrder {
-                    return ($0.manualOrder ?? 0) > ($1.manualOrder ?? 0)
-                }
-                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-                return $0.id.uuidString < $1.id.uuidString
-            }
+        familyIndex.childrenByParent[parentID] ?? []
+    }
+
+    /// Whether the family has any child, without materializing the list.
+    func hasSubtasks(_ parentID: UUID) -> Bool {
+        familyIndex.childrenByParent[parentID]?.isEmpty == false
     }
 
     /// Memoized per revision: SwiftUI evaluates view bodies far more often
@@ -514,10 +938,16 @@ final class TaskStore: ObservableObject {
             return cached.snapshot
         }
 
+        // One pass reads every root's keys; each section then sorts its own
+        // slice. Children are excluded through the index, never by scanning.
+        var keysByStatus: [String: [SectionSortKey]] = [:]
+        for task in tasks where parent(of: task) == nil {
+            let key = SectionSortKey(task)
+            keysByStatus[key.statusRaw, default: []].append(key)
+        }
         let sections = scope.statuses.compactMap { status -> TaskSectionSnapshot? in
-            let statusTasks = orderedTasks(for: status).filter { parent(of: $0) == nil }
-            guard !statusTasks.isEmpty else { return nil }
-            return TaskSectionSnapshot(status: status, tasks: statusTasks)
+            guard let keys = keysByStatus[status.rawValue], !keys.isEmpty else { return nil }
+            return TaskSectionSnapshot(status: status, tasks: keys.sorted(by: SectionSortKey.comesBefore).map(\.task))
         }
         let activeStatuses = Set(scope.countedStatuses)
         let snapshot = TaskScopeSnapshot(
@@ -548,7 +978,7 @@ final class TaskStore: ObservableObject {
     /// adopts that section's status (placing the task near the target row
     /// when their priorities allow it).
     @discardableResult
-    func drop(taskID: UUID, onto targetID: UUID) -> Bool {
+    func drop(taskID: UUID, onto targetID: UUID, allowingUnfinishedSubtasks: Bool = false) -> Bool {
         guard taskID != targetID,
               let task = tasks.first(where: { $0.id == taskID }),
               let target = tasks.first(where: { $0.id == targetID }) else {
@@ -561,7 +991,7 @@ final class TaskStore: ObservableObject {
             return reorder(taskID: taskID, relativeTo: targetID)
         }
 
-        guard setStatus(target.status, for: task) else { return false }
+        guard setStatus(target.status, for: task, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks) else { return false }
         if task.priority == target.priority {
             reorder(taskID: taskID, relativeTo: targetID)
         }
@@ -570,12 +1000,12 @@ final class TaskStore: ObservableObject {
 
     /// Drop onto a section's own area (header, gaps, empty placeholder).
     @discardableResult
-    func drop(taskID: UUID, into status: TaskStatus) -> Bool {
+    func drop(taskID: UUID, into status: TaskStatus, allowingUnfinishedSubtasks: Bool = false) -> Bool {
         guard let task = tasks.first(where: { $0.id == taskID }),
               task.status != status else {
             return false
         }
-        return setStatus(status, for: task)
+        return setStatus(status, for: task, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
     }
 
     @discardableResult
@@ -639,8 +1069,10 @@ final class TaskStore: ObservableObject {
             try persist(context)
             lastErrorMessage = nil
             revision &+= 1
+            #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
             reconcileProtectedCloudSyncActivity(for: .exportData)
+            #endif
             return true
         } catch {
             let saveError = error.localizedDescription
@@ -704,8 +1136,13 @@ final class TaskStore: ObservableObject {
     private func storedTaskGroups(
         matching ids: Set<UUID>
     ) throws -> [UUID: [TaskItem]] {
-        let stored = try context.fetch(FetchDescriptor<TaskItem>())
-        let groups = Dictionary(grouping: stored.filter { ids.contains($0.id) }, by: \.id)
+        // Every physical replica of each id, and nothing else: mutations
+        // still fan out to all duplicates without reading the whole table.
+        let idList = Array(ids)
+        let stored = try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { idList.contains($0.id) }
+        ))
+        let groups = Dictionary(grouping: stored, by: \.id)
         if let missingID = ids.first(where: { groups[$0]?.isEmpty != false }) {
             throw TaskReplicaMutationError.missingReplica(missingID)
         }
@@ -713,6 +1150,7 @@ final class TaskStore: ObservableObject {
     }
 
     private func observeRemoteChanges() {
+        #if !ATTIC_LOCAL_ONLY
         remoteChangeObservation = NotificationCenter.default.publisher(
             for: .NSPersistentStoreRemoteChange
         )
@@ -720,9 +1158,11 @@ final class TaskStore: ObservableObject {
         .sink { [weak self] _ in
             self?.refresh()
         }
+        #endif
     }
 
     private func observeCloudKitEvents() {
+        #if !ATTIC_LOCAL_ONLY
         cloudKitEventObservation = NotificationCenter.default.publisher(
             for: NSPersistentCloudKitContainer.eventChangedNotification
         )
@@ -741,6 +1181,7 @@ final class TaskStore: ObservableObject {
                 errorMessage: Self.cloudSyncErrorMessage(event.error)
             ))
         }
+        #endif
     }
 
     /// A successful CloudKit import means the SQLite store has changed, but
@@ -748,6 +1189,16 @@ final class TaskStore: ObservableObject {
     /// SwiftData import. Coalesce completed imports and replace the context so
     /// the panel cannot remain attached to stale model instances.
     func handleCloudSyncEvent(_ update: CloudSyncEventUpdate) {
+        #if ATTIC_LOCAL_ONLY
+        // Dormant: a local-only build has no CloudKit container, so an event
+        // posted in-process must not touch status, protection or refreshes.
+        return
+        #else
+        handleDeferredCloudSyncEvent(update)
+        #endif
+    }
+
+    private func handleDeferredCloudSyncEvent(_ update: CloudSyncEventUpdate) {
         cloudSyncProtection.apply(update)
         reconcileProtectedCloudSyncActivity(for: update.kind)
         cloudSyncStatus.apply(update)
@@ -957,6 +1408,7 @@ final class TaskStore: ObservableObject {
             task.completedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
             task.manualOrder.map(String.init) ?? "",
             task.parentID?.uuidString ?? "",
+            task.imageReferencesData?.base64EncodedString() ?? "",
             String(reflecting: task.persistentModelID)
         ].joined(separator: "\u{1F}")
     }

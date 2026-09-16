@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attic live visual-state catalog — 2026-09-14</title>
+  <style>
+    :root { color-scheme: dark; --bg:#111214; --panel:#1d1f23; --line:#353941; --text:#f2f3f5; --muted:#a5aab4; --accent:#62b3ff; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:28px; background:var(--bg); color:var(--text); font:15px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif; }
+    header { max-width:1400px; margin:0 auto 24px; }
+    h1 { margin:0 0 5px; font-size:28px; letter-spacing:-.02em; }
+    h2 { margin:28px 0 12px; font-size:20px; }
+    p { color:var(--muted); margin:4px 0; }
+    a { color:var(--accent); }
+    .note { border:1px solid var(--line); border-radius:14px; padding:14px 16px; background:#181a1e; }
+    .grid { max-width:1400px; margin:0 auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }
+    figure { margin:0; padding:10px; border:1px solid var(--line); border-radius:14px; background:var(--panel); overflow:hidden; }
+    figure.excluded { opacity:.58; }
+    figure a { display:block; background:#08090a; border-radius:9px; text-align:center; }
+    figure img { display:block; max-width:100%; height:260px; width:auto; margin:auto; object-fit:contain; }
+    figcaption { padding:9px 2px 1px; }
+    .id { font-weight:700; color:var(--text); }
+    .desc { color:var(--muted); font-size:13px; }
+    details { max-width:1400px; margin:0 auto; }
+    summary { cursor:pointer; color:var(--accent); margin:8px 0; }
+    @media (max-width:650px) { body { padding:15px; } .grid { grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); } figure img { height:210px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Attic live visual-state catalog</h1>
+    <p>63 PNGs captured from the running <code>AtticChromeCheckpoint</code> preview on 2026-09-14.</p>
+    <p><a href="./README.md">Read the full state index, reproduction steps, provenance, fixture disclosure, and limits.</a></p>
+    <div class="note"><strong>Coverage:</strong> tasks, subtasks, attachments, composer drafts, context menus and nested menus, Notes, native pickers, Canvas tools and transient placement states, Canvas document/View/Edit menus, app menus, Settings pages, and native Colors. Hover-only states remain explicitly unvisited because reliable pointer-hover automation was unavailable. The first full-screen capture is retained but excluded.</div>
+  </header>
+
+  <h2>Tasks and task panels</h2>
+  <div class="grid">
+    <figure><a href="./TP-001-main-tasks-baseline-window.png"><img loading="lazy" src="./TP-001-main-tasks-baseline-window.png" alt="TP-001 Tasks baseline"></a><figcaption><span class="id">TP-001</span><br><span class="desc">Pinned Tasks baseline</span></figcaption></figure>
+    <figure class="excluded"><a href="./TP-001-main-tasks-baseline.png"><img loading="lazy" src="./TP-001-main-tasks-baseline.png" alt="Excluded full-screen capture"></a><figcaption><span class="id">TP-001-X</span><br><span class="desc">Excluded accidental full-screen capture</span></figcaption></figure>
+    <figure><a href="./TP-002-main-tasks-unpinned.png"><img loading="lazy" src="./TP-002-main-tasks-unpinned.png" alt="TP-002 unpinned Tasks"></a><figcaption><span class="id">TP-002</span><br><span class="desc">Unpinned Tasks</span></figcaption></figure>
+    <figure><a href="./TP-010-backlog-empty-pinned.png"><img loading="lazy" src="./TP-010-backlog-empty-pinned.png" alt="TP-010 empty Backlog"></a><figcaption><span class="id">TP-010</span><br><span class="desc">Empty Backlog</span></figcaption></figure>
+    <figure><a href="./TP-012-main-task-attachment-subtask-metadata.png"><img loading="lazy" src="./TP-012-main-task-attachment-subtask-metadata.png" alt="TP-012 task metadata"></a><figcaption><span class="id">TP-012</span><br><span class="desc">Task attachment and subtask metadata</span></figcaption></figure>
+    <figure><a href="./TP-013-parent-completion-warning.png"><img loading="lazy" src="./TP-013-parent-completion-warning.png" alt="TP-013 parent completion warning"></a><figcaption><span class="id">TP-013</span><br><span class="desc">Unfinished-subtask completion warning</span></figcaption></figure>
+    <figure><a href="./TP-020-subpanel-subtasks-populated.png"><img loading="lazy" src="./TP-020-subpanel-subtasks-populated.png" alt="TP-020 subtasks subpanel"></a><figcaption><span class="id">TP-020</span><br><span class="desc">Populated subtasks subpanel</span></figcaption></figure>
+    <figure><a href="./TP-021-subpanel-pinned.png"><img loading="lazy" src="./TP-021-subpanel-pinned.png" alt="TP-021 pinned subpanel"></a><figcaption><span class="id">TP-021</span><br><span class="desc">Pinned subtasks subpanel</span></figcaption></figure>
+    <figure><a href="./TP-022-subpanel-composer-empty.png"><img loading="lazy" src="./TP-022-subpanel-composer-empty.png" alt="TP-022 empty subtask composer"></a><figcaption><span class="id">TP-022</span><br><span class="desc">Empty Add subtask composer</span></figcaption></figure>
+    <figure><a href="./TP-023-subpanel-nine-subtasks.png"><img loading="lazy" src="./TP-023-subpanel-nine-subtasks.png" alt="TP-023 nine subtasks"></a><figcaption><span class="id">TP-023</span><br><span class="desc">Nine-subtask fixture</span></figcaption></figure>
+    <figure><a href="./TP-024-subpanel-attachments-empty.png"><img loading="lazy" src="./TP-024-subpanel-attachments-empty.png" alt="TP-024 empty attachments subpanel"></a><figcaption><span class="id">TP-024</span><br><span class="desc">Empty Attachments mode</span></figcaption></figure>
+    <figure><a href="./TP-025-native-task-picker-fixture.png"><img loading="lazy" src="./TP-025-native-task-picker-fixture.png" alt="TP-025 native task file picker"></a><figcaption><span class="id">TP-025</span><br><span class="desc">Native task attachment picker</span></figcaption></figure>
+    <figure><a href="./TP-026-subpanel-attachment-image.png"><img loading="lazy" src="./TP-026-subpanel-attachment-image.png" alt="TP-026 image attachment"></a><figcaption><span class="id">TP-026</span><br><span class="desc">Image attachment</span></figcaption></figure>
+    <figure><a href="./TP-027-subpanel-attachments-image-file.png"><img loading="lazy" src="./TP-027-subpanel-attachments-image-file.png" alt="TP-027 image and file attachments"></a><figcaption><span class="id">TP-027</span><br><span class="desc">Image and normal file attachments</span></figcaption></figure>
+    <figure><a href="./TP-028-subpanel-partial-completion.png"><img loading="lazy" src="./TP-028-subpanel-partial-completion.png" alt="TP-028 partial completion"></a><figcaption><span class="id">TP-028</span><br><span class="desc">Partial subtask completion</span></figcaption></figure>
+    <figure><a href="./TP-030-composer-add-menu.png"><img loading="lazy" src="./TP-030-composer-add-menu.png" alt="TP-030 composer Add menu"></a><figcaption><span class="id">TP-030</span><br><span class="desc">Composer Add menu</span></figcaption></figure>
+    <figure><a href="./TP-031-composer-priority-expanded.png"><img loading="lazy" src="./TP-031-composer-priority-expanded.png" alt="TP-031 expanded priority"></a><figcaption><span class="id">TP-031</span><br><span class="desc">Composer priority options</span></figcaption></figure>
+    <figure><a href="./TP-032-composer-long-title-focused.png"><img loading="lazy" src="./TP-032-composer-long-title-focused.png" alt="TP-032 long title focused"></a><figcaption><span class="id">TP-032</span><br><span class="desc">Long-title composer focus</span></figcaption></figure>
+    <figure><a href="./TP-033-composer-high-priority-long-title.png"><img loading="lazy" src="./TP-033-composer-high-priority-long-title.png" alt="TP-033 High priority long title"></a><figcaption><span class="id">TP-033</span><br><span class="desc">High-priority long-title draft</span></figcaption></figure>
+    <figure><a href="./TP-034-composer-pending-image.png"><img loading="lazy" src="./TP-034-composer-pending-image.png" alt="TP-034 pending image"></a><figcaption><span class="id">TP-034</span><br><span class="desc">Pending image attachment</span></figcaption></figure>
+    <figure><a href="./TP-035-composer-pending-image-file.png"><img loading="lazy" src="./TP-035-composer-pending-image-file.png" alt="TP-035 pending image and file"></a><figcaption><span class="id">TP-035</span><br><span class="desc">Pending image and file attachments</span></figcaption></figure>
+    <figure><a href="./TP-040-task-context-menu.png"><img loading="lazy" src="./TP-040-task-context-menu.png" alt="TP-040 task context menu"></a><figcaption><span class="id">TP-040</span><br><span class="desc">Task row context menu</span></figcaption></figure>
+    <figure><a href="./TP-041-task-context-submenus.png"><img loading="lazy" src="./TP-041-task-context-submenus.png" alt="TP-041 context menu supplemental"></a><figcaption><span class="id">TP-041</span><br><span class="desc">Context-menu supplemental capture</span></figcaption></figure>
+    <figure><a href="./TP-042-task-priority-submenu.png"><img loading="lazy" src="./TP-042-task-priority-submenu.png" alt="TP-042 task priority submenu"></a><figcaption><span class="id">TP-042</span><br><span class="desc">Task Priority submenu</span></figcaption></figure>
+    <figure><a href="./TP-043-task-move-to-submenu.png"><img loading="lazy" src="./TP-043-task-move-to-submenu.png" alt="TP-043 task Move to submenu"></a><figcaption><span class="id">TP-043</span><br><span class="desc">Task Move to submenu</span></figcaption></figure>
+    <figure><a href="./TP-044-composer-options-with-pending-attachments.png"><img loading="lazy" src="./TP-044-composer-options-with-pending-attachments.png" alt="TP-044 composer options with attachments"></a><figcaption><span class="id">TP-044</span><br><span class="desc">Composer options with pending attachments</span></figcaption></figure>
+    <figure><a href="./TP-045-composer-priority-dropdown-with-attachments.png"><img loading="lazy" src="./TP-045-composer-priority-dropdown-with-attachments.png" alt="TP-045 composer priority with attachments"></a><figcaption><span class="id">TP-045</span><br><span class="desc">Composer priority dropdown with attachments</span></figcaption></figure>
+    <figure><a href="./TP-046-main-long-title-task-added.png"><img loading="lazy" src="./TP-046-main-long-title-task-added.png" alt="TP-046 long title task added"></a><figcaption><span class="id">TP-046</span><br><span class="desc">Long-title QA task in progress</span></figcaption></figure>
+    <figure><a href="./TP-047-main-completed-qa-task.png"><img loading="lazy" src="./TP-047-main-completed-qa-task.png" alt="TP-047 completed QA task"></a><figcaption><span class="id">TP-047</span><br><span class="desc">Completed QA task in Done</span></figcaption></figure>
+  </div>
+
+  <h2>Notes</h2>
+  <div class="grid">
+    <figure><a href="./NT-001-new-note-empty.png"><img loading="lazy" src="./NT-001-new-note-empty.png" alt="NT-001 new empty note"></a><figcaption><span class="id">NT-001</span><br><span class="desc">New empty note</span></figcaption></figure>
+    <figure><a href="./NT-002-note-long-unsaved.png"><img loading="lazy" src="./NT-002-note-long-unsaved.png" alt="NT-002 long unsaved note"></a><figcaption><span class="id">NT-002</span><br><span class="desc">Long unsaved note</span></figcaption></figure>
+    <figure><a href="./NT-003-note-long-saved.png"><img loading="lazy" src="./NT-003-note-long-saved.png" alt="NT-003 long saved note"></a><figcaption><span class="id">NT-003</span><br><span class="desc">Long saved note</span></figcaption></figure>
+    <figure><a href="./NT-004-note-long-scrolled-bottom.png"><img loading="lazy" src="./NT-004-note-long-scrolled-bottom.png" alt="NT-004 note scrolled bottom"></a><figcaption><span class="id">NT-004</span><br><span class="desc">Note scrolled to bottom</span></figcaption></figure>
+    <figure><a href="./NT-005-saved-notes-drawer.png"><img loading="lazy" src="./NT-005-saved-notes-drawer.png" alt="NT-005 Saved Notes drawer"></a><figcaption><span class="id">NT-005</span><br><span class="desc">Saved Notes drawer</span></figcaption></figure>
+    <figure><a href="./NT-006-native-picker-quota-warning.png"><img loading="lazy" src="./NT-006-native-picker-quota-warning.png" alt="NT-006 native picker quota warning"></a><figcaption><span class="id">NT-006</span><br><span class="desc">Native picker iCloud paused/quota state</span></figcaption></figure>
+  </div>
+
+  <h2>Canvas</h2>
+  <div class="grid">
+    <figure><a href="./CV-001-canvas-populated.png"><img loading="lazy" src="./CV-001-canvas-populated.png" alt="CV-001 populated Canvas"></a><figcaption><span class="id">CV-001</span><br><span class="desc">Populated Canvas</span></figcaption></figure>
+    <figure><a href="./CV-002-canvas-empty-qa.png"><img loading="lazy" src="./CV-002-canvas-empty-qa.png" alt="CV-002 empty QA Canvas"></a><figcaption><span class="id">CV-002</span><br><span class="desc">Empty QA Canvas</span></figcaption></figure>
+    <figure><a href="./CV-003-canvas-shape-menu.png"><img loading="lazy" src="./CV-003-canvas-shape-menu.png" alt="CV-003 Canvas shape menu"></a><figcaption><span class="id">CV-003</span><br><span class="desc">Canvas shape menu</span></figcaption></figure>
+    <figure><a href="./CV-004-canvas-rectangle-selected.png"><img loading="lazy" src="./CV-004-canvas-rectangle-selected.png" alt="CV-004 selected rectangle"></a><figcaption><span class="id">CV-004</span><br><span class="desc">Selected rectangle</span></figcaption></figure>
+    <figure><a href="./CV-005-canvas-selected-style-menu.png"><img loading="lazy" src="./CV-005-canvas-selected-style-menu.png" alt="CV-005 selected style menu"></a><figcaption><span class="id">CV-005</span><br><span class="desc">Selected-object style menu</span></figcaption></figure>
+    <figure><a href="./CV-006-canvas-text-selected.png"><img loading="lazy" src="./CV-006-canvas-text-selected.png" alt="CV-006 selected Canvas text"></a><figcaption><span class="id">CV-006</span><br><span class="desc">Selected text object</span></figcaption></figure>
+    <figure><a href="./CV-007-canvas-zoom-menu.png"><img loading="lazy" src="./CV-007-canvas-zoom-menu.png" alt="CV-007 Canvas zoom menu"></a><figcaption><span class="id">CV-007</span><br><span class="desc">Canvas zoom menu</span></figcaption></figure>
+    <figure><a href="./CV-008-canvas-zoomed-out.png"><img loading="lazy" src="./CV-008-canvas-zoomed-out.png" alt="CV-008 Canvas zoomed out"></a><figcaption><span class="id">CV-008</span><br><span class="desc">Zoomed-out Canvas</span></figcaption></figure>
+    <figure><a href="./CV-009-canvas-mixed-objects.png"><img loading="lazy" src="./CV-009-canvas-mixed-objects.png" alt="CV-009 mixed Canvas objects"></a><figcaption><span class="id">CV-009</span><br><span class="desc">Mixed objects and ink</span></figcaption></figure>
+    <figure><a href="./CV-010-canvas-ink-style-popover.png"><img loading="lazy" src="./CV-010-canvas-ink-style-popover.png" alt="CV-010 ink style popover"></a><figcaption><span class="id">CV-010</span><br><span class="desc">Ink style popover</span></figcaption></figure>
+    <figure><a href="./CV-011-canvas-blue-style.png"><img loading="lazy" src="./CV-011-canvas-blue-style.png" alt="CV-011 blue ink style"></a><figcaption><span class="id">CV-011</span><br><span class="desc">Blue ink style</span></figcaption></figure>
+    <figure><a href="./CV-012-canvas-document-menu.png"><img loading="lazy" src="./CV-012-canvas-document-menu.png" alt="CV-012 Canvas document menu"></a><figcaption><span class="id">CV-012</span><br><span class="desc">Canvas document/actions menu</span></figcaption></figure>
+    <figure><a href="./CV-013-new-canvas-modal.png"><img loading="lazy" src="./CV-013-new-canvas-modal.png" alt="CV-013 New Canvas modal"></a><figcaption><span class="id">CV-013</span><br><span class="desc">New Canvas modal sheet</span></figcaption></figure>
+    <figure><a href="./CV-014-canvas-shape-dropdown.png"><img loading="lazy" src="./CV-014-canvas-shape-dropdown.png" alt="CV-014 Canvas shape dropdown"></a><figcaption><span class="id">CV-014</span><br><span class="desc">Shape dropdown</span></figcaption></figure>
+    <figure><a href="./CV-015-canvas-pending-rectangle.png"><img loading="lazy" src="./CV-015-canvas-pending-rectangle.png" alt="CV-015 pending rectangle instruction"></a><figcaption><span class="id">CV-015</span><br><span class="desc">“Drag on the canvas to place a rectangle”</span></figcaption></figure>
+    <figure><a href="./CV-016-canvas-view-submenu.png"><img loading="lazy" src="./CV-016-canvas-view-submenu.png" alt="CV-016 Canvas View submenu"></a><figcaption><span class="id">CV-016</span><br><span class="desc">Canvas View submenu</span></figcaption></figure>
+    <figure><a href="./CV-017-canvas-edit-submenu.png"><img loading="lazy" src="./CV-017-canvas-edit-submenu.png" alt="CV-017 Canvas Edit submenu"></a><figcaption><span class="id">CV-017</span><br><span class="desc">Canvas Edit submenu</span></figcaption></figure>
+  </div>
+
+  <h2>Application menus and Settings</h2>
+  <div class="grid">
+    <figure><a href="./MENU-001-application-menu.png"><img loading="lazy" src="./MENU-001-application-menu.png" alt="MENU-001 application menu"></a><figcaption><span class="id">MENU-001</span><br><span class="desc">Application menu</span></figcaption></figure>
+    <figure><a href="./MENU-002-edit-menu.png"><img loading="lazy" src="./MENU-002-edit-menu.png" alt="MENU-002 Edit menu"></a><figcaption><span class="id">MENU-002</span><br><span class="desc">Edit menu</span></figcaption></figure>
+    <figure><a href="./MENU-003-view-menu.png"><img loading="lazy" src="./MENU-003-view-menu.png" alt="MENU-003 View menu"></a><figcaption><span class="id">MENU-003</span><br><span class="desc">View menu</span></figcaption></figure>
+    <figure><a href="./MENU-004-window-menu.png"><img loading="lazy" src="./MENU-004-window-menu.png" alt="MENU-004 Window menu"></a><figcaption><span class="id">MENU-004</span><br><span class="desc">Window menu</span></figcaption></figure>
+    <figure><a href="./MENU-005-help-menu.png"><img loading="lazy" src="./MENU-005-help-menu.png" alt="MENU-005 Help menu"></a><figcaption><span class="id">MENU-005</span><br><span class="desc">Help menu</span></figcaption></figure>
+    <figure><a href="./SET-001-settings-appearance.png"><img loading="lazy" src="./SET-001-settings-appearance.png" alt="SET-001 Appearance settings"></a><figcaption><span class="id">SET-001</span><br><span class="desc">Appearance settings</span></figcaption></figure>
+    <figure><a href="./SET-002-settings-general.png"><img loading="lazy" src="./SET-002-settings-general.png" alt="SET-002 General settings"></a><figcaption><span class="id">SET-002</span><br><span class="desc">General settings</span></figcaption></figure>
+    <figure><a href="./SET-003-settings-panel.png"><img loading="lazy" src="./SET-003-settings-panel.png" alt="SET-003 Panel settings"></a><figcaption><span class="id">SET-003</span><br><span class="desc">Panel settings</span></figcaption></figure>
+    <figure><a href="./SET-004-settings-agent-access.png"><img loading="lazy" src="./SET-004-settings-agent-access.png" alt="SET-004 Agent Access settings"></a><figcaption><span class="id">SET-004</span><br><span class="desc">Agent Access settings</span></figcaption></figure>
+    <figure><a href="./SET-005-settings-about.png"><img loading="lazy" src="./SET-005-settings-about.png" alt="SET-005 About settings"></a><figcaption><span class="id">SET-005</span><br><span class="desc">About settings</span></figcaption></figure>
+    <figure><a href="./SET-006-native-colors-panel.png"><img loading="lazy" src="./SET-006-native-colors-panel.png" alt="SET-006 native Colors panel"></a><figcaption><span class="id">SET-006</span><br><span class="desc">Native Colors panel</span></figcaption></figure>
+  </div>
+</body>
+</html>

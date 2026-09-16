@@ -1,0 +1,130 @@
+=== undo_share [] ===
+variant: textKit1=false dropOldEditor=false private=false
+window.undoManager is Optional(NSUndoManager<0x7992dc60d0>)
+e1.undoManager === window.undoManager: true
+  textDidChange(e1) -> 'gam'
+  textDidChange(e1) -> 'gamma'
+after typing in e1: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+e1 alive after teardown: true
+window after e1 teardown: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=false
+e2.undoManager === window.undoManager: true
+fresh e2 at entry: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=false
+draftBumps after programmatic string= : 0
+  textDidChange(e2) -> 'gamma!'
+e2 after typing '!': canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+window UM === e2 UM: true
+window UM: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=false
+after undoing '!': e2='gamma'
+e2 after undo of '!': canUndo=Optional(true) canRedo=Optional(true) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=true
+after 1st toolbar-style undo: e2='gamma' e1='gam' draftBumps=1
+e2 after 1st undo: canUndo=Optional(true) canRedo=Optional(true) undoTitle='Undo Typing'
+after 2nd toolbar-style undo: e2='gamma' e1='' draftBumps=1
+e2 after 2nd undo: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=true
+after e2 teardown, first responder = NSView
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=true
+window after e2 teardown: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+done
+=== undo_share [--private] ===
+variant: textKit1=false dropOldEditor=false private=true
+window.undoManager is Optional(NSUndoManager<0x796cda60d0>)
+e1.undoManager === window.undoManager: false
+  textDidChange(e1) -> 'gam'
+  textDidChange(e1) -> 'gamma'
+after typing in e1: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+e1 alive after teardown: true
+window after e1 teardown: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+e2.undoManager === window.undoManager: false
+fresh e2 at entry: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+draftBumps after programmatic string= : 0
+  textDidChange(e2) -> 'gamma!'
+e2 after typing '!': canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+window UM === e2 UM: false
+window UM: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+after undoing '!': e2='gamma'
+e2 after undo of '!': canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+after 1st toolbar-style undo: e2='gamma' e1='gamma' draftBumps=1
+e2 after 1st undo: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+after 2nd toolbar-style undo: e2='gamma' e1='gamma' draftBumps=1
+e2 after 2nd undo: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+after e2 teardown, first responder = NSView
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+window after e2 teardown: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+done
+=== undo_share [--tk1] ===
+variant: textKit1=true dropOldEditor=false private=false
+window.undoManager is Optional(NSUndoManager<0x7964dc60d0>)
+e1.undoManager === window.undoManager: true
+  textDidChange(e1) -> 'gam'
+  textDidChange(e1) -> 'gamma'
+after typing in e1: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+e1 alive after teardown: true
+window after e1 teardown: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=false
+e2.undoManager === window.undoManager: true
+fresh e2 at entry: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=false
+draftBumps after programmatic string= : 0
+  textDidChange(e2) -> 'gamma!'
+e2 after typing '!': canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+window UM === e2 UM: true
+window UM: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=false
+  textDidChange(e2) -> 'gamma'
+after undoing '!': e2='gamma'
+e2 after undo of '!': canUndo=Optional(true) canRedo=Optional(true) undoTitle='Undo Typing'
+undo: handled by NSWindow valid=true | redo: handled by NSWindow valid=true
+  textDidChange(e1) -> 'gam'
+  (stale e1 onDraft fired)
+after 1st toolbar-style undo: e2='gamma' e1='gam' draftBumps=3
+e2 after 1st undo: canUndo=Optional(true) canRedo=Optional(true) undoTitle='Undo Typing'
+  textDidChange(e1) -> ''
+  (stale e1 onDraft fired)
+after 2nd toolbar-style undo: e2='gamma' e1='' draftBumps=4
+e2 after 2nd undo: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=true
+after e2 teardown, first responder = NSView
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=true
+window after e2 teardown: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+done
+=== undo_share [--private --tk1 --drop] ===
+variant: textKit1=true dropOldEditor=true private=true
+window.undoManager is Optional(NSUndoManager<0x7b70dc60d0>)
+e1.undoManager === window.undoManager: false
+  textDidChange(e1) -> 'gam'
+  textDidChange(e1) -> 'gamma'
+after typing in e1: canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+e1 alive after teardown: true
+window after e1 teardown: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+e2.undoManager === window.undoManager: false
+fresh e2 at entry: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+draftBumps after programmatic string= : 0
+  textDidChange(e2) -> 'gamma!'
+e2 after typing '!': canUndo=Optional(true) canRedo=Optional(false) undoTitle='Undo Typing'
+window UM === e2 UM: false
+window UM: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+  textDidChange(e2) -> 'gamma'
+after undoing '!': e2='gamma'
+e2 after undo of '!': canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+after 1st toolbar-style undo: e2='gamma' e1='gamma' draftBumps=2
+e2 after 1st undo: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+after 2nd toolbar-style undo: e2='gamma' e1='gamma' draftBumps=2
+e2 after 2nd undo: canUndo=Optional(false) canRedo=Optional(true) undoTitle='Undo'
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+after e2 teardown, first responder = NSView
+undo: handled by NSWindow valid=false | redo: handled by NSWindow valid=false
+window after e2 teardown: canUndo=Optional(false) canRedo=Optional(false) undoTitle='Undo'
+done

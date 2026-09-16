@@ -237,6 +237,42 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         super.init()
         configurePanel()
         bindContentSize()
+        uiState.$dockingPreviewCorner.sink { [weak self] corner in
+            self?.updateDockingIndicator(corner: corner)
+        }.store(in: &cancellables)
+    }
+
+    private var dockingIndicator: NSPanel?
+    private var dockingIndicatorCorner: ScreenCorner?
+
+    private func updateDockingIndicator(corner: ScreenCorner?, frame: CGRect? = nil) {
+        guard let corner else { dockingIndicator?.orderOut(nil); return }
+        let frame = frame ?? panel.visibleContentFrame
+        guard let screen = bestScreen(for: frame) else { return }
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topRight || corner == .topLeft
+        let proposed = CGRect(x: right ? frame.maxX + 8 : frame.minX - 36,
+                              y: top ? frame.maxY - 28 : frame.minY, width: 28, height: 28)
+        let target = SubtaskPanelLayout.avoidingOverlap(proposed, occupied: [frame],
+            within: screen.visibleFrame.insetBy(dx: 4, dy: 4), gap: 8)
+        let indicator = dockingIndicator ?? NSPanel(contentRect: target,
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        indicator.isOpaque = false
+        indicator.backgroundColor = .clear
+        indicator.ignoresMouseEvents = true
+        indicator.hasShadow = false
+        indicator.level = .floating
+        let symbol = top ? (right ? "arrow.up.right" : "arrow.up.left") : (right ? "arrow.down.right" : "arrow.down.left")
+        if dockingIndicatorCorner != corner || indicator.contentView == nil {
+            indicator.contentView = NSHostingView(rootView:
+                Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                    .frame(width: 28, height: 28).background(.regularMaterial, in: Circle())
+                    .accessibilityHidden(true))
+            dockingIndicatorCorner = corner
+        }
+        indicator.setFrame(target, display: true)
+        if !indicator.isVisible { indicator.orderFrontRegardless() }
+        dockingIndicator = indicator
     }
 
     deinit {
@@ -430,7 +466,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Destructive/transient presentation state changes only after the
         // persistence boundary accepts the hide transaction.
         hostingView.cancelActiveInteraction(reason: .explicitHide)
-        canvasSession.cancelActiveInteraction()
+        canvasSession.interruptActiveInteraction()
         uiState.isCanvasConfirmationPresented = false
         uiState.dockingPreviewCorner = nil
         uiState.setInteractionLock(.windowMove, isActive: false)
@@ -795,6 +831,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if uiState.dockingPreviewCorner != previewCorner {
             uiState.dockingPreviewCorner = previewCorner
         }
+        updateDockingIndicator(corner: previewCorner, frame: constrainedFrame)
         return constrainedFrame
     }
 
@@ -971,7 +1008,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         if contentContainer == nil { finishes.finishPresentation() }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.8, 0.28, 1)
             panel.animator().setFrame(panel.nativeFrame(forVisibleFrame: frame), display: true)
         } completionHandler: {
             MainActor.assumeIsolated {

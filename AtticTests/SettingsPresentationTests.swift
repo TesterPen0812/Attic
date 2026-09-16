@@ -4,6 +4,35 @@ import XCTest
 @testable import Attic
 
 final class SettingsPresentationTests: XCTestCase {
+    func testTranslucencyChangesSurfaceOnlyWhileControlsStayLiquidGlass() {
+        // Control treatment takes no surface input at all, so no translucency
+        // or glass-style combination (including Glassmorphism) can move
+        // controls off Liquid Glass.
+        XCTAssertEqual(
+            AtticGlassControlTreatment.resolve(reduceTransparency: false, supportsNativeGlass: true),
+            .nativeGlass,
+            "every panel surface keeps Liquid Glass controls"
+        )
+        XCTAssertEqual(
+            AtticGlassControlTreatment.resolve(reduceTransparency: true, supportsNativeGlass: true),
+            .opaque,
+            "Reduce Transparency remains the accessibility override"
+        )
+        XCTAssertEqual(
+            AtticGlassControlTreatment.resolve(reduceTransparency: true, supportsNativeGlass: false),
+            .opaque
+        )
+        XCTAssertEqual(
+            AtticGlassControlTreatment.resolve(reduceTransparency: false, supportsNativeGlass: false),
+            .material,
+            "material is only the fallback without native glass"
+        )
+        XCTAssertEqual(
+            AppearanceSettingsPresentation.translucencyDescription,
+            "Changes the panel surface. Controls always use Liquid Glass."
+        )
+    }
+
     func testClearIsAvailableOnlyForOriginalAndEffectiveDarkAppearance() {
         for theme in AtticPanelTheme.allCases {
             for scheme in [ColorScheme.light, .dark] {

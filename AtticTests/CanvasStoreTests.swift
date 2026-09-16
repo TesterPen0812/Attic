@@ -493,6 +493,122 @@ final class CanvasStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedCreateAndDeleteSavesRestorePreviousSelectionAndKeepSaveError() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = PersistenceGate()
+        let store = CanvasStore(container: container, persist: gate.save)
+        let alpha = try XCTUnwrap(store.createCanvas(name: "Alpha"))
+        let beta = try XCTUnwrap(store.createCanvas(name: "Beta"))
+        let stroke = try XCTUnwrap(store.addStroke(color: .ink, width: 3, points: [.zero, CanvasPoint(x: 9, y: 9)]))
+        let saveError = PersistenceGate.Failure().localizedDescription
+        gate.shouldFail = true
+
+        XCTAssertNil(store.createCanvas(name: "Gamma"))
+        XCTAssertEqual(store.selectedCanvasID, beta.id)
+        XCTAssertEqual(store.canvases.map(\.id), [alpha.id, beta.id])
+        XCTAssertEqual(store.strokes.map(\.id), [stroke.id])
+        XCTAssertEqual(store.lastErrorMessage, saveError)
+
+        XCTAssertFalse(store.deleteCanvas(beta.id))
+        XCTAssertEqual(store.selectedCanvasID, beta.id)
+        XCTAssertEqual(store.canvases.map(\.id), [alpha.id, beta.id])
+        XCTAssertEqual(store.strokes.map(\.id), [stroke.id])
+        XCTAssertEqual(store.lastErrorMessage, saveError)
+
+        let verification = ModelContext(container)
+        let boards = try verification.fetch(FetchDescriptor<CanvasBoardItem>())
+        XCTAssertEqual(Set(boards.map(\.id)), [alpha.id, beta.id])
+        XCTAssertTrue(boards.allSatisfy { !$0.tombstoned })
+        XCTAssertTrue(try verification.fetch(FetchDescriptor<CanvasStrokeItem>()).allSatisfy { !$0.tombstoned })
+    }
+
+    @MainActor
+    func testFailedBoardSaveFallsBackWhenPreviousSelectionIsNoLongerLive() throws {
+        for operation in ["create", "delete"] {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let gate = PersistenceGate()
+            let store = CanvasStore(container: container, persist: gate.save)
+            let alpha = try XCTUnwrap(store.createCanvas(name: "Alpha"))
+            let beta = try XCTUnwrap(store.createCanvas(name: "Beta"))
+            let external = ModelContext(container)
+            let board = try XCTUnwrap(external.fetch(FetchDescriptor<CanvasBoardItem>()).first { $0.id == beta.id })
+            board.tombstoned = true
+            board.mutationVersion += 1
+            board.deletedAt = Date(timeIntervalSince1970: 2_000)
+            board.updatedAt = Date(timeIntervalSince1970: 2_000)
+            try external.save()
+            gate.shouldFail = true
+
+            if operation == "create" {
+                XCTAssertNil(store.createCanvas(name: "Gamma"), operation)
+            } else {
+                XCTAssertFalse(store.deleteCanvas(beta.id), operation)
+            }
+            XCTAssertEqual(store.selectedCanvasID, alpha.id, operation)
+            XCTAssertEqual(store.canvases.map(\.id), [alpha.id], operation)
+            XCTAssertEqual(store.lastErrorMessage, PersistenceGate.Failure().localizedDescription, operation)
+        }
+    }
+
+    @MainActor
+    func testFailedPreparationOnCreateCanvasRestoresPreviousSelectionAndKeepsPreparationError() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let preparation = CanvasPresentationPreparationGate()
+        let store = CanvasStore(container: container, loadReplicas: preparation.load)
+        let alpha = try XCTUnwrap(store.createCanvas(name: "Alpha"))
+        let beta = try XCTUnwrap(store.createCanvas(name: "Beta"))
+        let stroke = try XCTUnwrap(store.addStroke(
+            color: .ink,
+            width: 3,
+            points: [.zero, CanvasPoint(x: 9, y: 9)]
+        ))
+        let preparationError = "Canvas could not prepare its saved presentation: "
+            + CanvasPresentationPreparationGate.Failure().localizedDescription
+        preparation.failNextRead()
+
+        XCTAssertNil(store.createCanvas(name: "Gamma"))
+        XCTAssertEqual(store.selectedCanvasID, beta.id)
+        XCTAssertEqual(store.canvases.map(\.id), [alpha.id, beta.id])
+        XCTAssertEqual(store.strokes.map(\.id), [stroke.id])
+        XCTAssertEqual(store.lastErrorMessage, preparationError)
+
+        let verification = ModelContext(container)
+        let boards = try verification.fetch(FetchDescriptor<CanvasBoardItem>())
+        XCTAssertEqual(Set(boards.map(\.id)), [alpha.id, beta.id])
+        XCTAssertTrue(boards.allSatisfy { !$0.tombstoned })
+    }
+
+    @MainActor
+    func testFailedPreparationOnDeleteCanvasRestoresPreviousSelectionAndKeepsPreparationError() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let preparation = CanvasPresentationPreparationGate()
+        let store = CanvasStore(container: container, loadReplicas: preparation.load)
+        let alpha = try XCTUnwrap(store.createCanvas(name: "Alpha"))
+        let beta = try XCTUnwrap(store.createCanvas(name: "Beta"))
+        let stroke = try XCTUnwrap(store.addStroke(
+            color: .ink,
+            width: 3,
+            points: [.zero, CanvasPoint(x: 9, y: 9)]
+        ))
+        let preparationError = "Canvas could not prepare its saved presentation: "
+            + CanvasPresentationPreparationGate.Failure().localizedDescription
+        preparation.failNextRead()
+
+        XCTAssertFalse(store.deleteCanvas(beta.id))
+        XCTAssertEqual(store.selectedCanvasID, beta.id)
+        XCTAssertEqual(store.canvases.map(\.id), [alpha.id, beta.id])
+        XCTAssertEqual(store.strokes.map(\.id), [stroke.id])
+        XCTAssertEqual(store.lastErrorMessage, preparationError)
+
+        let verification = ModelContext(container)
+        let boards = try verification.fetch(FetchDescriptor<CanvasBoardItem>())
+        XCTAssertEqual(Set(boards.map(\.id)), [alpha.id, beta.id])
+        XCTAssertTrue(boards.allSatisfy { !$0.tombstoned })
+        XCTAssertTrue(try verification.fetch(FetchDescriptor<CanvasStrokeItem>())
+            .allSatisfy { !$0.tombstoned })
+    }
+
+    @MainActor
     func testClearAppliesPersistedPresentationWhenEveryPostSaveReloadFails() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let persistence = PersistenceGate()
@@ -773,6 +889,272 @@ final class CanvasStoreTests: XCTestCase {
     }
     #endif
 
+    // MARK: - PERF-A1 canvas-scoped replica reads
+
+    @MainActor
+    func testSameIDReplicaOnAnotherCanvasIsNotShownOrRewrittenBySelectedCanvasMutations() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let otherBoard = UUID()
+        let sharedID = UUID()
+        seed.insert(CanvasBoardItem(id: CanvasBoardItem.logicalBoardID, name: "Canvas", sortIndex: 0))
+        seed.insert(CanvasBoardItem(id: otherBoard, name: "Other", sortIndex: 1))
+        for _ in 0..<2 {
+            seed.insert(try storedStroke(id: sharedID, points: [.zero, CanvasPoint(x: 4, y: 4)]))
+        }
+        let foreign = try storedStroke(
+            id: sharedID,
+            color: .red,
+            points: [.zero, CanvasPoint(x: 9, y: 9)],
+            mutationVersion: 7
+        )
+        foreign.canvasID = otherBoard
+        seed.insert(foreign)
+        try seed.save()
+
+        let store = CanvasStore(container: container)
+        XCTAssertEqual(store.selectedCanvasID, CanvasBoardItem.logicalBoardID)
+        XCTAssertEqual(store.strokes.map(\.id), [sharedID])
+        XCTAssertEqual(store.strokes.first?.color, .ink)
+
+        XCTAssertTrue(store.setDeleted(true, strokeIDs: [sharedID]))
+        XCTAssertTrue(store.strokes.isEmpty)
+        let verification = ModelContext(container)
+        var rows = try verification.fetch(FetchDescriptor<CanvasStrokeItem>())
+        var local = rows.filter { $0.canvasID == CanvasBoardItem.logicalBoardID }
+        XCTAssertEqual(local.count, 2)
+        XCTAssertTrue(local.allSatisfy { $0.tombstoned && $0.mutationVersion == 2 })
+        var remote = try XCTUnwrap(rows.first { $0.canvasID == otherBoard })
+        XCTAssertFalse(remote.tombstoned)
+        XCTAssertEqual(remote.mutationVersion, 7)
+
+        XCTAssertTrue(store.setDeleted(false, strokeIDs: [sharedID]))
+        XCTAssertEqual(store.strokes.map(\.id), [sharedID])
+        XCTAssertEqual(store.strokes.first?.color, .ink)
+        rows = try ModelContext(container).fetch(FetchDescriptor<CanvasStrokeItem>())
+        local = rows.filter { $0.canvasID == CanvasBoardItem.logicalBoardID }
+        XCTAssertTrue(local.allSatisfy { !$0.tombstoned && $0.mutationVersion == 3 })
+        remote = try XCTUnwrap(rows.first { $0.canvasID == otherBoard })
+        XCTAssertEqual(remote.mutationVersion, 7)
+
+        XCTAssertTrue(store.selectCanvas(otherBoard))
+        XCTAssertEqual(store.strokes.map(\.id), [sharedID])
+        XCTAssertEqual(store.strokes.first?.color, .red)
+    }
+
+    @MainActor
+    func testUnboardedLegacyDefaultContentKeepsTheDefaultCanvasListedFromAnotherCanvas() throws {
+        enum LegacyContent: String, CaseIterable {
+            case stroke, image, semanticObject, tombstonedStrokeOnly
+        }
+        let defaultID = CanvasBoardItem.logicalBoardID
+        for legacy in LegacyContent.allCases {
+            let container = try PersistenceController.makeContainer(inMemory: true)
+            let seed = ModelContext(container)
+            let otherBoard = UUID()
+            // No physical default board row: only content claims the default id.
+            seed.insert(CanvasBoardItem(id: otherBoard, name: "Other", sortIndex: 1))
+            switch legacy {
+            case .stroke:
+                seed.insert(try storedStroke(points: [.zero, CanvasPoint(x: 2, y: 2)]))
+            case .image:
+                seed.insert(CanvasImageItem(
+                    encodedData: Data([0x89, 0x50, 0x4E, 0x47]),
+                    pixelWidth: 2,
+                    pixelHeight: 2
+                ))
+            case .semanticObject:
+                seed.insert(CanvasSemanticObjectItem())
+            case .tombstonedStrokeOnly:
+                seed.insert(try storedStroke(points: [.zero, CanvasPoint(x: 2, y: 2)], tombstoned: true))
+            }
+            try seed.save()
+            let expectsDefault = legacy != .tombstonedStrokeOnly
+
+            let store = CanvasStore(container: container)
+            XCTAssertEqual(store.canvases.contains { $0.id == defaultID }, expectsDefault, legacy.rawValue)
+            XCTAssertTrue(store.selectCanvas(otherBoard), legacy.rawValue)
+            XCTAssertEqual(store.canvases.contains { $0.id == defaultID }, expectsDefault, legacy.rawValue)
+
+            // Presentation now loads only the other canvas's content, so the
+            // default canvas must still be discovered without loading its rows.
+            XCTAssertNotNil(store.addStroke(color: .ink, width: 3, points: [.zero, CanvasPoint(x: 1, y: 1)]))
+            XCTAssertEqual(store.selectedCanvasID, otherBoard, legacy.rawValue)
+            XCTAssertEqual(store.strokes.count, 1, legacy.rawValue)
+            XCTAssertEqual(store.canvases.contains { $0.id == defaultID }, expectsDefault, legacy.rawValue)
+            XCTAssertEqual(
+                CanvasStore(container: container).canvases.contains { $0.id == defaultID },
+                expectsDefault,
+                legacy.rawValue
+            )
+            if legacy == .stroke {
+                XCTAssertTrue(store.selectCanvas(defaultID))
+                XCTAssertEqual(store.strokes.count, 1)
+            }
+        }
+    }
+
+    @MainActor
+    func testRefreshAfterSelectedCanvasIsDeletedElsewhereShowsTheFallbackCanvasContent() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let otherBoard = UUID()
+        let defaultStroke = try storedStroke(points: [.zero, CanvasPoint(x: 3, y: 3)])
+        let otherStroke = try storedStroke(color: .red, points: [.zero, CanvasPoint(x: 5, y: 5)])
+        otherStroke.canvasID = otherBoard
+        seed.insert(CanvasBoardItem(id: CanvasBoardItem.logicalBoardID, name: "Canvas", sortIndex: 0))
+        seed.insert(CanvasBoardItem(id: otherBoard, name: "Other", sortIndex: 1))
+        seed.insert(defaultStroke)
+        seed.insert(otherStroke)
+        try seed.save()
+        let defaultStrokeID = defaultStroke.id
+        let otherStrokeID = otherStroke.id
+
+        let store = CanvasStore(container: container)
+        XCTAssertTrue(store.selectCanvas(otherBoard))
+        XCTAssertEqual(store.strokes.map(\.id), [otherStrokeID])
+
+        let external = ModelContext(container)
+        let board = try XCTUnwrap(external.fetch(FetchDescriptor<CanvasBoardItem>()).first { $0.id == otherBoard })
+        board.tombstoned = true
+        board.mutationVersion += 1
+        board.deletedAt = Date(timeIntervalSince1970: 2_000)
+        board.updatedAt = Date(timeIntervalSince1970: 2_000)
+        try external.save()
+
+        store.refresh()
+
+        XCTAssertEqual(store.selectedCanvasID, CanvasBoardItem.logicalBoardID)
+        XCTAssertFalse(store.canvases.contains { $0.id == otherBoard })
+        XCTAssertEqual(store.strokes.map(\.id), [defaultStrokeID])
+        XCTAssertNotNil(store.addStroke(color: .ink, width: 3, points: [.zero, CanvasPoint(x: 6, y: 6)]))
+        XCTAssertEqual(store.strokes.count, 2)
+        XCTAssertTrue(store.strokes.allSatisfy { $0.canvasID == CanvasBoardItem.logicalBoardID })
+    }
+
+    @MainActor
+    func testDeletingMoreStrokesThanTheIdentifierPredicateLimitTouchesEveryReplica() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let otherBoard = UUID()
+        let count = CanvasStore.replicaIdentifierPredicateLimit + 20
+        let ids = (0..<count).map { _ in UUID() }
+        let payload = try CanvasStrokeCodec.encode(color: .ink, width: 3, points: [.zero, CanvasPoint(x: 1, y: 1)])
+        seed.insert(CanvasBoardItem(id: CanvasBoardItem.logicalBoardID, name: "Canvas", sortIndex: 0))
+        seed.insert(CanvasBoardItem(id: otherBoard, name: "Other", sortIndex: 1))
+        for (index, id) in ids.enumerated() {
+            for _ in 0..<2 {
+                seed.insert(CanvasStrokeItem(
+                    id: id,
+                    payloadVersion: CanvasStrokeCodec.currentVersion,
+                    payload: payload,
+                    createdAt: Date(timeIntervalSince1970: Double(index))
+                ))
+            }
+        }
+        seed.insert(CanvasStrokeItem(id: ids[0], canvasID: otherBoard, payload: payload))
+        try seed.save()
+
+        let store = CanvasStore(container: container)
+        XCTAssertEqual(store.strokes.count, count)
+
+        for (deleted, version) in [(true, Int64(2)), (false, Int64(3))] {
+            XCTAssertTrue(store.setDeleted(deleted, strokeIDs: Set(ids)))
+            XCTAssertEqual(store.strokes.count, deleted ? 0 : count)
+            let rows = try ModelContext(container).fetch(FetchDescriptor<CanvasStrokeItem>())
+            let local = rows.filter { $0.canvasID == CanvasBoardItem.logicalBoardID }
+            XCTAssertEqual(local.count, 2 * count)
+            XCTAssertTrue(local.allSatisfy { $0.tombstoned == deleted && $0.mutationVersion == version })
+            let remote = try XCTUnwrap(rows.first { $0.canvasID == otherBoard })
+            XCTAssertFalse(remote.tombstoned)
+            XCTAssertEqual(remote.mutationVersion, 1)
+        }
+    }
+
+    /// `save()` resolves presentation from the pending context before it
+    /// persists, so the canvas-scoped predicates must see unsaved changes: an
+    /// insert, a `canvasID` move into and out of a predicate, and a tombstone,
+    /// through `fetch`, `idList.contains` and `fetchCount` alike.
+    @MainActor
+    func testCanvasScopedReplicaReadsSeeUnsavedChangesInTheContext() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let boardA = UUID()
+        let boardB = UUID()
+        let defaultID = CanvasBoardItem.logicalBoardID
+        // No physical default board row, so a load from another canvas counts
+        // the default canvas's live content instead of fetching it.
+        seed.insert(CanvasBoardItem(id: boardA, name: "A", sortIndex: 1))
+        seed.insert(CanvasBoardItem(id: boardB, name: "B", sortIndex: 2))
+        let legacy = try storedStroke(points: [.zero, CanvasPoint(x: 1, y: 1)])
+        let moving = try storedStroke(points: [.zero, CanvasPoint(x: 2, y: 2)])
+        moving.canvasID = boardA
+        let staying = try storedStroke(points: [.zero, CanvasPoint(x: 3, y: 3)])
+        staying.canvasID = boardA
+        let existing = try storedStroke(points: [.zero, CanvasPoint(x: 4, y: 4)])
+        existing.canvasID = boardB
+        for stroke in [legacy, moving, staying, existing] {
+            seed.insert(stroke)
+        }
+        try seed.save()
+        let (legacyID, movingID, stayingID, existingID) = (legacy.id, moving.id, staying.id, existing.id)
+
+        let store = CanvasStore(container: container)
+        XCTAssertTrue(store.selectCanvas(boardB))
+        let context = store.context
+        XCTAssertTrue(try CanvasStoredReplicas.load(from: context, contentCanvasID: boardB)
+            .hasUnboardedLegacyDefaultContent)
+
+        let inserted = try storedStroke(points: [.zero, CanvasPoint(x: 5, y: 5)])
+        inserted.canvasID = boardB
+        context.insert(inserted)
+        let insertedID = inserted.id
+        let pendingMove = try XCTUnwrap(context.fetch(FetchDescriptor<CanvasStrokeItem>(
+            predicate: #Predicate { $0.id == movingID }
+        )).first)
+        pendingMove.canvasID = boardB
+        let pendingTombstone = try XCTUnwrap(context.fetch(FetchDescriptor<CanvasStrokeItem>(
+            predicate: #Predicate { $0.id == legacyID }
+        )).first)
+        pendingTombstone.tombstoned = true
+        XCTAssertTrue(context.hasChanges)
+
+        func assertReadsSeeTheChanges(in context: ModelContext, _ label: String) throws {
+            let onB = try CanvasStoredReplicas.load(from: context, contentCanvasID: boardB)
+            XCTAssertEqual(Set(onB.strokes.map(\.id)), [existingID, insertedID, movingID], label)
+            XCTAssertFalse(onB.hasUnboardedLegacyDefaultContent, label)
+            XCTAssertEqual(
+                try CanvasStoredReplicas.load(from: context, contentCanvasID: boardA).strokes.map(\.id),
+                [stayingID],
+                label
+            )
+            let idList = [insertedID, movingID, stayingID]
+            XCTAssertEqual(Set(try context.fetch(FetchDescriptor<CanvasStrokeItem>(
+                predicate: #Predicate { $0.canvasID == boardB && idList.contains($0.id) }
+            )).map(\.id)), [insertedID, movingID], label)
+            XCTAssertEqual(try context.fetchCount(FetchDescriptor<CanvasStrokeItem>(
+                predicate: #Predicate { $0.canvasID == defaultID && !$0.tombstoned }
+            )), 0, label)
+            XCTAssertEqual(try context.fetch(FetchDescriptor<CanvasStrokeItem>(
+                predicate: #Predicate { $0.canvasID == defaultID && !$0.tombstoned }
+            )).count, 0, label)
+        }
+
+        try assertReadsSeeTheChanges(in: context, "pending")
+        XCTAssertEqual(
+            Set(try store.storedStrokeReplicas(matching: [insertedID, movingID, stayingID]).keys),
+            [insertedID, movingID],
+            "pending"
+        )
+        // The changes really are unsaved: another context still sees the store.
+        let unsaved = try CanvasStoredReplicas.load(from: ModelContext(container), contentCanvasID: boardB)
+        XCTAssertEqual(unsaved.strokes.map(\.id), [existingID])
+        XCTAssertTrue(unsaved.hasUnboardedLegacyDefaultContent)
+
+        try context.save()
+        try assertReadsSeeTheChanges(in: ModelContext(container), "saved")
+    }
+
     private func storedStroke(
         id: UUID = UUID(),
         color: CanvasInkColor = .ink,
@@ -845,8 +1227,36 @@ private final class CanvasReplicaReadGate {
         shouldRejectReads = true
     }
 
-    func load(_ context: ModelContext) throws -> CanvasStoredReplicas {
+    func load(_ context: ModelContext, contentCanvasID: UUID) throws -> CanvasStoredReplicas {
         guard !shouldRejectReads else { throw Failure() }
-        return try CanvasStoredReplicas.load(from: context)
+        return try CanvasStoredReplicas.load(from: context, contentCanvasID: contentCanvasID)
+    }
+}
+
+/// Drives the presentation-preparation failure arm of
+/// `save(restoringSelectionOnFailure:)`. `save()` resolves the pending
+/// mutation through the injectable `loadReplicas` seam before it persists, so
+/// one injected read failure throws there; the reload that follows the restore
+/// reads normally again. No production seam is added or changed.
+@MainActor
+private final class CanvasPresentationPreparationGate {
+    struct Failure: LocalizedError {
+        var errorDescription: String? {
+            "Injected presentation-preparation failure."
+        }
+    }
+
+    private var failsNextRead = false
+
+    func failNextRead() {
+        failsNextRead = true
+    }
+
+    func load(_ context: ModelContext, contentCanvasID: UUID) throws -> CanvasStoredReplicas {
+        if failsNextRead {
+            failsNextRead = false
+            throw Failure()
+        }
+        return try CanvasStoredReplicas.load(from: context, contentCanvasID: contentCanvasID)
     }
 }

@@ -68,6 +68,21 @@ actor AttachmentFileStore {
         existingBytes: Int64,
         progress: (@Sendable (Int, Int) async -> Void)? = nil
     ) async throws -> [ImportedAttachment] {
+        try await importFiles(urls, baseSortIndex: baseSortIndex, existingCount: existingCount,
+                              existingBytes: existingBytes, includePayload: true, progress: progress)
+    }
+
+    /// `includePayload: false` is for callers that keep only the private file
+    /// (task attachments): nothing is read back, so a batch never holds file
+    /// contents in memory.
+    func importFiles(
+        _ urls: [URL],
+        baseSortIndex: Int64,
+        existingCount: Int,
+        existingBytes: Int64,
+        includePayload: Bool,
+        progress: (@Sendable (Int, Int) async -> Void)? = nil
+    ) async throws -> [ImportedAttachment] {
         try Task.checkCancellation()
         guard existingCount >= 0,
               existingCount <= AttachmentLimits.maxAttachmentsPerNote,
@@ -95,7 +110,8 @@ actor AttachmentFileStore {
                     stagingURL: batchRoot.appendingPathComponent("\(offset).stage"),
                     finalDirectories: &finalDirectories,
                     sortIndex: baseSortIndex + Int64(offset),
-                    totalBytes: &totalBytes
+                    totalBytes: &totalBytes,
+                    includePayload: includePayload
                 )
                 imported.append(result)
                 await progress?(offset + 1, urls.count)
@@ -255,6 +271,73 @@ actor AttachmentFileStore {
         return url
     }
 
+    /// A bounded, conservative sweep for stores whose attachments are only
+    /// ever created in-session (task attachments), run once at launch.
+    /// Removes a `<UUID>/<digest>` materialization only when no reference
+    /// with that UUID is in `referencedIDs` and the directory and everything
+    /// in it were created and last modified before `cutoff`; an entry with an
+    /// unreadable date counts as recent. Recent copies — an import still being
+    /// bound, a composer's pending items — and anything not shaped like a
+    /// materialization are left alone, as is the notes reconciler's tree.
+    /// Importer staging batches older than `cutoff` are removed too. Stops
+    /// after `limit` removals; returns how many materializations it removed.
+    func removeUnreferencedMaterializations(
+        keeping referencedIDs: Set<UUID>,
+        modifiedBefore cutoff: Date,
+        limit: Int
+    ) -> Int {
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey
+        ]
+        func isOld(_ url: URL) -> Bool {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                  let created = values.creationDate, let modified = values.contentModificationDate else { return false }
+            return created < cutoff && modified < cutoff
+        }
+        // A link is never an owned directory: traversing one would remove
+        // files outside the store root through the link.
+        func isDirectory(_ url: URL) -> Bool {
+            !Self.isSymbolicLink(url, fileManager: fileManager)
+                && (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+
+        var removed = 0
+        let idDirectories = (try? fileManager.contentsOfDirectory(
+            at: rootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
+        )) ?? []
+        for idDirectory in idDirectories where removed < limit {
+            guard let id = UUID(uuidString: idDirectory.lastPathComponent),
+                  id.uuidString == idDirectory.lastPathComponent,
+                  !referencedIDs.contains(id), isDirectory(idDirectory) else { continue }
+            // Read before removing anything changes its modification date.
+            let idDirectoryIsOld = isOld(idDirectory)
+            let digestDirectories = (try? fileManager.contentsOfDirectory(
+                at: idDirectory, includingPropertiesForKeys: keys, options: []
+            )) ?? []
+            for digestDirectory in digestDirectories where removed < limit {
+                let name = digestDirectory.lastPathComponent
+                guard name.count == 64, name.allSatisfy(\.isHexDigit), isDirectory(digestDirectory),
+                      isOld(digestDirectory) else { continue }
+                let contents = (try? fileManager.contentsOfDirectory(
+                    at: digestDirectory, includingPropertiesForKeys: keys, options: []
+                )) ?? []
+                guard contents.allSatisfy(isOld),
+                      (try? fileManager.removeItem(at: digestDirectory)) != nil else { continue }
+                removed += 1
+            }
+            if idDirectoryIsOld, (try? fileManager.contentsOfDirectory(atPath: idDirectory.path))?.isEmpty == true {
+                try? fileManager.removeItem(at: idDirectory)
+            }
+        }
+
+        for batch in (try? fileManager.contentsOfDirectory(
+            at: stagingRootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
+        )) ?? [] where !Self.isSymbolicLink(batch, fileManager: fileManager) && isOld(batch) {
+            try? fileManager.removeItem(at: batch)
+        }
+        return removed
+    }
+
     /// Performs the expensive content check only when a file is about to be
     /// used. Routine reconciliation intentionally stops at metadata inventory.
     func verifiedMaterializedURL(
@@ -277,7 +360,8 @@ actor AttachmentFileStore {
             includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) {
-            if child.lastPathComponent == stagingRootName || child.lastPathComponent == thumbnailRootName {
+            if child.lastPathComponent == stagingRootName || child.lastPathComponent == thumbnailRootName
+                || Self.isSymbolicLink(child, fileManager: fileManager) {
                 continue
             }
             guard (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
@@ -285,6 +369,7 @@ actor AttachmentFileStore {
                 continue
             }
             for digestDirectory in try fileManager.contentsOfDirectory(at: child, includingPropertiesForKeys: nil) {
+                guard !Self.isSymbolicLink(digestDirectory, fileManager: fileManager) else { continue }
                 let key = "\(child.lastPathComponent)/\(digestDirectory.lastPathComponent.lowercased())"
                 guard !expected.contains(key) else { continue }
                 try? fileManager.removeItem(at: digestDirectory)
@@ -298,7 +383,7 @@ actor AttachmentFileStore {
             at: stagingRootURL,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        )) ?? [] {
+        )) ?? [] where !Self.isSymbolicLink(staging, fileManager: fileManager) {
             let modified = (try? staging.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
             if now.timeIntervalSince(modified) > 24 * 60 * 60 {
                 try? fileManager.removeItem(at: staging)
@@ -320,7 +405,8 @@ actor AttachmentFileStore {
         stagingURL: URL,
         finalDirectories: inout [URL],
         sortIndex: Int64,
-        totalBytes: inout Int64
+        totalBytes: inout Int64,
+        includePayload: Bool
     ) throws -> ImportedAttachment {
         let sourceURL = sourceURL.standardizedFileURL
 
@@ -412,7 +498,7 @@ actor AttachmentFileStore {
         try fileManager.moveItem(at: stagingURL, to: finalURL)
         totalBytes += byteCount
 
-        let payload = try Data(contentsOf: finalURL, options: .mappedIfSafe)
+        let payload = includePayload ? try Data(contentsOf: finalURL, options: .mappedIfSafe) : nil
         return ImportedAttachment(
             id: attachmentID,
             filename: filename,
@@ -439,6 +525,11 @@ actor AttachmentFileStore {
             throw AttachmentFileStoreError.invalidDigest
         }
         return directory
+    }
+
+    /// Reads the entry itself (`lstat`), never its destination.
+    private static func isSymbolicLink(_ url: URL, fileManager: FileManager) -> Bool {
+        (try? fileManager.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeSymbolicLink
     }
 
     private var stagingRootName: String { ".staging" }

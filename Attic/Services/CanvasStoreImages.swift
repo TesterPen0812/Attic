@@ -83,8 +83,10 @@ extension CanvasStore {
             }
 
             let requestIDs = Set(imports.map(\.requestID))
-            let targetRows = try context.fetch(FetchDescriptor<CanvasImageItem>())
-                .filter { $0.canvasID == target.canvasID }
+            let targetCanvasID = target.canvasID
+            let targetRows = try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
+                predicate: #Predicate { $0.canvasID == targetCanvasID }
+            ))
             let groupedRows = Dictionary(grouping: targetRows, by: \.id)
             var highestUnaffectedZ = try groupedRows.compactMap { id, replicas -> Int64? in
                 guard !requestIDs.contains(id) else { return nil }
@@ -159,7 +161,8 @@ extension CanvasStore {
                         mutationVersion: mutationVersion,
                         tombstoned: false,
                         createdAt: createdAt,
-                        updatedAt: timestamp
+                        updatedAt: timestamp,
+                        payloadMetadata: item.prepared.payloadMetadata
                     ))
                 } else {
                     let winner = try Self.winningImageReplica(in: replicas)
@@ -173,7 +176,10 @@ extension CanvasStore {
                     // hidden duplicate after an uncertain completion.
                     for replica in replicas {
                         replica.canvasID = target.canvasID
-                        replica.encodedData = item.prepared.encodedData
+                        replica.applyEncodedPayload(
+                            item.prepared.encodedData,
+                            metadata: item.prepared.payloadMetadata
+                        )
                         replica.contentType = item.prepared.contentType
                         replica.pixelWidth = Int64(item.prepared.pixelWidth)
                         replica.pixelHeight = Int64(item.prepared.pixelHeight)
@@ -201,7 +207,8 @@ extension CanvasStore {
                     boardGeneration: target.boardGeneration,
                     mutationVersion: mutationVersion,
                     createdAt: createdAt,
-                    updatedAt: timestamp
+                    updatedAt: timestamp,
+                    payloadMetadata: item.prepared.payloadMetadata
                 ))
             }
 
@@ -334,7 +341,7 @@ extension CanvasStore {
         let grouped = try storedImageReplicas(matching: ids)
         for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard let snapshot = uniqueSnapshots[id],
-                  !snapshot.encodedData.isEmpty,
+                  snapshot.encodedByteCount > 0,
                   snapshot.pixelWidth > 0,
                   snapshot.pixelHeight > 0,
                   snapshot.transform.isValid else {
@@ -366,12 +373,16 @@ extension CanvasStore {
                     mutationVersion: nextVersion,
                     tombstoned: false,
                     createdAt: snapshot.createdAt,
-                    updatedAt: timestamp
+                    updatedAt: timestamp,
+                    payloadMetadata: snapshot.payloadMetadata
                 ))
             } else {
                 for replica in replicas {
                     replica.canvasID = selectedCanvasID
-                    replica.encodedData = snapshot.encodedData
+                    replica.applyEncodedPayload(
+                        snapshot.encodedData,
+                        metadata: snapshot.payloadMetadata
+                    )
                     replica.contentType = snapshot.contentType
                     replica.pixelWidth = Int64(snapshot.pixelWidth)
                     replica.pixelHeight = Int64(snapshot.pixelHeight)

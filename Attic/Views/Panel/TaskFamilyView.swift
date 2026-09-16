@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// A compact parent row: checkbox, title, an inline `done/total` control when
+/// A compact parent row: checkbox, title, passive `done/total` progress when
 /// the family has children, and the shared actions menu. Child details live
-/// in the auxiliary hover/pinned surface owned by `subtaskPanels`; this view
-/// only reports hover and publishes its anchor frame to that controller.
+/// in the auxiliary transient/pinned surface owned by `subtaskPanels`; this
+/// view only publishes its anchor frame to that controller. Hover is purely
+/// visual (the row surface and its actions); opening the workspace is always
+/// a deliberate action on the row.
 struct TaskFamilyView: View {
     @ObservedObject var store: TaskStore
     @ObservedObject var uiState: PanelUIState
@@ -12,26 +14,18 @@ struct TaskFamilyView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var children: [TaskItem] { store.subtasks(of: task.id) }
     private var summary: SubtaskRowSummary? {
+        let children = store.subtasks(of: task.id)
         guard !children.isEmpty else { return nil }
         return SubtaskRowSummary(
-            done: children.filter { $0.status == .done }.count,
+            done: children.reduce(0) { $0 + ($1.status == .done ? 1 : 0) },
             total: children.count
         )
     }
 
-    /// Hover reporting is worth installing only when a panel could appear:
-    /// a family with children, an in-flight draft, or an activated entry.
-    private var canPresentPanel: Bool {
-        !children.isEmpty
-            || !(uiState.subtaskDrafts[task.id] ?? "").isEmpty
-            || uiState.subtaskEntryActiveIDs.contains(task.id)
-    }
-
     private var isFamilyPresented: Bool {
         subtaskPanels.transientFamilyID == task.id
-            || subtaskPanels.pinnedFamilyID == task.id
+            || subtaskPanels.pinnedFamilyIDs.contains(task.id)
     }
 
     var body: some View {
@@ -42,8 +36,12 @@ struct TaskFamilyView: View {
             task: task,
             subtaskSummary: summary,
             isFamilyPresented: isFamilyPresented,
-            isFamilyPinned: subtaskPanels.pinnedFamilyID == task.id
+            isFamilyPinned: subtaskPanels.pinnedFamilyIDs.contains(task.id),
+            isEditing: uiState.editingTaskID == task.id,
+            isConfirmingDeletion: uiState.confirmingTaskDeletionID == task.id,
+            isImportingAttachments: store.importingAttachmentTaskIDs.contains(task.id)
         )
+        .equatable()
         .background {
             GeometryReader { proxy in
                 Color.clear.preference(
@@ -53,12 +51,6 @@ struct TaskFamilyView: View {
                     )]
                 )
             }
-        }
-        .onHover { hovering in
-            // Gate entry, not exit: an already-open surface must keep
-            // receiving leave events even if the family loses its last child.
-            guard hovering == false || canPresentPanel else { return }
-            subtaskPanels.noteRowHover(familyID: task.id, isHovering: hovering)
         }
         .animation(reduceMotion ? nil : AtticMotion.quick, value: isFamilyPresented)
     }

@@ -1,6 +1,15 @@
 import Foundation
 
 struct CanvasViewport: Equatable {
+    static func unobscuredRect(in size: CGSize, excluding controls: [CGRect]) -> CGRect {
+        var top: CGFloat = 0, bottom = size.height
+        for rect in controls where !rect.isEmpty && !rect.isNull {
+            if rect.midY < size.height / 2 { top = max(top, rect.maxY + 10) }
+            else { bottom = min(bottom, rect.minY - 10) }
+        }
+        guard bottom - top >= 80 else { return CGRect(origin: .zero, size: size) }
+        return CGRect(x: 0, y: top, width: size.width, height: bottom - top)
+    }
     static let minimumScale = 0.25
     static let maximumScale = 8.0
 

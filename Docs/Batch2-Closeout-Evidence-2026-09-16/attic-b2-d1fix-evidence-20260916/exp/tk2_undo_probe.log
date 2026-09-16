@@ -1,0 +1,2 @@
+forceTK1=false textLayoutManager(TK2)=true typing->changes=1 undo->+0 redo->+0 string='Keep draft' undoNotes=1 redoNotes=1 closeGroupNotes=1
+forceTK1=true textLayoutManager(TK2)=false typing->changes=1 undo->+1 redo->+1 string='Keep draft' undoNotes=1 redoNotes=1 closeGroupNotes=1

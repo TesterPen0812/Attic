@@ -3,6 +3,20 @@ import XCTest
 @testable import Attic
 
 final class CornerHoverStateMachineTests: XCTestCase {
+    func testIdleMainEditorFocusDoesNotPinButDraftAndSubpanelLocksStillProtect() {
+        XCTAssertFalse(MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: [.quickEntryFocus], pointerInside: false, secondsSinceKeyboardInput: 2))
+        XCTAssertFalse(MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: [.notesEditorFocus], pointerInside: false, secondsSinceKeyboardInput: 2))
+        XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: [.quickEntryFocus], pointerInside: false, secondsSinceKeyboardInput: 0.5))
+        XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: [.quickEntryFocus], pointerInside: true, secondsSinceKeyboardInput: 2))
+        for reason in [PanelInteractionLockReason.taskComposer, .notesDirty, .subtaskComposer, .taskEditing, .menuTracking] {
+            XCTAssertTrue(MainPanelAutoHidePolicy.isInteractionLocked(
+                reasons: [reason], pointerInside: false, secondsSinceKeyboardInput: 20))
+        }
+    }
     func testPointerMonitoringCoversOwnAppAndOtherApplicationDomains() {
         XCTAssertEqual(
             CornerHoverPointerMonitorDomains.required,
@@ -20,6 +34,10 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertEqual(CornerHoverSamplingCadence.responsive.leewayMilliseconds, 15)
         XCTAssertEqual(CornerHoverSamplingCadence.responsive.nominalSamplesPerMinute, 1_200)
         XCTAssertTrue(CornerHoverSamplingCadence.responsive.holdsResponsivenessActivity)
+        XCTAssertNil(CornerHoverSamplingCadence.eventDriven.intervalMilliseconds, "a visible panel runs no timer")
+        XCTAssertEqual(CornerHoverSamplingCadence.eventDriven.nominalSamplesPerMinute, 0)
+        XCTAssertFalse(CornerHoverSamplingCadence.eventDriven.holdsResponsivenessActivity,
+                       "a visible panel never holds an App Nap exemption")
     }
 
     func testHiddenFarSamplingIsIdleAndDoesNotHoldResponsivenessActivity() {
@@ -61,7 +79,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertEqual(decision.cadence, .responsive)
         XCTAssertTrue(decision.shouldSampleImmediately)
         XCTAssertTrue(decision.cadence.holdsResponsivenessActivity)
-        XCTAssertLessThanOrEqual(decision.cadence.intervalMilliseconds, 50)
+        XCTAssertLessThanOrEqual(decision.cadence.intervalMilliseconds ?? .max, 50)
     }
 
     func testFarPointerMovementDoesNotRequestFullMainThreadSample() {
@@ -127,8 +145,16 @@ final class CornerHoverStateMachineTests: XCTestCase {
             isPanelVisible: true
         )
 
-        XCTAssertEqual(visibleDecision.cadence, .responsive)
+        XCTAssertEqual(visibleDecision.cadence, .eventDriven)
         XCTAssertTrue(visibleDecision.shouldSampleImmediately)
+        XCTAssertFalse(visibleDecision.cadence.holdsResponsivenessActivity)
+        let stillVisible = sampling.update(
+            pointer: CGPoint(x: 961, y: 540),
+            screenFrames: [screen],
+            corner: .bottomLeft,
+            isPanelVisible: true
+        )
+        XCTAssertTrue(stillVisible.shouldSampleImmediately, "every pointer event samples while visible")
 
         let hiddenDecision = sampling.update(
             pointer: CGPoint(x: 960, y: 540),
@@ -224,6 +250,29 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertEqual(machine.update(at: 6.12, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5), .requestHide)
         XCTAssertTrue(machine.isVisible)
         XCTAssertTrue(machine.isHidePending)
+    }
+
+    /// PERF-006: with no timer while visible, the machine names the single
+    /// moment a sample could matter; an idle visible panel needs none.
+    func testVisiblePanelNamesOneFollowUpOnlyWhileAHideIsPending() {
+        var machine = CornerHoverStateMachine()
+        machine.forceVisible(at: 5, grace: 0.8)
+        // Pointer inside, pinned, or locked: nothing timed can change the outcome.
+        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInPanel: true, isInteractionLocked: false, isPinned: false, hideDelay: 0.3))
+        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInPanel: false, isInteractionLocked: true, isPinned: false, hideDelay: 0.3))
+        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInPanel: false, isInteractionLocked: false, isPinned: true, hideDelay: 0.3))
+        // Away during the reveal grace: follow up when the grace ends.
+        XCTAssertEqual(machine.nextTimedDecision(at: 5.1, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3), 5.8)
+        // Leave began: follow up exactly when the hide delay elapses.
+        _ = machine.update(at: 6.0, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5, hideDelay: 0.3)
+        XCTAssertEqual(machine.nextTimedDecision(at: 6.05, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3), 6.3)
+        XCTAssertEqual(machine.update(at: 6.31, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5, hideDelay: 0.3), .requestHide)
+        XCTAssertNil(machine.nextTimedDecision(at: 6.31, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3),
+                     "a pending hide waits for the window, not a timer")
+        var hidden = CornerHoverStateMachine()
+        XCTAssertNil(hidden.nextTimedDecision(at: 1, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3),
+                     "hidden panels are timer-driven elsewhere")
+        _ = hidden.update(at: 1, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5)
     }
 
     func testInteractionLockKeepsPanelVisible() {
@@ -412,8 +461,9 @@ final class CornerHoverStateMachineTests: XCTestCase {
 
     func testLocalOnlyRevealRefreshUsesOneImmediatePassWithoutCloudRetry() throws {
         #if ATTIC_LOCAL_ONLY
-        XCTAssertEqual(RevealRefreshPolicy.current, .singleEventDrivenPass)
-        XCTAssertEqual(RevealRefreshPolicy.current.maximumPassCount, 1)
+        XCTAssertEqual(RevealRefreshPolicy.current, .inProcessAuthoritative)
+        XCTAssertEqual(RevealRefreshPolicy.current.maximumPassCount, 0, "no reveal-time reload in local-only builds")
+        XCTAssertFalse(RevealRefreshPolicy.current.refreshesOnReveal)
         XCTAssertNil(RevealRefreshPolicy.current.retryDelay)
         #else
         throw XCTSkip("The Local target owns this regression.")

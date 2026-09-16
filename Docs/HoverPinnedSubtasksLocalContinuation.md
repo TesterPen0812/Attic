@@ -3,6 +3,46 @@
 Durable handoff between the interrupted cloud sessions and the local
 implementer/reviewer pair. Update this file whenever the checkpoint moves.
 
+## Current work — multiple independent surfaces (2026-09-12)
+
+The historical rounds below describe earlier candidates, including the obsolete
+single-pinned-window and remembered-position behavior. The current uncommitted
+candidate in `/Users/taha/Developer/attic-hover-pinned-subtasks` changes that contract:
+
+- Any number of distinct families can remain pinned. Closing/unpinning one does
+  not evict another or discard its draft.
+- Pinning promotes the actual visible window in place. It never reads the old
+  remembered window position. Unpinning while the main panel is visible keeps
+  the window in place as a detached transient; otherwise it closes.
+- Both kinds of surface drag from the measured header except its controls.
+  Dragging a transient cancels hover timers and detaches it from row layout.
+  It stays open until outside-click/explicit dismissal or main-panel hide.
+  Pinned windows survive main-panel hide.
+- Header and footer dividers are removed; the existing compact glass styling,
+  corner padding, real checklist rows, and durable TaskStore mutation paths stay.
+- `PanelSurfaceWindow`, generic `PanelSurfaceHostingView<Content>`, and measured
+  `PanelSurfaceDragGeometry` provide native behavior independent of tasks, for
+  reuse by future content. Header routing precedes child hit testing; other
+  content retains control events, and empty painted space has a host fallback.
+  The main panel also has the empty-space fallback. Unmeasured headers do not
+  steal events from controls.
+
+The click-through cause is now reproduced: disabling hit testing on the shared
+`AtticPanelSurface` background excludes blank glass from the native event region.
+`NSWindow.windowNumber(at:belowWindowWithWindowNumber:)` selected the underlying
+ChatGPT window at top and bottom padding, while selecting Attic over text. A
+standalone native probe varied backing opacity from 0 to 20% without affecting
+that result; enabling hit testing fixed the native region even at zero opacity.
+The actual app then selected its own window at all three sampled points. The
+shared background now participates in hit testing, with no visual fill added.
+Verification completed: 671 unit tests executed (one skipped, zero failures),
+16 full-suite UI passes plus the matching-settings Frosted UI pass. Native
+preview inspection confirmed independent pinned windows across main-panel hide;
+see the ledger for exact provenance and the manual gesture limitation.
+The new native tests cover a grid across the painted shape and a header with
+an event-owning child; real UI tests cover dragging, controls, typing, multiple
+windows, and a covered underlying input.
+
 ## Coordination handshake (authoritative)
 
 - **Phase:** `REVIEW_CONVERGED` — local adversarial loop ran in-session
@@ -79,6 +119,112 @@ Supaste overlay's edge-activation region (automation-only limitation).
 **635/0 fail/1 skip**; `verify_project_generation.rb` current/repeatable.
 Bundle: `com.taha.Attic`, Local configuration, ad-hoc signed
 (`CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`).
+
+## Round 5 — sub-panel repair (Opus 5, local, 2026-09-11 night)
+
+Uncommitted on top of `ae6418c`, in
+`/Users/taha/Developer/attic-hover-pinned-subtasks` only. The user reported
+that the sub-panel's blank glass, header and padding passed clicks through to
+windows underneath while the child rows worked; the pinned header could not be
+dragged; hover open/dismiss and family switching felt slow; and the surface was
+bigger than wanted.
+
+- **Click-through (hypothesis NOT confirmed — see the ledger's S1
+  correction):** an A/B XCUITest run (inert bottom-padding point of the pinned
+  window parked over the main panel's quick-entry field) shows no click-through
+  either with or without the `hitTest` override, so the reported symptom is
+  unreproduced and the override is hardening, not a demonstrated fix. Original
+  reading retained below for context. `AtticPanelSurface` paints its
+  glass inside an `.allowsHitTesting(false)` background, so
+  `NSHostingView.hitTest` answers `nil` over the header, the padding and empty
+  list space, and `SubtaskHostingView` had no fallback for those points. That
+  is read from source and matches the symptom (rows work, inert regions do
+  not). Where the unclaimed press actually ENDS UP — another Attic window,
+  another application, or nowhere — was NOT observed at runtime and remains
+  unproven; no desktop automation was run this round. Fixed with a
+  geometry-aware `SubtaskHostingView.hitTest`: `super.hitTest(point) ?? self`
+  inside the drawn squircle, `nil` outside it — the same policy
+  `AtticPanelHostingView` already applies on the main panel. Child controls
+  keep their hits; the transparent corner wedges stay genuinely click-through.
+- **Pinned header drag:** the hard-coded 44 pt strip could not follow
+  corner-aware padding and had no notion of the header's own controls. The
+  content now measures its header and its control cluster
+  (`SubtaskDragGeometryPreferenceKey`) and the hosting view drags only from
+  unclaimed header space. Geometry is accepted only from the live pinned
+  surface and reset when the pinned family changes.
+- **Hit geometry unified:** `containsTransientPoint`, the AppKit hit test and
+  the rendered shape all read `settings.panelCornerSize` through
+  `SubtaskPanelLayout.surfaceContains`; the fixed radius 18 is gone. Content
+  padding moved to `SubtaskPanelLayout.surfaceInsets` so the same corner value
+  drives spacing, and a live corner change re-applies to both hosts.
+- **Corridor transit (round-5 review fix):** the first version of this repair
+  treated the row→surface corridor as arrival — it called
+  `noteTransientPointer(inside: true)`, which CANCELS the pending close. A
+  pointer that paused in the gap past the grace and then left downward never
+  entered the surface, so no hover callback existed to re-arm the close and the
+  panel was stranded open; the corridor also spanned the full height of both
+  windows, over-suppressing outside-click dismissal. Now
+  `SubtaskPanelLayout.pointerCoverage` answers `.surface` / `.transit` /
+  `.outside`: only `.surface` cancels, `.transit` DEFERS via
+  `rearmPendingClose` within a bounded `corridorTransitBudget` (0.6 s), so
+  leaving the corridor in any direction closes the surface on the next
+  maturity with no further callback, and parking in it cannot hold the surface
+  forever. The corridor is now bounded vertically by the row/surface band plus
+  one row of slack instead of both windows' full height. A pending open for
+  another family skips the transit path entirely, so a deliberate switch is
+  never swallowed.
+- **Transit budget reset (round-5 review follow-up):** a genuine surface
+  arrival now clears `corridorTransitDeadline`. It previously survived the
+  arrival, so a later leave into the corridor inherited the spent deadline and
+  the second crossing closed the surface mid-gap.
+- **Timings:** `noteRowHover`/`noteTransientPointer` are now idempotent — a
+  repeated `onHover(true)` (SwiftUI re-emits it on every row rebuild) no
+  longer pushes the dwell deadline into the future, which is what made hover
+  feel slow. Discovery keeps the 0.35 s dwell; browsing to another family
+  while a surface is open uses `familySwitchDwell` 0.075 s; `closeGrace` drops
+  0.45 → 0.14 s. Gap travel stays reliable because `commitPendingClose` now
+  cancels when the pointer is actually inside the surface or its corridor at
+  maturity, instead of relying on a long timer. Pending family changes,
+  menu/edit deferral, drafts and focus handling are untouched.
+- **Size:** `panelWidth` 292 → 272, `maximumListHeight` 264 → 240. Height still
+  follows content (`clampedListHeight`); nothing forces an aspect ratio.
+  Trade-off: at the largest corner setting the corner-aware padding grows to
+  ~23.6 pt a side, leaving ~151 pt of title column beside the 66 pt control
+  cluster — `testSurfaceInsetsClearTheCurveAndKeepATitleColumn` guards that
+  floor at every `PanelCornerSize`.
+
+Checks actually run on this worktree (logs under
+`.build/opus5-subpanel-repair/`):
+
+- `xcodebuild build -scheme Attic -destination 'platform=macOS'
+  CODE_SIGNING_ALLOWED=NO` — **BUILD SUCCEEDED** (`build-1.log`).
+- `xcodebuild test … -only-testing:AtticTests CODE_SIGNING_ALLOWED=NO` —
+  **664 tests, 0 failures, 1 skipped** (`unit-tests-4.log`, after the review
+  fix; `unit-tests-2.log` recorded 656 before it). Baseline was 635. One obsolete assertion updated:
+  `testRowLeaveSchedulesCancellableCloseGrace` hard-coded a 0.2 s "before the
+  grace" instant, which is after the new 0.14 s grace; it now expresses its
+  times against `SubtaskPanelLayout.closeGrace`.
+- `xcodebuild build-for-testing … CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=` —
+  TEST BUILD SUCCEEDED (`uitest-compile.log`) — **unit target only**.
+  `AtticUITests` is not in the `Attic` scheme; UI tests build and run only via
+  `Scripts/run_local_ui_tests.zsh` (AtticUI scheme).
+- `bundle exec ruby Scripts/verify_project_generation.rb` — project current and
+  repeatable (no project inputs changed; edits are to existing files only).
+
+NOT run here, by instruction — Astra owns the desktop and validates after
+review: `AtticUITests` (no pointer automation, no preview launch, no installs).
+`commitPendingClose` reads `NSEvent.mouseLocation` in production, but the
+decision it drives is now a pure classifier plus a controller seam
+(`pointerCoverageForTesting`), so transit-defer, gap-exit closure, the transit
+budget, arrival-cancels and switch-preservation all have deterministic unit
+coverage; only the real cursor's path through the gap remains native
+(`testPointerCorridorAndInsideHoverKeepTransientOpen`,
+`testExitingTheGapWithoutEnteringSurfaceStillCloses`).
+
+Runtime routing of the unclaimed presses (which window received them before the
+fix) is still unproven — the click-through cause is a source-level hypothesis
+consistent with the symptom, and the XCUITests that would demonstrate the fixed
+behaviour have not been run here.
 
 ## Provenance
 

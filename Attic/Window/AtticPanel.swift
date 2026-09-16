@@ -538,7 +538,7 @@ enum AtticPanelResizePolicy {
 }
 
 enum AtticPanelDragPolicy {
-    static let controlClearance: CGFloat = 10
+    static let controlClearance: CGFloat = 8
 
     static func topDragRegion(
         in bounds: CGRect,
@@ -814,7 +814,14 @@ final class AtticPanelContentContainer: NSView {
     }
 
     var presentationTransform: CATransform3D {
-        motionView.layer?.presentation()?.transform ?? motionView.layer?.transform ?? CATransform3DIdentity
+        guard let layer = motionView.layer else { return CATransform3DIdentity }
+        // Finger-driven updates write the model immediately. The presentation
+        // tree can still describe the previous display frame until the next
+        // commit, so only consult it while a timed animation owns the motion.
+        if layer.animation(forKey: Self.collapseAnimationKey) != nil {
+            return layer.presentation()?.transform ?? layer.transform
+        }
+        return layer.transform
     }
 
     func stopCollapseMotion() {
@@ -979,7 +986,7 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
         ) {
             return self
         }
-        return super.hitTest(point)
+        return super.hitTest(point) ?? self
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {

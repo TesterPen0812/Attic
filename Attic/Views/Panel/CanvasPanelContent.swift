@@ -10,6 +10,10 @@ struct CanvasPanelContent: View {
     let horizontalInset: CGFloat
     @Binding var isClearConfirmationPresented: Bool
     var bottomOverlayInset: CGFloat = 0
+    var topOverlayInset: CGFloat = 0
+    var mainControlRects: [CGRect] = []
+    @State private var controlRects: [CGRect] = []
+    @State private var isShapeHovered = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -20,6 +24,20 @@ struct CanvasPanelContent: View {
         #else
         .white
         #endif
+    }
+    // Undo/Redo availability is route-only, exactly like the app Edit commands:
+    // a focused text editor owns them, and canvas history owns them otherwise.
+    // Adding a session term here made these controls render enabled while the
+    // route refused to act on them, disagreeing with the app Edit menu.
+    // Reading the editing-availability token keeps SwiftUI re-evaluating while
+    // typing, which deliberately never republishes canvas history.
+    private var canUndoCanvasEdit: Bool {
+        let _ = session.editingAvailabilityToken
+        return CanvasEditCommandRoute.canUndo(session: session, section: .canvas)
+    }
+    private var canRedoCanvasEdit: Bool {
+        let _ = session.editingAvailabilityToken
+        return CanvasEditCommandRoute.canRedo(session: session, section: .canvas)
     }
     private var secondaryForeground: Color {
         #if os(macOS)
@@ -48,6 +66,7 @@ struct CanvasPanelContent: View {
     @State private var exportDocument: CanvasImageExportDocument?
     @State private var exportType = UTType.png
     @State private var exportError: String?
+    @State private var dismissedImageFailureIDs: Set<UUID> = []
     #if !os(macOS)
     @FocusState private var isTextEntryFocused: Bool
     #endif
@@ -59,14 +78,25 @@ struct CanvasPanelContent: View {
 
                 canvasStatus
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.top, 10)
+                    .padding(.top, topOverlayInset + 8)
                     .padding(.leading, 10)
 
                 if let progress = session.imageImportProgress {
                     importProgress(progress)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .padding(.top, 42)
+                        .padding(.top, topOverlayInset + 38)
                         .padding(.horizontal, 10)
+                }
+
+                if session.pendingPlacement == nil, !visibleImageFailureIDs.isEmpty {
+                    imageRecoveryNotice
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .topLeading
+                        )
+                        .padding(.top, topOverlayInset + 38)
+                        .padding(.leading, 10)
                 }
 
                 if let pendingPlacement = session.pendingPlacement {
@@ -86,7 +116,7 @@ struct CanvasPanelContent: View {
                             maxHeight: .infinity,
                             alignment: .topLeading
                         )
-                        .padding(.top, 41)
+                        .padding(.top, topOverlayInset + 38)
                         .padding(.leading, 10)
                         .allowsHitTesting(false)
                         .accessibilityLabel(pendingPlacement.instruction)
@@ -94,15 +124,17 @@ struct CanvasPanelContent: View {
 
                 if session.selectedImage != nil {
                     imageSelectionDock
+                        .background(controlRegion)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 60 + bottomOverlayInset)
+                        .padding(.bottom, 106 + bottomOverlayInset)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 #if os(macOS)
                 if let object = session.selectedSemanticObject {
                     semanticSelectionDock(object)
+                        .background(controlRegion)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 60 + bottomOverlayInset)
+                        .padding(.bottom, 106 + bottomOverlayInset)
                 }
                 #endif
 
@@ -110,19 +142,25 @@ struct CanvasPanelContent: View {
                 // ViewThatFits can retain an unplaced second toolbar whose
                 // presenter competes with the visible button's presenter.
                 bottomChrome(compact: proxy.size.width < Self.fullChromeRequiredWidth)
+                    .background(controlRegion)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 10 + bottomOverlayInset)
             }
+            .coordinateSpace(name: "attic.canvas.surface")
+            .onPreferenceChange(CanvasControlFramesKey.self) { controlRects = $0 }
             .onAppear {
                 surfaceSize = proxy.size
             }
             .onChange(of: proxy.size) { _, newSize in
                 surfaceSize = newSize
             }
+            .onChange(of: session.failedImageIDs) { _, failures in
+                // Keep the dismissal scoped to the failures the user saw, so a
+                // new failure raises the notice again.
+                dismissedImageFailureIDs.formIntersection(failures)
+            }
         }
-        .padding(.horizontal, max(horizontalInset - 8, 8))
-        .padding(.bottom, 4)
         .transaction { transaction in
             if reduceMotion {
                 transaction.animation = nil
@@ -223,19 +261,80 @@ struct CanvasPanelContent: View {
         }
     }
 
+    private var controlRegion: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(key: CanvasControlFramesKey.self,
+                                   value: [proxy.frame(in: .named("attic.canvas.surface"))])
+        }
+    }
+
     private func board(size: CGSize) -> some View {
-        CanvasSurface(session: session)
-            .frame(width: size.width, height: size.height)
-            .background {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.04 : 0.025))
+        CanvasSurface(
+            session: session,
+            excludedRects: controlRects + mainControlRects,
+            onRequestImageExport: { presentExport(of: $0) }
+        )
+        .frame(width: size.width, height: size.height)
+    }
+
+    /// Recovery for images whose bytes are present but cannot be decoded
+    /// (CANVAS-012). It appears only while a failure is live, states the
+    /// problem in one line, and offers retry, selection for
+    /// replace/export/remove, and dismissal.
+    private var imageRecoveryNotice: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(secondaryForeground)
+            Text(failedImageLabel)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .atticClearGlassForegroundReadability()
+            Button("Retry") {
+                _ = session.retryFailedImageDecodes()
             }
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.primary.opacity(0.065), lineWidth: 0.75)
-                    .allowsHitTesting(false)
+            .buttonStyle(.plain)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .accessibilityIdentifier("canvas-image-recovery-retry")
+            Button {
+                dismissedImageFailureIDs = session.failedImageIDs
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(secondaryForeground)
+            .accessibilityLabel("Dismiss image warning")
+            .accessibilityIdentifier("canvas-image-recovery-dismiss")
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 25)
+        .atticGlassControl(in: Capsule(style: .continuous), interactive: false)
+        .overlay {
+            Capsule(style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 0.75)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(failedImageLabel)
+    }
+
+    private var visibleImageFailureIDs: Set<UUID> {
+        session.failedImageIDs.subtracting(dismissedImageFailureIDs)
+    }
+
+    private var failedImageLabel: String {
+        let count = visibleImageFailureIDs.count
+        return count == 1
+            ? "1 image could not be displayed"
+            : "\(count) images could not be displayed"
+    }
+
+    private func presentExport(of image: CanvasPlacedImage) {
+        exportDocument = CanvasImageExportDocument(data: image.encodedData)
+        exportType = UTType(image.contentType) ?? .data
+        isImageExporterPresented = true
     }
 
     private var canvasStatus: some View {
@@ -266,12 +365,56 @@ struct CanvasPanelContent: View {
     }
 
     private func bottomChrome(compact: Bool) -> some View {
-        HStack(alignment: .bottom, spacing: compact ? 6 : 10) {
-            addMenu(compact: compact)
+        VStack(spacing: 6) {
             toolDock(compact: compact)
+            HStack(spacing: 4) {
+                addMenu(compact: true)
+                CanvasCommandButton(title: "Undo", systemImage: "arrow.uturn.backward",
+                    identifier: "canvas-undo", isDisabled: !canUndoCanvasEdit) {
+                    _ = CanvasEditCommandRoute.undo(session: session, section: .canvas)
+                }
+                CanvasCommandButton(title: "Redo", systemImage: "arrow.uturn.forward",
+                    identifier: "canvas-redo", isDisabled: !canRedoCanvasEdit) {
+                    _ = CanvasEditCommandRoute.redo(session: session, section: .canvas)
+                }
+                Divider().frame(height: 16)
+                CanvasCommandButton(title: "Fit Canvas", systemImage: "arrow.up.left.and.arrow.down.right",
+                    identifier: "canvas-fit-view") { session.fit(in: surfaceSize, excluding: controlRects + mainControlRects) }
+                Menu {
+                    Button("Zoom In", systemImage: "plus.magnifyingglass") { zoom(by: 1.25) }
+                    Button("Zoom Out", systemImage: "minus.magnifyingglass") { zoom(by: 0.8) }
+                    Divider()
+                    Button("Actual Size (100%)") { session.resetView() }
+                        .accessibilityIdentifier("canvas-reset-view")
+                } label: {
+                    Text("\(Int((session.viewport.scale * 100).rounded()))%")
+                        .font(.system(size: 10, weight: .medium, design: .rounded).monospacedDigit())
+                        .frame(width: 44, height: 36)
+                        .contentShape(Capsule())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Zoom · pinch or use Command + / −")
+                .accessibilityLabel("Zoom \(Int((session.viewport.scale * 100).rounded())) percent")
+                .accessibilityIdentifier("canvas-zoom")
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .atticGlassControl(in: Capsule(), interactive: false)
         }
-        .fixedSize(horizontal: true, vertical: false)
-        .atticGlassEffectContainer(spacing: compact ? 6 : 10)
+        .fixedSize()
+        .atticGlassEffectContainer(spacing: 6)
+        .onHover { inside in
+            #if os(macOS)
+            if inside { NSCursor.arrow.set() }
+            #endif
+        }
+    }
+
+    private func zoom(by factor: Double) {
+        session.interruptActiveInteraction()
+        session.zoom(by: factor, anchoredAt: CGPoint(x: surfaceSize.width / 2, y: surfaceSize.height / 2), in: surfaceSize)
     }
 
     private func addMenu(compact: Bool) -> some View {
@@ -326,7 +469,7 @@ struct CanvasPanelContent: View {
 
             Menu("View") {
                 Button("Fit Content", systemImage: "arrow.up.left.and.arrow.down.right") {
-                    session.fit(in: surfaceSize)
+                    session.fit(in: surfaceSize, excluding: controlRects + mainControlRects)
                 }
                 .keyboardShortcut("9", modifiers: .command)
 
@@ -338,14 +481,14 @@ struct CanvasPanelContent: View {
 
             Menu("Edit") {
                 Button("Undo", systemImage: "arrow.uturn.backward") {
-                    _ = session.undo()
+                    _ = CanvasEditCommandRoute.undo(session: session, section: .canvas)
                 }
-                .disabled(!session.canUndo)
+                .disabled(!canUndoCanvasEdit)
 
                 Button("Redo", systemImage: "arrow.uturn.forward") {
-                    _ = session.redo()
+                    _ = CanvasEditCommandRoute.redo(session: session, section: .canvas)
                 }
-                .disabled(!session.canRedo)
+                .disabled(!canRedoCanvasEdit)
 
                 Divider()
 
@@ -357,7 +500,7 @@ struct CanvasPanelContent: View {
                 .accessibilityIdentifier("canvas-clear")
             }
         } label: {
-            Image(systemName: "plus")
+            Image(systemName: "square.stack")
                 .font(.system(size: compact ? 15 : 17, weight: .medium))
                 .atticClearGlassForegroundReadability()
                 .frame(width: compact ? 36 : 42, height: compact ? 36 : 42)
@@ -367,7 +510,7 @@ struct CanvasPanelContent: View {
         .menuIndicator(.hidden)
         .frame(width: compact ? 36 : 42, height: compact ? 36 : 42)
         .atticGlassControl(in: Circle())
-        .help("Add to Canvas")
+        .help("Canvas actions")
         .accessibilityLabel("Canvas menu")
         .accessibilityValue(session.selectedCanvas.name)
         .accessibilityIdentifier("canvas-document-menu")
@@ -447,25 +590,6 @@ struct CanvasPanelContent: View {
                 stylePopover
             }
 
-            CanvasCommandButton(
-                title: "Undo",
-                systemImage: "arrow.uturn.backward",
-                identifier: "canvas-undo",
-                isDisabled: !session.canUndo
-            ) {
-                _ = session.undo()
-            }
-
-            if !compact {
-                CanvasCommandButton(
-                    title: "Redo",
-                    systemImage: "arrow.uturn.forward",
-                    identifier: "canvas-redo",
-                    isDisabled: !session.canRedo
-                ) {
-                    _ = session.redo()
-                }
-            }
         }
         .padding(.horizontal, compact ? 5 : 8)
         .frame(height: compact ? 36 : 42)
@@ -492,13 +616,14 @@ struct CanvasPanelContent: View {
                 .frame(width: 32, height: 32)
                 .background {
                     Circle()
-                        .fill(pendingShape == nil ? Color.clear : Color.accentColor)
+                        .fill(pendingShape == nil ? Color.primary.opacity(isShapeHovered ? 0.08 : 0) : Color.accentColor)
                 }
                 .contentShape(Circle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .frame(width: 32, height: 32)
+        .onHover { isShapeHovered = $0 }
         .help("Add Shape")
         .accessibilityLabel("Add Shape")
         .accessibilityIdentifier("canvas-add-shape")
@@ -578,9 +703,7 @@ struct CanvasPanelContent: View {
                         isReplacementImporterPresented = true
                     }
                     Button("Export Original…", systemImage: "square.and.arrow.up") {
-                        exportDocument = CanvasImageExportDocument(data: image.encodedData)
-                        exportType = UTType(image.contentType) ?? .data
-                        isImageExporterPresented = true
+                        presentExport(of: image)
                     }
                     Button("Remove Image", systemImage: "trash", role: .destructive) {
                         _ = session.deleteImage(image.id)
@@ -810,4 +933,9 @@ struct CanvasPanelContent: View {
         guard value.isFinite else { return "—" }
         return value.formatted(.number.precision(.fractionLength(0)))
     }
+}
+
+private struct CanvasControlFramesKey: PreferenceKey {
+    static var defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) { value += nextValue() }
 }

@@ -75,6 +75,47 @@ final class SubtaskTests: XCTestCase {
         XCTAssertTrue(store.setStatus(.todo, for: child))
     }
 
+    func testConfirmedParentCompletionPreservesUnfinishedChildrenAndAllowsMetadataEdits() throws {
+        let store = try makeStore()
+        let parent = try XCTUnwrap(store.create(title: "Trip"))
+        let child = try XCTUnwrap(store.create(title: "Hotel", parentID: parent.id))
+        XCTAssertFalse(store.markDone(parent))
+        XCTAssertTrue(store.setStatus(.done, for: parent, allowingUnfinishedSubtasks: true))
+        XCTAssertEqual(child.status, .todo)
+        XCTAssertTrue(store.rename(parent, to: "Travel"))
+        XCTAssertTrue(store.rename(child, to: "Book hotel"))
+        XCTAssertEqual(store.purgeCompleted(before: .distantFuture), 0)
+        XCTAssertTrue(store.markDone(child))
+    }
+
+    func testCompletedSubtasksSortAfterUnfinishedAndReopenReturnsToActiveGroup() throws {
+        let store = try makeStore()
+        let parent = try XCTUnwrap(store.create(title: "Trip"))
+        let first = try XCTUnwrap(store.create(title: "Hotel", parentID: parent.id))
+        let second = try XCTUnwrap(store.create(title: "Flights", parentID: parent.id))
+        XCTAssertTrue(store.markDone(second))
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), [first.id, second.id])
+        XCTAssertTrue(store.setStatus(.todo, for: second))
+        XCTAssertTrue(store.markDone(first))
+        XCTAssertEqual(store.subtasks(of: parent.id).first?.id, second.id)
+    }
+
+    func testConfirmedDropsCompleteParentWithoutCompletingItsChildren() throws {
+        let store = try makeStore()
+        let parent = try XCTUnwrap(store.create(title: "Trip"))
+        let child = try XCTUnwrap(store.create(title: "Hotel", parentID: parent.id))
+        let target = try XCTUnwrap(store.create(title: "Finished"))
+        XCTAssertTrue(store.markDone(target))
+        XCTAssertFalse(store.drop(taskID: parent.id, into: .done))
+        XCTAssertTrue(store.drop(taskID: parent.id, into: .done, allowingUnfinishedSubtasks: true))
+        XCTAssertEqual(child.status, .todo)
+        XCTAssertTrue(store.setStatus(.todo, for: parent))
+        XCTAssertFalse(store.drop(taskID: parent.id, onto: target.id))
+        XCTAssertTrue(store.drop(taskID: parent.id, onto: target.id, allowingUnfinishedSubtasks: true))
+        XCTAssertEqual(parent.status, .done)
+        XCTAssertEqual(child.status, .todo)
+    }
+
     func testRejectsMissingNestedAndCompletedParents() throws {
         let store = try makeStore()
         XCTAssertNil(store.create(title: "Missing", parentID: UUID()))

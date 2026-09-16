@@ -11,6 +11,7 @@ struct TaskActionsMenu: View {
     let task: TaskItem
     var editLabel = "Edit"
     var deleteRequested: (() -> Void)? = nil
+    var statusRequested: ((TaskStatus) -> Void)? = nil
     let edit: () -> Void
 
     var body: some View {
@@ -35,7 +36,8 @@ struct TaskActionsMenu: View {
         Menu("Move to") {
             ForEach(TaskStatus.moveMenuOrder) { status in
                 Button {
-                    store.setStatus(status, for: task)
+                    if let statusRequested { statusRequested(status) }
+                    else { store.setStatus(status, for: task) }
                 } label: {
                     if task.status == status {
                         Label(status.title, systemImage: "checkmark")

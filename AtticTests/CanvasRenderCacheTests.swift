@@ -371,6 +371,58 @@ final class CanvasRenderCacheTests: XCTestCase {
         XCTAssertEqual(cache.state(for: images[1]), .idle)
     }
 
+    @MainActor
+    func testRetryDecodeRequeuesOffScreenFailureAcrossCandidatePruning() async {
+        for cancelsActiveDecodesWhenRemoved in [false, true] {
+            let mode = "cancelsActiveDecodesWhenRemoved=\(cancelsActiveDecodesWhenRemoved)"
+            let probe = RecoveringCanvasDecoderProbe(image: makeCGImage(), failingFirstAttempts: [70])
+            let offScreen = makePlacedImage(70)
+            let visible = makePlacedImage(71)
+            let neverFailed = makePlacedImage(72)
+            let cache = CanvasImageDecodeCache(
+                maximumConcurrentDecodes: 1,
+                cancelsActiveDecodesWhenRemoved: cancelsActiveDecodesWhenRemoved,
+                decode: { data in await probe.decode(data) }
+            )
+
+            cache.prepare(for: [offScreen])
+            let initialFailure = await waitUntil { cache.state(for: offScreen) == .failed }
+            XCTAssertTrue(initialFailure, mode)
+
+            // Pan away: the failed image leaves the candidate set while a
+            // visible decode occupies the only worker.
+            cache.prepare(for: [visible])
+            let visibleStarted = await waitUntil { await probe.started == [70, 71] }
+            XCTAssertTrue(visibleStarted, mode)
+
+            // Negative control: retry schedules only a remembered failure.
+            cache.retryDecode(for: neverFailed)
+            XCTAssertEqual(cache.state(for: neverFailed), .idle, mode)
+
+            cache.retryDecode(for: offScreen)
+            XCTAssertEqual(cache.state(for: offScreen), .queued, mode)
+            // Every draw re-prepares the unchanged candidate set; that pruning
+            // must not silently discard the explicit retry.
+            cache.prepare(for: [visible])
+            cache.prepare(for: [visible])
+            XCTAssertEqual(cache.state(for: offScreen), .queued, mode)
+
+            await probe.release(71)
+            let retryStarted = await waitUntil { await probe.started == [70, 71, 70] }
+            XCTAssertTrue(retryStarted, mode)
+            cache.prepare(for: [visible])
+            XCTAssertEqual(cache.state(for: offScreen), .decoding, mode)
+
+            await probe.release(70)
+            let recovered = await waitUntil { cache.state(for: offScreen) == .ready }
+            XCTAssertTrue(recovered, mode)
+            XCTAssertEqual(cache.state(for: visible), .ready, mode)
+            XCTAssertEqual(cache.state(for: neverFailed), .idle, mode)
+            let started = await probe.started
+            XCTAssertEqual(started, [70, 71, 70], mode)
+        }
+    }
+
     private func makePlacedImage(_ identifier: Int) -> CanvasPlacedImage {
         CanvasPlacedImage(
             encodedData: Data([UInt8(identifier)]),
@@ -591,5 +643,42 @@ private actor DelayedCanvasDecoderProbe {
             active: active,
             maximumActive: maximumActive
         )
+    }
+}
+
+/// Fails the first decode of selected payloads, then holds each later decode
+/// until the test releases it so queued/decoding states can be observed.
+private actor RecoveringCanvasDecoderProbe {
+    private let decodedImage: CanvasDecodedImage
+    private var failingFirstAttempts: Set<UInt8>
+    private(set) var started: [UInt8] = []
+    private var released: Set<UInt8> = []
+    private var waiters: [UInt8: CheckedContinuation<Void, Never>] = [:]
+
+    init(image: CGImage, failingFirstAttempts: Set<UInt8>) {
+        decodedImage = CanvasDecodedImage(image: image)
+        self.failingFirstAttempts = failingFirstAttempts
+    }
+
+    func decode(_ data: Data) async -> CanvasDecodedImage {
+        let identifier = data.first!
+        started.append(identifier)
+        if failingFirstAttempts.remove(identifier) != nil {
+            return CanvasDecodedImage(image: nil)
+        }
+        if released.remove(identifier) == nil {
+            await withCheckedContinuation { continuation in
+                waiters[identifier] = continuation
+            }
+        }
+        return decodedImage
+    }
+
+    func release(_ identifier: UInt8) {
+        guard let waiter = waiters.removeValue(forKey: identifier) else {
+            released.insert(identifier)
+            return
+        }
+        waiter.resume()
     }
 }

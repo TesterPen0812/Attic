@@ -41,6 +41,96 @@ enum CanvasImageDecodeCandidatePolicy {
     }
 }
 
+/// Caches the displayed image array and its z-order between changes.
+///
+/// `imagesForDisplay` is read by drawing, decode scheduling, accessibility,
+/// cursor hit-testing and selection lookup — several times per pass — and it
+/// rebuilt the whole array on every access while an image was being moved or
+/// resized (CANVAS-018/PERF-10). The cache is keyed on the canvas content
+/// revision plus the live preview, which is exactly what the array depends on.
+@MainActor
+final class CanvasImageDisplayCache {
+    private struct Key: Equatable {
+        let contentRevision: UInt64
+        let previewID: UUID?
+        let previewTransform: CanvasImageTransform?
+    }
+
+    private var key: Key?
+    private var cachedImages: [CanvasPlacedImage] = []
+    private var cachedOrder: CanvasImageHitTestOrder?
+    private var baseOrderRevision: UInt64?
+    private var baseOrder: CanvasImageHitTestOrder?
+
+    func images(
+        base: [CanvasPlacedImage],
+        previewID: UUID?,
+        previewTransform: CanvasImageTransform?,
+        contentRevision: UInt64
+    ) -> [CanvasPlacedImage] {
+        refreshIfNeeded(
+            base: base,
+            previewID: previewID,
+            previewTransform: previewTransform,
+            contentRevision: contentRevision
+        )
+        return cachedImages
+    }
+
+    func order(
+        base: [CanvasPlacedImage],
+        previewID: UUID?,
+        previewTransform: CanvasImageTransform?,
+        contentRevision: UInt64
+    ) -> CanvasImageHitTestOrder {
+        refreshIfNeeded(
+            base: base,
+            previewID: previewID,
+            previewTransform: previewTransform,
+            contentRevision: contentRevision
+        )
+        if let cachedOrder { return cachedOrder }
+        // Sort once per content change. A live preview reuses that order,
+        // because moving or resizing an image never changes its z-position.
+        if baseOrderRevision != contentRevision || baseOrder == nil {
+            baseOrder = CanvasImageHitTestOrder(images: base)
+            baseOrderRevision = contentRevision
+        }
+        let resolvedBase = baseOrder ?? CanvasImageHitTestOrder(images: base)
+        let order: CanvasImageHitTestOrder
+        if let id = key?.previewID, let transform = key?.previewTransform {
+            order = resolvedBase.applyingPreview(id: id, transform: transform)
+        } else {
+            order = resolvedBase
+        }
+        cachedOrder = order
+        return order
+    }
+
+    private func refreshIfNeeded(
+        base: [CanvasPlacedImage],
+        previewID: UUID?,
+        previewTransform: CanvasImageTransform?,
+        contentRevision: UInt64
+    ) {
+        let nextKey = Key(
+            contentRevision: contentRevision,
+            previewID: previewTransform == nil ? nil : previewID,
+            previewTransform: previewID == nil ? nil : previewTransform
+        )
+        guard key != nextKey else { return }
+        key = nextKey
+        cachedOrder = nil
+        guard let id = nextKey.previewID, let transform = nextKey.previewTransform else {
+            cachedImages = base
+            return
+        }
+        cachedImages = base.map {
+            $0.id == id ? $0.replacingTransform(transform) : $0
+        }
+    }
+}
+
 enum CanvasAccessibilityObjectKind: Hashable {
     case stroke
     case image
@@ -63,6 +153,7 @@ enum CanvasAccessibilityAction: Equatable {
     case makeLarger
     case sendBackward
     case bringForward
+    case retryDecode
     case delete
 
     var title: String {
@@ -77,6 +168,7 @@ enum CanvasAccessibilityAction: Equatable {
         case .makeLarger: "Make larger"
         case .sendBackward: "Send backward"
         case .bringForward: "Bring forward"
+        case .retryDecode: "Retry loading image"
         case .delete: "Delete"
         }
     }
@@ -87,6 +179,10 @@ final class CanvasAccessibilityObjectElement: NSAccessibilityElement {
     let key: CanvasAccessibilityObjectKey
     weak var canvasView: CanvasNSView?
     private(set) var availableActions: [CanvasAccessibilityAction] = []
+    /// The object's rectangle in canvas world space. The parent-space frame is
+    /// derived from it, so a viewport change only has to re-project this value
+    /// instead of rebuilding the element (CANVAS-017/PERF-09).
+    private(set) var worldRect: CGRect = .null
 
     var objectID: UUID { key.id }
     var objectKind: CanvasAccessibilityObjectKind { key.kind }
@@ -105,11 +201,12 @@ final class CanvasAccessibilityObjectElement: NSAccessibilityElement {
     func update(
         label: String,
         valueDescription: String,
-        frame: CGRect,
+        worldRect: CGRect,
         selected: Bool,
         actions: [CanvasAccessibilityAction]
     ) {
         availableActions = actions
+        self.worldRect = worldRect
         setAccessibilityParent(canvasView)
         setAccessibilityRole(objectKind == .image ? .image : .group)
         setAccessibilityIdentifier(
@@ -124,12 +221,21 @@ final class CanvasAccessibilityObjectElement: NSAccessibilityElement {
         )
         setAccessibilityEnabled(true)
         setAccessibilitySelected(selected)
-        setAccessibilityFrameInParentSpace(frame)
+        refreshAccessibilityFrame()
         setAccessibilityCustomActions(actions.map { action in
             NSAccessibilityCustomAction(name: action.title) { [weak self] in
                 self?.perform(action) ?? false
             }
         })
+    }
+
+    /// Re-projects the stored world rectangle through the canvas's current
+    /// viewport.
+    func refreshAccessibilityFrame() {
+        guard let canvasView else { return }
+        setAccessibilityFrameInParentSpace(
+            canvasView.canvasAccessibilityFrame(for: worldRect)
+        )
     }
 
     func perform(_ action: CanvasAccessibilityAction) -> Bool {
@@ -154,24 +260,89 @@ final class CanvasAccessibilityObjectElement: NSAccessibilityElement {
 }
 
 extension CanvasNSView {
+    /// Records that the objects accessibility describes have changed.
+    ///
+    /// The rebuild itself is deferred: it is coalesced to at most once per
+    /// run-loop turn, and it is only performed eagerly once an accessibility
+    /// client has actually queried the canvas. A client that has never asked
+    /// for children gets its elements built on first query instead
+    /// (CANVAS-017/PERF-09).
+    func invalidateCanvasAccessibilityElements(postLayoutNotification: Bool) {
+        canvasAccessibilityContentIsStale = true
+        canvasAccessibilityPendingLayoutNotification =
+            canvasAccessibilityPendingLayoutNotification || postLayoutNotification
+        guard hasBuiltCanvasAccessibilityElements,
+              !canvasAccessibilityRebuildIsScheduled else {
+            return
+        }
+        canvasAccessibilityRebuildIsScheduled = true
+        RunLoop.current.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.flushPendingAccessibilityRebuild()
+            }
+        }
+    }
+
+    /// Performs a coalesced rebuild that is still outstanding.
+    func flushPendingAccessibilityRebuild() {
+        canvasAccessibilityRebuildIsScheduled = false
+        guard canvasAccessibilityContentIsStale,
+              hasBuiltCanvasAccessibilityElements else {
+            return
+        }
+        let shouldPost = canvasAccessibilityPendingLayoutNotification
+        refreshCanvasAccessibilityElements(postLayoutNotification: shouldPost)
+    }
+
+    /// Moves existing accessibility frames to a new viewport without touching
+    /// labels, values, actions or navigation order.
+    ///
+    /// Panning and zooming change only where objects appear, so an attached
+    /// accessibility client still needs current frames while a full rebuild
+    /// would be pure waste.
+    func updateCanvasAccessibilityFramesForViewport() {
+        guard hasBuiltCanvasAccessibilityElements,
+              !canvasAccessibilityContentIsStale,
+              canvasAccessibilityBuiltViewport != interaction.viewport else {
+            return
+        }
+        canvasAccessibilityBuiltViewport = interaction.viewport
+        for element in canvasAccessibilityElements.values {
+            element.refreshAccessibilityFrame()
+        }
+    }
+
     func refreshCanvasAccessibilityElements(
         postLayoutNotification: Bool
     ) {
+        canvasAccessibilityContentIsStale = false
+        canvasAccessibilityPendingLayoutNotification = false
+        hasBuiltCanvasAccessibilityElements = true
+        canvasAccessibilityBuiltViewport = interaction.viewport
+        accessibilityRebuildCount &+= 1
         let orderedStrokes = interaction.strokes.sorted {
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.id.uuidString < $1.id.uuidString
         }
-        let orderedImages = imagesForDisplay.sorted {
-            if $0.zIndex != $1.zIndex { return $0.zIndex < $1.zIndex }
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.id.uuidString < $1.id.uuidString
-        }
+        // The shared z-ordered display structure is computed once per content
+        // change and reused by drawing, hit-testing and this rebuild
+        // (CANVAS-018/PERF-10).
+        let orderedImages = imageDisplayOrder.backToFront
         let nextOrder = orderedStrokes.map {
             CanvasAccessibilityObjectKey(kind: .stroke, id: $0.id)
         } + orderedImages.map {
             CanvasAccessibilityObjectKey(kind: .image, id: $0.id)
         } + semanticObjectsForDisplay.map {
             CanvasAccessibilityObjectKey(kind: .semantic, id: $0.id)
+        }
+        let semanticZIndices = semanticObjects.map(\.transform.zIndex)
+        let lowestSemanticZIndex = semanticZIndices.min()
+        let highestSemanticZIndex = semanticZIndices.max()
+        let failedImageIDs = Set(
+            orderedImages.filter { imageCache.state(for: $0) == .failed }.map(\.id)
+        )
+        func decodeFailed(_ image: CanvasPlacedImage) -> Bool {
+            failedImageIDs.contains(image.id)
         }
         let liveKeys = Set(nextOrder)
         canvasAccessibilityElements = canvasAccessibilityElements.filter {
@@ -199,7 +370,7 @@ extension CanvasNSView {
                     worldRect: rect,
                     prefix: "\(stroke.color.title), width \(canvasAccessibilityNumber(stroke.width))"
                 ),
-                frame: canvasAccessibilityFrame(for: rect),
+                worldRect: rect,
                 selected: accessibilityFocusedObjectKey == key,
                 actions: [.select, .delete]
             )
@@ -214,30 +385,47 @@ extension CanvasNSView {
                 .select, .moveLeft, .moveRight, .moveUp, .moveDown,
                 .makeSmaller, .makeLarger
             ]
-            if semanticObjects.contains(where: { $0.transform.zIndex <= image.zIndex }) || orderedImages.contains(where: {
-                CanvasImagePlacement.imageIsInFront(image, $0)
-            }) {
+            // `orderedImages` is sorted back-to-front by exactly the reverse
+            // of `imageIsInFront`, so "another image is behind this one" is
+            // simply "this is not the first element". That replaces two linear
+            // scans per image (quadratic overall) with an index comparison.
+            if lowestSemanticZIndex.map({ $0 <= image.zIndex }) == true || index > 0 {
                 actions.append(.sendBackward)
             }
-            if semanticObjects.contains(where: { $0.transform.zIndex >= image.zIndex }) || orderedImages.contains(where: {
-                CanvasImagePlacement.imageIsInFront($0, image)
-            }) {
+            if highestSemanticZIndex.map({ $0 >= image.zIndex }) == true
+                || index < orderedImages.count - 1 {
                 actions.append(.bringForward)
             }
+            if decodeFailed(image) { actions.append(.retryDecode) }
             actions.append(.delete)
+            let sizePrefix = "\(canvasAccessibilityNumber(image.width)) by \(canvasAccessibilityNumber(image.height))"
             element.update(
                 label: "Image \(index + 1) of \(orderedImages.count)",
                 valueDescription: canvasAccessibilityPositionDescription(
                     worldRect: image.worldRect,
-                    prefix: "\(canvasAccessibilityNumber(image.width)) by \(canvasAccessibilityNumber(image.height))"
+                    prefix: decodeFailed(image)
+                        ? "Could not be displayed, \(sizePrefix)"
+                        : sizePrefix
                 ),
-                frame: canvasAccessibilityFrame(for: image.worldRect),
+                worldRect: image.worldRect,
                 selected: selectedImageID == image.id,
                 actions: actions
             )
         }
 
-        let placedObjects = images.map(CanvasPlacedRenderObject.image) + semanticObjects.map(CanvasPlacedRenderObject.semantic)
+        // `comesBefore` is a strict total order over distinct object IDs, so a
+        // single sort yields, for every object, how many objects sit behind and
+        // in front of it. The previous two `contains` scans per object made
+        // this rebuild quadratic in the board size.
+        let placedOrder = (
+            images.map(CanvasPlacedRenderObject.image)
+                + semanticObjects.map(CanvasPlacedRenderObject.semantic)
+        ).sorted(by: CanvasPlacedRenderObject.comesBefore)
+        var placedDepthByID: [UUID: Int] = [:]
+        placedDepthByID.reserveCapacity(placedOrder.count)
+        for (depth, placed) in placedOrder.enumerated() where placedDepthByID[placed.id] == nil {
+            placedDepthByID[placed.id] = depth
+        }
         for object in semanticObjectsForDisplay {
             let key = CanvasAccessibilityObjectKey(kind: .semantic, id: object.id)
             let element = canvasAccessibilityElements[key]
@@ -245,13 +433,14 @@ extension CanvasNSView {
             canvasAccessibilityElements[key] = element
             var actions: [CanvasAccessibilityAction] = [.select, .moveLeft, .moveRight, .moveUp, .moveDown, .makeSmaller, .makeLarger]
             if object.content?.text != nil { actions.append(.editText) }
-            if placedObjects.contains(where: { CanvasPlacedRenderObject.comesBefore($0, .semantic(object)) }) { actions.append(.sendBackward) }
-            if placedObjects.contains(where: { CanvasPlacedRenderObject.comesBefore(.semantic(object), $0) }) { actions.append(.bringForward) }
+            let depth = placedDepthByID[object.id]
+            if let depth, depth > 0 { actions.append(.sendBackward) }
+            if let depth, depth < placedOrder.count - 1 { actions.append(.bringForward) }
             actions.append(.delete)
             element.update(label: String(object.title.prefix(160)),
                 valueDescription: canvasAccessibilityPositionDescription(worldRect: object.worldRect,
                     prefix: object.content?.text != nil ? "Editable text" : "Canvas object"),
-                frame: canvasAccessibilityFrame(for: object.worldRect),
+                worldRect: object.worldRect,
                 selected: selectedSemanticObjectID == object.id, actions: actions)
         }
         canvasAccessibilityNavigationOrder = nextOrder
@@ -288,6 +477,18 @@ extension CanvasNSView {
         switch action {
         case .select:
             return focusCanvasAccessibilityObject(key)
+        case .retryDecode:
+            // Recovery for an image whose decode failed (CANVAS-012). The
+            // renderer only honours a retry for an image it is tracking, so a
+            // stale element cannot resurrect a removed object.
+            guard key.kind == .image,
+                  let image = imagesForDisplay.first(where: { $0.id == key.id }),
+                  imageCache.state(for: image) == .failed else {
+                return false
+            }
+            imageCache.retryDecode(for: image)
+            onRetryImageDecode(key.id)
+            return true
         case .editText:
             guard focusCanvasAccessibilityObject(key), let object = selectedSemanticObject,
                   object.content?.text != nil else { return false }
@@ -362,7 +563,7 @@ extension CanvasNSView {
         return true
     }
 
-    private func canvasAccessibilityFrame(for worldRect: CGRect) -> CGRect {
+    func canvasAccessibilityFrame(for worldRect: CGRect) -> CGRect {
         guard !worldRect.isNull,
               !worldRect.isInfinite,
               worldRect.minX.isFinite,
@@ -525,40 +726,29 @@ enum CanvasCursorRole: Equatable {
 
 @MainActor
 private enum CanvasToolCursors {
-    static let pen = symbolCursor(
-        primaryName: "pencil.tip",
-        fallbackName: "pencil",
-        hotSpot: CGPoint(x: 5, y: 19)
-    )
-    static let eraser = symbolCursor(
-        primaryName: "eraser.fill",
-        fallbackName: "eraser",
-        hotSpot: CGPoint(x: 12, y: 12)
-    )
+    // A two-tone precision cross has an unambiguous center on either a light
+    // or dark canvas. No symbol bounding-box guess determines where ink lands.
+    static let pen = precisionCursor(eraser: false)
+    static let eraser = precisionCursor(eraser: true)
 
-    private static func symbolCursor(
-        primaryName: String,
-        fallbackName: String,
-        hotSpot: CGPoint
-    ) -> NSCursor {
-        let symbol = NSImage(systemSymbolName: primaryName, accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: fallbackName, accessibilityDescription: nil)
-        guard let configured = symbol?.withSymbolConfiguration(
-            .init(pointSize: 16, weight: .semibold)
-        ) else {
-            return .crosshair
+    private static func precisionCursor(eraser: Bool) -> NSCursor {
+        let image = NSImage(size: NSSize(width: 24, height: 24), flipped: false) { _ in
+            let path = NSBezierPath()
+            if eraser {
+                path.appendOval(in: CGRect(x: 5, y: 5, width: 14, height: 14))
+            } else {
+                path.move(to: CGPoint(x: 12, y: 2)); path.line(to: CGPoint(x: 12, y: 9))
+                path.move(to: CGPoint(x: 12, y: 15)); path.line(to: CGPoint(x: 12, y: 22))
+                path.move(to: CGPoint(x: 2, y: 12)); path.line(to: CGPoint(x: 9, y: 12))
+                path.move(to: CGPoint(x: 15, y: 12)); path.line(to: CGPoint(x: 22, y: 12))
+            }
+            path.lineWidth = 3; NSColor.white.setStroke(); path.stroke()
+            path.lineWidth = 1; NSColor.black.setStroke(); path.stroke()
+            NSColor.white.setFill(); NSBezierPath(ovalIn: CGRect(x: 10, y: 10, width: 4, height: 4)).fill()
+            NSColor.black.setFill(); NSBezierPath(ovalIn: CGRect(x: 11, y: 11, width: 2, height: 2)).fill()
+            return true
         }
-
-        let image = NSImage(size: NSSize(width: 24, height: 24))
-        image.lockFocus()
-        configured.draw(
-            in: NSRect(x: 3, y: 3, width: 18, height: 18),
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1
-        )
-        image.unlockFocus()
-        return NSCursor(image: image, hotSpot: hotSpot)
+        return NSCursor(image: image, hotSpot: CGPoint(x: 12, y: 12))
     }
 }
 
@@ -577,17 +767,31 @@ extension CanvasNSView {
         return imagesForDisplay.first { $0.id == selectedImageID }
     }
 
+    /// The images as currently displayed, including any live move/resize
+    /// preview.
+    ///
+    /// During an image transform this used to rebuild the whole array on every
+    /// access, and it is read by drawing, hit-testing, accessibility and the
+    /// cursor path within a single pass (PERF-10). The array is now built once
+    /// per change of the inputs it depends on and reused.
     var imagesForDisplay: [CanvasPlacedImage] {
-        guard !semanticPointerActive else { return images }
-        guard let selectedImageID,
-              let previewImageTransform else {
-            return images
-        }
-        return images.map {
-            $0.id == selectedImageID
-                ? $0.replacingTransform(previewImageTransform)
-                : $0
-        }
+        imageDisplayCache.images(
+            base: images,
+            previewID: semanticPointerActive ? nil : selectedImageID,
+            previewTransform: semanticPointerActive ? nil : previewImageTransform,
+            contentRevision: canvasContentRevision
+        )
+    }
+
+    /// Front-to-back order over `imagesForDisplay`, shared by drawing,
+    /// accessibility and pointer hit-testing.
+    var imageDisplayOrder: CanvasImageHitTestOrder {
+        imageDisplayCache.order(
+            base: images,
+            previewID: semanticPointerActive ? nil : selectedImageID,
+            previewTransform: semanticPointerActive ? nil : previewImageTransform,
+            contentRevision: canvasContentRevision
+        )
     }
 
     var baseCursor: NSCursor {
@@ -614,6 +818,7 @@ extension CanvasNSView {
     }
 
     func cursorRole(at viewPoint: CGPoint) -> CanvasCursorRole {
+        if excludedControlRects.contains(where: { $0.contains(viewPoint) }) { return .arrow }
         if spacePressed { return .openHand }
         switch imagePointerMode {
         case .moving: return .closedHand
@@ -647,10 +852,7 @@ extension CanvasNSView {
             in: bounds.size
         )
         if semanticObject(at: worldPoint) != nil { return .openHand }
-        if CanvasImagePlacement.topmostImage(
-            at: worldPoint,
-            images: imagesForDisplay
-        ) != nil {
+        if imageDisplayOrder.topmostImage(at: worldPoint) != nil {
             return .openHand
         }
         return .arrow

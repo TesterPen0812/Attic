@@ -14,6 +14,14 @@ enum NoteAttachmentActions {
         }
     }
 
+    /// Open hands another app a disposable read-only copy, never the private
+    /// materialization (DATA-002). The private copy is the attachment's only
+    /// working file and is digest-checked on every access, so
+    /// `AttachmentFileStore` rewrites it from the stored payload as soon as an
+    /// external editor saves over it — the edit would vanish with no warning.
+    /// Read-only makes the one-way handoff visible in the editor instead. This
+    /// is the same promise task attachments already make
+    /// (`TaskImageFiles.openableCopy`).
     static func open(store: NoteStore, attachment: NoteAttachment) {
         guard isSafeToOpen(attachment) else {
             store.setAttachmentError(
@@ -22,16 +30,66 @@ enum NoteAttachmentActions {
             return
         }
         Task {
-            guard let url = await store.materializedURL(for: attachment) else { return }
-            NSWorkspace.shared.open(url)
+            guard let sourceURL = await store.materializedURL(for: attachment) else { return }
+            do {
+                let openableURL = try await Task.detached(priority: .userInitiated) {
+                    try openableCopy(of: sourceURL, named: attachment.originalFilename)
+                }.value
+                NSWorkspace.shared.open(openableURL)
+            } catch {
+                store.setAttachmentError(
+                    "Unable to open a copy of \(attachment.originalFilename): \(error.localizedDescription)"
+                )
+            }
         }
     }
 
+    /// Reveal keeps selecting the private file. Finder does not edit it, and
+    /// selecting a throwaway export directory instead would hide where the
+    /// attachment actually lives — the least surprising of the two.
     static func reveal(store: NoteStore, attachment: NoteAttachment) {
         Task {
             guard let url = await store.materializedURL(for: attachment) else { return }
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
+    }
+
+    /// A disposable read-only copy under a temporary exports root that is
+    /// pruned after a day. Only these copies are pruned, never durable
+    /// attachments.
+    nonisolated static func openableCopy(of sourceURL: URL, named filename: String) throws -> URL {
+        let directory = try disposableExportDirectory()
+        let copyURL = directory
+            .appendingPathComponent(AttachmentFileStore.sanitizedFilename(filename), isDirectory: false)
+            .standardizedFileURL
+        guard copyURL.path.hasPrefix(directory.path + "/") else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: copyURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o444], ofItemAtPath: copyURL.path
+        )
+        return copyURL
+    }
+
+    nonisolated private static func disposableExportDirectory() throws -> URL {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("AtticNoteExports", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let cutoff = Date().addingTimeInterval(-86400)
+        let existing = (try? fileManager.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.creationDateKey]
+        )) ?? []
+        for url in existing {
+            let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate)
+                ?? .distantFuture
+            guard created < cutoff else { continue }
+            try? fileManager.removeItem(at: url)
+        }
+        let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 
     static func export(store: NoteStore, attachment: NoteAttachment) {
@@ -63,7 +121,14 @@ enum NoteAttachmentActions {
     }
 
     static func isSafeToOpen(_ attachment: NoteAttachment) -> Bool {
-        let type = attachment.contentType
+        isSafeToOpen(contentTypeIdentifier: attachment.contentTypeIdentifier)
+    }
+
+    /// Shared with task attachments: executables, scripts, packages and
+    /// untyped data are previewed rather than opened.
+    static func isSafeToOpen(contentTypeIdentifier: String) -> Bool {
+        guard !contentTypeIdentifier.isEmpty else { return false }
+        let type = UTType(contentTypeIdentifier) ?? .data
         let unsafeIdentifiers = [
             UTType.application.identifier,
             UTType.executable.identifier,
@@ -75,8 +140,7 @@ enum NoteAttachmentActions {
         return !unsafeIdentifiers.contains(where: {
             type.conforms(to: UTType($0) ?? .data)
         })
-            && !attachment.contentTypeIdentifier.isEmpty
-            && attachment.contentType != .data
+            && type != .data
     }
 
     nonisolated private static func exportCopy(from sourceURL: URL, to destinationURL: URL) throws {

@@ -21,7 +21,10 @@ final class CanvasInteractionController {
     private(set) var eraserWorldPoint: CanvasPoint?
     private(set) var eraserRadiusWorld = 0.0
 
-    private var strokeRenderKeys: [CanvasStrokeRenderKey] = []
+    /// Bumped only when the stroke collection's render identity changes.
+    /// Consumers that only care about content (accessibility, hit-test order)
+    /// compare this instead of re-deriving the stroke list per configure.
+    private(set) var strokeContentRevision: UInt64 = 0
     private var mutableActivePath: CGMutablePath?
     private var activeColor: CanvasInkColor = .ink
     private var activeWidth = 3.0
@@ -39,8 +42,10 @@ final class CanvasInteractionController {
         width: Double,
         viewport: CanvasViewport
     ) -> Bool {
-        let newRenderKeys = strokes.map(\.renderKey)
-        let semanticContentChanged = strokeRenderKeys != newRenderKeys
+        // Compare render keys in place. Mapping the whole collection into a
+        // new array ran on every published change, including viewport-only
+        // pan and zoom frames (PERF-09).
+        let semanticContentChanged = !hasSameStrokeRenderKeys(as: strokes)
         let styleChanged = self.tool != tool
             || self.color != color
             || self.width != width
@@ -53,7 +58,7 @@ final class CanvasInteractionController {
 
         if semanticContentChanged {
             self.strokes = strokes
-            strokeRenderKeys = newRenderKeys
+            strokeContentRevision &+= 1
         }
         self.tool = tool
         self.color = color
@@ -63,6 +68,15 @@ final class CanvasInteractionController {
             || semanticContentChanged
             || styleChanged
             || viewportChanged
+    }
+
+    private func hasSameStrokeRenderKeys(as candidates: [CanvasStroke]) -> Bool {
+        guard candidates.count == strokes.count else { return false }
+        for index in candidates.indices
+        where candidates[index].renderKey != strokes[index].renderKey {
+            return false
+        }
+        return true
     }
 
     @discardableResult
