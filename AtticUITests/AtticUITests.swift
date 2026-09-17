@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 final class AtticUITests: XCTestCase {
@@ -77,27 +78,129 @@ final class AtticUITests: XCTestCase {
         action.click()
     }
 
-    /// The main panel floats above the Settings window; on the CI display it
-    /// covers the window's right-hand controls in its vertical band. When a
-    /// control is occluded, drop the window just far enough for the control
-    /// to clear the panel's lower edge, where hittability no longer depends
-    /// on the horizontal overlap.
-    private func dropSettingsWindow(_ settings: XCUIElement, clearing element: XCUIElement) {
-        let panel = app.dialogs.firstMatch
-        guard panel.exists, element.exists else { return }
-        let panelFrame = panel.frame
-        guard panelFrame.intersects(element.frame) else { return }
-        let shift = panelFrame.maxY + 8 - element.frame.minY
-        guard shift > 0 else { return }
+    /// Distance kept between a Settings control and the floating Attic panel's
+    /// lower edge. A control that merely touches that edge still reports as
+    /// hittable while its click is swallowed by the panel above it, so the
+    /// reveal leaves real clearance instead of lining the two frames up.
+    private static let settingsControlClearance: CGFloat = 40
+
+    /// Largest single scroll step; the page is short enough that one step can
+    /// always cover the distance from a control to the bottom of the band.
+    private static let settingsScrollStep: CGFloat = 450
+
+    /// How the last gesture left the control it was aimed at.
+    private enum GestureOutcome {
+        /// The control travelled in the requested direction.
+        case moved
+        /// The page or window was already at its limit.
+        case pinned
+        /// The control moved the other way, which also happens while the sign
+        /// of XCUI's wheel delta is still being worked out.
+        case backwards
+    }
+
+    /// Which wheel sign carries the page towards its end on this Xcode. The
+    /// first gesture that moves a control the opposite way flips this for the
+    /// rest of the test, so the reveal never guesses twice.
+    private var scrollTowardsEndSign: CGFloat = 1
+
+    /// Movement below this is jitter rather than a gesture response.
+    private static let settingsGestureTolerance: CGFloat = 2
+
+    /// Report how a gesture moved the control, given its travel in the
+    /// direction the gesture asked for.
+    private static func outcome(for travel: CGFloat) -> GestureOutcome {
+        if travel >= settingsGestureTolerance { return .moved }
+        if travel <= -settingsGestureTolerance { return .backwards }
+        return .pinned
+    }
+
+    /// Slide the window by `deltaY` and report whether the control followed.
+    /// A window that has reached the bottom of the display stays where it is,
+    /// which is the caller's cue to move the control by scrolling instead.
+    private func slideSettingsWindow(
+        _ settings: XCUIElement,
+        by deltaY: CGFloat,
+        moving element: XCUIElement
+    ) -> GestureOutcome {
+        guard abs(deltaY) > 1 else { return .pinned }
+        let before = element.frame
         let titleBar = settings.coordinate(
             withNormalizedOffset: CGVector(dx: 0.25, dy: 0.02)
         )
         titleBar.click(
             forDuration: 0.1,
-            thenDragTo: titleBar.withOffset(CGVector(dx: 0, dy: shift)),
+            thenDragTo: titleBar.withOffset(CGVector(dx: 0, dy: deltaY)),
             withVelocity: .slow,
             thenHoldForDuration: 0.1
         )
+        guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
+        let travelled = after.minY - before.minY
+        return Self.outcome(for: deltaY > 0 ? travelled : -travelled)
+    }
+
+    /// Scroll the page so the control travels in the requested direction,
+    /// reporting whether it did. A page at the end of its range leaves the
+    /// control in place.
+    private func scrollPage(
+        _ page: XCUIElement,
+        element: XCUIElement,
+        towardsTop: Bool,
+        distance: CGFloat
+    ) -> GestureOutcome {
+        let before = element.frame
+        let delta = (towardsTop ? -1 : 1) * scrollTowardsEndSign * distance
+        page.scroll(byDeltaX: 0, deltaY: delta)
+        guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
+        let travelled = before.minY - after.minY
+        let outcome = Self.outcome(for: towardsTop ? travelled : -travelled)
+        if outcome == .backwards {
+            // The running Xcode applied the opposite sign: remember it and let
+            // the caller re-measure the control rather than guessing again.
+            scrollTowardsEndSign = -scrollTowardsEndSign
+        }
+        return outcome
+    }
+
+    /// The control's frame once it has reacted to the last gesture, or nil
+    /// when it did not move within a second.
+    private func settledFrame(of element: XCUIElement, differingFrom before: CGRect) -> CGRect? {
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            let frame = element.frame
+            if frame != before { return frame }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return nil
+    }
+
+    /// The vertical band, in accessibility (top-left origin) coordinates,
+    /// where a Settings control can be clicked. Its lower edge is the top of
+    /// the Dock: the Settings window is taller than this display, so once the
+    /// window is slid down to clear the floating panel its last rows end up
+    /// behind the Dock, and a control that cannot be scrolled above the Dock
+    /// can only be reached by raising the window again.
+    private func settingsBand() -> (top: CGFloat, bottom: CGFloat) {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            return (44, 768 - 73)
+        }
+        // Screen frames use the bottom-left origin of the primary screen;
+        // accessibility frames grow downwards from its top edge.
+        let primaryHeight = (NSScreen.screens.first ?? screen).frame.height
+        let visible = screen.visibleFrame
+        return (primaryHeight - visible.maxY + 8, primaryHeight - visible.minY - 8)
+    }
+
+    /// The lowest screen position a control may keep when the window is
+    /// raised: the panel's lower edge when the panel covers the control's
+    /// column, the top of the band otherwise.
+    private static func settingsCeiling(
+        for frame: CGRect,
+        panel: CGRect,
+        bandTop: CGFloat
+    ) -> CGFloat {
+        let sharesPanelColumn = frame.minX < panel.maxX && frame.maxX > panel.minX
+        return sharesPanelColumn ? panel.maxY + settingsControlClearance : bandTop
     }
 
     override func tearDownWithError() throws {
@@ -106,14 +209,15 @@ final class AtticUITests: XCTestCase {
         app = nil
     }
 
-    /// Bring a Settings control into reach before interacting with it. The
-    /// main panel floats above the window, so on a small display it hides the
-    /// window's right-hand controls, while the window's own content is taller
-    /// than the visible screen. Both are ordinary user moves: slide the window
-    /// down until the control clears the panel's lower edge, then scroll the
-    /// page until the control sits in the band between the panel and the
-    /// screen bottom. The window is never resized, and callers still assert
-    /// that the control is hittable afterwards.
+    /// Bring a Settings control into reach before interacting with it. Two
+    /// ordinary windows cover a Settings control on a small display: the main
+    /// panel floats over the window's right-hand controls, and the Dock covers
+    /// the window's last rows once the window has been slid down to clear that
+    /// panel. This slides the window (never resizing it) and scrolls the page
+    /// until the control sits in the band between the panel and the Dock, and
+    /// re-measures actual frames after every gesture; a stale `isHittable`
+    /// reading is exactly what let a covered control through to a click that
+    /// could not land. Callers still assert that the control is hittable.
     private func revealSettingsControl(
         _ element: XCUIElement,
         in settings: XCUIElement,
@@ -121,17 +225,63 @@ final class AtticUITests: XCTestCase {
     ) {
         let panel = app.dialogs.firstMatch
         guard element.waitForExistence(timeout: 3), panel.exists else { return }
-        for _ in 0..<3 where !element.isHittable && element.frame.intersects(panel.frame) {
-            dropSettingsWindow(settings, clearing: element)
-        }
-        // Sweep the page in both directions rather than bouncing back and
-        // forth: a wrong-direction sweep simply reaches the scroll limit, and
-        // the following sweep then passes through the whole usable range.
-        for _ in 0..<8 where !element.isHittable {
-            page.scroll(byDeltaX: 0, deltaY: -140)
-        }
-        for _ in 0..<14 where !element.isHittable {
-            page.scroll(byDeltaX: 0, deltaY: 140)
+        let band = settingsBand()
+        for _ in 0..<8 {
+            let panelFrame = panel.frame
+            let frame = element.frame
+            guard frame.width > 0, frame.height > 0,
+                  frame.minY.isFinite, frame.maxY.isFinite else { return }
+            let panelEdge = panelFrame.maxY + Self.settingsControlClearance
+            let sharesPanelColumn = frame.minX < panelFrame.maxX && frame.maxX > panelFrame.minX
+            // A control that only grazes the panel's lower edge still reports
+            // as hittable while the panel swallows the click, so treat the
+            // whole strip up to `panelEdge` as covered.
+            if frame.intersects(panelFrame)
+                || (sharesPanelColumn && frame.minY < panelEdge - Self.settingsGestureTolerance) {
+                // The panel covers this control's hit point. Sliding the
+                // window down is the direct fix; when the window has already
+                // reached the bottom of the display, bring the control down by
+                // scrolling the page towards its top instead.
+                let needed = panelEdge - frame.minY
+                switch slideSettingsWindow(settings, by: needed, moving: element) {
+                case .moved, .backwards: continue
+                case .pinned: break
+                }
+                switch scrollPage(page, element: element, towardsTop: false, distance: min(needed, Self.settingsScrollStep)) {
+                case .moved, .backwards: continue
+                case .pinned: return
+                }
+            }
+            if frame.maxY > band.bottom {
+                // Under the Dock, or past the bottom of the display. Scrolling
+                // is the gentler move, so try it first and raise the window
+                // only when the page has no room left to scroll.
+                let needed = frame.maxY - band.bottom
+                switch scrollPage(page, element: element, towardsTop: true, distance: min(needed, Self.settingsScrollStep)) {
+                case .moved, .backwards: continue
+                case .pinned: break
+                }
+                let room = frame.minY - Self.settingsCeiling(
+                    for: frame, panel: panelFrame, bandTop: band.top
+                )
+                guard room > 1 else { return }
+                switch slideSettingsWindow(settings, by: -min(needed, room), moving: element) {
+                case .moved, .backwards: continue
+                case .pinned: return
+                }
+            }
+            if frame.minY < band.top {
+                let needed = band.top - frame.minY
+                switch scrollPage(page, element: element, towardsTop: false, distance: min(needed, Self.settingsScrollStep)) {
+                case .moved, .backwards: continue
+                case .pinned: break
+                }
+                switch slideSettingsWindow(settings, by: needed, moving: element) {
+                case .moved, .backwards: continue
+                case .pinned: return
+                }
+            }
+            return
         }
     }
 
@@ -175,6 +325,7 @@ final class AtticUITests: XCTestCase {
         let toggle = settings.descendants(matching: .any)["setting-agent-access"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 3))
         revealSettingsControl(toggle, in: settings, page: page)
+        XCTAssertTrue(toggle.isHittable, "Settings control must be reachable without resizing the window")
         if settings.descendants(matching: .any)["settings-agent-disabled-message"].exists {
             toggle.click()
         }
@@ -185,10 +336,12 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(settings.debugDescription.contains("127.0.0.1"))
         let copy = settings.buttons["settings-copy-agent-endpoint"]
         revealSettingsControl(copy, in: settings, page: page)
+        XCTAssertTrue(copy.isHittable, "Settings control must be reachable without resizing the window")
         XCTAssertTrue(copy.isEnabled)
         copy.click()
         XCTAssertTrue(settings.buttons["settings-copy-agent-setup"].isEnabled)
         revealSettingsControl(toggle, in: settings, page: page)
+        XCTAssertTrue(toggle.isHittable, "Settings control must be reachable without resizing the window")
         toggle.click()
         XCTAssertTrue(settings.descendants(matching: .any)["settings-agent-disabled-message"].waitForExistence(timeout: 3))
     }
