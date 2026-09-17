@@ -23,7 +23,9 @@ final class DailyCleanupServiceTests: XCTestCase {
         store.markDone(todayDone)
 
         let service = DailyCleanupService(store: store, now: { now }, calendar: { calendar })
-        XCTAssertEqual(service.performCleanup(), 1)
+        let deleted = service.performCleanup()
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
 
         XCTAssertFalse(store.tasks.contains { $0.id == oldDone.id })
         XCTAssertTrue(store.tasks.contains { $0.id == todayDone.id })
@@ -48,7 +50,9 @@ final class DailyCleanupServiceTests: XCTestCase {
 
         clock.value = afterMidnight
         let service = DailyCleanupService(store: store, now: { clock.value }, calendar: { calendar })
-        XCTAssertEqual(service.performCleanup(), 1)
+        let deleted = service.performCleanup()
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
         XCTAssertTrue(store.tasks.isEmpty)
     }
 
@@ -86,7 +90,9 @@ final class DailyCleanupServiceTests: XCTestCase {
         try context.save()
 
         let store = TaskStore(container: container)
-        XCTAssertEqual(store.purgeCompleted(before: cutoff), 1)
+        let deleted = store.purgeCompleted(before: cutoff)
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
 
         let expectedRemainingIDs: Set<UUID> = [
             missingCompletion.id,
@@ -134,7 +140,9 @@ final class DailyCleanupServiceTests: XCTestCase {
         let store = TaskStore(container: container)
         let service = DailyCleanupService(store: store, now: { now })
 
-        XCTAssertEqual(service.performCleanup(), 1)
+        let deleted = service.performCleanup()
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
         let verificationContext = ModelContext(container)
         let remaining = try verificationContext.fetch(FetchDescriptor<TaskItem>())
         XCTAssertEqual(remaining.count, 2)
@@ -173,5 +181,128 @@ final class DailyCleanupServiceTests: XCTestCase {
 
         XCTAssertEqual(service.performCleanup(), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskItem>()), 2)
+    }
+    // TEMPORARY hosted-runtime diagnostic for the macOS 26 cleanup failure.
+    // The candidate query must not order-compare the optional completedAt
+    // date on that runtime; these probes print the row count each predicate
+    // form returns, including the UUID-membership and optional-parent forms
+    // the purge also uses, so the hosted log records exactly which forms are
+    // safe. Remove once the hosted run confirms the fixed candidate query.
+    @MainActor
+    func testHostedPredicateFormProbe() throws {
+        let cutoff = Date(timeIntervalSince1970: 500_000)
+        let createdAt = cutoff.addingTimeInterval(-100)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let beforeCutoff = TaskItem(
+            title: "Completed before cutoff",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff.addingTimeInterval(-1)
+        )
+        let doneParent = TaskItem(
+            title: "Done parent",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff.addingTimeInterval(-1)
+        )
+        let openChild = TaskItem(
+            title: "Open child",
+            status: .todo,
+            createdAt: createdAt,
+            parentID: doneParent.id
+        )
+        let fixtures = [
+            beforeCutoff,
+            doneParent,
+            openChild,
+            TaskItem(title: "Missing completion date", status: .done, createdAt: createdAt, completedAt: nil),
+            TaskItem(title: "Completed at cutoff", status: .done, createdAt: createdAt, completedAt: cutoff),
+            TaskItem(title: "Completed after cutoff", status: .done, createdAt: createdAt, completedAt: cutoff.addingTimeInterval(1)),
+        ]
+        fixtures.forEach(context.insert)
+        try context.save()
+
+        let fresh = ModelContext(container)
+        let doneRaw = TaskStatus.done.rawValue
+        let farFuture = Date.distantFuture
+        let candidateIDs = [beforeCutoff.id, doneParent.id]
+
+        func probe(_ label: String, _ make: () throws -> [TaskItem]) {
+            do {
+                let rows = try make()
+                print("PROBE", label, "count:", rows.count, "titles:", rows.map(\.title).sorted())
+            } catch {
+                print("PROBE", label, "THREW:", String(describing: error))
+            }
+        }
+
+        probe("A status-only") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.statusRaw == doneRaw }
+            ))
+        }
+        probe("B candidate-nonnil-force") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.statusRaw == doneRaw && $0.completedAt != nil && $0.completedAt! < cutoff }
+            ))
+        }
+        probe("C candidate-coalesce") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.statusRaw == doneRaw && ($0.completedAt ?? farFuture) < cutoff }
+            ))
+        }
+        probe("D completedAt-nonnil-only") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.completedAt != nil }
+            ))
+        }
+        probe("E completedAt-force-compare-only") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.completedAt! < cutoff }
+            ))
+        }
+        probe("F completedAt-coalesce-only") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { ($0.completedAt ?? farFuture) < cutoff }
+            ))
+        }
+        probe("G createdAt-compare") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.createdAt < cutoff }
+            ))
+        }
+        probe("I id-membership") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { candidateIDs.contains($0.id) }
+            ))
+        }
+        probe("J parent-force-unwrap-membership") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.parentID != nil && candidateIDs.contains($0.parentID!) }
+            ))
+        }
+        // The replacement candidate shape: status-only fetch plus an
+        // in-memory completion-date filter.
+        probe("L status-only-plus-memory-cutoff") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.statusRaw == doneRaw }
+            )).filter { $0.completedAt.map { $0 < cutoff } == true }
+        }
+
+        let candidatePredicate = #Predicate<TaskItem> {
+            $0.statusRaw == doneRaw && $0.completedAt != nil && $0.completedAt! < cutoff
+        }
+        do {
+            let all = try fresh.fetch(FetchDescriptor<TaskItem>())
+            let manual = try all.filter { try candidatePredicate.evaluate($0) }
+            print("PROBE manual-eval count:", manual.count, "titles:", manual.map(\.title).sorted())
+        } catch {
+            print("PROBE manual-eval THREW:", String(describing: error))
+        }
+
+        let store = TaskStore(container: container)
+        let deleted = store.purgeCompleted(before: cutoff)
+        print("PROBE store-purge deleted:", deleted, "lastError:", store.lastErrorMessage ?? "nil")
     }
 }

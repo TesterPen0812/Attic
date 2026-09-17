@@ -181,7 +181,9 @@ final class SubtaskTests: XCTestCase {
         time = Date(timeIntervalSince1970: 3_000)
         XCTAssertTrue(store.markDone(parent))
         XCTAssertEqual(store.purgeCompleted(before: cutoff), 0)
-        XCTAssertEqual(store.purgeCompleted(before: Date(timeIntervalSince1970: 4_000)), 2)
+        let deleted = store.purgeCompleted(before: Date(timeIntervalSince1970: 4_000))
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 2)
         XCTAssertTrue(store.tasks.isEmpty)
     }
 

@@ -226,14 +226,52 @@ final class TaskStore: ObservableObject {
     /// Family relationships indexed once per revision (see `familyIndex`).
     private var familyIndexCache: FamilyIndex?
 
-    /// `id → task` and `parent → ordered children`, built in one pass over
-    /// the visible tasks and reused until the next mutation. Row bodies ask
-    /// for a family's children several times per evaluation, so each lookup
-    /// must be O(1) rather than a scan of every task.
-    private struct FamilyIndex {
+    /// `id → task`, the visible root list, and `parent → children`, built in
+    /// one pass over the visible tasks and reused until the next mutation.
+    /// Row bodies ask for a family's children several times per evaluation,
+    /// so each lookup must be O(1) rather than a scan of every task. Child
+    /// rows are sorted per family on first use: the index is rebuilt after
+    /// every mutation, and eagerly materializing sort keys for every family
+    /// made each post-edit snapshot dominate toggle cost at scale (every
+    /// model property read goes through SwiftData's storage).
+    private final class FamilyIndex {
         let revision: UInt64
         let byID: [UUID: TaskItem]
-        let childrenByParent: [UUID: [TaskItem]]
+        /// Tasks that are not a validated child of a live top-level parent:
+        /// true roots plus orphaned, self-linked and nested links, which stay
+        /// visible instead of vanishing (same rule as `parent(of:)`).
+        let roots: [TaskItem]
+        private let childrenByParent: [UUID: [TaskItem]]
+        private var sortedChildrenByParent: [UUID: [TaskItem]] = [:]
+
+        init(
+            revision: UInt64,
+            byID: [UUID: TaskItem],
+            roots: [TaskItem],
+            childrenByParent: [UUID: [TaskItem]]
+        ) {
+            self.revision = revision
+            self.byID = byID
+            self.roots = roots
+            self.childrenByParent = childrenByParent
+        }
+
+        func children(of parentID: UUID) -> [TaskItem] {
+            if let sorted = sortedChildrenByParent[parentID] { return sorted }
+            guard let unsorted = childrenByParent[parentID] else { return [] }
+            // Sort keys are read once per task: comparators must not re-read
+            // model properties O(n log n) times.
+            let sorted = unsorted
+                .map(SubtaskSortKey.init)
+                .sorted(by: SubtaskSortKey.comesBefore)
+                .map(\.task)
+            sortedChildrenByParent[parentID] = sorted
+            return sorted
+        }
+
+        func hasChildren(_ parentID: UUID) -> Bool {
+            childrenByParent[parentID]?.isEmpty == false
+        }
     }
     private static let manualOrderStride: Int64 = 1_024
 #if os(macOS)
@@ -275,21 +313,22 @@ final class TaskStore: ObservableObject {
         for task in tasks where byID[task.id] == nil {
             byID[task.id] = task
         }
-        // Sort keys are read once per task: every model property access
-        // goes through SwiftData's storage, so comparators must not re-read
-        // them O(n log n) times.
-        var childrenByParent: [UUID: [SubtaskSortKey]] = [:]
+        var childrenByParent: [UUID: [TaskItem]] = [:]
+        var roots: [TaskItem] = []
         for task in tasks {
             // Same root-validation rule as parent(of:): a child counts only
             // under a live top-level parent; orphaned links stay visible as
             // roots instead of vanishing.
-            guard let parentID = task.parentID, parentID != task.id,
-                  let parent = byID[parentID], parent.parentID == nil else { continue }
-            childrenByParent[parentID, default: []].append(SubtaskSortKey(task))
+            if let parentID = task.parentID, parentID != task.id,
+               let parent = byID[parentID], parent.parentID == nil {
+                childrenByParent[parentID, default: []].append(task)
+            } else {
+                roots.append(task)
+            }
         }
         let index = FamilyIndex(
-            revision: revision, byID: byID,
-            childrenByParent: childrenByParent.mapValues { $0.sorted(by: SubtaskSortKey.comesBefore).map(\.task) }
+            revision: revision, byID: byID, roots: roots,
+            childrenByParent: childrenByParent
         )
         familyIndexCache = index
         return index
@@ -848,13 +887,18 @@ final class TaskStore: ObservableObject {
         let stored: [TaskItem]
         do {
             let doneRaw = TaskStatus.done.rawValue
+            // Read only the done rows, then apply the completion cutoff in
+            // memory. The hosted macOS 26.6 runtime throws SwiftDataError-1
+            // for predicates that order-compare the optional completedAt
+            // date (and silently returned no rows for the earlier coalesced
+            // form), so the date never belongs in the fetch. Done rows are
+            // what the daily purge can expire, which keeps this bounded.
             let candidates = try context.fetch(FetchDescriptor<TaskItem>(
-                predicate: #Predicate {
-                    $0.statusRaw == doneRaw
-                        && $0.completedAt != nil
-                        && $0.completedAt! < cutoff
-                }
-            ))
+                predicate: #Predicate { $0.statusRaw == doneRaw }
+            )).filter { task in
+                guard let completedAt = task.completedAt else { return false }
+                return completedAt < cutoff
+            }
             guard !candidates.isEmpty else { return 0 }
             let candidateIDs = Array(Set(candidates.map(\.id)))
             let parentIDs = Array(Set(candidates.compactMap(\.parentID)))
@@ -925,12 +969,12 @@ final class TaskStore: ObservableObject {
     /// The family's children in display order — unfinished first, then
     /// manual order, then creation. O(1) per call between mutations.
     func subtasks(of parentID: UUID) -> [TaskItem] {
-        familyIndex.childrenByParent[parentID] ?? []
+        familyIndex.children(of: parentID)
     }
 
     /// Whether the family has any child, without materializing the list.
     func hasSubtasks(_ parentID: UUID) -> Bool {
-        familyIndex.childrenByParent[parentID]?.isEmpty == false
+        familyIndex.hasChildren(parentID)
     }
 
     /// Memoized per revision: SwiftUI evaluates view bodies far more often
@@ -941,10 +985,10 @@ final class TaskStore: ObservableObject {
             return cached.snapshot
         }
 
-        // One pass reads every root's keys; each section then sorts its own
-        // slice. Children are excluded through the index, never by scanning.
+        // The index already classified roots, so sections read only root
+        // keys; each section then sorts its own slice.
         var keysByStatus: [String: [SectionSortKey]] = [:]
-        for task in tasks where parent(of: task) == nil {
+        for task in familyIndex.roots {
             let key = SectionSortKey(task)
             keysByStatus[key.statusRaw, default: []].append(key)
         }

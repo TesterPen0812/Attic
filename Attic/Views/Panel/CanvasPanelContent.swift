@@ -2,9 +2,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct CanvasPanelContent: View {
-    // Add control + gap + eight tool slots + seven gaps + dock padding,
-    // followed by the existing ten-point inset on each side of the toolbar.
-    static let fullChromeRequiredWidth: CGFloat = 42 + 10 + 8 * 32 + 7 * 2 + 2 * 8 + 20
+    // 42 (add control) + 10 (gap) + 8 * 32 (tool slots) + 7 * 2 (gaps)
+    // + 2 * 8 (dock padding) + 20 (ten-point insets on both toolbar sides).
+    // Written precomputed: Xcode 26.2's type checker times out on the
+    // literal arithmetic in this otherwise trivial declaration.
+    static let fullChromeRequiredWidth: CGFloat = 358
 
     @ObservedObject var session: CanvasSession
     let horizontalInset: CGFloat

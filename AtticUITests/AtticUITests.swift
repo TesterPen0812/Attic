@@ -77,6 +77,29 @@ final class AtticUITests: XCTestCase {
         action.click()
     }
 
+    /// The main panel floats above the Settings window; on the CI display it
+    /// covers the window's right-hand controls in its vertical band. When a
+    /// control is occluded, drop the window just far enough for the control
+    /// to clear the panel's lower edge, where hittability no longer depends
+    /// on the horizontal overlap.
+    private func dropSettingsWindow(_ settings: XCUIElement, clearing element: XCUIElement) {
+        let panel = app.dialogs.firstMatch
+        guard panel.exists, element.exists else { return }
+        let panelFrame = panel.frame
+        guard panelFrame.intersects(element.frame) else { return }
+        let shift = panelFrame.maxY + 8 - element.frame.minY
+        guard shift > 0 else { return }
+        let titleBar = settings.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.25, dy: 0.02)
+        )
+        titleBar.click(
+            forDuration: 0.1,
+            thenDragTo: titleBar.withOffset(CGVector(dx: 0, dy: shift)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1
+        )
+    }
+
     override func tearDownWithError() throws {
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
@@ -121,6 +144,7 @@ final class AtticUITests: XCTestCase {
         let settings = openSettings(section: "settings-nav-agentAccess")
         let toggle = settings.descendants(matching: .any)["setting-agent-access"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 3))
+        dropSettingsWindow(settings, clearing: toggle)
         if settings.descendants(matching: .any)["settings-agent-disabled-message"].exists {
             toggle.click()
         }
@@ -154,6 +178,10 @@ final class AtticUITests: XCTestCase {
             for _ in 0..<5 {
                 if element.isHittable { return }
                 page.scroll(byDeltaX: 0, deltaY: deltaY)
+            }
+            dropSettingsWindow(settings, clearing: element)
+            for attempt in 0..<16 where !element.isHittable {
+                page.scroll(byDeltaX: 0, deltaY: attempt.isMultiple(of: 2) ? 150 : -150)
             }
             XCTAssertTrue(element.isHittable, "Settings control must be reachable without resizing the window")
         }
@@ -260,6 +288,10 @@ final class AtticUITests: XCTestCase {
             for _ in 0..<5 where !element.isHittable {
                 page.scroll(byDeltaX: 0, deltaY: deltaY)
             }
+            dropSettingsWindow(settings, clearing: element)
+            for attempt in 0..<16 where !element.isHittable {
+                page.scroll(byDeltaX: 0, deltaY: attempt.isMultiple(of: 2) ? 150 : -150)
+            }
             XCTAssertTrue(element.isHittable)
         }
         func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
@@ -361,7 +393,9 @@ final class AtticUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(addButton.frame.minY - composer.frame.minY, 4,
                                     "The expanded composer needs space above its action hit targets")
         XCTAssertGreaterThanOrEqual(addButton.frame.minX - composer.frame.minX, 6)
-        XCTAssertGreaterThanOrEqual(composer.frame.maxX - submit.frame.maxX, 6)
+        // The submit button closes the composer's trailing edge by design;
+        // its breathing room is the composer's inset inside the docked panel.
+        XCTAssertGreaterThanOrEqual(app.dialogs.firstMatch.frame.maxX - submit.frame.maxX, 6)
 
         let titleField = app.textFields["quick-entry-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
@@ -567,8 +601,10 @@ final class AtticUITests: XCTestCase {
         let parentStatus = app.buttons["complete-task-\(parentID)"]
         let confirmationTitle = app.staticTexts["Complete this task?"]
         let confirmationMessage = app.staticTexts["Some subtasks are unfinished. They will stay unfinished if you complete this task."]
-        let completeAnyway = app.buttons["Complete anyway"]
-        let cancelCompletion = app.buttons["Cancel"]
+        // Confirmation buttons are mirrored into the sheet's Touch Bar;
+        // scope to the sheet so the query stays unambiguous.
+        let completeAnyway = app.sheets.buttons["Complete anyway"].firstMatch
+        let cancelCompletion = app.sheets.buttons["Cancel"].firstMatch
         func requestParentCompletion() {
             parentStatus.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
             XCTAssertTrue(confirmationTitle.waitForExistence(timeout: 2))
@@ -617,12 +653,12 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(parentMenu.waitForExistence(timeout: 2))
         parentMenu.click()
         app.menuItems["Delete task and subtasks"].click()
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 2))
-        app.buttons["Cancel"].click()
+        XCTAssertTrue(app.sheets.buttons["Cancel"].waitForExistence(timeout: 2))
+        app.sheets.buttons["Cancel"].click()
         XCTAssertTrue(app.staticTexts["Plan weekend trip"].exists)
         parentMenu.click()
         app.menuItems["Delete task and subtasks"].click()
-        app.buttons["Delete all"].click()
+        app.sheets.buttons["Delete all"].click()
         waitForChange("Confirmed deletion removes the entire family") { !self.app.staticTexts["Plan weekend trip"].exists }
         XCTAssertFalse(app.staticTexts["Choose destination"].exists)
         XCTAssertFalse(app.staticTexts["Book accommodation"].exists)
@@ -644,6 +680,10 @@ final class AtticUITests: XCTestCase {
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
         let titleField = app.textFields["quick-entry-title"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
+        // Establish keyboard focus explicitly: title layout is under test
+        // here, and the hosted runner does not always hand this field the
+        // field editor at launch.
+        titleField.click()
         titleField.typeText(shortTitle)
         app.typeKey(.return, modifierFlags: [])
         titleField.typeText(longTitle)

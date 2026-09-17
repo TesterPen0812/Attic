@@ -187,8 +187,19 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
             // Reacquire the live field editor for every row, then keep the
             // documented Enter-to-save path under test at every list size.
             app.typeKey(.return, modifierFlags: [])
+            // The bounded checklist scrolls a lazy row stack, so a row added
+            // below the fold stays out of the accessibility tree until the
+            // list scrolls to it. Reveal the created row instead of treating
+            // absence from the tree as a failed submit.
+            let row = app.staticTexts[child]
+            if !row.waitForExistence(timeout: 2) {
+                let list = transient(id).scrollViews.firstMatch
+                for attempt in 0..<10 where !row.exists {
+                    list.scroll(byDeltaX: 0, deltaY: attempt.isMultiple(of: 2) ? 140 : -140)
+                }
+            }
             XCTAssertTrue(
-                app.staticTexts[child].waitForExistence(timeout: 2),
+                row.waitForExistence(timeout: 2),
                 "expected child row: \(child)"
             )
         }
