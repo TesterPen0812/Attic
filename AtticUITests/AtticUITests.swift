@@ -150,7 +150,20 @@ final class AtticUITests: XCTestCase {
     ) -> GestureOutcome {
         let before = element.frame
         let delta = (towardsTop ? -1 : 1) * scrollTowardsEndSign * distance
-        page.scroll(byDeltaX: 0, deltaY: delta)
+        // Element-scoped scroll asks XCTest to find the ScrollView's hit
+        // point, which can be below the display after moving Settings. Use
+        // the visible part of its empty leading gutter instead of its center.
+        let pageFrame = page.frame
+        let band = settingsBand()
+        let top = max(pageFrame.minY + 8, band.top)
+        let bottom = min(pageFrame.maxY - 8, band.bottom)
+        guard bottom > top else {
+            XCTFail("Settings page must have a visible scroll surface")
+            return .pinned
+        }
+        page.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 8, dy: (top + bottom) / 2 - pageFrame.minY))
+            .scroll(byDeltaX: 0, deltaY: delta)
         guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
         let travelled = before.minY - after.minY
         let outcome = Self.outcome(for: towardsTop ? travelled : -travelled)
