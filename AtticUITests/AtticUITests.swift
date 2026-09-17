@@ -161,8 +161,12 @@ final class AtticUITests: XCTestCase {
             XCTFail("Settings page must have a visible scroll surface")
             return .pinned
         }
-        page.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: 8, dy: (top + bottom) / 2 - pageFrame.minY))
+        // Anchor to the application: a coordinate rooted in the ScrollView
+        // still makes XCTest resolve that view's off-screen hit point.
+        let appFrame = app.frame
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: pageFrame.minX + 8 - appFrame.minX,
+                                 dy: (top + bottom) / 2 - appFrame.minY))
             .scroll(byDeltaX: 0, deltaY: delta)
         guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
         let travelled = before.minY - after.minY
