@@ -155,6 +155,10 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
         titleField.click()
         titleField.typeText(title)
+        let submit = app.buttons["quick-entry-submit"]
+        waitFor("the quick-entry model must be ready before Return") {
+            (titleField.value as? String) == title && submit.isEnabled
+        }
         // App-level Return: the focused TextField's AX element is swapped for
         // its field editor, so element-scoped typeKey can hit a stale handle.
         app.typeKey(.return, modifierFlags: [])

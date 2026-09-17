@@ -231,6 +231,27 @@ final class AtticUITests: XCTestCase {
             let frame = element.frame
             guard frame.width > 0, frame.height > 0,
                   frame.minY.isFinite, frame.maxY.isFinite else { return }
+            // Scrolling can leave an element with a valid AX frame outside
+            // the page's clipped viewport. Moving the whole window cannot
+            // reveal it: first scroll it back into the page, then resolve
+            // screen/panel occlusion below.
+            let viewport = page.frame.intersection(settings.frame)
+            if !viewport.isNull, frame.minY < viewport.minY + 8 {
+                let needed = viewport.minY + 8 - frame.minY
+                switch scrollPage(page, element: element, towardsTop: false,
+                                  distance: min(needed, Self.settingsScrollStep)) {
+                case .moved, .backwards: continue
+                case .pinned: return
+                }
+            }
+            if !viewport.isNull, frame.maxY > viewport.maxY - 8 {
+                let needed = frame.maxY - viewport.maxY + 8
+                switch scrollPage(page, element: element, towardsTop: true,
+                                  distance: min(needed, Self.settingsScrollStep)) {
+                case .moved, .backwards: continue
+                case .pinned: return
+                }
+            }
             let panelEdge = panelFrame.maxY + Self.settingsControlClearance
             let sharesPanelColumn = frame.minX < panelFrame.maxX && frame.maxX > panelFrame.minX
             // A control that only grazes the panel's lower edge still reports
