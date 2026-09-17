@@ -161,12 +161,20 @@ final class AtticUITests: XCTestCase {
             XCTFail("Settings page must have a visible scroll surface")
             return .pinned
         }
-        // Anchor to the application: a coordinate rooted in the ScrollView
-        // still makes XCTest resolve that view's off-screen hit point.
-        let appFrame = app.frame
-        app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: pageFrame.minX + 8 - appFrame.minX,
-                                 dy: (top + bottom) / 2 - appFrame.minY))
+        // The application AX frame can be infinite, and a ScrollView-rooted
+        // coordinate still resolves its off-screen hit point. The Settings
+        // close button stays visible when the window moves; use its finite
+        // frame as the origin for a scroll in the page's empty gutter.
+        let anchor = app.windows["Attic Settings"].buttons[XCUIIdentifierCloseWindow]
+        let anchorFrame = anchor.frame
+        guard anchorFrame.minX.isFinite, anchorFrame.minY.isFinite,
+              anchor.isHittable else {
+            XCTFail("Settings scroll anchor must be visible and finite")
+            return .pinned
+        }
+        anchor.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: pageFrame.minX + 8 - anchorFrame.minX,
+                                 dy: (top + bottom) / 2 - anchorFrame.minY))
             .scroll(byDeltaX: 0, deltaY: delta)
         guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
         let travelled = before.minY - after.minY
