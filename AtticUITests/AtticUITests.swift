@@ -888,10 +888,11 @@ final class AtticUITests: XCTestCase {
         // The row fades the title out at its trailing edge instead of wrapping,
         // and the accessibility frame reports the unmasked text: on both the
         // local and hosted runtime the clipped title measures wider than its
-        // row. Assert what that proves - the fade is doing work because the
-        // full title cannot fit - while the row keeps the short row's size.
+        // row. Verify overflow and stable row geometry here. These AX
+        // assertions do not prove the pixels are clipped or faded; that
+        // appearance still requires rendered inspection.
         XCTAssertGreaterThan(title.frame.width, longRow.frame.width,
-                             "the full title overflows the row, so the trailing fade clips it")
+                             "the full title is wider than the available row")
         XCTAssertEqual(longRow.frame.width, shortRow.frame.width, accuracy: 1,
                        "a long title does not widen its row")
     }

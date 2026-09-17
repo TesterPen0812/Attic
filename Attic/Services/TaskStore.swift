@@ -880,19 +880,16 @@ final class TaskStore: ObservableObject {
 
     @discardableResult
     func purgeCompleted(before cutoff: Date) -> Int {
-        // Only expiry candidates and their immediate family are read: every
-        // replica of each candidate (so divergent duplicates still refuse
-        // cleanup), the candidates' children, and their parents. Rows that
-        // are neither can't change which candidates expire.
+        // Fetch done rows and parent-linked rows in batches, then retain the
+        // expiry candidates and their immediate families. Every candidate's
+        // replicas participate so divergent duplicates still refuse cleanup.
         let stored: [TaskItem]
         do {
             let doneRaw = TaskStatus.done.rawValue
             // Read only the done rows, then apply the completion cutoff in
-            // memory. The hosted macOS 26.6 runtime throws SwiftDataError-1
-            // for predicates that order-compare the optional completedAt
-            // date (and silently returned no rows for the earlier coalesced
-            // form), so the date never belongs in the fetch. Done rows are
-            // what the daily purge can expire, which keeps this bounded.
+            // memory. Hosted macOS 26.6 rejects the ForcedUnwrap predicate
+            // expression used by the previous completedAt comparison. This
+            // batch query avoids that unsupported optional operation.
             let candidates = try context.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { $0.statusRaw == doneRaw }
             )).filter { task in
@@ -900,7 +897,8 @@ final class TaskStore: ObservableObject {
                 return completedAt < cutoff
             }
             guard !candidates.isEmpty else { return 0 }
-            let candidateIDs = Array(Set(candidates.map(\.id)))
+            let candidateIDSet = Set(candidates.map(\.id))
+            let candidateIDs = Array(candidateIDSet)
             let parentIDs = Array(Set(candidates.compactMap(\.parentID)))
             let relatedIDs = candidateIDs + parentIDs
             let replicas = try context.fetch(FetchDescriptor<TaskItem>(
@@ -917,7 +915,7 @@ final class TaskStore: ObservableObject {
                 predicate: #Predicate { $0.parentID != nil }
             )).filter { task in
                 guard let parentID = task.parentID else { return false }
-                return candidateIDs.contains(parentID)
+                return candidateIDSet.contains(parentID)
             }
             var seen = Set<PersistentIdentifier>()
             stored = (replicas + children).filter { seen.insert($0.persistentModelID).inserted }
