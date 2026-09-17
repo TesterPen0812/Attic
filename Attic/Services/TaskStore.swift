@@ -906,9 +906,19 @@ final class TaskStore: ObservableObject {
             let replicas = try context.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { relatedIDs.contains($0.id) }
             ))
+            // Match the optional parent link in memory: the hosted macOS
+            // 26.6 runtime rejects any predicate that force-unwraps an
+            // optional (`unsupportedPredicate` for PredicateExpressions
+            // .ForcedUnwrap), and the old `candidateIDs.contains($0.parentID!)`
+            // form therefore made every expiry attempt fail with
+            // SwiftDataError-1. Rows carrying a parent link are read, the
+            // membership test runs on the values.
             let children = try context.fetch(FetchDescriptor<TaskItem>(
-                predicate: #Predicate { $0.parentID != nil && candidateIDs.contains($0.parentID!) }
-            ))
+                predicate: #Predicate { $0.parentID != nil }
+            )).filter { task in
+                guard let parentID = task.parentID else { return false }
+                return candidateIDs.contains(parentID)
+            }
             var seen = Set<PersistentIdentifier>()
             stored = (replicas + children).filter { seen.insert($0.persistentModelID).inserted }
         } catch {

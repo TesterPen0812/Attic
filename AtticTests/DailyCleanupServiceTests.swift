@@ -289,6 +289,21 @@ final class DailyCleanupServiceTests: XCTestCase {
                 predicate: #Predicate { $0.statusRaw == doneRaw }
             )).filter { $0.completedAt.map { $0 < cutoff } == true }
         }
+        // The replacement child shape: a non-nil check on the optional
+        // parent link, matched against the candidates in memory.
+        probe("M parent-nonnil-only") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.parentID != nil }
+            ))
+        }
+        probe("N parent-nonnil-plus-memory-membership") {
+            try fresh.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.parentID != nil }
+            )).filter { task in
+                guard let parentID = task.parentID else { return false }
+                return candidateIDs.contains(parentID)
+            }
+        }
 
         let candidatePredicate = #Predicate<TaskItem> {
             $0.statusRaw == doneRaw && $0.completedAt != nil && $0.completedAt! < cutoff

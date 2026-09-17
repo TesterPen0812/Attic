@@ -106,6 +106,35 @@ final class AtticUITests: XCTestCase {
         app = nil
     }
 
+    /// Bring a Settings control into reach before interacting with it. The
+    /// main panel floats above the window, so on a small display it hides the
+    /// window's right-hand controls, while the window's own content is taller
+    /// than the visible screen. Both are ordinary user moves: slide the window
+    /// down until the control clears the panel's lower edge, then scroll the
+    /// page until the control sits in the band between the panel and the
+    /// screen bottom. The window is never resized, and callers still assert
+    /// that the control is hittable afterwards.
+    private func revealSettingsControl(
+        _ element: XCUIElement,
+        in settings: XCUIElement,
+        page: XCUIElement
+    ) {
+        let panel = app.dialogs.firstMatch
+        guard element.waitForExistence(timeout: 3), panel.exists else { return }
+        for _ in 0..<3 where !element.isHittable && element.frame.intersects(panel.frame) {
+            dropSettingsWindow(settings, clearing: element)
+        }
+        // Sweep the page in both directions rather than bouncing back and
+        // forth: a wrong-direction sweep simply reaches the scroll limit, and
+        // the following sweep then passes through the whole usable range.
+        for _ in 0..<8 where !element.isHittable {
+            page.scroll(byDeltaX: 0, deltaY: -140)
+        }
+        for _ in 0..<14 where !element.isHittable {
+            page.scroll(byDeltaX: 0, deltaY: 140)
+        }
+    }
+
     func testMainPanelIdleRetainsTaskDraftThenHidesCleanEditor() throws {
         let field = app.textFields["quick-entry-title"]
         XCTAssertTrue(field.waitForExistence(timeout: 3))
@@ -142,9 +171,10 @@ final class AtticUITests: XCTestCase {
 
     func testAgentAccessConnectionDetailsRemainAccessible() throws {
         let settings = openSettings(section: "settings-nav-agentAccess")
+        let page = settings.descendants(matching: .any)["settings-page-agentAccess"]
         let toggle = settings.descendants(matching: .any)["setting-agent-access"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 3))
-        dropSettingsWindow(settings, clearing: toggle)
+        revealSettingsControl(toggle, in: settings, page: page)
         if settings.descendants(matching: .any)["settings-agent-disabled-message"].exists {
             toggle.click()
         }
@@ -154,9 +184,11 @@ final class AtticUITests: XCTestCase {
         // recursed through its overridden accessibility label on macOS.
         XCTAssertTrue(settings.debugDescription.contains("127.0.0.1"))
         let copy = settings.buttons["settings-copy-agent-endpoint"]
+        revealSettingsControl(copy, in: settings, page: page)
         XCTAssertTrue(copy.isEnabled)
         copy.click()
         XCTAssertTrue(settings.buttons["settings-copy-agent-setup"].isEnabled)
+        revealSettingsControl(toggle, in: settings, page: page)
         toggle.click()
         XCTAssertTrue(settings.descendants(matching: .any)["settings-agent-disabled-message"].waitForExistence(timeout: 3))
     }
@@ -174,15 +206,8 @@ final class AtticUITests: XCTestCase {
         func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
             picker.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
         }
-        func reveal(_ element: XCUIElement, deltaY: CGFloat) {
-            for _ in 0..<5 {
-                if element.isHittable { return }
-                page.scroll(byDeltaX: 0, deltaY: deltaY)
-            }
-            dropSettingsWindow(settings, clearing: element)
-            for attempt in 0..<16 where !element.isHittable {
-                page.scroll(byDeltaX: 0, deltaY: attempt.isMultiple(of: 2) ? 150 : -150)
-            }
+        func reveal(_ element: XCUIElement) {
+            revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable, "Settings control must be reachable without resizing the window")
         }
         func waitFor(_ message: String, _ condition: @escaping () -> Bool) {
@@ -204,16 +229,18 @@ final class AtticUITests: XCTestCase {
 
         // One app launch covers every preset in both explicit appearances.
         // Establish Clear once, then prove unavailable states do not erase it.
-        reveal(original, deltaY: 450)
+        reveal(original)
         original.click()
-        segment("Dark", in: appearance).click()
+        let darkScheme = segment("Dark", in: appearance)
+        reveal(darkScheme)
+        darkScheme.click()
         if !glass.exists {
-            reveal(translucency, deltaY: -450)
+            reveal(translucency)
             translucency.click()
         }
         XCTAssertTrue(glass.waitForExistence(timeout: 3))
         let clear = segment("Clear", in: glass)
-        reveal(clear, deltaY: -450)
+        reveal(clear)
         waitFor("Original Dark must enable Clear") { clear.isEnabled }
         clear.click()
         assertSelected(clear)
@@ -222,12 +249,12 @@ final class AtticUITests: XCTestCase {
                       "electricBlue", "seaGlass", "amethyst"]
         for scheme in ["Light", "Dark"] {
             let schemeControl = segment(scheme, in: appearance)
-            reveal(schemeControl, deltaY: 450)
+            reveal(schemeControl)
             schemeControl.click()
             for theme in themes {
                 let choice = settings.buttons["setting-panel-theme-\(theme)"]
                 XCTAssertTrue(choice.waitForExistence(timeout: 3))
-                reveal(choice, deltaY: -300)
+                reveal(choice)
                 choice.click()
                 waitFor("Selected theme must update") { (choice.value as? String) == "Selected" }
                 let clearIsAvailable = theme == "original" && scheme == "Dark"
@@ -244,10 +271,10 @@ final class AtticUITests: XCTestCase {
             }
         }
 
-        reveal(original, deltaY: 450)
+        reveal(original)
         original.click()
         assertSelected(clear)
-        reveal(translucency, deltaY: -450)
+        reveal(translucency)
         translucency.click()
         waitFor("Opaque mode hides the glass picker") { !glass.exists }
         recordPanel("Original-Dark-Opaque")
@@ -258,20 +285,20 @@ final class AtticUITests: XCTestCase {
         // Explicit Frosted makes the gradient active; Original Dark Clear
         // intentionally preserves its existing surface instead.
         let frosted = segment("Frosted", in: glass)
-        reveal(frosted, deltaY: -450)
+        reveal(frosted)
         frosted.click()
         assertSelected(frosted)
-        reveal(coverage, deltaY: -450)
+        reveal(coverage)
         XCTAssertTrue(coverage.isEnabled)
         for endpoint: CGFloat in [0, 1] {
             dragGradientCoverage(coverage, to: endpoint)
             recordPanel(endpoint == 0 ? "Gradient-Off" : "Gradient-Full-Coverage")
         }
         coverage.adjust(toNormalizedSliderPosition: 0.55)
-        reveal(clear, deltaY: 450)
+        reveal(clear)
         clear.click()
         let systemAppearance = segment("System", in: appearance)
-        reveal(systemAppearance, deltaY: 450)
+        reveal(systemAppearance)
         systemAppearance.click()
         settings.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(app.descendants(matching: .any)["panel-section-picker"].exists)
@@ -284,14 +311,8 @@ final class AtticUITests: XCTestCase {
         let appearance = settings.descendants(matching: .any)["setting-appearance"]
         let glass = settings.descendants(matching: .any)["setting-glass-style"]
         let translucency = settings.descendants(matching: .any)["setting-translucency"]
-        func reveal(_ element: XCUIElement, deltaY: CGFloat) {
-            for _ in 0..<5 where !element.isHittable {
-                page.scroll(byDeltaX: 0, deltaY: deltaY)
-            }
-            dropSettingsWindow(settings, clearing: element)
-            for attempt in 0..<16 where !element.isHittable {
-                page.scroll(byDeltaX: 0, deltaY: attempt.isMultiple(of: 2) ? 150 : -150)
-            }
+        func reveal(_ element: XCUIElement) {
+            revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable)
         }
         func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
@@ -303,17 +324,17 @@ final class AtticUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message)
         }
         let original = settings.buttons["setting-panel-theme-original"]
-        reveal(original, deltaY: 450)
+        reveal(original)
         original.click()
         if !glass.exists {
-            reveal(translucency, deltaY: -450)
+            reveal(translucency)
             translucency.click()
         }
         XCTAssertTrue(glass.waitForExistence(timeout: 3))
         let clear = segment("Clear", in: glass)
         for scheme in ["Dark", "Light", "Dark"] {
             let choice = segment(scheme, in: appearance)
-            reveal(choice, deltaY: 450)
+            reveal(choice)
             choice.click()
             waitFor("Model-backed Clear eligibility must follow \(scheme)") {
                 clear.exists == (scheme == "Dark")
@@ -321,7 +342,7 @@ final class AtticUITests: XCTestCase {
         }
         for style in ["Frosted", "Clear", "Frosted"] {
             let choice = segment(style, in: glass)
-            reveal(choice, deltaY: -450)
+            reveal(choice)
             choice.click()
             waitFor("Glass selection must settle on \(style)") {
                 choice.isSelected || (choice.value as? String) == "1"
@@ -656,6 +677,11 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(app.sheets.buttons["Cancel"].waitForExistence(timeout: 2))
         app.sheets.buttons["Cancel"].click()
         XCTAssertTrue(app.staticTexts["Plan weekend trip"].exists)
+        // The confirmation sheet takes the pointer and the key window, so the
+        // row's hover affordances are hidden again once it dismisses; return
+        // the pointer to the row before re-opening its menu, as a user would.
+        parentRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
+        XCTAssertTrue(parentMenu.waitForExistence(timeout: 2))
         parentMenu.click()
         app.menuItems["Delete task and subtasks"].click()
         app.sheets.buttons["Delete all"].click()
@@ -706,7 +732,15 @@ final class AtticUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 2))
         XCTAssertLessThanOrEqual(title.frame.height, 20, "the title renders as a single line")
-        XCTAssertLessThan(title.frame.width, longRow.frame.width, "the visible title is clipped inside the row")
+        // The row fades the title out at its trailing edge instead of wrapping,
+        // and the accessibility frame reports the unmasked text: on both the
+        // local and hosted runtime the clipped title measures wider than its
+        // row. Assert what that proves - the fade is doing work because the
+        // full title cannot fit - while the row keeps the short row's size.
+        XCTAssertGreaterThan(title.frame.width, longRow.frame.width,
+                             "the full title overflows the row, so the trailing fade clips it")
+        XCTAssertEqual(longRow.frame.width, shortRow.frame.width, accuracy: 1,
+                       "a long title does not widen its row")
     }
 
     func testDragReordersTasksWithMatchingPriority() throws {
