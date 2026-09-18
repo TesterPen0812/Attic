@@ -371,7 +371,12 @@ final class NoteStore: ObservableObject {
             }
 
             let existing = try visibleAttachments(forNoteID: targetNoteID)
-            let baseSortIndex = existing.map(\.sortIndex).max().map { $0 + 1 } ?? 0
+            guard let baseSortIndex = AttachmentLimits.nextSortIndex(
+                after: existing.map(\.sortIndex).max(),
+                adding: request.urls.count
+            ) else {
+                throw AttachmentFileStoreError.sortIndexExhausted
+            }
             let existingBytes = totalAttachmentBytes(existing)
             imported = try await attachmentImporter.importFiles(
                 request.urls,
@@ -440,7 +445,12 @@ final class NoteStore: ObservableObject {
             guard importedBytes <= AttachmentLimits.maxBytesPerNote - currentBytes else {
                 throw AttachmentFileStoreError.noteTooLarge
             }
-            let currentBaseSortIndex = currentAttachments.map(\.sortIndex).max().map { $0 + 1 } ?? 0
+            guard let currentBaseSortIndex = AttachmentLimits.nextSortIndex(
+                after: currentAttachments.map(\.sortIndex).max(),
+                adding: imported.count
+            ) else {
+                throw AttachmentFileStoreError.sortIndexExhausted
+            }
             let references = imported.enumerated().map { offset, item in
                 NoteAttachment(
                     id: item.id,
@@ -961,18 +971,7 @@ final class NoteStore: ObservableObject {
     }
 
     private func totalAttachmentBytes(_ byteCounts: [Int64]) -> Int64 {
-        byteCounts.reduce(Int64.zero) { total, byteCount in
-            let validByteCount = max(byteCount, 0)
-            guard total < AttachmentLimits.maxBytesPerNote else {
-                return AttachmentLimits.maxBytesPerNote
-            }
-            return min(
-                AttachmentLimits.maxBytesPerNote,
-                total > AttachmentLimits.maxBytesPerNote - validByteCount
-                    ? AttachmentLimits.maxBytesPerNote
-                    : total + validByteCount
-            )
-        }
+        AttachmentLimits.cappedByteCount(byteCounts)
     }
 
     private func visibleUniqueAttachments(
@@ -1297,7 +1296,7 @@ final class NoteStore: ObservableObject {
             .joined(separator: " ")
     }
 
-    private static func hasMeaningfulBody(_ body: String) -> Bool {
+    static func hasMeaningfulBody(_ body: String) -> Bool {
         !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 

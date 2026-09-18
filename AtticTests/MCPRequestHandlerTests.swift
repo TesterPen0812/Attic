@@ -331,6 +331,30 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(note.body, "new body")
     }
 
+    func testUpdateNoteRejectsBlankingWithAnAccurateMessage() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(noteStore.create(title: "Title", body: "Body"))
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": "update_note",
+                "arguments": ["id": note.id.uuidString, "title": "  ", "body": "\n"]
+            ]
+        ])
+        let response = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body))
+                as? [String: Any]
+        )
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        XCTAssertEqual(content.first?["text"] as? String, "A title or body must remain non-empty.")
+        XCTAssertEqual(note.title, "Title")
+        XCTAssertEqual(note.body, "Body")
+    }
+
     func testDeleteNoteRemovesNote() throws {
         let (noteStore, handler) = try makeNoteHandler()
         let note = try XCTUnwrap(noteStore.create(body: "Remove me"))

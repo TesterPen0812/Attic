@@ -12,6 +12,7 @@ enum AttachmentFileStoreError: LocalizedError, Equatable {
     case invalidDigest
     case invalidFilename(String)
     case coordinationFailed(URL, String)
+    case sortIndexExhausted
 
     var errorDescription: String? {
         switch self {
@@ -33,6 +34,8 @@ enum AttachmentFileStoreError: LocalizedError, Equatable {
             "The attachment filename is invalid: \(filename)"
         case let .coordinationFailed(url, reason):
             "Unable to coordinate a read of \(url.lastPathComponent): \(reason)"
+        case .sortIndexExhausted:
+            "Attachment ordering is out of range and must be repaired before adding more files."
         }
     }
 }
@@ -92,6 +95,9 @@ actor AttachmentFileStore {
         guard existingBytes >= 0,
               existingBytes <= AttachmentLimits.maxBytesPerNote else {
             throw AttachmentFileStoreError.noteTooLarge
+        }
+        guard AttachmentLimits.canAssignSortIndexes(startingAt: baseSortIndex, count: urls.count) else {
+            throw AttachmentFileStoreError.sortIndexExhausted
         }
 
         try prepare()

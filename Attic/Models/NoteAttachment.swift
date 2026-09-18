@@ -109,4 +109,29 @@ enum AttachmentLimits {
     static let maxBytesPerNote: Int64 = 100 * 1024 * 1024
     static let maxAttachmentsPerNote = 20
     static let maxFilenameUTF8Bytes = 512
+
+    static func cappedByteCount<S: Sequence>(_ byteCounts: S) -> Int64 where S.Element == Int64 {
+        byteCounts.reduce(Int64.zero) { total, byteCount in
+            let validByteCount = max(byteCount, 0)
+            guard total < maxBytesPerNote else { return maxBytesPerNote }
+            return total > maxBytesPerNote - validByteCount
+                ? maxBytesPerNote
+                : total + validByteCount
+        }
+    }
+
+    static func nextSortIndex(after highest: Int64?, adding count: Int) -> Int64? {
+        guard count >= 0 else { return nil }
+        guard count > 0 else { return highest ?? 0 }
+        guard let highest else { return 0 }
+        let added = Int64(count)
+        guard highest <= Int64.max - added else { return nil }
+        return highest + 1
+    }
+
+    static func canAssignSortIndexes(startingAt base: Int64, count: Int) -> Bool {
+        guard base >= 0, count >= 0 else { return false }
+        guard count > 0 else { return true }
+        return base <= Int64.max - Int64(count - 1)
+    }
 }

@@ -76,6 +76,60 @@ final class TaskImageTests: XCTestCase {
         let old = Data("{\"title\":\"Legacy task\"}".utf8)
         XCTAssertNil(try JSONDecoder().decode(TaskDragPayload.self, from: old).imageReferences)
     }
+
+    func testTaskImportRejectsOverflowingPersistedByteCountsWithoutTrapping() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = try textFile(named: "New.txt", in: root)
+        let existing = [
+            TaskImageReference(
+                id: UUID(),
+                filename: "a.txt",
+                digest: String(repeating: "0", count: 64),
+                contentTypeIdentifier: UTType.plainText.identifier,
+                byteCount: Int64.max
+            ),
+            TaskImageReference(
+                id: UUID(),
+                filename: "b.txt",
+                digest: String(repeating: "1", count: 64),
+                contentTypeIdentifier: UTType.plainText.identifier,
+                byteCount: Int64.max
+            )
+        ]
+
+        do {
+            _ = try await TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
+                .importAttachments([file], existing: existing)
+            XCTFail("Malformed persisted byte totals must be rejected")
+        } catch let error as AttachmentFileStoreError {
+            XCTAssertEqual(error, .noteTooLarge)
+        }
+    }
+
+    func testFailedExportRemovesItsDisposableDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let exportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticTaskExports", isDirectory: true)
+        let before = Set((try? FileManager.default.contentsOfDirectory(atPath: exportRoot.path)) ?? [])
+        let missing = TaskImageReference(
+            id: UUID(),
+            filename: "missing.txt",
+            digest: String(repeating: "0", count: 64),
+            contentTypeIdentifier: UTType.plainText.identifier,
+            byteCount: 1
+        )
+
+        do {
+            _ = try await TaskImageFiles(rootURL: root.appendingPathComponent("storage"))
+                .export(title: "Failed export", references: [missing])
+            XCTFail("Missing private bytes must fail export")
+        } catch {}
+
+        let after = Set((try? FileManager.default.contentsOfDirectory(atPath: exportRoot.path)) ?? [])
+        XCTAssertTrue(after.subtracting(before).isEmpty, "A failed export must remove its new disposable directory")
+    }
     // MARK: - Batch 2: general files, parent ownership, compatibility
 
     private func textFile(named name: String, in directory: URL, contents: String = "Packing list") throws -> URL {
