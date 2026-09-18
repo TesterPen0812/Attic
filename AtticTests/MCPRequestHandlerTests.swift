@@ -243,6 +243,29 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(error["code"] as? Int, -32602)
     }
 
+    func testNonObjectToolArgumentsReturnInvalidParamsWithoutRunningTheTool() throws {
+        let malformedArguments: [Any] = [["Write tests"], "Write tests", 7, true]
+        for arguments in malformedArguments {
+            let response = try send(
+                method: "tools/call",
+                params: ["name": "create_task", "arguments": arguments]
+            )
+            let error = try XCTUnwrap(response["error"] as? [String: Any])
+            XCTAssertEqual(error["code"] as? Int, -32602)
+            XCTAssertNil(response["result"])
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    func testNullToolArgumentsAreTreatedAsAbsent() throws {
+        let response = try send(
+            method: "tools/call",
+            params: ["name": "list_tasks", "arguments": NSNull()]
+        )
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, false)
+    }
+
     // MARK: - Notes
 
     func testToolsListIncludesNoteToolsWhenNoteStoreProvided() throws {
