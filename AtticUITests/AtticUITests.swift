@@ -477,6 +477,7 @@ final class AtticUITests: XCTestCase {
         translucency.click()
         waitFor("Opaque mode hides the glass picker") { !glass.exists }
         recordPanel("Original-Dark-Opaque")
+        reveal(translucency)
         translucency.click()
         XCTAssertTrue(glass.waitForExistence(timeout: 3))
         assertSelected(clear)
@@ -593,8 +594,11 @@ final class AtticUITests: XCTestCase {
             dx: endpoint == 0 ? -24 : frame.width + 24,
             dy: frame.height / 2
         ))
+        // Keep the final mouse-down position separate from mouse-up. The
+        // 99% hosted failure recorded release at the same timestamp as the
+        // move ended; hold the final position before releasing it.
         thumb.click(forDuration: 0.1, thenDragTo: beyondTrack,
-                    withVelocity: .slow, thenHoldForDuration: 0)
+                    withVelocity: .slow, thenHoldForDuration: 0.2)
         let reachedEndpoint = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             slider.normalizedSliderPosition == endpoint
         }, object: nil)

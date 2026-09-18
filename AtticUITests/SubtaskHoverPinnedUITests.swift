@@ -198,8 +198,11 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
             let row = app.staticTexts[child]
             if !row.waitForExistence(timeout: 2) {
                 let list = transient(id).scrollViews.firstMatch
-                for attempt in 0..<10 where !row.exists {
-                    list.scroll(byDeltaX: 0, deltaY: attempt.isMultiple(of: 2) ? 140 : -140)
+                // New children are appended below the existing rows. Keep
+                // moving toward the end; alternating signs only revisits
+                // the same strip and can leave a saved row below the fold.
+                for _ in 0..<10 where !row.exists {
+                    list.scroll(byDeltaX: 0, deltaY: -140)
                 }
             }
             XCTAssertTrue(
