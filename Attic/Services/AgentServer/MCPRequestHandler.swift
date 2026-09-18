@@ -103,7 +103,18 @@ final class MCPRequestHandler {
         guard let name = params["name"] as? String else {
             return errorResponse(id: id, code: -32602, message: "Missing tool name")
         }
-        let arguments = params["arguments"] as? [String: Any] ?? [:]
+        // A malformed `arguments` value must be rejected, not silently treated
+        // as an empty object: an array or string would otherwise run the tool
+        // with defaults the client never asked for.
+        let arguments: [String: Any]
+        if let rawArguments = params["arguments"], !(rawArguments is NSNull) {
+            guard let object = rawArguments as? [String: Any] else {
+                return errorResponse(id: id, code: -32602, message: "Tool arguments must be an object")
+            }
+            arguments = object
+        } else {
+            arguments = [:]
+        }
         do {
             let text = try tools.call(name: name, arguments: arguments)
             return toolResponse(id: id, text: text, isError: false)
