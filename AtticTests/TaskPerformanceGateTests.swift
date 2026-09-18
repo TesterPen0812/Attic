@@ -93,6 +93,9 @@ final class TaskPerformanceGateTests: XCTestCase {
         let store = try seedStore(parents: 300, childrenPerParent: 0, attachmentsPerTask: 4)
         let rows = store.tasks
         XCTAssertEqual(rows.count, 300)
+        // Prime each payload once so the timed block measures the contract in
+        // this test's name: repeated reads should reuse the memoized decode.
+        for row in rows { _ = row.attachments.count }
         var total = 0
         let median = medianMilliseconds {
             for row in rows {
