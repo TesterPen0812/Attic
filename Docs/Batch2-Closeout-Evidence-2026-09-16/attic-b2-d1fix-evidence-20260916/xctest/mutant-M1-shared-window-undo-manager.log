@@ -1,0 +1,57 @@
+label=mutant-M1-shared-window-undo-manager limit=600s started=2026-09-16T13:07:50Z
+tests=CanvasAccessibilityTests/testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo CanvasAccessibilityTests/testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory CanvasAccessibilityTests/testRestyleThatClearsEditorHistoryRerendersUndoRedo CanvasAccessibilityTests/testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu CanvasAccessibilityTests/testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto CanvasAccessibilityTests/testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft CanvasAccessibilityTests/testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo CanvasAccessibilityTests/testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory CanvasAccessibilityTests/testAddMenuUndoRoutesToFocusedTextEditor CanvasAccessibilityTests/testAddMenuRedoRoutesToFocusedTextEditor CanvasAccessibilityTests/testToolbarUndoRedoFollowFocusedTextEditor
+products=/tmp/attic-b2-opus-scratch/dd-mut/Build/Products/Local
+host_sha256=2287db132ef1900a23f1352289411bd47c6c755e9e2bbc7bfb59af32b7a39e2d
+host_debug_dylib_sha256=68e1450dc9c4aab9a80e1aacbb819823b3c1c5d87ad4d91d7a418dc03572cf3a
+bundle_binary_sha256=545ee2531f833d59ebeedf6a1f56b21a681f18b6f8dcf335319c25a746ba619c
+sandbox_extension_issue_file_to_process failed for /tmp/attic-b2-opus-scratch/dd-mut/Build/Products/Local/AtticUnitTestHost.app: 1 (Operation not permitted)
+Test Suite 'Selected tests' started at 2026-09-16 14:07:50.882.
+Test Suite 'AtticTests.xctest' started at 2026-09-16 14:07:50.882.
+Test Suite 'CanvasAccessibilityTests' started at 2026-09-16 14:07:50.882.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' passed (2.407 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' passed (2.288 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' started.
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1706: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1708: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1709: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertEqual failed: ("Keep draft") is not equal to ("Keep") - plain Undo must undo typing in the focused editor
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1711: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1712: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1722: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertFalse failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1728: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertEqual failed: ("Optional(true)") is not equal to ("Optional(false)")
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1734: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertFalse failed - plain Undo must not offer typing from a committed editor
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1749: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertFalse failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1754: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertEqual failed: ("Optional(true)") is not equal to ("Optional(false)")
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1755: error: -[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu] : XCTAssertFalse failed
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' failed (6.997 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' passed (5.633 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' started.
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1504: error: -[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo] : XCTAssertEqual failed: ("Optional(true)") is not equal to ("Optional(false)") - a fresh editor must not inherit a closed editor's typing
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1506: error: -[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo] : XCTAssertFalse failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1512: error: -[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo] : XCTAssertEqual failed: ("Optional(true)") is not equal to ("Optional(false)") - Undo must not stay enabled from canvas history once the fresh editor has focus
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1534: error: -[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo] : XCTAssertTrue failed - the app's plain Undo must reach the focused editor
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1539: error: -[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo] : XCTAssertEqual failed: ("Optional(true)") is not equal to ("Optional(false)")
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' failed (6.993 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' started.
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1871: error: -[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft] : XCTAssertEqual failed: ("") is not equal to ("Keep") - Cmd-Z must not change a closed editor's text
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1881: error: -[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft] : XCTAssertEqual failed: ("nil") is not equal to ("Optional("Keep draft")")
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' failed (4.171 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' passed (5.528 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' passed (6.694 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' passed (5.977 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' passed (2.264 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' passed (2.785 seconds).
+Test Suite 'CanvasAccessibilityTests' failed at 2026-09-16 14:08:42.620.
+	 Executed 11 tests, with 18 failures (0 unexpected) in 51.736 (51.738) seconds
+Test Suite 'AtticTests.xctest' failed at 2026-09-16 14:08:42.620.
+	 Executed 11 tests, with 18 failures (0 unexpected) in 51.736 (51.738) seconds
+Test Suite 'Selected tests' failed at 2026-09-16 14:08:42.621.
+	 Executed 11 tests, with 18 failures (0 unexpected) in 51.736 (51.739) seconds
+exit_status=1 finished=2026-09-16T13:08:42Z

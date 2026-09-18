@@ -1,0 +1,275 @@
+label=promotion-persistence-20260916 limit=180s started=2026-09-16T16:45:40Z
+tests=SubtaskTests CanvasStoreTests CanvasImageStoreTests NoteAttachmentTests TaskImageTests
+products=/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local
+host_sha256=2287db132ef1900a23f1352289411bd47c6c755e9e2bbc7bfb59af32b7a39e2d
+host_debug_dylib_sha256=5a3708d2d50385ece573251646aac6d5eb800c65875be98279c61898c1516f8b
+bundle_binary_sha256=71a8c64edabf3e9054335c33156326779b1f3884e92e80e6ce82e711e06b029e
+sandbox_extension_issue_file_to_process failed for /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app: 1 (Operation not permitted)
+Test Suite 'Selected tests' started at 2026-09-16 17:45:41.198.
+Test Suite 'AtticTests.xctest' started at 2026-09-16 17:45:41.198.
+Test Suite 'CanvasImageStoreTests' started at 2026-09-16 17:45:41.198.
+Test Case '-[AtticTests.CanvasImageStoreTests testAddingAnExistingImageIDUpdatesEveryReplicaInsteadOfCreatingAHiddenDuplicate]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testAddingAnExistingImageIDUpdatesEveryReplicaInsteadOfCreatingAHiddenDuplicate]' passed (0.043 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testChangedImagePayloadWithSameMetadataInvalidatesContentToken]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testChangedImagePayloadWithSameMetadataInvalidatesContentToken]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testDuplicateImageTombstoneWinsAndMutationsTouchEveryReplica]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testDuplicateImageTombstoneWinsAndMutationsTouchEveryReplica]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testImageBytesAndTransformPersistAcrossFreshStore]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testImageBytesAndTransformPersistAcrossFreshStore]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testInvalidImageSnapshotIsRejectedWithoutPersistingIt]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testInvalidImageSnapshotIsRejectedWithoutPersistingIt]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasImageStoreTests testUnchangedImageRefreshRetainsRenderTokenButTransformInvalidatesIt]' started.
+Test Case '-[AtticTests.CanvasImageStoreTests testUnchangedImageRefreshRetainsRenderTokenButTransformInvalidatesIt]' passed (0.007 seconds).
+Test Suite 'CanvasImageStoreTests' passed at 2026-09-16 17:45:41.275.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.076 (0.077) seconds
+Test Suite 'CanvasStoreTests' started at 2026-09-16 17:45:41.275.
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokePersistsOneArchiveWithOneSave]' started.
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokePersistsOneArchiveWithOneSave]' passed (0.006 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokeReturnsPersistedObjectWithoutDuplicateRetryWhenPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testAddStrokeReturnsPersistedObjectWithoutDuplicateRetryWhenPostSaveReloadFails]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testCanvasScopedReplicaReadsSeeUnsavedChangesInTheContext]' started.
+Test Case '-[AtticTests.CanvasStoreTests testCanvasScopedReplicaReadsSeeUnsavedChangesInTheContext]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearAdvancesEveryBoardReplicaToOneGeneration]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearAdvancesEveryBoardReplicaToOneGeneration]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearAppliesPersistedPresentationWhenEveryPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearAppliesPersistedPresentationWhenEveryPostSaveReloadFails]' passed (0.006 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearGenerationHidesStaleReplicaImportedLater]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearGenerationHidesStaleReplicaImportedLater]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testClearReportsPersistedWhenFreshContextReloadFailsWithoutRetry]' started.
+Test Case '-[AtticTests.CanvasStoreTests testClearReportsPersistedWhenFreshContextReloadFailsWithoutRetry]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testCopiedLegacyStoreOpensAdditivelyWithoutRewritingInkOrImages]' started.
+Test Case '-[AtticTests.CanvasStoreTests testCopiedLegacyStoreOpensAdditivelyWithoutRewritingInkOrImages]' passed (0.426 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testCreateCanvasReturnsPersistedBoardWithoutDuplicateRetryWhenPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testCreateCanvasReturnsPersistedBoardWithoutDuplicateRetryWhenPostSaveReloadFails]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testDeletingMoreStrokesThanTheIdentifierPredicateLimitTouchesEveryReplica]' started.
+Test Case '-[AtticTests.CanvasStoreTests testDeletingMoreStrokesThanTheIdentifierPredicateLimitTouchesEveryReplica]' passed (0.468 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testEraseAndRestoreMutateEveryPhysicalReplica]' started.
+Test Case '-[AtticTests.CanvasStoreTests testEraseAndRestoreMutateEveryPhysicalReplica]' passed (0.008 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedAddRollsBackAndDoesNotExposeUnpersistedInk]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedAddRollsBackAndDoesNotExposeUnpersistedInk]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedBoardSaveFallsBackWhenPreviousSelectionIsNoLongerLive]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedBoardSaveFallsBackWhenPreviousSelectionIsNoLongerLive]' passed (0.015 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedClearReloadsPersistedGenerationAndInk]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedClearReloadsPersistedGenerationAndInk]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedCreateAndDeleteSavesRestorePreviousSelectionAndKeepSaveError]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedCreateAndDeleteSavesRestorePreviousSelectionAndKeepSaveError]' passed (0.009 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedMultiStrokeRestoreRollsBackEarlierInserts]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedMultiStrokeRestoreRollsBackEarlierInserts]' passed (0.005 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnCreateCanvasRestoresPreviousSelectionAndKeepsPreparationError]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnCreateCanvasRestoresPreviousSelectionAndKeepsPreparationError]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnDeleteCanvasRestoresPreviousSelectionAndKeepsPreparationError]' started.
+Test Case '-[AtticTests.CanvasStoreTests testFailedPreparationOnDeleteCanvasRestoresPreviousSelectionAndKeepsPreparationError]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testLocalOnlyStoreCreatesNoDeferredCloudInfrastructure]' started.
+Test Case '-[AtticTests.CanvasStoreTests testLocalOnlyStoreCreatesNoDeferredCloudInfrastructure]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testMalformedPayloadIsRetainedButNotRendered]' started.
+Test Case '-[AtticTests.CanvasStoreTests testMalformedPayloadIsRetainedButNotRendered]' passed (0.003 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testMultiImageRestoreRollsBackEarlierImageWhenLaterImageIsInvalid]' started.
+Test Case '-[AtticTests.CanvasStoreTests testMultiImageRestoreRollsBackEarlierImageWhenLaterImageIsInvalid]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testNewImageImportStillRejectsPayloadAboveCurrentImportCap]' started.
+Test Case '-[AtticTests.CanvasStoreTests testNewImageImportStillRejectsPayloadAboveCurrentImportCap]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testRefreshAfterSelectedCanvasIsDeletedElsewhereShowsTheFallbackCanvasContent]' started.
+Test Case '-[AtticTests.CanvasStoreTests testRefreshAfterSelectedCanvasIsDeletedElsewhereShowsTheFallbackCanvasContent]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testRefreshChoosesOneDeterministicLogicalReplicaWithoutDeletingRows]' started.
+Test Case '-[AtticTests.CanvasStoreTests testRefreshChoosesOneDeterministicLogicalReplicaWithoutDeletingRows]' passed (0.004 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testRestoreAfterClearReplaysCapturedStrokeIntoCurrentGeneration]' started.
+Test Case '-[AtticTests.CanvasStoreTests testRestoreAfterClearReplaysCapturedStrokeIntoCurrentGeneration]' passed (0.006 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testSameIDReplicaOnAnotherCanvasIsNotShownOrRewrittenBySelectedCanvasMutations]' started.
+Test Case '-[AtticTests.CanvasStoreTests testSameIDReplicaOnAnotherCanvasIsNotShownOrRewrittenBySelectedCanvasMutations]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testSemanticDuplicateMutationFailureDeletionAndRestoreAffectEveryReplica]' started.
+Test Case '-[AtticTests.CanvasStoreTests testSemanticDuplicateMutationFailureDeletionAndRestoreAffectEveryReplica]' passed (0.010 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testSemanticTextAtAcceptedLimitSurvivesWorstCaseJSONEscaping]' started.
+Test Case '-[AtticTests.CanvasStoreTests testSemanticTextAtAcceptedLimitSurvivesWorstCaseJSONEscaping]' passed (0.014 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testUnboardedLegacyDefaultContentKeepsTheDefaultCanvasListedFromAnotherCanvas]' started.
+Test Case '-[AtticTests.CanvasStoreTests testUnboardedLegacyDefaultContentKeepsTheDefaultCanvasListedFromAnotherCanvas]' passed (0.024 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testUndoAppliesRestoredPresentationWhenEveryPostSaveReloadFails]' started.
+Test Case '-[AtticTests.CanvasStoreTests testUndoAppliesRestoredPresentationWhenEveryPostSaveReloadFails]' passed (0.007 seconds).
+Test Case '-[AtticTests.CanvasStoreTests testUnknownSemanticPayloadIsRetainedThroughTransformDeleteAndUndo]' started.
+Test Case '-[AtticTests.CanvasStoreTests testUnknownSemanticPayloadIsRetainedThroughTransformDeleteAndUndo]' passed (0.009 seconds).
+Test Suite 'CanvasStoreTests' passed at 2026-09-16 17:45:42.398.
+	 Executed 31 tests, with 0 failures (0 unexpected) in 1.120 (1.123) seconds
+Test Suite 'NoteAttachmentTests' started at 2026-09-16 17:45:42.398.
+Test Case '-[AtticTests.NoteAttachmentTests testAcceptedPastedImageReportsNothingAndReachesTheCapturedOwner]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testAcceptedPastedImageReportsNothingAndReachesTheCapturedOwner]' passed (0.032 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testAttachmentMutationsUpdateOwningNoteRecency]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testAttachmentMutationsUpdateOwningNoteRecency]' passed (0.017 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testAttachmentOnlyNotePersistsAndOrdersAttachments]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testAttachmentOnlyNotePersistsAndOrdersAttachments]' passed (0.010 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testAttachmentsSurviveStoreRecreationAndMaterializeAgain]' started.
+2026-09-16 17:45:42.467 AtticUnitTestHost[45297:10119470] Attic attachment reconciliation skipped 108CE2C7-AEA1-487F-9A25-CF2C6253ADD7: The file “relaunch.txt” couldn’t be opened because there is no such file.
+Test Case '-[AtticTests.NoteAttachmentTests testAttachmentsSurviveStoreRecreationAndMaterializeAgain]' passed (0.011 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testAutosaveAfterBlankImportPersistsBeforeDraftCompletionReusesReservedOrigin]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testAutosaveAfterBlankImportPersistsBeforeDraftCompletionReusesReservedOrigin]' passed (0.009 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testAutosaveWhileBlankImportIsSuspendedUsesReservedOrigin]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testAutosaveWhileBlankImportIsSuspendedUsesReservedOrigin]' passed (0.005 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testBlankDraftAttachmentCompletionCannotStealNewerBlankSession]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testBlankDraftAttachmentCompletionCannotStealNewerBlankSession]' passed (0.005 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testBlankDraftAttachmentCompletionPreservesTypingMadeAfterImportInitiation]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testBlankDraftAttachmentCompletionPreservesTypingMadeAfterImportInitiation]' passed (0.008 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testBlankDraftAttachmentCompletionUsesAutosavedOriginInsteadOfSplittingNote]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testBlankDraftAttachmentCompletionUsesAutosavedOriginInsteadOfSplittingNote]' passed (0.008 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testCancelledImportDoesNotCreateOwnedFiles]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testCancelledImportDoesNotCreateOwnedFiles]' passed (0.001 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testCancellingInFlightBlankImportReturnsCancelledWithoutRows]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testCancellingInFlightBlankImportReturnsCancelledWithoutRows]' passed (0.003 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testDeletingNoteDeletesAllAttachmentReplicas]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testDeletingNoteDeletesAllAttachmentReplicas]' passed (0.004 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testDeletingOriginWhileImportIsInFlightReturnsOriginUnavailable]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testDeletingOriginWhileImportIsInFlightReturnsOriginUnavailable]' passed (0.109 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testDraftAdoptsAttachmentOnlyNoteWithoutLosingEditorSession]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testDraftAdoptsAttachmentOnlyNoteWithoutLosingEditorSession]' passed (0.010 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testEditorReadabilityChangesGlyphAttributesWithoutChangingTextOrSelection]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testEditorReadabilityChangesGlyphAttributesWithoutChangingTextOrSelection]' passed (0.074 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testEditorReadabilitySkipsFullRangeWorkForUnchangedTypingState]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testEditorReadabilitySkipsFullRangeWorkForUnchangedTypingState]' passed (0.000 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testExternalDeletionOfAutosavedBlankOriginWinsOverSuspendedImport]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testExternalDeletionOfAutosavedBlankOriginWinsOverSuspendedImport]' passed (0.047 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testFailedAttachmentSaveRollsBackNoteRowsAndOwnedFiles]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testFailedAttachmentSaveRollsBackNoteRowsAndOwnedFiles]' passed (0.007 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testImportEnforcesPerFileAggregateAndCountLimits]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testImportEnforcesPerFileAggregateAndCountLimits]' passed (0.012 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testImportPreservesFinderOrderAndDuplicateFilenames]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testImportPreservesFinderOrderAndDuplicateFilenames]' passed (0.005 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testImportRejectsDirectoriesAndSymbolicLinks]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testImportRejectsDirectoriesAndSymbolicLinks]' passed (0.002 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testImportReportsProgressAfterEveryCompletedFile]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testImportReportsProgressAfterEveryCompletedFile]' passed (0.006 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testInFlightBlankImportPersistsToOriginAfterSwitchAndKeepsProgressSessionBound]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testInFlightBlankImportPersistsToOriginAfterSwitchAndKeepsProgressSessionBound]' passed (0.006 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testLocateRejectsChangedMetadataInFreshContextBeforeRestoringPayload]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testLocateRejectsChangedMetadataInFreshContextBeforeRestoringPayload]' passed (0.011 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testMalformedReplicaDoesNotAbortValidRepairOrOrphanCleanup]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testMalformedReplicaDoesNotAbortValidRepairOrOrphanCleanup]' passed (0.002 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testMaterializedPathConfinesUntrustedFilenameToAttachmentDirectory]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testMaterializedPathConfinesUntrustedFilenameToAttachmentDirectory]' passed (0.003 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testMetadataReconciliationDoesNotRequirePayloadForValidFile]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testMetadataReconciliationDoesNotRequirePayloadForValidFile]' passed (0.003 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testMissingAttachmentReportsRecoveryAndLocateRejectsDifferentContents]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testMissingAttachmentReportsRecoveryAndLocateRejectsDifferentContents]' passed (0.011 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testMixedBatchFailureRollsBackEarlierMaterializations]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testMixedBatchFailureRollsBackEarlierMaterializations]' passed (0.003 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testOnDemandAccessRepairsSameSizeContentCorruption]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testOnDemandAccessRepairsSameSizeContentCorruption]' passed (0.004 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testOpenHandsOutADisposableReadOnlyCopyNotThePrivateMaterialization]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testOpenHandsOutADisposableReadOnlyCopyNotThePrivateMaterialization]' passed (0.010 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testPasteboardRouterAcceptsFileURLsButLeavesPlainPathsAsText]' started.
+sandbox_extension_consume failed: 1 (Operation not permitted)
+Test Case '-[AtticTests.NoteAttachmentTests testPasteboardRouterAcceptsFileURLsButLeavesPlainPathsAsText]' passed (0.002 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testPersistedImportRefreshFailureKeepsReservedDraftAndAttachmentVisible]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testPersistedImportRefreshFailureKeepsReservedDraftAndAttachmentVisible]' passed (0.006 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testPreviewDemandUsesVisibleDisplayPixelsWithoutDoubleApplyingScale]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testPreviewDemandUsesVisibleDisplayPixelsWithoutDoubleApplyingScale]' passed (0.000 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testPromisedFileBatchCancellationRemovesLateDeliveredDirectory]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testPromisedFileBatchCancellationRemovesLateDeliveredDirectory]' passed (0.001 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testPromisedFileBatchTimesOutOnceAndRemovesTemporaryDirectory]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testPromisedFileBatchTimesOutOnceAndRemovesTemporaryDirectory]' passed (0.055 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testPromisedFileReceiverRetainsInitiatingNoteAfterEditorSwitch]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testPromisedFileReceiverRetainsInitiatingNoteAfterEditorSwitch]' passed (0.013 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testReconcileRemovesOnlyUnreferencedMaterializations]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testReconcileRemovesOnlyUnreferencedMaterializations]' passed (0.012 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testRejectedPastedImageReportsTheBusyMessageInsteadOfVanishing]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testRejectedPastedImageReportsTheBusyMessageInsteadOfVanishing]' passed (0.002 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testRejectedPastedImageUsesTheComposerSuppliedReason]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testRejectedPastedImageUsesTheComposerSuppliedReason]' passed (0.001 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testRejectedPromiseCaptureCannotFallBackToCurrentEditor]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testRejectedPromiseCaptureCannotFallBackToCurrentEditor]' passed (0.000 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testRemovedAttachmentCannotBeRematerializedThroughStaleReference]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testRemovedAttachmentCannotBeRematerializedThroughStaleReference]' passed (0.119 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testRemovingAttachmentClearsEveryVisibleNoteMapForDivergentReplicas]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testRemovingAttachmentClearsEveryVisibleNoteMapForDivergentReplicas]' passed (0.006 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testRemovingDuplicateAttachmentReplicasDeletesEveryRowOnlyAfterSave]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testRemovingDuplicateAttachmentReplicasDeletesEveryRowOnlyAfterSave]' passed (0.006 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testSourceCanDisappearAfterImportAndMissingMaterializationIsRebuilt]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testSourceCanDisappearAfterImportAndMissingMaterializationIsRebuilt]' passed (0.004 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testSuspendedImportRevalidatesExternalAttachmentsBeforeAssigningSortOrder]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testSuspendedImportRevalidatesExternalAttachmentsBeforeAssigningSortOrder]' passed (0.006 seconds).
+Test Case '-[AtticTests.NoteAttachmentTests testSwitchedEditorKeepsSessionLabelledImportCancellationVisible]' started.
+Test Case '-[AtticTests.NoteAttachmentTests testSwitchedEditorKeepsSessionLabelledImportCancellationVisible]' passed (0.005 seconds).
+Test Suite 'NoteAttachmentTests' passed at 2026-09-16 17:45:43.080.
+	 Executed 47 tests, with 0 failures (0 unexpected) in 0.677 (0.682) seconds
+Test Suite 'SubtaskTests' started at 2026-09-16 17:45:43.080.
+Test Case '-[AtticTests.SubtaskTests testAllPhysicalChildReplicasAreUpdatedAndDeleted]' started.
+Test Case '-[AtticTests.SubtaskTests testAllPhysicalChildReplicasAreUpdatedAndDeleted]' passed (0.006 seconds).
+Test Case '-[AtticTests.SubtaskTests testCleanupRetainsCompletedChildrenUntilEntireFamilyExpires]' started.
+Test Case '-[AtticTests.SubtaskTests testCleanupRetainsCompletedChildrenUntilEntireFamilyExpires]' passed (0.007 seconds).
+Test Case '-[AtticTests.SubtaskTests testCompletedSubtasksSortAfterUnfinishedAndReopenReturnsToActiveGroup]' started.
+Test Case '-[AtticTests.SubtaskTests testCompletedSubtasksSortAfterUnfinishedAndReopenReturnsToActiveGroup]' passed (0.005 seconds).
+Test Case '-[AtticTests.SubtaskTests testCompletionIsManualAndCompletedStepsStayUnderParent]' started.
+Test Case '-[AtticTests.SubtaskTests testCompletionIsManualAndCompletedStepsStayUnderParent]' passed (0.005 seconds).
+Test Case '-[AtticTests.SubtaskTests testConfirmedDropsCompleteParentWithoutCompletingItsChildren]' started.
+Test Case '-[AtticTests.SubtaskTests testConfirmedDropsCompleteParentWithoutCompletingItsChildren]' passed (0.006 seconds).
+Test Case '-[AtticTests.SubtaskTests testConfirmedParentCompletionPreservesUnfinishedChildrenAndAllowsMetadataEdits]' started.
+Test Case '-[AtticTests.SubtaskTests testConfirmedParentCompletionPreservesUnfinishedChildrenAndAllowsMetadataEdits]' passed (0.006 seconds).
+Test Case '-[AtticTests.SubtaskTests testConflictingParentLinksBlockFamilyDeletion]' started.
+Test Case '-[AtticTests.SubtaskTests testConflictingParentLinksBlockFamilyDeletion]' passed (0.003 seconds).
+Test Case '-[AtticTests.SubtaskTests testCrossFamilyDropsDoNotMoveChildren]' started.
+Test Case '-[AtticTests.SubtaskTests testCrossFamilyDropsDoNotMoveChildren]' passed (0.004 seconds).
+Test Case '-[AtticTests.SubtaskTests testDeletingChildPreservesParentAndDeletingParentDeletesFamilyOnly]' started.
+Test Case '-[AtticTests.SubtaskTests testDeletingChildPreservesParentAndDeletingParentDeletesFamilyOnly]' passed (0.005 seconds).
+Test Case '-[AtticTests.SubtaskTests testDivergentChildPreventsParentCompletionAndCleanup]' started.
+Test Case '-[AtticTests.SubtaskTests testDivergentChildPreventsParentCompletionAndCleanup]' passed (0.004 seconds).
+Test Case '-[AtticTests.SubtaskTests testExistingOnDiskTaskMigratesWithoutLosingFields]' started.
+Test Case '-[AtticTests.SubtaskTests testExistingOnDiskTaskMigratesWithoutLosingFields]' passed (0.027 seconds).
+Test Case '-[AtticTests.SubtaskTests testFailedFamilyDeletionAndChildCreationRollBack]' started.
+Test Case '-[AtticTests.SubtaskTests testFailedFamilyDeletionAndChildCreationRollBack]' passed (0.005 seconds).
+Test Case '-[AtticTests.SubtaskTests testFamilyDeleteConfirmationPreventsAutoHideAndReconcilesRemoval]' started.
+Test Case '-[AtticTests.SubtaskTests testFamilyDeleteConfirmationPreventsAutoHideAndReconcilesRemoval]' passed (0.000 seconds).
+Test Case '-[AtticTests.SubtaskTests testMCPCreateListCompleteAndDeleteFamily]' started.
+Test Case '-[AtticTests.SubtaskTests testMCPCreateListCompleteAndDeleteFamily]' passed (0.005 seconds).
+Test Case '-[AtticTests.SubtaskTests testMCPRejectsMalformedParentBeforeCreatingAnything]' started.
+Test Case '-[AtticTests.SubtaskTests testMCPRejectsMalformedParentBeforeCreatingAnything]' passed (0.003 seconds).
+Test Case '-[AtticTests.SubtaskTests testMovingParentKeepsFamilyTogetherAcrossScopes]' started.
+Test Case '-[AtticTests.SubtaskTests testMovingParentKeepsFamilyTogetherAcrossScopes]' passed (0.003 seconds).
+Test Case '-[AtticTests.SubtaskTests testOrphanedAndCyclicImportsRemainVisible]' started.
+Test Case '-[AtticTests.SubtaskTests testOrphanedAndCyclicImportsRemainVisible]' passed (0.003 seconds).
+Test Case '-[AtticTests.SubtaskTests testRejectsMissingNestedAndCompletedParents]' started.
+Test Case '-[AtticTests.SubtaskTests testRejectsMissingNestedAndCompletedParents]' passed (0.004 seconds).
+Test Case '-[AtticTests.SubtaskTests testRenameDraftSeededByBeginEditingAndClearedOnEnd]' started.
+Test Case '-[AtticTests.SubtaskTests testRenameDraftSeededByBeginEditingAndClearedOnEnd]' passed (0.003 seconds).
+Test Case '-[AtticTests.SubtaskTests testRenameDraftSurvivesFailedSave]' started.
+Test Case '-[AtticTests.SubtaskTests testRenameDraftSurvivesFailedSave]' passed (0.003 seconds).
+Test Case '-[AtticTests.SubtaskTests testSiblingReorderPersistsWithoutReorderingMainTasks]' started.
+Test Case '-[AtticTests.SubtaskTests testSiblingReorderPersistsWithoutReorderingMainTasks]' passed (0.006 seconds).
+Test Case '-[AtticTests.SubtaskTests testSubtaskDraftSurvivesSurfaceDismissalWithoutLockingMain]' started.
+Test Case '-[AtticTests.SubtaskTests testSubtaskDraftSurvivesSurfaceDismissalWithoutLockingMain]' passed (0.000 seconds).
+Test Case '-[AtticTests.SubtaskTests testSubtaskEntryStateLifecycle]' started.
+Test Case '-[AtticTests.SubtaskTests testSubtaskEntryStateLifecycle]' passed (0.000 seconds).
+Test Case '-[AtticTests.SubtaskTests testSubtasksPersistAcrossFreshContextsAndCountOnlyTheParent]' started.
+Test Case '-[AtticTests.SubtaskTests testSubtasksPersistAcrossFreshContextsAndCountOnlyTheParent]' passed (0.003 seconds).
+Test Suite 'SubtaskTests' passed at 2026-09-16 17:45:43.200.
+	 Executed 24 tests, with 0 failures (0 unexpected) in 0.118 (0.120) seconds
+Test Suite 'TaskImageTests' started at 2026-09-16 17:45:43.200.
+Test Case '-[AtticTests.TaskImageTests testAttachAndRemoveApplyToEveryPhysicalDuplicate]' started.
+Test Case '-[AtticTests.TaskImageTests testAttachAndRemoveApplyToEveryPhysicalDuplicate]' passed (0.014 seconds).
+Test Case '-[AtticTests.TaskImageTests testAttachmentDragPromisesItsRecordedTypeAndHandsOutACopy]' started.
+Test Case '-[AtticTests.TaskImageTests testAttachmentDragPromisesItsRecordedTypeAndHandsOutACopy]' passed (0.009 seconds).
+Test Case '-[AtticTests.TaskImageTests testCorruptImageIsRejectedAndLegacyTaskPayloadStillDecodes]' started.
+Test Case '-[AtticTests.TaskImageTests testCorruptImageIsRejectedAndLegacyTaskPayloadStillDecodes]' passed (0.003 seconds).
+Test Case '-[AtticTests.TaskImageTests testFailedAttachmentSaveRollsBackReferencesAndLeavesTaskUntouched]' started.
+Test Case '-[AtticTests.TaskImageTests testFailedAttachmentSaveRollsBackReferencesAndLeavesTaskUntouched]' passed (0.007 seconds).
+Test Case '-[AtticTests.TaskImageTests testFailedFileSaveRollsBackAndRemovesOnlyTheNewPrivateCopies]' started.
+Test Case '-[AtticTests.TaskImageTests testFailedFileSaveRollsBackAndRemovesOnlyTheNewPrivateCopies]' passed (0.011 seconds).
+Test Case '-[AtticTests.TaskImageTests testImagesAndGeneralFilesAttachTogetherAndStayUsableAfterRelaunch]' started.
+Test Case '-[AtticTests.TaskImageTests testImagesAndGeneralFilesAttachTogetherAndStayUsableAfterRelaunch]' passed (0.012 seconds).
+Test Case '-[AtticTests.TaskImageTests testImagesPersistAcrossContextsAndExportTextWithOriginalImageBytes]' started.
+Test Case '-[AtticTests.TaskImageTests testImagesPersistAcrossContextsAndExportTextWithOriginalImageBytes]' passed (0.009 seconds).
+Test Case '-[AtticTests.TaskImageTests testLegacyImageReferencesDecodeAsImageAttachments]' started.
+Test Case '-[AtticTests.TaskImageTests testLegacyImageReferencesDecodeAsImageAttachments]' passed (0.000 seconds).
+Test Case '-[AtticTests.TaskImageTests testOnlyOpenableFileTypesMayOpen]' started.
+Test Case '-[AtticTests.TaskImageTests testOnlyOpenableFileTypesMayOpen]' passed (0.001 seconds).
+Test Case '-[AtticTests.TaskImageTests testOpenHandsOutADisposableReadOnlyCopyAndThePrivateCopyStaysVerified]' started.
+Test Case '-[AtticTests.TaskImageTests testOpenHandsOutADisposableReadOnlyCopyAndThePrivateCopyStaysVerified]' passed (0.005 seconds).
+Test Case '-[AtticTests.TaskImageTests testRemovingAnAttachmentKeepsFilesAnotherTaskStillReferences]' started.
+Test Case '-[AtticTests.TaskImageTests testRemovingAnAttachmentKeepsFilesAnotherTaskStillReferences]' passed (0.634 seconds).
+Test Case '-[AtticTests.TaskImageTests testSubtaskAttachmentsResolveToTheParent]' started.
+Test Case '-[AtticTests.TaskImageTests testSubtaskAttachmentsResolveToTheParent]' passed (0.010 seconds).
+Test Case '-[AtticTests.TaskImageTests testTaskImportReadsNoPayloadAndRejectsABatchWithABrokenImage]' started.
+Test Case '-[AtticTests.TaskImageTests testTaskImportReadsNoPayloadAndRejectsABatchWithABrokenImage]' passed (0.017 seconds).
+Test Case '-[AtticTests.TaskImageTests testTaskLimitErrorsUseTaskWording]' started.
+Test Case '-[AtticTests.TaskImageTests testTaskLimitErrorsUseTaskWording]' passed (0.112 seconds).
+Test Suite 'TaskImageTests' passed at 2026-09-16 17:45:44.046.
+	 Executed 14 tests, with 0 failures (0 unexpected) in 0.845 (0.846) seconds
+Test Suite 'AtticTests.xctest' passed at 2026-09-16 17:45:44.046.
+	 Executed 122 tests, with 0 failures (0 unexpected) in 2.836 (2.848) seconds
+Test Suite 'Selected tests' passed at 2026-09-16 17:45:44.046.
+	 Executed 122 tests, with 0 failures (0 unexpected) in 2.836 (2.848) seconds
+exit_status=0 finished=2026-09-16T16:45:44Z

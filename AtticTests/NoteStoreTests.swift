@@ -3,9 +3,89 @@ import XCTest
 @testable import Attic
 
 final class NoteStoreTests: XCTestCase {
+    #if ATTIC_LOCAL_ONLY
+    @MainActor
+    func testLocalOnlyNotesDoNotStartDeferredCloudActivity() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let initialStatus = store.cloudSyncStatus
+        XCTAssertNotNil(store.create(body: "Local save"))
+        let externalContext = ModelContext(container)
+        let externalNote = try XCTUnwrap(externalContext.fetch(FetchDescriptor<NoteItem>()).first)
+        externalNote.body = "External change"
+        try externalContext.save()
+        store.handleCloudSyncEvent(CloudSyncEventUpdate(
+            id: UUID(), kind: .importData, endedAt: Date(), succeeded: true, errorMessage: nil
+        ))
+        XCTAssertEqual(store.cloudSyncStatus, initialStatus)
+        XCTAssertNil(store.remoteChangeObservation)
+        XCTAssertNil(store.cloudKitEventObservation)
+        XCTAssertNil(store.cloudImportRefreshTask)
+        XCTAssertNil(store.exportActivityToken)
+        XCTAssertNil(store.importActivityToken)
+        XCTAssertNil(store.exportActivityTimeoutTask)
+        XCTAssertNil(store.importActivityTimeoutTask)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(store.notes.first?.body, "Local save", "Deferred events cannot reload Local Notes")
+        store.refresh()
+        XCTAssertEqual(store.notes.first?.body, "External change", "Explicit local refresh must still replace stale contexts")
+    }
+    #endif
+
+    @MainActor
+    func testEmptyStoreReconciliationLeavesSeparateDefaultLikeRootUntouched() async throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticNoteStoreSentinel-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+
+        let defaultLikeRoot = parent
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("Attic", isDirectory: true)
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent("v1", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: defaultLikeRoot,
+            withIntermediateDirectories: true
+        )
+        let sentinelURL = defaultLikeRoot.appendingPathComponent("must-survive.txt")
+        let sentinelData = Data("separate app attachment root".utf8)
+        try sentinelData.write(to: sentinelURL)
+
+        let testRoot = parent
+            .appendingPathComponent("XCTest", isDirectory: true)
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent("v1", isDirectory: true)
+        let fileStore = makeTestAttachmentFileStore(rootURL: testRoot)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = NoteStore(container: container, attachmentFileStore: fileStore)
+
+        XCTAssertTrue(store.notes.isEmpty)
+        let preparationDeadline = ContinuousClock.now + .seconds(2)
+        let testStagingRoot = testRoot.appendingPathComponent(".staging", isDirectory: true)
+        while !FileManager.default.fileExists(atPath: testStagingRoot.path),
+              ContinuousClock.now < preparationDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: testStagingRoot.path),
+            "The injected test root must be the root reconciled during NoteStore creation"
+        )
+        XCTAssertEqual(try Data(contentsOf: sentinelURL), sentinelData)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: defaultLikeRoot.appendingPathComponent(".staging").path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: defaultLikeRoot.appendingPathComponent("Thumbnails").path
+        ))
+    }
+
     @MainActor
     func testCreateNormalizesTitleWithoutChangingMeaningfulBodyWhitespace() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
 
         XCTAssertNil(store.create(title: "   ", body: "   \n  "))
         let note = try XCTUnwrap(store.create(title: "  Meeting   notes ", body: "  Discuss\nrelease  "))
@@ -17,7 +97,9 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor
     func testUpdatePreservesMeaningfulBodyWhitespace() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(body: "Original"))
 
         XCTAssertTrue(store.update(note, body: "  Indented\ntext  "))
@@ -26,7 +108,9 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor
     func testCreateAcceptsBodyWithoutTitle() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(body: "Quick jot"))
 
         XCTAssertEqual(note.title, "")
@@ -37,7 +121,10 @@ final class NoteStoreTests: XCTestCase {
     func testCreateReportsPersistenceFailureAndRollsBack() throws {
         let gate = PersistenceGate()
         gate.shouldFail = true
-        let store = try makeTestNoteStore(persist: gate.save)
+        let store = try makeTestNoteStore(
+            persist: gate.save,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
 
         XCTAssertNil(store.create(body: "Must not disappear"))
         XCTAssertTrue(store.notes.isEmpty)
@@ -46,7 +133,9 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor
     func testUpdateRejectsEmptyTitleAndBody() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(title: "Keep", body: "me"))
 
         XCTAssertFalse(store.update(note, title: "   ", body: "   "))
@@ -57,7 +146,10 @@ final class NoteStoreTests: XCTestCase {
     @MainActor
     func testFailedSaveRestoresNote() throws {
         let gate = PersistenceGate()
-        let store = try makeTestNoteStore(persist: gate.save)
+        let store = try makeTestNoteStore(
+            persist: gate.save,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(body: "Keep me"))
         gate.shouldFail = true
 
@@ -70,7 +162,9 @@ final class NoteStoreTests: XCTestCase {
 
     @MainActor
     func testDeleteRemovesNote() throws {
-        let store = try makeTestNoteStore()
+        let store = try makeTestNoteStore(
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let note = try XCTUnwrap(store.create(body: "Temporary"))
 
         store.delete(note)
@@ -80,7 +174,10 @@ final class NoteStoreTests: XCTestCase {
     @MainActor
     func testOrderedNotesNewestFirst() throws {
         let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
-        let store = try makeTestNoteStore(now: { clock.value })
+        let store = try makeTestNoteStore(
+            now: { clock.value },
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let older = try XCTUnwrap(store.create(body: "Older"))
         clock.value = Date(timeIntervalSince1970: 2_000)
         let newer = try XCTUnwrap(store.create(body: "Newer"))
@@ -91,7 +188,10 @@ final class NoteStoreTests: XCTestCase {
     @MainActor
     func testRefreshSeesChangesSavedByAnotherModelContext() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let externalContext = ModelContext(container)
         let externalNote = NoteItem(title: "Created elsewhere", body: "hi")
 
@@ -122,7 +222,10 @@ final class NoteStoreTests: XCTestCase {
         context.insert(newer)
         try context.save()
 
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
 
         XCTAssertEqual(store.notes.count, 1)
         XCTAssertEqual(store.notes.first?.title, "Newer")
@@ -142,7 +245,10 @@ final class NoteStoreTests: XCTestCase {
             updatedAt: Date().addingTimeInterval(1)
         ))
         try seedContext.save()
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let visible = try XCTUnwrap(store.notes.first)
 
         XCTAssertTrue(store.update(visible, title: "Unified", body: "z"))
@@ -157,6 +263,7 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertTrue(replicas.isEmpty)
     }
 
+    #if !ATTIC_LOCAL_ONLY
     @MainActor
     func testSuccessfulCloudImportRefreshesChangesSavedOutsideStoreContext() async throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
@@ -164,7 +271,10 @@ final class NoteStoreTests: XCTestCase {
         seedContext.insert(NoteItem(title: "Before iPhone update", body: "v1"))
         try seedContext.save()
 
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         XCTAssertEqual(store.notes.map(\.body), ["v1"])
 
         let externalContext = ModelContext(container)
@@ -187,11 +297,15 @@ final class NoteStoreTests: XCTestCase {
 
         XCTAssertEqual(store.notes.map(\.body), ["Updated from iPhone"])
     }
+    #endif
 
     @MainActor
     func testRemoteDeletionMakesCapturedNoteReferencesNoOps() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
-        let store = NoteStore(container: container)
+        let store = NoteStore(
+            container: container,
+            attachmentFileStore: makeTestAttachmentFileStore()
+        )
         let capturedNote = try XCTUnwrap(store.create(body: "Deleted elsewhere"))
         let externalContext = ModelContext(container)
         let externalNote = try XCTUnwrap(

@@ -4,45 +4,74 @@ struct CornerPicker: View {
     @Binding var selection: ScreenCorner
 
     var body: some View {
-        VStack(spacing: 9) {
-            HStack {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow {
                 cornerButton(.topLeft)
-                Spacer()
                 cornerButton(.topRight)
             }
-            Spacer()
-            Image(systemName: "display")
-                .font(.system(size: 23, weight: .light))
-                .foregroundStyle(.tertiary)
-            Spacer()
-            HStack {
+            GridRow {
                 cornerButton(.bottomLeft)
-                Spacer()
                 cornerButton(.bottomRight)
             }
         }
-        .padding(10)
-        .frame(width: 230, height: 132)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.12), lineWidth: 0.7)
-        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Hiding corner")
+        .accessibilityIdentifier("setting-hiding-corner")
     }
 
     private func cornerButton(_ corner: ScreenCorner) -> some View {
-        Button { selection = corner } label: {
-            Circle()
-                .fill(selection == corner ? Color.accentColor : Color.primary.opacity(0.12))
-                .frame(width: 17, height: 17)
-                .overlay {
-                    Circle()
-                        .stroke(selection == corner ? Color.accentColor.opacity(0.25) : .clear, lineWidth: 5)
-                }
+        Button {
+            selection = corner
+        } label: {
+            HStack(spacing: 8) {
+                CornerGlyph(corner: corner, isSelected: selection == corner)
+
+                Text(corner.title)
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .opacity(selection == corner ? 1 : 0)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.plain)
-        .help(corner.title)
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .tint(selection == corner ? .accentColor : .secondary)
+        .help("Use the \(corner.title.lowercased()) corner")
         .accessibilityLabel(corner.title)
         .accessibilityAddTraits(selection == corner ? .isSelected : [])
+        .accessibilityIdentifier("setting-corner-\(corner.rawValue)")
+    }
+}
+
+private struct CornerGlyph: View {
+    let corner: ScreenCorner
+    let isSelected: Bool
+
+    var body: some View {
+        ZStack(alignment: alignment) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(Color.secondary.opacity(0.8), lineWidth: 1)
+
+            Circle()
+                .fill(isSelected ? Color.accentColor : Color.secondary)
+                .frame(width: 5, height: 5)
+                .padding(2)
+        }
+        .frame(width: 25, height: 17)
+        .accessibilityHidden(true)
+    }
+
+    private var alignment: Alignment {
+        switch corner {
+        case .topLeft: .topLeading
+        case .topRight: .topTrailing
+        case .bottomLeft: .bottomLeading
+        case .bottomRight: .bottomTrailing
+        }
     }
 }

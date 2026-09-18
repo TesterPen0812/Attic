@@ -1,0 +1,9 @@
+MIGRATION_GATE=PASS
+installed_sha=8b03586df79c6d667a6aea444b74f7167e552568
+candidate_sha=f8a18a09b7d6cc914ab97fdfad252d1f2f8b3d6c
+entities=7
+seed_files=3
+original_seed_unchanged=true
+candidate_round_trip=true
+external_payloads_preserved=true
+image_backfill_preserved_replica_fields=true

@@ -23,7 +23,9 @@ final class DailyCleanupServiceTests: XCTestCase {
         store.markDone(todayDone)
 
         let service = DailyCleanupService(store: store, now: { now }, calendar: { calendar })
-        XCTAssertEqual(service.performCleanup(), 1)
+        let deleted = service.performCleanup()
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
 
         XCTAssertFalse(store.tasks.contains { $0.id == oldDone.id })
         XCTAssertTrue(store.tasks.contains { $0.id == todayDone.id })
@@ -48,8 +50,59 @@ final class DailyCleanupServiceTests: XCTestCase {
 
         clock.value = afterMidnight
         let service = DailyCleanupService(store: store, now: { clock.value }, calendar: { calendar })
-        XCTAssertEqual(service.performCleanup(), 1)
+        let deleted = service.performCleanup()
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
         XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    @MainActor
+    func testCleanupPurgesOnlyCompletionStrictlyBeforeCutoff() throws {
+        let cutoff = Date(timeIntervalSince1970: 500_000)
+        let createdAt = cutoff.addingTimeInterval(-100)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let missingCompletion = TaskItem(
+            title: "Missing completion date",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: nil
+        )
+        let atCutoff = TaskItem(
+            title: "Completed at cutoff",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff
+        )
+        let beforeCutoff = TaskItem(
+            title: "Completed before cutoff",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff.addingTimeInterval(-1)
+        )
+        let afterCutoff = TaskItem(
+            title: "Completed after cutoff",
+            status: .done,
+            createdAt: createdAt,
+            completedAt: cutoff.addingTimeInterval(1)
+        )
+        [missingCompletion, atCutoff, beforeCutoff, afterCutoff].forEach(context.insert)
+        try context.save()
+
+        let store = TaskStore(container: container)
+        let deleted = store.purgeCompleted(before: cutoff)
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
+
+        let expectedRemainingIDs: Set<UUID> = [
+            missingCompletion.id,
+            atCutoff.id,
+            afterCutoff.id,
+        ]
+        XCTAssertEqual(Set(store.tasks.map(\.id)), expectedRemainingIDs)
+        let persisted = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(Set(persisted.map(\.id)), expectedRemainingIDs)
+        XCTAssertFalse(persisted.contains { $0.id == beforeCutoff.id })
     }
 
     @MainActor
@@ -87,7 +140,9 @@ final class DailyCleanupServiceTests: XCTestCase {
         let store = TaskStore(container: container)
         let service = DailyCleanupService(store: store, now: { now })
 
-        XCTAssertEqual(service.performCleanup(), 1)
+        let deleted = service.performCleanup()
+        XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
+        XCTAssertEqual(deleted, 1)
         let verificationContext = ModelContext(container)
         let remaining = try verificationContext.fetch(FetchDescriptor<TaskItem>())
         XCTAssertEqual(remaining.count, 2)

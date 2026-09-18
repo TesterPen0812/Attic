@@ -1,0 +1,19 @@
+Resuming the reconciliation. The tree was being actively edited by the no-swipe implementer during my last pass — let me re-check current state and finish remaining verifications.warning: rejected a tool call that requires confirmation. Running in non-interactive mode. Use --permission-mode dangerous to auto-approve all tools.
+
+Final state captured — `TaskFamilyView` has no hover reporting at all, and UITests now encode the new contracts. A few last cheap source checks on the named CANVAS source defects and daily cleanup, then I'll write the report.All verification complete. I have comprehensive evidence now — including that the no-swipe implementation landed in the tree mid-audit and `DailyCleanupService`/`purgeCompleted` are now predicated. Writing the report.Done. `Docs/Rolling-Requirements-Audit.md` is complete — the only file I touched.
+
+**Key findings**
+
+- **P0 (subpanel swipe removal):** implemented in source by the in-flight worker — `PanelSurfaceHostingView` now forwards every scroll event untouched, zero swipe references remain in `Attic/`, new negative tests encode the contract, and main-panel swipe (`PanelTrackpadDismissTracker` chain) is intact. Still owed: the implementation doc, post-removal build/test run, independent review, and a native gesture pass. I flagged one stale comment (`SubtaskPanelController.swift:316`, "hover dwell") for the reviewer.
+
+- **Confirmed defects found:** none — every item I checked has either a real source fix or lacks evidence in either direction. Old unchecked checklist entries did not automatically classify as current bugs.
+
+- **Passed by specific evidence:** TP-013 (FamilyIndex + bounded perf gates), TP-014 (zero reveal refreshes under local-only), TP-019 and TASK-001/002 (recorded native passes, older build), TP-023, DATA-001/002/004, QUALITY-007.
+
+- **Implemented but unverified (the bulk):** TP-001–009, TP-011/012/015/016/018/020–022/024, DATA-003, PERF-002/004–006/009, CANVAS-016, NOTES-001/013 — each with concrete file:line evidence and the specific validation still owed.
+
+- **Still genuinely open:** TP-010/PERF-001/003 (no baselines exist — owned by the in-flight perf audit), CANVAS-017/018, TP-017 (needs physical trackpad), PANEL-003/004/005/006 live sweeps.
+
+**Bounded next-work list** is in the report, ordered: land no-swipe → one batched native verification pass over Section A → gesture UAT → measured baselines (coordinated with the perf worker) → small gaps (TP-024 test, stale comment) → deferred CANVAS/NOTES lanes → checklist checkboxes only after evidence lands.
+
+One caveat documented in the report: the checkpoint's recorded 182-test serial run predates the swipe-removal edits, so "tested" items carry that asterisk until a fresh run happens.

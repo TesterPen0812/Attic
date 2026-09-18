@@ -1,0 +1,1180 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild build-for-testing -project Attic.xcodeproj -scheme Attic -configuration Local -derivedDataPath /tmp/attic-b2-opus-scratch/dd-live "-only-testing:AtticTests" CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=NO
+
+Build settings from command line:
+    CODE_SIGN_IDENTITY = -
+    CODE_SIGNING_ALLOWED = NO
+
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:macOS, arch:arm64, id:00008132-001258143ED9801C, name:My Mac }
+{ platform:macOS, arch:x86_64, id:00008132-001258143ED9801C, name:My Mac }
+{ platform:macOS, name:Any Mac }
+note: Using codesigning identity override: -
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (2 targets)
+    Target 'AtticTests' in project 'Attic'
+        ➜ Explicit dependency on target 'AtticUnitTestHost' in project 'Attic'
+    Target 'AtticUnitTestHost' in project 'Attic' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+Build description signature: df634712a3b3fe9b9fc29ca7f3830a37
+Build description path: /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/XCBuildData/df634712a3b3fe9b9fc29ca7f3830a37.xcbuilddata
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/CompilationCache.noindex
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/CompilationCache.noindex
+
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -o /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/Build/Products
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/Build/Products
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/ExplicitPrecompiledModules
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/PrecompiledHeaders
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/PrecompiledHeaders
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local
+
+CreateBuildDirectory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/EagerLinkingTBDs/Local
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    builtin-create-build-directory /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/EagerLinkingTBDs/Local
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/Attic-da958aef55466f70e6607154738295c0-VFS/all-product-headers.yaml
+    cd /Users/taha/Developer/attic-task-panels-v2/Attic.xcodeproj
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/Attic-da958aef55466f70e6607154738295c0-VFS/all-product-headers.yaml
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-project-headers.hmap (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-project-headers.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.DependencyStaticMetadataFileList (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.DependencyStaticMetadataFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.DependencyMetadataFileList (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.DependencyMetadataFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.hmap (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-OutputFileMap.json (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-OutputFileMap.json
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.LinkFileList (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.LinkFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftConstValuesFileList (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftConstValuesFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_const_extract_protocols.json (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_const_extract_protocols.json
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftFileList (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-generated-files.hmap (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-generated-files.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-all-target-headers.hmap (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-all-target-headers.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-own-target-headers.hmap (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-own-target-headers.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-all-non-framework-target-headers.hmap (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-all-non-framework-target-headers.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-DebugDylibPath-normal-arm64.txt (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-DebugDylibPath-normal-arm64.txt
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-DebugDylibInstallName-normal-arm64.txt (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-DebugDylibInstallName-normal-arm64.txt
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/empty-AtticTests.plist (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/empty-AtticTests.plist
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_const_extract_protocols.json (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_const_extract_protocols.json
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftConstValuesFileList (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftConstValuesFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.LinkFileList (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.LinkFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftFileList (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-OutputFileMap.json (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-OutputFileMap.json
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.hmap (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.DependencyStaticMetadataFileList (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.DependencyStaticMetadataFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.DependencyMetadataFileList (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.DependencyMetadataFileList
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-project-headers.hmap (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-project-headers.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-generated-files.hmap (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-generated-files.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-own-target-headers.hmap (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-own-target-headers.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-all-target-headers.hmap (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-all-target-headers.hmap
+
+WriteAuxiliaryFile /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-all-non-framework-target-headers.hmap (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    write-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-all-non-framework-target-headers.hmap
+
+MkDir /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /bin/mkdir -p /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns
+
+MkDir /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /bin/mkdir -p /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS
+
+MkDir /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /bin/mkdir -p /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents
+
+MkDir /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /bin/mkdir -p /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app
+
+MkDir /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /bin/mkdir -p /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest
+
+MkDir /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /bin/mkdir -p /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents
+
+MkDir /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/MacOS (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /bin/mkdir -p /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/MacOS
+
+Ld /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/__preview.dylib normal (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-macos14.0 -dynamiclib -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -O0 -Xlinker -no_warn_duplicate_libraries -L/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -install_name @rpath/AtticUnitTestHost.debug.dylib -rdynamic -Xlinker -no_deduplicate -Xlinker -dependency_info -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_dependency_info.dat -o /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/__preview.dylib
+
+ProcessInfoPlistFile /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/Info.plist /Users/taha/Developer/attic-task-panels-v2/Attic/Info.plist (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-infoPlistUtility /Users/taha/Developer/attic-task-panels-v2/Attic/Info.plist -producttype com.apple.product-type.application -genpkginfo /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PkgInfo -expandbuildsettings -platform macosx -o /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/Info.plist
+
+SwiftDriver AtticUnitTestHost normal arm64 com.apple.xcode.tools.swift.compiler (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name AtticUnitTestHost -Onone @/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftFileList -DDEBUG -DATTIC_LOCAL_ONLY -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -target arm64-apple-macos14.0 -g -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /tmp/attic-b2-opus-scratch/dd-live/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache -output-file-map /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -sdk-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -emit-const-values -const-gather-protocols-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_const_extract_protocols.json -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-generated-files.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-own-target-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-all-target-headers.hmap -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-project-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/include -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources-normal/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-Swift.h -working-directory /Users/taha/Developer/attic-task-panels-v2 -experimental-emit-module-separately -disable-cmo
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_AvailabilityInternal-71TN2SG7RSO57CBBUBFWUUOLX.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/DeveloperToolsSupport-2723K0RQN0H88E9IQ9VCNMGCH.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_SwiftConcurrencyShims-10I8W6LI26OD27UQ85KRFRZLF.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ptrcheck-6I4IVJLSGM0846G2GLVJE3N0V.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_stdarg-4C3EH6CV13UM56147GP5HQFOH.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_stdbool-9QPIGML93BDMW2BU8ADZF6AKS.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_float-5T6HHOP3F8C359S09DSI67SUQ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ptrauth-74I4AKZOG56CA0FLESO6EBDTJ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/SwiftShims-B79ZVIT8U1P3CRHLMOCR5LUTY.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_stddef-75FN4HE37DG86HX159Z6D48M1.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_DarwinFoundation1-47Q40FENF1I095R4FZB8W0DZE.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_limits-4D4HFF0KPVGPLIHBYJYPOYAWZ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ExtensionFoundation-9IM3R7SYLW1J4N8KEWZT3UBU6.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_DarwinFoundation2-D9MVVD6WQXMNMA6H4ZYS4LQQE.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/sys_types-E8WU1M679VS41TFIR99VDZICW.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/string_h-CUSUEYH9BUXF6VGHYUHO2XY8F.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_stdint-DWUJMWL80BSKUSR3Z0CE5RSPC.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_tgmath-2V8QQPH7NW00TPGP2J8DK2B30.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_stdatomic-487DQH5AX15YMSX1A06GZOYM2.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/libDER-5W6UY7LG7N0UHM65LW1ENCSFA.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_intrinsics-LLMRL2B5E8NJC060Z16LWE7L.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_DarwinFoundation3-6DE1JW9W6QXI5S6UMIRC8LRKS.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/_Builtin_inttypes-CXFZ0DR386NPRAO5RTUT851Z0.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Darwin-98HDH8L00FOK11E0IQZTLDH23.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/simd-605F1RSNG3O7B3RZHXE3V0F5Q.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/MachO-834X6EYMVP0T0IPLKTXOMCX2W.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/libkern-9W256GHN03P0I0M5FRRT3FB2U.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/launch-2V7ORLAC5WJSQJQHLO6ZKHDCK.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CUPS-7N6T3NKLJ5H44KNPNVBMAYR8V.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Spatial-91Y05MPO88CUDJRE3D1C99BQE.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ObjectiveC-ACQ2TOS33C5DP8IXBLL4F8EE4.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/os_object-AKO3V3UJ0I5EKIX56IM3TTME5.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/os_workgroup-6PAFDSBECHSR4IXUKJXVMBN8U.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Dispatch-6STI5IBIRZ9FB7AM05PX8PIAL.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreFoundation-D154M6624WKX1ICSPLPYOOO71.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/dnssd-8BRKJ90XQUV6C68BT6MD3WY0F.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/XPC-6PQ53N1OOVQ4P1Y1WNTUWQDPJ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/os-8UE4IJ23TXVBA05CAC8130VIU.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ColorSync-6CL9CTJ0NADK3HZTSQQZMUN40.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreAudioTypes-2M6SC3MV2DY8R2A1OW40YX4L9.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Security-AC0YPPQRMAK3SOEJMG7T5UDQY.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CFNetwork-B8M42RRZ9UFFPCEVXBP542UV4.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/IOKit-5EAUN5ABUHU9R2659HVGEAOHX.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/DiskArbitration-F4H4ANF5IV23S1DVVQ1LM9NT3.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreGraphics-CHCBKPH9W18YUZSSH11BSUVRR.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreServices-3AX4ZYI5SVVHMII01WY4TQ475.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ImageIO-4BBCMUD8GLR2PQC5N6ZWG9W69.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreText-F0E5W54YZVZ1LYVVM98DCNKYV.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Foundation-2B6ISBN51TG25KKVUB2SK0CI3.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/DataDetection-BZWT10GQQX74XTIZ54WR0RGWK.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreTransferable-D3BLNH9MKY5EAN9UDKQJ8GT4F.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Network-4J5F32FOBWXOHDURI91V97E75.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ApplicationServices-8D36UFCSWXTGJOBSSQFTULM20.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/LocalAuthentication-7DP32711L2GHGOAM7P46DP94R.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/UniformTypeIdentifiers-DO7TR7C9RX6FOJHVW7R6YDKCP.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreAudio-7YSIWFZ9FPBI02BDE7H0IUPU6.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/OSLog-ET5JRFQOYYX1ZECG1FW549O67.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreData-38KVVR6LNZN7YWS7PLHAKB8HR.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Symbols-EAT6C6FYDLHSTAOCRW6Z4LB87.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Accessibility-2POUCZYD5ALVB4U3Q7ZR0K69W.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ServiceManagement-4GHVZBKD4TLELIZBXM22K9BQ5.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/IOSurface-7D713RP7Z1PQSY545SV1ODSWJ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/QuickLookThumbnailing-8ROZM66VBU7UNY6HOUIKGOJ7S.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Carbon-E9EKDTYYPXOQEYZSLL4PIX1SR.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/QuickLook-FE45Q5HQ05Y3Z9AO4FK7SY8Y.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Metal-2JG0W8F9R3TJXFFM4C14THITG.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/OpenGL-37A1XU1IO9FTN95MU0GH6QFFC.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreVideo-B4VZTC4MMFKUZOTSR4LTU8Z1O.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/QuartzCore-42NNSWUP592JUMQDWQVOV09QM.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreImage-A8DF5S2EBTKO02OPGHJ5M6C30.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/CoreMedia-C2S3PLAOPG0JZ7ASKOCCXUSK4.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/SwiftUICore-9REKJLZO0NRIUDNUJ49HWHM88.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/AppKit-DVHQN1BDBGK77X3A7HD3X0FD5.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/SwiftUI-6WIO9EXDH2UVTTXPV4LUABDOY.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Cocoa-AR34ICL1RL4EWRYCK9PAWY8P7.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/PDFKit-DSJMAVWL6831DJ9DEC439FMNR.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/ImageCaptureCore-VP6BRC4WVSKLQC2WMNUYSLLJ.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/QuickLookUI-C89S1Y5YMJUYG57K10BNQDFHA.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules/Quartz-W4BORZPRG218WCSMCMHHY2DV.pcm
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ AtticUnitTestHost (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    
+
+SwiftCompile normal arm64 Compiling\ TaskSectionView.swift,\ TaskStatusButton.swift,\ AboutSettingsView.swift,\ AgentAccessSettingsView.swift,\ AppearanceSettingsView.swift,\ CornerPicker.swift,\ GeneralSettingsView.swift,\ PanelSettingsView.swift,\ SettingsComponents.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskSectionView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskStatusButton.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/AboutSettingsView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/AgentAccessSettingsView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/AppearanceSettingsView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/CornerPicker.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/GeneralSettingsView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/PanelSettingsView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/SettingsComponents.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskSectionView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskSectionView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskStatusButton.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskStatusButton.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/AboutSettingsView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AboutSettingsView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/AgentAccessSettingsView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentAccessSettingsView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/AppearanceSettingsView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AppearanceSettingsView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/CornerPicker.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CornerPicker.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/GeneralSettingsView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile GeneralSettingsView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/PanelSettingsView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelSettingsView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/SettingsComponents.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SettingsComponents.swift
+
+SwiftCompile normal arm64 Compiling\ NoteAttachmentTray.swift,\ NoteInlineCards.swift,\ NotesPanelContent.swift,\ SubtaskPanelContent.swift,\ TaskAttachmentDrop.swift,\ TaskComposerAttachments.swift,\ TaskFamilyView.swift,\ TaskImageAttachments.swift,\ TaskRowView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/NoteAttachmentTray.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/NoteInlineCards.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/NotesPanelContent.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/SubtaskPanelContent.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskAttachmentDrop.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskComposerAttachments.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskFamilyView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskImageAttachments.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskRowView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/NoteAttachmentTray.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteAttachmentTray.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/NoteInlineCards.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteInlineCards.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/NotesPanelContent.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NotesPanelContent.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/SubtaskPanelContent.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SubtaskPanelContent.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskAttachmentDrop.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskAttachmentDrop.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskComposerAttachments.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskComposerAttachments.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskFamilyView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskFamilyView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskImageAttachments.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskImageAttachments.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/TaskRowView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskRowView.swift
+
+SwiftCompile normal arm64 Compiling\ NoteAttachmentPlatformSupport.swift,\ NoteDraftController.swift,\ NoteStore.swift,\ PanelGeometry.swift,\ PersistenceController.swift,\ SubtaskPanelLayout.swift,\ TaskStore.swift,\ MenuBarView.swift,\ AtticPanelView.swift,\ CanvasPanelContent.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/NoteAttachmentPlatformSupport.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/NoteDraftController.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/NoteStore.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/PanelGeometry.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/PersistenceController.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/SubtaskPanelLayout.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/TaskStore.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/MenuBarView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/AtticPanelView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/CanvasPanelContent.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/NoteAttachmentPlatformSupport.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteAttachmentPlatformSupport.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/NoteDraftController.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteDraftController.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/NoteStore.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteStore.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/PanelGeometry.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelGeometry.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/PersistenceController.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PersistenceController.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/SubtaskPanelLayout.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SubtaskPanelLayout.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/TaskStore.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskStore.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/MenuBarView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile MenuBarView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/AtticPanelView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AtticPanelView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Panel/CanvasPanelContent.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasPanelContent.swift
+
+SwiftCompile normal arm64 Compiling\ SettingsSection.swift,\ SettingsView.swift,\ AtticPanel.swift,\ AtticPanelController.swift,\ PanelSection.swift,\ PanelSurfaceHostingView.swift,\ PanelUIState.swift,\ SettingsWindowController.swift,\ SubtaskPanelController.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/SettingsSection.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/SettingsView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Window/AtticPanel.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Window/AtticPanelController.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Window/PanelSection.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Window/PanelSurfaceHostingView.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Window/PanelUIState.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Window/SettingsWindowController.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Window/SubtaskPanelController.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/SettingsSection.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SettingsSection.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Views/Settings/SettingsView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SettingsView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Window/AtticPanel.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AtticPanel.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Window/AtticPanelController.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AtticPanelController.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Window/PanelSection.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelSection.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Window/PanelSurfaceHostingView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelSurfaceHostingView.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Window/PanelUIState.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelUIState.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Window/SettingsWindowController.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SettingsWindowController.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Window/SubtaskPanelController.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SubtaskPanelController.swift
+
+SwiftCompile normal arm64 Compiling\ main.swift,\ AppCoordinator.swift,\ AppDelegate.swift,\ CanvasEditCommandRoute.swift,\ CanvasControls.swift,\ CanvasImageExportDocument.swift,\ CanvasImageImporter.swift,\ CanvasImageTypes.swift,\ CanvasInputStateMachine.swift,\ CanvasSemanticInteraction.swift /Users/taha/Developer/attic-task-panels-v2/AtticUnitTestHost/main.swift /Users/taha/Developer/attic-task-panels-v2/Attic/App/AppCoordinator.swift /Users/taha/Developer/attic-task-panels-v2/Attic/App/AppDelegate.swift /Users/taha/Developer/attic-task-panels-v2/Attic/App/CanvasEditCommandRoute.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasControls.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasImageExportDocument.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasImageImporter.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasImageTypes.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasInputStateMachine.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSemanticInteraction.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticUnitTestHost/main.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile main.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/App/AppCoordinator.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AppCoordinator.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/App/AppDelegate.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AppDelegate.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/App/CanvasEditCommandRoute.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasEditCommandRoute.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasControls.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasControls.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasImageExportDocument.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasImageExportDocument.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasImageImporter.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasImageImporter.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasImageTypes.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasImageTypes.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasInputStateMachine.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasInputStateMachine.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSemanticInteraction.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSemanticInteraction.swift
+
+SwiftCompile normal arm64 Compiling\ CanvasSemanticObjectItem.swift,\ CanvasStrokeItem.swift,\ NoteAttachment.swift,\ NoteInlineAnchor.swift,\ NoteItem.swift,\ TaskDragPayload.swift,\ TaskImageReference.swift,\ TaskItem.swift,\ TaskTypes.swift,\ AgentAccessTokenStore.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasSemanticObjectItem.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasStrokeItem.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/NoteAttachment.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/NoteInlineAnchor.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/NoteItem.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskDragPayload.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskImageReference.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskItem.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskTypes.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentAccessTokenStore.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasSemanticObjectItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSemanticObjectItem.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasStrokeItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStrokeItem.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/NoteAttachment.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteAttachment.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/NoteInlineAnchor.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteInlineAnchor.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/NoteItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteItem.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskDragPayload.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskDragPayload.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskImageReference.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskImageReference.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskItem.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/TaskTypes.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskTypes.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentAccessTokenStore.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentAccessTokenStore.swift
+
+SwiftCompile normal arm64 Compiling\ CanvasSemanticObject.swift,\ CanvasSemanticRenderer.swift,\ CanvasSendable.swift,\ CanvasSession.swift,\ CanvasStrokeCodec.swift,\ CanvasSurface.swift,\ CanvasSurfaceIOS.swift,\ CanvasSurfaceInteraction.swift,\ CanvasSurfaceMac.swift,\ CanvasSurfaceMacHelpers.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSemanticObject.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSemanticRenderer.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSendable.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSession.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasStrokeCodec.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurface.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceIOS.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceInteraction.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceMac.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceMacHelpers.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSemanticObject.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSemanticObject.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSemanticRenderer.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSemanticRenderer.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSendable.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSendable.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSession.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSession.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasStrokeCodec.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStrokeCodec.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurface.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSurface.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceIOS.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSurfaceIOS.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceInteraction.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSurfaceInteraction.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceMac.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSurfaceMac.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceMacHelpers.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSurfaceMacHelpers.swift
+
+SwiftCompile normal arm64 Compiling\ CanvasSurfaceRenderer.swift,\ CanvasTypes.swift,\ CanvasViewport.swift,\ AtticPanelTheme.swift,\ AtticStyle.swift,\ AtticTheme.swift,\ Squircle.swift,\ TaskActionsMenu.swift,\ CanvasBoardItem.swift,\ CanvasImageItem.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceRenderer.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasTypes.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasViewport.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Design/AtticPanelTheme.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Design/AtticStyle.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Design/AtticTheme.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Design/Squircle.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Design/TaskActionsMenu.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasBoardItem.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasImageItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasSurfaceRenderer.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSurfaceRenderer.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasTypes.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasTypes.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Canvas/CanvasViewport.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasViewport.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Design/AtticPanelTheme.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AtticPanelTheme.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Design/AtticStyle.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AtticStyle.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Design/AtticTheme.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AtticTheme.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Design/Squircle.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile Squircle.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Design/TaskActionsMenu.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskActionsMenu.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasBoardItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasBoardItem.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Models/CanvasImageItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasImageItem.swift
+
+SwiftCompile normal arm64 Compiling\ AgentHTTPRequest.swift,\ AgentServer.swift,\ AgentTaskTools.swift,\ MCPRequestHandler.swift,\ AppSettings.swift,\ AttachmentFileStore.swift,\ CanvasStore.swift,\ CanvasStoreBoards.swift,\ CanvasStoreCloudSync.swift,\ CanvasStoreImages.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentHTTPRequest.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentServer.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentTaskTools.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/MCPRequestHandler.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AppSettings.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AttachmentFileStore.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStore.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreBoards.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreCloudSync.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreImages.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentHTTPRequest.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentHTTPRequest.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentServer.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentServer.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/AgentTaskTools.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentTaskTools.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AgentServer/MCPRequestHandler.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile MCPRequestHandler.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AppSettings.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AppSettings.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/AttachmentFileStore.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AttachmentFileStore.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStore.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStore.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreBoards.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreBoards.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreCloudSync.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreCloudSync.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreImages.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreImages.swift
+
+SwiftCompile normal arm64 Compiling\ CanvasStoreLifecycle.swift,\ CanvasStorePersistence.swift,\ CanvasStoreReplicaResolution.swift,\ CanvasStoreSemanticObjects.swift,\ CanvasStoreStrokes.swift,\ CornerHoverMonitor.swift,\ CornerHoverStateMachine.swift,\ DailyCleanupService.swift,\ GlobalHotKey.swift,\ LoginItemService.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreLifecycle.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStorePersistence.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreReplicaResolution.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreSemanticObjects.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreStrokes.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CornerHoverMonitor.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CornerHoverStateMachine.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/DailyCleanupService.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/GlobalHotKey.swift /Users/taha/Developer/attic-task-panels-v2/Attic/Services/LoginItemService.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreLifecycle.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreLifecycle.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStorePersistence.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStorePersistence.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreReplicaResolution.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreReplicaResolution.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreSemanticObjects.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreSemanticObjects.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CanvasStoreStrokes.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreStrokes.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CornerHoverMonitor.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CornerHoverMonitor.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/CornerHoverStateMachine.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CornerHoverStateMachine.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/DailyCleanupService.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile DailyCleanupService.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/GlobalHotKey.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile GlobalHotKey.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/Attic/Services/LoginItemService.swift (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile LoginItemService.swift
+
+SwiftDriverJobDiscovery normal arm64 Emitting module for AtticUnitTestHost (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriver\ Compilation\ Requirements AtticUnitTestHost normal arm64 com.apple.xcode.tools.swift.compiler (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name AtticUnitTestHost -Onone @/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftFileList -DDEBUG -DATTIC_LOCAL_ONLY -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -target arm64-apple-macos14.0 -g -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /tmp/attic-b2-opus-scratch/dd-live/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache -output-file-map /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -sdk-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -emit-const-values -const-gather-protocols-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_const_extract_protocols.json -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-generated-files.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-own-target-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-all-target-headers.hmap -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-project-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/include -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources-normal/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-Swift.h -working-directory /Users/taha/Developer/attic-task-panels-v2 -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling CanvasSemanticObjectItem.swift, CanvasStrokeItem.swift, NoteAttachment.swift, NoteInlineAnchor.swift, NoteItem.swift, TaskDragPayload.swift, TaskImageReference.swift, TaskItem.swift, TaskTypes.swift, AgentAccessTokenStore.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftMergeGeneratedHeaders /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources/AtticUnitTestHost-Swift.h /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-Swift.h (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-swiftHeaderTool -arch arm64 /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-Swift.h -o /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources/AtticUnitTestHost-Swift.h
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/arm64-apple-macos.swiftmodule /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftmodule (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftmodule /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/arm64-apple-macos.swiftmodule
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/arm64-apple-macos.swiftdoc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftdoc (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftdoc /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/arm64-apple-macos.swiftdoc
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/arm64-apple-macos.abi.json /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.abi.json (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.abi.json /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/arm64-apple-macos.abi.json
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftsourceinfo (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftsourceinfo /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo
+
+SwiftDriver AtticTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftDriver -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name AtticTests -Onone @/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftFileList -DDEBUG -DATTIC_LOCAL_ONLY -module-alias Attic\=AtticUnitTestHost -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -target arm64-apple-macos14.0 -g -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /tmp/attic-b2-opus-scratch/dd-live/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache -output-file-map /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -sdk-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -emit-const-values -const-gather-protocols-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_const_extract_protocols.json -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-generated-files.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-own-target-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-all-target-headers.hmap -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-project-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/include -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources-normal/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-Swift.h -working-directory /Users/taha/Developer/attic-task-panels-v2 -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling AgentHTTPRequest.swift, AgentServer.swift, AgentTaskTools.swift, MCPRequestHandler.swift, AppSettings.swift, AttachmentFileStore.swift, CanvasStore.swift, CanvasStoreBoards.swift, CanvasStoreCloudSync.swift, CanvasStoreImages.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling TaskSectionView.swift, TaskStatusButton.swift, AboutSettingsView.swift, AgentAccessSettingsView.swift, AppearanceSettingsView.swift, CornerPicker.swift, GeneralSettingsView.swift, PanelSettingsView.swift, SettingsComponents.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling CanvasSurfaceRenderer.swift, CanvasTypes.swift, CanvasViewport.swift, AtticPanelTheme.swift, AtticStyle.swift, AtticTheme.swift, Squircle.swift, TaskActionsMenu.swift, CanvasBoardItem.swift, CanvasImageItem.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling CanvasSemanticObject.swift, CanvasSemanticRenderer.swift, CanvasSendable.swift, CanvasSession.swift, CanvasStrokeCodec.swift, CanvasSurface.swift, CanvasSurfaceIOS.swift, CanvasSurfaceInteraction.swift, CanvasSurfaceMac.swift, CanvasSurfaceMacHelpers.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling main.swift, AppCoordinator.swift, AppDelegate.swift, CanvasEditCommandRoute.swift, CanvasControls.swift, CanvasImageExportDocument.swift, CanvasImageImporter.swift, CanvasImageTypes.swift, CanvasInputStateMachine.swift, CanvasSemanticInteraction.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling SettingsSection.swift, SettingsView.swift, AtticPanel.swift, AtticPanelController.swift, PanelSection.swift, PanelSurfaceHostingView.swift, PanelUIState.swift, SettingsWindowController.swift, SubtaskPanelController.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCUIAutomation-EWHMA8BD3DNQB9DYK2B1E7660.pcm
+
+SwiftExplicitDependencyGeneratePcm arm64 /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCTest-7SI7NUU0EN0CWNEJLFR0LGWG0.pcm
+
+SwiftExplicitDependencyCompileModuleFromInterface arm64 /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCUIAutomation-3CFTM6TPBOF4M.swiftmodule
+
+SwiftExplicitDependencyCompileModuleFromInterface arm64 /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules/XCTest-3IH2G53885QCZ.swiftmodule
+
+SwiftCompile normal arm64 Compiling\ MCPRequestHandlerTests.swift,\ NoteAttachmentTests.swift,\ NoteDraftControllerTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/MCPRequestHandlerTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteAttachmentTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteDraftControllerTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/MCPRequestHandlerTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile MCPRequestHandlerTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteAttachmentTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteAttachmentTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteDraftControllerTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteDraftControllerTests.swift
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ AtticTests (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    
+
+SwiftCompile normal arm64 Compiling\ CanvasUITestStoreTests.swift,\ CornerHoverStateMachineTests.swift,\ DailyCleanupServiceTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasUITestStoreTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CornerHoverStateMachineTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/DailyCleanupServiceTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasUITestStoreTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasUITestStoreTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CornerHoverStateMachineTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CornerHoverStateMachineTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/DailyCleanupServiceTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile DailyCleanupServiceTests.swift
+
+SwiftCompile normal arm64 Compiling\ NoteInlineCardsTests.swift,\ NoteStoreTests.swift,\ PanelGeometryTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteInlineCardsTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteStoreTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelGeometryTests.swift (in target 'AtticTests' from project 'Attic')
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelGeometryTests.swift:291:39: warning: 'CGWindowListCreateImage' was deprecated in macOS 14.0: Please use ScreenCaptureKit instead. [#DeprecatedDeclaration]
+ 289 |             panel.onTrackpadDismissProgress?(CGFloat(distance))
+ 290 |             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+ 291 |             let image = try XCTUnwrap(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber), [.boundsIgnoreFraming, .bestResolution]))
+     |                                       `- warning: 'CGWindowListCreateImage' was deprecated in macOS 14.0: Please use ScreenCaptureKit instead. [#DeprecatedDeclaration]
+ 292 |             try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+ 293 |                 .write(to: directory.appendingPathComponent("swipe-\(distance).png"))
+
+[#DeprecatedDeclaration]: <https://docs.swift.org/compiler/documentation/diagnostics/deprecated-declaration>
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteInlineCardsTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteInlineCardsTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/NoteStoreTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile NoteStoreTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelGeometryTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelGeometryTests.swift
+
+SwiftCompile normal arm64 Compiling\ SubtaskTests.swift,\ TaskAttachmentDropTests.swift,\ TaskImageTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/SubtaskTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskAttachmentDropTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskImageTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/SubtaskTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SubtaskTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskAttachmentDropTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskAttachmentDropTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskImageTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskImageTests.swift
+
+SwiftCompile normal arm64 Compiling\ PanelSquircleGeometryTests.swift,\ PanelSquircleSettingsTests.swift,\ PanelSurfaceHostingViewTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelSquircleGeometryTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelSquircleSettingsTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelSurfaceHostingViewTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelSquircleGeometryTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelSquircleGeometryTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelSquircleSettingsTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelSquircleSettingsTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/PanelSurfaceHostingViewTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile PanelSurfaceHostingViewTests.swift
+
+SwiftCompile normal arm64 Compiling\ SettingsPresentationTests.swift,\ SubtaskPanelControllerTests.swift,\ SubtaskPanelTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/SettingsPresentationTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/SubtaskPanelControllerTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/SubtaskPanelTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/SettingsPresentationTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SettingsPresentationTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/SubtaskPanelControllerTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SubtaskPanelControllerTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/SubtaskPanelTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile SubtaskPanelTests.swift
+
+SwiftCompile normal arm64 Compiling\ AgentAccessTokenStoreTests.swift,\ AgentHTTPRequestTests.swift,\ AgentServerIntegrationTests.swift,\ AppSettingsTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/AgentAccessTokenStoreTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/AgentHTTPRequestTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/AgentServerIntegrationTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/AppSettingsTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/AgentAccessTokenStoreTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentAccessTokenStoreTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/AgentHTTPRequestTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentHTTPRequestTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/AgentServerIntegrationTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AgentServerIntegrationTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/AppSettingsTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile AppSettingsTests.swift
+
+SwiftDriverJobDiscovery normal arm64 Compiling CanvasUITestStoreTests.swift, CornerHoverStateMachineTests.swift, DailyCleanupServiceTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 Compiling\ CanvasPrecisionTests.swift,\ CanvasRenderCacheTests.swift,\ CanvasSessionTests.swift,\ CanvasStoreTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPrecisionTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasRenderCacheTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasSessionTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasStoreTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPrecisionTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasPrecisionTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasRenderCacheTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasRenderCacheTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasSessionTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasSessionTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasStoreTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasStoreTests.swift
+
+SwiftDriverJobDiscovery normal arm64 Emitting module for AtticTests (in target 'AtticTests' from project 'Attic')
+
+SwiftDriver\ Compilation\ Requirements AtticTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-Swift-Compilation-Requirements -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name AtticTests -Onone @/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftFileList -DDEBUG -DATTIC_LOCAL_ONLY -module-alias Attic\=AtticUnitTestHost -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -target arm64-apple-macos14.0 -g -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /tmp/attic-b2-opus-scratch/dd-live/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache -output-file-map /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -sdk-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -emit-const-values -const-gather-protocols-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_const_extract_protocols.json -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-generated-files.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-own-target-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-all-target-headers.hmap -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-project-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/include -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources-normal/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-Swift.h -working-directory /Users/taha/Developer/attic-task-panels-v2 -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling CanvasStoreLifecycle.swift, CanvasStorePersistence.swift, CanvasStoreReplicaResolution.swift, CanvasStoreSemanticObjects.swift, CanvasStoreStrokes.swift, CornerHoverMonitor.swift, CornerHoverStateMachine.swift, DailyCleanupService.swift, GlobalHotKey.swift, LoginItemService.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftCompile normal arm64 Compiling\ TaskPerformanceGateTests.swift,\ TaskStoreTests.swift,\ TestSupport.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskPerformanceGateTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskStoreTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/TestSupport.swift (in target 'AtticTests' from project 'Attic')
+/Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskStoreTests.swift:257:9: warning: code after 'throw' will never be executed
+ 255 |         throw XCTSkip("Deferred CloudKit import handling is dormant in local-only builds.")
+ 256 |         #endif
+ 257 |         let container = try PersistenceController.makeContainer(inMemory: true)
+     |         `- warning: code after 'throw' will never be executed
+ 258 |         let seedContext = ModelContext(container)
+ 259 |         seedContext.insert(TaskItem(title: "Before iPhone update", priority: .high))
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskPerformanceGateTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskPerformanceGateTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/TaskStoreTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TaskStoreTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/TestSupport.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile TestSupport.swift
+
+SwiftDriverJobDiscovery normal arm64 Compiling PanelSquircleGeometryTests.swift, PanelSquircleSettingsTests.swift, PanelSurfaceHostingViewTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftMergeGeneratedHeaders /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources/AtticTests-Swift.h /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-Swift.h (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-swiftHeaderTool -arch arm64 /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-Swift.h -o /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources/AtticTests-Swift.h
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/arm64-apple-macos.swiftmodule /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftmodule (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftmodule /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/arm64-apple-macos.swiftmodule
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/arm64-apple-macos.swiftdoc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftdoc (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftdoc /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/arm64-apple-macos.swiftdoc
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/arm64-apple-macos.abi.json /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.abi.json (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.abi.json /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/arm64-apple-macos.abi.json
+
+Copy /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftsourceinfo (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftsourceinfo /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticTests.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo
+
+SwiftCompile normal arm64 Compiling\ CanvasDocumentTests.swift,\ CanvasDomainTests.swift,\ CanvasImageTests.swift,\ CanvasPerformanceGateTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasDocumentTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasDomainTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasImageTests.swift /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasDocumentTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasDocumentTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasDomainTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasDomainTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasImageTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasImageTests.swift
+
+SwiftCompile normal arm64 /Users/taha/Developer/attic-task-panels-v2/AtticTests/CanvasPerformanceGateTests.swift (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-SwiftPerFileCompile CanvasPerformanceGateTests.swift
+
+SwiftDriverJobDiscovery normal arm64 Compiling SettingsPresentationTests.swift, SubtaskPanelControllerTests.swift, SubtaskPanelTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling NoteInlineCardsTests.swift, NoteStoreTests.swift, PanelGeometryTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling AgentAccessTokenStoreTests.swift, AgentHTTPRequestTests.swift, AgentServerIntegrationTests.swift, AppSettingsTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling TaskPerformanceGateTests.swift, TaskStoreTests.swift, TestSupport.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling SubtaskTests.swift, TaskAttachmentDropTests.swift, TaskImageTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling MCPRequestHandlerTests.swift, NoteAttachmentTests.swift, NoteDraftControllerTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling CanvasPrecisionTests.swift, CanvasRenderCacheTests.swift, CanvasSessionTests.swift, CanvasStoreTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling CanvasDocumentTests.swift, CanvasDomainTests.swift, CanvasImageTests.swift, CanvasPerformanceGateTests.swift (in target 'AtticTests' from project 'Attic')
+
+SwiftDriver\ Compilation AtticTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-Swift-Compilation -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name AtticTests -Onone @/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftFileList -DDEBUG -DATTIC_LOCAL_ONLY -module-alias Attic\=AtticUnitTestHost -plugin-path /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -target arm64-apple-macos14.0 -g -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /tmp/attic-b2-opus-scratch/dd-live/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -Isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache -output-file-map /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -sdk-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -emit-const-values -const-gather-protocols-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_const_extract_protocols.json -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-generated-files.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-own-target-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-all-target-headers.hmap -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests-project-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/include -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources-normal/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests-Swift.h -working-directory /Users/taha/Developer/attic-task-panels-v2 -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling NoteAttachmentPlatformSupport.swift, NoteDraftController.swift, NoteStore.swift, PanelGeometry.swift, PersistenceController.swift, SubtaskPanelLayout.swift, TaskStore.swift, MenuBarView.swift, AtticPanelView.swift, CanvasPanelContent.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriverJobDiscovery normal arm64 Compiling NoteAttachmentTray.swift, NoteInlineCards.swift, NotesPanelContent.swift, SubtaskPanelContent.swift, TaskAttachmentDrop.swift, TaskComposerAttachments.swift, TaskFamilyView.swift, TaskImageAttachments.swift, TaskRowView.swift (in target 'AtticUnitTestHost' from project 'Attic')
+
+SwiftDriver\ Compilation AtticUnitTestHost normal arm64 com.apple.xcode.tools.swift.compiler (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-Swift-Compilation -- /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name AtticUnitTestHost -Onone @/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftFileList -DDEBUG -DATTIC_LOCAL_ONLY -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -target arm64-apple-macos14.0 -g -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /tmp/attic-b2-opus-scratch/dd-live/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -c -j10 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /tmp/attic-b2-opus-scratch/dd-live/SDKStatCaches.noindex/macosx27.0-26A5419a-7231f6df4def33e022ae2eb8f782df1a.sdkstatcache -output-file-map /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-OutputFileMap.json -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex -sdk-module-cache-path /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules -emit-dependencies -emit-module -emit-module-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftmodule -serialize-diagnostics -dependency-scan-serialize-diagnostics-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-dependency-scan.dia -validate-clang-modules-once -clang-build-session-file /tmp/attic-b2-opus-scratch/dd-live/ModuleCache.noindex/Session.modulevalidation -Xcc -fmodules-prune-interval\=86400 -Xcc -fmodules-prune-after\=345600 -emit-const-values -const-gather-protocols-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_const_extract_protocols.json -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-generated-files.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-own-target-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-all-target-headers.hmap -Xcc -iquote -Xcc /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-project-headers.hmap -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/include -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources-normal/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources/arm64 -Xcc -I/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost-Swift.h -working-directory /Users/taha/Developer/attic-task-panels-v2 -experimental-emit-module-separately -disable-cmo
+
+Ld /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost.debug.dylib normal (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-macos14.0 -dynamiclib -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -O0 -Xlinker -no_warn_duplicate_libraries -L/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/EagerLinkingTBDs/Local -L/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/EagerLinkingTBDs/Local -F/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -filelist /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.LinkFileList -install_name @rpath/AtticUnitTestHost.debug.dylib -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @executable_path/../Frameworks -Xlinker -object_path_lto -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_lto.o -rdynamic -Xlinker -no_deduplicate -Xlinker -dependency_info -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_dependency_info.dat -fobjc-link-runtime -L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.swiftmodule -Xlinker -alias -Xlinker _main -Xlinker ___debug_main_executable_dylib_entry_point -framework Cocoa -o /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost.debug.dylib
+
+ConstructStubExecutorLinkFileList /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-ExecutorLinkFileList-normal-arm64.txt (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    construct-stub-executor-link-file-list /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost.debug.dylib /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libPreviewsJITStubExecutor_no_swift_entry_point.a /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libPreviewsJITStubExecutor.a --output /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-ExecutorLinkFileList-normal-arm64.txt
+note: Using stub executor library with Swift entry point. (in target 'AtticUnitTestHost' from project 'Attic')
+
+Ld /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost normal (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-macos14.0 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -O0 -Xlinker -no_warn_duplicate_libraries -L/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -F/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -Xlinker -rpath -Xlinker @executable_path -Xlinker -rpath -Xlinker @executable_path/../Frameworks -rdynamic -Xlinker -no_deduplicate -e ___debug_blank_executor_main -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __debug_dylib -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-DebugDylibPath-normal-arm64.txt -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __debug_instlnm -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-DebugDylibInstallName-normal-arm64.txt -Xlinker -filelist -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost-ExecutorLinkFileList-normal-arm64.txt /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost.debug.dylib -o /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost
+
+CopySwiftLibs /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost.debug.dylib --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/Frameworks --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/Library/SystemExtensions --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/Extensions --scan-folder /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework --platform macosx --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/Frameworks --strip-bitcode --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+Ignoring --strip-bitcode because --sign was not passed
+
+ExtractAppIntentsMetadata (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --module-name AtticUnitTestHost --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk --xcode-version 27A5252f --platform-family macOS --deployment-target 14.0 --bundle-identifier com.taha.Attic.UnitTestHost --output /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/Resources --target-triple arm64-apple-macos14.0 --binary-file /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost --dependency-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost_dependency_info.dat --stringsdata-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftFileList --metadata-file-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.DependencyMetadataFileList --static-metadata-file-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/AtticUnitTestHost.DependencyStaticMetadataFileList --swift-const-vals-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticUnitTestHost.build/Objects-normal/arm64/AtticUnitTestHost.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization
+2026-09-16 13:22:46.656 appintentsmetadataprocessor[1241:9554112] Starting appintentsmetadataprocessor export
+2026-09-16 13:22:46.660 appintentsmetadataprocessor[1241:9554112] warning: Metadata extraction skipped, no AppIntents.framework dependency found
+
+ProcessInfoPlistFile /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/Info.plist /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/empty-AtticTests.plist (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-infoPlistUtility /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/empty-AtticTests.plist -producttype com.apple.product-type.bundle.unit-test -expandbuildsettings -platform macosx -o /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/Info.plist
+
+Ld /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/MacOS/AtticTests normal (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-macos14.0 -bundle -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk -O0 -Xlinker -no_warn_duplicate_libraries -L/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/EagerLinkingTBDs/Local -L/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -L/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib -F/tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/EagerLinkingTBDs/Local -F/tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local -iframework /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks -filelist /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.LinkFileList -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @loader_path/../Frameworks -Xlinker -rpath -Xlinker @executable_path/../Frameworks -bundle_loader /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost -Xlinker -object_path_lto -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_lto.o -rdynamic -Xlinker -no_deduplicate -Xlinker -dependency_info -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_dependency_info.dat -fobjc-link-runtime -L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.swiftmodule -Xlinker -needed_framework -Xlinker XCTest -framework XCTest -Xlinker -needed-lXCTestSwiftSupport -lXCTestSwiftSupport -framework Cocoa /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/MacOS/AtticUnitTestHost.debug.dylib -o /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/MacOS/AtticTests
+
+ExtractAppIntentsMetadata (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --module-name AtticTests --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk --xcode-version 27A5252f --platform-family macOS --deployment-target 14.0 --bundle-identifier com.taha.AtticTests --output /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/Resources --target-triple arm64-apple-macos14.0 --binary-file /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/MacOS/AtticTests --dependency-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests_dependency_info.dat --stringsdata-file /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftFileList --metadata-file-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.DependencyMetadataFileList --static-metadata-file-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/AtticTests.DependencyStaticMetadataFileList --swift-const-vals-list /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/Objects-normal/arm64/AtticTests.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization
+2026-09-16 13:22:46.910 appintentsmetadataprocessor[1246:9554127] Starting appintentsmetadataprocessor export
+2026-09-16 13:22:46.911 appintentsmetadataprocessor[1246:9554127] warning: Metadata extraction skipped, no AppIntents.framework dependency found
+
+CopySwiftLibs /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/MacOS/AtticTests --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/Frameworks --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/PlugIns --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/Library/SystemExtensions --scan-folder /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/Extensions --scan-folder /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework --platform macosx --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest/Contents/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/Attic.build/Local/AtticTests.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+Ignoring --strip-bitcode because --sign was not passed
+
+RegisterExecutionPolicyException /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-RegisterExecutionPolicyException /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest
+
+Touch /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest (in target 'AtticTests' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /usr/bin/touch -c /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app/Contents/PlugIns/AtticTests.xctest
+
+RegisterExecutionPolicyException /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-RegisterExecutionPolicyException /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app
+
+Validate /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-validationUtility /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app -no-validate-extension -infoplist-subpath Contents/Info.plist
+
+Touch /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    /usr/bin/touch -c /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app
+
+RegisterWithLaunchServices /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app (in target 'AtticUnitTestHost' from project 'Attic')
+    cd /Users/taha/Developer/attic-task-panels-v2
+    builtin-lsregisterurl --record-path /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/XCBuildData/registered-launchservices.txt -- /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister -f -R -trusted /tmp/attic-b2-opus-scratch/dd-live/Build/Products/Local/AtticUnitTestHost.app
+
+PruneExplicitPrecompiledModules /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/attic-b2-opus-scratch/dd-live/SDKExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/attic-b2-opus-scratch/dd-live/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+note: Disabling hardened runtime with ad-hoc codesigning. (in target 'AtticUnitTestHost' from project 'Attic')
+** TEST BUILD SUCCEEDED **
+
+exit=0

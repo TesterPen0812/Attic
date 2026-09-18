@@ -1,5 +1,43 @@
 import AppKit
+import Combine
 import SwiftUI
+
+enum RevealRefreshPolicy: Equatable {
+    /// Local-only builds: every writer runs in this process through the
+    /// stores themselves, so the in-memory presentation is authoritative and
+    /// a reveal reloads nothing. Imports (CloudKit) are the only reason to
+    /// replace contexts on reveal, and they are dormant here.
+    case inProcessAuthoritative
+    case singleEventDrivenPass
+    case eventDrivenPassWithRetry(after: Duration)
+
+    static var current: Self {
+        #if ATTIC_LOCAL_ONLY
+        .inProcessAuthoritative
+        #else
+        .eventDrivenPassWithRetry(after: .milliseconds(900))
+        #endif
+    }
+
+    var refreshesOnReveal: Bool { self != .inProcessAuthoritative }
+
+    var retryDelay: Duration? {
+        switch self {
+        case .inProcessAuthoritative, .singleEventDrivenPass:
+            nil
+        case let .eventDrivenPassWithRetry(delay):
+            delay
+        }
+    }
+
+    var maximumPassCount: Int {
+        switch self {
+        case .inProcessAuthoritative: 0
+        case .singleEventDrivenPass: 1
+        case .eventDrivenPassWithRetry: 2
+        }
+    }
+}
 
 @MainActor
 final class CornerHoverMonitor {
@@ -8,14 +46,37 @@ final class CornerHoverMonitor {
     private let uiState: PanelUIState
     private let store: TaskStore
     private let noteStore: NoteStore
+    private let canvasStore: CanvasStore
     private let noteDraft: NoteDraftController
 
     private var stateMachine = CornerHoverStateMachine()
+    private var samplingState = CornerHoverSamplingState()
     private var pollingTimer: DispatchSourceTimer?
+    private var pollingTimerEpoch = CornerHoverTimerEpoch()
+    private var scheduledCadence: CornerHoverSamplingCadence?
+    private var cachedScreenFrames: [CGRect] = []
+    private var localPointerMonitor: Any?
+    private var globalPointerMonitor: Any?
     private var screenChangeToken: NSObjectProtocol?
+    private var cornerObservation: AnyCancellable?
     private var responsivenessActivity: NSObjectProtocol?
     private var revealRefreshTask: Task<Void, Never>?
     private var dragReleaseTask: Task<Void, Never>?
+    private var isRunning = false
+    private var lastKeyboardInputAt: TimeInterval = -.infinity
+    /// Visible-panel sampling is event-driven: bursts of pointer events are
+    /// coalesced to one sample per `eventSampleInterval`, with a trailing
+    /// sample so the last position is never missed.
+    private var lastEventSampleAt: TimeInterval = -.infinity
+    private var trailingSampleWork: DispatchWorkItem?
+    /// One-shot follow-up for the hide delay while visible; see
+    /// `CornerHoverStateMachine.nextTimedDecision`.
+    private var followUpWork: DispatchWorkItem?
+    private var lockObservation: AnyCancellable?
+    private var lockSampleScheduled = false
+    private static let eventSampleInterval: TimeInterval = 1.0 / 30
+    /// Test seam: how many full pointer samples ran.
+    private(set) var sampleCount = 0
 
     init(
         settings: AppSettings,
@@ -23,6 +84,7 @@ final class CornerHoverMonitor {
         uiState: PanelUIState,
         store: TaskStore,
         noteStore: NoteStore,
+        canvasStore: CanvasStore,
         noteDraft: NoteDraftController
     ) {
         self.settings = settings
@@ -30,54 +92,83 @@ final class CornerHoverMonitor {
         self.uiState = uiState
         self.store = store
         self.noteStore = noteStore
+        self.canvasStore = canvasStore
         self.noteDraft = noteDraft
+        panelController.onInteractiveHideCompleted = { [weak self] in
+            guard let self else { return }
+            stateMachine.forceHidden(untilHotspotExit: true)
+            refreshSamplingCadence(at: NSEvent.mouseLocation)
+        }
     }
 
     func start() {
-        guard pollingTimer == nil else { return }
-
-        responsivenessActivity = ProcessInfo.processInfo.beginActivity(
-            options: .userInitiatedAllowingIdleSystemSleep,
-            reason: "Keep the configured Attic corner responsive"
-        )
-
-        // A coalesced 20 Hz sample keeps the corner responsive without tracking raw mouse events.
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(
-            deadline: .now(),
-            repeating: .milliseconds(50),
-            leeway: .milliseconds(15)
-        )
-        timer.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { self?.samplePointer() }
-        }
-        pollingTimer = timer
-        timer.resume()
+        guard !isRunning else { return }
+        isRunning = true
+        samplingState = CornerHoverSamplingState()
+        scheduledCadence = nil
+        refreshCachedScreenFrames()
+        startPointerActivityMonitoring()
 
         screenChangeToken = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.samplePointer() }
+            MainActor.assumeIsolated {
+                self?.refreshCachedScreenFrames()
+                self?.samplePointer()
+            }
         }
+        cornerObservation = settings.$corner
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                samplingState = CornerHoverSamplingState()
+                samplePointer()
+            }
+        // Locks and the pin are the other inputs to the auto-hide decision.
+        // With no timer while visible, a change to either re-samples once on
+        // the next turn (coalesced across a burst of publications).
+        lockObservation = uiState.objectWillChange
+            .sink { [weak self] _ in self?.scheduleLockSample() }
+
+        // Establish the initial cadence synchronously. A pointer already near
+        // the configured corner gets the responsive path immediately; hidden
+        // and far starts at the coalesced idle cadence without an activity hold.
+        samplePointer()
     }
 
     func stop() {
+        isRunning = false
         pollingTimer?.cancel()
         pollingTimer = nil
+        pollingTimerEpoch.invalidate()
+        scheduledCadence = nil
+        stopPointerActivityMonitoring()
         revealRefreshTask?.cancel()
         revealRefreshTask = nil
         dragReleaseTask?.cancel()
         dragReleaseTask = nil
         if let screenChangeToken { NotificationCenter.default.removeObserver(screenChangeToken) }
         screenChangeToken = nil
-        if let responsivenessActivity {
-            ProcessInfo.processInfo.endActivity(responsivenessActivity)
-            self.responsivenessActivity = nil
+        cornerObservation = nil
+        lockObservation = nil
+        trailingSampleWork?.cancel()
+        trailingSampleWork = nil
+        followUpWork?.cancel()
+        followUpWork = nil
+        endResponsivenessActivity()
+        let hideResult = panelController.requestHide { [weak self] completion in
+            guard let self else { return }
+            if completion == .hidden {
+                stateMachine.forceHidden()
+            } else {
+                stateMachine.resolveHideCompletion(didOrderOut: false)
+            }
         }
-        stateMachine.forceHidden()
-        panelController.hide()
+        if !hideResult.isAccepted {
+            stateMachine.resolveHideCompletion(didOrderOut: false)
+        }
     }
 
     func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
@@ -85,6 +176,7 @@ final class CornerHoverMonitor {
         guard preparePresentation(openComposer: openComposer, section: section) else { return }
         refreshStoreForReveal()
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
+        refreshSamplingCadence(at: NSEvent.mouseLocation)
         panelController.show(on: screen, corner: settings.corner, makeKey: openComposer)
     }
 
@@ -92,6 +184,7 @@ final class CornerHoverMonitor {
         guard let screen = NSScreen.main else { return }
         guard preparePresentation(openComposer: openComposer, section: nil) else { return }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
+        refreshSamplingCadence(at: NSEvent.mouseLocation)
         panelController.show(on: screen, corner: settings.corner, makeKey: true)
     }
 
@@ -119,8 +212,11 @@ final class CornerHoverMonitor {
         return true
     }
 
-    private func samplePointer() {
-        let location = NSEvent.mouseLocation
+    private func samplePointer(at location: CGPoint = NSEvent.mouseLocation) {
+        sampleCount += 1
+        let uptime = ProcessInfo.processInfo.systemUptime
+        lastEventSampleAt = uptime
+        defer { refreshSamplingCadence(at: location) }
         let activeScreen = screen(containing: location)
         // When the cursor is pinned against a screen edge, mouseLocation sits exactly on
         // the frame boundary (e.g. y == maxY at the top), which CGRect.contains excludes.
@@ -130,7 +226,14 @@ final class CornerHoverMonitor {
                 .insetBy(dx: -1, dy: -1)
                 .contains(location)
         } ?? false
-        let isInPanel = panelController.visibleFrame?.contains(location) ?? false
+        // Mouse passthrough and resize cursors belong to the panel
+        // controller's own pointer monitors, which run only while the panel
+        // is visible; sampling here must not duplicate that work.
+        // The transient subtask surface extends "inside" coverage: the open
+        // checklist is useless without its anchor, so hovering it keeps the
+        // main panel alive. The pinned window is independent and excluded.
+        let isInPanel = panelController.containsScreenPoint(location)
+            || panelController.auxiliarySurfaceContains(location)
         let isMouseButtonPressed = NSEvent.pressedMouseButtons != 0
         if isMouseButtonPressed {
             dragReleaseTask?.cancel()
@@ -142,8 +245,7 @@ final class CornerHoverMonitor {
             dragReleaseTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(150))
                 guard let self, !Task.isCancelled else { return }
-                let releasedInPanel = panelController.visibleFrame?
-                    .contains(NSEvent.mouseLocation) ?? false
+                let releasedInPanel = panelController.containsScreenPoint(NSEvent.mouseLocation)
                 if let draggedTaskID = uiState.finishDragging(
                     releasedOutsidePanel: !releasedInPanel
                 ) {
@@ -153,14 +255,22 @@ final class CornerHoverMonitor {
             }
         }
 
-        let uptime = ProcessInfo.processInfo.systemUptime
+        let isInteractionLocked = MainPanelAutoHidePolicy.isInteractionLocked(
+            reasons: uiState.interactionLockReasons, pointerInside: isInPanel,
+            secondsSinceKeyboardInput: uptime - lastKeyboardInputAt
+        ) || isMouseButtonPressed
         let transition = stateMachine.update(
             at: uptime,
             isInHotspot: isInHotspot,
             isInPanel: isInPanel,
-            isInteractionLocked: uiState.isInteractionLocked || isMouseButtonPressed,
+            isInteractionLocked: isInteractionLocked,
+            isPinned: uiState.isPanelPinned,
             revealDelay: settings.revealDelay,
             hideDelay: settings.hideDelay
+        )
+        scheduleFollowUp(
+            at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
+            isMouseButtonPressed: isMouseButtonPressed
         )
 
         switch transition {
@@ -170,11 +280,215 @@ final class CornerHoverMonitor {
             guard let activeScreen else { return }
             // Pull any CloudKit import out of SwiftData's context cache before
             // calculating the panel contents. This only runs on reveal, not on
-            // the 20 Hz pointer sampling path.
+            // the pointer sampling path.
             refreshStoreForReveal()
             panelController.show(on: activeScreen, corner: settings.corner)
-        case .hide:
-            panelController.hide()
+        case .requestHide:
+            let result = panelController.requestHide { [weak self] completion in
+                guard let self else { return }
+                stateMachine.resolveHideCompletion(
+                    didOrderOut: completion == .hidden
+                )
+                refreshSamplingCadence(at: NSEvent.mouseLocation)
+            }
+            if !result.isAccepted {
+                stateMachine.resolveHideCompletion(didOrderOut: false)
+            }
+        }
+    }
+
+    private func pointerActivityObserved(at location: CGPoint) {
+        guard isRunning else { return }
+        let decision = samplingState.update(
+            pointer: location,
+            screenFrames: cachedScreenFrames,
+            corner: settings.corner,
+            isPanelVisible: stateMachine.isVisible
+        )
+        let cadenceChanged = decision.cadence != scheduledCadence
+        applySamplingCadence(decision.cadence)
+        guard decision.shouldSampleImmediately else { return }
+        // A boundary crossing samples at once. Event-driven sampling while
+        // visible coalesces bursts: one sample per interval plus a trailing
+        // one, so a fast sweep costs a handful of hit tests, not hundreds.
+        let now = ProcessInfo.processInfo.systemUptime
+        if cadenceChanged || now - lastEventSampleAt >= Self.eventSampleInterval {
+            trailingSampleWork?.cancel()
+            trailingSampleWork = nil
+            samplePointer(at: location)
+        } else if trailingSampleWork == nil {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.isRunning else { return }
+                self.trailingSampleWork = nil
+                self.samplePointer()
+            }
+            trailingSampleWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.eventSampleInterval, execute: work)
+        }
+    }
+
+    /// Locks and the pin changed: one coalesced sample on the next turn.
+    private func scheduleLockSample() {
+        guard isRunning, stateMachine.isVisible, !lockSampleScheduled else { return }
+        lockSampleScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lockSampleScheduled = false
+            guard self.isRunning, self.stateMachine.isVisible else { return }
+            self.samplePointer()
+        }
+    }
+
+    /// The only timed work while visible: a single follow-up at the next
+    /// decision deadline. This is normally the hide delay or reveal grace;
+    /// clean editor focus also gets one deadline because keyboard-idle time
+    /// can expire that lock without another event. Persistent locks and pins
+    /// remain event-driven (see `scheduleLockSample`), and a pressed button is
+    /// followed by its mouse-up event.
+    private func scheduleFollowUp(
+        at uptime: TimeInterval, isInPanel: Bool, isInteractionLocked: Bool, isMouseButtonPressed: Bool
+    ) {
+        followUpWork?.cancel()
+        followUpWork = nil
+        let isPinned = uiState.isPanelPinned
+        guard stateMachine.isVisible, !stateMachine.isHidePending,
+              !isMouseButtonPressed, !isPinned else { return }
+        let stateDeadline = stateMachine.nextTimedDecision(
+            at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
+            isPinned: isPinned, hideDelay: settings.hideDelay
+        )
+        let focusDeadline = MainPanelAutoHidePolicy.focusExpirationDeadline(
+            reasons: uiState.interactionLockReasons,
+            pointerInside: isInPanel,
+            lastKeyboardInputAt: lastKeyboardInputAt,
+            timestamp: uptime
+        )
+        guard let deadline = [stateDeadline, focusDeadline].compactMap({ $0 }).min() else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.followUpWork = nil
+            self.samplePointer()
+        }
+        followUpWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, deadline - uptime) + 0.02, execute: work)
+    }
+
+    private func refreshSamplingCadence(at location: CGPoint) {
+        guard isRunning else { return }
+        let decision = samplingState.update(
+            pointer: location,
+            screenFrames: cachedScreenFrames,
+            corner: settings.corner,
+            isPanelVisible: stateMachine.isVisible
+        )
+        applySamplingCadence(decision.cadence)
+    }
+
+    private func applySamplingCadence(_ cadence: CornerHoverSamplingCadence) {
+        guard isRunning, cadence != scheduledCadence else { return }
+        pollingTimer?.cancel()
+        pollingTimer = nil
+        let timerEpoch = pollingTimerEpoch.beginTimer()
+        scheduledCadence = cadence
+        updateResponsivenessActivity(for: cadence)
+        guard let interval = cadence.intervalMilliseconds else {
+            // Visible: no repeating timer at all.
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(
+            deadline: .now() + .milliseconds(interval),
+            repeating: .milliseconds(interval),
+            leeway: .milliseconds(cadence.leewayMilliseconds)
+        )
+        timer.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self,
+                      self.pollingTimerEpoch.permits(
+                        timerEpoch,
+                        whileRunning: self.isRunning
+                      ) else { return }
+                self.samplePointer()
+            }
+        }
+        pollingTimer = timer
+        timer.resume()
+    }
+
+    /// Test seam: whether a repeating sampling timer exists right now.
+    var hasPollingTimerForTesting: Bool { pollingTimer != nil }
+    var scheduledCadenceForTesting: CornerHoverSamplingCadence? { scheduledCadence }
+    var holdsResponsivenessActivityForTesting: Bool { responsivenessActivity != nil }
+
+    private func updateResponsivenessActivity(for cadence: CornerHoverSamplingCadence) {
+        if cadence.holdsResponsivenessActivity {
+            guard responsivenessActivity == nil else { return }
+            responsivenessActivity = ProcessInfo.processInfo.beginActivity(
+                options: .userInitiatedAllowingIdleSystemSleep,
+                reason: "Keep the configured Attic corner responsive"
+            )
+        } else {
+            endResponsivenessActivity()
+        }
+    }
+
+    private func endResponsivenessActivity() {
+        guard let responsivenessActivity else { return }
+        ProcessInfo.processInfo.endActivity(responsivenessActivity)
+        self.responsivenessActivity = nil
+    }
+
+    private func refreshCachedScreenFrames() {
+        cachedScreenFrames = NSScreen.screens.map(\.frame)
+    }
+
+    private func startPointerActivityMonitoring() {
+        guard localPointerMonitor == nil, globalPointerMonitor == nil else { return }
+        // Mouse-up is included so a drag or press that ended away from the
+        // panel is judged the moment it releases, with no timer.
+        let mask: NSEvent.EventTypeMask = [
+            .mouseMoved,
+            .leftMouseDragged,
+            .rightMouseDragged,
+            .otherMouseDragged,
+            .leftMouseUp
+        ]
+        // AppKit's monitor domains are complementary, not interchangeable:
+        // local monitors cover Attic (including its tracking loops), while
+        // global monitors cover pointer movement over other applications.
+        // A hidden LSUIElement needs both regardless of activation state.
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask.union(.keyDown)) {
+            [weak self] event in
+            MainActor.assumeIsolated {
+                if event.type == .keyDown {
+                    self?.lastKeyboardInputAt = ProcessInfo.processInfo.systemUptime
+                    self?.followUpWork?.cancel()
+                    self?.followUpWork = nil
+                }
+                self?.pointerActivityObserved(at: NSEvent.mouseLocation)
+            }
+            return event
+        }
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
+            [weak self] _ in
+            // AppKit delivers global event-monitor callbacks on the main thread.
+            // The handler only runs the cheap cadence state until a boundary
+            // crossing requests one immediate full sample.
+            MainActor.assumeIsolated {
+                self?.pointerActivityObserved(at: NSEvent.mouseLocation)
+            }
+        }
+    }
+
+    private func stopPointerActivityMonitoring() {
+        if let localPointerMonitor {
+            NSEvent.removeMonitor(localPointerMonitor)
+            self.localPointerMonitor = nil
+        }
+        if let globalPointerMonitor {
+            NSEvent.removeMonitor(globalPointerMonitor)
+            self.globalPointerMonitor = nil
         }
     }
 
@@ -186,14 +500,22 @@ final class CornerHoverMonitor {
     }
 
     private func refreshStoreForReveal() {
+        revealRefreshTask?.cancel()
+        revealRefreshTask = nil
+        guard RevealRefreshPolicy.current.refreshesOnReveal else { return }
         store.refresh()
         noteStore.refresh()
-        revealRefreshTask?.cancel()
+        canvasStore.refresh()
+
+        guard let retryDelay = RevealRefreshPolicy.current.retryDelay else {
+            return
+        }
         revealRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(900))
-            guard !Task.isCancelled else { return }
-            self?.store.refresh()
-            self?.noteStore.refresh()
+            try? await Task.sleep(for: retryDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.store.refresh()
+            self.noteStore.refresh()
+            self.canvasStore.refresh()
         }
     }
 }

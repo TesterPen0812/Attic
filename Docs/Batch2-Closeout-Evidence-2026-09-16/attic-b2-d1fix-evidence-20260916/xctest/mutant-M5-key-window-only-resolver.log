@@ -1,0 +1,53 @@
+label=mutant-M5-key-window-only-resolver limit=600s started=2026-09-16T13:12:37Z
+tests=CanvasAccessibilityTests/testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo CanvasAccessibilityTests/testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory CanvasAccessibilityTests/testRestyleThatClearsEditorHistoryRerendersUndoRedo CanvasAccessibilityTests/testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu CanvasAccessibilityTests/testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto CanvasAccessibilityTests/testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft CanvasAccessibilityTests/testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo CanvasAccessibilityTests/testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory CanvasAccessibilityTests/testAddMenuUndoRoutesToFocusedTextEditor CanvasAccessibilityTests/testAddMenuRedoRoutesToFocusedTextEditor CanvasAccessibilityTests/testToolbarUndoRedoFollowFocusedTextEditor
+products=/tmp/attic-b2-opus-scratch/dd-mut/Build/Products/Local
+host_sha256=2287db132ef1900a23f1352289411bd47c6c755e9e2bbc7bfb59af32b7a39e2d
+host_debug_dylib_sha256=19554711be69faca3e760a26e09eeda092d14b18a9f5b1c29d050a9eb5993eb8
+bundle_binary_sha256=5a527e2ca5c09fc6ca7d6b1c9ccc1fb132de3a855120faa12c9dc7d4daea24f2
+sandbox_extension_issue_file_to_process failed for /tmp/attic-b2-opus-scratch/dd-mut/Build/Products/Local/AtticUnitTestHost.app: 1 (Operation not permitted)
+Test Suite 'Selected tests' started at 2026-09-16 14:12:37.635.
+Test Suite 'AtticTests.xctest' started at 2026-09-16 14:12:37.635.
+Test Suite 'CanvasAccessibilityTests' started at 2026-09-16 14:12:37.635.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuRedoRoutesToFocusedTextEditor]' passed (2.391 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testAddMenuUndoRoutesToFocusedTextEditor]' passed (2.295 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testClosedTextEditorLeavesNoTypingHistoryForPlainEditMenu]' passed (2.082 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testFocusedEmptyTextEditorDisablesToolbarAndMenuUndoRedo]' passed (5.690 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardEditEntryAfterCommittedTypingRendersFreshEditorUndoRedo]' passed (7.073 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testKeyboardUndoInReopenedTextEditorRerendersUndoRedoAndDraft]' passed (4.125 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testRestyleThatClearsEditorHistoryRerendersUndoRedo]' passed (5.545 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' started.
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1793: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1794: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertFalse failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1795: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertFalse failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1796: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertEqual failed: ("Optional(true)") is not equal to ("Optional(false)") - Undo must follow the open editor, not canvas history
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1798: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertEqual failed: ("Optional(true)") is not equal to ("Optional(false)") - Redo must follow the open editor, not canvas history
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:2043: warning: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : Publishing changes from within view updates is not allowed, this will cause undefined behavior.
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1804: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertTrue failed - toolbar Undo must not remove the text being edited
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1816: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertEqual failed: ("Keep draft") is not equal to ("Keep")
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1817: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1818: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertEqual failed: ("[]") is not equal to ("[Optional("Keep")]")
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1825: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1826: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertEqual failed: ("[]") is not equal to ("[Optional("Keep saved")]")
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1828: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertTrue failed
+/tmp/attic-b2-opus-scratch/mut/AtticTests/CanvasDomainTests.swift:1829: error: -[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto] : XCTAssertEqual failed: ("[]") is not equal to ("[Optional("Keep")]")
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextEditorInNonKeyPanelKeepsUndoRedoAndCommitVeto]' failed (11.678 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTextToolInsertionSpawnRendersEditorUndoRedoOverCanvasHistory]' passed (6.035 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testToolbarUndoRedoFollowFocusedTextEditor]' passed (2.271 seconds).
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' started.
+Test Case '-[AtticTests.CanvasAccessibilityTests testTypingInFocusedTextEditorEnablesToolbarUndoWithEmptyCanvasHistory]' passed (2.790 seconds).
+Test Suite 'CanvasAccessibilityTests' failed at 2026-09-16 14:13:29.613.
+	 Executed 11 tests, with 13 failures (0 unexpected) in 51.976 (51.978) seconds
+Test Suite 'AtticTests.xctest' failed at 2026-09-16 14:13:29.614.
+	 Executed 11 tests, with 13 failures (0 unexpected) in 51.976 (51.979) seconds
+Test Suite 'Selected tests' failed at 2026-09-16 14:13:29.614.
+	 Executed 11 tests, with 13 failures (0 unexpected) in 51.976 (51.979) seconds
+exit_status=1 finished=2026-09-16T13:13:29Z

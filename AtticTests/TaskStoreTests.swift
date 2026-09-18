@@ -1,9 +1,17 @@
 import XCTest
 import SwiftData
+import SwiftUI
 import UniformTypeIdentifiers
 @testable import Attic
 
 final class TaskStoreTests: XCTestCase {
+    func testTaskPriorityIndicatorColoursKeepEstablishedMapping() {
+        assertSameSRGBColor(TaskPriority.none.color, Color.secondary.opacity(0.5))
+        assertSameSRGBColor(TaskPriority.low.color, .blue)
+        assertSameSRGBColor(TaskPriority.medium.color, .orange)
+        assertSameSRGBColor(TaskPriority.high.color, .red)
+    }
+
     @MainActor
     func testAgentAccessRequiresExplicitOptInOnlyOnce() {
         let suiteName = "AtticTests.AgentAccess.\(UUID().uuidString)"
@@ -19,6 +27,10 @@ final class TaskStoreTests: XCTestCase {
     }
 
     func testTaskDragPayloadExportsInternalDataAndPlainText() {
+        let declaredTypes = Bundle.main.object(forInfoDictionaryKey: "UTExportedTypeDeclarations") as? [[String: Any]]
+        XCTAssertTrue(declaredTypes?.contains(where: {
+            $0["UTTypeIdentifier"] as? String == TaskDragPayload.internalTaskType.identifier
+        }) == true, "The real test host must export the same task drag type as Attic")
         let taskID = UUID()
         let payload = TaskDragPayload(taskID: taskID, title: "Paste me")
         let provider = payload.itemProvider()
@@ -91,8 +103,157 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(store.tasks.first).title, "Updated elsewhere")
     }
 
+    #if ATTIC_LOCAL_ONLY
+    /// The deferred CloudKit machinery must stay dormant in local-only
+    /// builds, exactly like NoteStore and CanvasStore: no observers, no
+    /// event handling, no App Nap assertions after a local save.
+    @MainActor
+    func testLocalOnlyTasksDoNotStartDeferredCloudActivity() async throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let store = TaskStore(container: container)
+        let initialStatus = store.cloudSyncStatus
+        XCTAssertNotNil(store.create(title: "Local save"))
+        let externalContext = ModelContext(container)
+        let externalTask = try XCTUnwrap(externalContext.fetch(FetchDescriptor<TaskItem>()).first)
+        externalTask.title = "External change"
+        externalTask.updatedAt = Date().addingTimeInterval(1)
+        try externalContext.save()
+        store.handleCloudSyncEvent(CloudSyncEventUpdate(
+            id: UUID(), kind: .importData, endedAt: Date(), succeeded: true, errorMessage: nil
+        ))
+        XCTAssertEqual(store.cloudSyncStatus, initialStatus)
+        XCTAssertNil(store.remoteChangeObservation)
+        XCTAssertNil(store.cloudKitEventObservation)
+        XCTAssertNil(store.cloudImportRefreshTask)
+        XCTAssertNil(store.exportActivityToken)
+        XCTAssertNil(store.importActivityToken)
+        XCTAssertNil(store.exportActivityTimeoutTask)
+        XCTAssertNil(store.importActivityTimeoutTask)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(store.tasks.first?.title, "Local save", "Deferred events cannot reload local-only tasks")
+        store.refresh()
+        XCTAssertEqual(store.tasks.first?.title, "External change", "Explicit refresh still replaces stale contexts")
+    }
+    #endif
+
+    /// The per-revision family index must answer exactly like a full scan
+    /// after every mutation path, including ones that change sort order
+    /// in place and ones that fail and roll back.
+    @MainActor
+    func testFamilyIndexStaysCoherentAcrossEveryMutationPath() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let other = try XCTUnwrap(store.create(title: "Other"))
+        let first = try XCTUnwrap(store.create(title: "First", parentID: parent.id))
+        let second = try XCTUnwrap(store.create(title: "Second", parentID: parent.id))
+        func scanned(_ id: UUID) -> [UUID] {
+            store.tasks.filter { $0.parentID == id }.sorted {
+                if ($0.status == .done) != ($1.status == .done) { return $0.status != .done }
+                if $0.manualOrder != $1.manualOrder { return ($0.manualOrder ?? 0) > ($1.manualOrder ?? 0) }
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }.map(\.id)
+        }
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), scanned(parent.id))
+        XCTAssertTrue(store.hasSubtasks(parent.id))
+        XCTAssertFalse(store.hasSubtasks(other.id))
+        XCTAssertEqual(store.task(withID: first.id)?.id, first.id)
+        XCTAssertEqual(store.parent(of: first)?.id, parent.id)
+
+        // A status change re-sorts children in place.
+        XCTAssertTrue(store.setStatus(.done, for: first))
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), [second.id, first.id])
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), scanned(parent.id))
+
+        // A failed save rolls back and the index follows the reload.
+        gate.shouldFail = true
+        XCTAssertFalse(store.setStatus(.done, for: second))
+        gate.shouldFail = false
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), scanned(parent.id))
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.status), [.todo, .done])
+
+        // Deletion and external refresh both invalidate it.
+        XCTAssertTrue(store.delete(store.task(withID: second.id)!))
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), [first.id])
+        XCTAssertNil(store.task(withID: second.id))
+        store.refresh()
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), [first.id])
+        XCTAssertTrue(store.delete(store.task(withID: parent.id)!))
+        XCTAssertFalse(store.hasSubtasks(parent.id))
+        XCTAssertTrue(store.subtasks(of: parent.id).isEmpty)
+        XCTAssertEqual(store.tasks.map(\.id), [other.id])
+    }
+
+    /// Orphaned or self-referencing links never count as children; they stay
+    /// visible as roots, the same as the scan-based rule they replace.
+    @MainActor
+    func testFamilyIndexIgnoresOrphanedAndNestedLinks() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let parentID = UUID(), childID = UUID(), grandchildID = UUID()
+        seed.insert(TaskItem(id: parentID, title: "Parent"))
+        seed.insert(TaskItem(id: childID, title: "Child", parentID: parentID))
+        seed.insert(TaskItem(id: grandchildID, title: "Grandchild", parentID: childID))
+        seed.insert(TaskItem(title: "Orphan", parentID: UUID()))
+        let selfID = UUID()
+        seed.insert(TaskItem(id: selfID, title: "Self", parentID: selfID))
+        try seed.save()
+        let store = TaskStore(container: container)
+        XCTAssertEqual(store.subtasks(of: parentID).map(\.id), [childID])
+        XCTAssertTrue(store.subtasks(of: childID).isEmpty, "a child is not a valid root, so its link is orphaned")
+        XCTAssertNil(store.parent(of: store.task(withID: grandchildID)!))
+        XCTAssertNil(store.parent(of: store.task(withID: selfID)!))
+        let roots = store.snapshot(for: .tasks).sections.flatMap { $0.tasks.map(\.title) }
+        XCTAssertEqual(Set(roots), ["Parent", "Grandchild", "Orphan", "Self"])
+    }
+
+    /// Status validation reads only the rows it concerns and still applies
+    /// to replicas the visible list hides.
+    @MainActor
+    func testCompletionAndReopenRulesStillSeeHiddenReplicas() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let parentID = UUID(), childID = UUID()
+        seed.insert(TaskItem(id: parentID, title: "Parent"))
+        seed.insert(TaskItem(id: childID, title: "Child", updatedAt: Date(timeIntervalSince1970: 10), parentID: parentID))
+        // A hidden replica of the child is still unfinished.
+        seed.insert(TaskItem(id: childID, title: "Child", status: .done,
+                             updatedAt: Date(timeIntervalSince1970: 20), parentID: parentID))
+        try seed.save()
+        let store = TaskStore(container: container)
+        XCTAssertEqual(store.task(withID: childID)?.status, .done, "the newer replica is the visible one")
+        XCTAssertFalse(store.setStatus(.done, for: store.task(withID: parentID)!),
+                       "an unfinished hidden replica still blocks completion")
+        XCTAssertEqual(store.lastErrorMessage, "Finish the subtasks before completing this task.")
+        XCTAssertTrue(store.setStatus(.done, for: store.task(withID: parentID)!, allowingUnfinishedSubtasks: true))
+        XCTAssertFalse(store.setStatus(.todo, for: store.task(withID: childID)!),
+                       "a done parent refuses reopening a child")
+        XCTAssertTrue(store.rename(store.task(withID: childID)!, to: "Child renamed"),
+                      "edits that change no status never consult the status rules")
+    }
+
+    @MainActor
+    func testDeleteRefusesNestedLinksWithoutReadingUnrelatedRows() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let parentID = UUID(), childID = UUID()
+        seed.insert(TaskItem(id: parentID, title: "Parent"))
+        seed.insert(TaskItem(id: childID, title: "Child", parentID: parentID))
+        seed.insert(TaskItem(title: "Grandchild", parentID: childID))
+        seed.insert(TaskItem(title: "Unrelated"))
+        try seed.save()
+        let store = TaskStore(container: container)
+        XCTAssertFalse(store.delete(store.task(withID: parentID)!))
+        XCTAssertEqual(store.lastErrorMessage, "An unsupported nested or cyclic subtask link prevents safe deletion.")
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).count, 4)
+    }
+
     @MainActor
     func testSuccessfulCloudImportRefreshesChangesSavedOutsideStoreContext() async throws {
+        #if ATTIC_LOCAL_ONLY
+        throw XCTSkip("Deferred CloudKit import handling is dormant in local-only builds.")
+        #endif
         let container = try PersistenceController.makeContainer(inMemory: true)
         let seedContext = ModelContext(container)
         seedContext.insert(TaskItem(title: "Before iPhone update", priority: .high))
@@ -899,4 +1060,34 @@ final class TaskStoreTests: XCTestCase {
         protection.completeImportRefresh()
         XCTAssertFalse(protection.protectsImport)
     }
+}
+
+private func assertSameSRGBColor(
+    _ actual: Color,
+    _ expected: Color,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    guard let actual = NSColor(actual).usingColorSpace(.sRGB),
+          let expected = NSColor(expected).usingColorSpace(.sRGB) else {
+        XCTFail("Expected colours to resolve in sRGB", file: file, line: line)
+        return
+    }
+
+    XCTAssertEqual(
+        actual.redComponent, expected.redComponent,
+        accuracy: 0.001, file: file, line: line
+    )
+    XCTAssertEqual(
+        actual.greenComponent, expected.greenComponent,
+        accuracy: 0.001, file: file, line: line
+    )
+    XCTAssertEqual(
+        actual.blueComponent, expected.blueComponent,
+        accuracy: 0.001, file: file, line: line
+    )
+    XCTAssertEqual(
+        actual.alphaComponent, expected.alphaComponent,
+        accuracy: 0.001, file: file, line: line
+    )
 }

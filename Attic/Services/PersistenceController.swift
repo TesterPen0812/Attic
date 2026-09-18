@@ -62,7 +62,82 @@ enum PersistenceController {
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
-        return try ModelContainer(for: TaskItem.self, NoteItem.self, configurations: configuration)
+        #if os(macOS)
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            NoteAttachment.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            CanvasSemanticObjectItem.self,
+            configurations: configuration
+        )
+        #else
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            configurations: configuration
+        )
+        #endif
+    }
+
+    /// A durable, CloudKit-free store used only by controlled UI tests that
+    /// need to terminate and relaunch the app. Its path is disjoint from every
+    /// normal Attic store, and reset removes only this store family.
+    static func makeCanvasUITestContainer(
+        reset: Bool,
+        baseDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) throws -> ModelContainer {
+        let root = baseDirectory ?? fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+        let bundleComponent = (Bundle.main.bundleIdentifier ?? "unknown-bundle")
+            .replacingOccurrences(of: "/", with: "-")
+        let directory = root
+            .appendingPathComponent("AtticCanvasUITests", isDirectory: true)
+            .appendingPathComponent(bundleComponent, isDirectory: true)
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+
+        let storeURL = directory.appendingPathComponent("canvas.store")
+        if reset {
+            try removeStoreFamily(at: storeURL, fileManager: fileManager)
+        }
+
+        let configuration = ModelConfiguration(
+            "canvas-ui-testing",
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        #if os(macOS)
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            NoteAttachment.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            CanvasSemanticObjectItem.self,
+            configurations: configuration
+        )
+        #else
+        return try ModelContainer(
+            for: TaskItem.self,
+            NoteItem.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            configurations: configuration
+        )
+        #endif
     }
 
     #if DEBUG
@@ -73,7 +148,7 @@ enum PersistenceController {
         defaults: UserDefaults = .standard
     ) throws {
         guard currentCloudKitEnvironment == .development else { return }
-        let marker = "didInitializeCloudKitDevelopmentSchemaV1"
+        let marker = "didInitializeCloudKitDevelopmentSchemaV4"
         guard !defaults.bool(forKey: marker) else { return }
 
         try autoreleasepool {
@@ -97,7 +172,13 @@ enum PersistenceController {
             description.shouldAddStoreAsynchronously = false
 
             guard let managedObjectModel = NSManagedObjectModel.makeManagedObjectModel(
-                for: [TaskItem.self, NoteItem.self]
+                for: [
+                    TaskItem.self,
+                    NoteItem.self,
+                    CanvasBoardItem.self,
+                    CanvasStrokeItem.self,
+                    CanvasImageItem.self
+                ]
             ) else {
                 throw CloudKitSchemaInitializationError.unableToCreateManagedObjectModel
             }
@@ -135,6 +216,17 @@ enum PersistenceController {
         #else
         return .production
         #endif
+    }
+
+    private static func removeStoreFamily(
+        at storeURL: URL,
+        fileManager: FileManager
+    ) throws {
+        for suffix in ["", "-wal", "-shm"] {
+            let url = URL(fileURLWithPath: storeURL.path + suffix)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            try fileManager.removeItem(at: url)
+        }
     }
 
     /// Copies the unopened legacy SQLite store once before CloudKit first

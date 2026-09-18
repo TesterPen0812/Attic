@@ -69,8 +69,12 @@ final class DailyCleanupService {
     private func cleanupAndReschedule() {
         let timestamp = now()
         // Foreground/wake refresh is a fallback for delayed or dropped
-        // CloudKit remote-change pushes.
-        store.refresh()
+        // CloudKit remote-change pushes; a local-only build has no remote
+        // writer, so the purge reads the store directly (predicated) instead
+        // of reloading everything first.
+        if RevealRefreshPolicy.current.refreshesOnReveal {
+            store.refresh()
+        }
         performCleanup(at: timestamp)
         scheduleNextMidnight(after: timestamp)
     }

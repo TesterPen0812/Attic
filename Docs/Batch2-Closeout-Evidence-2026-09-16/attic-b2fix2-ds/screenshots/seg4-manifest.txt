@@ -1,0 +1,8 @@
+seg4-01-line109.png mime=image/png line=109 ts=2026-09-16T14:51:50.886Z bytes=20078
+seg4-02-line150.png mime=image/png line=150 ts=2026-09-16T14:52:47.548Z bytes=21420
+seg4-03-line218.png mime=image/png line=218 ts=2026-09-16T14:54:16.744Z bytes=23372
+seg4-04-line256.png mime=image/png line=256 ts=2026-09-16T14:55:36.083Z bytes=20785
+seg4-05-line317.png mime=image/png line=317 ts=2026-09-16T14:58:50.724Z bytes=20865
+seg4-06-line483.png mime=image/png line=483 ts=2026-09-16T15:04:01.338Z bytes=26300
+seg4-07-line532.png mime=image/png line=532 ts=2026-09-16T15:05:32.538Z bytes=19999
+seg4-08-line562.png mime=image/png line=562 ts=2026-09-16T15:06:04.419Z bytes=24485

@@ -11,13 +11,36 @@ func makeTestStore(
     return TaskStore(container: container, now: now, persist: persist)
 }
 
+func makeTestAttachmentFileStore(rootURL: URL? = nil) -> AttachmentFileStore {
+    let isolatedRoot = rootURL ?? FileManager.default.temporaryDirectory
+        .appendingPathComponent("AtticNoteStoreTests-\(UUID().uuidString)", isDirectory: true)
+    return AttachmentFileStore(rootURL: isolatedRoot)
+}
+
 @MainActor
 func makeTestNoteStore(
     now: @escaping () -> Date = Date.init,
-    persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+    attachmentFileStore: AttachmentFileStore,
+    attachmentImporter: (any NoteAttachmentFileImporting)? = nil
 ) throws -> NoteStore {
     let container = try PersistenceController.makeContainer(inMemory: true)
-    return NoteStore(container: container, now: now, persist: persist)
+    return NoteStore(
+        container: container,
+        now: now,
+        persist: persist,
+        attachmentFileStore: attachmentFileStore,
+        attachmentImporter: attachmentImporter
+    )
+}
+
+@MainActor
+func makeTestCanvasStore(
+    now: @escaping () -> Date = Date.init,
+    persist: @escaping (ModelContext) throws -> Void = { try $0.save() }
+) throws -> CanvasStore {
+    let container = try PersistenceController.makeContainer(inMemory: true)
+    return CanvasStore(container: container, now: now, persist: persist)
 }
 
 final class MutableNow {

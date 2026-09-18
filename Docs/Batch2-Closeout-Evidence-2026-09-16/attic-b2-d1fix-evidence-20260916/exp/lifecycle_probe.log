@@ -1,0 +1,12 @@
+=== lifecycle_probe [] ===
+empty: validateMenuItem undo=false 'Undo' redo=false 'Redo'
+typed: validateMenuItem undo=true 'Undo Typing' redo=false 'Redo'
+after undo: '' validateMenuItem undo=false 'Undo' redo=true 'Redo Typing'
+after redo: 'abc'
+tk1=false clear=false editor alive after removal: true
+=== lifecycle_probe [--tk1 --clear] ===
+empty: validateMenuItem undo=false 'Undo' redo=false 'Redo'
+typed: validateMenuItem undo=true 'Undo Typing' redo=false 'Redo'
+after undo: '' validateMenuItem undo=false 'Undo' redo=true 'Redo Typing'
+after redo: 'abc'
+tk1=true clear=true editor alive after removal: true

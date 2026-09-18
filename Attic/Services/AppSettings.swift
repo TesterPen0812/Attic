@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import SwiftUI
 
 enum AppearancePreference: String, CaseIterable, Identifiable {
     case system
@@ -26,6 +27,94 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
+enum PanelGlassStyle: String, CaseIterable, Identifiable {
+    case clear
+    case frosted
+    /// Keeps the earlier `stable` preference compatible while restoring the
+    /// original live macOS material used by Attic.
+    case glassmorphism = "stable"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .clear: return "Clear"
+        case .frosted: return "Frosted"
+        case .glassmorphism: return "Glassmorphism"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .clear:
+            return "Live transparency and native refraction, available with Original in Dark appearance."
+        case .frosted:
+            return "Native blur with stronger contrast."
+        case .glassmorphism:
+            return "Classic live macOS blur and vibrancy, matching Attic's original surface."
+        }
+    }
+
+    /// Resolve presentation without overwriting the user's saved glass choice.
+    func resolved(for theme: AtticPanelTheme, colorScheme: ColorScheme) -> Self {
+        self == .clear && (theme != .original || colorScheme != .dark) ? .frosted : self
+    }
+}
+
+/// User-adjustable corner radius of the panel squircle, in points.
+enum PanelCornerSize: Double, CaseIterable, Identifiable {
+    case small = 10
+    case standard = 18
+    case large = 28
+    case extraLarge = 40
+    case huge = 80
+    case enormous = 110
+    case maximum = 140
+
+    var id: Double { rawValue }
+
+    var title: String {
+        switch self {
+        case .small: return "Small"
+        case .standard: return "Default"
+        case .large: return "Large"
+        case .extraLarge: return "Extra Large"
+        case .huge: return "Huge"
+        case .enormous: return "Enormous"
+        case .maximum: return "Maximum"
+        }
+    }
+
+    static let min = PanelCornerSize.small.rawValue
+    static let max = PanelCornerSize.maximum.rawValue
+    static let defaultValue = PanelCornerSize.huge.rawValue
+}
+
+/// User-adjustable and live-resizable width of the panel, in points.
+enum PanelContentSize: Double, CaseIterable, Identifiable {
+    case standard = 320
+    case large = 360
+    case extraLarge = 380
+
+    var id: Double { rawValue }
+
+    var title: String {
+        switch self {
+        case .standard: return "Default"
+        case .large: return "Large"
+        case .extraLarge: return "Extra Large"
+        }
+    }
+
+    static let min = PanelContentSize.standard.rawValue
+    static var max: Double {
+        NSScreen.screens
+            .map { Swift.max(min, $0.visibleFrame.width - (PanelGeometry.screenInset * 2)) }
+            .max() ?? min
+    }
+    static let defaultValue = PanelContentSize.standard.rawValue
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     private enum Key {
@@ -37,10 +126,18 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedInstantReveal = "hasAdoptedInstantRevealV3"
         static let hasShownWelcome = "hasShownWelcome"
         static let isTranslucent = "isTranslucent"
+        static let panelGlassStyle = "panelGlassStyle"
+        static let panelTheme = "panelTheme"
+        static let panelGradientCoverage = "panelGradientCoverage"
+        static let panelGradientColorHex = "panelGradientColorHex"
         static let appearance = "appearancePreference"
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
+        static let panelCornerSize = "panelCornerSize"
+        static let panelContentSize = "panelContentSize"
+        static let panelHeight = "panelHeight"
+        static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
     }
 
     @Published var corner: ScreenCorner {
@@ -51,12 +148,99 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(isTranslucent, forKey: Key.isTranslucent) }
     }
 
+    @Published var panelGlassStyle: PanelGlassStyle {
+        didSet { defaults.set(panelGlassStyle.rawValue, forKey: Key.panelGlassStyle) }
+    }
+
+    @Published var panelTheme: AtticPanelTheme {
+        didSet { defaults.set(panelTheme.rawValue, forKey: Key.panelTheme) }
+    }
+
+    @Published var panelGradientCoverage: Double {
+        didSet {
+            let normalized = Self.clamp(panelGradientCoverage, to: 0...1, fallback: 0.55)
+            if panelGradientCoverage != normalized { panelGradientCoverage = normalized }
+            defaults.set(normalized, forKey: Key.panelGradientCoverage)
+        }
+    }
+
+    /// Empty follows the adaptive theme; custom colors are opaque sRGB RRGGBB.
+    @Published var panelGradientColorHex: String {
+        didSet {
+            let normalized = AtticThemeColor(hex: panelGradientColorHex)?.hexString ?? ""
+            if panelGradientColorHex != normalized { panelGradientColorHex = normalized }
+            defaults.set(normalized, forKey: Key.panelGradientColorHex)
+        }
+    }
+
     @Published var appearance: AppearancePreference {
         didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
     }
 
     @Published var isAgentAccessEnabled: Bool {
         didSet { defaults.set(isAgentAccessEnabled, forKey: Key.isAgentAccessEnabled) }
+    }
+
+    @Published var panelCornerSize: Double {
+        didSet {
+            let clamped = Self.clamp(panelCornerSize, to: PanelCornerSize.min...PanelCornerSize.max, fallback: PanelCornerSize.defaultValue)
+            if panelCornerSize != clamped {
+                panelCornerSize = clamped
+            } else {
+                defaults.set(panelCornerSize, forKey: Key.panelCornerSize)
+            }
+        }
+    }
+
+    @Published var panelContentSize: Double {
+        didSet {
+            let clamped = Self.clampMinimum(
+                panelContentSize,
+                minimum: PanelContentSize.min,
+                fallback: PanelContentSize.defaultValue
+            )
+            if panelContentSize != clamped {
+                panelContentSize = clamped
+            } else {
+                defaults.set(panelContentSize, forKey: Key.panelContentSize)
+            }
+        }
+    }
+
+    @Published private(set) var panelHeight: Double {
+        didSet {
+            let clamped = Self.clampMinimum(
+                panelHeight,
+                minimum: PanelGeometry.minimumHeight,
+                fallback: PanelGeometry.defaultPanelSize.height
+            )
+            if panelHeight != clamped {
+                panelHeight = clamped
+            } else {
+                defaults.set(panelHeight, forKey: Key.panelHeight)
+            }
+        }
+    }
+
+    /// Last on-screen frame of the pinned subtask mini-window. Persisted as
+    /// a rect string so reopening restores position; invalid or stale values
+    /// fall back to anchored placement beside the main panel.
+    var pinnedSubtaskWindowFrame: CGRect? {
+        get {
+            guard let stored = defaults.string(forKey: Key.pinnedSubtaskWindowFrame),
+                  !stored.isEmpty else { return nil }
+            let rect = NSRectFromString(stored)
+            guard rect.width >= 1, rect.height >= 1,
+                  rect.origin.x.isFinite, rect.origin.y.isFinite else { return nil }
+            return rect
+        }
+        set {
+            if let newValue {
+                defaults.set(NSStringFromRect(newValue), forKey: Key.pinnedSubtaskWindowFrame)
+            } else {
+                defaults.removeObject(forKey: Key.pinnedSubtaskWindowFrame)
+            }
+        }
     }
 
     @Published private(set) var cloudSyncStartupErrorMessage: String?
@@ -116,6 +300,24 @@ final class AppSettings: ObservableObject {
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
         isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
+        let storedGlassStyle = defaults.string(forKey: Key.panelGlassStyle) ?? ""
+        if storedGlassStyle == "liveStable" {
+            panelGlassStyle = .glassmorphism
+            defaults.set(PanelGlassStyle.glassmorphism.rawValue, forKey: Key.panelGlassStyle)
+        } else {
+            panelGlassStyle = PanelGlassStyle(rawValue: storedGlassStyle) ?? .clear
+        }
+        panelTheme = AtticPanelTheme(
+            rawValue: defaults.string(forKey: Key.panelTheme) ?? ""
+        ) ?? .defaultTheme
+        panelGradientCoverage = Self.clamp(
+            defaults.object(forKey: Key.panelGradientCoverage) as? Double ?? 0.55,
+            to: 0...1,
+            fallback: 0.55
+        )
+        panelGradientColorHex = AtticThemeColor(
+            hex: defaults.string(forKey: Key.panelGradientColorHex) ?? ""
+        )?.hexString ?? ""
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
@@ -124,6 +326,25 @@ final class AppSettings: ObservableObject {
             defaults.set(true, forKey: Key.hasAdoptedAgentAccessOptIn)
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
+        panelCornerSize = Self.clamp(
+            defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
+            to: PanelCornerSize.min...PanelCornerSize.max,
+            fallback: PanelCornerSize.defaultValue
+        )
+        let resolvedPanelWidth = Self.clampMinimum(
+            defaults.object(forKey: Key.panelContentSize) as? Double ?? PanelContentSize.defaultValue,
+            minimum: PanelContentSize.min,
+            fallback: PanelContentSize.defaultValue
+        )
+        panelContentSize = resolvedPanelWidth
+        panelHeight = Self.clampMinimum(
+            defaults.object(forKey: Key.panelHeight) as? Double
+                ?? PanelGeometry.preferredWorkspaceHeight(contentWidth: resolvedPanelWidth),
+            minimum: PanelGeometry.minimumHeight,
+            fallback: PanelGeometry.defaultPanelSize.height
+        )
+        defaults.set(panelGradientCoverage, forKey: Key.panelGradientCoverage)
+        defaults.set(panelGradientColorHex, forKey: Key.panelGradientColorHex)
     }
 
     var agentServerPort: UInt16 {
@@ -146,6 +367,19 @@ final class AppSettings: ObservableObject {
         cloudSyncStartupErrorMessage = message
     }
 
+    /// Called once after AppKit finishes a manual live resize. Keeping this
+    /// separate from live layout updates avoids continuously writing defaults
+    /// while the pointer is moving.
+    func persistPanelSize(_ size: CGSize) {
+        let clamped = PanelGeometry.clampedPanelSize(size)
+        if panelContentSize != clamped.width {
+            panelContentSize = clamped.width
+        }
+        if panelHeight != clamped.height {
+            panelHeight = clamped.height
+        }
+    }
+
     private static func clamp(
         _ value: Double,
         to range: ClosedRange<Double>,
@@ -153,5 +387,14 @@ final class AppSettings: ObservableObject {
     ) -> Double {
         guard value.isFinite else { return fallback }
         return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    private static func clampMinimum(
+        _ value: Double,
+        minimum: Double,
+        fallback: Double
+    ) -> Double {
+        guard value.isFinite else { return fallback }
+        return max(value, minimum)
     }
 }

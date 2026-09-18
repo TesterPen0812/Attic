@@ -1,0 +1,191 @@
+ M Attic.xcodeproj/project.pbxproj
+ M Attic/App/AppCoordinator.swift
+ M Attic/App/CanvasEditCommandRoute.swift
+ M Attic/AtticNotesLocal.entitlements
+ M Attic/Canvas/CanvasImageTypes.swift
+ M Attic/Canvas/CanvasSemanticInteraction.swift
+ M Attic/Canvas/CanvasSession.swift
+ M Attic/Canvas/CanvasSurface.swift
+ M Attic/Canvas/CanvasSurfaceInteraction.swift
+ M Attic/Canvas/CanvasSurfaceMac.swift
+ M Attic/Canvas/CanvasSurfaceMacHelpers.swift
+ M Attic/Canvas/CanvasSurfaceRenderer.swift
+ M Attic/Canvas/CanvasViewport.swift
+ M Attic/Design/AtticStyle.swift
+ M Attic/Design/TaskActionsMenu.swift
+ M Attic/Info.plist
+ M Attic/Models/CanvasImageItem.swift
+ M Attic/Models/NoteAttachment.swift
+ M Attic/Models/TaskDragPayload.swift
+ M Attic/Models/TaskItem.swift
+ M Attic/Services/AppSettings.swift
+ M Attic/Services/AttachmentFileStore.swift
+ M Attic/Services/CanvasStore.swift
+ M Attic/Services/CanvasStoreBoards.swift
+ M Attic/Services/CanvasStoreImages.swift
+ M Attic/Services/CanvasStoreLifecycle.swift
+ M Attic/Services/CanvasStorePersistence.swift
+ M Attic/Services/CanvasStoreReplicaResolution.swift
+ M Attic/Services/CanvasStoreSemanticObjects.swift
+ M Attic/Services/CornerHoverMonitor.swift
+ M Attic/Services/CornerHoverStateMachine.swift
+ M Attic/Services/DailyCleanupService.swift
+ M Attic/Services/NoteAttachmentPlatformSupport.swift
+ M Attic/Services/NoteDraftController.swift
+ M Attic/Services/NoteStore.swift
+ M Attic/Services/PanelGeometry.swift
+ M Attic/Services/SubtaskPanelLayout.swift
+ M Attic/Services/TaskStore.swift
+ M Attic/Views/Panel/AtticPanelView.swift
+ M Attic/Views/Panel/CanvasPanelContent.swift
+ M Attic/Views/Panel/NoteAttachmentTray.swift
+ M Attic/Views/Panel/NotesPanelContent.swift
+ M Attic/Views/Panel/SubtaskPanelContent.swift
+ M Attic/Views/Panel/TaskFamilyView.swift
+ M Attic/Views/Panel/TaskRowView.swift
+ M Attic/Views/Panel/TaskSectionView.swift
+ M Attic/Views/Settings/AppearanceSettingsView.swift
+ M Attic/Window/AtticPanel.swift
+ M Attic/Window/AtticPanelController.swift
+ M Attic/Window/PanelUIState.swift
+ M Attic/Window/SubtaskPanelController.swift
+ M AtticTests/CanvasDomainTests.swift
+ M AtticTests/CanvasImageTests.swift
+ M AtticTests/CanvasRenderCacheTests.swift
+ M AtticTests/CanvasSessionTests.swift
+ M AtticTests/CanvasStoreTests.swift
+ M AtticTests/CornerHoverStateMachineTests.swift
+ M AtticTests/NoteAttachmentTests.swift
+ M AtticTests/NoteDraftControllerTests.swift
+ M AtticTests/PanelGeometryTests.swift
+ M AtticTests/PanelSquircleGeometryTests.swift
+ M AtticTests/SettingsPresentationTests.swift
+ M AtticTests/SubtaskPanelControllerTests.swift
+ M AtticTests/SubtaskPanelTests.swift
+ M AtticTests/SubtaskTests.swift
+ M AtticTests/TaskStoreTests.swift
+ M AtticUITests/AtticUITests.swift
+ M AtticUITests/CanvasUITests.swift
+ M AtticUITests/SubtaskHoverPinnedUITests.swift
+ M Docs/HoverPinnedSubtasksLocalContinuation.md
+ M Docs/HoverPinnedSubtasksVerificationLedger.md
+ M Scripts/launch_local_preview.zsh
+?? Attic/Models/NoteInlineAnchor.swift
+?? Attic/Models/TaskImageReference.swift
+?? Attic/Views/Panel/NoteInlineCards.swift
+?? Attic/Views/Panel/TaskAttachmentDrop.swift
+?? Attic/Views/Panel/TaskComposerAttachments.swift
+?? Attic/Views/Panel/TaskImageAttachments.swift
+?? Attic/Window/PanelSurfaceHostingView.swift
+?? AtticTests/CanvasPerformanceGateTests.swift
+?? AtticTests/CanvasPrecisionTests.swift
+?? AtticTests/NoteInlineCardsTests.swift
+?? AtticTests/PanelSurfaceHostingViewTests.swift
+?? AtticTests/TaskAttachmentDropTests.swift
+?? AtticTests/TaskImageTests.swift
+?? AtticTests/TaskPerformanceGateTests.swift
+?? Docs/Attic-Local-Cleanup-Result-2026-09-15.md
+?? Docs/Attic-Worktree-Cleanup-Inventory-2026-09-15.md
+?? Docs/Batch1-Counterexample-Validation.md
+?? Docs/Batch1-DeepSeek-Verification-Review.md
+?? Docs/Batch1-Remediation-DeepSeek-MiniSWE-Review.md
+?? Docs/Batch1-Remediation-Implementation.md
+?? Docs/Batch1-Remediation-SWE-Review.md
+?? Docs/Batch1-Remediation-Sol-Native-Final.md
+?? Docs/Batch1-Reviewer-Comparison.md
+?? Docs/Batch1-SWE-Interaction-Review.md
+?? Docs/Batch1-SWE-Lifecycle-Review.md
+?? Docs/Batch1-SWE-Verification-Review.md
+?? Docs/Batch2-D1-Residual-Fix-Opus-2026-09-16.md
+?? Docs/Batch2-Editing-Availability-Fix-Implementation-2026-09-16.md
+?? Docs/Batch2-Editing-Availability-Fix-Native-Sol-2026-09-16.md
+?? Docs/Batch2-Editing-Availability-Fix-Native-Sol-Direct-2026-09-16.md
+?? Docs/Batch2-Editing-Availability-Fix-Native-Sol-Retry-2026-09-16.md
+?? Docs/Batch2-Native-Trial-Checklist-Rubric-2026-09-16.md
+?? Docs/Batch2-Native-Trial-Results-2026-09-16.md
+?? Docs/Batch2-Orchestrator-Acceptance-2026-09-16.md
+?? Docs/Batch2-Orchestrator-Ledger-2026-09-16.md
+?? Docs/Batch2-Review-R1-Correctness.md
+?? Docs/Batch2-Review-R1b-AvailabilityFix-Correctness-2026-09-16.md
+?? Docs/Batch2-Review-R2-Editing-Semantics.md
+?? Docs/Batch2-Review-R2b-AvailabilityFix-EditingSemantics-2026-09-16.md
+?? Docs/Batch2-Review-R3-Recovery-Perf.md
+?? Docs/Batch2-Review-R4-DeepSeek-MiniSWE.md
+?? Docs/Batch2-Review-R4b-DeepSeek-V41-Flash-2026-09-16.md
+?? Docs/Batch2-Review-R5-GLM-Integration.md
+?? Docs/ConcurrentSWEReview-CodeCorrectness.md
+?? Docs/ConcurrentSWEReview-DataAttachments.md
+?? Docs/ConcurrentSWEReview-NativeUX-Evidence/
+?? Docs/ConcurrentSWEReview-NativeUX-Partial.md
+?? Docs/ConcurrentSWEReview-Performance.md
+?? Docs/ConcurrentSWEReview-RequirementsTests.md
+?? Docs/ConsolidatedDefectChecklist-2026-09-13.md
+?? Docs/CuaHarnessSetup.md
+?? Docs/CuaSWECompatSmoke.md
+?? Docs/CuaSWEHarnessSmoke.md
+?? Docs/DeepAudit-Batch1-Implementation.md
+?? Docs/DeepAudit-Batch2-Implementation.md
+?? Docs/DeepAudit-Canvas-2026-09-14.md
+?? Docs/DeepAudit-Consolidated-2026-09-15.md
+?? Docs/DeepAudit-Data-2026-09-14.md
+?? Docs/DeepAudit-Integration-2026-09-14.md
+?? Docs/DeepAudit-Runtime-2026-09-14.md
+?? Docs/DeepAudit-UX-2026-09-14-screenshots/
+?? Docs/DeepAudit-UX-2026-09-14.md
+?? Docs/Direct-Luna-Correctness.md
+?? Docs/Direct-Luna-Regression.md
+?? Docs/Direct-Sol-Implementation.md
+?? Docs/FunnelRedoVerification.md
+?? Docs/MiniSWE-Setup-Smoke.md
+?? Docs/Native-Verification-Playbook.md
+?? Docs/Opus-Implementation-Handoff.md
+?? Docs/Opus-Implementation-Report.md
+?? Docs/Opus-PERFA1-Review-Fixes.md
+?? Docs/PersonalChromeCheckpoint-2026-09-14.md
+?? Docs/Rolling-NoSwipe-Implementation.md
+?? Docs/Rolling-NoSwipe-Review.md
+?? Docs/Rolling-Performance-A3-Plan.md
+?? Docs/Rolling-Performance-Audit.md
+?? Docs/Rolling-Reliability-Audit.md
+?? Docs/Rolling-Reliability-R01-R02-Implementation.md
+?? Docs/Rolling-Requirements-Audit.md
+?? Docs/Rolling-Sol-Native-Verification.md
+?? Docs/RollingEvidence-2026-09-14/
+?? Docs/RollingWork-2026-09-14.md
+?? Docs/SWE-PERFA1-Correctness-Review.md
+?? Docs/SWE-PERFA1-Efficiency-Review.md
+?? Docs/SWE-PERFA1-Verification-Review.md
+?? Docs/Sol-Canvas-PERFA1-Review.md
+?? Docs/Sol-PERFA1-Native-Final.md
+?? Docs/TaskPanelV2Batch1Live.md
+?? Docs/TaskPanelV2Batch1Review.md
+?? Docs/TaskPanelV2Batch2FixSWE-A.md
+?? Docs/TaskPanelV2Batch2FixSWE-B.md
+?? Docs/TaskPanelV2Batch2Live.md
+?? Docs/TaskPanelV2Batch2SWE-A.md
+?? Docs/TaskPanelV2Batch2SWE-B.md
+?? Docs/TaskPanelV2Batch3FixSWE-A.md
+?? Docs/TaskPanelV2Batch3FixSWE-B.md
+?? Docs/TaskPanelV2Batch3Live.md
+?? Docs/TaskPanelV2Batch3SWE-A.md
+?? Docs/TaskPanelV2Batch3SWE-B.md
+?? Docs/TaskPanelV2Batch4FixSWE-A.md
+?? Docs/TaskPanelV2Batch4FixSWE-B.md
+?? Docs/TaskPanelV2Batch4SWE-A.md
+?? Docs/TaskPanelV2Batch4SWE-B.md
+?? Docs/TaskPanelV2FinalAstraReview.md
+?? Docs/TaskPanelV2FinalValidation.md
+?? Docs/TaskPanelV2IntegrationLive.md
+?? Docs/TaskPanelV2Ledger.md
+?? Docs/TaskPanelV2Orchestration.md
+?? Docs/TaskPanelV2QualityAudit-A.md
+?? Docs/TaskPanelV2QualityAudit-B.md
+?? Docs/TaskPanelV2QualityAudit-Root-LiveAddendum.md
+?? Docs/TaskPanelV2QualityAudit-Root.md
+?? Docs/TaskPanelV2QualityChecklist.txt
+?? Docs/TaskPanelV2References/
+?? Docs/TaskPanelV2Requirements.md
+?? Docs/TaskPanelV2ReviewCriteria.md
+?? Docs/TaskPanelV2VisualStateContract.md
+?? Docs/UXRefinementLedger.md
+?? Docs/Visual-State-Catalog/

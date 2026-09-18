@@ -1,162 +1,701 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// The notes surface shown in the panel when the Notes section is selected.
-struct NotesPanelContent: View {
-    @ObservedObject var noteStore: NoteStore
-    let noteDraft: NoteDraftController
-    @ObservedObject var uiState: PanelUIState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+struct NotesComposerInteractionSnapshot: Equatable {
+    let isTitleFocused: Bool
+    let isBodyFocused: Bool
+    let isLibraryPresented: Bool
+    let isImporterPresented: Bool
+    let isBlockingSave: Bool
 
-    var body: some View {
-        let notes = noteStore.orderedNotes()
-
-        Group {
-            if notes.isEmpty {
-                VStack(spacing: 5) {
-                    Text(uiState.selectedSection.emptyStateTitle)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                    Text("Write a note and it stays close by.")
-                        .font(.system(size: 11, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.bottom, 18)
-                .transition(.opacity.combined(with: .scale(scale: 0.98)))
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: AtticStyle.taskSpacing) {
-                        ForEach(notes) { note in
-                            NoteRowView(
-                                noteStore: noteStore,
-                                noteDraft: noteDraft,
-                                uiState: uiState,
-                                note: note
-                            )
-                            .transition(
-                                .asymmetric(
-                                    insertion: .move(edge: .top).combined(with: .opacity),
-                                    removal: .scale(scale: 0.96).combined(with: .opacity)
-                                )
-                            )
-                        }
-                    }
-                    .padding(.horizontal, AtticStyle.horizontalPadding - 4)
-                    .padding(.bottom, 14)
-                }
-                .scrollIndicators(.never)
-            }
+    var lockReasons: Set<PanelInteractionLockReason> {
+        var reasons: Set<PanelInteractionLockReason> = []
+        if isTitleFocused || isBodyFocused {
+            reasons.insert(.notesEditorFocus)
         }
-        .animation(reduceMotion ? nil : AtticMotion.spring, value: notes.map(\.id))
+        if isLibraryPresented || isImporterPresented {
+            reasons.insert(.notesPopover)
+        }
+        if isBlockingSave {
+            reasons.insert(.blockingSave)
+        }
+        return reasons
     }
 }
 
-/// Edits the app-owned draft. The draft outlives this SwiftUI view, so a panel
-/// transition or model-context refresh cannot discard pending text.
-struct NoteComposerView: View {
+/// The saved-note library is contextual: while an editor is active the library
+/// lives in the editor's overlay so the writing surface keeps all available
+/// panel height.
+struct NotesPanelContent: View {
+    @Environment(\.atticPanelThemePalette) private var palette
+    @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
-
-    @FocusState private var isBodyFocused: Bool
+    var topContentInset: CGFloat = 0
+    var bottomContentInset: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 9) {
-                TextField("Title (optional)", text: $noteDraft.title)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .onSubmit(saveAndClose)
-                    .onExitCommand(perform: saveAndClose)
-                    .accessibilityIdentifier("note-title")
-
-                Button(action: saveAndClose) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 9, weight: .bold))
-                        .frame(width: 20, height: 20)
-                        .background(
-                            noteDraft.canPersist
-                                ? Color.accentColor
-                                : Color.secondary.opacity(0.3),
-                            in: Circle()
-                        )
-                        .foregroundStyle(.white)
-                }
-                .buttonStyle(.plain)
-                .disabled(!noteDraft.canPersist)
-                .help(saveLabel)
-                .accessibilityLabel(saveLabel)
-                .accessibilityIdentifier("save-note")
+        if uiState.isComposerPresented {
+            Color.clear
+                .frame(height: 0)
+                .accessibilityHidden(true)
+        } else {
+            VStack(spacing: 8) {
+                NoteRecoveryWarning(noteDraft: noteDraft, uiState: uiState)
+                    .padding(.horizontal, AtticStyle.horizontalPadding)
+                savedNotes
             }
+        }
+    }
 
-            TextEditor(text: $noteDraft.body)
-                .font(.system(size: 12, design: .rounded))
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 60, idealHeight: 78, maxHeight: 90)
-                .focused($isBodyFocused)
-                .accessibilityIdentifier("note-body")
+    @ViewBuilder
+    private var savedNotes: some View {
+        let notes = noteStore.orderedNotes()
+
+        if notes.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "note.text")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(palette.secondaryForegroundColor)
+                    .atticClearGlassForegroundReadability()
+                Text("A quiet place for the next thought.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .atticClearGlassForegroundReadability()
+                Button("New Note", action: beginNew)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("new-note-empty-state")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.bottom, 28)
+            .padding(.top, topContentInset)
+            .padding(.bottom, bottomContentInset)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 5) {
+                    ForEach(notes) { note in
+                        NoteRowView(
+                            noteStore: noteStore,
+                            noteDraft: noteDraft,
+                            uiState: uiState,
+                            note: note
+                        )
+                    }
+                }
+                .padding(.horizontal, AtticStyle.horizontalPadding - 4)
+                .padding(.top, topContentInset + 2)
+                .padding(.bottom, bottomContentInset + 18)
+            }
+            .scrollIndicators(.never)
+            .animation(reduceMotion ? nil : AtticMotion.spring, value: notes.map(\.id))
+        }
+    }
+
+    private func beginNew() {
+        guard noteDraft.beginNew() else { return }
+        uiState.beginAdding()
+    }
+}
+
+private struct NoteRecoveryWarning: View {
+    @Environment(\.atticPanelThemePalette) private var palette
+    @ObservedObject var noteDraft: NoteDraftController
+    @ObservedObject var uiState: PanelUIState
+
+    var body: some View {
+        if let message = noteDraft.recoveryErrorMessage {
+            HStack(alignment: .top, spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Retry") {
+                    Task { @MainActor in
+                        guard let restoredSession = await noteDraft.retryRecovery(),
+                              uiState.selectedSection.isNotes,
+                              noteDraft.isActive,
+                              noteDraft.editorSession == restoredSession else { return }
+                        if let note = noteDraft.noteStore.notes.first(where: { $0.id == noteDraft.activeNoteID }) {
+                            uiState.beginEditingNote(note)
+                        } else {
+                            uiState.beginAdding()
+                        }
+                    }
+                }
+                .disabled(noteDraft.isRestoringRecovery)
+                .accessibilityIdentifier("retry-note-recovery")
+            }
+            .foregroundStyle(palette.primaryForegroundColor)
+            .atticClearGlassForegroundReadability()
+            .accessibilityIdentifier("note-recovery-error")
+        }
+    }
+}
+
+/// A focused note remains mounted while the temporary library slides above it.
+/// That preserves Cocoa selection, the body editor's scroll position, marked
+/// text, undo state, and the app-owned draft while browsing saved notes.
+struct NoteComposerView: View {
+    @Environment(\.atticPanelThemePalette) private var palette
+    @ObservedObject var noteDraft: NoteDraftController
+    @ObservedObject private var noteStore: NoteStore
+    @ObservedObject var uiState: PanelUIState
+    let topContentInset: CGFloat
+    let bottomContentInset: CGFloat
+
+    /// The title participates in SwiftUI's focus system, while the wrapped
+    /// NSTextView owns body focus through AppKit's responder chain. Treating
+    /// the body as an unregistered `FocusState` value lets SwiftUI clear it on
+    /// the next render, which made the editor surrender first responder after
+    /// every draft publication.
+    @FocusState private var isTitleFocused: Bool
+    @State private var isBodyFocused = false
+    @State private var isImporterPresented = false
+    @State private var isFileTargeted = false
+    @State private var isLibraryPresented = false
+    @State private var isBlockingSave = false
+    @State private var attachmentImportTask: Task<Void, Never>?
+    /// Resolves inline cards and tray rows once per meaningful change rather
+    /// than once per draft publish, and carries the editor's edit ledger so
+    /// anchors rebase from the real keystroke delta (PERF-12).
+    @State private var inlineCardResolver = NoteInlineCardResolver()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(noteDraft: NoteDraftController, uiState: PanelUIState,
+         topContentInset: CGFloat = 0, bottomContentInset: CGFloat = 0) {
+        self.noteDraft = noteDraft
+        _noteStore = ObservedObject(wrappedValue: noteDraft.noteStore)
+        self.uiState = uiState
+        self.topContentInset = topContentInset
+        self.bottomContentInset = bottomContentInset
+    }
+
+    var body: some View {
+        GeometryReader { _ in
+            ZStack {
+                editorSurface
+                    .allowsHitTesting(!isLibraryPresented)
+                    .accessibilityHidden(isLibraryPresented)
+
+                if isLibraryPresented {
+                    SavedNotesDrawer(
+                        noteStore: noteStore,
+                        selectedNoteID: noteDraft.activeNoteID,
+                        onSelect: selectNote,
+                        onNew: beginNewNote,
+                        onClose: closeLibrary
+                    )
+                    .padding(.top, topContentInset)
+                    .padding(.bottom, bottomContentInset)
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .move(edge: .trailing).combined(with: .opacity)
+                    )
+                    .zIndex(2)
+                }
+            }
+            .overlay {
+                if isFileTargeted, !isLibraryPresented {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.primary.opacity(0.035))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(
+                                    Color.primary.opacity(0.32),
+                                    style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                                )
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .background(
+                NotesHorizontalSwipeMonitor(isLibraryPresented: isLibraryPresented) {
+                    withAnimation(reduceMotion ? nil : AtticMotion.spring) {
+                        if isLibraryPresented {
+                            closeLibrary()
+                        } else {
+                            openLibrary()
+                        }
+                    }
+                }
+            )
+            .dropDestination(for: URL.self) { urls, _ in
+                let files = urls.filter(\.isFileURL)
+                guard !files.isEmpty, !isLibraryPresented else { return false }
+                importURLs(files, [])
+                return true
+            } isTargeted: { targeted in
+                isFileTargeted = targeted && !isLibraryPresented
+            }
+        }
+        .frame(minHeight: 230)
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true,
+            onCompletion: handleImporterResult
+        )
+        .onAppear {
+            syncComposerInteractionLocks()
+            DispatchQueue.main.async { focusBody() }
+        }
+        .onChange(of: isTitleFocused) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isBodyFocused) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isLibraryPresented) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isImporterPresented) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onChange(of: isBlockingSave) { _, _ in
+            syncComposerInteractionLocks()
+        }
+        .onDisappear {
+            attachmentImportTask?.cancel()
+            // Shared section/panel controllers flush before their transitions.
+            // This is the final durability boundary, never an implicit discard.
+            _ = withBlockingSave { noteDraft.flush() }
+            clearComposerInteractionLocks()
+        }
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: noteDraft.conflict)
+        .animation(reduceMotion ? nil : AtticMotion.quick, value: isFileTargeted)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("active-note-workspace")
+    }
+
+    private var editorSurface: some View {
+        ZStack(alignment: .bottom) {
+            AttachmentAwareTextEditor(
+                text: $noteDraft.body,
+                isFileTargeted: $isFileTargeted,
+                isFocused: isBodyFocused,
+                session: noteDraft.editorSession,
+                onFocusChange: updateBodyFocus,
+                onImportFiles: importURLs,
+                onImportError: noteStore.setAttachmentError,
+                initialViewState: noteDraft.editorViewState,
+                onViewStateChange: { state, session in
+                    noteDraft.recordEditorViewState(state, for: session)
+                },
+                onViewStateCommit: noteDraft.persistEditorSession,
+                captureImportReceiver: captureImportReceiver,
+                importUnavailableMessage: importUnavailableMessage,
+                documentAccessories: AnyView(documentAccessories),
+                hasDocumentAccessories: hasDocumentAttachments || noteDraft.conflictMessage != nil
+                    || noteDraft.saveErrorMessage != nil || noteDraft.recoveryErrorMessage != nil,
+                isDocumentVisible: !isLibraryPresented,
+                documentHeader: AnyView(noteHeader),
+                hasDocumentHeader: true,
+                topContentInset: topContentInset,
+                bottomContentInset: bottomContentInset + AtticStyle.composerControlHeight + 14,
+                inlineCards: inlineResolution.cards,
+                bodyEditLedger: noteDraft.bodyEditLedger,
+                onMoveAttachment: { id, offset in
+                    guard noteDraft.flush(), let noteID = noteDraft.activeNoteID else { return false }
+                    return noteStore.placeAttachment(id, in: noteID, offset: offset)
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 4)
+
+            bottomComposer
+                .padding(.bottom, bottomContentInset)
+        }
+    }
+
+    private var inlineResolution: NoteInlineCardResolver.Resolution {
+        inlineCardResolver.resolve(noteStore: noteStore, noteDraft: noteDraft)
+    }
+
+    private var documentAccessories: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if hasDocumentAttachments {
+                NoteAttachmentTray(
+                    noteStore: noteStore,
+                    noteDraft: noteDraft,
+                    trayAttachments: inlineResolution.trayAttachments,
+                    onCancelImport: cancelAttachmentImport,
+                    onImportFiles: importURLs
+                )
+            }
 
             if let conflictMessage = noteDraft.conflictMessage {
                 conflictControls(message: conflictMessage)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
+            if let saveError = noteDraft.saveErrorMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Label(saveError, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("Retry", action: saveInPlace)
+                        .accessibilityIdentifier("retry-note-save")
+                }
+                .foregroundStyle(palette.primaryForegroundColor)
+                .atticClearGlassForegroundReadability()
+                .accessibilityIdentifier("note-save-error")
+            }
+            if noteDraft.recoveryErrorMessage != nil {
+                NoteRecoveryWarning(noteDraft: noteDraft, uiState: uiState)
+            }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 7)
-        .onAppear {
-            DispatchQueue.main.async { isBodyFocused = true }
+    }
+
+    private var hasDocumentAttachments: Bool {
+        if noteStore.attachmentImportPresentation(for: noteDraft.editorSession) != .idle { return true }
+        guard let noteID = noteDraft.activeNoteID else { return false }
+        return !noteStore.attachments(for: noteID).isEmpty
+    }
+
+    private var noteHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("Untitled note", text: $noteDraft.title,
+                      prompt: Text("Untitled note").foregroundStyle(palette.secondaryForegroundColor))
+                .textFieldStyle(.plain)
+                .font(.system(size: 19, weight: .medium, design: .rounded))
+                .foregroundStyle(palette.primaryForegroundColor)
+                .atticClearGlassForegroundReadability()
+                .focused($isTitleFocused)
+                .onChange(of: isTitleFocused) { _, focused in
+                    if focused { isBodyFocused = false }
+                }
+                .onSubmit(focusBody)
+                .onExitCommand {
+                    // Escape only releases the title field. It never saves,
+                    // closes, or discards the durable draft.
+                    isTitleFocused = false
+                }
+                .accessibilityIdentifier("note-title")
+
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(saveStatusColor)
+                    .frame(width: 4, height: 4)
+                    .atticClearGlassForegroundReadability()
+                Text(saveStatus)
+                    .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(palette.secondaryForegroundColor)
+                    .atticClearGlassForegroundReadability()
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(saveStatus)
         }
-        .onChange(of: isBodyFocused) { _, isFocused in
-            if !isFocused { _ = noteDraft.flush() }
+        .padding(.horizontal, 2)
+        .padding(.top, 2)
+        .padding(.bottom, 2)
+    }
+
+    private var bottomComposer: some View {
+        HStack(spacing: 8) {
+            noteControl("Saved notes", symbol: "rectangle.stack", identifier: "browse-saved-notes") {
+                isLibraryPresented ? closeLibrary() : openLibrary()
+            }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
+            Spacer(minLength: 8)
+            noteControl("Attach files", symbol: "plus", identifier: "add-note-attachment") {
+                isImporterPresented = true
+            }
+            .disabled(isImporting)
+            noteControl("New note", symbol: "square.and.pencil", identifier: "new-note-from-editor",
+                        action: beginNewNote)
         }
-        .onDisappear { _ = noteDraft.flush() }
-        .animation(reduceMotion ? nil : AtticMotion.quick, value: noteDraft.conflict)
+        .padding(.horizontal, 6)
+        .padding(.top, 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Note controls")
+        .accessibilityIdentifier("note-entry-bar")
+    }
+
+    private func noteControl(_ title: String, symbol: String, identifier: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .medium))
+                .atticClearGlassForegroundReadability()
+                .frame(width: 34, height: 34)
+                .atticGlassControl(in: Circle(), interactive: true)
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var libraryLabel: String {
+        let count = noteStore.notes.count
+        return count == 1 ? "1 saved note" : "\(count) saved notes"
+    }
+
+    private var isImporting: Bool {
+        if attachmentImportTask != nil { return true }
+        if case .importing = noteStore.attachmentImportState { return true }
+        return false
+    }
+
+    private var saveStatusColor: Color {
+        if noteDraft.recoveryErrorMessage != nil { return .orange }
+        if noteDraft.saveErrorMessage != nil { return .orange }
+        if noteDraft.conflict != nil { return .orange }
+        if noteDraft.isDirty { return Color.primary.opacity(0.42) }
+        return Color.primary.opacity(0.28)
+    }
+
+    private var saveStatus: String {
+        if noteDraft.conflict != nil { return "Needs your attention" }
+        if noteDraft.saveErrorMessage != nil { return "Not saved · Retry available" }
+        if noteDraft.isDirty { return "Unsaved changes" }
+        if noteDraft.recoveryErrorMessage != nil { return "Recovery needs attention · Retry available" }
+        guard let noteID = noteDraft.activeNoteID,
+              let note = noteStore.notes.first(where: { $0.id == noteID }) else {
+            return "New note"
+        }
+
+        if Date().timeIntervalSince(note.updatedAt) < 2 { return "Saved just now" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        let relative = formatter.localizedString(for: note.updatedAt, relativeTo: Date())
+        return relative == "now" ? "Saved just now" : "Saved \(relative)"
+    }
+
+    private func updateBodyFocus(_ isFocused: Bool) {
+        if isFocused {
+            isTitleFocused = false
+        }
+        isBodyFocused = isFocused
+    }
+
+    private func focusBody() {
+        isTitleFocused = false
+        isBodyFocused = true
+    }
+
+    private func openLibrary() {
+        isTitleFocused = false
+        isBodyFocused = false
+        withAnimation(reduceMotion ? nil : AtticMotion.spring) {
+            isLibraryPresented = true
+        }
+    }
+
+    private func closeLibrary() {
+        withAnimation(reduceMotion ? nil : AtticMotion.spring) {
+            isLibraryPresented = false
+        }
+        DispatchQueue.main.async { focusBody() }
+    }
+
+    private func beginNewNote() {
+        guard withBlockingSave({ noteDraft.beginNew() }) else { return }
+        uiState.beginAdding()
+        isLibraryPresented = false
+        DispatchQueue.main.async { focusBody() }
+    }
+
+    private func selectNote(_ note: NoteItem) {
+        guard withBlockingSave({ noteDraft.beginEditing(note) }) else { return }
+        uiState.beginEditingNote(note)
+        isLibraryPresented = false
+        DispatchQueue.main.async { focusBody() }
+    }
+
+    private func saveInPlace() {
+        _ = withBlockingSave { noteDraft.flush() }
+    }
+
+    private func handleImporterResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case let .success(urls):
+            importURLs(urls, [])
+        case let .failure(error):
+            let cocoaError = error as NSError
+            guard cocoaError.domain != NSCocoaErrorDomain
+                    || cocoaError.code != CocoaError.Code.userCancelled.rawValue else {
+                return
+            }
+            noteStore.setAttachmentError(
+                "Unable to choose attachments: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func importURLs(_ urls: [URL], _ cleanupDirectories: [URL]) {
+        guard !urls.isEmpty else {
+            removeTemporaryDirectories(cleanupDirectories)
+            return
+        }
+        guard !isImporting else {
+            removeTemporaryDirectories(cleanupDirectories)
+            noteStore.setAttachmentError(
+                "Finish or cancel the current attachment import before adding more files."
+            )
+            return
+        }
+        guard let request = withBlockingSave({
+            noteDraft.prepareAttachmentImport(from: urls)
+        }) else {
+            removeTemporaryDirectories(cleanupDirectories)
+            return
+        }
+
+        startAttachmentImport(request, cleanupDirectories: cleanupDirectories)
+    }
+
+    /// Why a paste or promised drop could not start an import, in the same
+    /// words the URL path uses (DATA-003).
+    private func importUnavailableMessage() -> String {
+        if isImporting { return AttachmentAcceptingTextView.busyImportMessage }
+        if let conflictMessage = noteDraft.conflictMessage { return conflictMessage }
+        if let saveError = noteDraft.saveErrorMessage {
+            return "This note could not be saved, so the file was not attached: \(saveError)"
+        }
+        return "This note could not be saved, so the file was not attached. Retry the save and try again."
+    }
+
+    /// File-provider delivery may arrive after the native editor has switched
+    /// notes. Capture the logical owner now, before receiving promised bytes.
+    private func captureImportReceiver() -> (([URL], [URL]) -> Void)? {
+        guard !isImporting,
+              let captured = withBlockingSave({ noteDraft.prepareAttachmentImport(from: []) }) else { return nil }
+        return { urls, cleanup in
+            let request = NoteAttachmentImportRequest(
+                id: captured.id,
+                editorSession: captured.editorSession,
+                origin: captured.origin,
+                urls: urls
+            )
+            startAttachmentImport(request, cleanupDirectories: cleanup)
+        }
+    }
+
+    private func startAttachmentImport(
+        _ request: NoteAttachmentImportRequest,
+        cleanupDirectories: [URL]
+    ) {
+        guard !request.urls.isEmpty, !isImporting else {
+            removeTemporaryDirectories(cleanupDirectories)
+            noteStore.setAttachmentError("Finish or cancel the current attachment import before adding more files.")
+            return
+        }
+
+        attachmentImportTask = Task { @MainActor in
+            defer {
+                removeTemporaryDirectories(cleanupDirectories)
+                attachmentImportTask = nil
+            }
+            let outcome = await noteStore.importAttachments(request)
+            let completion = noteDraft.completeAttachmentImport(
+                outcome,
+                for: request
+            )
+            if case let .adopted(noteID) = completion {
+                uiState.editingNoteID = noteID
+            }
+        }
+    }
+
+    private func cancelAttachmentImport() {
+        attachmentImportTask?.cancel()
+    }
+
+    private func removeTemporaryDirectories(_ directories: [URL]) {
+        guard !directories.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            for directory in directories {
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
+    }
+
+    private var interactionSnapshot: NotesComposerInteractionSnapshot {
+        NotesComposerInteractionSnapshot(
+            isTitleFocused: isTitleFocused,
+            isBodyFocused: isBodyFocused,
+            isLibraryPresented: isLibraryPresented,
+            isImporterPresented: isImporterPresented,
+            isBlockingSave: isBlockingSave
+        )
+    }
+
+    private func syncComposerInteractionLocks() {
+        let reasons = interactionSnapshot.lockReasons
+        for reason in [
+            PanelInteractionLockReason.notesEditorFocus,
+            .notesPopover,
+            .blockingSave
+        ] {
+            uiState.setInteractionLock(reason, isActive: reasons.contains(reason))
+        }
+    }
+
+    private func clearComposerInteractionLocks() {
+        uiState.setInteractionLock(.notesEditorFocus, isActive: false)
+        uiState.setInteractionLock(.notesPopover, isActive: false)
+        uiState.setInteractionLock(.blockingSave, isActive: false)
+    }
+
+    private func withBlockingSave<Result>(
+        _ operation: () -> Result
+    ) -> Result {
+        isBlockingSave = true
+        syncComposerInteractionLocks()
+        defer {
+            isBlockingSave = false
+            syncComposerInteractionLocks()
+        }
+        return operation()
     }
 
     private func conflictControls(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(.orange)
+                .foregroundStyle(palette.primaryForegroundColor)
+                .atticClearGlassForegroundReadability()
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
                 switch noteDraft.conflict {
                 case .remoteChange:
-                    conflictButton(
-                        "Use Remote",
-                        identifier: "use-remote-note",
-                        action: useRemoteVersion
-                    )
-                    conflictButton(
-                        "Keep Mine",
-                        identifier: "keep-local-note",
-                        action: overwriteRemoteVersion
-                    )
-                    conflictButton(
-                        "Save Copy",
-                        identifier: "save-note-copy",
-                        action: saveAsNew
-                    )
+                    conflictButton("Use Saved", identifier: "use-remote-note") {
+                        _ = noteDraft.useRemoteVersion()
+                    }
+                    conflictButton("Keep Mine", identifier: "keep-local-note") {
+                        _ = noteDraft.overwriteRemoteVersion()
+                    }
+                    conflictButton("Save Copy", identifier: "save-note-copy") {
+                        _ = noteDraft.saveAsNew()
+                    }
                 case .missingOriginal:
-                    conflictButton(
-                        "Save as New",
-                        identifier: "recover-note-as-new",
-                        action: saveAsNew
-                    )
+                    conflictButton("Save as New", identifier: "recover-note-as-new") {
+                        _ = noteDraft.saveAsNew()
+                    }
                     conflictButton(
                         "Discard",
                         role: .destructive,
-                        identifier: "discard-note-draft",
-                        action: discardDraft
-                    )
+                        identifier: "discard-note-draft"
+                    ) {
+                        noteDraft.discardDraft()
+                        uiState.endAdding()
+                    }
                 case nil:
                     EmptyView()
                 }
             }
         }
-        .padding(7)
-        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+        .padding(9)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("note-conflict")
     }
@@ -172,35 +711,182 @@ struct NoteComposerView: View {
             .controlSize(.mini)
             .accessibilityIdentifier(identifier)
     }
+}
 
-    private var saveLabel: String {
-        noteDraft.activeNoteID == nil ? "Add note" : "Save note"
+private struct SavedNotesDrawer: View {
+    @Environment(\.atticPanelThemePalette) private var palette
+    @ObservedObject var noteStore: NoteStore
+    let selectedNoteID: UUID?
+    let onSelect: (NoteItem) -> Void
+    let onNew: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            ScrollView {
+                if noteStore.notes.isEmpty {
+                    Text("No saved notes yet")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(palette.secondaryForegroundColor)
+                        .padding(.top, 64)
+                } else {
+                    LazyVStack(spacing: 5) {
+                        ForEach(noteStore.orderedNotes()) { note in
+                            SavedNoteRow(noteStore: noteStore, note: note,
+                                isSelected: note.id == selectedNoteID, onSelect: { onSelect(note) })
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 58)
+                    .padding(.bottom, 58)
+                }
+            }
+            .scrollIndicators(.never)
+            HStack {
+                drawerButton("New note", symbol: "square.and.pencil", id: "new-saved-note", action: onNew)
+                Spacer()
+                drawerButton("Return to note", symbol: "xmark", id: "close-saved-notes", action: onClose)
+            }
+            .padding(14)
+            .frame(maxHeight: .infinity, alignment: .top)
+            drawerButton("Return to writing", symbol: "arrow.left", id: "return-to-writing", action: onClose)
+                .padding(14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        }
+        .atticGlassControl(in: Squircle(cornerRadius: 36, exponent: AtticStyle.panelSquircleExponent), interactive: false)
+        .clipShape(Squircle(cornerRadius: 36, exponent: AtticStyle.panelSquircleExponent))
+        .padding(2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Saved notes")
+        .accessibilityIdentifier("saved-notes-drawer")
     }
 
-    private func saveAndClose() {
-        guard noteDraft.close() else { return }
-        uiState.endAdding()
+    private func drawerButton(_ title: String, symbol: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 32, height: 32)
+                .atticGlassControl(in: Circle())
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(id)
     }
 
-    private func useRemoteVersion() {
-        _ = noteDraft.useRemoteVersion()
+}
+
+private struct SavedNoteRow: View {
+    @Environment(\.atticPanelThemePalette) private var palette
+    @ObservedObject var noteStore: NoteStore
+    let note: NoteItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    @State private var isHovering = false
+    @State private var isConfirmingDeletion = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Button(action: onSelect) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(displayTitle)
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                        .atticClearGlassForegroundReadability()
+                    HStack(spacing: 5) {
+                        Text(preview)
+                            .lineLimit(1)
+                        if attachmentCount > 0 {
+                            Label("\(attachmentCount)", systemImage: "paperclip")
+                                .labelStyle(.titleAndIcon)
+                        }
+                    }
+                    .font(.system(size: 9.5, design: .rounded))
+                    .foregroundStyle(palette.secondaryForegroundColor)
+                    .atticClearGlassForegroundReadability()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                Button("Open", systemImage: "arrow.right", action: onSelect)
+                Button("Copy", systemImage: "doc.on.doc", action: copyNote)
+                Divider()
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    isConfirmingDeletion = true
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 10, weight: .semibold))
+                    .atticClearGlassForegroundReadability()
+                    .frame(width: 24, height: 24)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(palette.secondaryForegroundColor)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(
+            Color.primary.opacity(isSelected ? 0.105 : (isHovering ? 0.06 : 0.025)),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(isSelected ? 0.13 : 0.04), lineWidth: 0.75)
+        }
+        .onHover { isHovering = $0 }
+        .alert("Delete note?", isPresented: $isConfirmingDeletion) {
+            Button("Delete", role: .destructive) {
+                _ = noteStore.delete(note)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes the local note and its attachments.")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(displayTitle), \(preview)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private func overwriteRemoteVersion() {
-        _ = noteDraft.overwriteRemoteVersion()
+    private var displayTitle: String {
+        let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        return note.body
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
+            ?? noteStore.attachments(for: note.id).first?.originalFilename
+            ?? "Untitled note"
     }
 
-    private func saveAsNew() {
-        _ = noteDraft.saveAsNew()
+    private var preview: String {
+        let body = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !body.isEmpty {
+            return body.replacingOccurrences(of: "\n", with: " ")
+        }
+        return attachmentCount == 1 ? "1 attachment" : "\(attachmentCount) attachments"
     }
 
-    private func discardDraft() {
-        noteDraft.discardDraft()
-        uiState.endAdding()
+    private var attachmentCount: Int {
+        noteStore.attachments(for: note.id).count
+    }
+
+    private func copyNote() {
+        let text = note.title.isEmpty ? note.body : "\(note.title)\n\n\(note.body)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
 struct NoteRowView: View {
+    @Environment(\.atticPanelThemePalette) private var palette
     @ObservedObject var noteStore: NoteStore
     let noteDraft: NoteDraftController
     @ObservedObject var uiState: PanelUIState
@@ -217,13 +903,13 @@ struct NoteRowView: View {
                     Text(displayTitle)
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                         .lineLimit(1)
+                        .atticClearGlassForegroundReadability()
                     Text(preview)
-                        .font(.system(size: 11, design: .rounded))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 10.5, design: .rounded))
+                        .foregroundStyle(palette.secondaryForegroundColor)
+                        .atticClearGlassForegroundReadability()
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .layoutPriority(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -242,23 +928,19 @@ struct NoteRowView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 11, weight: .semibold))
+                    .atticClearGlassForegroundReadability()
                     .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .opacity(isHovering ? 1 : 0.38)
-            .help("Edit note")
-            .accessibilityLabel("Edit note")
-            .accessibilityIdentifier("note-actions-\(note.id.uuidString)")
+            .foregroundStyle(palette.secondaryForegroundColor)
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .frame(minHeight: AtticStyle.rowHeight)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
         .background(
-            Color.primary.opacity(isHovering ? 0.055 : 0),
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            Color.primary.opacity(isHovering ? 0.06 : 0.025),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
         .onHover { hovering in
             withAnimation(reduceMotion ? nil : AtticMotion.quick) {
@@ -269,7 +951,7 @@ struct NoteRowView: View {
             Button("Delete", role: .destructive, action: deleteNote)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes the note from synced devices.")
+            Text("This permanently removes the local note and its attachments.")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("note-row-\(note.id.uuidString)")
@@ -295,27 +977,72 @@ struct NoteRowView: View {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty })
+            ?? noteStore.attachments(for: note.id).first?.originalFilename
             ?? "Untitled note"
     }
 
     private var preview: String {
-        let bodyLines = note.body
+        let text = note.body
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        if !text.isEmpty { return text }
 
-        guard !bodyLines.isEmpty else { return "No additional text" }
-        if note.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let rest = bodyLines.dropFirst().joined(separator: " ")
-            return rest.isEmpty ? "No additional text" : rest
-        }
-        return bodyLines.first ?? "No additional text"
+        let count = noteStore.attachments(for: note.id).count
+        if count == 1 { return "1 attachment" }
+        if count > 1 { return "\(count) attachments" }
+        return "No additional text"
     }
 
     private func copyNote() {
         let text = note.title.isEmpty ? note.body : "\(note.title)\n\n\(note.body)"
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
+}
+
+/// Registers the Notes workspace with the panel's native scroll-event router.
+/// A single deliberate swipe toggles the contextual library.
+private struct NotesHorizontalSwipeMonitor: NSViewRepresentable {
+    let isLibraryPresented: Bool
+    let onSwipe: () -> Void
+
+    func makeNSView(context: Context) -> NotesHorizontalSwipeView {
+        NotesHorizontalSwipeView(isLibraryPresented: isLibraryPresented, onSwipe: onSwipe)
+    }
+
+    func updateNSView(_ nsView: NotesHorizontalSwipeView, context: Context) {
+        nsView.onSwipe = onSwipe
+        nsView.isNotesLibraryPresented = isLibraryPresented
+    }
+}
+
+private final class NotesHorizontalSwipeView: NSView, PanelNotesSwipeTarget {
+    var onSwipe: () -> Void
+    var isNotesLibraryPresented: Bool
+    var swipeView: NSView { self }
+    private weak var registeredPanel: AtticPanel?
+
+    init(isLibraryPresented: Bool, onSwipe: @escaping () -> Void) {
+        self.isNotesLibraryPresented = isLibraryPresented
+        self.onSwipe = onSwipe
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let registeredPanel, registeredPanel.notesSwipeTarget === self {
+            registeredPanel.notesSwipeTarget = nil
+        }
+        registeredPanel = window as? AtticPanel
+        registeredPanel?.notesSwipeTarget = self
+    }
+
+    func performNotesSwipe() { onSwipe() }
 }

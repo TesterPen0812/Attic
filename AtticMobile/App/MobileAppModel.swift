@@ -40,6 +40,8 @@ enum ICloudAvailability: Equatable {
 final class MobileAppModel: ObservableObject {
     @Published private(set) var store: TaskStore?
     @Published private(set) var noteStore: NoteStore?
+    @Published private(set) var canvasStore: CanvasStore?
+    @Published private(set) var canvasSession: CanvasSession?
     @Published private(set) var startupError: String?
     @Published private(set) var iCloudAvailability: ICloudAvailability = .checking
 
@@ -72,24 +74,44 @@ final class MobileAppModel: ObservableObject {
             let isRunningTests = environment["ATTIC_TESTING"] == "1"
                 || environment["XCTestConfigurationFilePath"] != nil
                 || environment["XCTestBundlePath"] != nil
+            let usesCanvasUITestPersistence = isRunningTests
+                && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
             shouldCheckICloudStatus = !isRunningTests
             #if DEBUG
             if !isRunningTests {
                 try PersistenceController.initializeCloudKitDevelopmentSchemaIfNeeded()
             }
             #endif
-            let container = try PersistenceController.makeContainer(
-                inMemory: isRunningTests
-            )
+
+            let container: ModelContainer
+            if usesCanvasUITestPersistence {
+                container = try PersistenceController.makeCanvasUITestContainer(
+                    reset: environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1"
+                )
+            } else {
+                container = try PersistenceController.makeContainer(
+                    inMemory: isRunningTests
+                )
+            }
+
+            let store = TaskStore(container: container)
+            let noteStore = NoteStore(container: container)
+            let canvasStore = CanvasStore(container: container)
+            let canvasSession = CanvasSession(store: canvasStore)
+
             self.container = container
-            store = TaskStore(container: container)
-            noteStore = NoteStore(container: container)
+            self.store = store
+            self.noteStore = noteStore
+            self.canvasStore = canvasStore
+            self.canvasSession = canvasSession
             startupError = nil
             Task { await refresh() }
         } catch {
             container = nil
             store = nil
             noteStore = nil
+            canvasStore = nil
+            canvasSession = nil
             startupError = error.localizedDescription
         }
     }
@@ -97,6 +119,7 @@ final class MobileAppModel: ObservableObject {
     func refresh() async {
         store?.refresh()
         noteStore?.refresh()
+        canvasStore?.refresh()
         purgeCompletedBeforeToday()
         await refreshICloudAvailability()
     }

@@ -36,12 +36,13 @@ project.root_object.attributes['LastUpgradeCheck'] = '2660'
 project.add_build_configuration('Local', :debug)
 
 app = project.new_target(:application, 'Attic', :osx, '14.0')
+unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '14.0')
 unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '14.0')
 ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '14.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
-unit_tests.add_dependency(app)
+unit_tests.add_dependency(unit_host)
 ui_tests.add_dependency(app)
 mobile_tests.add_dependency(mobile_app)
 mobile_ui_tests.add_dependency(mobile_app)
@@ -57,28 +58,53 @@ def add_swift_sources(project, target, group_name, directory)
 end
 
 app_group = add_swift_sources(project, app, 'Attic', 'Attic')
-tests_group = add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
-ui_tests_group = add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
+add_swift_sources(
+  project,
+  unit_host,
+  'AtticUnitTestHost',
+  'AtticUnitTestHost'
+)
+app_group.files.each do |reference|
+  next if reference.path == 'App/AtticApp.swift'
+
+  unit_host.source_build_phase.add_file_reference(reference)
+end
+add_swift_sources(project, unit_tests, 'AtticTests', 'AtticTests')
+add_swift_sources(project, ui_tests, 'AtticUITests', 'AtticUITests')
 mobile_group = add_swift_sources(project, mobile_app, 'AtticMobile', 'AtticMobile')
-mobile_tests_group = add_swift_sources(
-  project,
-  mobile_tests,
-  'AtticMobileTests',
-  'AtticMobileTests'
-)
-mobile_ui_tests_group = add_swift_sources(
-  project,
-  mobile_ui_tests,
-  'AtticMobileUITests',
-  'AtticMobileUITests'
-)
+add_swift_sources(project, mobile_tests, 'AtticMobileTests', 'AtticMobileTests')
+add_swift_sources(project, mobile_ui_tests, 'AtticMobileUITests', 'AtticMobileUITests')
 
 shared_mobile_sources = [
+  'Canvas/CanvasControls.swift',
+  'Canvas/CanvasImageImporter.swift',
+  'Canvas/CanvasImageTypes.swift',
+  'Canvas/CanvasInputStateMachine.swift',
+  'Canvas/CanvasSendable.swift',
+  'Canvas/CanvasSession.swift',
+  'Canvas/CanvasStrokeCodec.swift',
+  'Canvas/CanvasSurface.swift',
+  'Canvas/CanvasSurfaceIOS.swift',
+  'Canvas/CanvasSurfaceInteraction.swift',
+  'Canvas/CanvasSurfaceRenderer.swift',
+  'Canvas/CanvasTypes.swift',
+  'Canvas/CanvasViewport.swift',
   'Design/AtticTheme.swift',
   'Design/TaskActionsMenu.swift',
+  'Models/CanvasBoardItem.swift',
+  'Models/CanvasImageItem.swift',
+  'Models/CanvasStrokeItem.swift',
   'Models/TaskItem.swift',
   'Models/TaskTypes.swift',
   'Models/NoteItem.swift',
+  'Services/CanvasStore.swift',
+  'Services/CanvasStoreBoards.swift',
+  'Services/CanvasStoreCloudSync.swift',
+  'Services/CanvasStoreImages.swift',
+  'Services/CanvasStoreLifecycle.swift',
+  'Services/CanvasStorePersistence.swift',
+  'Services/CanvasStoreReplicaResolution.swift',
+  'Services/CanvasStoreStrokes.swift',
   'Services/PersistenceController.swift',
   'Services/NoteStore.swift',
   'Services/TaskStore.swift'
@@ -111,18 +137,22 @@ end
 
 app.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.Attic'
-  settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
+  # Keep the official defaults while giving isolated UI hosts target-specific
+  # override points. A global PRODUCT_BUNDLE_IDENTIFIER override also changes
+  # the UI-test bundle and can make XCTest's runner unlaunchable.
+  settings['ATTIC_MACOS_BUNDLE_IDENTIFIER'] = 'com.taha.Attic'
+  settings['ATTIC_MACOS_PRODUCT_NAME'] = 'Attic'
+  settings['ATTIC_MACOS_EXECUTABLE_NAME'] = 'Attic'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_BUNDLE_IDENTIFIER)'
+  settings['PRODUCT_NAME'] = '$(ATTIC_MACOS_PRODUCT_NAME)'
+  settings['EXECUTABLE_NAME'] = '$(ATTIC_MACOS_EXECUTABLE_NAME)'
+  settings['PRODUCT_MODULE_NAME'] = 'Attic'
   settings['ATTIC_DISPLAY_NAME'] = 'Attic'
   settings['GENERATE_INFOPLIST_FILE'] = 'NO'
   settings['INFOPLIST_FILE'] = 'Attic/Info.plist'
-  settings['CODE_SIGN_ENTITLEMENTS'] = case config.name
-                                       when 'Debug' then 'Attic/AtticDebug.entitlements'
-                                       when 'Local' then 'Attic/AtticLocal.entitlements'
-                                       else 'Attic/Attic.entitlements'
-                                       end
+  settings['CODE_SIGN_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['ENABLE_APP_SANDBOX'] = 'YES'
   settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
   settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
@@ -130,35 +160,68 @@ app.build_configurations.each do |config|
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['SWIFT_EMIT_LOC_STRINGS'] = 'YES'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
   settings['MARKETING_VERSION'] = '1.1'
   settings['CURRENT_PROJECT_VERSION'] = '11'
-  settings['ICLOUD_CONTAINER_ENVIRONMENT'] = config.name == 'Release' ? 'Production' : 'Development'
-  settings['APS_ENVIRONMENT'] = config.name == 'Release' ? 'production' : 'development'
-  abort "Mismatched Attic CloudKit/APNs environment for #{config.name}" unless
-    (settings['ICLOUD_CONTAINER_ENVIRONMENT'] == 'Production') ==
-      (settings['APS_ENVIRONMENT'] == 'production')
+end
+
+unit_host.build_configurations.each do |config|
+  settings = config.build_settings
+  settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME'] = 'AtticUnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME'] = 'AtticUnitTestHost'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER)'
+  settings['PRODUCT_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'
+  settings['EXECUTABLE_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'
+  settings['PRODUCT_MODULE_NAME'] = 'AtticUnitTestHost'
+  # Exercise the same exported drag types as the app without duplicating its
+  # declaration. Identity and version remain specific to the isolated host.
+  settings['GENERATE_INFOPLIST_FILE'] = 'NO'
+  settings['INFOPLIST_FILE'] = 'Attic/Info.plist'
+  settings['ATTIC_DISPLAY_NAME'] = '$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME)'
+  settings['MARKETING_VERSION'] = '1.0'
+  settings['CURRENT_PROJECT_VERSION'] = '1'
+  # Socket-level MCP tests exercise the real loopback listener while retaining
+  # the same local-only sandbox/network permissions as the application.
+  settings['CODE_SIGN_ENTITLEMENTS'] = 'Attic/AtticNotesLocal.entitlements'
+  settings['CODE_SIGN_STYLE'] = 'Automatic'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
+  settings['ENABLE_APP_SANDBOX'] = 'YES'
+  settings['ENABLE_HARDENED_RUNTIME'] = 'YES'
+  settings['SWIFT_VERSION'] = '5.0'
+  settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY'
 end
 
 unit_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticTests'
+  # TEST_HOST is evaluated in the unit-test target's build-setting scope, so
+  # keep ordinary Local/Debug runs usable when no isolated-host overrides are
+  # supplied on the xcodebuild command line.
+  settings['ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticTests'
+  settings['ATTIC_MACOS_UNIT_HOST_BUNDLE_IDENTIFIER'] = 'com.taha.Attic.UnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME'] = 'AtticUnitTestHost'
+  settings['ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME'] = 'AtticUnitTestHost'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UNIT_TEST_BUNDLE_IDENTIFIER)'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+  settings['OTHER_SWIFT_FLAGS'] = '$(inherited) -DATTIC_LOCAL_ONLY -module-alias Attic=AtticUnitTestHost'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
-  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/Attic.app/Contents/MacOS/Attic'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
+  settings['TEST_HOST'] = '$(BUILT_PRODUCTS_DIR)/$(ATTIC_MACOS_UNIT_HOST_PRODUCT_NAME).app/Contents/MacOS/$(ATTIC_MACOS_UNIT_HOST_EXECUTABLE_NAME)'
   settings['BUNDLE_LOADER'] = '$(TEST_HOST)'
 end
 
 ui_tests.build_configurations.each do |config|
   settings = config.build_settings
-  settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.emanueledipietro.AtticUITests'
+  settings['ATTIC_MACOS_UI_TEST_BUNDLE_IDENTIFIER'] = 'com.taha.AtticUITests'
+  settings['PRODUCT_BUNDLE_IDENTIFIER'] = '$(ATTIC_MACOS_UI_TEST_BUNDLE_IDENTIFIER)'
   settings['GENERATE_INFOPLIST_FILE'] = 'YES'
   settings['SWIFT_VERSION'] = '5.0'
   settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
   settings['CODE_SIGN_STYLE'] = 'Automatic'
-  settings['DEVELOPMENT_TEAM'] = 'HR24WHR326'
+  settings['DEVELOPMENT_TEAM'] = 'ZGZWS73268'
   settings['TEST_TARGET_NAME'] = 'Attic'
 end
 
@@ -243,12 +306,6 @@ proxy_targets.each do |proxy, target|
 end
 
 target_attributes = project.root_object.attributes['TargetAttributes'] ||= {}
-target_attributes[app.uuid] = {
-  'SystemCapabilities' => {
-    'com.apple.iCloud' => { 'enabled' => 1 },
-    'com.apple.Push' => { 'enabled' => 1 }
-  }
-}
 target_attributes[mobile_app.uuid] = {
   'SystemCapabilities' => {
     'com.apple.BackgroundModes' => { 'enabled' => 1 },
@@ -259,14 +316,25 @@ target_attributes[mobile_app.uuid] = {
 
 scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)
+scheme.build_action.entries.last.build_for_testing = false
+scheme.add_build_target(unit_host, false)
 scheme.set_launch_target(app)
 scheme.launch_action.build_configuration = 'Local'
 scheme.add_test_target(unit_tests)
-scheme.add_test_target(ui_tests)
 scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
   { key: 'ATTIC_TESTING', value: '1', enabled: true }
 ])
 scheme.save_as(staged_project_path, 'Attic', true)
+
+ui_scheme = Xcodeproj::XCScheme.new
+ui_scheme.add_build_target(app)
+ui_scheme.set_launch_target(app)
+ui_scheme.launch_action.build_configuration = 'Local'
+ui_scheme.add_test_target(ui_tests)
+ui_scheme.test_action.environment_variables = Xcodeproj::XCScheme::EnvironmentVariables.new([
+  { key: 'ATTIC_TESTING', value: '1', enabled: true }
+])
+ui_scheme.save_as(staged_project_path, 'AtticUI', true)
 
 mobile_scheme = Xcodeproj::XCScheme.new
 mobile_scheme.add_build_target(mobile_app)
@@ -279,14 +347,44 @@ mobile_scheme.test_action.environment_variables = Xcodeproj::XCScheme::Environme
 ])
 mobile_scheme.save_as(staged_project_path, 'AtticMobile', true)
 
+# Keep target UUIDs stable when the macOS source graph changes. The checked-in
+# schemes are part of the generated project contract, and changing only the
+# macOS target's source list must not churn their buildable references.
+stable_target_uuids = {
+  app => 'A7714C2169D9DBD5A01DC94837E1C051',
+  unit_host => '91B51DB0FF2546EAAA06E2521BC7D6A8',
+  unit_tests => '6276F3101BBBD6791E37F0DC63F158C3',
+  ui_tests => '29D42C445B39133F6CE8ED3394F0BD54',
+  mobile_app => '6A9C0775F09BF19B3C70496EEC4AF237',
+  mobile_tests => 'A7E2FBB4FDEEC93FE643B32D6940915E',
+  mobile_ui_tests => '1BD194A0EE08899209C8473CFFD68DA0'
+}.freeze
+
 project.save
 
 project_file = File.join(staged_project_path, 'project.pbxproj')
 project_contents = File.read(project_file)
+stable_target_uuids.each do |target, stable_uuid|
+  project_contents.gsub!(target.uuid, stable_uuid)
+end
 project_contents.sub!("\tobjectVersion = 77;", "\tobjectVersion = 71;")
 project_contents.gsub!(/^\s*minimizedProjectReferenceProxies = 0;\n/, '')
 project_contents.gsub!(/^\s*preferredProjectObjectVersion = 77;\n/, '')
 File.write(project_file, project_contents)
+
+['Attic', 'AtticUI', 'AtticMobile'].each do |scheme_name|
+  scheme_file = File.join(
+    staged_project_path,
+    'xcshareddata',
+    'xcschemes',
+    "#{scheme_name}.xcscheme"
+  )
+  scheme_contents = File.read(scheme_file)
+  stable_target_uuids.each do |target, stable_uuid|
+    scheme_contents.gsub!(target.uuid, stable_uuid)
+  end
+  File.write(scheme_file, scheme_contents)
+end
 
 Xcodeproj::Project.open(staged_project_path)
 
