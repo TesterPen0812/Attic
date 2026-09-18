@@ -142,6 +142,17 @@ struct PanelMenuTrackingState {
     }
 }
 
+enum AppTerminationPreparation {
+    static func prepare(
+        flushNoteDraft: () -> Bool,
+        commitCanvasTermination: () -> Void
+    ) -> Bool {
+        guard flushNoteDraft() else { return false }
+        commitCanvasTermination()
+        return true
+    }
+}
+
 @MainActor
 final class AppCoordinator {
     static let shared = AppCoordinator()
@@ -389,9 +400,14 @@ final class AppCoordinator {
     }
 
     func prepareForTermination() -> Bool {
-        canvasSession.cancelActiveInteraction()
-        canvasSession.flushViewState()
-        guard noteDraft.flush() else {
+        let canTerminate = AppTerminationPreparation.prepare(
+            flushNoteDraft: { noteDraft.flush() },
+            commitCanvasTermination: {
+                canvasSession.cancelActiveInteraction()
+                canvasSession.flushViewState()
+            }
+        )
+        guard canTerminate else {
             hoverMonitor.revealProgrammatically(section: .notes)
             return false
         }

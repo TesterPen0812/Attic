@@ -5,6 +5,40 @@ import XCTest
 @testable import Attic
 
 final class AppSettingsTests: XCTestCase {
+    func testTerminationVetoPreservesCanvasWork() {
+        var events: [String] = []
+
+        let canTerminate = AppTerminationPreparation.prepare(
+            flushNoteDraft: {
+                events.append("note-flush")
+                return false
+            },
+            commitCanvasTermination: {
+                events.append("canvas-termination")
+            }
+        )
+
+        XCTAssertFalse(canTerminate)
+        XCTAssertEqual(events, ["note-flush"])
+    }
+
+    func testSuccessfulTerminationCommitsCanvasAfterNoteFlush() {
+        var events: [String] = []
+
+        let canTerminate = AppTerminationPreparation.prepare(
+            flushNoteDraft: {
+                events.append("note-flush")
+                return true
+            },
+            commitCanvasTermination: {
+                events.append("canvas-termination")
+            }
+        )
+
+        XCTAssertTrue(canTerminate)
+        XCTAssertEqual(events, ["note-flush", "canvas-termination"])
+    }
+
     func testUIHostsUseEphemeralAgentCredentialsWithoutXCTestEnvironmentKeys() {
         XCTAssertTrue(AppRuntimeEnvironment(environment: ["ATTIC_UI_TESTING": "1"]).usesEphemeralAgentCredential)
         XCTAssertTrue(AppRuntimeEnvironment(environment: ["ATTIC_TESTING": "1"]).usesEphemeralAgentCredential)
