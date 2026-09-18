@@ -1,0 +1,2 @@
+- [Swift audit environment limits](swift-audit-environment.md) — Swift here is parse-only via a PATH-repaired 5.8 wrapper; never claim builds/tests; tests go in existing files.
+- [Audit method lessons](audit-method-lessons.md) — findings ledger lives in Docs/Whole-App-Audit-2026-09-18.md; explorer leads need source re-reads (half were false); veto-before-irreversible termination rule.
