@@ -77,6 +77,29 @@ final class CanvasAffordanceTruthTests: XCTestCase {
 }
 
 final class CanvasAccessibilityTests: XCTestCase {
+    func testAccessibilityNumberTextKeepsIntegralAndFractionalFormatting() {
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: 12), "12")
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: -3), "-3")
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: 0), "0")
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: 12.5), "12.5")
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: -0.5), "-0.5")
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: Double(Int.min)), "-9223372036854775808")
+    }
+
+    func testAccessibilityNumberTextDoesNotTrapOutsideIntRangeOrOnNonFiniteValues() {
+        // Persisted geometry is validated as finite, not bounded. `Int(_:)`
+        // traps on these values; the description must degrade instead.
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: Double(Int.max)), "9223372036854775808.0")
+        XCTAssertEqual(CanvasAccessibilityNumberText.string(for: 18_446_744_073_709_551_616.0), "18446744073709551616.0")
+        let huge = CanvasAccessibilityNumberText.string(for: 1e300)
+        XCTAssertTrue(huge.hasPrefix("1"))
+        XCTAssertTrue(huge.hasSuffix(".0"))
+        XCTAssertTrue(CanvasAccessibilityNumberText.string(for: -1e300).hasPrefix("-1"))
+        XCTAssertFalse(CanvasAccessibilityNumberText.string(for: .infinity).isEmpty)
+        XCTAssertFalse(CanvasAccessibilityNumberText.string(for: -.infinity).isEmpty)
+        XCTAssertFalse(CanvasAccessibilityNumberText.string(for: .nan).isEmpty)
+    }
+
     @MainActor
     func testViewportKeysWorkAfterInlineCommitWithoutOpeningMenuAndRespectFocusAndSaveVeto() throws {
         let gate = PersistenceGate()

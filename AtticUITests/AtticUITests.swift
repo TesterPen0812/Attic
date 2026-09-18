@@ -583,27 +583,35 @@ final class AtticUITests: XCTestCase {
         // this native track (1% / 99%). Drag the actual thumb past the track
         // boundary so AppKit clamps to the exact endpoint, without relying
         // on keyboard focus or accepting a near-zero gradient as off.
-        let frame = slider.frame
-        let inset = min(frame.height / 2, frame.width / 2)
-        let origin = slider.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-        let thumb = origin.withOffset(CGVector(
-            dx: inset + (frame.width - 2 * inset) * slider.normalizedSliderPosition,
-            dy: frame.height / 2
-        ))
-        let beyondTrack = origin.withOffset(CGVector(
-            dx: endpoint == 0 ? -24 : frame.width + 24,
-            dy: frame.height / 2
-        ))
-        // Keep the final mouse-down position separate from mouse-up. The
-        // 99% hosted failure recorded release at the same timestamp as the
-        // move ended; hold the final position before releasing it.
-        thumb.click(forDuration: 0.1, thenDragTo: beyondTrack,
-                    withVelocity: .slow, thenHoldForDuration: 0.2)
-        let reachedEndpoint = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            slider.normalizedSliderPosition == endpoint
-        }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [reachedEndpoint], timeout: 3), .completed,
-                       "Gradient must reach \(endpoint); actual: \(slider.normalizedSliderPosition), value: \(String(describing: slider.value))")
+        // Hosted macOS can occasionally drop the first native drag entirely.
+        // Retry once from the slider's newly reported position while keeping
+        // the same real pointer input and exact endpoint requirement.
+        for attempt in 0..<2 {
+            let frame = slider.frame
+            let inset = min(frame.height / 2, frame.width / 2)
+            let origin = slider.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            let thumb = origin.withOffset(CGVector(
+                dx: inset + (frame.width - 2 * inset) * slider.normalizedSliderPosition,
+                dy: frame.height / 2
+            ))
+            let beyondTrack = origin.withOffset(CGVector(
+                dx: endpoint == 0 ? -24 : frame.width + 24,
+                dy: frame.height / 2
+            ))
+            // Keep the final mouse-down position separate from mouse-up. The
+            // 99% hosted failure recorded release at the same timestamp as the
+            // move ended; hold the final position before releasing it.
+            thumb.click(forDuration: 0.1, thenDragTo: beyondTrack,
+                        withVelocity: .slow, thenHoldForDuration: 0.2)
+            let reachedEndpoint = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                slider.normalizedSliderPosition == endpoint
+            }, object: nil)
+            let timeout: TimeInterval = attempt == 0 ? 1 : 3
+            if XCTWaiter.wait(for: [reachedEndpoint], timeout: timeout) == .completed {
+                return
+            }
+        }
+        XCTFail("Gradient must reach \(endpoint); actual: \(slider.normalizedSliderPosition), value: \(String(describing: slider.value))")
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {

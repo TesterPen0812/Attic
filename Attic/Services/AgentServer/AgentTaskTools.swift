@@ -408,6 +408,11 @@ final class AgentTaskTools {
         guard newTitle != nil || newBody != nil else {
             throw AgentToolError.invalidArguments("Provide a title or body to update.")
         }
+        let destinationTitle = newTitle.map(NoteStore.normalizedTitle) ?? note.title
+        let destinationBody = newBody ?? note.body
+        guard !destinationTitle.isEmpty || NoteStore.hasMeaningfulBody(destinationBody) else {
+            throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
+        }
         try performNote {
             noteStore.update(note, title: newTitle, body: newBody)
         }

@@ -607,9 +607,20 @@ extension CanvasNSView {
     }
 
     private func canvasAccessibilityNumber(_ value: Double) -> String {
-        value.rounded() == value
-            ? String(Int(value))
-            : String(format: "%.1f", value)
+        CanvasAccessibilityNumberText.string(for: value)
+    }
+}
+
+/// Formats world-space numbers for accessibility descriptions. Persisted
+/// geometry is validated as finite, not bounded, so an integral value outside
+/// `Int`'s range (or a non-finite one from a corrupt row) must never reach
+/// `Int(_:)`, which traps instead of failing.
+enum CanvasAccessibilityNumberText {
+    static func string(for value: Double) -> String {
+        if let integer = Int(exactly: value) {
+            return String(integer)
+        }
+        return String(format: "%.1f", value)
     }
 }
 

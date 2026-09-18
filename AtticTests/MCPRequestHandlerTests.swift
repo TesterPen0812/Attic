@@ -243,6 +243,29 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(error["code"] as? Int, -32602)
     }
 
+    func testNonObjectToolArgumentsReturnInvalidParamsWithoutRunningTheTool() throws {
+        let malformedArguments: [Any] = [["Write tests"], "Write tests", 7, true]
+        for arguments in malformedArguments {
+            let response = try send(
+                method: "tools/call",
+                params: ["name": "create_task", "arguments": arguments]
+            )
+            let error = try XCTUnwrap(response["error"] as? [String: Any])
+            XCTAssertEqual(error["code"] as? Int, -32602)
+            XCTAssertNil(response["result"])
+        }
+        XCTAssertTrue(store.tasks.isEmpty)
+    }
+
+    func testNullToolArgumentsAreTreatedAsAbsent() throws {
+        let response = try send(
+            method: "tools/call",
+            params: ["name": "list_tasks", "arguments": NSNull()]
+        )
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, false)
+    }
+
     // MARK: - Notes
 
     func testToolsListIncludesNoteToolsWhenNoteStoreProvided() throws {
@@ -306,6 +329,30 @@ final class MCPRequestHandlerTests: XCTestCase {
         let updated = try XCTUnwrap(payload["note"] as? [String: Any])
         XCTAssertEqual(updated["body"] as? String, "new body")
         XCTAssertEqual(note.body, "new body")
+    }
+
+    func testUpdateNoteRejectsBlankingWithAnAccurateMessage() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(noteStore.create(title: "Title", body: "Body"))
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": "update_note",
+                "arguments": ["id": note.id.uuidString, "title": "  ", "body": "\n"]
+            ]
+        ])
+        let response = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body))
+                as? [String: Any]
+        )
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        XCTAssertEqual(content.first?["text"] as? String, "A title or body must remain non-empty.")
+        XCTAssertEqual(note.title, "Title")
+        XCTAssertEqual(note.body, "Body")
     }
 
     func testDeleteNoteRemovesNote() throws {

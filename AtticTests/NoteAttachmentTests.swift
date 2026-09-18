@@ -6,6 +6,18 @@ import XCTest
 @testable import Attic
 
 final class NoteAttachmentTests: XCTestCase {
+    func testAttachmentLimitHelpersSaturateBytesAndRejectSortIndexOverflow() {
+        XCTAssertEqual(
+            AttachmentLimits.cappedByteCount([Int64.max, Int64.max]),
+            AttachmentLimits.maxBytesPerNote
+        )
+        XCTAssertEqual(AttachmentLimits.nextSortIndex(after: Int64.max - 1, adding: 1), Int64.max)
+        XCTAssertNil(AttachmentLimits.nextSortIndex(after: Int64.max, adding: 1))
+        XCTAssertNil(AttachmentLimits.nextSortIndex(after: Int64.max - 1, adding: 2))
+        XCTAssertTrue(AttachmentLimits.canAssignSortIndexes(startingAt: Int64.max, count: 1))
+        XCTAssertFalse(AttachmentLimits.canAssignSortIndexes(startingAt: Int64.max, count: 2))
+    }
+
     func testPreviewDemandUsesVisibleDisplayPixelsWithoutDoubleApplyingScale() {
         let bounds = CGRect(x: 0, y: 0, width: 420, height: 250)
         let demand = NoteAttachmentPreviewDemand.resolve(bounds: bounds, visibleRect: bounds, scale: 2)

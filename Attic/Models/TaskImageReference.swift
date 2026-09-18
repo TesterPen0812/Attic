@@ -47,7 +47,8 @@ actor TaskImageFiles {
     /// from their private copy, which ImageIO reads incrementally.
     func importAttachments(_ urls: [URL], existing: [TaskImageReference]) async throws -> [TaskImageReference] {
         let imported = try await files.importFiles(urls, baseSortIndex: Int64(existing.count),
-            existingCount: existing.count, existingBytes: existing.reduce(0) { $0 + $1.byteCount },
+            existingCount: existing.count,
+            existingBytes: AttachmentLimits.cappedByteCount(existing.map(\.byteCount)),
             includePayload: false)
         let references = imported.map {
             TaskImageReference(id: $0.id, filename: $0.filename, digest: $0.digest,
@@ -121,11 +122,16 @@ actor TaskImageFiles {
         // A missing, changed or invalid private copy reads as unavailable;
         // only a failure to make the copy throws.
         guard let source = try? await files.verifiedMaterializedURL(for: reference.fileReference) else { return nil }
-        let copy = try Self.disposableDirectory()
-            .appendingPathComponent(AttachmentFileStore.sanitizedFilename(reference.filename))
-        try FileManager.default.copyItem(at: source, to: copy)
-        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: copy.path)
-        return copy
+        let disposable = try Self.disposableDirectory()
+        let copy = disposable.appendingPathComponent(AttachmentFileStore.sanitizedFilename(reference.filename))
+        do {
+            try FileManager.default.copyItem(at: source, to: copy)
+            try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: copy.path)
+            return copy
+        } catch {
+            try? FileManager.default.removeItem(at: disposable)
+            throw error
+        }
     }
 
     func remove(_ references: [TaskImageReference]) async {
@@ -170,14 +176,19 @@ actor TaskImageFiles {
     func export(title: String, references: [TaskImageReference]) async throws -> URL {
         let sanitized = String(AttachmentFileStore.sanitizedFilename(title).prefix(70))
         let name = ["", ".", ".."].contains(sanitized) ? "Task" : sanitized
-        let directory = try Self.disposableDirectory()
-            .appendingPathComponent(name.isEmpty ? "Task" : name, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try title.write(to: directory.appendingPathComponent("Task.txt"), atomically: true, encoding: .utf8)
-        for (index, reference) in references.enumerated() {
-            guard let source = try await files.verifiedMaterializedURL(for: reference.fileReference) else { throw CocoaError(.fileNoSuchFile) }
-            try FileManager.default.copyItem(at: source, to: directory.appendingPathComponent("\(index + 1)-\(AttachmentFileStore.sanitizedFilename(reference.filename))"))
+        let disposable = try Self.disposableDirectory()
+        let directory = disposable.appendingPathComponent(name.isEmpty ? "Task" : name, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try title.write(to: directory.appendingPathComponent("Task.txt"), atomically: true, encoding: .utf8)
+            for (index, reference) in references.enumerated() {
+                guard let source = try await files.verifiedMaterializedURL(for: reference.fileReference) else { throw CocoaError(.fileNoSuchFile) }
+                try FileManager.default.copyItem(at: source, to: directory.appendingPathComponent("\(index + 1)-\(AttachmentFileStore.sanitizedFilename(reference.filename))"))
+            }
+            return directory
+        } catch {
+            try? FileManager.default.removeItem(at: disposable)
+            throw error
         }
-        return directory
     }
 }
