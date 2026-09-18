@@ -79,8 +79,10 @@ with a macOS validation plan instead of being changed.
 
 Reader key: **main** = read directly by the main auditor; any other name is the
 delegated explorer pass whose report lists the file with a full `1-N` range.
-Line counts are those of the audited tree (`CanvasSurfaceMacHelpers.swift` grew
-by 11 lines with F-02; all other counts are unchanged by this audit).
+Line counts are those of the audited tree after the fixes: this audit grew
+`AppCoordinator.swift` by 16 lines (F-01), `CanvasSurfaceMacHelpers.swift` by
+11 (F-02), and `MCPRequestHandler.swift` by 11 (F-03); every other production
+count is unchanged.
 
 | Area | File | Lines | Reader |
 | --- | --- | --- | --- |
@@ -310,8 +312,8 @@ plus unit tests exist on the audit branch but have not been compiled or run;
   centre (lines 356-377), image size and centre (379-412), and semantic object
   centre (441).
 - **Trigger:** any board whose persisted stroke point, image transform, or
-  semantic-object frame contains a finite coordinate with magnitude
-  ≥ 2^63 (or a non-finite value that slipped past load validation), while an
+  semantic-object frame contains a finite coordinate ≥ 2^63 or < -2^63 (or an
+  infinite value that slipped past load validation), while an
   assistive client — VoiceOver, Accessibility Inspector, or any process using
   the accessibility API — asks the Canvas view for its children.
 - **Causal trace:** (1) load-time validation is finiteness-only:
@@ -322,7 +324,9 @@ plus unit tests exist on the audit branch but have not been compiled or run;
   (2) `canvasAccessibilityPositionDescription` passed `worldRect.midX/midY`
   straight to `canvasAccessibilityNumber`. (3) For integral values that
   function evaluated `Int(value)`, which traps for any `Double` outside
-  `Int`'s range and for ±infinity/NaN. The frame path
+  `Int`'s range and for ±infinity (NaN never reached it, because `NaN == NaN`
+  is false and it took the `%.1f` branch; exactly -2^63 is `Int.min` and was
+  fine). The frame path
   (`canvasAccessibilityFrame`, lines 566-572) guards finiteness; the description
   path did not guard anything.
 - **Impact:** deterministic process crash whenever the accessibility tree is
@@ -439,10 +443,11 @@ plus unit tests exist on the audit branch but have not been compiled or run;
   connections — including the bearer header — without Attic noticing. Without
   reuse, such a process could only squat the port before Attic starts, which
   Attic surfaces as a listener failure.
-- **Why documented, not changed:** the option exists so that toggling Agent
-  access off and on rebinds immediately instead of failing on a lingering
-  `TIME_WAIT` socket. Whether the takeover is possible, and whether removing the
-  flag breaks the restart path, can only be established on macOS.
+- **Why documented, not changed:** the option may be needed so that toggling
+  Agent access off and on rebinds immediately instead of failing on a lingering
+  `TIME_WAIT` socket; the source does not state its intent. Whether the takeover
+  is possible, and whether removing the flag breaks the restart path, can only
+  be established on macOS.
 - **Validation plan:** with Agent access enabled, run a second process (e.g. a
   Python script setting `SO_REUSEADDR` and `SO_REUSEPORT`) that binds the same
   loopback endpoint; record whether `bind` succeeds and whether a subsequent

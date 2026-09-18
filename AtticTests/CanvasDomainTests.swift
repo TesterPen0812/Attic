@@ -88,7 +88,8 @@ final class CanvasAccessibilityTests: XCTestCase {
 
     func testAccessibilityNumberTextDoesNotTrapOutsideIntRangeOrOnNonFiniteValues() {
         // Persisted geometry is validated as finite, not bounded. `Int(_:)`
-        // traps on these values; the description must degrade instead.
+        // traps on out-of-range and infinite values; the description must
+        // degrade instead (NaN is included to pin the fallback path).
         XCTAssertEqual(CanvasAccessibilityNumberText.string(for: Double(Int.max)), "9223372036854775808.0")
         XCTAssertEqual(CanvasAccessibilityNumberText.string(for: 18_446_744_073_709_551_616.0), "18446744073709551616.0")
         let huge = CanvasAccessibilityNumberText.string(for: 1e300)
