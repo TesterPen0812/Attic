@@ -16,6 +16,11 @@ final class AgentServer: ObservableObject {
 
     static let defaultPort: UInt16 = 7335
     nonisolated private static let maxRequestBytes = 1_048_576
+    /// How long an accepted socket may stay open without a complete request
+    /// and answer. A client that opened a connection and then sent nothing —
+    /// or half a request — otherwise held it for as long as it liked, and
+    /// `stop()` left it behind.
+    nonisolated static let defaultRequestDeadline: TimeInterval = 30
 
     @Published private(set) var state: State = .stopped
     @Published private(set) var setupToken = ""
@@ -23,27 +28,40 @@ final class AgentServer: ObservableObject {
     private let port: UInt16
     private let tokenProvider: (@Sendable () throws -> String)?
     private let handler: MCPRequestHandler
+    /// Overridden only by tests, which cannot wait out the real deadline.
+    private let requestDeadline: TimeInterval
     private let queue = DispatchQueue(label: "com.taha.Attic.AgentServer")
     private let logger = Logger(subsystem: "com.taha.Attic", category: "AgentServer")
     private var listener: NWListener?
+    /// The connections this listener generation accepted. A new generation gets
+    /// its own registry, so a socket accepted while the old listener was being
+    /// cancelled can never be served or counted by the next one.
+    private var connections: AcceptedConnections?
     private var credentialTask: Task<Void, Never>?
     private var pendingCredentialLoad: Task<String, Error>?
     private var generation = UUID()
 
     var boundPort: UInt16? { listener?.port?.rawValue }
 
-    init(port: UInt16, bearerToken: String, handler: MCPRequestHandler) {
+    /// Accepted sockets still open for the current listener.
+    var openConnectionCount: Int { connections?.count ?? 0 }
+
+    init(port: UInt16, bearerToken: String, handler: MCPRequestHandler,
+         requestDeadline: TimeInterval = defaultRequestDeadline) {
         self.port = port
         self.setupToken = bearerToken
         self.tokenProvider = nil
         self.handler = handler
+        self.requestDeadline = requestDeadline
     }
 
     init(port: UInt16, handler: MCPRequestHandler,
-         tokenProvider: @escaping @Sendable () throws -> String = { try AgentAccessTokenStore().loadOrCreate() }) {
+         tokenProvider: @escaping @Sendable () throws -> String = { try AgentAccessTokenStore().loadOrCreate() },
+         requestDeadline: TimeInterval = defaultRequestDeadline) {
         self.port = port
         self.handler = handler
         self.tokenProvider = tokenProvider
+        self.requestDeadline = requestDeadline
     }
 
     func start() {
@@ -124,21 +142,46 @@ final class AgentServer: ObservableObject {
             }
         }
         let listenerGeneration = generation
+        let connections = AcceptedConnections()
+        let queue = queue
+        let requestDeadline = requestDeadline
         listener.newConnectionHandler = { [weak self] connection in
-            connection.start(queue: self?.queue ?? .global())
-            self?.receive(on: connection, buffer: Data(), bearerToken: bearerToken, generation: listenerGeneration)
+            // A socket accepted after `stop()` drained this registry is closed
+            // straight away rather than served or tracked.
+            guard let self, connections.track(connection, on: queue,
+                                             deadline: requestDeadline) else {
+                connection.cancel()
+                return
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .cancelled, .failed:
+                    connections.forget(connection)
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+            self.receive(on: connection, buffer: Data(), bearerToken: bearerToken, generation: listenerGeneration)
         }
 
         listener.start(queue: queue)
         self.listener = listener
+        self.connections = connections
     }
 
+    /// Closes the listener and every socket it accepted. Cancellation itself is
+    /// handed to Network.framework and never waited on, so this returns without
+    /// blocking the main actor; the per-connection deadline is the backstop for
+    /// a peer that never finishes its request.
     func stop() {
         generation = UUID()
         credentialTask?.cancel()
         credentialTask = nil
         listener?.cancel()
         listener = nil
+        connections?.shutDown()
+        connections = nil
         state = .stopped
     }
 
@@ -238,6 +281,62 @@ final class AgentServer: ObservableObject {
         connection.send(content: response, completion: .contentProcessed { _ in
             connection.cancel()
         })
+    }
+}
+
+/// The accepted sockets of one listener generation. The listener queue inserts
+/// and removes entries while the main actor drains them on `stop()`, so every
+/// access is locked. Each entry owns the work item that closes a connection
+/// which never completed its request.
+private final class AcceptedConnections: @unchecked Sendable {
+    private let lock = NSLock()
+    private var deadlines: [ObjectIdentifier: DispatchWorkItem] = [:]
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    private var isShutDown = false
+
+    var count: Int { lock.withLock { connections.count } }
+
+    /// Registers `connection` and schedules its deadline. Returns false once
+    /// the registry has been shut down, meaning the caller must close the
+    /// connection instead of serving it.
+    func track(_ connection: NWConnection, on queue: DispatchQueue, deadline: TimeInterval) -> Bool {
+        let key = ObjectIdentifier(connection)
+        let timeout = DispatchWorkItem { connection.forceCancel() }
+        let accepted: Bool = lock.withLock {
+            guard !isShutDown else { return false }
+            connections[key] = connection
+            deadlines[key] = timeout
+            return true
+        }
+        guard accepted else { return false }
+        queue.asyncAfter(deadline: .now() + deadline, execute: timeout)
+        return true
+    }
+
+    /// Drops a closed connection and the deadline that was watching it.
+    func forget(_ connection: NWConnection) {
+        let key = ObjectIdentifier(connection)
+        let timeout: DispatchWorkItem? = lock.withLock {
+            connections.removeValue(forKey: key)
+            return deadlines.removeValue(forKey: key)
+        }
+        timeout?.cancel()
+    }
+
+    /// Closes every accepted connection and refuses any further one. Cancelling
+    /// a connection fires its state handler, which would re-enter the lock, so
+    /// the entries are taken out first and cancelled outside it.
+    func shutDown() {
+        let (open, timeouts): ([NWConnection], [DispatchWorkItem]) = lock.withLock {
+            isShutDown = true
+            let open = Array(connections.values)
+            let timeouts = Array(deadlines.values)
+            connections.removeAll()
+            deadlines.removeAll()
+            return (open, timeouts)
+        }
+        timeouts.forEach { $0.cancel() }
+        open.forEach { $0.forceCancel() }
     }
 }
 

@@ -41,6 +41,20 @@ struct CanvasPanelContent: View {
         let _ = session.editingAvailabilityToken
         return CanvasEditCommandRoute.canRedo(session: session, section: .canvas)
     }
+    /// The deliberate "waiting to be placed" fill. It must not be read from
+    /// the environment accent: quieting the glyph overrides that accent for
+    /// this subtree, so `Color.accentColor` here repainted the circle in the
+    /// glyph's own colour and hid the symbol on top of it. The panel palette's
+    /// accent is also the colour `selectedShapeForeground` is chosen to
+    /// contrast with, so the signal now reads on every theme.
+    private var pendingShapeFill: Color {
+        #if os(macOS)
+        palette.accentColor
+        #else
+        Color.accentColor
+        #endif
+    }
+
     private var secondaryForeground: Color {
         #if os(macOS)
         palette.secondaryForegroundColor
@@ -511,6 +525,7 @@ struct CanvasPanelContent: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .frame(width: compact ? 36 : 42, height: compact ? 36 : 42)
+        .atticQuietMenuGlyph(Color.primary)
         .atticGlassControl(in: Circle())
         .help("Canvas actions")
         .accessibilityLabel("Canvas menu")
@@ -618,13 +633,17 @@ struct CanvasPanelContent: View {
                 .frame(width: 32, height: 32)
                 .background {
                     Circle()
-                        .fill(pendingShape == nil ? Color.primary.opacity(isShapeHovered ? 0.08 : 0) : Color.accentColor)
+                        .fill(pendingShape == nil ? Color.primary.opacity(isShapeHovered ? 0.08 : 0) : pendingShapeFill)
                 }
                 .contentShape(Circle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .frame(width: 32, height: 32)
+        // At rest the pop-up button painted the square accent blue, which is
+        // exactly the signal a pending shape uses. Quiet the idle glyph so the
+        // deliberate accent fill below means "waiting to be placed" again.
+        .atticQuietMenuGlyph(pendingShape == nil ? Color.primary : selectedShapeForeground)
         .onHover { isShapeHovered = $0 }
         .help("Add Shape")
         .accessibilityLabel("Add Shape")
@@ -717,6 +736,9 @@ struct CanvasPanelContent: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
+                // A failed image keeps its warning colour; everything else is
+                // quiet chrome rather than system accent.
+                .atticQuietMenuGlyph(session.failedImageIDs.contains(image.id) ? .orange : secondaryForeground)
                 .accessibilityLabel("Image recovery and export")
             }
             CanvasCommandButton(
@@ -845,6 +867,7 @@ struct CanvasPanelContent: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
+                .atticQuietMenuGlyph(secondaryForeground)
                 .accessibilityLabel("Selected object style")
             }
             CanvasCommandButton(title: "Send Object Backward", systemImage: "square.2.layers.3d.bottom.filled",

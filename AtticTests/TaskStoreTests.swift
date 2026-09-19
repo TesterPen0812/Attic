@@ -80,6 +80,74 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
     }
 
+    /// Every message carries the surface that owns it. While the owner was a
+    /// second property that only cleared when the message became nil, a general
+    /// failure after a family-scoped one inherited that family: the main banner
+    /// suppressed it (`lastErrorOwnerID != nil`) and a closed family panel could
+    /// not show it either, so the user saw nothing at all.
+    @MainActor
+    func testLaterErrorsNeverInheritAnEarlierOperationsOwner() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let familyA = try XCTUnwrap(store.create(title: "Family A"))
+        let familyB = try XCTUnwrap(store.create(title: "Family B"))
+
+        // A family-scoped failure: creating a subtask of family A.
+        gate.shouldFail = true
+        XCTAssertNil(store.create(title: "Step", parentID: familyA.id))
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertEqual(store.lastErrorOwnerID, familyA.id)
+
+        // A general failure follows. It belongs to the main panel, not to the
+        // family that happened to fail first.
+        XCTAssertFalse(store.rename(familyB, to: "Renamed"))
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID,
+                     "a general save failure must not stay attached to family A")
+
+        // A different family's failure takes ownership from the general one.
+        XCTAssertNil(store.create(title: "Step", parentID: familyB.id))
+        XCTAssertEqual(store.lastErrorOwnerID, familyB.id)
+
+        // A general delete failure releases the family again.
+        XCTAssertFalse(store.delete(familyA))
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID)
+
+        // Success clears message and owner together, as does dismissal.
+        gate.shouldFail = false
+        XCTAssertTrue(store.rename(familyB, to: "Renamed"))
+        XCTAssertNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID)
+
+        gate.shouldFail = true
+        XCTAssertNil(store.create(title: "Step", parentID: familyB.id))
+        XCTAssertEqual(store.lastErrorOwnerID, familyB.id)
+        store.dismissError()
+        XCTAssertNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID)
+    }
+
+    /// The refusals that are not persistence failures follow the same rule: a
+    /// stale family owner must not hide them from the main banner.
+    @MainActor
+    func testStatusAndDeletionRefusalsAreOwnedByTheMainPanel() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        _ = try XCTUnwrap(store.create(title: "Step", parentID: parent.id))
+
+        // Take ownership with a family-scoped failure first.
+        gate.shouldFail = true
+        XCTAssertNil(store.create(title: "Another step", parentID: parent.id))
+        XCTAssertEqual(store.lastErrorOwnerID, parent.id)
+        gate.shouldFail = false
+
+        XCTAssertFalse(store.setStatus(.done, for: parent))
+        XCTAssertEqual(store.lastErrorMessage, "Finish the subtasks before completing this task.")
+        XCTAssertNil(store.lastErrorOwnerID, "the main banner must show the refusal")
+    }
+
     @MainActor
     func testRefreshSeesChangesSavedByAnotherModelContext() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)

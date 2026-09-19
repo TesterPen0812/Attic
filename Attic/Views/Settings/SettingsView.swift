@@ -30,6 +30,7 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var agentServer: AgentServer
+    @ObservedObject var globalHotKey: GlobalHotKey
 
     @AppStorage(SettingsSection.selectionStorageKey)
     private var selectedSectionRawValue = SettingsSection.general.rawValue
@@ -89,7 +90,10 @@ struct SettingsView: View {
     private var detail: some View {
         switch selectedSection {
         case .general:
-            GeneralSettingsView(loginItemService: loginItemService)
+            GeneralSettingsView(
+                loginItemService: loginItemService,
+                globalHotKey: globalHotKey
+            )
         case .panel:
             PanelSettingsView(settings: settings)
         case .appearance:

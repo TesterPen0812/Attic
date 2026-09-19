@@ -1445,6 +1445,107 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual(gradient.map(\.location), gradient.map(\.location).sorted(), "stops are monotone")
     }
 
+    /// The saved-notes drawer overlaid its buttons on an unmasked list: the
+    /// bottom "Return to writing" button sat permanently on top of the lowest
+    /// row's preview text and the last row hard-clipped at the squircle edge.
+    /// The bands must clear each button's whole footprint and fade the way the
+    /// task list beside it does.
+    func testSavedNotesDrawerBandsClearItsButtonsAndFadeLikeTheTaskList() {
+        XCTAssertGreaterThan(
+            SavedNotesDrawerLayout.chromeBandHeight,
+            SavedNotesDrawerLayout.buttonFootprint,
+            "a row must never come to rest under a drawer button"
+        )
+        // The empty state is placed past the fade, so the mask that exists for
+        // scrolling rows cannot render "No saved notes yet" half-faded.
+        XCTAssertGreaterThanOrEqual(
+            SavedNotesDrawerLayout.emptyStateTopInset,
+            SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength
+        )
+
+        for height in [CGFloat(280), 480, 900] {
+            let stops = SavedNotesDrawerLayout.stops(height: height)
+            XCTAssertEqual(stops.topClearEnd * height,
+                           SavedNotesDrawerLayout.chromeBandHeight, accuracy: 0.001)
+            XCTAssertEqual(stops.topFadeEnd * height,
+                           SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength,
+                           accuracy: 0.001)
+            XCTAssertEqual((1 - stops.bottomClearStart) * height,
+                           SavedNotesDrawerLayout.chromeBandHeight, accuracy: 0.001)
+            XCTAssertEqual((1 - stops.bottomFadeStart) * height,
+                           SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength,
+                           accuracy: 0.001)
+            // A row that rests at its inset is fully opaque, not subdued.
+            XCTAssertGreaterThan(SavedNotesDrawerLayout.chromeBandHeight / height, stops.topClearEnd - 0.0001)
+            let gradient = TaskScrollMaskLayout.gradientStops(stops)
+            XCTAssertEqual(gradient.map(\.location), gradient.map(\.location).sorted(),
+                           "stops are monotone at height \(height)")
+        }
+
+        // Accessibility contrast settings remove the underlay here too.
+        XCTAssertEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: true, increasedContrast: false), 0)
+    }
+
+    /// The panel's primary action had no hover or keyboard-focus affordance on
+    /// any treatment: the emphasis colors existed but nothing consumed them.
+    /// Emphasis appears for either signal, stays away at rest, and never
+    /// advertises a submit that cannot run.
+    func testQuickSubmitEmphasisFollowsHoverFocusAndAvailability() {
+        XCTAssertFalse(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: false, isFocused: false))
+        XCTAssertTrue(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: true, isFocused: false))
+        XCTAssertTrue(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: false, isFocused: true))
+        XCTAssertTrue(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: true, isFocused: true))
+        for hovered in [true, false] {
+            for focused in [true, false] {
+                XCTAssertFalse(
+                    QuickSubmitEmphasis.isEmphasized(canSubmit: false, isHovered: hovered, isFocused: focused),
+                    "a disabled submit stays quiet (hover: \(hovered), focus: \(focused))"
+                )
+            }
+        }
+        XCTAssertGreaterThan(
+            QuickSubmitEmphasis.strokeWidth(isFocused: true),
+            QuickSubmitEmphasis.strokeWidth(isFocused: false),
+            "keyboard focus reads stronger than hover"
+        )
+    }
+
+    /// Backlog and Tasks share one quick-entry composer. Creation already
+    /// routed to `.backlog`, but every piece of its copy — placeholder, submit
+    /// title, pending-import help, the options menu label and its two command
+    /// titles — still called a backlog entry a task.
+    func testQuickEntryCopyFollowsTheSelectedScope() {
+        XCTAssertEqual(TaskScope.tasks.quickEntryPlaceholder, "Add a task…")
+        XCTAssertEqual(TaskScope.tasks.quickEntrySubmitTitle, "Add task")
+        XCTAssertEqual(TaskScope.tasks.quickEntryOptionsCommandTitle, "Task options")
+        XCTAssertEqual(TaskScope.tasks.quickEntryCloseOptionsCommandTitle, "Close task options")
+
+        let backlogCopy = [
+            TaskScope.backlog.quickEntryPlaceholder,
+            TaskScope.backlog.quickEntrySubmitTitle,
+            TaskScope.backlog.quickEntryPendingSubmitTitle,
+            TaskScope.backlog.quickEntryOptionsTitle,
+            TaskScope.backlog.quickEntryOptionsCommandTitle,
+            TaskScope.backlog.quickEntryCloseOptionsCommandTitle
+        ]
+        for copy in backlogCopy {
+            XCTAssertFalse(copy.lowercased().contains("task"),
+                           "Backlog quick entry must not call an idea a task: \(copy)")
+            XCTAssertFalse(copy.isEmpty)
+        }
+        XCTAssertTrue(TaskScope.backlog.quickEntryPendingSubmitTitle.contains("attachments finish copying"),
+                      "the pending-import help still has to explain the wait")
+        XCTAssertEqual(TaskScope.backlog.creationStatus, .backlog,
+                       "copy follows the scope; routing is unchanged")
+
+        // Every scope answers with distinct, non-empty copy.
+        for scope in TaskScope.allCases {
+            XCTAssertFalse(scope.quickEntryPlaceholder.isEmpty)
+            XCTAssertNotEqual(scope.quickEntryOptionsCommandTitle, scope.quickEntryCloseOptionsCommandTitle)
+        }
+        XCTAssertNotEqual(TaskScope.tasks.quickEntrySubmitTitle, TaskScope.backlog.quickEntrySubmitTitle)
+    }
+
     func testUnderChromeDepthRespectsContrastSettingsAndComposerTextSpace() {
         XCTAssertGreaterThan(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: false, increasedContrast: false), 0)
         XCTAssertLessThanOrEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: false, increasedContrast: false), 0.2)

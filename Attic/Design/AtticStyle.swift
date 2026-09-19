@@ -395,4 +395,17 @@ extension View {
     func atticGlassEffectContainer(spacing: CGFloat) -> some View {
         modifier(AtticGlassEffectContainerModifier(spacing: spacing))
     }
+
+    /// Quiets the glyph of a `.borderlessButton` `Menu` whose label is an
+    /// `Image`. AppKit renders that label through a pop-up button which paints
+    /// the symbol as an accent-tinted template and ignores the label's own
+    /// `foregroundStyle`, so every such menu showed system blue at rest. All
+    /// three overrides are needed: `tint` and `accentColor` reach the AppKit
+    /// cell, `foregroundStyle` the SwiftUI label. Proven by the task composer's
+    /// `+` menu, which was the one site that already did this.
+    func atticQuietMenuGlyph(_ color: Color) -> some View {
+        tint(color)
+            .accentColor(color)
+            .foregroundStyle(color)
+    }
 }

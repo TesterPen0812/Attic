@@ -545,7 +545,10 @@ struct AtticPanelView: View {
                         Button("Attach images or files…", systemImage: "paperclip", action: chooseComposerAttachments)
                             .disabled(!canAddComposerAttachments)
                             .accessibilityIdentifier("quick-entry-attach")
-                        Button(isTaskEntryExpanded ? "Close task options" : "Task options", systemImage: "flag") {
+                        Button(isTaskEntryExpanded
+                                ? uiState.selectedScope.quickEntryCloseOptionsCommandTitle
+                                : uiState.selectedScope.quickEntryOptionsCommandTitle,
+                               systemImage: "flag") {
                             withAnimation(reduceMotion ? nil : AtticMotion.quick) {
                                 if isTaskEntryExpanded { uiState.endAdding() }
                                 else { uiState.beginAdding() }
@@ -562,15 +565,13 @@ struct AtticPanelView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .frame(width: AtticStyle.taskComposerControlSize, height: AtticStyle.taskComposerControlSize)
-                    .tint(panelThemePalette.primaryForegroundColor)
-                    .accentColor(panelThemePalette.primaryForegroundColor)
-                    .foregroundStyle(panelThemePalette.primaryForegroundColor)
-                    .help("Attachments and task options")
-                    .accessibilityLabel("Attachments and task options")
+                    .atticQuietMenuGlyph(panelThemePalette.primaryForegroundColor)
+                    .help(quickEntryOptionsTitle)
+                    .accessibilityLabel(quickEntryOptionsTitle)
                     .accessibilityIdentifier("add-task-button")
 
-                    TextField("Add a task…", text: $quickEntryTitle,
-                              prompt: Text("Add a task…")
+                    TextField(quickEntryPlaceholder, text: $quickEntryTitle,
+                              prompt: Text(quickEntryPlaceholder)
                                 .foregroundStyle(panelThemePalette.secondaryForegroundColor))
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, design: .rounded))
@@ -598,14 +599,19 @@ struct AtticPanelView: View {
                         .atticClearGlassForegroundReadability()
                         .frame(width: AtticStyle.taskComposerControlSize, height: AtticStyle.taskComposerControlSize)
                         .atticGlassControl(in: Circle())
+                        .overlay {
+                            quickSubmitEmphasis
+                                .animation(reduceMotion ? nil : AtticMotion.quick,
+                                           value: isQuickSubmitEmphasized)
+                        }
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSaveQuickTask)
                 .focused($isQuickSubmitFocused)
                 .onHover { isQuickSubmitHovered = $0 }
-                .help(composerAttachments.isImporting ? "Add task when attachments finish copying" : "Add task")
-                .accessibilityLabel("Add task")
+                .help(composerAttachments.isImporting ? quickEntryPendingSubmitTitle : quickEntrySubmitTitle)
+                .accessibilityLabel(quickEntrySubmitTitle)
                 .accessibilityIdentifier("quick-entry-submit")
             }
             .frame(height: AtticStyle.taskComposerRowHeight)
@@ -942,6 +948,13 @@ struct AtticPanelView: View {
         return panelThemePalette.accentColor.opacity(min(opacity, 1))
     }
 
+    /// Backlog and Tasks share the quick-entry composer, so its copy follows
+    /// the selected scope; creation routing is unchanged.
+    private var quickEntryPlaceholder: String { uiState.selectedScope.quickEntryPlaceholder }
+    private var quickEntrySubmitTitle: String { uiState.selectedScope.quickEntrySubmitTitle }
+    private var quickEntryPendingSubmitTitle: String { uiState.selectedScope.quickEntryPendingSubmitTitle }
+    private var quickEntryOptionsTitle: String { uiState.selectedScope.quickEntryOptionsTitle }
+
     private var quickSubmitForegroundColor: Color {
         guard canSaveQuickTask else { return Color.primary.opacity(0.34) }
         return usesOriginalTheme
@@ -949,25 +962,49 @@ struct AtticPanelView: View {
             : panelThemePalette.accentColor.opacity(0.98)
     }
 
-    private var quickSubmitBackgroundColor: Color {
-        guard canSaveQuickTask else { return Color.primary.opacity(0.045) }
-        let isEmphasized = isQuickSubmitHovered || isQuickSubmitFocused
-        if usesOriginalTheme {
-            return Color.primary.opacity(isEmphasized ? 0.16 : 0.10)
+    /// The panel's primary action had no hover or focus affordance on any
+    /// treatment: `atticGlassControl` supplies no hover variant on material or
+    /// opaque, and native glass interactivity answers the pointer only — never
+    /// keyboard focus. This emphasis is drawn over whichever backing the system
+    /// chose, so all three behave the same, and nothing is drawn at rest.
+    @ViewBuilder
+    private var quickSubmitEmphasis: some View {
+        if isQuickSubmitEmphasized {
+            Circle()
+                .fill(quickSubmitEmphasisFill)
+                .overlay {
+                    Circle().stroke(
+                        quickSubmitEmphasisStroke,
+                        lineWidth: QuickSubmitEmphasis.strokeWidth(isFocused: isQuickSubmitFocused)
+                    )
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
         }
-        let opacity = isEmphasized
-            ? min(panelThemePalette.selectedFillOpacity + 0.06, 0.24)
-            : max(panelThemePalette.selectedFillOpacity * 0.72, 0.08)
-        return panelThemePalette.accentColor.opacity(opacity)
     }
 
-    private var quickSubmitStrokeColor: Color {
+    private var isQuickSubmitEmphasized: Bool {
+        QuickSubmitEmphasis.isEmphasized(
+            canSubmit: canSaveQuickTask,
+            isHovered: isQuickSubmitHovered,
+            isFocused: isQuickSubmitFocused
+        )
+    }
+
+    private var quickSubmitEmphasisFill: Color {
         if usesOriginalTheme {
-            let opacity = isQuickSubmitFocused ? 0.30 : (canSaveQuickTask ? 0.12 : 0.06)
-            return Color.primary.opacity(hasIncreasedContrast ? min(opacity + 0.12, 1) : opacity)
+            return Color.primary.opacity(0.16)
         }
-        guard canSaveQuickTask else {
-            return Color.primary.opacity(hasIncreasedContrast ? 0.16 : 0.06)
+        return panelThemePalette.accentColor.opacity(
+            min(panelThemePalette.selectedFillOpacity + 0.06, 0.24)
+        )
+    }
+
+    /// Keyboard focus reads stronger than hover, as it does on the mode dock.
+    private var quickSubmitEmphasisStroke: Color {
+        if usesOriginalTheme {
+            let opacity = isQuickSubmitFocused ? 0.30 : 0.16
+            return Color.primary.opacity(hasIncreasedContrast ? min(opacity + 0.12, 1) : opacity)
         }
         let baseOpacity = isQuickSubmitFocused
             ? panelThemePalette.selectedStrokeOpacity

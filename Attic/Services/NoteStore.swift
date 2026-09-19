@@ -525,9 +525,16 @@ final class NoteStore: ObservableObject {
                 replica.updatedAt = now()
             }
             if size == nil || targetID != nil {
-                var order = attachments(for: noteID).map(\.id).filter { $0 != id }
-                let index = targetID.flatMap { order.firstIndex(of: $0) } ?? order.endIndex
-                order.insert(id, at: index)
+                let current = attachments(for: noteID).map(\.id)
+                var order = current.filter { $0 != id }
+                // A card dropped on itself is not a reorder: it must stay where
+                // it is. `order` no longer holds the source, so a target equal
+                // to it missed the lookup and the card was appended to the end
+                // (A,B,C dropping A on A produced B,C,A).
+                let index = targetID == id
+                    ? current.firstIndex(of: id)
+                    : targetID.flatMap { order.firstIndex(of: $0) }
+                order.insert(id, at: min(index ?? order.endIndex, order.endIndex))
                 let indices = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, Int64($0.offset)) })
                 for replica in all { replica.sortIndex = indices[replica.id] ?? replica.sortIndex }
             }

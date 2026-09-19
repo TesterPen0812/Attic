@@ -177,23 +177,37 @@ final class TaskStore: ObservableObject {
         // value stores, and must already see a deleted task gone.
         didSet { familyIndexCache = nil }
     }
-    @Published private(set) var lastErrorMessage: String? {
-        didSet { if lastErrorMessage == nil { lastErrorOwnerID = nil } }
+    /// A task failure together with the surface that owns it. Message and
+    /// owner are one value on purpose: while they were separate properties
+    /// every later `lastErrorMessage = …` inherited the previous operation's
+    /// owner, so a general failure that followed a family-scoped one stayed
+    /// attached to that family — the main banner suppressed it and a closed
+    /// family panel could not show it either.
+    struct ErrorNotice: Equatable {
+        let message: String
+        /// The family whose panel shows the message. nil is a general or
+        /// main-composer error, shown by the main panel alone.
+        let owner: UUID?
     }
+
+    @Published private(set) var errorNotice: ErrorNotice?
+
+    var lastErrorMessage: String? { errorNotice?.message }
     /// The family a task error concerns, when it concerns one: its panel
     /// shows the message and the main panel stays quiet. nil is a general
     /// or main-composer error, shown by the main panel alone.
-    @Published private(set) var lastErrorOwnerID: UUID?
+    var lastErrorOwnerID: UUID? { errorNotice?.owner }
 
     /// The user dismissed the notice, or a later success made it stale.
     func dismissError() {
-        guard lastErrorMessage != nil else { return }
-        lastErrorMessage = nil
+        guard errorNotice != nil else { return }
+        errorNotice = nil
     }
 
+    /// The single boundary every task error passes through, so no message can
+    /// reach the UI without the owner that operation decided.
     private func report(_ message: String, owner: UUID?) {
-        lastErrorOwnerID = owner
-        lastErrorMessage = message
+        errorNotice = ErrorNotice(message: message, owner: owner)
     }
 
     func reportUnavailableAttachment(named filename: String, owner: UUID? = nil) {
@@ -426,7 +440,7 @@ final class TaskStore: ObservableObject {
                 updatedAt: timestamp
             )
         } catch {
-            lastErrorMessage = error.localizedDescription
+            report(error.localizedDescription, owner: parentID)
             return nil
         }
         let task = TaskItem(
@@ -444,13 +458,13 @@ final class TaskStore: ObservableObject {
             do {
                 task.imageReferencesData = try JSONEncoder().encode(attachments)
             } catch {
-                lastErrorMessage = error.localizedDescription
+                report(error.localizedDescription, owner: parentID)
                 return nil
             }
         }
         context.insert(task)
         tasks.append(task)
-        guard save() else { return nil }
+        guard save(owner: parentID) else { return nil }
         return task
     }
 
@@ -484,7 +498,7 @@ final class TaskStore: ObservableObject {
         do {
             replicas = try storedTasks(matching: task.id)
         } catch {
-            lastErrorMessage = error.localizedDescription
+            report(error.localizedDescription, owner: nil)
             return false
         }
         let normalizedTitle = title.map(Self.normalized)
@@ -505,7 +519,7 @@ final class TaskStore: ObservableObject {
                     )
                     unfinishedChildren.fetchLimit = 1
                     if try !context.fetch(unfinishedChildren).isEmpty {
-                        lastErrorMessage = "Finish the subtasks before completing this task."
+                        report("Finish the subtasks before completing this task.", owner: nil)
                         return false
                     }
                 }
@@ -515,12 +529,12 @@ final class TaskStore: ObservableObject {
                     )
                     doneParents.fetchLimit = 1
                     if try !context.fetch(doneParents).isEmpty {
-                        lastErrorMessage = "Reopen the main task before reopening a subtask."
+                        report("Reopen the main task before reopening a subtask.", owner: nil)
                         return false
                     }
                 }
             } catch {
-                lastErrorMessage = error.localizedDescription
+                report(error.localizedDescription, owner: nil)
                 return false
             }
         }
@@ -547,7 +561,7 @@ final class TaskStore: ObservableObject {
                     updatedAt: timestamp
                 )
             } catch {
-                lastErrorMessage = error.localizedDescription
+                report(error.localizedDescription, owner: nil)
                 return false
             }
         } else {
@@ -660,7 +674,7 @@ final class TaskStore: ObservableObject {
     ) async -> [UUID]? {
         guard let ownerID = attachmentOwnerID(for: taskID),
               let initial = tasks.first(where: { $0.id == ownerID }) else {
-            lastErrorMessage = "Couldn’t attach files. The task is no longer available."
+            report("Couldn’t attach files. The task is no longer available.", owner: nil)
             return nil
         }
         guard !importingAttachmentTaskIDs.contains(ownerID) else {
@@ -682,7 +696,7 @@ final class TaskStore: ObservableObject {
                 replica.imageReferencesData = data
                 replica.updatedAt = now()
             }
-            guard save() else {
+            guard save(owner: ownerID) else {
                 await taskImageFiles.remove(imported); return nil
             }
             return imported.map(\.id)
@@ -762,7 +776,7 @@ final class TaskStore: ObservableObject {
             removeAttachmentFiles([removed], excludingTaskIDs: [])
             return true
         } catch {
-            lastErrorMessage = error.localizedDescription
+            report(error.localizedDescription, owner: nil)
             return false
         }
     }
@@ -847,26 +861,26 @@ final class TaskStore: ObservableObject {
                 throw TaskReplicaMutationError.missingReplica(task.id)
             }
             guard groups.values.allSatisfy({ Set($0.map(\.parentID)).count == 1 }) else {
-                lastErrorMessage = "Conflicting subtask links prevent safe deletion. Refresh and resolve them first."
+                report("Conflicting subtask links prevent safe deletion. Refresh and resolve them first.", owner: nil)
                 return false
             }
             guard family.allSatisfy({ item in
                 item.id == task.id || (task.parentID == nil && item.parentID == task.id)
             }) else {
-                lastErrorMessage = "An unsupported nested or cyclic subtask link prevents safe deletion."
+                report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: nil)
                 return false
             }
             for childID in Set(family.map(\.id)).subtracting([task.id]) {
                 var nested = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == childID })
                 nested.fetchLimit = 1
                 if try !context.fetch(nested).isEmpty {
-                    lastErrorMessage = "An unsupported nested or cyclic subtask link prevents safe deletion."
+                    report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: nil)
                     return false
                 }
             }
             replicas = family
         } catch {
-            lastErrorMessage = error.localizedDescription
+            report(error.localizedDescription, owner: nil)
             return false
         }
         let removedImages = replicas.flatMap(\.attachments)
@@ -920,7 +934,7 @@ final class TaskStore: ObservableObject {
             var seen = Set<PersistentIdentifier>()
             stored = (replicas + children).filter { seen.insert($0.persistentModelID).inserted }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            report(error.localizedDescription, owner: nil)
             return 0
         }
 
@@ -1103,7 +1117,7 @@ final class TaskStore: ObservableObject {
         } catch {
             context.rollback()
             refresh()
-            lastErrorMessage = error.localizedDescription
+            report(error.localizedDescription, owner: nil)
             return false
         }
         return save()
@@ -1112,17 +1126,19 @@ final class TaskStore: ObservableObject {
     func refresh() {
         do {
             try reloadTasks()
-            lastErrorMessage = nil
+            errorNotice = nil
         } catch {
-            lastErrorMessage = error.localizedDescription
+            report(error.localizedDescription, owner: nil)
         }
     }
 
+    /// `owner` is the surface a failed save belongs to, decided by the
+    /// operation that asked for it; a success clears any notice outright.
     @discardableResult
-    private func save() -> Bool {
+    private func save(owner: UUID? = nil) -> Bool {
         do {
             try persist(context)
-            lastErrorMessage = nil
+            errorNotice = nil
             revision &+= 1
             #if !ATTIC_LOCAL_ONLY
             cloudSyncProtection.noteLocalSave()
@@ -1134,9 +1150,9 @@ final class TaskStore: ObservableObject {
             context.rollback()
             do {
                 try reloadTasks()
-                lastErrorMessage = saveError
+                report(saveError, owner: owner)
             } catch {
-                lastErrorMessage = "\(saveError) · Reload failed: \(error.localizedDescription)"
+                report("\(saveError) · Reload failed: \(error.localizedDescription)", owner: owner)
             }
             return false
         }

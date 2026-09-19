@@ -182,9 +182,7 @@ final class AppCoordinator {
     private var agentAccessObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
-    private lazy var newTaskHotKey = GlobalHotKey { [weak self] in
-        self?.showNewTask()
-    }
+    private let newTaskHotKey: GlobalHotKey
 
     private init() {
         let environment = ProcessInfo.processInfo.environment
@@ -286,10 +284,14 @@ final class AppCoordinator {
         } else {
             agentServer = AgentServer(port: settings.agentServerPort, handler: agentHandler)
         }
+        // Built before the window so Settings observes the same hot key it
+        // reports on; its action is bound once `self` exists.
+        let newTaskHotKey = GlobalHotKey()
         let settingsWindowController = SettingsWindowController(
             settings: settings,
             loginItemService: loginItemService,
             agentServer: agentServer,
+            globalHotKey: newTaskHotKey,
             store: store
         )
         let panelController = AtticPanelController(
@@ -312,6 +314,7 @@ final class AppCoordinator {
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
+        self.newTaskHotKey = newTaskHotKey
         cleanupService = DailyCleanupService(store: store)
         hoverMonitor = CornerHoverMonitor(
             settings: settings,
@@ -322,6 +325,7 @@ final class AppCoordinator {
             canvasStore: canvasStore,
             noteDraft: noteDraft
         )
+        newTaskHotKey.action = { [weak self] in self?.showNewTask() }
     }
 
     func start() {

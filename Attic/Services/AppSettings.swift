@@ -389,12 +389,20 @@ final class AppSettings: ObservableObject {
         return min(max(value, range.lowerBound), range.upperBound)
     }
 
+    /// Panel width and height have no fixed upper bound: the user may have
+    /// sized the panel on a display that is not attached right now, and
+    /// shrinking a valid preference to fit the current screen would lose it.
+    /// A value beyond any display's plausible size is a corrupt preference
+    /// rather than a choice, though, and previously survived validation as a
+    /// finite magnitude that layout and numeric formatting could not use.
+    static let maximumRestorableDimension: Double = 50_000
+
     private static func clampMinimum(
         _ value: Double,
         minimum: Double,
         fallback: Double
     ) -> Double {
-        guard value.isFinite else { return fallback }
+        guard value.isFinite, value <= maximumRestorableDimension else { return fallback }
         return max(value, minimum)
     }
 }

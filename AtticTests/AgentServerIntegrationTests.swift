@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import Attic
 
@@ -150,6 +151,68 @@ final class AgentServerIntegrationTests: XCTestCase {
         XCTAssertEqual(next.status, 200)
     }
 
+    /// A client that connects and then says nothing held its accepted socket
+    /// for as long as it liked, and `stop()` walked away from it: the listener
+    /// was cancelled while the socket stayed open and served. Stopping now
+    /// closes every accepted socket, and the peer sees the close.
+    func testStopClosesSocketsThatNeverCompletedARequest() async throws {
+        let token = try AgentAccessTokenStore.generateToken()
+        let server = AgentServer(port: 0, bearerToken: token,
+                                 handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore())))
+        defer { server.stop() }
+        let port = try await start(server)
+        XCTAssertEqual(server.openConnectionCount, 0)
+
+        let idle = IdleSocket(port: port)
+        defer { idle.close() }
+        idle.open()
+        await eventually { server.openConnectionCount == 1 }
+        XCTAssertFalse(idle.isClosed, "the server must not close a socket that is merely slow")
+
+        server.stop()
+        XCTAssertEqual(server.openConnectionCount, 0, "stop() must not leave an accepted socket behind")
+        await eventually { idle.isClosed }
+        XCTAssertTrue(idle.isClosed)
+
+        // A restart starts from an empty registry rather than inheriting the
+        // previous generation's sockets.
+        let nextPort = try await start(server)
+        XCTAssertEqual(server.openConnectionCount, 0)
+        let afterRestart = try await post(nextPort, token: token, method: "ping")
+        XCTAssertEqual(afterRestart.status, 200)
+    }
+
+    /// The deadline is the backstop for a peer that never finishes its
+    /// request while the server keeps running. Half a request is enough: the
+    /// parser keeps waiting for the terminator forever on its own.
+    func testAnUnfinishedRequestIsClosedByItsDeadline() async throws {
+        let token = try AgentAccessTokenStore.generateToken()
+        let server = AgentServer(port: 0, bearerToken: token,
+                                 handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore())),
+                                 requestDeadline: 0.4)
+        defer { server.stop() }
+        let port = try await start(server)
+
+        let truncated = IdleSocket(port: port)
+        defer { truncated.close() }
+        truncated.open()
+        await eventually { server.openConnectionCount == 1 }
+        truncated.send("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+
+        await eventually { truncated.isClosed }
+        XCTAssertTrue(truncated.isClosed, "an unfinished request must not hold its socket open")
+        await eventually { server.openConnectionCount == 0 }
+        XCTAssertEqual(server.openConnectionCount, 0, "the closed socket must leave the registry")
+
+        // The listener is still serving: the deadline closes one socket, not
+        // the server.
+        XCTAssertEqual(server.state, .running)
+        let served = try await post(port, token: token, method: "ping")
+        XCTAssertEqual(served.status, 200)
+        await eventually { server.openConnectionCount == 0 }
+        XCTAssertEqual(server.openConnectionCount, 0, "a completed request must not stay registered")
+    }
+
     func testPlaceholderAndEmptyCredentialsNeverOpenListener() throws {
         for token in ["", "attic-local-only-agent-disabled", "attic-test-agent-token"] {
             let server = AgentServer(port: 0, bearerToken: token, handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore())))
@@ -157,6 +220,19 @@ final class AgentServerIntegrationTests: XCTestCase {
             guard case .failed = server.state else { return XCTFail("Unsafe credential must fail closed") }
             XCTAssertNil(server.boundPort)
         }
+    }
+
+    private func eventually(
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: () -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition(), "condition not reached within \(timeout)s", file: file, line: line)
     }
 
     private func start(_ server: AgentServer) async throws -> UInt16 {
@@ -195,6 +271,62 @@ final class AgentServerIntegrationTests: XCTestCase {
         let (data, response) = try await session.data(for: request)
         return (try XCTUnwrap(response as? HTTPURLResponse).statusCode,
                 (try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+    }
+}
+
+/// A bare loopback peer: it connects, optionally sends a fragment, and never
+/// completes a request. This is the client shape that used to outlive `stop()`.
+private final class IdleSocket: @unchecked Sendable {
+    private let connection: NWConnection
+    private let lock = NSLock()
+    private var closed = false
+
+    init(port: UInt16) {
+        connection = NWConnection(
+            host: .ipv4(.loopback),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+    }
+
+    var isClosed: Bool { lock.withLock { closed } }
+
+    func open() {
+        connection.stateUpdateHandler = { [self] state in
+            switch state {
+            case .ready:
+                waitForClose()
+            case .failed, .cancelled:
+                markClosed()
+            default:
+                break
+            }
+        }
+        connection.start(queue: .global())
+    }
+
+    func send(_ text: String) {
+        connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in })
+    }
+
+    func close() {
+        connection.cancel()
+    }
+
+    /// A peer observes a closed socket as end-of-stream or as a reset; either
+    /// answer means the server let go of it.
+    private func waitForClose() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) { [self] _, _, isComplete, error in
+            if isComplete || error != nil {
+                markClosed()
+            } else {
+                waitForClose()
+            }
+        }
+    }
+
+    private func markClosed() {
+        lock.withLock { closed = true }
     }
 }
 

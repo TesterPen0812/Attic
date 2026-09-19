@@ -48,4 +48,10 @@ enum SettingsVisibility {
     static func showsAgentConnection(isEnabled: Bool) -> Bool {
         isEnabled
     }
+
+    /// The refused global shortcut Settings must explain, or nil while the
+    /// shortcut is working or has not been attempted yet.
+    static func globalShortcutFailure(_ registration: GlobalHotKeyRegistration) -> GlobalHotKeyFailure? {
+        registration.failure
+    }
 }

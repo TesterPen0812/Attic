@@ -386,6 +386,48 @@ final class NoteAttachmentTests: XCTestCase {
         return noteID
     }
 
+    /// Dropping a card on itself is not a reorder: it must stay where it is.
+    /// The source is taken out of the working order before the target index is
+    /// looked up, so a target equal to the source missed the lookup entirely
+    /// and the card was appended to the end — A,B,C dropping A on A produced
+    /// B,C,A.
+    @MainActor
+    func testDroppingAnAttachmentOnItselfLeavesTheOrderAlone() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["a.txt", "b.txt", "c.txt"]
+        let sources = try names.map { try write(Data($0.utf8), named: $0, in: directory) }
+        let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
+        let store = try makeTestNoteStore(attachmentFileStore: fileStore)
+
+        let outcome = await store.importAttachments(makeStoreImportRequest(from: sources))
+        let noteID = try XCTUnwrap(importedNoteID(from: outcome))
+        XCTAssertEqual(store.attachments(for: noteID).map(\.originalFilename), names)
+
+        // Every position, not just the first: head, middle and tail each used
+        // to jump to the end.
+        for attachment in store.attachments(for: noteID) {
+            XCTAssertTrue(store.placeAttachment(attachment.id, in: noteID, offset: nil, before: attachment.id))
+            XCTAssertEqual(store.attachments(for: noteID).map(\.originalFilename), names,
+                           "dropping \(attachment.originalFilename) on itself must not move it")
+        }
+
+        // Genuine reorders are unaffected: the last card moves before the first…
+        let ordered = store.attachments(for: noteID)
+        let first = try XCTUnwrap(ordered.first)
+        let last = try XCTUnwrap(ordered.last)
+        XCTAssertTrue(store.placeAttachment(last.id, in: noteID, offset: nil, before: first.id))
+        XCTAssertEqual(store.attachments(for: noteID).map(\.originalFilename), ["c.txt", "a.txt", "b.txt"])
+
+        // … and a drop past the end still appends.
+        XCTAssertTrue(store.placeAttachment(last.id, in: noteID, offset: nil, before: nil))
+        XCTAssertEqual(store.attachments(for: noteID).map(\.originalFilename), ["a.txt", "b.txt", "c.txt"])
+
+        // The order survives a reload from the same store.
+        store.refresh()
+        XCTAssertEqual(store.attachments(for: noteID).map(\.originalFilename), ["a.txt", "b.txt", "c.txt"])
+    }
+
     func testImportPreservesFinderOrderAndDuplicateFilenames() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

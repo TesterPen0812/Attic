@@ -712,6 +712,160 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertEqual(session.selectedSemanticObject?.content?.text, draft)
     }
 
+    /// The app's canvas Undo/Redo items shadow the standard Edit ▸ Undo/Redo
+    /// with the same key equivalent. AppKit stops at the first item that
+    /// matches: a disabled one consumes the event and neither it nor the
+    /// standard item behind it runs. That is why a stale "disabled" on those
+    /// items is not merely cosmetic — ⌘Z does nothing at all — and why their
+    /// availability has to be republished while the user types.
+    @MainActor
+    func testADisabledShortcutItemSwallowsItsKeyEquivalent() throws {
+        final class Fired: NSObject {
+            var shadowing = false
+            var standard = false
+            @objc func shadowingUndo(_ sender: Any?) { shadowing = true }
+            @objc func undo(_ sender: Any?) { standard = true }
+        }
+        let fired = Fired()
+
+        func edit(shadowingIsEnabled: Bool) -> NSMenu {
+            let menu = NSMenu(title: "Edit")
+            menu.autoenablesItems = false
+            let shadowing = NSMenuItem(title: "Undo Canvas Change",
+                                       action: #selector(Fired.shadowingUndo(_:)), keyEquivalent: "z")
+            shadowing.keyEquivalentModifierMask = [.command]
+            shadowing.target = fired
+            shadowing.isEnabled = shadowingIsEnabled
+            menu.addItem(shadowing)
+            let standard = NSMenuItem(title: "Undo", action: #selector(Fired.undo(_:)), keyEquivalent: "z")
+            standard.keyEquivalentModifierMask = [.command]
+            standard.target = fired
+            menu.addItem(standard)
+            return menu
+        }
+
+        let commandZ = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
+            characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6
+        ))
+
+        XCTAssertTrue(edit(shadowingIsEnabled: false).performKeyEquivalent(with: commandZ),
+                      "AppKit consumes the event at the disabled item")
+        XCTAssertFalse(fired.shadowing)
+        XCTAssertFalse(fired.standard,
+                       "a disabled shortcut item does not fall through to the standard Undo behind it")
+
+        XCTAssertTrue(edit(shadowingIsEnabled: true).performKeyEquivalent(with: commandZ))
+        XCTAssertTrue(fired.shadowing, "an enabled item runs and still shadows the standard Undo")
+        XCTAssertFalse(fired.standard)
+    }
+
+    /// The app's Edit ▸ Undo item reads availability through
+    /// `editingAvailabilityToken`, the way the canvas toolbar already does.
+    /// Without that read, a board whose session history was cleared left the
+    /// item cached as disabled while the user typed — and a disabled ⌘Z item
+    /// swallows the shortcut rather than deferring to the standard Undo.
+    @MainActor
+    func testEditingAvailabilityRepublishesWhileTypingWithEmptyCanvasHistory() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+
+        // Renaming the board clears session history, exactly as selecting or
+        // creating one does: the object survives, the undo stack does not.
+        XCTAssertTrue(session.renameSelectedCanvas(to: "Board"))
+        XCTAssertFalse(session.canUndo, "the flagged state: an object on a board with no history")
+
+        let chrome = HostedCanvasChrome(session: session)
+        defer { chrome.tearDown() }
+        let canvas = try XCTUnwrap(chrome.canvas)
+        let object = try XCTUnwrap(session.semanticObjects.first)
+        session.selectSemanticObject(object.id)
+        canvas.beginSemanticTextEditing(object)
+        let editor = try XCTUnwrap(canvas.semanticTextEditor)
+        XCTAssertTrue(chrome.window.firstResponder === editor)
+        chrome.settle()
+
+        let beforeTyping = session.editingAvailabilityToken
+        XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
+
+        editor.insertText(" draft", replacementRange: NSRange(location: 4, length: 0))
+        editor.breakUndoCoalescing()
+        chrome.settle()
+
+        XCTAssertGreaterThan(session.editingAvailabilityToken, beforeTyping,
+                             "typing must republish availability; canvas history never does")
+        XCTAssertFalse(session.canUndo, "and it must not invent canvas history")
+        XCTAssertTrue(CanvasEditCommandRoute.canUndo(session: session, section: .canvas),
+                      "Undo must now be offered for the typing")
+        XCTAssertTrue(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertEqual(editor.string, "Keep")
+        XCTAssertEqual(session.semanticObjects.count, 1)
+
+        // The editor's own undo also changes what it can do, so the token has
+        // to move again — otherwise Redo stays cached as disabled.
+        let afterUndo = session.editingAvailabilityToken
+        XCTAssertGreaterThan(afterUndo, beforeTyping)
+        XCTAssertTrue(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
+    }
+
+    /// Availability for the route is decided by the focused editor's undo
+    /// manager, which canvas history never republishes. Every combination of
+    /// focus, canvas history and section must answer correctly, and the command
+    /// must never pop canvas history behind a focused editor's back.
+    @MainActor
+    func testEditCommandRouteIsSafeToInvokeWithNothingToUndo() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let chrome = HostedCanvasChrome(session: session)
+        defer { chrome.tearDown() }
+
+        // Nothing anywhere: both commands refuse and change nothing.
+        XCTAssertFalse(session.canUndo)
+        XCTAssertFalse(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertFalse(CanvasEditCommandRoute.redo(session: session, section: .canvas))
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+
+        // Outside the Canvas section the commands are not offered at all, and
+        // the route refuses even if it is reached.
+        XCTAssertFalse(CanvasEditCommandRoute.undo(session: session, section: .tasks))
+        XCTAssertFalse(CanvasEditCommandRoute.redo(session: session, section: .tasks))
+
+        let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        chrome.settle()
+        let object = try XCTUnwrap(session.semanticObjects.first)
+        session.selectSemanticObject(object.id)
+        let canvas = try XCTUnwrap(chrome.canvas)
+        canvas.beginSemanticTextEditing(object)
+        let editor = try XCTUnwrap(canvas.semanticTextEditor)
+        XCTAssertTrue(chrome.window.firstResponder === editor)
+
+        // A focused editor with nothing typed: the canvas history must not be
+        // popped behind the user's back, and the command is still harmless.
+        XCTAssertEqual(editor.undoManager?.canUndo, false)
+        XCTAssertTrue(session.canUndo, "the insert itself is canvas history")
+        XCTAssertFalse(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertEqual(session.semanticObjects.count, 1)
+        XCTAssertEqual(editor.string, "Keep")
+
+        // Typing is undone in the editor, never in the canvas.
+        editor.insertText(" draft", replacementRange: NSRange(location: 4, length: 0))
+        editor.breakUndoCoalescing()
+        chrome.settle()
+        XCTAssertTrue(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertEqual(editor.string, "Keep")
+        XCTAssertEqual(session.semanticObjects.count, 1, "canvas history must stay untouched while editing")
+
+        // With the editor closed the same command reaches canvas history.
+        XCTAssertTrue(canvas.finishSemanticTextEditing(commit: true))
+        chrome.settle()
+        XCTAssertTrue(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        XCTAssertTrue(CanvasEditCommandRoute.redo(session: session, section: .canvas))
+        XCTAssertEqual(session.semanticObjects.count, 1)
+    }
+
     @MainActor
     func testInlineEscapeCancelsDraftWithoutDeletingObjectAndNativeUndoStaysInEditor() async throws {
         let session = CanvasSession(store: try makeTestCanvasStore())

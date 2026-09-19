@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 import XCTest
 @testable import Attic
@@ -9,6 +10,78 @@ final class PanelSurfaceHostingViewTests: XCTestCase {
         let view: NSView
         func makeNSView(context: Context) -> NSView { view }
         func updateNSView(_ nsView: NSView, context: Context) {}
+    }
+
+    private enum MenuGlyphTreatment {
+        case foregroundStyleOnly
+        case quiet
+    }
+
+    private struct MenuGlyphProbe: View {
+        let treatment: MenuGlyphTreatment
+
+        var body: some View {
+            let menu = Menu {
+                Button("Action") {}
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 40, height: 40)
+
+            return Group {
+                switch treatment {
+                case .foregroundStyleOnly: menu.foregroundStyle(Color.red)
+                case .quiet: menu.atticQuietMenuGlyph(.red)
+                }
+            }
+            .frame(width: 60, height: 60)
+            .background(Color.white)
+        }
+    }
+
+    /// Pixels painted in the colour the probe asks for.
+    private func renderedProbeColourCount(_ treatment: MenuGlyphTreatment) -> Int {
+        let host = NSHostingView(rootView: MenuGlyphProbe(treatment: treatment))
+        host.frame = NSRect(x: 0, y: 0, width: 60, height: 60)
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 60, height: 60),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        for _ in 0..<6 {
+            host.layoutSubtreeIfNeeded()
+            CATransaction.flush()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 0 }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        var red = 0
+        for x in 0..<rep.pixelsWide {
+            for y in 0..<rep.pixelsHigh {
+                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                let r = pixel.redComponent, g = pixel.greenComponent, b = pixel.blueComponent
+                if r > g + 0.15 && r > b + 0.15 { red += 1 }
+            }
+        }
+        return red
+    }
+
+    /// A `.borderlessButton` `Menu` with an `Image` label renders through an
+    /// AppKit pop-up button that paints the symbol as a tinted template and
+    /// ignores the label's own `foregroundStyle` — which is why every such menu
+    /// outside the task rows showed system accent at rest. This pins the
+    /// treatment that actually reaches the cell: it fails if
+    /// `atticQuietMenuGlyph` is ever reduced to `foregroundStyle` alone.
+    ///
+    /// It asserts colour reach only. Whether the resting glyph looks right on
+    /// each real surface is native UAT, as the audit's own verification says.
+    func testQuietMenuGlyphIsWhatActuallyColoursABorderlessImageMenu() {
+        XCTAssertEqual(renderedProbeColourCount(.foregroundStyleOnly), 0,
+                       "foregroundStyle alone never reaches the pop-up button's glyph")
+        XCTAssertGreaterThan(renderedProbeColourCount(.quiet), 0,
+                             "atticQuietMenuGlyph must colour the glyph itself")
     }
 
     func testEveryHeaderPointExceptControlsRoutesToTheHost() {
