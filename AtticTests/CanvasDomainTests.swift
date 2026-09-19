@@ -77,6 +77,58 @@ final class CanvasAffordanceTruthTests: XCTestCase {
     }
 }
 
+/// A stand-in for SwiftUI's main-menu delegate, built to the behaviour the
+/// shipped Edit menu was measured to have: the `Commands` answer is available
+/// continuously, but it is written onto the menu item — target, action and
+/// enabled state alike — only from `menuNeedsUpdate(_:)`, which AppKit calls
+/// when the menu is about to be tracked and at no other time. Before the first
+/// such pass the item carries its shortcut with no target and no action at
+/// all, which is exactly the state a never-opened Edit menu swallows ⌘Z from.
+@MainActor
+private final class RenderedCommandsMenuDelegate: NSObject, NSMenuDelegate {
+    private let sample: @MainActor () -> (undo: Bool, redo: Bool)
+    private let perform: @MainActor (_ isUndo: Bool) -> Void
+    private weak var undoItem: NSMenuItem?
+    private weak var redoItem: NSMenuItem?
+
+    private(set) var updates = 0
+    private(set) var undoInvocations = 0
+    private(set) var redoInvocations = 0
+
+    init(
+        undoItem: NSMenuItem,
+        redoItem: NSMenuItem,
+        sample: @escaping @MainActor () -> (undo: Bool, redo: Bool),
+        perform: @escaping @MainActor (_ isUndo: Bool) -> Void
+    ) {
+        self.undoItem = undoItem
+        self.redoItem = redoItem
+        self.sample = sample
+        self.perform = perform
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        updates += 1
+        let rendered = sample()
+        undoItem?.target = self
+        undoItem?.action = #selector(invokeUndo(_:))
+        undoItem?.isEnabled = rendered.undo
+        redoItem?.target = self
+        redoItem?.action = #selector(invokeRedo(_:))
+        redoItem?.isEnabled = rendered.redo
+    }
+
+    @objc private func invokeUndo(_ sender: Any?) {
+        undoInvocations += 1
+        perform(true)
+    }
+
+    @objc private func invokeRedo(_ sender: Any?) {
+        redoInvocations += 1
+        perform(false)
+    }
+}
+
 final class CanvasAccessibilityTests: XCTestCase {
     func testAccessibilityNumberTextKeepsIntegralAndFractionalFormatting() {
         XCTAssertEqual(CanvasAccessibilityNumberText.string(for: 12), "12")
@@ -1202,6 +1254,322 @@ final class CanvasAccessibilityTests: XCTestCase {
     @MainActor
     private func settleFocusPublication() {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+    }
+
+    /// The ⌘Z event AppKit dispatches at a menu, so the key equivalent under
+    /// test is the one the app actually claims.
+    @MainActor
+    private func commandZEvent() throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
+            characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6
+        ))
+    }
+
+    /// The release-blocking native defect, driven end to end for one alert
+    /// field shape. See
+    /// `testANeverOpenedEditMenuStopsSwallowingCommandZInTheCanvasAlertFields`.
+    @MainActor
+    private func assertAlertFieldRegainsDirectCommandZ(
+        _ label: String,
+        initialText: String,
+        typed: String
+    ) throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertFalse(session.canUndo, "\(label): the flagged state, no canvas history to offer")
+
+        // The Edit menu as the app leaves it between tracking passes: the
+        // shadowing items claim ⌘Z and ⇧⌘Z in front of an enabled standard
+        // Undo. The submenu is deliberately not titled "Edit" — the delivery
+        // has to find it by the shortcut the items claim, not by a title
+        // AppKit localizes.
+        final class StandardUndo: NSObject {
+            var fired = 0
+            @objc func undo(_ sender: Any?) { fired += 1 }
+        }
+        let standardUndo = StandardUndo()
+        let mainMenu = NSMenu(title: "Main")
+        let shadowed = NSMenu(title: "Ändern")
+        shadowed.autoenablesItems = false
+        let undoItem = NSMenuItem(title: "Undo Canvas Change", action: nil, keyEquivalent: "z")
+        undoItem.keyEquivalentModifierMask = [.command]
+        let redoItem = NSMenuItem(title: "Redo Canvas Change", action: nil, keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        shadowed.addItem(undoItem)
+        shadowed.addItem(redoItem)
+        let standardItem = NSMenuItem(title: "Undo", action: #selector(StandardUndo.undo(_:)),
+                                      keyEquivalent: "z")
+        standardItem.keyEquivalentModifierMask = [.command]
+        standardItem.target = standardUndo
+        shadowed.addItem(standardItem)
+        let shadowedHost = NSMenuItem(title: "Ändern", action: nil, keyEquivalent: "")
+        shadowedHost.submenu = shadowed
+        mainMenu.addItem(shadowedHost)
+
+        // A text field outside the canvas, in the two shapes the New Canvas
+        // and Rename Canvas alerts open in.
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 240, height: 120),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
+        let field = NSTextField(frame: NSRect(x: 0, y: 48, width: 240, height: 24))
+        field.isEditable = true
+        field.stringValue = initialText
+        container.addSubview(field)
+        window.contentView = container
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.contentView = nil }
+
+        let previousResponder = CanvasEditCommandRoute.focusedResponder
+        let previousMenu = CanvasEditCommandMenuDelivery.mainMenu
+        CanvasEditCommandRoute.focusedResponder = { [weak window] in window?.firstResponder }
+        CanvasEditCommandMenuDelivery.mainMenu = { mainMenu }
+        defer {
+            CanvasEditCommandRoute.focusedResponder = previousResponder
+            CanvasEditCommandMenuDelivery.mainMenu = previousMenu
+        }
+        window.makeFirstResponder(container)
+
+        let delegate = RenderedCommandsMenuDelegate(
+            undoItem: undoItem,
+            redoItem: redoItem,
+            sample: {
+                (CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas),
+                 CanvasEditCommandAvailability.redoIsEnabled(session: session, section: .canvas))
+            },
+            perform: { isUndo in
+                if isUndo {
+                    _ = CanvasEditCommandRoute.undo(session: session, section: .canvas)
+                } else {
+                    _ = CanvasEditCommandRoute.redo(session: session, section: .canvas)
+                }
+            }
+        )
+        shadowed.delegate = delegate
+
+        let monitor = CanvasEditCommandFocusMonitor()
+        defer { monitor.stopObserving() }
+
+        // The state the native run began from: the menu was last tracked while
+        // canvas history was empty and nothing outside the canvas held focus,
+        // so both shadowing items render disabled, agreeing with the toolbar.
+        XCTAssertTrue(CanvasEditCommandMenuDelivery.deliver())
+        XCTAssertFalse(undoItem.isEnabled, "\(label): the menu agrees with the disabled toolbar")
+        XCTAssertFalse(redoItem.isEnabled)
+
+        // Focus moves into the alert's field and it is typed into. The
+        // boundary publishes for this shape exactly as for the other.
+        window.makeFirstResponder(field)
+        settleFocusPublication()
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView,
+                                   "\(label): the field editor took focus")
+        XCTAssertTrue(monitor.foreignTextViewOwnsAvailability,
+                      "\(label): the responder boundary is published for this field shape")
+        editor.insertText(typed, replacementRange: NSRange(location: 0, length: editor.string.count))
+        editor.breakUndoCoalescing()
+        XCTAssertEqual(editor.string, typed)
+        XCTAssertTrue(editor.undoManager?.canUndo == true, "\(label): the field has an undo to lose")
+        XCTAssertTrue(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas),
+                      "\(label): what the next render produces is *enabled*")
+
+        // The reported failure, with no delivery: the live item still holds
+        // the stale render, consumes ⌘Z, and the field text does not change.
+        XCTAssertFalse(undoItem.isEnabled, "\(label): the rendered answer never reached the item")
+        XCTAssertTrue(try mainMenu.performKeyEquivalent(with: commandZEvent()),
+                      "\(label): AppKit consumes the event at the stale disabled item")
+        XCTAssertEqual(delegate.undoInvocations, 0)
+        XCTAssertEqual(standardUndo.fired, 0,
+                       "\(label): nor does it fall through to the standard Undo behind it")
+        XCTAssertEqual(editor.string, typed, "\(label): the native symptom — the field is unchanged")
+
+        // The fix: the render is delivered, so the item AppKit dispatches at
+        // is the one the app last produced.
+        XCTAssertTrue(CanvasEditCommandMenuDelivery.deliver())
+        XCTAssertTrue(undoItem.isEnabled, "\(label): the delivered render enables the item")
+        XCTAssertTrue(try mainMenu.performKeyEquivalent(with: commandZEvent()))
+        XCTAssertEqual(delegate.undoInvocations, 1, "\(label): ⌘Z reached the item")
+        XCTAssertEqual(standardUndo.fired, 0,
+                       "\(label): and it still shadows the standard Undo")
+        XCTAssertEqual(editor.string, initialText, "\(label): ⌘Z edited the field's own text")
+        XCTAssertTrue(session.semanticObjects.isEmpty, "\(label): canvas history was never touched")
+        XCTAssertFalse(session.canUndo)
+
+        // And the same for ⇧⌘Z, which the field's own undo manager owns too.
+        // Its item claims the shortcut the way SwiftUI writes it — keyEquivalent
+        // "z" with ⇧⌘ — and AppKit's matching of a *synthesized* shifted key
+        // equivalent does not reproduce the hardware one: a synthetic ⇧⌘Z is
+        // taken by the ⌘Z item in front of it. The delivery is what this test
+        // owns, so the redo item is dispatched the way AppKit dispatches an
+        // item it has matched, once the render has reached it.
+        XCTAssertTrue(CanvasEditCommandMenuDelivery.deliver())
+        XCTAssertTrue(redoItem.isEnabled, "\(label): the delivered render enables Redo too")
+        let redoAction = try XCTUnwrap(redoItem.action,
+                                       "\(label): a delivered item has an action to dispatch")
+        XCTAssertTrue(NSApp.sendAction(redoAction, to: redoItem.target, from: redoItem))
+        XCTAssertEqual(delegate.redoInvocations, 1)
+        XCTAssertEqual(editor.string, typed, "\(label): ⇧⌘Z restored the field's own text")
+
+        // Leaving the field hands the answer back to canvas state, and the
+        // delivery is what puts the menu back in step with the toolbar.
+        window.makeFirstResponder(container)
+        settleFocusPublication()
+        XCTAssertFalse(monitor.foreignTextViewOwnsAvailability)
+        XCTAssertTrue(CanvasEditCommandMenuDelivery.deliver())
+        XCTAssertFalse(undoItem.isEnabled, "\(label): the menu agrees with the toolbar again")
+        XCTAssertFalse(redoItem.isEnabled)
+    }
+
+    /// The release-blocking native defect. From an Edit menu that last
+    /// rendered *Undo Canvas Change* disabled, focusing the New Canvas alert's
+    /// name field, typing, and pressing ⌘Z without opening Edit left the field
+    /// text unchanged, and Edit opened afterwards still showed both the
+    /// shadowing Undo and the standard Undo disabled.
+    ///
+    /// The responder route was never the problem. The focus monitor already
+    /// republishes that boundary
+    /// (`testFocusMonitorPublishesOnlyWhenForeignTextViewOwnershipChanges`) and
+    /// availability already answers *enabled* for it
+    /// (`testShadowingUndoIsNeverDisabledForAForeignTextView`). What was
+    /// missing is delivery: SwiftUI writes a `Commands` answer onto the live
+    /// `NSMenuItem` — target, action and enabled state alike — only when
+    /// AppKit asks the menu to update, and AppKit asks only when the menu is
+    /// about to be tracked. A menu that is never opened therefore kept the
+    /// stale disabled item, and a disabled item consumes ⌘Z while letting
+    /// neither itself nor the standard Undo behind it run
+    /// (`testADisabledShortcutItemSwallowsItsKeyEquivalent`).
+    ///
+    /// Both alert fields are driven, in the shapes they open in: New Canvas on
+    /// an empty field, Rename Canvas pre-filled with the selected canvas's
+    /// name. They behave identically at every step, including the failure —
+    /// the native run's New/Rename split was an ordering artifact of the Edit
+    /// menu having been tracked between the two checks, not a difference
+    /// between the fields, and a fix that only addressed New Canvas would have
+    /// left Rename Canvas failing from the same stale render.
+    ///
+    /// Native-UAT limit: this drives the real notifications, responder
+    /// transitions, field editors, availability, delivery and `NSMenu`
+    /// key-equivalent dispatch, but it cannot drive SwiftUI's own `Commands` →
+    /// `NSMenuItem` pipeline or a real `.alert` presentation. That
+    /// `CanvasEditCommands` requests the delivery on every render still needs
+    /// a native check: ⌘Z and ⇧⌘Z in the New Canvas and Rename Canvas fields
+    /// without opening Edit after focus, and the same in a pinned family
+    /// panel's rename field.
+    @MainActor
+    func testANeverOpenedEditMenuStopsSwallowingCommandZInTheCanvasAlertFields() throws {
+        try assertAlertFieldRegainsDirectCommandZ(
+            "New Canvas", initialText: "", typed: "FieldRouteZX91"
+        )
+        try assertAlertFieldRegainsDirectCommandZ(
+            "Rename Canvas", initialText: "UAT Board Base", typed: "RenameRouteQ72"
+        )
+    }
+
+    /// What the delivery costs and what it refuses to assume.
+    ///
+    /// It is requested from a `Commands` render, so it has to be deferred past
+    /// that render, collapse when a burst of publications lands in one
+    /// run-loop turn, find the menu by the shortcut the shadowing items claim
+    /// rather than by a localized title, and answer an absence rather than
+    /// create one — `CanvasEditCommands` is built before `NSApplicationMain`
+    /// has created an application to hold a main menu
+    /// (`testRouteAndFocusMonitorSurviveStartupBeforeNSApplicationExists`).
+    @MainActor
+    func testMenuDeliveryIsDeferredCoalescedAndSafeBeforeAnApplicationExists() throws {
+        let previousApplication = CanvasEditCommandRoute.runningApplication
+        let previousMenu = CanvasEditCommandMenuDelivery.mainMenu
+        defer {
+            CanvasEditCommandRoute.runningApplication = previousApplication
+            CanvasEditCommandMenuDelivery.mainMenu = previousMenu
+        }
+
+        // The launch window: no application, so no main menu and nothing that
+        // traps reaching for one.
+        CanvasEditCommandMenuDelivery.mainMenu = {
+            CanvasEditCommandRoute.runningApplication()?.mainMenu
+        }
+        CanvasEditCommandRoute.runningApplication = { nil }
+        let enabledRender = CanvasEditCommandMenuDelivery.Render(
+            offersShadowingItems: true, undoIsEnabled: true, redoIsEnabled: false
+        )
+        XCTAssertNil(CanvasEditCommandMenuDelivery.shadowedMenu())
+        XCTAssertFalse(CanvasEditCommandMenuDelivery.deliver(),
+                       "there is no menu to deliver to, and that is not a delivery")
+        CanvasEditCommandMenuDelivery.scheduleDelivery(enabledRender)
+        settleFocusPublication()
+        XCTAssertFalse(CanvasEditCommandMenuDelivery.deliver(),
+                       "and a render that found no menu is not recorded as delivered")
+
+        // A main menu whose first submenu claims no ⌘Z: the delivery has to
+        // keep looking rather than settle for the first submenu it sees.
+        let mainMenu = NSMenu(title: "Main")
+        let decoy = NSMenu(title: "Edit")
+        let cut = NSMenuItem(title: "Cut", action: nil, keyEquivalent: "x")
+        cut.keyEquivalentModifierMask = [.command]
+        decoy.addItem(cut)
+        let decoyHost = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        decoyHost.submenu = decoy
+        mainMenu.addItem(decoyHost)
+
+        let shadowed = NSMenu(title: "Ändern")
+        shadowed.autoenablesItems = false
+        let undoItem = NSMenuItem(title: "Undo Canvas Change", action: nil, keyEquivalent: "z")
+        undoItem.keyEquivalentModifierMask = [.command]
+        let redoItem = NSMenuItem(title: "Redo Canvas Change", action: nil, keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        shadowed.addItem(undoItem)
+        shadowed.addItem(redoItem)
+        let shadowedHost = NSMenuItem(title: "Ändern", action: nil, keyEquivalent: "")
+        shadowedHost.submenu = shadowed
+        mainMenu.addItem(shadowedHost)
+
+        final class RenderBox {
+            var undo = true
+            var redo = false
+        }
+        let box = RenderBox()
+        let delegate = RenderedCommandsMenuDelegate(
+            undoItem: undoItem,
+            redoItem: redoItem,
+            sample: { (box.undo, box.redo) },
+            perform: { _ in }
+        )
+        shadowed.delegate = delegate
+        CanvasEditCommandMenuDelivery.mainMenu = { mainMenu }
+        XCTAssertTrue(CanvasEditCommandMenuDelivery.shadowedMenu() === shadowed,
+                      "found by the shortcut the shadowing items claim, not by a title")
+
+        CanvasEditCommandMenuDelivery.scheduleDelivery(enabledRender)
+        CanvasEditCommandMenuDelivery.scheduleDelivery(enabledRender)
+        CanvasEditCommandMenuDelivery.scheduleDelivery(enabledRender)
+        XCTAssertEqual(delegate.updates, 0,
+                       "the delivery is deferred past the render that asked for it")
+        settleFocusPublication()
+        XCTAssertEqual(delegate.updates, 1,
+                       "three requests inside one run-loop turn cost one menu update")
+        XCTAssertTrue(undoItem.isEnabled)
+        XCTAssertFalse(redoItem.isEnabled)
+
+        // Asking the menu to update is itself what makes SwiftUI re-run the
+        // body, so a render the menu already holds must not be delivered
+        // again: otherwise the app updates its Edit menu every run-loop turn
+        // for as long as it is open.
+        CanvasEditCommandMenuDelivery.scheduleDelivery(enabledRender)
+        settleFocusPublication()
+        XCTAssertEqual(delegate.updates, 1, "an unchanged render costs nothing")
+
+        // A render that does differ is delivered, so the gate cannot go on to
+        // swallow the change the menu exists to show.
+        box.undo = false
+        box.redo = true
+        CanvasEditCommandMenuDelivery.scheduleDelivery(
+            CanvasEditCommandMenuDelivery.Render(
+                offersShadowingItems: true, undoIsEnabled: false, redoIsEnabled: true
+            )
+        )
+        settleFocusPublication()
+        XCTAssertEqual(delegate.updates, 2)
+        XCTAssertFalse(undoItem.isEnabled)
+        XCTAssertTrue(redoItem.isEnabled)
     }
 
     /// The flagged defect: *Undo Canvas Change* and *Redo Canvas Change* were

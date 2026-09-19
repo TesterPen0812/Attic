@@ -120,6 +120,110 @@ enum CanvasEditCommandRoute {
     }
 }
 
+#if os(macOS)
+/// Pushes the enablement a `CanvasEditCommands` render produced onto the live
+/// `NSMenuItem`s that claim ⌘Z and ⇧⌘Z.
+///
+/// SwiftUI re-runs that body whenever anything it reads publishes, but it does
+/// not write the result onto the materialized menu items until AppKit asks the
+/// menu to update, and AppKit only asks when the menu is about to be tracked.
+/// Until the first such pass the items have no target and no action at all
+/// while already claiming the shortcut, and after it they keep whatever that
+/// pass left behind. A *disabled* item consumes ⌘Z and neither it nor the
+/// standard Undo behind it runs (`testADisabledShortcutItemSwallowsItsKeyEquivalent`),
+/// so the render that re-enables the items has to be delivered rather than
+/// waited on: focus moving into a New/Rename Canvas alert field, a pinned
+/// family panel's rename field or a Settings field re-enables them, and the
+/// very next keystroke can be the ⌘Z that has to reach them.
+///
+/// This is the half of the fix `CanvasEditCommandFocusMonitor` cannot supply.
+/// The monitor makes the responder boundary observable, which is what gets the
+/// body re-run with the right answer; without a delivery that answer stays in
+/// SwiftUI and the menu keeps swallowing the shortcut.
+///
+/// `NSMenu.update()` alone is not enough. It validates targets and actions
+/// against the responder chain, while SwiftUI's main-menu delegate writes a
+/// `Commands` change onto its items only from `menuNeedsUpdate(_:)`. This asks
+/// for exactly what tracking asks for, one run-loop pass after the render.
+///
+/// It is requested with what the render produced, and a render that produced
+/// what the menu was last given is not delivered again. Asking the menu to
+/// update makes SwiftUI re-run the body, which would ask again: delivering
+/// only changes is what keeps that from becoming a menu update every run-loop
+/// turn for as long as the app is open.
+@MainActor
+enum CanvasEditCommandMenuDelivery {
+    /// What a `CanvasEditCommands` render produced, and therefore what the
+    /// menu items should be presenting.
+    struct Render: Equatable {
+        var offersShadowingItems: Bool
+        var undoIsEnabled: Bool
+        var redoIsEnabled: Bool
+
+        init(offersShadowingItems: Bool, undoIsEnabled: Bool, redoIsEnabled: Bool) {
+            self.offersShadowingItems = offersShadowingItems
+            self.undoIsEnabled = undoIsEnabled
+            self.redoIsEnabled = redoIsEnabled
+        }
+    }
+
+    /// The application's main menu, or `nil` while there is no application.
+    /// `CanvasEditCommands` is built before `NSApplicationMain` has run, for
+    /// the same reason `CanvasEditCommandRoute.runningApplication` exists, so
+    /// this has to answer an absence rather than create one. Tests substitute
+    /// a menu they can inspect.
+    static var mainMenu: @MainActor () -> NSMenu? = {
+        CanvasEditCommandRoute.runningApplication()?.mainMenu
+    }
+
+    private static var hasPendingDelivery = false
+    private static var deliveredRender: Render?
+
+    /// The submenu the shadowing items live in, found by the shortcut they
+    /// claim rather than by a title AppKit localizes. The standard Undo they
+    /// shadow carries the same shortcut, so the menu is still found in the
+    /// sections where nothing is shadowed and the items have to be taken back
+    /// out again.
+    static func shadowedMenu() -> NSMenu? {
+        mainMenu()?.items.lazy.compactMap(\.submenu).first { submenu in
+            submenu.items.contains {
+                $0.keyEquivalent == "z" && $0.keyEquivalentModifierMask == [.command]
+            }
+        }
+    }
+
+    /// Requests a delivery on the next run-loop pass, which is after the
+    /// render that asked for it. A render the menu already holds is not
+    /// delivered, and repeated requests within one turn collapse.
+    static func scheduleDelivery(_ render: Render) {
+        guard render != deliveredRender else { return }
+        deliveredRender = render
+        guard !hasPendingDelivery else { return }
+        hasPendingDelivery = true
+        RunLoop.main.perform(inModes: [.common, .modalPanel, .eventTracking]) {
+            MainActor.assumeIsolated { deliver() }
+        }
+    }
+
+    /// Answers whether there was a menu to update, so the absence stays
+    /// visible instead of being mistaken for a delivery. Without a menu the
+    /// record of what was delivered is dropped as well, so the render is
+    /// offered again once the application has one — the app builds these
+    /// commands before it has a main menu at all.
+    @discardableResult
+    static func deliver() -> Bool {
+        hasPendingDelivery = false
+        guard let menu = shadowedMenu() else {
+            deliveredRender = nil
+            return false
+        }
+        menu.delegate?.menuNeedsUpdate?(menu)
+        menu.update()
+        return true
+    }
+}
+#endif
+
 /// Publishes the moments at which the responder that owns Undo/Redo can have
 /// changed, so Edit-menu enablement — which SwiftUI samples only when it
 /// renders — is never left describing a responder that no longer has focus.

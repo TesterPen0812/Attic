@@ -66,6 +66,9 @@ private struct CanvasEditCommands: Commands {
     /// `CanvasEditCommandAvailability` documents the one case that stays
     /// enabled regardless — a disabled shortcut item swallows ⌘Z — and the
     /// route decides what each press acts on, at the moment it is pressed.
+    /// Publishing is only half of it: what this body produces reaches the live
+    /// menu items when `CanvasEditCommandMenuDelivery` hands it to AppKit, and
+    /// not merely because the body ran.
     private var canUndo: Bool {
         let _ = session.editingAvailabilityToken
         let _ = focus.foreignTextViewOwnsAvailability
@@ -86,7 +89,27 @@ private struct CanvasEditCommands: Commands {
 
     var body: some Commands {
         CommandGroup(before: .undoRedo) {
-            if CanvasEditCommandAvailability.offersShadowingItems(section: uiState.selectedSection) {
+            let offersShadowingItems = CanvasEditCommandAvailability
+                .offersShadowingItems(section: uiState.selectedSection)
+            let undoIsEnabled = canUndo
+            let redoIsEnabled = canRedo
+
+            // Re-running this body is not the same as the menu changing.
+            // SwiftUI writes what it produces here onto the live menu items
+            // only when AppKit asks the menu to update, which AppKit does when
+            // the menu is about to be tracked and at no other time — so a ⌘Z
+            // pressed without opening the menu meets whatever the last
+            // tracking pass left, and a disabled item swallows it. The render
+            // is therefore delivered rather than waited on.
+            let _ = CanvasEditCommandMenuDelivery.scheduleDelivery(
+                CanvasEditCommandMenuDelivery.Render(
+                    offersShadowingItems: offersShadowingItems,
+                    undoIsEnabled: undoIsEnabled,
+                    redoIsEnabled: redoIsEnabled
+                )
+            )
+
+            if offersShadowingItems {
                 Button("Undo Canvas Change") {
                     _ = CanvasEditCommandRoute.undo(
                         session: session,
@@ -94,7 +117,7 @@ private struct CanvasEditCommands: Commands {
                     )
                 }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(!canUndo)
+                .disabled(!undoIsEnabled)
 
                 Button("Redo Canvas Change") {
                     _ = CanvasEditCommandRoute.redo(
@@ -103,7 +126,7 @@ private struct CanvasEditCommands: Commands {
                     )
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!canRedo)
+                .disabled(!redoIsEnabled)
             }
         }
     }
