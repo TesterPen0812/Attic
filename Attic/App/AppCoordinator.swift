@@ -174,6 +174,11 @@ final class AppCoordinator: ObservableObject {
     let noteDraft: NoteDraftController
     let loginItemService: LoginItemService
     let uiState: PanelUIState
+    /// Renders the Edit menu's Undo/Redo enablement again when a text view
+    /// outside the canvas takes or gives up focus. Nothing else in the app's
+    /// model moves at that boundary, so without it the menu keeps the
+    /// enablement of its last render; see `CanvasEditCommandFocusMonitor`.
+    let canvasEditFocus = CanvasEditCommandFocusMonitor()
 
     private let cleanupService: DailyCleanupService
     private let panelController: AtticPanelController

@@ -20,7 +20,8 @@ struct AtticApp: App {
             }
             CanvasEditCommands(
                 session: coordinator.canvasSession,
-                uiState: coordinator.uiState
+                uiState: coordinator.uiState,
+                focus: coordinator.canvasEditFocus
             )
         }
     }
@@ -51,18 +52,23 @@ struct AtticApp: App {
 private struct CanvasEditCommands: Commands {
     @ObservedObject var session: CanvasSession
     @ObservedObject var uiState: PanelUIState
+    @ObservedObject var focus: CanvasEditCommandFocusMonitor
 
     /// Enablement comes from `CanvasEditCommandAvailability`, which reads the
     /// same route the canvas toolbar's Undo/Redo buttons read, so the menu
-    /// never offers an operation the toolbar shows as unavailable. Reading the
-    /// editing-availability token keeps that answer re-evaluated while a canvas
-    /// text editor is focused, exactly as the toolbar does; canvas history,
-    /// undo, redo and the selected section publish themselves.
+    /// never offers an operation the toolbar shows as unavailable. It is
+    /// sampled only when this body runs, so every boundary that can change the
+    /// answer has to publish. Canvas history, undo, redo and the selected
+    /// section publish themselves; the editing-availability token covers a
+    /// focused canvas text editor, exactly as the toolbar does; and the focus
+    /// monitor covers a text view outside the canvas taking or giving up focus,
+    /// which moves nothing else the app observes.
     /// `CanvasEditCommandAvailability` documents the one case that stays
     /// enabled regardless — a disabled shortcut item swallows ⌘Z — and the
     /// route decides what each press acts on, at the moment it is pressed.
     private var canUndo: Bool {
         let _ = session.editingAvailabilityToken
+        let _ = focus.foreignTextViewOwnsAvailability
         return CanvasEditCommandAvailability.undoIsEnabled(
             session: session,
             section: uiState.selectedSection
@@ -71,6 +77,7 @@ private struct CanvasEditCommands: Commands {
 
     private var canRedo: Bool {
         let _ = session.editingAvailabilityToken
+        let _ = focus.foreignTextViewOwnsAvailability
         return CanvasEditCommandAvailability.redoIsEnabled(
             session: session,
             section: uiState.selectedSection
