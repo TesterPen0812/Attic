@@ -7,6 +7,21 @@ import AppKit
 @MainActor
 enum CanvasEditCommandRoute {
     #if os(macOS)
+    /// The `NSApplication` singleton, or `nil` while it does not exist yet.
+    ///
+    /// `NSApp` is an implicitly unwrapped optional that stays nil until AppKit
+    /// creates the application, and every member access on it before then
+    /// traps. This type runs before then: `AtticApp` holds
+    /// `AppCoordinator.shared` as a stored property, so SwiftUI builds the
+    /// coordinator — and with it `CanvasEditCommandFocusMonitor`, whose `init`
+    /// samples `availabilityIsUnobserved` — before `NSApplicationMain` has run.
+    /// `NSApplication.shared` is deliberately not used: it *creates* the
+    /// singleton, which would hand an application to a unit test, a command
+    /// line host or the app's own pre-launch phase that none of them asked for,
+    /// and would hide the absence instead of answering for it. Tests replace
+    /// this to reproduce that pre-application state.
+    static var runningApplication: @MainActor () -> NSApplication? = { NSApp }
+
     /// The responder that owns keyboard focus for canvas commands: a text view
     /// focused in the key window, otherwise a canvas text editor that still
     /// holds focus in its visible window. The canvas panel is non-activating,
@@ -14,8 +29,15 @@ enum CanvasEditCommandRoute {
     /// presses still reach its controls; with the key window alone, Undo and
     /// Redo then acted on canvas history and tool changes skipped the save
     /// veto. Tests inject a specific window's responder instead.
-    static var focusedResponder: @MainActor () -> NSResponder? = {
-        let keyResponder = NSApp.keyWindow?.firstResponder
+    static var focusedResponder: @MainActor () -> NSResponder? = responderInKeyWindow
+
+    /// The production lookup behind `focusedResponder`, named so a test can
+    /// reinstall the closure the app actually launches with rather than rely on
+    /// no other test having replaced it. With no application there is no key
+    /// window and no focus anywhere, so every answer below falls through to the
+    /// canvas session's own state.
+    static func responderInKeyWindow() -> NSResponder? {
+        let keyResponder = runningApplication()?.keyWindow?.firstResponder
         if keyResponder is NSTextView { return keyResponder }
         return CanvasSemanticTextEditor.focusedInVisibleWindow ?? keyResponder
     }
@@ -159,6 +181,12 @@ final class CanvasEditCommandFocusMonitor: ObservableObject {
     private var hasPendingSample = false
     #endif
 
+    /// Constructed while `AtticApp`'s stored properties are built, which is
+    /// before AppKit has created `NSApplication`: the initial sample and every
+    /// deferred one resolve the application through
+    /// `CanvasEditCommandRoute.runningApplication`, which answers `nil` rather
+    /// than trapping or creating one. Registering the observers and scheduling
+    /// on the main run loop need no application at all.
     init() {
         #if os(macOS)
         foreignTextViewOwnsAvailability = CanvasEditCommandRoute.availabilityIsUnobserved

@@ -996,6 +996,91 @@ final class CanvasAccessibilityTests: XCTestCase {
                       "the live answer did move; only its publication stopped")
     }
 
+    /// The monitor is built before AppKit has an application to ask.
+    ///
+    /// `AtticApp` holds `AppCoordinator.shared` as a stored property and the
+    /// coordinator holds `CanvasEditCommandFocusMonitor`, so SwiftUI builds the
+    /// monitor — whose `init` samples `availabilityIsUnobserved` — while
+    /// `NSApp` is still the nil implicitly unwrapped optional it is until
+    /// `NSApplicationMain` creates the singleton. Dereferencing it there traps,
+    /// and native UAT of the previous commit saw exactly that: every launch
+    /// aborted at `CanvasEditCommandRoute.swift:18`, before any window existed,
+    /// with no user-visible symptom other than an app that would not start.
+    ///
+    /// The other tests in this file replace `focusedResponder`, which is why
+    /// none of them reached the closure that trapped. This one reinstalls the
+    /// production lookup explicitly and removes only the application, so the
+    /// thing under test is the launch path itself: the sample inside `init`,
+    /// a direct query, the availability the Edit menu renders from, the commit
+    /// veto, and the deferred sample the observers schedule. `.shared` would
+    /// satisfy all of them by conjuring an application the app has not reached
+    /// yet, so the absence has to survive the whole path instead.
+    @MainActor
+    func testRouteAndFocusMonitorSurviveStartupBeforeNSApplicationExists() throws {
+        let previousResponder = CanvasEditCommandRoute.focusedResponder
+        let previousApplication = CanvasEditCommandRoute.runningApplication
+        CanvasEditCommandRoute.focusedResponder = CanvasEditCommandRoute.responderInKeyWindow
+        CanvasEditCommandRoute.runningApplication = { nil }
+        defer {
+            CanvasEditCommandRoute.focusedResponder = previousResponder
+            CanvasEditCommandRoute.runningApplication = previousApplication
+        }
+
+        XCTAssertNil(CanvasEditCommandRoute.focusedResponder(),
+                     "no application means no key window and no focused responder")
+        XCTAssertFalse(CanvasEditCommandRoute.availabilityIsUnobserved,
+                       "nothing outside the canvas can own an answer before the app exists")
+
+        // The construction that aborted every launch of the previous commit.
+        let monitor = CanvasEditCommandFocusMonitor()
+        defer { monitor.stopObserving() }
+        XCTAssertFalse(monitor.foreignTextViewOwnsAvailability)
+
+        // Everything the Edit menu and the toolbar ask of the route in that
+        // window answers from canvas state, which is the only state there is.
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
+        XCTAssertFalse(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
+        XCTAssertFalse(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas))
+        XCTAssertFalse(CanvasEditCommandAvailability.redoIsEnabled(session: session, section: .canvas))
+        XCTAssertTrue(CanvasEditCommandRoute.finishTextEditing(),
+                      "there is no open editor to veto a tool change")
+        XCTAssertTrue(session.completeStroke(points: [CanvasPoint(x: -10, y: -10), CanvasPoint(x: 10, y: 10)]))
+        XCTAssertTrue(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas))
+
+        // The observers are live from `init`, so every notification the monitor
+        // subscribes to schedules the deferred sample in this window too. Each
+        // one re-reads the route a run-loop pass later, still with no
+        // application to read.
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 120, height: 60),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let field = NSTextView(frame: NSRect(x: 0, y: 0, width: 120, height: 60))
+        field.isEditable = true
+        window.contentView = field
+        defer { window.contentView = nil }
+        for name in [NSText.didBeginEditingNotification,
+                     NSText.didEndEditingNotification,
+                     NSTextView.didChangeSelectionNotification] {
+            NotificationCenter.default.post(name: name, object: field)
+        }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.post(name: name, object: window)
+        }
+        settleFocusPublication()
+        XCTAssertFalse(monitor.foreignTextViewOwnsAvailability)
+
+        // The seam this injects through is the live application in production,
+        // not a permanently indirected one: once AppKit has created it, the
+        // same monitor resolves the real singleton and its key window again.
+        CanvasEditCommandRoute.runningApplication = previousApplication
+        XCTAssertTrue(CanvasEditCommandRoute.runningApplication() === NSApp,
+                      "the default seam is `NSApp` itself")
+        NotificationCenter.default.post(name: NSText.didEndEditingNotification, object: field)
+        settleFocusPublication()
+        XCTAssertFalse(monitor.foreignTextViewOwnsAvailability,
+                       "the unit-test host owns no key window, so the answer is canvas state")
+    }
+
     /// The defect three reviews flagged in the enablement fix: enablement is
     /// sampled only when SwiftUI renders, so a render taken while canvas
     /// history was empty left *Undo Canvas Change* disabled, and focus moving
