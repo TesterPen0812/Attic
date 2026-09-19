@@ -250,6 +250,34 @@ final class AgentServerIntegrationTests: XCTestCase {
         XCTAssertEqual(registry.count, 0)
     }
 
+    /// An `NWConnection` retains its own `stateUpdateHandler`, so the handler
+    /// that deregisters a closed socket could close two cycles at once:
+    /// connection → handler → connection, and registry → connection → handler →
+    /// registry. The second one *is* observable, and this pins it: the
+    /// connection is never started, so Network has had no final state at which
+    /// to release the handler, and the handler is still installed on a live
+    /// connection holding whatever it captured. The registry must still be
+    /// released — `track` captures the key by value and the registry weakly.
+    func testAnAcceptedSocketsHandlerDoesNotKeepItsRegistryAlive() async throws {
+        let queue = DispatchQueue(label: "AgentServerTests.registry.retain")
+        // Held for the whole test: the socket outliving its registry is exactly
+        // the situation a strong capture made impossible.
+        let connection = NWConnection(host: .ipv4(.loopback), port: 9, using: .tcp)
+        defer { connection.cancel() }
+        weak var observed: AcceptedConnections?
+
+        do {
+            let registry = AcceptedConnections()
+            observed = registry
+            XCTAssertTrue(registry.track(connection, on: queue, deadline: 60))
+            XCTAssertEqual(registry.count, 1)
+            XCTAssertNotNil(observed)
+        }
+
+        await eventually { observed == nil }
+        XCTAssertNil(observed, "an accepted socket must not keep its generation's registry alive")
+    }
+
     /// A connection that never closes on its own is still released once the
     /// registry is shut down, so `stop()` frees the sockets as well as closing
     /// them.

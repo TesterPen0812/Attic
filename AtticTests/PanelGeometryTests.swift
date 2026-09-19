@@ -1555,13 +1555,18 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual(TaskScope.tasks.quickEntryOptionsCommandTitle, "Task options")
         XCTAssertEqual(TaskScope.tasks.quickEntryCloseOptionsCommandTitle, "Close task options")
 
+        XCTAssertEqual(TaskScope.tasks.quickEntryContainerLabel, "Quick task entry")
+
         let backlogCopy = [
             TaskScope.backlog.quickEntryPlaceholder,
             TaskScope.backlog.quickEntrySubmitTitle,
             TaskScope.backlog.quickEntryPendingSubmitTitle,
             TaskScope.backlog.quickEntryOptionsTitle,
             TaskScope.backlog.quickEntryOptionsCommandTitle,
-            TaskScope.backlog.quickEntryCloseOptionsCommandTitle
+            TaskScope.backlog.quickEntryCloseOptionsCommandTitle,
+            // VoiceOver reads the composer's container before anything inside
+            // it, and this one label was still hard-coded to "Quick task entry".
+            TaskScope.backlog.quickEntryContainerLabel
         ]
         for copy in backlogCopy {
             XCTAssertFalse(copy.lowercased().contains("task"),
@@ -1576,8 +1581,11 @@ final class PanelGeometryTests: XCTestCase {
         // Every scope answers with distinct, non-empty copy.
         for scope in TaskScope.allCases {
             XCTAssertFalse(scope.quickEntryPlaceholder.isEmpty)
+            XCTAssertFalse(scope.quickEntryContainerLabel.isEmpty)
             XCTAssertNotEqual(scope.quickEntryOptionsCommandTitle, scope.quickEntryCloseOptionsCommandTitle)
         }
+        XCTAssertNotEqual(TaskScope.tasks.quickEntryContainerLabel,
+                          TaskScope.backlog.quickEntryContainerLabel)
         XCTAssertNotEqual(TaskScope.tasks.quickEntrySubmitTitle, TaskScope.backlog.quickEntrySubmitTitle)
     }
 

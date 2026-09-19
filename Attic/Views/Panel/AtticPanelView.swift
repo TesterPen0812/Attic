@@ -685,7 +685,7 @@ struct AtticPanelView: View {
         .padding(.bottom, chromeInsets.bottom)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Quick task entry")
+        .accessibilityLabel(quickEntryContainerLabel)
         .accessibilityIdentifier("task-entry-bar")
     }
 
@@ -948,6 +948,7 @@ struct AtticPanelView: View {
     private var quickEntrySubmitTitle: String { uiState.selectedScope.quickEntrySubmitTitle }
     private var quickEntryPendingSubmitTitle: String { uiState.selectedScope.quickEntryPendingSubmitTitle }
     private var quickEntryOptionsTitle: String { uiState.selectedScope.quickEntryOptionsTitle }
+    private var quickEntryContainerLabel: String { uiState.selectedScope.quickEntryContainerLabel }
 
     private var quickSubmitForegroundColor: Color {
         guard canSaveQuickTask else { return Color.primary.opacity(0.34) }

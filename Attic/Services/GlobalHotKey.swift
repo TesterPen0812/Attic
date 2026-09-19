@@ -147,6 +147,9 @@ final class GlobalHotKey: ObservableObject {
     private static let signature: OSType = 0x504B424F // "PKBO"
 
     let combination: GlobalHotKeyCombination
+    /// Distinguishes this instance's presses from another GlobalHotKey's on the
+    /// shared application event target.
+    private let identifier: UInt32
     /// Assigned by the owner after construction so the hot key can be handed
     /// to Settings before the coordinator finishes initializing.
     var action: (@MainActor () -> Void)?
@@ -165,7 +168,13 @@ final class GlobalHotKey: ObservableObject {
     init(combination: GlobalHotKeyCombination, action: (@MainActor () -> Void)? = nil) {
         self.combination = combination
         self.action = action
+        Self.nextIdentifier += 1
+        identifier = Self.nextIdentifier
     }
+
+    /// Hot key ids start at 1; `EventHotKeyID()` zero-fills, so a malformed
+    /// event can never match a live instance.
+    private static var nextIdentifier: UInt32 = 0
 
     @discardableResult
     func register() -> GlobalHotKeyRegistration {
@@ -191,11 +200,16 @@ final class GlobalHotKey: ObservableObject {
                     nil,
                     &identifier
                 )
-                guard status == noErr, identifier.signature == GlobalHotKey.signature else {
+                let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(context).takeUnretainedValue()
+                // Every GlobalHotKey installs its own handler on the same
+                // process-wide target, so each one sees the others' presses.
+                // Match the signature *and* this instance's own id, otherwise a
+                // second hot key would fire every registered action at once.
+                guard status == noErr,
+                      identifier.signature == GlobalHotKey.signature,
+                      identifier.id == hotKey.identifier else {
                     return noErr
                 }
-
-                let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(context).takeUnretainedValue()
                 Task { @MainActor in hotKey.action?() }
                 return noErr
             },
@@ -209,11 +223,11 @@ final class GlobalHotKey: ObservableObject {
             return record(.init(stage: .eventHandler, status: installStatus, combination: combination))
         }
 
-        let identifier = EventHotKeyID(signature: Self.signature, id: 1)
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: identifier)
         let registerStatus = RegisterEventHotKey(
             combination.keyCode,
             combination.modifiers,
-            identifier,
+            hotKeyID,
             GetApplicationEventTarget(),
             0,
             &hotKeyReference
@@ -234,6 +248,15 @@ final class GlobalHotKey: ObservableObject {
         hotKeyReference = nil
         eventHandlerReference = nil
         registration = .notRegistered
+    }
+
+    /// The Carbon handler holds this object unretained, so the registration
+    /// must not outlive it: an event arriving after deallocation would resolve
+    /// a dangling pointer. The application event target is process-wide, so
+    /// there is no owner left to call `unregister()` for us.
+    deinit {
+        if let hotKeyReference { UnregisterEventHotKey(hotKeyReference) }
+        if let eventHandlerReference { RemoveEventHandler(eventHandlerReference) }
     }
 
     @discardableResult

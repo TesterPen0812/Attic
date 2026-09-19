@@ -147,6 +147,16 @@ enum TaskScope: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The composer's own accessibility label. VoiceOver reads the container
+    /// before any control inside it, so a Backlog composer announced itself as
+    /// task entry before naming the idea field it actually contains.
+    var quickEntryContainerLabel: String {
+        switch self {
+        case .tasks: "Quick task entry"
+        case .backlog: "Quick idea entry"
+        }
+    }
+
     var emptyStateTitle: String {
         switch self {
         case .tasks: "Nothing hiding here"
