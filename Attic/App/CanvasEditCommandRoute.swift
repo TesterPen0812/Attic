@@ -201,7 +201,10 @@ enum CanvasEditCommandMenuDelivery {
         guard !hasPendingDelivery else { return }
         hasPendingDelivery = true
         RunLoop.main.perform(inModes: [.common, .modalPanel, .eventTracking]) {
-            MainActor.assumeIsolated { deliver() }
+            // The result is discarded explicitly: a single-expression closure
+            // would otherwise infer `assumeIsolated`'s `T` as `Bool` and clash
+            // with the `Void` this run-loop block has to return.
+            MainActor.assumeIsolated { _ = deliver() }
         }
     }
 
