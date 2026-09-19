@@ -101,6 +101,62 @@ enum TaskScope: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The panel's quick-entry field, submit button, help text and
+    /// accessibility labels are one shared composer serving both scopes.
+    /// Backlog routes creation to `.backlog` correctly, but the copy still
+    /// called every entry a task, so the wording follows the scope too.
+    var quickEntryPlaceholder: String {
+        switch self {
+        case .tasks: "Add a task…"
+        case .backlog: "Capture an idea…"
+        }
+    }
+
+    var quickEntrySubmitTitle: String {
+        switch self {
+        case .tasks: "Add task"
+        case .backlog: "Add idea"
+        }
+    }
+
+    var quickEntryPendingSubmitTitle: String {
+        switch self {
+        case .tasks: "Add task when attachments finish copying"
+        case .backlog: "Add idea when attachments finish copying"
+        }
+    }
+
+    var quickEntryOptionsTitle: String {
+        switch self {
+        case .tasks: "Attachments and task options"
+        case .backlog: "Attachments and idea options"
+        }
+    }
+
+    var quickEntryOptionsCommandTitle: String {
+        switch self {
+        case .tasks: "Task options"
+        case .backlog: "Idea options"
+        }
+    }
+
+    var quickEntryCloseOptionsCommandTitle: String {
+        switch self {
+        case .tasks: "Close task options"
+        case .backlog: "Close idea options"
+        }
+    }
+
+    /// The composer's own accessibility label. VoiceOver reads the container
+    /// before any control inside it, so a Backlog composer announced itself as
+    /// task entry before naming the idea field it actually contains.
+    var quickEntryContainerLabel: String {
+        switch self {
+        case .tasks: "Quick task entry"
+        case .backlog: "Quick idea entry"
+        }
+    }
+
     var emptyStateTitle: String {
         switch self {
         case .tasks: "Nothing hiding here"

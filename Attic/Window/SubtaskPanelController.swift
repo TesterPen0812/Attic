@@ -71,7 +71,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in self?.reconcileStore() }
             .store(in: &cancellables)
-        store.$lastErrorMessage
+        store.$errorNotice
             .dropFirst()
             .sink { [weak self] _ in
                 // @Published emits in willSet — before the value stores —

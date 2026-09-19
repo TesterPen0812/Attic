@@ -154,8 +154,17 @@ enum AppTerminationPreparation {
 }
 
 @MainActor
-final class AppCoordinator {
+final class AppCoordinator: ObservableObject {
     static let shared = AppCoordinator()
+
+    /// Read-only mirror of the global shortcut's registration, so UI can stop
+    /// advertising a combination the system refused without being able to
+    /// register, unregister or rebind it. Published because a refusal resolves
+    /// during `start()`, which can land after a menu has already been built.
+    @Published private(set) var globalShortcutRegistration: GlobalHotKeyRegistration = .notRegistered
+
+    /// The combination that shortcut claims, for the menu that advertises it.
+    var globalShortcutCombination: GlobalHotKeyCombination { newTaskHotKey.combination }
 
     let settings: AppSettings
     let store: TaskStore
@@ -165,6 +174,11 @@ final class AppCoordinator {
     let noteDraft: NoteDraftController
     let loginItemService: LoginItemService
     let uiState: PanelUIState
+    /// Renders the Edit menu's Undo/Redo enablement again when a text view
+    /// outside the canvas takes or gives up focus. Nothing else in the app's
+    /// model moves at that boundary, so without it the menu keeps the
+    /// enablement of its last render; see `CanvasEditCommandFocusMonitor`.
+    let canvasEditFocus = CanvasEditCommandFocusMonitor()
 
     private let cleanupService: DailyCleanupService
     private let panelController: AtticPanelController
@@ -180,11 +194,10 @@ final class AppCoordinator {
     private var menuNotificationTokens: [NSObjectProtocol] = []
     private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
+    private var globalShortcutObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
-    private lazy var newTaskHotKey = GlobalHotKey { [weak self] in
-        self?.showNewTask()
-    }
+    private let newTaskHotKey: GlobalHotKey
 
     private init() {
         let environment = ProcessInfo.processInfo.environment
@@ -286,10 +299,14 @@ final class AppCoordinator {
         } else {
             agentServer = AgentServer(port: settings.agentServerPort, handler: agentHandler)
         }
+        // Built before the window so Settings observes the same hot key it
+        // reports on; its action is bound once `self` exists.
+        let newTaskHotKey = GlobalHotKey()
         let settingsWindowController = SettingsWindowController(
             settings: settings,
             loginItemService: loginItemService,
             agentServer: agentServer,
+            globalHotKey: newTaskHotKey,
             store: store
         )
         let panelController = AtticPanelController(
@@ -312,6 +329,7 @@ final class AppCoordinator {
         self.loginItemService = loginItemService
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
+        self.newTaskHotKey = newTaskHotKey
         cleanupService = DailyCleanupService(store: store)
         hoverMonitor = CornerHoverMonitor(
             settings: settings,
@@ -322,6 +340,11 @@ final class AppCoordinator {
             canvasStore: canvasStore,
             noteDraft: noteDraft
         )
+        newTaskHotKey.action = { [weak self] in self?.showNewTask() }
+        globalShortcutObservation = newTaskHotKey.$registration
+            .sink { [weak self] registration in
+                self?.globalShortcutRegistration = registration
+            }
     }
 
     func start() {

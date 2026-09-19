@@ -282,6 +282,7 @@ private struct NoteImageAttachmentCard: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .atticQuietMenuGlyph(palette.secondaryForegroundColor)
         .help("Attachment actions")
         .accessibilityLabel("Actions for \(attachment.originalFilename)")
     }
@@ -525,6 +526,7 @@ struct NoteFileAttachmentCard: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .atticQuietMenuGlyph(palette.secondaryForegroundColor)
         .help("Attachment actions")
         .accessibilityLabel("Actions for \(attachment.originalFilename)")
     }

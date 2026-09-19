@@ -80,6 +80,257 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
     }
 
+    /// Every message carries the surface that owns it. While the owner was a
+    /// second property that only cleared when the message became nil, a general
+    /// failure after a family-scoped one inherited that family: the main banner
+    /// suppressed it (`lastErrorOwnerID != nil`) and a closed family panel could
+    /// not show it either, so the user saw nothing at all.
+    @MainActor
+    func testLaterErrorsNeverInheritAnEarlierOperationsOwner() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let familyA = try XCTUnwrap(store.create(title: "Family A"))
+        let familyB = try XCTUnwrap(store.create(title: "Family B"))
+
+        // A family-scoped failure: creating a subtask of family A.
+        gate.shouldFail = true
+        XCTAssertNil(store.create(title: "Step", parentID: familyA.id))
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertEqual(store.lastErrorOwnerID, familyA.id)
+
+        // A general failure follows. It belongs to the main panel, not to the
+        // family that happened to fail first.
+        XCTAssertFalse(store.rename(familyB, to: "Renamed"))
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID,
+                     "a general save failure must not stay attached to family A")
+
+        // A different family's failure takes ownership from the general one.
+        XCTAssertNil(store.create(title: "Step", parentID: familyB.id))
+        XCTAssertEqual(store.lastErrorOwnerID, familyB.id)
+
+        // A general delete failure releases the family again.
+        XCTAssertFalse(store.delete(familyA))
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID)
+
+        // Success clears message and owner together, as does dismissal.
+        gate.shouldFail = false
+        XCTAssertTrue(store.rename(familyB, to: "Renamed"))
+        XCTAssertNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID)
+
+        gate.shouldFail = true
+        XCTAssertNil(store.create(title: "Step", parentID: familyB.id))
+        XCTAssertEqual(store.lastErrorOwnerID, familyB.id)
+        store.dismissError()
+        XCTAssertNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID)
+    }
+
+    /// The refusals that are not persistence failures follow the same rule: a
+    /// stale family owner must not hide them from the main banner.
+    @MainActor
+    func testStatusAndDeletionRefusalsAreOwnedByTheMainPanel() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        _ = try XCTUnwrap(store.create(title: "Step", parentID: parent.id))
+
+        // Take ownership with a family-scoped failure first.
+        gate.shouldFail = true
+        XCTAssertNil(store.create(title: "Another step", parentID: parent.id))
+        XCTAssertEqual(store.lastErrorOwnerID, parent.id)
+        gate.shouldFail = false
+
+        XCTAssertFalse(store.setStatus(.done, for: parent))
+        XCTAssertEqual(store.lastErrorMessage, "Finish the subtasks before completing this task.")
+        XCTAssertNil(store.lastErrorOwnerID, "the main banner must show the refusal")
+    }
+
+    /// Every mutation a family panel can start had to learn its owner, not
+    /// just subtask creation. A child's rename, priority, status, reorder,
+    /// attachment removal and deletion all failed with `owner` nil, so the
+    /// message went to the main banner while the user was looking at the
+    /// family panel that had just refused them — and `SubtaskPanelContent`
+    /// shows a message only when it owns it.
+    @MainActor
+    func testChildMutationFailuresAreOwnedByTheFamilyPanelThatShowsThem() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let childID = try XCTUnwrap(store.create(title: "Step", parentID: parent.id)).id
+        let siblingID = try XCTUnwrap(store.create(title: "Other step", parentID: parent.id)).id
+
+        // Attached through a successful save, because every refused save below
+        // rolls back and reloads: a row edited in place would not survive.
+        let reference = TaskImageReference(
+            id: UUID(), filename: "a.png", digest: "digest",
+            contentTypeIdentifier: UTType.png.identifier, byteCount: 1
+        )
+        try XCTUnwrap(store.task(withID: childID)).imageReferencesData =
+            try JSONEncoder().encode([reference])
+        // A different title, so the edit really is written: an update that
+        // changes nothing returns true without saving, and the reference would
+        // then only exist on the in-memory row.
+        XCTAssertTrue(store.rename(try XCTUnwrap(store.task(withID: childID)),
+                                   to: "Step with an attachment"))
+        XCTAssertEqual(gate.saveCount, 4, "the attachment reached the store")
+        store.refresh()
+        XCTAssertEqual(try XCTUnwrap(store.task(withID: childID)).attachments, [reference])
+
+        // Each operation is attempted from a cleared notice and against the
+        // freshly reloaded row, so a passing owner can only have come from
+        // that operation.
+        func assertOwnedByFamily(
+            _ label: String,
+            file: StaticString = #filePath,
+            line: UInt = #line,
+            _ operation: (TaskItem) -> Bool
+        ) throws {
+            store.dismissError()
+            let child = try XCTUnwrap(store.task(withID: childID), file: file, line: line)
+            gate.shouldFail = true
+            XCTAssertFalse(operation(child), "\(label) must fail while saving is refused",
+                           file: file, line: line)
+            gate.shouldFail = false
+            XCTAssertNotNil(store.lastErrorMessage, "\(label) reported nothing", file: file, line: line)
+            XCTAssertEqual(store.lastErrorOwnerID, parent.id,
+                           "\(label) belongs to the family panel it happened in",
+                           file: file, line: line)
+        }
+
+        try assertOwnedByFamily("rename") { store.rename($0, to: "Renamed step") }
+        try assertOwnedByFamily("priority") { store.setPriority(.high, for: $0) }
+        try assertOwnedByFamily("status") { store.setStatus(.done, for: $0) }
+        try assertOwnedByFamily("attachment removal") {
+            store.removeAttachment(reference.id, from: $0.id)
+        }
+        try assertOwnedByFamily("reorder") {
+            store.reorder(taskID: $0.id, relativeTo: siblingID)
+        }
+        try assertOwnedByFamily("delete") { store.delete($0) }
+    }
+
+    /// The refusals a family panel raises are not save failures, and they were
+    /// the other half of the same problem: a child that cannot be reopened, or
+    /// cannot be deleted safely, said so on the main banner.
+    @MainActor
+    func testChildRefusalsAreOwnedByTheFamilyPanelThatRaisedThem() throws {
+        let store = try makeTestStore()
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let child = try XCTUnwrap(store.create(title: "Step", parentID: parent.id))
+
+        // Completing the family completes its child too, then reopening the
+        // child alone is refused — a refusal the family panel must show.
+        XCTAssertTrue(store.setStatus(.done, for: child))
+        XCTAssertTrue(store.setStatus(.done, for: parent))
+        store.dismissError()
+        XCTAssertFalse(store.setStatus(.todo, for: child))
+        XCTAssertEqual(store.lastErrorMessage, "Reopen the main task before reopening a subtask.")
+        XCTAssertEqual(store.lastErrorOwnerID, parent.id)
+
+        // And a subtask of a finished family is refused in that family too.
+        store.dismissError()
+        XCTAssertNil(store.create(title: "Another step", parentID: parent.id))
+        XCTAssertEqual(store.lastErrorMessage,
+                       "Subtasks need an unfinished main task. Reopen the main task first.")
+        XCTAssertEqual(store.lastErrorOwnerID, parent.id)
+    }
+
+    /// Ownership follows what the user can see, which is what `parent(of:)`
+    /// and the family index already decide: an orphaned, self-linked or
+    /// nested link is presented as a root, and its failures therefore belong
+    /// to the main banner. Naming a family with no panel would hide the
+    /// message from every surface — the bug this ownership exists to prevent.
+    @MainActor
+    func testFailuresOnRootsAndOrphanedLinksStayWithTheMainPanel() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        // Links no live top-level parent validates — exactly what a malformed
+        // import can produce, and what the store keeps visible as roots rather
+        // than hiding. Seeded through their own context so the store reads
+        // them as stored data.
+        let seed = ModelContext(container)
+        let rootID = UUID(), orphanID = UUID(), selfLinkedID = UUID(), childID = UUID()
+        let parentID = UUID()
+        seed.insert(TaskItem(id: rootID, title: "Root"))
+        seed.insert(TaskItem(id: orphanID, title: "Orphan", parentID: UUID()))
+        seed.insert(TaskItem(id: selfLinkedID, title: "Self linked", parentID: selfLinkedID))
+        // A valid family, as the contrast: its child is the one row that is
+        // only reachable inside a family panel.
+        seed.insert(TaskItem(id: parentID, title: "Parent"))
+        seed.insert(TaskItem(id: childID, title: "Step", parentID: parentID))
+        try seed.save()
+
+        let gate = PersistenceGate()
+        let store = TaskStore(container: container, persist: gate.save)
+        XCTAssertEqual(store.tasks.count, 5, "no row is hidden by an invalid link")
+
+        for (id, label) in [(rootID, "a root"), (orphanID, "an orphaned link"),
+                            (selfLinkedID, "a self link")] {
+            let visible = try XCTUnwrap(store.tasks.first { $0.id == id })
+            store.dismissError()
+            gate.shouldFail = true
+            XCTAssertFalse(store.rename(visible, to: "Renamed \(label)"))
+            gate.shouldFail = false
+            XCTAssertNotNil(store.lastErrorMessage)
+            XCTAssertNil(store.lastErrorOwnerID,
+                         "\(label) is presented as a root, so the main panel owns its failure")
+
+            store.dismissError()
+            gate.shouldFail = true
+            XCTAssertFalse(store.delete(visible))
+            gate.shouldFail = false
+            XCTAssertNotNil(store.lastErrorMessage)
+            XCTAssertNil(store.lastErrorOwnerID)
+        }
+
+        // The validated child is the case that does name a family, so the
+        // assertions above are about the link rule and not about nil always
+        // being the answer.
+        let child = try XCTUnwrap(store.tasks.first { $0.id == childID })
+        store.dismissError()
+        gate.shouldFail = true
+        XCTAssertFalse(store.rename(child, to: "Renamed step"))
+        gate.shouldFail = false
+        XCTAssertEqual(store.lastErrorOwnerID, parentID)
+
+        // The global done-task sweep is nobody's family.
+        store.dismissError()
+        gate.shouldFail = true
+        XCTAssertTrue(store.setStatus(.done, for: try XCTUnwrap(store.tasks.first { $0.id == rootID })) == false)
+        gate.shouldFail = false
+        XCTAssertNil(store.lastErrorOwnerID)
+    }
+
+    /// A parent's row exists in the main panel as well as in its own family
+    /// panel, and a failed import does not open that panel, so an attachment
+    /// failure aimed at a parent belongs to the main banner. A child's belongs
+    /// to the family panel its row lives in. The files still go to the parent
+    /// either way — that owner is a storage decision, not a presentation one.
+    @MainActor
+    func testAttachmentFailureOwnerFollowsTheRowTheUserActedOn() async throws {
+        let store = try makeTestStore()
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let child = try XCTUnwrap(store.create(title: "Step", parentID: parent.id))
+        XCTAssertEqual(store.attachmentOwnerID(for: child.id), parent.id,
+                       "the files themselves still belong to the parent")
+
+        struct Refused: Error {}
+        store.dismissError()
+        let fromParent = await store.attachStagedFiles(to: parent.id) { throw Refused() }
+        XCTAssertNil(fromParent)
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertNil(store.lastErrorOwnerID, "the main panel owns a parent row's failure")
+
+        store.dismissError()
+        let fromChild = await store.attachStagedFiles(to: child.id) { throw Refused() }
+        XCTAssertNil(fromChild)
+        XCTAssertNotNil(store.lastErrorMessage)
+        XCTAssertEqual(store.lastErrorOwnerID, parent.id,
+                       "a child row is only reachable inside its family panel")
+    }
+
     @MainActor
     func testRefreshSeesChangesSavedByAnotherModelContext() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)

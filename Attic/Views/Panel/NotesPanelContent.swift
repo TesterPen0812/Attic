@@ -721,37 +721,53 @@ private struct SavedNotesDrawer: View {
     let onNew: () -> Void
     let onClose: () -> Void
 
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
     var body: some View {
-        ZStack {
-            ScrollView {
-                if noteStore.notes.isEmpty {
-                    Text("No saved notes yet")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(palette.secondaryForegroundColor)
-                        .padding(.top, 64)
-                } else {
-                    LazyVStack(spacing: 5) {
-                        ForEach(noteStore.orderedNotes()) { note in
-                            SavedNoteRow(noteStore: noteStore, note: note,
-                                isSelected: note.id == selectedNoteID, onSelect: { onSelect(note) })
+        GeometryReader { proxy in
+            ZStack {
+                ScrollView {
+                    if noteStore.notes.isEmpty {
+                        Text("No saved notes yet")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundStyle(palette.secondaryForegroundColor)
+                            .padding(.top, SavedNotesDrawerLayout.emptyStateTopInset)
+                    } else {
+                        LazyVStack(spacing: 5) {
+                            ForEach(noteStore.orderedNotes()) { note in
+                                SavedNoteRow(noteStore: noteStore, note: note,
+                                    isSelected: note.id == selectedNoteID, onSelect: { onSelect(note) })
+                            }
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.top, SavedNotesDrawerLayout.rowRestingInset)
+                        .padding(.bottom, SavedNotesDrawerLayout.rowRestingInset)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 58)
-                    .padding(.bottom, 58)
                 }
+                .scrollIndicators(.never)
+                .mask(chromeMask(height: proxy.size.height))
+                // The mask only dims: without these the bottom button still
+                // shared its footprint with whatever row had scrolled under
+                // it, and a press in the fade landed on a row the user could
+                // barely see. They sit between the list and the buttons, so
+                // the buttons keep their own clicks.
+                AtticPointerShield(height: SavedNotesDrawerLayout.shieldHeight)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                AtticPointerShield(height: SavedNotesDrawerLayout.shieldHeight)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                HStack {
+                    drawerButton("New note", symbol: "square.and.pencil", id: "new-saved-note", action: onNew)
+                    Spacer()
+                    drawerButton("Return to note", symbol: "xmark", id: "close-saved-notes", action: onClose)
+                }
+                .padding(SavedNotesDrawerLayout.buttonEdgePadding)
+                .frame(maxHeight: .infinity, alignment: .top)
+                drawerButton("Return to writing", symbol: "arrow.left", id: "return-to-writing", action: onClose)
+                    .padding(SavedNotesDrawerLayout.buttonEdgePadding)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
-            .scrollIndicators(.never)
-            HStack {
-                drawerButton("New note", symbol: "square.and.pencil", id: "new-saved-note", action: onNew)
-                Spacer()
-                drawerButton("Return to note", symbol: "xmark", id: "close-saved-notes", action: onClose)
-            }
-            .padding(14)
-            .frame(maxHeight: .infinity, alignment: .top)
-            drawerButton("Return to writing", symbol: "arrow.left", id: "return-to-writing", action: onClose)
-                .padding(14)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .atticGlassControl(in: Squircle(cornerRadius: 36, exponent: AtticStyle.panelSquircleExponent), interactive: false)
         .clipShape(Squircle(cornerRadius: 36, exponent: AtticStyle.panelSquircleExponent))
@@ -761,13 +777,32 @@ private struct SavedNotesDrawer: View {
         .accessibilityIdentifier("saved-notes-drawer")
     }
 
+    /// Rows keep a faint impression under the drawer's buttons and are fully
+    /// readable between them, so the bottom button can never sit on top of
+    /// legible preview text and the last row no longer hard-clips.
+    private func chromeMask(height: CGFloat) -> some View {
+        let stops = SavedNotesDrawerLayout.stops(height: height)
+        return LinearGradient(
+            stops: TaskScrollMaskLayout.gradientStops(
+                stops,
+                underChromeOpacity: TaskScrollMaskLayout.underChromeOpacity(
+                    reduceTransparency: reduceTransparency,
+                    increasedContrast: colorSchemeContrast == .increased
+                )
+            ),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
     private func drawerButton(_ title: String, symbol: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .medium))
                 .frame(width: 32, height: 32)
                 .atticGlassControl(in: Circle())
-                .frame(width: 36, height: 36)
+                .frame(width: SavedNotesDrawerLayout.buttonDiameter,
+                       height: SavedNotesDrawerLayout.buttonDiameter)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -829,7 +864,12 @@ private struct SavedNoteRow: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .foregroundStyle(palette.secondaryForegroundColor)
+            // A borderless Menu renders its Image label through an AppKit
+            // pop-up button, which paints the symbol accent-tinted and ignores
+            // the label's own foregroundStyle. Overriding the tint is what the
+            // composer's `+` proved; without it every resting row showed a
+            // blue "•••".
+            .atticQuietMenuGlyph(palette.secondaryForegroundColor)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -934,7 +974,7 @@ struct NoteRowView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .foregroundStyle(palette.secondaryForegroundColor)
+            .atticQuietMenuGlyph(palette.secondaryForegroundColor)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)

@@ -3,7 +3,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @ObservedObject var store: TaskStore
-    let coordinator: AppCoordinator
+    @ObservedObject var coordinator: AppCoordinator
 
     var body: some View {
         Button("Show Attic", systemImage: "eye") {
@@ -13,7 +13,7 @@ struct MenuBarView: View {
         Button("New task", systemImage: "plus") {
             coordinator.showNewTask()
         }
-        .keyboardShortcut(.space, modifiers: [.control, .option])
+        .keyboardShortcut(advertisedGlobalShortcut)
 
         Button("New note", systemImage: "note.text") {
             coordinator.showNewNote()
@@ -52,5 +52,16 @@ struct MenuBarView: View {
 
     private var activeTaskCount: Int {
         store.snapshot(for: .tasks).activeCount
+    }
+
+    /// Only Carbon's registration makes this combination work from anywhere,
+    /// and this menu is the only place it is advertised. While the system has
+    /// refused it, showing the equivalent here would claim a binding that does
+    /// nothing — so the command stays and the claim goes. The equivalent comes
+    /// from the same combination the hot key registers, so the two cannot
+    /// drift apart.
+    private var advertisedGlobalShortcut: KeyboardShortcut? {
+        guard coordinator.globalShortcutRegistration.isActive else { return nil }
+        return coordinator.globalShortcutCombination.keyboardShortcut
     }
 }

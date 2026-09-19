@@ -638,3 +638,62 @@ enum TaskScrollMaskLayout {
         ]
     }
 }
+
+/// The saved-notes drawer overlays round glass buttons on its scrolling list.
+/// Its chrome bands have to clear each button's whole footprint — otherwise a
+/// row rests underneath one and its preview text is unreadable — and the list
+/// fades under them the way the task list already does.
+enum SavedNotesDrawerLayout {
+    static let buttonDiameter: CGFloat = 36
+    /// Distance from the drawer edge to the button's own frame.
+    static let buttonEdgePadding: CGFloat = 14
+    /// How far a button reaches into the list, measured from the same edge.
+    static var buttonFootprint: CGFloat { buttonEdgePadding + buttonDiameter }
+
+    /// Resting inset for rows, and the band the mask keeps subdued.
+    static let chromeBandHeight: CGFloat = 64
+    /// Shorter than the task list's fade: the drawer's bands are shorter too.
+    static let fadeLength: CGFloat = 18
+
+    static func stops(height: CGFloat) -> TaskScrollMaskLayout.Stops {
+        TaskScrollMaskLayout.stops(
+            height: height,
+            topObscuredHeight: chromeBandHeight,
+            bottomObscuredHeight: chromeBandHeight,
+            fadeLength: fadeLength
+        )
+    }
+
+    /// The band a pointer shield covers at each edge, the same rule the task
+    /// list uses: the chrome band plus the fade, so nothing the mask has
+    /// dimmed can be pressed or hovered.
+    static var shieldHeight: CGFloat { chromeBandHeight + fadeLength }
+
+    /// Where a row comes to rest. Past the shield, not merely past the band:
+    /// the task list's first row overlaps its own shield by a few points, and
+    /// at this drawer's row height that would leave a visible, fully opaque
+    /// row with an inert top edge.
+    static var rowRestingInset: CGFloat { shieldHeight }
+
+    /// The drawer's empty state sits below the top fade so it is never
+    /// rendered half-faded by the mask that exists for scrolling rows.
+    static var emptyStateTopInset: CGFloat { shieldHeight }
+}
+
+/// Hover and keyboard focus feedback for the panel's quick-entry submit.
+/// `atticGlassControl` supplies no hover variant on the material and opaque
+/// treatments, and native glass interactivity answers the pointer only, so the
+/// emphasis is drawn over whichever backing the system chose. Kept here so the
+/// rules are testable without rendering the panel.
+enum QuickSubmitEmphasis {
+    /// Nothing is drawn at rest, and a disabled submit stays quiet: there is
+    /// nothing to add yet.
+    static func isEmphasized(canSubmit: Bool, isHovered: Bool, isFocused: Bool) -> Bool {
+        canSubmit && (isHovered || isFocused)
+    }
+
+    /// Keyboard focus reads stronger than hover, as it does on the mode dock.
+    static func strokeWidth(isFocused: Bool) -> CGFloat {
+        isFocused ? 1.5 : 0.75
+    }
+}

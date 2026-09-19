@@ -112,11 +112,26 @@ struct PanelSettingsView: View {
     }
 
     private func pointsText(_ value: Double) -> String {
-        "\(Int(value.rounded())) pt"
+        "\(SettingsPointFormat.rounded(value)) pt"
     }
 
     private func pointsAccessibilityText(_ value: Double) -> String {
-        "\(Int(value.rounded())) points"
+        "\(SettingsPointFormat.rounded(value)) points"
+    }
+}
+
+/// Point values are rendered from whatever the model currently holds, so the
+/// formatting must be total over every `Double`. `Int(value.rounded())` traps
+/// on any magnitude `Int` cannot represent, and a corrupt preference can carry
+/// a finite value such as `1e30` past validation — reading Settings then
+/// crashed the app rather than showing a number.
+enum SettingsPointFormat {
+    static func rounded(_ value: Double) -> Int {
+        guard value.isFinite else { return 0 }
+        let rounded = value.rounded()
+        if rounded >= Double(Int.max) { return Int.max }
+        if rounded <= Double(Int.min) { return Int.min }
+        return Int(rounded)
     }
 }
 

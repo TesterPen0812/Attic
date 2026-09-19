@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GeneralSettingsView: View {
     @ObservedObject var loginItemService: LoginItemService
+    @ObservedObject var globalHotKey: GlobalHotKey
 
     var body: some View {
         SettingsPage(
@@ -50,6 +51,15 @@ struct GeneralSettingsView: View {
                     SettingsDivider()
                     SettingsMessage(text: error, tone: .error)
                         .accessibilityIdentifier("settings-login-error")
+                }
+            }
+
+            // Nothing is shown while the shortcut works: the menu already
+            // advertises it. Only a refusal needs explaining.
+            if let failure = SettingsVisibility.globalShortcutFailure(globalHotKey.registration) {
+                SettingsGroup("Shortcut") {
+                    SettingsMessage(text: failure.settingsMessage, tone: .warning)
+                        .accessibilityIdentifier("settings-global-shortcut-unavailable")
                 }
             }
         }

@@ -395,4 +395,42 @@ extension View {
     func atticGlassEffectContainer(spacing: CGFloat) -> some View {
         modifier(AtticGlassEffectContainerModifier(spacing: spacing))
     }
+
+    /// Quiets the glyph of a `.borderlessButton` `Menu` whose label is an
+    /// `Image`. AppKit renders that label through a pop-up button which paints
+    /// the symbol as an accent-tinted template and ignores the label's own
+    /// `foregroundStyle`, so every such menu showed system blue at rest. All
+    /// three overrides are needed: `tint` and `accentColor` reach the AppKit
+    /// cell, `foregroundStyle` the SwiftUI label. Proven by the task composer's
+    /// `+` menu, which was the one site that already did this.
+    func atticQuietMenuGlyph(_ color: Color) -> some View {
+        tint(color)
+            .accentColor(color)
+            .foregroundStyle(color)
+    }
+}
+
+/// An inert band over a scrolling list, sized to the fixed chrome above or
+/// below it plus the mask's fade. Rows hidden or fading under chrome are
+/// dimmed by the mask; this makes them inert as well, so a press or hover
+/// landing beside a chrome control, or in the fade, can never reach a row the
+/// user cannot see. Scroll wheel events still reach the list, which AppKit
+/// hit-tests independently of this shape.
+struct AtticPointerShield: View {
+    let height: CGFloat
+
+    /// A degenerate measurement collapses the shield rather than making the
+    /// whole list inert: chrome heights are measured from live geometry, and a
+    /// band that swallowed every press would be far worse than none.
+    static func shieldedHeight(_ height: CGFloat) -> CGFloat {
+        guard height.isFinite else { return 0 }
+        return max(0, height)
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(height: Self.shieldedHeight(height))
+            .contentShape(Rectangle())
+            .accessibilityHidden(true)
+    }
 }

@@ -30,6 +30,7 @@ final class SettingsWindowController: NSWindowController {
         settings: AppSettings,
         loginItemService: LoginItemService,
         agentServer: AgentServer,
+        globalHotKey: GlobalHotKey,
         store: TaskStore
     ) {
         // The coordinator still owns TaskStore. Sync controls are intentionally
@@ -39,7 +40,8 @@ final class SettingsWindowController: NSWindowController {
         let rootView = SettingsView(
             settings: settings,
             loginItemService: loginItemService,
-            agentServer: agentServer
+            agentServer: agentServer,
+            globalHotKey: globalHotKey
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)

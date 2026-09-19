@@ -1445,6 +1445,171 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertEqual(gradient.map(\.location), gradient.map(\.location).sorted(), "stops are monotone")
     }
 
+    /// The saved-notes drawer overlaid its buttons on an unmasked list: the
+    /// bottom "Return to writing" button sat permanently on top of the lowest
+    /// row's preview text and the last row hard-clipped at the squircle edge.
+    /// The bands must clear each button's whole footprint and fade the way the
+    /// task list beside it does.
+    func testSavedNotesDrawerBandsClearItsButtonsAndFadeLikeTheTaskList() {
+        XCTAssertGreaterThan(
+            SavedNotesDrawerLayout.chromeBandHeight,
+            SavedNotesDrawerLayout.buttonFootprint,
+            "a row must never come to rest under a drawer button"
+        )
+        // The empty state is placed past the fade, so the mask that exists for
+        // scrolling rows cannot render "No saved notes yet" half-faded.
+        XCTAssertGreaterThanOrEqual(
+            SavedNotesDrawerLayout.emptyStateTopInset,
+            SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength
+        )
+
+        for height in [CGFloat(280), 480, 900] {
+            let stops = SavedNotesDrawerLayout.stops(height: height)
+            XCTAssertEqual(stops.topClearEnd * height,
+                           SavedNotesDrawerLayout.chromeBandHeight, accuracy: 0.001)
+            XCTAssertEqual(stops.topFadeEnd * height,
+                           SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength,
+                           accuracy: 0.001)
+            XCTAssertEqual((1 - stops.bottomClearStart) * height,
+                           SavedNotesDrawerLayout.chromeBandHeight, accuracy: 0.001)
+            XCTAssertEqual((1 - stops.bottomFadeStart) * height,
+                           SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength,
+                           accuracy: 0.001)
+            let gradient = TaskScrollMaskLayout.gradientStops(stops)
+            XCTAssertEqual(gradient.map(\.location), gradient.map(\.location).sorted(),
+                           "stops are monotone at height \(height)")
+            // What the rendered mask does, not just where its stops sit: a row
+            // resting at its inset is fully painted, while anything under a
+            // button's footprint is subdued. (The previous assertion here
+            // restated `topClearEnd == chromeBandHeight / height`, which the
+            // lines above already pin, so it held for every possible value.)
+            XCTAssertEqual(
+                maskOpacity(gradient, at: SavedNotesDrawerLayout.rowRestingInset / height),
+                1, accuracy: 0.001,
+                "a resting row must be fully readable at height \(height)"
+            )
+            XCTAssertEqual(
+                maskOpacity(gradient, at: 1 - SavedNotesDrawerLayout.rowRestingInset / height),
+                1, accuracy: 0.001,
+                "and so must the lowest one at height \(height)"
+            )
+            for depth in [CGFloat(2), SavedNotesDrawerLayout.buttonEdgePadding,
+                          SavedNotesDrawerLayout.buttonFootprint] {
+                XCTAssertLessThan(
+                    maskOpacity(gradient, at: depth / height), 1,
+                    "content \(depth)pt under a button must stay subdued at height \(height)"
+                )
+                XCTAssertLessThan(
+                    maskOpacity(gradient, at: 1 - depth / height), 1,
+                    "and so must content \(depth)pt above the bottom one"
+                )
+            }
+        }
+
+        // The pointer shields cover exactly what the mask dims, the rule the
+        // task list uses, and a row comes to rest clear of them: a fully
+        // opaque row with an inert top edge would be worse than either.
+        XCTAssertEqual(SavedNotesDrawerLayout.shieldHeight,
+                       SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength)
+        XCTAssertGreaterThan(SavedNotesDrawerLayout.shieldHeight,
+                             SavedNotesDrawerLayout.buttonFootprint,
+                             "a shield must cover the whole button it protects")
+        XCTAssertGreaterThanOrEqual(SavedNotesDrawerLayout.rowRestingInset,
+                                    SavedNotesDrawerLayout.shieldHeight)
+
+        // Accessibility contrast settings remove the underlay here too.
+        XCTAssertEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: true, increasedContrast: false), 0)
+    }
+
+    /// The panel's primary action had no hover or keyboard-focus affordance on
+    /// any treatment: the emphasis colors existed but nothing consumed them.
+    /// Emphasis appears for either signal, stays away at rest, and never
+    /// advertises a submit that cannot run.
+    func testQuickSubmitEmphasisFollowsHoverFocusAndAvailability() {
+        XCTAssertFalse(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: false, isFocused: false))
+        XCTAssertTrue(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: true, isFocused: false))
+        XCTAssertTrue(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: false, isFocused: true))
+        XCTAssertTrue(QuickSubmitEmphasis.isEmphasized(canSubmit: true, isHovered: true, isFocused: true))
+        for hovered in [true, false] {
+            for focused in [true, false] {
+                XCTAssertFalse(
+                    QuickSubmitEmphasis.isEmphasized(canSubmit: false, isHovered: hovered, isFocused: focused),
+                    "a disabled submit stays quiet (hover: \(hovered), focus: \(focused))"
+                )
+            }
+        }
+        XCTAssertGreaterThan(
+            QuickSubmitEmphasis.strokeWidth(isFocused: true),
+            QuickSubmitEmphasis.strokeWidth(isFocused: false),
+            "keyboard focus reads stronger than hover"
+        )
+    }
+
+    /// Backlog and Tasks share one quick-entry composer. Creation already
+    /// routed to `.backlog`, but every piece of its copy — placeholder, submit
+    /// title, pending-import help, the options menu label and its two command
+    /// titles — still called a backlog entry a task.
+    func testQuickEntryCopyFollowsTheSelectedScope() {
+        XCTAssertEqual(TaskScope.tasks.quickEntryPlaceholder, "Add a task…")
+        XCTAssertEqual(TaskScope.tasks.quickEntrySubmitTitle, "Add task")
+        XCTAssertEqual(TaskScope.tasks.quickEntryOptionsCommandTitle, "Task options")
+        XCTAssertEqual(TaskScope.tasks.quickEntryCloseOptionsCommandTitle, "Close task options")
+
+        XCTAssertEqual(TaskScope.tasks.quickEntryContainerLabel, "Quick task entry")
+
+        let backlogCopy = [
+            TaskScope.backlog.quickEntryPlaceholder,
+            TaskScope.backlog.quickEntrySubmitTitle,
+            TaskScope.backlog.quickEntryPendingSubmitTitle,
+            TaskScope.backlog.quickEntryOptionsTitle,
+            TaskScope.backlog.quickEntryOptionsCommandTitle,
+            TaskScope.backlog.quickEntryCloseOptionsCommandTitle,
+            // VoiceOver reads the composer's container before anything inside
+            // it, and this one label was still hard-coded to "Quick task entry".
+            TaskScope.backlog.quickEntryContainerLabel
+        ]
+        for copy in backlogCopy {
+            XCTAssertFalse(copy.lowercased().contains("task"),
+                           "Backlog quick entry must not call an idea a task: \(copy)")
+            XCTAssertFalse(copy.isEmpty)
+        }
+        XCTAssertTrue(TaskScope.backlog.quickEntryPendingSubmitTitle.contains("attachments finish copying"),
+                      "the pending-import help still has to explain the wait")
+        XCTAssertEqual(TaskScope.backlog.creationStatus, .backlog,
+                       "copy follows the scope; routing is unchanged")
+
+        // Every scope answers with distinct, non-empty copy.
+        for scope in TaskScope.allCases {
+            XCTAssertFalse(scope.quickEntryPlaceholder.isEmpty)
+            XCTAssertFalse(scope.quickEntryContainerLabel.isEmpty)
+            XCTAssertNotEqual(scope.quickEntryOptionsCommandTitle, scope.quickEntryCloseOptionsCommandTitle)
+        }
+        XCTAssertNotEqual(TaskScope.tasks.quickEntryContainerLabel,
+                          TaskScope.backlog.quickEntryContainerLabel)
+        XCTAssertNotEqual(TaskScope.tasks.quickEntrySubmitTitle, TaskScope.backlog.quickEntrySubmitTitle)
+    }
+
+    /// The alpha the rendered mask applies at `location`, interpolated between
+    /// the surrounding stops exactly as a `LinearGradient` does. Lets a test
+    /// ask what the mask does to a given row rather than only where its stops
+    /// are.
+    private func maskOpacity(_ stops: [Gradient.Stop], at location: CGFloat) -> Double {
+        func alpha(_ color: Color) -> Double {
+            Double(NSColor(color).usingColorSpace(.deviceRGB)?.alphaComponent ?? 0)
+        }
+        guard let first = stops.first, let last = stops.last else { return 0 }
+        if location <= first.location { return alpha(first.color) }
+        if location >= last.location { return alpha(last.color) }
+        for (lower, upper) in zip(stops, stops.dropFirst()) {
+            guard location >= lower.location, location <= upper.location else { continue }
+            let span = upper.location - lower.location
+            guard span > 0 else { return alpha(upper.color) }
+            let t = Double((location - lower.location) / span)
+            return alpha(lower.color) + (alpha(upper.color) - alpha(lower.color)) * t
+        }
+        return alpha(last.color)
+    }
+
     func testUnderChromeDepthRespectsContrastSettingsAndComposerTextSpace() {
         XCTAssertGreaterThan(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: false, increasedContrast: false), 0)
         XCTAssertLessThanOrEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: false, increasedContrast: false), 0.2)

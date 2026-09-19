@@ -404,6 +404,10 @@ struct TaskRowView: View, Equatable {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            // The same pop-up button the newer path exists to avoid: it paints
+            // the label as a tinted template and ignores its foregroundStyle,
+            // so without this the fallback row rested on the panel accent.
+            .atticQuietMenuGlyph(palette.secondaryForegroundColor)
             .modifier(RowActionsAffordance(isShown: showsRowAffordances, taskID: task.id))
             .focused($focusedControl, equals: .actions)
         }
