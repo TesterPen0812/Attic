@@ -34,6 +34,22 @@ enum CanvasEditCommandRoute {
         return true
     }
 
+    /// Whether the answer `canUndo`/`canRedo` gives right now is owned by a
+    /// text view this app cannot republish: a focused `NSTextView` that is not
+    /// the canvas editor — a pinned family panel's title field, a Settings
+    /// field. Its undo manager fills up while nothing SwiftUI observes here
+    /// moves, so a *disabled* state derived from it could never be corrected.
+    /// The canvas editor is deliberately excluded: focus, typing and its own
+    /// undo all republish through `CanvasSession.editingAvailabilityToken`.
+    static var availabilityIsUnobserved: Bool {
+        #if os(macOS)
+        guard let responder = focusedResponder() as? NSTextView else { return false }
+        return !(responder is CanvasSemanticTextEditor)
+        #else
+        return false
+        #endif
+    }
+
     static func canUndo(session: CanvasSession, section: PanelSection) -> Bool {
         guard section.isCanvas else { return false }
         #if os(macOS)
@@ -77,31 +93,36 @@ enum CanvasEditCommandRoute {
     }
 }
 
-/// Whether the app's Edit menu shadows the standard Undo/Redo, and why those
-/// items carry no disabled state.
+/// Whether the app's Edit menu shadows the standard Undo/Redo, and when those
+/// items are presented enabled.
 ///
-/// The items claim ⌘Z and ⇧⌘Z, and AppKit stops at the first item matching a
-/// shortcut: a *disabled* one consumes the event and neither it nor the
-/// standard item behind it runs
-/// (`testADisabledShortcutItemSwallowsItsKeyEquivalent`). Their availability
-/// used to come from `CanvasEditCommandRoute.canUndo`, which reads the focused
-/// responder's undo manager — state no publisher owns. The canvas republishes
-/// its own editor through `editingAvailabilityToken`, but a *foreign* text view
-/// (a pinned family panel's title field, a Settings field) changes nothing
-/// SwiftUI observes here, so a cached disabled item survived while that field
-/// filled up with undoable typing, and ⌘Z in it did nothing at all.
+/// Enablement reads `CanvasEditCommandRoute`, the same source the canvas
+/// toolbar's Undo/Redo buttons read, so the menu never offers an operation the
+/// toolbar shows as unavailable. Mutations, undo and redo republish it through
+/// `CanvasSession.canUndo`/`canRedo`, a canvas text editor's focus, typing and
+/// own undo republish it through `editingAvailabilityToken`, and leaving the
+/// Canvas section republishes it through `PanelUIState.selectedSection`.
 ///
-/// Enablement is not what decides which undo runs: the route re-reads the
-/// first responder at invocation and forwards to the focused text view's own
-/// undo manager, falling back to canvas history only when none is focused. So
-/// dropping the disabled state changes no outcome where something could be
-/// undone, and replaces a swallowed shortcut with a no-op where nothing could
-/// — the same thing the standard disabled Undo does. Nothing is polled and no
-/// responder is observed, because availability no longer depends on either.
+/// One case is exempt, and it is the reason enablement is not the bare route
+/// answer. The items claim ⌘Z and ⇧⌘Z, and AppKit stops at the first item
+/// matching a shortcut: a *disabled* one consumes the event and neither it nor
+/// the standard item behind it runs
+/// (`testADisabledShortcutItemSwallowsItsKeyEquivalent`). When the route's
+/// answer comes from a *foreign* text view — a pinned family panel's title
+/// field, a Settings field — nothing republishes it
+/// (`CanvasEditCommandRoute.availabilityIsUnobserved`), so a disabled item
+/// would survive that field filling up with undoable typing and ⌘Z in it would
+/// do nothing at all. While such a view holds focus the items therefore stay
+/// enabled, and the route — which re-reads the first responder when it runs —
+/// forwards ⌘Z to that view's own undo manager.
 ///
-/// The canvas toolbar's own Undo/Redo buttons keep their disabled state: they
-/// hold no key equivalent, so a stale one cannot swallow anything, and while
-/// the canvas is focused they read canvas history correctly.
+/// Enablement is not what decides which undo runs. It only decides what the
+/// menu claims, and an enabled item with nothing to undo is a no-op, the same
+/// thing the standard disabled Undo does.
+///
+/// The canvas toolbar's own Undo/Redo buttons take the route answer directly:
+/// they hold no key equivalent, so a stale one cannot swallow anything.
+@MainActor
 enum CanvasEditCommandAvailability {
     /// Whether the shadowing items exist at all. Outside the Canvas section
     /// the standard Edit ▸ Undo/Redo is left alone.
@@ -109,7 +130,20 @@ enum CanvasEditCommandAvailability {
         section.isCanvas
     }
 
-    /// Whether an offered item may be presented disabled. Always false: see
-    /// the type's documentation.
-    static let shadowingItemsMayBeDisabled = false
+    /// Whether the offered *Undo Canvas Change* item is presented enabled.
+    static func undoIsEnabled(session: CanvasSession, section: PanelSection) -> Bool {
+        isEnabled(CanvasEditCommandRoute.canUndo(session: session, section: section), section: section)
+    }
+
+    /// Whether the offered *Redo Canvas Change* item is presented enabled.
+    static func redoIsEnabled(session: CanvasSession, section: PanelSection) -> Bool {
+        isEnabled(CanvasEditCommandRoute.canRedo(session: session, section: section), section: section)
+    }
+
+    /// An offered item may only be presented disabled when the answer behind
+    /// it is one this app republishes: see the type's documentation.
+    private static func isEnabled(_ canPerform: Bool, section: PanelSection) -> Bool {
+        guard offersShadowingItems(section: section) else { return false }
+        return canPerform || CanvasEditCommandRoute.availabilityIsUnobserved
+    }
 }

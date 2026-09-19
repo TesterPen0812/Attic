@@ -770,10 +770,12 @@ final class CanvasAccessibilityTests: XCTestCase {
     ///
     /// The first half of this test shows why no `.disabled` read can be kept
     /// fresh here: the route's answer changes while nothing SwiftUI observes
-    /// does. The second half shows the shipped consequence — the items carry no
-    /// disabled state, so ⌘Z reaches them and the route, which re-reads the
-    /// responder when it runs, performs that text view's own undo and leaves
-    /// canvas history alone.
+    /// does. The second half shows the shipped consequence — while such a view
+    /// holds focus the items stay enabled, so ⌘Z reaches them and the route,
+    /// which re-reads the responder when it runs, performs that text view's own
+    /// undo and leaves canvas history alone. Every other state disables the
+    /// items in step with the canvas toolbar
+    /// (`testShadowingUndoRedoEnablementTracksTheCanvasToolbar`).
     @MainActor
     func testShadowingUndoIsNeverDisabledForAForeignTextView() throws {
         let session = CanvasSession(store: try makeTestCanvasStore())
@@ -807,10 +809,18 @@ final class CanvasAccessibilityTests: XCTestCase {
                        + "disabled state could never have been corrected")
         XCTAssertFalse(session.canUndo, "canvas history is still empty")
 
-        // The shipped rule: offered while Canvas is selected, never disabled.
+        // The shipped rule: offered while Canvas is selected, and enabled for
+        // as long as this unobservable text view owns the answer — including
+        // before it had anything to undo, which is when a cached disabled
+        // state would have been baked in.
         XCTAssertTrue(CanvasEditCommandAvailability.offersShadowingItems(section: .canvas))
         XCTAssertFalse(CanvasEditCommandAvailability.offersShadowingItems(section: .tasks))
-        XCTAssertFalse(CanvasEditCommandAvailability.shadowingItemsMayBeDisabled)
+        XCTAssertTrue(CanvasEditCommandRoute.availabilityIsUnobserved)
+        XCTAssertTrue(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas))
+        XCTAssertTrue(CanvasEditCommandAvailability.redoIsEnabled(session: session, section: .canvas),
+                      "Redo has nothing to redo yet and must still be enabled: "
+                      + "this field's undo manager republishes nothing")
+        XCTAssertFalse(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .tasks))
 
         // A menu item built from that rule, in front of the standard Undo it
         // shadows: the event must reach it rather than being consumed.
@@ -827,8 +837,7 @@ final class CanvasAccessibilityTests: XCTestCase {
                                    action: #selector(Fired.shadowingUndo(_:)), keyEquivalent: "z")
         shadowing.keyEquivalentModifierMask = [.command]
         shadowing.target = fired
-        shadowing.isEnabled = CanvasEditCommandAvailability.offersShadowingItems(section: .canvas)
-            && !CanvasEditCommandAvailability.shadowingItemsMayBeDisabled
+        shadowing.isEnabled = CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas)
         menu.addItem(shadowing)
         let standard = NSMenuItem(title: "Undo", action: #selector(Fired.undo(_:)), keyEquivalent: "z")
         standard.keyEquivalentModifierMask = [.command]
@@ -854,6 +863,77 @@ final class CanvasAccessibilityTests: XCTestCase {
         // the rule is not simply "always true".
         XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .tasks))
         XCTAssertFalse(CanvasEditCommandRoute.undo(session: session, section: .notes))
+    }
+
+    /// The flagged defect: *Undo Canvas Change* and *Redo Canvas Change* were
+    /// presented enabled while the canvas toolbar's own Undo/Redo buttons were
+    /// disabled, so the Edit menu advertised operations that could not run.
+    /// Menu enablement now reads the route the toolbar reads, and has to keep
+    /// agreeing with it through a mutation, an undo, a redo and a board change
+    /// that clears history — and the agreement has to be causal: where both
+    /// report disabled, invoking the command must genuinely do nothing.
+    @MainActor
+    func testShadowingUndoRedoEnablementTracksTheCanvasToolbar() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        let chrome = HostedCanvasChrome(session: session)
+        defer { chrome.tearDown() }
+
+        // Focus rests on the canvas rather than on a text view, so availability
+        // is the republished kind and a disabled item is safe to present.
+        XCTAssertFalse(CanvasEditCommandRoute.availabilityIsUnobserved)
+
+        // The toolbar's own expression: `CanvasPanelContent` disables
+        // `canvas-undo`/`canvas-redo` from exactly these two reads.
+        func assertMenuMatchesToolbar(_ state: String, undo: Bool, redo: Bool,
+                                      file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(CanvasEditCommandRoute.canUndo(session: session, section: .canvas),
+                           undo, "toolbar Undo, \(state)", file: file, line: line)
+            XCTAssertEqual(CanvasEditCommandRoute.canRedo(session: session, section: .canvas),
+                           redo, "toolbar Redo, \(state)", file: file, line: line)
+            XCTAssertEqual(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas),
+                           undo, "menu Undo, \(state)", file: file, line: line)
+            XCTAssertEqual(CanvasEditCommandAvailability.redoIsEnabled(session: session, section: .canvas),
+                           redo, "menu Redo, \(state)", file: file, line: line)
+        }
+
+        // An empty board: the state UAT flagged, where the toolbar was
+        // disabled and both menu items were offered enabled anyway.
+        assertMenuMatchesToolbar("an empty board with no history", undo: false, redo: false)
+        XCTAssertFalse(CanvasEditCommandRoute.undo(session: session, section: .canvas),
+                       "the disabled state is causal: the command does nothing here")
+        XCTAssertFalse(CanvasEditCommandRoute.redo(session: session, section: .canvas))
+
+        let placed = await session.insertText("Keep", at: .zero, prefersDarkSurface: false)
+        XCTAssertTrue(placed)
+        chrome.settle()
+        assertMenuMatchesToolbar("after a mutation", undo: true, redo: false)
+
+        XCTAssertTrue(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        chrome.settle()
+        XCTAssertTrue(session.semanticObjects.isEmpty)
+        assertMenuMatchesToolbar("after undo", undo: false, redo: true)
+
+        XCTAssertTrue(CanvasEditCommandRoute.redo(session: session, section: .canvas))
+        chrome.settle()
+        XCTAssertEqual(session.semanticObjects.count, 1)
+        assertMenuMatchesToolbar("after redo", undo: true, redo: false)
+
+        // A board change clears session history while the object survives, so
+        // both items have to fall back to disabled together.
+        XCTAssertTrue(session.renameSelectedCanvas(to: "Board"))
+        chrome.settle()
+        XCTAssertEqual(session.semanticObjects.count, 1)
+        assertMenuMatchesToolbar("after a board change cleared history", undo: false, redo: false)
+        XCTAssertFalse(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertEqual(session.semanticObjects.count, 1, "and it really could not act")
+
+        // Leaving the Canvas section withdraws the items altogether rather
+        // than leaving an enabled shadow in front of the standard Undo.
+        for section in PanelSection.allCases where !section.isCanvas {
+            XCTAssertFalse(CanvasEditCommandAvailability.offersShadowingItems(section: section))
+            XCTAssertFalse(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: section))
+            XCTAssertFalse(CanvasEditCommandAvailability.redoIsEnabled(session: session, section: section))
+        }
     }
 
     /// The app's Edit ▸ Undo item reads availability through
@@ -884,6 +964,10 @@ final class CanvasAccessibilityTests: XCTestCase {
 
         let beforeTyping = session.editingAvailabilityToken
         XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
+        // The canvas editor republishes, so the menu item may be — and, to
+        // agree with the toolbar, must be — presented disabled here.
+        XCTAssertFalse(CanvasEditCommandRoute.availabilityIsUnobserved)
+        XCTAssertFalse(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas))
 
         editor.insertText(" draft", replacementRange: NSRange(location: 4, length: 0))
         editor.breakUndoCoalescing()
@@ -894,6 +978,9 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertFalse(session.canUndo, "and it must not invent canvas history")
         XCTAssertTrue(CanvasEditCommandRoute.canUndo(session: session, section: .canvas),
                       "Undo must now be offered for the typing")
+        XCTAssertTrue(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas),
+                      "and the republished answer must re-enable the menu item, "
+                      + "so ⌘Z is not swallowed by a stale disabled one")
         XCTAssertTrue(CanvasEditCommandRoute.undo(session: session, section: .canvas))
         XCTAssertEqual(editor.string, "Keep")
         XCTAssertEqual(session.semanticObjects.count, 1)
@@ -903,6 +990,9 @@ final class CanvasAccessibilityTests: XCTestCase {
         let afterUndo = session.editingAvailabilityToken
         XCTAssertGreaterThan(afterUndo, beforeTyping)
         XCTAssertTrue(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
+        XCTAssertTrue(CanvasEditCommandAvailability.redoIsEnabled(session: session, section: .canvas))
+        XCTAssertFalse(CanvasEditCommandAvailability.undoIsEnabled(session: session, section: .canvas),
+                       "and Undo falls back to disabled with the toolbar")
     }
 
     /// Availability for the route is decided by the focused editor's undo
