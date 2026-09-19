@@ -741,12 +741,21 @@ private struct SavedNotesDrawer: View {
                             }
                         }
                         .padding(.horizontal, 12)
-                        .padding(.top, SavedNotesDrawerLayout.chromeBandHeight)
-                        .padding(.bottom, SavedNotesDrawerLayout.chromeBandHeight)
+                        .padding(.top, SavedNotesDrawerLayout.rowRestingInset)
+                        .padding(.bottom, SavedNotesDrawerLayout.rowRestingInset)
                     }
                 }
                 .scrollIndicators(.never)
                 .mask(chromeMask(height: proxy.size.height))
+                // The mask only dims: without these the bottom button still
+                // shared its footprint with whatever row had scrolled under
+                // it, and a press in the fade landed on a row the user could
+                // barely see. They sit between the list and the buttons, so
+                // the buttons keep their own clicks.
+                AtticPointerShield(height: SavedNotesDrawerLayout.shieldHeight)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                AtticPointerShield(height: SavedNotesDrawerLayout.shieldHeight)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
                 HStack {
                     drawerButton("New note", symbol: "square.and.pencil", id: "new-saved-note", action: onNew)
                     Spacer()

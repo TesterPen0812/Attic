@@ -409,3 +409,28 @@ extension View {
             .foregroundStyle(color)
     }
 }
+
+/// An inert band over a scrolling list, sized to the fixed chrome above or
+/// below it plus the mask's fade. Rows hidden or fading under chrome are
+/// dimmed by the mask; this makes them inert as well, so a press or hover
+/// landing beside a chrome control, or in the fade, can never reach a row the
+/// user cannot see. Scroll wheel events still reach the list, which AppKit
+/// hit-tests independently of this shape.
+struct AtticPointerShield: View {
+    let height: CGFloat
+
+    /// A degenerate measurement collapses the shield rather than making the
+    /// whole list inert: chrome heights are measured from live geometry, and a
+    /// band that swallowed every press would be far worse than none.
+    static func shieldedHeight(_ height: CGFloat) -> CGFloat {
+        guard height.isFinite else { return 0 }
+        return max(0, height)
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(height: Self.shieldedHeight(height))
+            .contentShape(Rectangle())
+            .accessibilityHidden(true)
+    }
+}

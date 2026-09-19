@@ -1475,12 +1475,47 @@ final class PanelGeometryTests: XCTestCase {
             XCTAssertEqual((1 - stops.bottomFadeStart) * height,
                            SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength,
                            accuracy: 0.001)
-            // A row that rests at its inset is fully opaque, not subdued.
-            XCTAssertGreaterThan(SavedNotesDrawerLayout.chromeBandHeight / height, stops.topClearEnd - 0.0001)
             let gradient = TaskScrollMaskLayout.gradientStops(stops)
             XCTAssertEqual(gradient.map(\.location), gradient.map(\.location).sorted(),
                            "stops are monotone at height \(height)")
+            // What the rendered mask does, not just where its stops sit: a row
+            // resting at its inset is fully painted, while anything under a
+            // button's footprint is subdued. (The previous assertion here
+            // restated `topClearEnd == chromeBandHeight / height`, which the
+            // lines above already pin, so it held for every possible value.)
+            XCTAssertEqual(
+                maskOpacity(gradient, at: SavedNotesDrawerLayout.rowRestingInset / height),
+                1, accuracy: 0.001,
+                "a resting row must be fully readable at height \(height)"
+            )
+            XCTAssertEqual(
+                maskOpacity(gradient, at: 1 - SavedNotesDrawerLayout.rowRestingInset / height),
+                1, accuracy: 0.001,
+                "and so must the lowest one at height \(height)"
+            )
+            for depth in [CGFloat(2), SavedNotesDrawerLayout.buttonEdgePadding,
+                          SavedNotesDrawerLayout.buttonFootprint] {
+                XCTAssertLessThan(
+                    maskOpacity(gradient, at: depth / height), 1,
+                    "content \(depth)pt under a button must stay subdued at height \(height)"
+                )
+                XCTAssertLessThan(
+                    maskOpacity(gradient, at: 1 - depth / height), 1,
+                    "and so must content \(depth)pt above the bottom one"
+                )
+            }
         }
+
+        // The pointer shields cover exactly what the mask dims, the rule the
+        // task list uses, and a row comes to rest clear of them: a fully
+        // opaque row with an inert top edge would be worse than either.
+        XCTAssertEqual(SavedNotesDrawerLayout.shieldHeight,
+                       SavedNotesDrawerLayout.chromeBandHeight + SavedNotesDrawerLayout.fadeLength)
+        XCTAssertGreaterThan(SavedNotesDrawerLayout.shieldHeight,
+                             SavedNotesDrawerLayout.buttonFootprint,
+                             "a shield must cover the whole button it protects")
+        XCTAssertGreaterThanOrEqual(SavedNotesDrawerLayout.rowRestingInset,
+                                    SavedNotesDrawerLayout.shieldHeight)
 
         // Accessibility contrast settings remove the underlay here too.
         XCTAssertEqual(TaskScrollMaskLayout.underChromeOpacity(reduceTransparency: true, increasedContrast: false), 0)
@@ -1544,6 +1579,27 @@ final class PanelGeometryTests: XCTestCase {
             XCTAssertNotEqual(scope.quickEntryOptionsCommandTitle, scope.quickEntryCloseOptionsCommandTitle)
         }
         XCTAssertNotEqual(TaskScope.tasks.quickEntrySubmitTitle, TaskScope.backlog.quickEntrySubmitTitle)
+    }
+
+    /// The alpha the rendered mask applies at `location`, interpolated between
+    /// the surrounding stops exactly as a `LinearGradient` does. Lets a test
+    /// ask what the mask does to a given row rather than only where its stops
+    /// are.
+    private func maskOpacity(_ stops: [Gradient.Stop], at location: CGFloat) -> Double {
+        func alpha(_ color: Color) -> Double {
+            Double(NSColor(color).usingColorSpace(.deviceRGB)?.alphaComponent ?? 0)
+        }
+        guard let first = stops.first, let last = stops.last else { return 0 }
+        if location <= first.location { return alpha(first.color) }
+        if location >= last.location { return alpha(last.color) }
+        for (lower, upper) in zip(stops, stops.dropFirst()) {
+            guard location >= lower.location, location <= upper.location else { continue }
+            let span = upper.location - lower.location
+            guard span > 0 else { return alpha(upper.color) }
+            let t = Double((location - lower.location) / span)
+            return alpha(lower.color) + (alpha(upper.color) - alpha(lower.color)) * t
+        }
+        return alpha(last.color)
     }
 
     func testUnderChromeDepthRespectsContrastSettingsAndComposerTextSpace() {

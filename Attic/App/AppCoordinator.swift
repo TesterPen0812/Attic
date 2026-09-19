@@ -154,8 +154,17 @@ enum AppTerminationPreparation {
 }
 
 @MainActor
-final class AppCoordinator {
+final class AppCoordinator: ObservableObject {
     static let shared = AppCoordinator()
+
+    /// Read-only mirror of the global shortcut's registration, so UI can stop
+    /// advertising a combination the system refused without being able to
+    /// register, unregister or rebind it. Published because a refusal resolves
+    /// during `start()`, which can land after a menu has already been built.
+    @Published private(set) var globalShortcutRegistration: GlobalHotKeyRegistration = .notRegistered
+
+    /// The combination that shortcut claims, for the menu that advertises it.
+    var globalShortcutCombination: GlobalHotKeyCombination { newTaskHotKey.combination }
 
     let settings: AppSettings
     let store: TaskStore
@@ -180,6 +189,7 @@ final class AppCoordinator {
     private var menuNotificationTokens: [NSObjectProtocol] = []
     private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
+    private var globalShortcutObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private let newTaskHotKey: GlobalHotKey
@@ -326,6 +336,10 @@ final class AppCoordinator {
             noteDraft: noteDraft
         )
         newTaskHotKey.action = { [weak self] in self?.showNewTask() }
+        globalShortcutObservation = newTaskHotKey.$registration
+            .sink { [weak self] registration in
+                self?.globalShortcutRegistration = registration
+            }
     }
 
     func start() {

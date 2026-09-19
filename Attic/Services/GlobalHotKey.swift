@@ -1,6 +1,74 @@
 import Carbon.HIToolbox
 import Combine
 import os
+#if canImport(SwiftUI)
+import SwiftUI
+#endif
+
+/// A key combination Attic can claim application-wide. Carried by everything
+/// that talks about the shortcut — the Carbon registration, the refusal copy
+/// and the menu equivalent — so no surface can name a combination other than
+/// the one that was actually claimed.
+struct GlobalHotKeyCombination: Equatable {
+    /// Carbon virtual key code (`kVK_…`).
+    let keyCode: UInt32
+    /// Carbon modifier mask (`controlKey`, `optionKey`, `shiftKey`, `cmdKey`).
+    let modifiers: UInt32
+
+    /// Attic's one global shortcut: show the panel with a new task ready.
+    static let newTask = GlobalHotKeyCombination(
+        keyCode: UInt32(kVK_Space),
+        modifiers: UInt32(controlKey | optionKey)
+    )
+
+    /// The combination written the way menus write it, in Apple's modifier
+    /// order, or nil for a key or mask Attic has no name for. Copy that would
+    /// otherwise have to guess omits the combination instead.
+    var displayName: String? {
+        guard let key = Self.keyNames[keyCode] else { return nil }
+        let glyphs = Self.modifierGlyphs(modifiers)
+        // A shortcut with no modifiers could never be claimed globally, so a
+        // mask this type cannot read is a value it must not describe.
+        guard !glyphs.isEmpty else { return nil }
+        return glyphs + key
+    }
+
+    private static func modifierGlyphs(_ modifiers: UInt32) -> String {
+        var glyphs = ""
+        if modifiers & UInt32(controlKey) != 0 { glyphs += "⌃" }
+        if modifiers & UInt32(optionKey) != 0 { glyphs += "⌥" }
+        if modifiers & UInt32(shiftKey) != 0 { glyphs += "⇧" }
+        if modifiers & UInt32(cmdKey) != 0 { glyphs += "⌘" }
+        return glyphs
+    }
+
+    private static let keyNames: [UInt32: String] = [
+        UInt32(kVK_Space): "Space"
+    ]
+}
+
+#if canImport(SwiftUI)
+extension GlobalHotKeyCombination {
+    /// The same combination as a SwiftUI shortcut, so a menu item cannot
+    /// advertise one binding while Carbon claims another. nil for a key this
+    /// app never binds: the menu then shows no equivalent at all rather than
+    /// the wrong one.
+    var keyboardShortcut: KeyboardShortcut? {
+        guard let key = Self.keyEquivalents[keyCode] else { return nil }
+        var flags = SwiftUI.EventModifiers()
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        if modifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        if modifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+        guard !flags.isEmpty else { return nil }
+        return KeyboardShortcut(key, modifiers: flags)
+    }
+
+    private static let keyEquivalents: [UInt32: KeyEquivalent] = [
+        UInt32(kVK_Space): .space
+    ]
+}
+#endif
 
 /// Why the system refused Attic's global shortcut, and the calm sentence
 /// Settings shows for it. Kept separate from the Carbon calls so the wording
@@ -17,6 +85,9 @@ struct GlobalHotKeyFailure: Equatable {
 
     let stage: Stage
     let status: OSStatus
+    /// The combination that was refused. Required, not defaulted: the copy
+    /// below names it, and it previously named ⌃⌥Space whatever was claimed.
+    let combination: GlobalHotKeyCombination
 
     /// Another application already owns the same combination. Carbon reports
     /// this separately from an outright failure, and it is the only case the
@@ -26,21 +97,30 @@ struct GlobalHotKeyFailure: Equatable {
     }
 
     /// One sentence, no error codes: the shortcut is the only thing that
-    /// stopped working, and the menu bar item still opens Attic.
+    /// stopped working, and the menu bar item still opens Attic. The
+    /// combination is named only when it can be named correctly.
     var settingsMessage: String {
+        let shortcut = combination.displayName
         if isConflict {
-            return "Another app already uses ⌃⌥Space, so Attic's shortcut is off. "
+            let subject = shortcut.map { "Another app already uses \($0)" }
+                ?? "Another app already uses Attic's shortcut combination"
+            return "\(subject), so Attic's shortcut is off. "
                 + "Free that combination in the other app, then restart Attic. "
                 + "Attic's menu bar icon still opens the panel."
         }
-        return "macOS refused Attic's ⌃⌥Space shortcut, so it is off. "
+        let subject = shortcut.map { "macOS refused Attic's \($0) shortcut" }
+            ?? "macOS refused Attic's shortcut"
+        return "\(subject), so it is off. "
             + "Restart Attic to try again. Attic's menu bar icon still opens the panel."
     }
 
     /// Full detail for the log, where the status code belongs.
     var logDescription: String {
         let stageName = stage == .eventHandler ? "InstallEventHandler" : "RegisterEventHotKey"
-        return "\(stageName) returned \(status)\(isConflict ? " (the combination is already taken)" : "")"
+        let combinationName = combination.displayName
+            ?? "key \(combination.keyCode) with modifier mask \(combination.modifiers)"
+        return "\(stageName) returned \(status) for \(combinationName)"
+            + (isConflict ? " (the combination is already taken)" : "")
     }
 }
 
@@ -56,14 +136,17 @@ enum GlobalHotKeyRegistration: Equatable {
         guard case let .failed(failure) = self else { return nil }
         return failure
     }
+
+    /// Whether the combination is actually claimed right now. UI must not
+    /// advertise a global binding while this is false.
+    var isActive: Bool { self == .registered }
 }
 
 @MainActor
 final class GlobalHotKey: ObservableObject {
     private static let signature: OSType = 0x504B424F // "PKBO"
 
-    private let keyCode: UInt32
-    private let modifiers: UInt32
+    let combination: GlobalHotKeyCombination
     /// Assigned by the owner after construction so the hot key can be handed
     /// to Settings before the coordinator finishes initializing.
     var action: (@MainActor () -> Void)?
@@ -76,16 +159,11 @@ final class GlobalHotKey: ObservableObject {
     @Published private(set) var registration: GlobalHotKeyRegistration = .notRegistered
 
     convenience init(action: (@MainActor () -> Void)? = nil) {
-        self.init(
-            keyCode: UInt32(kVK_Space),
-            modifiers: UInt32(controlKey | optionKey),
-            action: action
-        )
+        self.init(combination: .newTask, action: action)
     }
 
-    init(keyCode: UInt32, modifiers: UInt32, action: (@MainActor () -> Void)? = nil) {
-        self.keyCode = keyCode
-        self.modifiers = modifiers
+    init(combination: GlobalHotKeyCombination, action: (@MainActor () -> Void)? = nil) {
+        self.combination = combination
         self.action = action
     }
 
@@ -128,13 +206,13 @@ final class GlobalHotKey: ObservableObject {
         )
         guard installStatus == noErr else {
             eventHandlerReference = nil
-            return record(.init(stage: .eventHandler, status: installStatus))
+            return record(.init(stage: .eventHandler, status: installStatus, combination: combination))
         }
 
         let identifier = EventHotKeyID(signature: Self.signature, id: 1)
         let registerStatus = RegisterEventHotKey(
-            keyCode,
-            modifiers,
+            combination.keyCode,
+            combination.modifiers,
             identifier,
             GetApplicationEventTarget(),
             0,
@@ -144,7 +222,7 @@ final class GlobalHotKey: ObservableObject {
             if let eventHandlerReference { RemoveEventHandler(eventHandlerReference) }
             eventHandlerReference = nil
             hotKeyReference = nil
-            return record(.init(stage: .hotKey, status: registerStatus))
+            return record(.init(stage: .hotKey, status: registerStatus, combination: combination))
         }
         registration = .registered
         return registration

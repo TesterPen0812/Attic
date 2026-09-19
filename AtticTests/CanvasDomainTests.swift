@@ -761,6 +761,101 @@ final class CanvasAccessibilityTests: XCTestCase {
         XCTAssertFalse(fired.standard)
     }
 
+    /// The residual of the same defect: `editingAvailabilityToken` republishes
+    /// only what the *canvas* editor does, so a foreign text view — a pinned
+    /// family panel's title field, a Settings field — could fill with undoable
+    /// typing while the app's Edit ▸ Undo item stayed cached as disabled, and a
+    /// disabled ⌘Z item swallows the shortcut
+    /// (`testADisabledShortcutItemSwallowsItsKeyEquivalent`).
+    ///
+    /// The first half of this test shows why no `.disabled` read can be kept
+    /// fresh here: the route's answer changes while nothing SwiftUI observes
+    /// does. The second half shows the shipped consequence — the items carry no
+    /// disabled state, so ⌘Z reaches them and the route, which re-reads the
+    /// responder when it runs, performs that text view's own undo and leaves
+    /// canvas history alone.
+    @MainActor
+    func testShadowingUndoIsNeverDisabledForAForeignTextView() throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertFalse(session.canUndo, "the flagged state: no canvas history to offer")
+
+        // A text view that is not a canvas editor, in its own window, with
+        // undo enabled: the shape of every field outside the canvas.
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 240, height: 80),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let field = NSTextView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
+        field.allowsUndo = true
+        window.contentView = field
+        window.makeFirstResponder(field)
+        defer { window.contentView = nil }
+        XCTAssertFalse(field is CanvasSemanticTextEditor)
+
+        let previousResponder = CanvasEditCommandRoute.focusedResponder
+        CanvasEditCommandRoute.focusedResponder = { field }
+        defer { CanvasEditCommandRoute.focusedResponder = previousResponder }
+
+        let tokenBefore = session.editingAvailabilityToken
+        XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .canvas))
+
+        field.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
+        field.breakUndoCoalescing()
+
+        XCTAssertTrue(CanvasEditCommandRoute.canUndo(session: session, section: .canvas),
+                      "the route now has something to undo")
+        XCTAssertEqual(session.editingAvailabilityToken, tokenBefore,
+                       "and nothing the app commands observe moved — so a cached "
+                       + "disabled state could never have been corrected")
+        XCTAssertFalse(session.canUndo, "canvas history is still empty")
+
+        // The shipped rule: offered while Canvas is selected, never disabled.
+        XCTAssertTrue(CanvasEditCommandAvailability.offersShadowingItems(section: .canvas))
+        XCTAssertFalse(CanvasEditCommandAvailability.offersShadowingItems(section: .tasks))
+        XCTAssertFalse(CanvasEditCommandAvailability.shadowingItemsMayBeDisabled)
+
+        // A menu item built from that rule, in front of the standard Undo it
+        // shadows: the event must reach it rather than being consumed.
+        final class Fired: NSObject {
+            var shadowing = false
+            var standard = false
+            @objc func shadowingUndo(_ sender: Any?) { shadowing = true }
+            @objc func undo(_ sender: Any?) { standard = true }
+        }
+        let fired = Fired()
+        let menu = NSMenu(title: "Edit")
+        menu.autoenablesItems = false
+        let shadowing = NSMenuItem(title: "Undo Canvas Change",
+                                   action: #selector(Fired.shadowingUndo(_:)), keyEquivalent: "z")
+        shadowing.keyEquivalentModifierMask = [.command]
+        shadowing.target = fired
+        shadowing.isEnabled = CanvasEditCommandAvailability.offersShadowingItems(section: .canvas)
+            && !CanvasEditCommandAvailability.shadowingItemsMayBeDisabled
+        menu.addItem(shadowing)
+        let standard = NSMenuItem(title: "Undo", action: #selector(Fired.undo(_:)), keyEquivalent: "z")
+        standard.keyEquivalentModifierMask = [.command]
+        standard.target = fired
+        menu.addItem(standard)
+
+        let commandZ = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil,
+            characters: "z", charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6
+        ))
+        XCTAssertTrue(menu.performKeyEquivalent(with: commandZ))
+        XCTAssertTrue(fired.shadowing, "⌘Z must reach the item instead of being swallowed")
+
+        // And what it runs is the focused text view's undo, not canvas history.
+        XCTAssertTrue(CanvasEditCommandRoute.undo(session: session, section: .canvas))
+        XCTAssertEqual(field.string, "", "the field's own typing was undone")
+        XCTAssertFalse(session.canUndo)
+        XCTAssertTrue(session.semanticObjects.isEmpty, "canvas history was never touched")
+        XCTAssertTrue(CanvasEditCommandRoute.canRedo(session: session, section: .canvas))
+
+        // Outside the Canvas section nothing shadows the standard items, so
+        // the rule is not simply "always true".
+        XCTAssertFalse(CanvasEditCommandRoute.canUndo(session: session, section: .tasks))
+        XCTAssertFalse(CanvasEditCommandRoute.undo(session: session, section: .notes))
+    }
+
     /// The app's Edit ▸ Undo item reads availability through
     /// `editingAvailabilityToken`, the way the canvas toolbar already does.
     /// Without that read, a board whose session history was cleared left the

@@ -53,28 +53,14 @@ private struct CanvasEditCommands: Commands {
     @ObservedObject var uiState: PanelUIState
 
     /// These items shadow the standard Edit ▸ Undo/Redo with the same key
-    /// equivalent while the Canvas section is selected, and AppKit stops at
-    /// the first item matching a shortcut: a *disabled* one consumes ⌘Z and
-    /// neither it nor the standard item behind it runs
-    /// (`testADisabledShortcutItemSwallowsItsKeyEquivalent`). Availability is
-    /// route-only, and the route reads the focused text editor's undo manager
-    /// — state that canvas history never republishes. So the availability has
-    /// to be read through the editing token, exactly as the canvas toolbar
-    /// does: without it, typing on a board whose session history is empty left
-    /// these cached as disabled and ⌘Z did nothing at all.
-    private var canUndoCanvasEdit: Bool {
-        let _ = session.editingAvailabilityToken
-        return CanvasEditCommandRoute.canUndo(session: session, section: uiState.selectedSection)
-    }
-
-    private var canRedoCanvasEdit: Bool {
-        let _ = session.editingAvailabilityToken
-        return CanvasEditCommandRoute.canRedo(session: session, section: uiState.selectedSection)
-    }
-
+    /// equivalent while the Canvas section is selected, and they carry no
+    /// disabled state: a disabled shortcut item swallows ⌘Z, and availability
+    /// read from the first responder cannot be kept fresh by anything SwiftUI
+    /// observes here. `CanvasEditCommandAvailability` documents the whole rule;
+    /// the route decides what each press acts on, at the moment it is pressed.
     var body: some Commands {
         CommandGroup(before: .undoRedo) {
-            if uiState.selectedSection.isCanvas {
+            if CanvasEditCommandAvailability.offersShadowingItems(section: uiState.selectedSection) {
                 Button("Undo Canvas Change") {
                     _ = CanvasEditCommandRoute.undo(
                         session: session,
@@ -82,7 +68,6 @@ private struct CanvasEditCommands: Commands {
                     )
                 }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(!canUndoCanvasEdit)
 
                 Button("Redo Canvas Change") {
                     _ = CanvasEditCommandRoute.redo(
@@ -91,7 +76,6 @@ private struct CanvasEditCommands: Commands {
                     )
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!canRedoCanvasEdit)
             }
         }
     }

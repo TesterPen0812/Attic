@@ -257,7 +257,9 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertNil(SettingsVisibility.globalShortcutFailure(.notRegistered))
         XCTAssertNil(SettingsVisibility.globalShortcutFailure(.registered))
 
-        let conflict = GlobalHotKeyFailure(stage: .hotKey, status: OSStatus(eventHotKeyExistsErr))
+        let conflict = GlobalHotKeyFailure(stage: .hotKey,
+                                           status: OSStatus(eventHotKeyExistsErr),
+                                           combination: .newTask)
         let shown = try? XCTUnwrap(SettingsVisibility.globalShortcutFailure(.failed(conflict)))
         XCTAssertEqual(shown, conflict)
         XCTAssertTrue(conflict.isConflict)
@@ -269,13 +271,79 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertTrue(conflict.logDescription.contains("RegisterEventHotKey"))
         XCTAssertTrue(conflict.logDescription.contains("\(eventHotKeyExistsErr)"))
 
-        let refused = GlobalHotKeyFailure(stage: .eventHandler, status: -50)
+        let refused = GlobalHotKeyFailure(stage: .eventHandler, status: -50,
+                                          combination: .newTask)
         XCTAssertFalse(refused.isConflict)
         XCTAssertTrue(refused.settingsMessage.contains("macOS refused"))
         XCTAssertTrue(refused.settingsMessage.contains("menu bar"))
         XCTAssertTrue(refused.logDescription.contains("InstallEventHandler"))
         XCTAssertTrue(refused.logDescription.contains("-50"))
         XCTAssertNotEqual(refused.settingsMessage, conflict.settingsMessage)
+    }
+
+    /// The copy used to name ⌃⌥Space in a literal while the type it belonged
+    /// to was parameterised by key code and modifiers, so a failure for any
+    /// other combination described the wrong one. The failure now carries the
+    /// combination it was refused for, and says nothing it cannot say
+    /// correctly.
+    func testRefusalCopyNamesTheCombinationThatWasActuallyRefused() throws {
+        XCTAssertEqual(GlobalHotKeyCombination.newTask.displayName, "⌃⌥Space")
+
+        let newTask = GlobalHotKeyFailure(stage: .hotKey,
+                                          status: OSStatus(eventHotKeyExistsErr),
+                                          combination: .newTask)
+        XCTAssertTrue(newTask.settingsMessage.contains("⌃⌥Space"))
+
+        // A different combination: the copy must follow it rather than repeat
+        // the one that happens to be shipped.
+        let other = GlobalHotKeyCombination(
+            keyCode: UInt32(kVK_Space),
+            modifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        )
+        XCTAssertEqual(other.displayName, "⌃⌥⇧⌘Space", "Apple's modifier order")
+        for stage in [GlobalHotKeyFailure.Stage.hotKey, .eventHandler] {
+            let failure = GlobalHotKeyFailure(stage: stage, status: -50, combination: other)
+            XCTAssertTrue(failure.settingsMessage.contains("⌃⌥⇧⌘Space"),
+                          "\(stage) copy must name the refused combination")
+            XCTAssertFalse(failure.settingsMessage.contains("⌃⌥Space,"),
+                           "and must not name the shipped one instead")
+            XCTAssertTrue(failure.logDescription.contains("⌃⌥⇧⌘Space"))
+        }
+
+        // A key this app has no name for is never guessed at: the sentence
+        // omits the combination and still reads, and the log keeps the raw
+        // values so the refusal is still diagnosable.
+        let unnamed = GlobalHotKeyCombination(keyCode: 999, modifiers: UInt32(controlKey))
+        XCTAssertNil(unnamed.displayName)
+        let vague = GlobalHotKeyFailure(stage: .hotKey, status: -50, combination: unnamed)
+        XCTAssertFalse(vague.settingsMessage.contains("Space"))
+        XCTAssertTrue(vague.settingsMessage.contains("menu bar"))
+        XCTAssertTrue(vague.logDescription.contains("999"))
+        XCTAssertTrue(vague.logDescription.contains("\(UInt32(controlKey))"))
+    }
+
+    /// The menu bar item is the only place the global combination is
+    /// advertised, and it advertised it unconditionally — including after
+    /// Carbon refused the registration, when nothing outside an open menu
+    /// would answer that shortcut. The advertised equivalent now follows the
+    /// registration, and comes from the same combination the hot key claims so
+    /// the two cannot drift apart.
+    func testTheMenuAdvertisesTheGlobalShortcutOnlyWhileItIsRegistered() throws {
+        XCTAssertFalse(GlobalHotKeyRegistration.notRegistered.isActive)
+        XCTAssertTrue(GlobalHotKeyRegistration.registered.isActive)
+        XCTAssertFalse(GlobalHotKeyRegistration.failed(
+            GlobalHotKeyFailure(stage: .hotKey, status: -50, combination: .newTask)
+        ).isActive)
+
+        // The equivalent the menu would show is the claimed combination, not a
+        // literal written beside it.
+        let shortcut = try XCTUnwrap(GlobalHotKeyCombination.newTask.keyboardShortcut)
+        XCTAssertEqual(shortcut.key, KeyEquivalent.space)
+        XCTAssertEqual(shortcut.modifiers, [.control, .option])
+
+        let unnamed = GlobalHotKeyCombination(keyCode: 999, modifiers: UInt32(controlKey))
+        XCTAssertNil(unnamed.keyboardShortcut,
+                     "a key Attic never binds must show no equivalent rather than a wrong one")
     }
 
     /// Whatever the system answers, `register()` must leave a state the UI can
@@ -286,10 +354,10 @@ final class SettingsPresentationTests: XCTestCase {
         // F13 with four modifiers: an unlikely combination for another app to
         // own, so this exercises the success path without fighting for a
         // shortcut the user may actually be using.
-        let hotKey = GlobalHotKey(
+        let hotKey = GlobalHotKey(combination: GlobalHotKeyCombination(
             keyCode: UInt32(kVK_F13),
             modifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey)
-        )
+        ))
         defer { hotKey.unregister() }
         XCTAssertEqual(hotKey.registration, .notRegistered)
 

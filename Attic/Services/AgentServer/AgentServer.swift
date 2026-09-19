@@ -133,9 +133,7 @@ final class AgentServer: ObservableObject {
                 logger.error("Agent MCP server failed: \(error.localizedDescription)")
                 Task { @MainActor in
                     guard let self, let listener, self.listener === listener else { return }
-                    listener.cancel()
-                    self.listener = nil
-                    self.state = .failed(error.localizedDescription)
+                    self.handleListenerFailure(error.localizedDescription)
                 }
             default:
                 break
@@ -147,19 +145,13 @@ final class AgentServer: ObservableObject {
         let requestDeadline = requestDeadline
         listener.newConnectionHandler = { [weak self] connection in
             // A socket accepted after `stop()` drained this registry is closed
-            // straight away rather than served or tracked.
+            // straight away rather than served or tracked. `track` also
+            // installs the close observation, so the registry and the handler
+            // that empties it cannot disagree.
             guard let self, connections.track(connection, on: queue,
                                              deadline: requestDeadline) else {
                 connection.cancel()
                 return
-            }
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .cancelled, .failed:
-                    connections.forget(connection)
-                default:
-                    break
-                }
             }
             connection.start(queue: queue)
             self.receive(on: connection, buffer: Data(), bearerToken: bearerToken, generation: listenerGeneration)
@@ -175,14 +167,36 @@ final class AgentServer: ObservableObject {
     /// blocking the main actor; the per-connection deadline is the backstop for
     /// a peer that never finishes its request.
     func stop() {
-        generation = UUID()
         credentialTask?.cancel()
         credentialTask = nil
+        releaseListenerGeneration()
+        state = .stopped
+    }
+
+    /// A failed listener accepts nothing more, so the sockets it already
+    /// accepted are closed now rather than held for up to the request
+    /// deadline. Shares `stop()`'s teardown so the two cannot drift.
+    private func handleListenerFailure(_ message: String) {
+        releaseListenerGeneration()
+        state = .failed(message)
+    }
+
+    /// Test seam: performs exactly what the listener's `.failed` state does,
+    /// without asking the system to fail a real listener.
+    func failListenerForTesting(_ message: String) {
+        guard listener != nil else { return }
+        handleListenerFailure(message)
+    }
+
+    /// Releases this listener generation: the listener itself, every socket it
+    /// accepted, and their deadlines. The new generation makes a request still
+    /// in flight refuse rather than answer for a server that is gone.
+    private func releaseListenerGeneration() {
+        generation = UUID()
         listener?.cancel()
         listener = nil
         connections?.shutDown()
         connections = nil
-        state = .stopped
     }
 
     nonisolated private func receive(on connection: NWConnection, buffer: Data, searchedBytes: Int = 0,
@@ -288,20 +302,39 @@ final class AgentServer: ObservableObject {
 /// and removes entries while the main actor drains them on `stop()`, so every
 /// access is locked. Each entry owns the work item that closes a connection
 /// which never completed its request.
-private final class AcceptedConnections: @unchecked Sendable {
+///
+/// Internal rather than private so a test can drive it directly and prove
+/// that a closed connection is released by everything this registry put in
+/// place for it.
+final class AcceptedConnections: @unchecked Sendable {
+    /// A connection's registry identity, so a connection's own handler can
+    /// remove it without capturing — and therefore retaining — the
+    /// connection that owns that handler.
+    struct Key: Hashable, Sendable {
+        private let identifier: ObjectIdentifier
+
+        init(_ connection: NWConnection) {
+            identifier = ObjectIdentifier(connection)
+        }
+    }
+
     private let lock = NSLock()
-    private var deadlines: [ObjectIdentifier: DispatchWorkItem] = [:]
-    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    private var deadlines: [Key: DispatchWorkItem] = [:]
+    private var connections: [Key: NWConnection] = [:]
     private var isShutDown = false
 
     var count: Int { lock.withLock { connections.count } }
 
-    /// Registers `connection` and schedules its deadline. Returns false once
-    /// the registry has been shut down, meaning the caller must close the
-    /// connection instead of serving it.
+    /// Registers `connection`, observes its close, and schedules its deadline.
+    /// Returns false once the registry has been shut down, meaning the caller
+    /// must close the connection instead of serving it.
     func track(_ connection: NWConnection, on queue: DispatchQueue, deadline: TimeInterval) -> Bool {
-        let key = ObjectIdentifier(connection)
-        let timeout = DispatchWorkItem { connection.forceCancel() }
+        let key = Key(connection)
+        // A cancelled work item stays on the queue until its scheduled time,
+        // so holding the connection here would keep a closed socket alive for
+        // the rest of the deadline. The registry entry is the owner; the
+        // deadline only acts while that entry exists.
+        let timeout = DispatchWorkItem { [weak connection] in connection?.forceCancel() }
         let accepted: Bool = lock.withLock {
             guard !isShutDown else { return false }
             connections[key] = connection
@@ -309,13 +342,29 @@ private final class AcceptedConnections: @unchecked Sendable {
             return true
         }
         guard accepted else { return false }
+        // The connection owns this handler, so the handler must not own the
+        // connection back. Capturing it strongly made a real cycle for as long
+        // as the socket was open (connection → handler → connection); whether
+        // that cycle outlived the close depended on Network releasing the
+        // handler at a final state, which nothing promises. The key is a value
+        // instead, and the connection is alive whenever its own handler runs,
+        // so removal still happens exactly once. The registry is captured
+        // weakly for the same reason: it holds the connection, so a strong
+        // capture would close the loop through this entry instead.
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .cancelled, .failed:
+                self?.forget(key)
+            default:
+                break
+            }
+        }
         queue.asyncAfter(deadline: .now() + deadline, execute: timeout)
         return true
     }
 
     /// Drops a closed connection and the deadline that was watching it.
-    func forget(_ connection: NWConnection) {
-        let key = ObjectIdentifier(connection)
+    func forget(_ key: Key) {
         let timeout: DispatchWorkItem? = lock.withLock {
             connections.removeValue(forKey: key)
             return deadlines.removeValue(forKey: key)

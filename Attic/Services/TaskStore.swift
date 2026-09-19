@@ -217,6 +217,32 @@ final class TaskStore: ObservableObject {
     func reportAttachmentOpenFailure(named filename: String, error: Error, owner: UUID? = nil) {
         report("Couldn’t open “\(filename)”. \(error.localizedDescription)", owner: owner)
     }
+
+    /// The surface that owns a failure concerning `task`. A validated child's
+    /// failure belongs to its family panel, which is the only place that row
+    /// can be acted on; a root's belongs to the main panel. Orphaned,
+    /// self-linked and nested links resolve to nil because `parent(of:)` and
+    /// the family index already present them as roots — naming a family that
+    /// has no panel would hide the message from every surface.
+    private func familyOwner(of task: TaskItem) -> UUID? {
+        parent(of: task)?.id
+    }
+
+    /// The owner for an operation that names a family directly rather than a
+    /// row, such as creating a subtask. The family exists only while that id
+    /// is a live top-level task; anything else is a general failure.
+    private func familyOwner(forParentID parentID: UUID?) -> UUID? {
+        guard let parentID, let parent = task(withID: parentID),
+              parent.parentID == nil else { return nil }
+        return parentID
+    }
+
+    /// The same rule for an operation that only has an id: a row that is gone
+    /// leaves the failure general, which is where it can still be read.
+    private func familyOwner(forTaskID taskID: UUID) -> UUID? {
+        guard let task = task(withID: taskID) else { return nil }
+        return familyOwner(of: task)
+    }
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 
@@ -424,12 +450,15 @@ final class TaskStore: ObservableObject {
         guard !normalizedTitle.isEmpty else { return nil }
 
         let timestamp = now()
+        // Resolved before the first failure can be reported: a composer error
+        // belongs to the family panel that asked for the subtask.
+        let owner = familyOwner(forParentID: parentID)
         let manualOrder: Int64?
         do {
             if let parentID {
                 let parents = try storedTasks(matching: parentID)
                 guard parents.allSatisfy({ $0.parentID == nil && $0.status != .done }) else {
-                    report("Subtasks need an unfinished main task. Reopen the main task first.", owner: parentID)
+                    report("Subtasks need an unfinished main task. Reopen the main task first.", owner: owner)
                     return nil
                 }
             }
@@ -440,7 +469,7 @@ final class TaskStore: ObservableObject {
                 updatedAt: timestamp
             )
         } catch {
-            report(error.localizedDescription, owner: parentID)
+            report(error.localizedDescription, owner: owner)
             return nil
         }
         let task = TaskItem(
@@ -458,13 +487,13 @@ final class TaskStore: ObservableObject {
             do {
                 task.imageReferencesData = try JSONEncoder().encode(attachments)
             } catch {
-                report(error.localizedDescription, owner: parentID)
+                report(error.localizedDescription, owner: owner)
                 return nil
             }
         }
         context.insert(task)
         tasks.append(task)
-        guard save(owner: parentID) else { return nil }
+        guard save(owner: owner) else { return nil }
         return task
     }
 
@@ -494,11 +523,15 @@ final class TaskStore: ObservableObject {
         allowingUnfinishedSubtasks: Bool = false
     ) -> Bool {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
+        // Every refusal and every failure below concerns this row, so they all
+        // belong to the surface that owns it: a child's family panel, or the
+        // main panel for a root.
+        let owner = familyOwner(of: task)
         let replicas: [TaskItem]
         do {
             replicas = try storedTasks(matching: task.id)
         } catch {
-            report(error.localizedDescription, owner: nil)
+            report(error.localizedDescription, owner: owner)
             return false
         }
         let normalizedTitle = title.map(Self.normalized)
@@ -519,7 +552,7 @@ final class TaskStore: ObservableObject {
                     )
                     unfinishedChildren.fetchLimit = 1
                     if try !context.fetch(unfinishedChildren).isEmpty {
-                        report("Finish the subtasks before completing this task.", owner: nil)
+                        report("Finish the subtasks before completing this task.", owner: owner)
                         return false
                     }
                 }
@@ -529,12 +562,12 @@ final class TaskStore: ObservableObject {
                     )
                     doneParents.fetchLimit = 1
                     if try !context.fetch(doneParents).isEmpty {
-                        report("Reopen the main task before reopening a subtask.", owner: nil)
+                        report("Reopen the main task before reopening a subtask.", owner: owner)
                         return false
                     }
                 }
             } catch {
-                report(error.localizedDescription, owner: nil)
+                report(error.localizedDescription, owner: owner)
                 return false
             }
         }
@@ -561,7 +594,7 @@ final class TaskStore: ObservableObject {
                     updatedAt: timestamp
                 )
             } catch {
-                report(error.localizedDescription, owner: nil)
+                report(error.localizedDescription, owner: owner)
                 return false
             }
         } else {
@@ -585,7 +618,7 @@ final class TaskStore: ObservableObject {
             replica.completedAt = destinationCompletedAt
             replica.updatedAt = timestamp
         }
-        return save()
+        return save(owner: owner)
     }
 
     @discardableResult
@@ -672,13 +705,19 @@ final class TaskStore: ObservableObject {
         to taskID: UUID,
         importing: (_ ownerID: UUID, _ existing: [TaskImageReference]) async throws -> [TaskImageReference]
     ) async -> [UUID]? {
+        // The attachment owner is where the files are written; the error owner
+        // is the surface the user acted on. They differ for a parent, whose
+        // row exists in the main panel as well as in its own family panel —
+        // and a family panel is not opened for a failed import, so reporting
+        // there would leave nothing on screen.
+        let errorOwner = familyOwner(forTaskID: taskID)
         guard let ownerID = attachmentOwnerID(for: taskID),
               let initial = tasks.first(where: { $0.id == ownerID }) else {
-            report("Couldn’t attach files. The task is no longer available.", owner: nil)
+            report("Couldn’t attach files. The task is no longer available.", owner: errorOwner)
             return nil
         }
         guard !importingAttachmentTaskIDs.contains(ownerID) else {
-            report("Attic is still attaching files to “\(initial.title)”. Try again when it finishes.", owner: ownerID)
+            report("Attic is still attaching files to “\(initial.title)”. Try again when it finishes.", owner: errorOwner)
             return nil
         }
         importingAttachmentTaskIDs.insert(ownerID)
@@ -688,7 +727,7 @@ final class TaskStore: ObservableObject {
             imported = try await importing(ownerID, initial.attachments)
             guard let current = tasks.first(where: { $0.id == ownerID }) else {
                 await taskImageFiles.remove(imported)
-                report("Couldn’t attach files. The task was deleted while they were copied.", owner: nil)
+                report("Couldn’t attach files. The task was deleted while they were copied.", owner: errorOwner)
                 return nil
             }
             let data = try JSONEncoder().encode(current.attachments + imported)
@@ -696,13 +735,13 @@ final class TaskStore: ObservableObject {
                 replica.imageReferencesData = data
                 replica.updatedAt = now()
             }
-            guard save(owner: ownerID) else {
+            guard save(owner: errorOwner) else {
                 await taskImageFiles.remove(imported); return nil
             }
             return imported.map(\.id)
         } catch {
             await taskImageFiles.remove(imported)
-            reportAttachmentImportFailure(error, owner: ownerID)
+            reportAttachmentImportFailure(error, owner: errorOwner)
             return nil
         }
     }
@@ -767,16 +806,20 @@ final class TaskStore: ObservableObject {
     func removeAttachment(_ attachmentID: UUID, from taskID: UUID) -> Bool {
         guard let task = tasks.first(where: { $0.id == taskID }),
               let removed = task.attachments.first(where: { $0.id == attachmentID }) else { return false }
+        // Attachments are reached from the family panel — a parent’s through
+        // its own attachments view, a subtask’s through its row — so a failed
+        // removal has to be visible there rather than behind a closed panel.
+        let owner = familyOwner(of: task)
         do {
             let data = try JSONEncoder().encode(task.attachments.filter { $0.id != attachmentID })
             for replica in try storedTasks(matching: taskID) {
                 replica.imageReferencesData = data; replica.updatedAt = now()
             }
-            guard save() else { return false }
+            guard save(owner: owner) else { return false }
             removeAttachmentFiles([removed], excludingTaskIDs: [])
             return true
         } catch {
-            report(error.localizedDescription, owner: nil)
+            report(error.localizedDescription, owner: owner)
             return false
         }
     }
@@ -839,6 +882,10 @@ final class TaskStore: ObservableObject {
     @discardableResult
     func delete(_ task: TaskItem) -> Bool {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
+        // Read while the row is still there: the family a deleted subtask
+        // belonged to is the panel the user is looking at, and a refusal has
+        // to appear beside the row it refused.
+        let owner = familyOwner(of: task)
         let replicas: [TaskItem]
         do {
             // Only the task's own replicas and its direct children are read;
@@ -861,33 +908,33 @@ final class TaskStore: ObservableObject {
                 throw TaskReplicaMutationError.missingReplica(task.id)
             }
             guard groups.values.allSatisfy({ Set($0.map(\.parentID)).count == 1 }) else {
-                report("Conflicting subtask links prevent safe deletion. Refresh and resolve them first.", owner: nil)
+                report("Conflicting subtask links prevent safe deletion. Refresh and resolve them first.", owner: owner)
                 return false
             }
             guard family.allSatisfy({ item in
                 item.id == task.id || (task.parentID == nil && item.parentID == task.id)
             }) else {
-                report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: nil)
+                report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: owner)
                 return false
             }
             for childID in Set(family.map(\.id)).subtracting([task.id]) {
                 var nested = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == childID })
                 nested.fetchLimit = 1
                 if try !context.fetch(nested).isEmpty {
-                    report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: nil)
+                    report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: owner)
                     return false
                 }
             }
             replicas = family
         } catch {
-            report(error.localizedDescription, owner: nil)
+            report(error.localizedDescription, owner: owner)
             return false
         }
         let removedImages = replicas.flatMap(\.attachments)
         replicas.forEach(context.delete)
         let deletedIDs = Set(replicas.map(\.id))
         tasks.removeAll { deletedIDs.contains($0.id) }
-        guard save() else { return false }
+        guard save(owner: owner) else { return false }
         removeAttachmentFiles(removedImages, excludingTaskIDs: deletedIDs)
         return true
     }
@@ -1088,6 +1135,7 @@ final class TaskStore: ObservableObject {
             return false
         }
 
+        let owner = familyOwner(of: task)
         var group = (task.parentID.map(subtasks(of:)) ?? orderedTasks(for: task.status)).filter {
             $0.priority == task.priority && $0.parentID == task.parentID && $0.status == task.status
         }
@@ -1116,11 +1164,13 @@ final class TaskStore: ObservableObject {
             }
         } catch {
             context.rollback()
+            // refresh() clears the notice on success, so the reorder failure
+            // is reported after it, with the surface the row belongs to.
             refresh()
-            report(error.localizedDescription, owner: nil)
+            report(error.localizedDescription, owner: owner)
             return false
         }
-        return save()
+        return save(owner: owner)
     }
 
     func refresh() {

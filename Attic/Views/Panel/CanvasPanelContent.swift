@@ -411,6 +411,13 @@ struct CanvasPanelContent: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                // A Text label goes through the same pop-up button as an Image
+                // one: it is painted in the inherited tint, and the panel sets
+                // one, so this readout rested on the panel accent while every
+                // control beside it used Color.primary. `foregroundStyle` alone
+                // does not reach it
+                // (`testQuietMenuGlyphIsWhatActuallyColoursABorderlessMenuLabel`).
+                .atticQuietMenuGlyph(Color.primary)
                 .help("Zoom · pinch or use Command + / −")
                 .accessibilityLabel("Zoom \(Int((session.viewport.scale * 100).rounded())) percent")
                 .accessibilityIdentifier("canvas-zoom")

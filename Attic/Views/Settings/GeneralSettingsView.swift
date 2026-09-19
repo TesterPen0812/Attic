@@ -59,8 +59,6 @@ struct GeneralSettingsView: View {
             if let failure = SettingsVisibility.globalShortcutFailure(globalHotKey.registration) {
                 SettingsGroup("Shortcut") {
                     SettingsMessage(text: failure.settingsMessage, tone: .warning)
-                        .padding(.horizontal, 15)
-                        .padding(.vertical, 11)
                         .accessibilityIdentifier("settings-global-shortcut-unavailable")
                 }
             }

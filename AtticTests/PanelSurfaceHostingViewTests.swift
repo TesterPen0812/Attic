@@ -13,75 +13,180 @@ final class PanelSurfaceHostingViewTests: XCTestCase {
     }
 
     private enum MenuGlyphTreatment {
+        case untreated
         case foregroundStyleOnly
         case quiet
     }
 
+    private enum MenuGlyphLabel {
+        /// The row and toolbar menus.
+        case symbol
+        /// The canvas zoom readout, which is a `Text` label.
+        case text
+    }
+
+    /// The panel supplies its own accent (`AtticPanelView` sets `.tint` and
+    /// `.accentColor`), so the probe supplies one too: `ambient`. Nothing here
+    /// reads the user's system accent, which is why this test says the same
+    /// thing on every machine — previously a red or orange accent would have
+    /// made the untreated case look like the requested colour.
     private struct MenuGlyphProbe: View {
+        static let ambient = Color.blue
+        static let requested = Color.red
+
         let treatment: MenuGlyphTreatment
+        let label: MenuGlyphLabel
 
         var body: some View {
             let menu = Menu {
                 Button("Action") {}
             } label: {
-                Image(systemName: "ellipsis")
+                switch label {
+                case .symbol:
+                    Image(systemName: "ellipsis")
+                        .frame(width: 44, height: 36)
+                case .text:
+                    Text("100%")
+                        .font(.system(size: 10, weight: .medium, design: .rounded).monospacedDigit())
+                        .frame(width: 44, height: 36)
+                }
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .frame(width: 40, height: 40)
+            .fixedSize()
 
             return Group {
                 switch treatment {
-                case .foregroundStyleOnly: menu.foregroundStyle(Color.red)
-                case .quiet: menu.atticQuietMenuGlyph(.red)
+                case .untreated: menu
+                case .foregroundStyleOnly: menu.foregroundStyle(Self.requested)
+                case .quiet: menu.atticQuietMenuGlyph(Self.requested)
                 }
             }
-            .frame(width: 60, height: 60)
+            .frame(width: 70, height: 60)
             .background(Color.white)
+            .tint(Self.ambient)
+            .accentColor(Self.ambient)
         }
     }
 
-    /// Pixels painted in the colour the probe asks for.
-    private func renderedProbeColourCount(_ treatment: MenuGlyphTreatment) -> Int {
-        let host = NSHostingView(rootView: MenuGlyphProbe(treatment: treatment))
-        host.frame = NSRect(x: 0, y: 0, width: 60, height: 60)
-        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 60, height: 60),
+    private struct MenuGlyphPixels {
+        /// Pixels painted in the colour the probe asked for.
+        let requested: Int
+        /// Pixels painted in the ambient accent the probe supplied.
+        let ambient: Int
+    }
+
+    private func renderedProbePixels(_ treatment: MenuGlyphTreatment,
+                                     label: MenuGlyphLabel) -> MenuGlyphPixels {
+        let host = NSHostingView(rootView: MenuGlyphProbe(treatment: treatment, label: label))
+        host.frame = NSRect(x: 0, y: 0, width: 70, height: 60)
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 70, height: 60),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
-        for _ in 0..<6 {
+        for _ in 0..<8 {
             host.layoutSubtreeIfNeeded()
             CATransaction.flush()
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         }
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 0 }
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            return MenuGlyphPixels(requested: 0, ambient: 0)
+        }
         host.cacheDisplay(in: host.bounds, to: rep)
-        var red = 0
+        var requested = 0, ambient = 0
         for x in 0..<rep.pixelsWide {
             for y in 0..<rep.pixelsHigh {
                 guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
                 let r = pixel.redComponent, g = pixel.greenComponent, b = pixel.blueComponent
-                if r > g + 0.15 && r > b + 0.15 { red += 1 }
+                if r > g + 0.15 && r > b + 0.15 { requested += 1 }
+                if b > r + 0.15 && b > g + 0.15 { ambient += 1 }
             }
         }
-        return red
+        return MenuGlyphPixels(requested: requested, ambient: ambient)
     }
 
-    /// A `.borderlessButton` `Menu` with an `Image` label renders through an
-    /// AppKit pop-up button that paints the symbol as a tinted template and
-    /// ignores the label's own `foregroundStyle` — which is why every such menu
-    /// outside the task rows showed system accent at rest. This pins the
-    /// treatment that actually reaches the cell: it fails if
-    /// `atticQuietMenuGlyph` is ever reduced to `foregroundStyle` alone.
+    /// A `.borderlessButton` `Menu` renders its label through an AppKit pop-up
+    /// button that paints it in the inherited tint and ignores the label's own
+    /// `foregroundStyle`. That is why every such menu outside the task rows
+    /// rested on the panel accent, and it is true of a `Text` label as well as
+    /// a symbol — which is what the canvas zoom readout is.
+    ///
+    /// This pins the treatment that actually reaches the cell: it fails if
+    /// `atticQuietMenuGlyph` is ever reduced to `foregroundStyle` alone, and it
+    /// fails if a label stops being given a colour of its own.
     ///
     /// It asserts colour reach only. Whether the resting glyph looks right on
     /// each real surface is native UAT, as the audit's own verification says.
-    func testQuietMenuGlyphIsWhatActuallyColoursABorderlessImageMenu() {
-        XCTAssertEqual(renderedProbeColourCount(.foregroundStyleOnly), 0,
-                       "foregroundStyle alone never reaches the pop-up button's glyph")
-        XCTAssertGreaterThan(renderedProbeColourCount(.quiet), 0,
-                             "atticQuietMenuGlyph must colour the glyph itself")
+    func testQuietMenuGlyphIsWhatActuallyColoursABorderlessMenuLabel() {
+        for label in [MenuGlyphLabel.symbol, .text] {
+            let untreated = renderedProbePixels(.untreated, label: label)
+            XCTAssertGreaterThan(untreated.ambient, 0,
+                                 "\(label) is painted in the inherited tint when nothing claims it")
+            XCTAssertEqual(untreated.requested, 0, "and never in a colour nobody asked for")
+
+            let foregroundOnly = renderedProbePixels(.foregroundStyleOnly, label: label)
+            XCTAssertEqual(foregroundOnly.requested, 0,
+                           "foregroundStyle alone never reaches the pop-up button's \(label)")
+            XCTAssertGreaterThan(foregroundOnly.ambient, 0,
+                                 "\(label) still rests on the inherited tint")
+
+            let quiet = renderedProbePixels(.quiet, label: label)
+            XCTAssertGreaterThan(quiet.requested, 0,
+                                 "atticQuietMenuGlyph must colour the \(label) itself")
+            XCTAssertEqual(quiet.ambient, 0, "and must leave none of the tint behind")
+        }
+    }
+
+    /// Rows dimmed under the drawer's or the panel's fixed chrome have to be
+    /// inert as well: the mask only changes how they look. The shield is the
+    /// one piece that makes them unclickable, and it is sized from the same
+    /// band and fade the mask uses.
+    func testPointerShieldsOwnTheBandsTheMaskDims() {
+        let child = NSView()
+        let size = CGSize(width: 272, height: 420)
+        let shield = SavedNotesDrawerLayout.shieldHeight
+        let host = NSHostingView(rootView: ZStack {
+            HitOwningContent(view: child).frame(width: size.width, height: size.height)
+            AtticPointerShield(height: shield)
+                .frame(maxHeight: .infinity, alignment: .top)
+            AtticPointerShield(height: shield)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+        }
+        .frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000,
+                                                  width: size.width, height: size.height),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded()
+
+        func hit(atDistanceFromTop distance: CGFloat) -> NSView? {
+            let point = CGPoint(x: size.width / 2,
+                                y: host.isFlipped ? distance : size.height - distance)
+            return host.hitTest(host.convert(point, to: host.superview))
+        }
+
+        // Every point a button occupies, and every point the fade covers, is
+        // held by the shield rather than by a row underneath it.
+        for distance in stride(from: CGFloat(2), through: shield - 2, by: 8) {
+            XCTAssertFalse(hit(atDistanceFromTop: distance) === child,
+                           "a row is reachable \(distance)pt under the top chrome")
+            XCTAssertFalse(hit(atDistanceFromTop: size.height - distance) === child,
+                           "a row is reachable \(distance)pt under the bottom chrome")
+        }
+        // And the workspace between them still belongs to the rows.
+        for distance in stride(from: shield + 4, through: size.height - shield - 4, by: 24) {
+            XCTAssertTrue(hit(atDistanceFromTop: distance) === child,
+                          "a resting row lost its press at \(distance)pt")
+        }
+        // A degenerate measured height collapses the shield instead of making
+        // the whole list inert.
+        XCTAssertEqual(AtticPointerShield.shieldedHeight(shield), shield)
+        XCTAssertEqual(AtticPointerShield.shieldedHeight(.nan), 0)
+        XCTAssertEqual(AtticPointerShield.shieldedHeight(.infinity), 0)
+        XCTAssertEqual(AtticPointerShield.shieldedHeight(-40), 0)
     }
 
     func testEveryHeaderPointExceptControlsRoutesToTheHost() {

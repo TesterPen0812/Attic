@@ -664,9 +664,20 @@ enum SavedNotesDrawerLayout {
         )
     }
 
+    /// The band a pointer shield covers at each edge, the same rule the task
+    /// list uses: the chrome band plus the fade, so nothing the mask has
+    /// dimmed can be pressed or hovered.
+    static var shieldHeight: CGFloat { chromeBandHeight + fadeLength }
+
+    /// Where a row comes to rest. Past the shield, not merely past the band:
+    /// the task list's first row overlaps its own shield by a few points, and
+    /// at this drawer's row height that would leave a visible, fully opaque
+    /// row with an inert top edge.
+    static var rowRestingInset: CGFloat { shieldHeight }
+
     /// The drawer's empty state sits below the top fade so it is never
     /// rendered half-faded by the mask that exists for scrolling rows.
-    static var emptyStateTopInset: CGFloat { chromeBandHeight + fadeLength }
+    static var emptyStateTopInset: CGFloat { shieldHeight }
 }
 
 /// Hover and keyboard focus feedback for the panel's quick-entry submit.

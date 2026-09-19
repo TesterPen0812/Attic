@@ -116,18 +116,12 @@ struct AtticPanelView: View {
         // independently of these shapes.
         .overlay(alignment: .top) {
             if uiState.selectedSection.isTaskBased {
-                Color.clear
-                    .frame(height: taskTopObscuredHeight + TaskScrollMaskLayout.fadeLength)
-                    .contentShape(Rectangle())
-                    .accessibilityHidden(true)
+                AtticPointerShield(height: taskTopObscuredHeight + TaskScrollMaskLayout.fadeLength)
             }
         }
         .overlay(alignment: .bottom) {
             if uiState.selectedSection.isTaskBased {
-                Color.clear
-                    .frame(height: taskBottomObscuredHeight + TaskScrollMaskLayout.fadeLength)
-                    .contentShape(Rectangle())
-                    .accessibilityHidden(true)
+                AtticPointerShield(height: taskBottomObscuredHeight + TaskScrollMaskLayout.fadeLength)
             }
         }
         .overlay(alignment: .top) {

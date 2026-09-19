@@ -225,13 +225,18 @@ final class AppSettings: ObservableObject {
     /// Last on-screen frame of the pinned subtask mini-window. Persisted as
     /// a rect string so reopening restores position; invalid or stale values
     /// fall back to anchored placement beside the main panel.
+    ///
+    /// The size is bounded the same way a restored panel dimension is. A
+    /// width of `.infinity` passes `>= 1`, and a finite `1e30` passes as well;
+    /// either one then reaches window placement and numeric formatting, which
+    /// cannot use it. A frame the user really chose on a display that is not
+    /// attached right now is far inside these limits, so it still restores.
     var pinnedSubtaskWindowFrame: CGRect? {
         get {
             guard let stored = defaults.string(forKey: Key.pinnedSubtaskWindowFrame),
                   !stored.isEmpty else { return nil }
             let rect = NSRectFromString(stored)
-            guard rect.width >= 1, rect.height >= 1,
-                  rect.origin.x.isFinite, rect.origin.y.isFinite else { return nil }
+            guard Self.isRestorableFrame(rect) else { return nil }
             return rect
         }
         set {
@@ -404,5 +409,19 @@ final class AppSettings: ObservableObject {
     ) -> Double {
         guard value.isFinite, value <= maximumRestorableDimension else { return fallback }
         return max(value, minimum)
+    }
+
+    /// A stored window frame Attic is willing to restore: a usable size, and
+    /// every component finite and within the magnitude a display could
+    /// justify. An origin may be negative — a window on a display left of or
+    /// below the main one — so only its magnitude is bounded.
+    static func isRestorableFrame(_ rect: CGRect) -> Bool {
+        guard rect.origin.x.isFinite, rect.origin.y.isFinite,
+              rect.width.isFinite, rect.height.isFinite else { return false }
+        guard rect.width >= 1, rect.height >= 1,
+              rect.width <= maximumRestorableDimension,
+              rect.height <= maximumRestorableDimension else { return false }
+        return abs(rect.origin.x) <= maximumRestorableDimension
+            && abs(rect.origin.y) <= maximumRestorableDimension
     }
 }

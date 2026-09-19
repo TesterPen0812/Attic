@@ -213,6 +213,102 @@ final class AgentServerIntegrationTests: XCTestCase {
         XCTAssertEqual(server.openConnectionCount, 0, "a completed request must not stay registered")
     }
 
+    /// A closed connection must be let go of by everything the registry put in
+    /// place for it, not just dropped from the dictionary. The deadline is the
+    /// case that bites: a cancelled `DispatchWorkItem` stays on its queue until
+    /// its scheduled time, so one that held the connection kept a closed socket
+    /// alive for the rest of the deadline.
+    ///
+    /// It does not prove anything about the handler's own capture: Network
+    /// releases a connection's state handler when it reaches a final state, so
+    /// that cycle cannot be observed from here. Capturing the key by value
+    /// instead of the connection is reviewed, not asserted.
+    func testATrackedConnectionIsReleasedOnceItCloses() async throws {
+        let registry = AcceptedConnections()
+        let queue = DispatchQueue(label: "AgentServerTests.registry")
+        weak var released: NWConnection?
+
+        do {
+            let connection = NWConnection(host: .ipv4(.loopback), port: 9, using: .tcp)
+            released = connection
+            XCTAssertTrue(registry.track(connection, on: queue, deadline: 60))
+            XCTAssertEqual(registry.count, 1)
+            XCTAssertNotNil(released)
+
+            // Started so the state handler the registry installed is actually
+            // delivered; closing it is then the only thing that removes the
+            // entry, whether the close arrives as .cancelled or .failed.
+            connection.start(queue: queue)
+            connection.cancel()
+            await eventually { registry.count == 0 }
+        }
+
+        // The registry has let go, and nothing else it scheduled may still be
+        // holding on: the deadline is still pending on the queue.
+        await eventually { released == nil }
+        XCTAssertNil(released, "a closed connection must not be kept alive by its pending deadline")
+        XCTAssertEqual(registry.count, 0)
+    }
+
+    /// A connection that never closes on its own is still released once the
+    /// registry is shut down, so `stop()` frees the sockets as well as closing
+    /// them.
+    func testShutDownReleasesEverySocketItClosed() async throws {
+        let registry = AcceptedConnections()
+        let queue = DispatchQueue(label: "AgentServerTests.registry.shutdown")
+        weak var released: NWConnection?
+
+        do {
+            let connection = NWConnection(host: .ipv4(.loopback), port: 9, using: .tcp)
+            released = connection
+            XCTAssertTrue(registry.track(connection, on: queue, deadline: 60))
+            connection.start(queue: queue)
+            registry.shutDown()
+            XCTAssertEqual(registry.count, 0)
+            XCTAssertFalse(registry.track(connection, on: queue, deadline: 60),
+                           "a shut-down registry refuses further sockets")
+        }
+
+        await eventually { released == nil }
+        XCTAssertNil(released)
+    }
+
+    /// A listener that fails keeps nothing: it will accept no further socket,
+    /// so the ones it already accepted are closed immediately instead of being
+    /// held until their request deadline elapses.
+    func testAFailedListenerDrainsItsAcceptedSocketsImmediately() async throws {
+        let token = try AgentAccessTokenStore.generateToken()
+        let configured = AgentServer(
+            port: 0,
+            bearerToken: token,
+            handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore())),
+            // Long enough that a deadline cannot be what closes the socket.
+            requestDeadline: 600
+        )
+        defer { configured.stop() }
+        let port = try await start(configured)
+
+        let idle = IdleSocket(port: port)
+        defer { idle.close() }
+        idle.open()
+        await eventually { configured.openConnectionCount == 1 }
+        XCTAssertFalse(idle.isClosed)
+
+        configured.failListenerForTesting("Listener refused")
+
+        XCTAssertEqual(configured.state, .failed("Listener refused"))
+        XCTAssertEqual(configured.openConnectionCount, 0,
+                       "a failed listener must not leave an accepted socket behind")
+        XCTAssertNil(configured.boundPort)
+        await eventually { idle.isClosed }
+        XCTAssertTrue(idle.isClosed, "the peer must see the close rather than wait out the deadline")
+
+        // And the failure is not terminal for the object: a restart serves.
+        let nextPort = try await start(configured)
+        let served = try await post(nextPort, token: token, method: "ping")
+        XCTAssertEqual(served.status, 200)
+    }
+
     func testPlaceholderAndEmptyCredentialsNeverOpenListener() throws {
         for token in ["", "attic-local-only-agent-disabled", "attic-test-agent-token"] {
             let server = AgentServer(port: 0, bearerToken: token, handler: MCPRequestHandler(tools: AgentTaskTools(store: try makeTestStore())))
