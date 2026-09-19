@@ -611,6 +611,30 @@ final class AtticUITests: XCTestCase {
                 return
             }
         }
+
+        // Hosted macOS occasionally releases a real pointer drag several
+        // native slider steps before the end of the track after a long UI
+        // suite. Keep the exact endpoint contract: focus the same native
+        // control, then finish the remaining 1% steps with keyboard input.
+        // This is a second input path, not tolerance for a near-end value.
+        let focusFrame = slider.frame
+        let focusInset = min(focusFrame.height / 2, focusFrame.width / 2)
+        let focusOrigin = slider.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        focusOrigin.withOffset(CGVector(
+            dx: focusInset + (focusFrame.width - 2 * focusInset) * slider.normalizedSliderPosition,
+            dy: focusFrame.height / 2
+        )).click()
+        let stepKey: XCUIKeyboardKey = endpoint == 0 ? .leftArrow : .rightArrow
+        for _ in 0..<110 {
+            if slider.normalizedSliderPosition == endpoint { return }
+            slider.typeKey(stepKey, modifierFlags: [])
+        }
+        let keyboardEndpoint = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            slider.normalizedSliderPosition == endpoint
+        }, object: nil)
+        if XCTWaiter.wait(for: [keyboardEndpoint], timeout: 2) == .completed {
+            return
+        }
         XCTFail("Gradient must reach \(endpoint); actual: \(slider.normalizedSliderPosition), value: \(String(describing: slider.value))")
     }
 

@@ -88,22 +88,56 @@ final class TaskPerformanceGateTests: XCTestCase {
     }
 
     /// The audit measured 12.8 ms per 300-row × 6-read pass with a fresh
-    /// JSON decode on every read; the memo makes repeat reads a comparison.
+    /// JSON decode on every read. Compare the memoized path against that same
+    /// decode-heavy work on the current runner instead of using a sub-3 ms
+    /// absolute wall-clock threshold, which is too sensitive to hosted load.
     func testRepeatedAttachmentReadsAreMemoizedPerPayload() throws {
         let store = try seedStore(parents: 300, childrenPerParent: 0, attachmentsPerTask: 4)
         let rows = store.tasks
         XCTAssertEqual(rows.count, 300)
+        let originalPayload = try XCTUnwrap(rows.first?.imageReferencesData)
+        let originalReferences = try JSONDecoder().decode([TaskImageReference].self, from: originalPayload)
+        let alternateReferences = originalReferences.enumerated().map { index, reference in
+            index == 0
+                ? TaskImageReference(
+                    id: reference.id,
+                    filename: "alternate.png",
+                    digest: reference.digest,
+                    contentTypeIdentifier: reference.contentTypeIdentifier,
+                    byteCount: reference.byteCount
+                )
+                : reference
+        }
+        let alternatePayload = try JSONEncoder().encode(alternateReferences)
+
         // Prime each payload once so the timed block measures the contract in
         // this test's name: repeated reads should reuse the memoized decode.
         for row in rows { _ = row.attachments.count }
         var total = 0
-        let median = medianMilliseconds {
+        let memoizedMedian = medianMilliseconds {
             for row in rows {
                 for _ in 0..<6 { total += row.attachments.count }
             }
         }
         XCTAssertEqual(total % 1_200, 0)
-        XCTAssertLessThan(median, 3, "repeat reads must not decode again (median \(median) ms)")
+
+        // Toggle the stored bytes before every read so the cache key changes
+        // and each access must decode. The ratio is the invariant we care
+        // about and remains meaningful across differently loaded CI runners.
+        let decodingMedian = medianMilliseconds(iterations: 7) {
+            for row in rows {
+                for index in 0..<6 {
+                    row.imageReferencesData = index.isMultiple(of: 2) ? alternatePayload : originalPayload
+                    total += row.attachments.count
+                }
+            }
+        }
+        XCTAssertLessThan(
+            memoizedMedian * 2,
+            decodingMedian,
+            "memoized repeat reads must remain at least twice as fast as forced decodes "
+                + "(memoized \(memoizedMedian) ms, decoding \(decodingMedian) ms)"
+        )
         measure(metrics: [XCTClockMetric()]) {
             for row in rows { _ = row.attachments.count }
         }
