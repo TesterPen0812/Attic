@@ -185,6 +185,18 @@ final class AppCoordinator: ObservableObject {
     /// The auxiliary subtask surfaces (transient hover panel and the single
     /// pinned mini-window) owned by the panel controller.
     var subtaskPanels: SubtaskPanelController { panelController.subtaskPanels }
+
+    /// Capture seam for the appearance harness: seeds one family into the
+    /// in-memory UI-testing store and pins its checklist window, so the
+    /// auxiliary surface can be photographed hands-off next to the panel.
+    private func presentSampleSubtaskWindowsForUITesting() {
+        guard let parent = store.create(title: "Plan the launch") else { return }
+        _ = store.create(title: "Write the announcement", parentID: parent.id)
+        _ = store.create(title: "Check the build", parentID: parent.id)
+        DispatchQueue.main.async { [weak self] in
+            self?.subtaskPanels.pinFamily(parent.id)
+        }
+    }
     private let settingsWindowController: SettingsWindowController
     private let hoverMonitor: CornerHoverMonitor
     private let agentServer: AgentServer
@@ -372,6 +384,9 @@ final class AppCoordinator: ObservableObject {
                 hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
             } else {
                 hoverMonitor.keepVisibleForUITesting()
+            }
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PRESENT_SUBTASKS"] == "1" {
+                presentSampleSubtaskWindowsForUITesting()
             }
             return
         }
