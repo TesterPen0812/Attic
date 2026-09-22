@@ -104,7 +104,7 @@ Tint is one layer across the top of the panel, in one of two forms. Both are dra
 
 ### 4.1 Original: the neutral shade
 
-Original is Attic's neutral palette, so its Tint has no colour: it is black in Dark and white in Light (`PanelNeutralShade`). Original's coloured (blue) wash from the previous model is gone.
+Original is Attic's neutral palette, so its Tint has no colour: it is black in Dark and a light grey (0.84, brightness 214) in Light (`PanelNeutralShade`). Light's shade was white until the owner found it had almost no effect: the bright glass already passes a light desktop almost untouched (254), so white over it changed nothing over light windows. The grey reads as a soft shade at the top that fades out, and near-black text keeps about 11:1 on it. Original's coloured (blue) wash from the previous model is gone.
 
 **What it is matched to.** The owner found the first version (the old Clear crown over the Tint-Off foundation) still barely see-through next to the macOS 27 Siri panel. Over a white page Siri's panel brightness (0 = black, 255 = white) runs almost linearly: about 5 at the top, 50 at a quarter, 100 at mid-height, 145 at three quarters and 175–180 at the bottom, where white text is only about 1.9:1. Attic's Bold ran 27 → 67 → 121 and stayed dark lower down, for two reasons: `.regular` Liquid Glass in its Dark appearance greys a white page to about 143 before anything is added, and the Tint-Off foundation and a crown that faded early added more. A prototype showed that the same glass in its **Light** appearance plus a straight black ramp reproduces Siri (15 / 48 / 101 / 145 / 170).
 
@@ -118,11 +118,11 @@ Original is Attic's neutral palette, so its Tint has no colour: it is black in D
 
 So Bold is the Siri ramp wherever it is already readable. Subtle and Vivid are lighter at the top and follow the floor lower down. The floor never clamps and there is no calibration table.
 
-**Unchanged.** Tint Off keeps the flat Tint-Off foundation (Glass 3.0:1, Frosted 3.5:1, §2) with the surface in the panel's own appearance. On Solid, under Reduce Transparency (which draws Solid), and on every surface below macOS 26, the shade is drawn over the usual foundation with the profile above. There it can only raise contrast: it moves the surface toward black under white text (Dark) and toward white under dark text (Light). The custom palettes' accent wash (§4.2) is untouched.
+**Unchanged.** Tint Off keeps the flat Tint-Off foundation (Glass 3.0:1, Frosted 3.5:1, §2) with the surface in the panel's own appearance. On Solid, under Reduce Transparency (which draws Solid), and on every surface below macOS 26, the shade is drawn over the usual foundation with the profile above. In Dark it can only raise contrast (it moves the surface toward black under white text). In Light the grey lowers contrast on a white surface, but never below 4.75:1. The custom palettes' accent wash (§4.2) is untouched.
 
 **The trade-off, stated plainly.** Over a pure white page, the lower rows of a Dark Glass panel with Original's Tint read at about 2:1, like Siri's, where Tint Off keeps 3:1. The top stays at 4.75:1 or better. Frosted keeps 2.5:1 at the bottom. Typical desktops read far better than a pure white page.
 
-**Tests.** `testShadeCarriesReadabilityOnNativeTranslucentSurfaces` checks each stop meets its floor over the bright surface, is never darker than the ramp or floor asks for, and is monotone by step. `testShadeKeepsItsFloorOverEveryDesktopExtreme` checks the floor at every 5% over all eight desktop extremes through the bright surface's measured endpoints. `testBoldGlassFollowsTheSiriRamp` pins Bold over a white page to the Siri numbers. `testShadeOverTheUsualSurfaceNeverLowersContrast` covers Solid and the pre-macOS 26 path.
+**Tests.** `testShadeCarriesReadabilityOnNativeTranslucentSurfaces` checks each stop meets its floor over the bright surface, is never darker than the ramp or floor asks for, and is monotone by step. `testShadeKeepsItsFloorOverEveryDesktopExtreme` checks the floor at every 5% over all eight desktop extremes through the bright surface's measured endpoints. `testBoldGlassFollowsTheSiriRamp` pins Bold over a white page to the Siri numbers. `testShadeOverTheUsualSurfaceKeepsTheReadableTarget` covers Solid and the pre-macOS 26 path. `testLightShadeIsVisibleOverAWhitePage` checks that Light Bold's top is a clear grey against Tint Off over a white page and lightens toward the bottom.
 
 **Measured in the running app** (September 2026, macOS 27, full-screen white page behind Dark and black page behind Light, brightness averaged in the empty interior at 3 / 25 / 50 / 75 / 97% of the panel height, contrast against the secondary foreground 230 in Dark and 31 in Light):
 
@@ -135,11 +135,19 @@ So Bold is the Siri ramp wherever it is already readable. Subtle and Vivid are l
 | Dark Glass Bold, length 50% | 16 (15.2:1) | 109 (4.2:1) | 124 (3.4:1) | 139 (2.7:1) | 158 (2.1:1) |
 | Dark Frosted Bold | 10 (15.9:1) | 48 (10.6:1) | 104 (4.5:1) | 130 (3.1:1) | 142 (2.6:1) |
 | Dark Glass Tint Off | 131 (3.0:1) | 132 (3.0:1) | 132 (3.0:1) | 132 (3.0:1) | 132 (3.0:1) |
-| Light Glass Bold (over black) | 249 (15.6:1) | 225 (12.6:1) | 191 (8.9:1) | 163 (6.5:1) | 144 (5.2:1) |
+| Light Glass Bold (over black) | 208 (10.7:1) | 191 (9.0:1) | 167 (6.9:1) | 148 (5.4:1) | 135 (4.6:1) |
 
 The first capture used the prototype's 236 for bright Glass and came out lighter than the model at every height (Bold's bottom at 171, 1.84:1). Solving back from it gave 254 at every sampled height, which is what `brightUnderlay` now uses. Every sample then sits on or within 0.02 of its floor, and Bold is within about 10 levels of Siri down to three quarters. Only the bottom is darker (158 against 175–180), because the 2:1 floor stops short of Siri's 1.9:1. In Dark, Subtle and Vivid differ only near the top, because the floor sets the rest.
 
-On Original Light Solid, whose surface is exactly `#FFFFFF`, a white shade is invisible by construction.
+Light over a **white** page, after the change to the grey shade (Tint Off measures 251–253 throughout):
+
+| configuration | 3% | 25% | 50% | 75% | 97% |
+|---|---:|---:|---:|---:|---:|
+| Light Glass Subtle | 239 | 242 | 245 | 248 | 249 |
+| Light Glass Vivid | 228 | 233 | 238 | 243 | 246 |
+| Light Glass Bold | 217 | 223 | 231 | 238 | 242 |
+
+Over a mid-grey page (Tint Off 189) the steps stay close together (Bold 213 → 195), because the glass over mid-grey is already about the shade's grey. A single neutral shade cannot stand out over every desktop brightness; this one is chosen to show over light windows, the common case in Light. On Original Light Solid (`#FFFFFF`) the shade now shows as the same soft grey top.
 
 ### 4.2 Custom palettes: the calibrated accent wash
 

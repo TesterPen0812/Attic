@@ -683,7 +683,7 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     /// Whether this treatment's Tint is Original's neutral shade.
     var usesNeutralTint: Bool { theme.usesNeutralTint }
 
-    /// The wash colour: black or white for the neutral shade, otherwise the
+    /// The wash colour: black or a light grey for the neutral shade, otherwise the
     /// palette accent's hue, saturated.
     var washColor: AtticThemeColor {
         usesNeutralTint

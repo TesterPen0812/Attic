@@ -109,8 +109,14 @@ enum PanelNeutralShade {
         }
     }
 
+    /// Black in Dark. In Light, a soft grey rather than white: the bright
+    /// glass already passes a light desktop almost untouched, so a white
+    /// shade vanished over light windows. Near-black text keeps about 11:1
+    /// on this grey.
+    static let lightShade = 0.84
+
     static func color(for appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
-        let value = appearance == .dark ? 0.0 : 1.0
+        let value = appearance == .dark ? 0.0 : lightShade
         return AtticThemeColor(red: value, green: value, blue: value)
     }
 
@@ -138,8 +144,8 @@ enum PanelNeutralShade {
         return last.opacity
     }
 
-    /// The shade as the readability layer: at each sampled height, the darker
-    /// (Dark) or lighter (Light) of the step's ramp and the least shade that
+    /// The shade as the readability layer: at each sampled height, the more
+    /// opaque of the step's ramp and the least shade that
     /// keeps both foregrounds at `readableFloor` over `underlay`.
     static func readableStops(
         level: PanelTintLevel,

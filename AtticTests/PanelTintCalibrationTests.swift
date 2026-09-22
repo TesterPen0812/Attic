@@ -352,7 +352,7 @@ final class PanelTintCalibrationTests: XCTestCase {
         XCTAssertEqual(PanelNeutralShade.profile.map(\.location), [0, 0.25, 0.5, 0.75, 1])
         XCTAssertEqual(PanelTintLevel.allCases.map(PanelNeutralShade.strength(for:)), [0, 0.35, 0.65, 1])
         XCTAssertEqual(PanelNeutralShade.color(for: .dark), .init(red: 0, green: 0, blue: 0))
-        XCTAssertEqual(PanelNeutralShade.color(for: .light), .init(red: 1, green: 1, blue: 1))
+        XCTAssertEqual(PanelNeutralShade.color(for: .light), .init(red: 0.84, green: 0.84, blue: 0.84))
         XCTAssertTrue(PanelNeutralShade.stops(level: .off, length: 1).isEmpty)
         XCTAssertEqual(PanelNeutralShade.stops(level: .vivid, length: 0.5).map(\.location), [0, 0.125, 0.25, 0.375, 0.5])
         XCTAssertEqual(PanelNeutralShade.rampOpacity(level: .bold, length: 0.5, at: 0.9), 0.25, accuracy: 1e-12)
@@ -453,9 +453,25 @@ final class PanelTintCalibrationTests: XCTestCase {
         XCTAssertGreaterThan(brightness(1), flatBrightness + 20, "the lower edge is more see-through than flat Glass")
     }
 
-    /// On Solid and below macOS 26 the shade is drawn over the usual surface
-    /// and only moves it away from the text colour.
-    func testShadeOverTheUsualSurfaceNeverLowersContrast() {
+    /// In Light the shade must show over a light desktop, where the bright
+    /// glass passes a white page almost untouched: Bold's top is a clear grey
+    /// against Tint Off, and it lightens toward the bottom.
+    func testLightShadeIsVisibleOverAWhitePage() {
+        for kind in [Kind.glass, .frosted] {
+            let white = brightMeasuredUnderlay(kind: kind, desktop: .init(red: 1, green: 1, blue: 1))
+            let off = treatment(.original, .light, kind).compositedSurface(over: white).red * 255
+            let bold = treatment(.original, .light, kind, tint: .bold)
+            let top = bold.compositedSurface(over: white, location: 0).red * 255
+            let bottom = bold.compositedSurface(over: white, location: 1).red * 255
+            XCTAssertLessThan(top, off - 20, "\(kind.rawValue)")
+            XCTAssertGreaterThan(bottom, top + 15, "\(kind.rawValue)")
+        }
+    }
+
+    /// On Solid and below macOS 26 the shade is drawn over the usual surface.
+    /// In Dark it only moves the surface away from the text colour; in Light
+    /// the grey may lower contrast, but never below the readable target.
+    func testShadeOverTheUsualSurfaceKeepsTheReadableTarget() {
         for appearance in AtticPanelThemeAppearance.allCases {
             for (kind, credits) in [(Kind.solid, true), (.solid, false), (.glass, false), (.frosted, false)] {
                 let plain = treatment(.original, appearance, kind, creditsNativeSurface: credits)
@@ -473,7 +489,10 @@ final class PanelTintCalibrationTests: XCTestCase {
                                     palette: plain.palette, over: plain.compositedSurface(over: desktop, location: location))
                                 let after = PanelTintCalibration.minimumForegroundContrast(
                                     palette: shaded.palette, over: shaded.compositedSurface(over: desktop, location: location))
-                                XCTAssertGreaterThanOrEqual(after, before - 1e-9, "\(context) \(desktop.hexString) @\(location)")
+                                let floor = appearance == .dark
+                                    ? before
+                                    : min(before, AtticPanelSurfaceTreatment.readableContrastTarget)
+                                XCTAssertGreaterThanOrEqual(after, floor - 1e-9, "\(context) \(desktop.hexString) @\(location)")
                             }
                         } } }
                     }
