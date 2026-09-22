@@ -105,6 +105,20 @@ it is those three places plus the Settings toggle.
 
 Fidelity to the old Original Dark Clear: see §7.
 
+### 3.1 Depth on Solid, dark palettes
+
+Captured over white (`after-<palette>-dark-solid-depthtrue-tintoff-white.png`
+in the PR's capture set). The crown is 0.82 black at the top edge, so on a
+dark Solid palette the top third reads as near-black whatever the palette:
+Midnight Cobalt's navy `#071127` becomes about `#040914` at the top and only
+returns to navy below the middle; Smoked Umber, Porcelain Vapor, Amethyst and
+Sea Glass behave the same way (interior mid-height strips in the capture
+log). Original Dark Solid stays a neutral near-black, which is its intent.
+Whether that muddies the custom palettes is the owner's call; the brief
+anticipated removing Depth if it does not work, and Depth is self-contained
+for that reason (§3). Light Solid with Depth is a white crown over a
+near-white surface and reads as a soft lift, not a colour loss.
+
 ## 4. Tint
 
 The wash is the palette accent's hue at HSV saturation 0.85 and value 1.0
@@ -226,6 +240,26 @@ same `atticPanelSurface(showsElevation: true)`. Persisted pinned frames stay
 visible-frame based. Details and tests are listed in the PR.
 
 ## 7. Original Dark: old Clear versus Glass + Depth
+
+Measured over the busy backdrop (harness interior strips at 35–65 % height,
+six columns):
+
+| | strip 1 | strip 2 | strip 3 | strip 4 | strip 5 | strip 6 |
+|---|---|---|---|---|---|---|
+| old Clear (main 5451490) | 72 71 23 | 63 70 27 | 64 74 45 | 75 51 92 | 68 38 100 | 65 41 100 |
+| new Glass + Depth | 29 30 15 | 27 29 15 | 25 30 18 | 34 22 42 | 32 21 44 | 31 21 44 |
+| new Glass, Depth off | 57 62 27 | 51 62 29 | 50 63 38 | 73 45 81 | 73 40 88 | 68 43 88 |
+
+The crown itself is pixel-identical in construction (same stops, same pole).
+What differs is what sits under it: the old Clear had no foundation, so the
+lower half showed the desktop at nearly full strength; Glass carries the 66 %
+readable foundation, so the desktop shows at about a third of that. Glass
+without Depth is in fact the closer match to old Clear's *lower* half, and
+Glass with Depth to its *upper* half. A foundation that varies with height
+(clear under the crown, readable at the bottom) was considered and rejected:
+the owner chose from prototype captures made with the uniform foundation
+under the crown, and the brief asks for Depth to be one layer above the
+fill.
 
 The old Clear surface was clear Liquid Glass with a black 0.06 tint, no
 foundation, and the crown. Glass is `.regular` Liquid Glass under the
