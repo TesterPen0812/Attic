@@ -59,7 +59,7 @@ identifier that tests rely on was kept. Screenshots are in
 | Row icon tile | 24 × 24 pt, corner 6 pt continuous, 11.5 pt semibold white symbol on `tint.gradient` |
 | Section header / footer | native grouped form (headline / caption secondary) |
 | Choosable tile | corner 10 pt continuous; boundary 1 pt at 0.14 (Increased Contrast 1.5 pt at 0.42); selection ring 2 pt accent (2.5 pt) |
-| Palette tile | adaptive grid, 104–150 pt wide, min height 74 pt, two 40 × 30 pt squircle swatches |
+| Palette tile | adaptive grid, 132–176 pt wide (four per row at the default width), min height 74 pt, two 40 × 30 pt squircle swatches |
 | Surface tile | three equal columns; 44 pt hint, callout title, caption line |
 | Tint pill | four equal columns; 34 pt sample, caption title |
 | Corner picker | 116 × 74 pt display, 22 pt targets, name underneath |

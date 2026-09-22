@@ -8,8 +8,11 @@ struct PaletteChooser: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
+    // Four tiles per row at the default window width (4 + 3 for the seven
+    // palettes). A fifth column would put a tile under the pinned panel's
+    // column on a 1280 pt display, where the UI tests cannot reveal it.
     private let columns = [
-        GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 8, alignment: .top)
+        GridItem(.adaptive(minimum: 132, maximum: 176), spacing: 8, alignment: .top)
     ]
 
     var body: some View {
