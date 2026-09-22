@@ -388,6 +388,11 @@ final class AppCoordinator: ObservableObject {
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_PRESENT_SUBTASKS"] == "1" {
                 presentSampleSubtaskWindowsForUITesting()
             }
+            // Capture seam: open Settings on the remembered section (pass
+            // `-AtticSettings.selectedSection <section>`) for screenshots.
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_OPEN_SETTINGS"] == "1" {
+                DispatchQueue.main.async { [weak self] in self?.openSettings() }
+            }
             return
         }
 

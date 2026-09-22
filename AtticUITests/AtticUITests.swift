@@ -414,10 +414,16 @@ final class AtticUITests: XCTestCase {
             }
         }
         func recordPanel(_ name: String) {
+            // Evidence only: the live panel, and the Settings window as the
+            // user sees it at that moment (the redesigned controls).
             let attachment = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
             attachment.name = name
             attachment.lifetime = .keepAlways
             add(attachment)
+            let window = XCTAttachment(screenshot: settings.screenshot())
+            window.name = "Settings-\(name)"
+            window.lifetime = .keepAlways
+            add(window)
         }
 
         XCTAssertTrue(preview.waitForExistence(timeout: 3), "the live preview is one element")

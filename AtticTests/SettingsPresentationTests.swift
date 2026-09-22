@@ -50,6 +50,82 @@ final class SettingsPresentationTests: XCTestCase {
         )
     }
 
+    func testAppearancePreviewIsARealMiniatureWithADescriptiveLabel() {
+        XCTAssertEqual(AppearancePreviewLayout.scale, 0.46)
+        XCTAssertEqual(AppearancePreviewLayout.panelSize.width,
+                       (PanelGeometry.defaultPanelSize.width * 0.46).rounded())
+        XCTAssertEqual(AppearancePreviewLayout.panelSize.height,
+                       (PanelGeometry.defaultPanelSize.height * 0.46).rounded())
+        XCTAssertGreaterThan(AppearancePreviewLayout.cardHeight, AppearancePreviewLayout.panelSize.height)
+        XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: 80), 80 * 0.46)
+        XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: 0), 4)
+        XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: .nan),
+                       AtticStyle.panelCornerRadius * 0.46)
+        XCTAssertEqual(
+            AppearancePreviewLayout.accessibilityLabel(
+                theme: .seaGlass, surface: .glass, depth: true, tint: .vivid,
+                appearance: .dark, reduceTransparency: false),
+            "Panel preview: Sea Glass palette, Glass surface, Depth on, Tint Vivid, Dark appearance."
+        )
+        XCTAssertEqual(
+            AppearancePreviewLayout.accessibilityLabel(
+                theme: .original, surface: .frosted, depth: false, tint: .off,
+                appearance: .light, reduceTransparency: true),
+            "Panel preview: Original palette, Solid (Reduce Transparency) surface, Depth off, Tint Off, Light appearance."
+        )
+    }
+
+    func testTintFloorNoteAppearsOnlyForClampedCells() {
+        func treatment(_ theme: AtticPanelTheme, _ appearance: AtticPanelThemeAppearance,
+                       _ surface: PanelSurfaceStyle, depth: Bool, tint: PanelTintLevel) -> AtticPanelSurfaceTreatment {
+            theme.surfaceTreatment(appearance: appearance, surface: surface, depth: depth, tint: tint,
+                                   reduceTransparency: false)
+        }
+        // Off never notes; Solid never clamps; a clamped Glass cell notes,
+        // and the note points at Depth only when Depth is off.
+        XCTAssertNil(AppearanceSettingsPresentation.tintFloorNote(for: treatment(.original, .dark, .glass, depth: false, tint: .off)))
+        XCTAssertNil(AppearanceSettingsPresentation.tintFloorNote(for: treatment(.original, .dark, .solid, depth: false, tint: .bold)))
+        XCTAssertNil(AppearanceSettingsPresentation.tintFloorNote(for: treatment(.original, .dark, .glass, depth: true, tint: .bold)))
+        let clamped = try? XCTUnwrap(AppearanceSettingsPresentation.tintFloorNote(
+            for: treatment(.original, .dark, .glass, depth: false, tint: .vivid)))
+        XCTAssertEqual(clamped, "Tint is kept faint on this surface so text stays readable. Turn on Depth for the full range.")
+        // Every clamped cell in the table produces a note, every other cell none.
+        for theme in AtticPanelTheme.allCases {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for surface in PanelSurfaceStyle.allCases {
+                    for depth in [false, true] {
+                        for tint in [PanelTintLevel.subtle, .vivid, .bold] {
+                            let t = treatment(theme, appearance, surface, depth: depth, tint: tint)
+                            let cell = PanelTintCalibration.cell(theme: theme, appearance: appearance,
+                                                                 kind: surface.treatmentKind, depth: depth, level: tint)
+                            XCTAssertEqual(AppearanceSettingsPresentation.tintFloorNote(for: t) != nil,
+                                           cell?.isClamped == true,
+                                           "\(theme.rawValue) \(appearance.rawValue) \(surface.rawValue) \(depth) \(tint.rawValue)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testSettingsDesignTokensStrengthenInIncreasedContrast() {
+        XCTAssertGreaterThan(SettingsDesign.selectionLineWidth(for: .increased), SettingsDesign.selectionLineWidth(for: .standard))
+        XCTAssertGreaterThan(SettingsDesign.tileBoundaryOpacity(for: .increased), SettingsDesign.tileBoundaryOpacity(for: .standard))
+        XCTAssertGreaterThan(SettingsDesign.tileBoundaryLineWidth(for: .increased), SettingsDesign.tileBoundaryLineWidth(for: .standard))
+        XCTAssertEqual(SettingsDesign.iconSize, 24)
+        XCTAssertEqual(SettingsDesign.titleSize, 22)
+        XCTAssertEqual(AppearanceSettingsPresentation.depthDescription, "A soft shade across the top of the panel.")
+        for section in SettingsSection.allCases {
+            XCTAssertFalse(section.systemImage.isEmpty)
+            XCTAssertNotEqual(section.tint, Color.clear)
+        }
+        // New control identifiers, on the elements that play those roles.
+        XCTAssertEqual(PanelSurfaceStyle.allCases.map(\.accessibilityIdentifier),
+                       ["setting-panel-surface-solid", "setting-panel-surface-glass", "setting-panel-surface-frosted"])
+        XCTAssertEqual(PanelTintLevel.allCases.map(\.accessibilityIdentifier),
+                       ["setting-panel-tint-off", "setting-panel-tint-subtle", "setting-panel-tint-vivid", "setting-panel-tint-bold"])
+    }
+
     @MainActor
     func testSystemAccentEnvironmentDefaultsToOriginalBehavior() {
         XCTAssertTrue(EnvironmentValues().atticPanelUsesSystemAccent)

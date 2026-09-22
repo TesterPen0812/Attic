@@ -6,34 +6,37 @@ struct PanelSettingsView: View {
     var body: some View {
         SettingsPage(
             title: "Panel",
-            subtitle: "Control where the panel waits and how it fits your workspace.",
+            subtitle: "Where the panel waits, and how it fits your desk.",
             accessibilityIdentifier: "settings-page-panel"
         ) {
-            SettingsGroup("Docking") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Reveal Attic from", systemImage: "rectangle.inset.filled")
-                        .font(.system(size: 13, weight: .medium))
+            Section {
+                HStack(alignment: .center, spacing: 16) {
+                    SettingsRowLabel(
+                        title: "Reveal from",
+                        description: "Rest the pointer in this corner of any display to open Attic.",
+                        systemImage: "arrow.up.right.square.fill",
+                        tint: .blue
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     CornerPicker(selection: $settings.corner)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("The same corner works on every connected display.")
-                        Text("You can also drag the panel’s top area to another corner. Its buttons remain clickable.")
-                        Text("Swipe with two fingers toward the attached screen edge to hide the panel, even while pinned. Canvas gestures stay on the canvas.")
-                        Text("macOS Hot Corners may activate at the same time.")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(15)
+            } header: {
+                Text("Corner")
+            } footer: {
+                SettingsFootnote(
+                    "Drag the panel's top edge to move it to another corner. "
+                    + "Swipe two fingers toward the screen edge to hide it, even while it's pinned; "
+                    + "canvas gestures stay on the canvas. Hot Corners can trigger at the same time."
+                )
             }
 
-            SettingsGroup("Timing") {
+            Section("Timing") {
                 SettingsRow(
                     title: "Reveal delay",
-                    description: "How long the pointer rests in the corner before Attic appears.",
-                    systemImage: "timer"
+                    description: "How long the pointer rests in the corner first.",
+                    systemImage: "timer",
+                    tint: .orange
                 ) {
                     SettingsSliderControl(
                         label: "Reveal delay",
@@ -46,12 +49,11 @@ struct PanelSettingsView: View {
                     )
                 }
 
-                SettingsDivider()
-
                 SettingsRow(
                     title: "Hide delay",
-                    description: "How long Attic waits after the pointer leaves before hiding.",
-                    systemImage: "eye.slash"
+                    description: "How long Attic waits after the pointer leaves.",
+                    systemImage: "eye.slash.fill",
+                    tint: .orange
                 ) {
                     SettingsSliderControl(
                         label: "Hide delay",
@@ -65,11 +67,12 @@ struct PanelSettingsView: View {
                 }
             }
 
-            SettingsGroup("Shape and size") {
+            Section {
                 SettingsRow(
                     title: "Corner size",
-                    description: "Round the panel without changing its usable bounds.",
-                    systemImage: "square.dashed"
+                    description: "Rounder corners, same usable space.",
+                    systemImage: "square.dashed",
+                    tint: .indigo
                 ) {
                     SettingsSliderControl(
                         label: "Panel corner size",
@@ -82,12 +85,11 @@ struct PanelSettingsView: View {
                     )
                 }
 
-                SettingsDivider()
-
                 SettingsRow(
-                    title: "Panel width",
-                    description: "Resize from the panel’s inward-facing edges. The docked corner stays anchored above the Dock.",
-                    systemImage: "arrow.left.and.right"
+                    title: "Width",
+                    description: "You can also drag the panel's inward edge.",
+                    systemImage: "arrow.left.and.right",
+                    tint: .indigo
                 ) {
                     SettingsSliderControl(
                         label: "Panel width",
@@ -99,6 +101,10 @@ struct PanelSettingsView: View {
                         accessibilityIdentifier: "setting-panel-width"
                     )
                 }
+            } header: {
+                Text("Shape")
+            } footer: {
+                SettingsFootnote("The docked corner stays put; the panel grows toward the middle of the screen.")
             }
         }
     }
@@ -153,7 +159,7 @@ private struct SettingsSliderControl: View {
                 .accessibilityIdentifier(accessibilityIdentifier)
 
             Text(valueText)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 48, alignment: .trailing)
                 .monospacedDigit()

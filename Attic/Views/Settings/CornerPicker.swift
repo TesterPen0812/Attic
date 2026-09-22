@@ -1,72 +1,91 @@
 import SwiftUI
 
+/// The docking corner, chosen on a little display: four corner targets on a
+/// screen shape, the chosen one filled with the accent, its name underneath.
 struct CornerPicker: View {
     @Binding var selection: ScreenCorner
 
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    static let displaySize = CGSize(width: 116, height: 74)
+    static let targetSize: CGFloat = 22
+
     var body: some View {
-        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-            GridRow {
+        VStack(spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.primary.opacity(colorSchemeContrast == .increased ? 0.10 : 0.06))
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(
+                        Color.primary.opacity(SettingsDesign.tileBoundaryOpacity(for: colorSchemeContrast)),
+                        lineWidth: 1
+                    )
+                // The menu bar, so the top of the display reads as the top.
+                VStack {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.12))
+                        .frame(height: 3)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 7)
+                    Spacer(minLength: 0)
+                }
+                .accessibilityHidden(true)
+
                 cornerButton(.topLeft)
                 cornerButton(.topRight)
-            }
-            GridRow {
                 cornerButton(.bottomLeft)
                 cornerButton(.bottomRight)
             }
+            .frame(width: Self.displaySize.width, height: Self.displaySize.height)
+
+            Text(selection.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Hiding corner")
+        .accessibilityValue(selection.title)
         .accessibilityIdentifier("setting-hiding-corner")
     }
 
     private func cornerButton(_ corner: ScreenCorner) -> some View {
-        Button {
+        let isSelected = selection == corner
+        return Button {
             selection = corner
         } label: {
-            HStack(spacing: 8) {
-                CornerGlyph(corner: corner, isSelected: selection == corner)
-
-                Text(corner.title)
-                    .lineLimit(1)
-
-                Spacer(minLength: 4)
-
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .opacity(selection == corner ? 1 : 0)
-                    .accessibilityHidden(true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(
+                            isSelected
+                                ? Color.accentColor
+                                : Color.primary.opacity(colorSchemeContrast == .increased ? 0.5 : 0.22),
+                            lineWidth: 1
+                        )
+                }
+                .overlay {
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(width: Self.targetSize, height: Self.targetSize)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .buttonStyle(.bordered)
-        .controlSize(.regular)
-        .tint(selection == corner ? .accentColor : .secondary)
-        .help("Use the \(corner.title.lowercased()) corner")
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment(for: corner))
+        .padding(8)
+        .help("Reveal Attic from the \(corner.title.lowercased()) corner")
         .accessibilityLabel(corner.title)
-        .accessibilityAddTraits(selection == corner ? .isSelected : [])
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
         .accessibilityIdentifier("setting-corner-\(corner.rawValue)")
     }
-}
 
-private struct CornerGlyph: View {
-    let corner: ScreenCorner
-    let isSelected: Bool
-
-    var body: some View {
-        ZStack(alignment: alignment) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .stroke(Color.secondary.opacity(0.8), lineWidth: 1)
-
-            Circle()
-                .fill(isSelected ? Color.accentColor : Color.secondary)
-                .frame(width: 5, height: 5)
-                .padding(2)
-        }
-        .frame(width: 25, height: 17)
-        .accessibilityHidden(true)
-    }
-
-    private var alignment: Alignment {
+    private func alignment(for corner: ScreenCorner) -> Alignment {
         switch corner {
         case .topLeft: .topLeading
         case .topRight: .topTrailing

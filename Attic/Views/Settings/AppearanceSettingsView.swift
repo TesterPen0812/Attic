@@ -13,13 +13,30 @@ enum AppearanceSettingsPresentation {
     static func nonselectedThemeBoundaryOpacity(
         for contrast: ColorSchemeContrast
     ) -> Double {
-        contrast == .increased ? 0.52 : 0.46
+        SettingsDesign.tileBoundaryOpacity(for: contrast)
     }
 
     static func nonselectedThemeBoundaryLineWidth(
         for contrast: ColorSchemeContrast
     ) -> CGFloat {
-        contrast == .increased ? 1 : 0.5
+        SettingsDesign.tileBoundaryLineWidth(for: contrast)
+    }
+
+    static let depthDescription = "A soft shade across the top of the panel."
+
+    /// The one line the pane shows when the readability floor, not the
+    /// chosen step, sets the wash for this palette, surface and Depth state;
+    /// nil when the step reaches its full strength.
+    static func tintFloorNote(for treatment: AtticPanelSurfaceTreatment) -> String? {
+        guard treatment.tint != .off,
+              let cell = PanelTintCalibration.cell(
+                  theme: treatment.theme, appearance: treatment.appearance,
+                  kind: treatment.kind, depth: treatment.depth, level: treatment.tint
+              ),
+              cell.isClamped else { return nil }
+        return treatment.depth
+            ? "Tint is kept faint here so text stays readable."
+            : "Tint is kept faint on this surface so text stays readable. Turn on Depth for the full range."
     }
 }
 
@@ -27,18 +44,23 @@ struct AppearanceSettingsView: View {
     @ObservedObject var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         SettingsPage(
             title: "Appearance",
-            subtitle: "Keep Attic calm and readable in every workspace.",
+            subtitle: "How the panel looks on your desktop.",
             accessibilityIdentifier: "settings-page-appearance"
         ) {
-            SettingsGroup("Mode") {
+            Section {
+                AppearancePreviewCard(settings: settings)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
+
                 SettingsRow(
-                    title: "Appearance",
+                    title: "Mode",
                     description: "Follow your Mac, or keep Attic in Light or Dark.",
-                    systemImage: "sun.max"
+                    systemImage: "circle.lefthalf.filled",
+                    tint: .purple
                 ) {
                     Picker("Appearance", selection: appearanceSelection) {
                         ForEach(AppearancePreference.allCases) { preference in
@@ -52,73 +74,91 @@ struct AppearanceSettingsView: View {
                     .accessibilityLabel("Attic appearance")
                     .accessibilityIdentifier("setting-appearance")
                 }
+            } footer: {
+                if reduceTransparency {
+                    SettingsFootnote("Reduce Transparency is on, so the panel is drawn solid. Your Surface choice is kept.")
+                }
             }
 
-            SettingsGroup("Palette") {
-                VStack(alignment: .leading, spacing: 12) {
-                    PanelThemeChooser(selection: $settings.panelTheme)
-                }
-                .padding(.horizontal, 15)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier(
-                    AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier
+            Section {
+                PaletteChooser(selection: $settings.panelTheme)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier)
+            } header: {
+                Text("Palette")
+            } footer: {
+                SettingsFootnote("Each palette has a Light and a Dark pair. Original is Attic's neutral look.")
+            }
+
+            Section {
+                SurfaceChooser(
+                    selection: $settings.panelSurfaceStyle,
+                    palette: palette,
+                    appearance: appearance,
+                    accent: accent
                 )
-            }
-
-            SettingsGroup("Surface") {
-                SettingsRow(
-                    title: "Surface",
-                    description: settings.panelSurfaceStyle.detail,
-                    systemImage: settings.panelSurfaceStyle.systemImage
-                ) {
-                    Picker("Surface", selection: $settings.panelSurfaceStyle) {
-                        ForEach(PanelSurfaceStyle.allCases) { style in
-                            Text(style.title).tag(style)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 220)
-                    .accessibilityLabel("Panel surface")
-                    .accessibilityIdentifier("setting-panel-surface")
-                }
-
-                SettingsDivider()
 
                 SettingsRow(
                     title: "Depth",
-                    description: "A soft shade across the top of the panel.",
-                    systemImage: "rectangle.tophalf.filled"
+                    description: AppearanceSettingsPresentation.depthDescription,
+                    systemImage: "rectangle.tophalf.filled",
+                    tint: .indigo
                 ) {
                     Toggle("Depth", isOn: $settings.panelDepthEnabled)
                         .labelsHidden()
                         .toggleStyle(.switch)
+                        .help("Shade the top of the panel")
                         .accessibilityLabel("Depth")
                         .accessibilityIdentifier("setting-panel-depth")
                 }
 
-                SettingsDivider()
-
-                SettingsRow(
-                    title: "Tint",
-                    description: settings.panelTint.detail,
-                    systemImage: "paintbrush.pointed"
-                ) {
-                    Picker("Tint", selection: $settings.panelTint) {
-                        ForEach(PanelTintLevel.allCases) { level in
-                            Text(level.title).tag(level)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 260)
-                    .accessibilityLabel("Panel tint")
-                    .accessibilityIdentifier("setting-panel-tint")
+                VStack(alignment: .leading, spacing: 10) {
+                    SettingsRowLabel(
+                        title: "Tint",
+                        description: settings.panelTint.detail,
+                        systemImage: "paintbrush.pointed.fill",
+                        tint: .pink
+                    )
+                    TintChooser(selection: $settings.panelTint, treatment: treatment, accent: accent)
+                }
+            } header: {
+                Text("Surface")
+            } footer: {
+                if let note = AppearanceSettingsPresentation.tintFloorNote(for: treatment) {
+                    SettingsFootnote(note)
                 }
             }
         }
+    }
+
+    private var effectiveColorScheme: ColorScheme {
+        switch settings.appearance {
+        case .light: .light
+        case .dark: .dark
+        case .system: colorScheme
+        }
+    }
+
+    private var appearance: AtticPanelThemeAppearance {
+        effectiveColorScheme == .dark ? .dark : .light
+    }
+
+    private var palette: AtticPanelThemePalette {
+        settings.panelTheme.palette(for: effectiveColorScheme, contrast: colorSchemeContrast)
+    }
+
+    private var treatment: AtticPanelSurfaceTreatment {
+        settings.panelSurfaceTreatment(
+            colorScheme: effectiveColorScheme,
+            contrast: colorSchemeContrast,
+            reduceTransparency: reduceTransparency
+        )
+    }
+
+    private var accent: Color {
+        settings.panelTheme.usesSystemAccent
+            ? Color.accentColor
+            : settings.panelTheme.palette(for: colorScheme, contrast: colorSchemeContrast).accentColor
     }
 
     private var appearanceSelection: Binding<AppearancePreference> {
@@ -132,179 +172,5 @@ struct AppearanceSettingsView: View {
                 settings.appearance = preference
             }
         }
-    }
-}
-
-private struct PanelThemeChooser: View {
-    @Binding var selection: AtticPanelTheme
-
-    private let columns = [
-        GridItem(.adaptive(minimum: 126, maximum: 176), spacing: 8, alignment: .top)
-    ]
-
-    var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-            ForEach(AtticPanelTheme.allCases) { theme in
-                PanelThemeChoice(
-                    theme: theme,
-                    isSelected: selection == theme
-                ) {
-                    selection = theme
-                }
-            }
-        }
-        .accessibilityLabel("Panel theme")
-    }
-}
-
-private struct PanelThemeChoice: View {
-    let theme: AtticPanelTheme
-    let isSelected: Bool
-    let select: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
-
-    private var currentPalette: AtticPanelThemePalette {
-        theme.palette(for: colorScheme, contrast: colorSchemeContrast)
-    }
-
-    var body: some View {
-        Button(action: select) {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 7) {
-                    ThemePairPreview(
-                        theme: theme,
-                        contrast: colorSchemeContrast
-                    )
-
-                    Spacer(minLength: 0)
-
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(isSelected ? currentPalette.accentColor : Color.clear)
-                        .frame(width: 16, height: 16)
-                        .background(
-                            isSelected
-                                ? currentPalette.accentColor.opacity(0.13)
-                                : Color.clear,
-                            in: Circle()
-                        )
-                        .accessibilityHidden(true)
-                }
-
-                Text(theme.title)
-                    .font(.caption.weight(isSelected ? .semibold : .medium))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(
-                        AppearanceSettingsPresentation.themeTitleLineLimit,
-                        reservesSpace: true
-                    )
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
-            .frame(
-                maxWidth: .infinity,
-                minHeight: AppearanceSettingsPresentation.themeChoiceHeight,
-                maxHeight: AppearanceSettingsPresentation.themeChoiceHeight,
-                alignment: .leading
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .background(
-                isSelected
-                    ? currentPalette.accentColor.opacity(currentPalette.selectedFillOpacity)
-                    : Color.primary.opacity(0.025),
-                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(
-                        choiceBoundaryColor,
-                        lineWidth: choiceBoundaryLineWidth
-                    )
-            }
-        }
-        .buttonStyle(.plain)
-        .help(theme.detail)
-        .accessibilityLabel(theme.title)
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
-        .accessibilityHint(theme.detail)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityIdentifier(theme.accessibilityIdentifier)
-    }
-
-    private var choiceBoundaryColor: Color {
-        if isSelected {
-            return currentPalette.accentColor
-        }
-        if colorSchemeContrast == .increased {
-            return Color.primary.opacity(
-                AppearanceSettingsPresentation.nonselectedThemeBoundaryOpacity(
-                    for: colorSchemeContrast
-                )
-            )
-        }
-        return Color(nsColor: .separatorColor).opacity(
-            AppearanceSettingsPresentation.nonselectedThemeBoundaryOpacity(
-                for: colorSchemeContrast
-            )
-        )
-    }
-
-    private var choiceBoundaryLineWidth: CGFloat {
-        if isSelected {
-            return colorSchemeContrast == .increased ? 2 : 1.5
-        }
-        return AppearanceSettingsPresentation.nonselectedThemeBoundaryLineWidth(
-            for: colorSchemeContrast
-        )
-    }
-}
-
-private struct ThemePairPreview: View {
-    let theme: AtticPanelTheme
-    let contrast: ColorSchemeContrast
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ThemeMiniPanel(
-                palette: theme.palette(
-                    for: AtticPanelThemeAppearance.light,
-                    contrast: contrast
-                )
-            )
-            ThemeMiniPanel(
-                palette: theme.palette(
-                    for: AtticPanelThemeAppearance.dark,
-                    contrast: contrast
-                )
-            )
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct ThemeMiniPanel: View {
-    let palette: AtticPanelThemePalette
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(palette.opaqueSurfaceColor)
-            .frame(width: 27, height: 22)
-            .overlay(alignment: .bottomLeading) {
-                Capsule()
-                    .fill(palette.accentColor)
-                    .frame(width: 12, height: 2.5)
-                    .padding(4)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(
-                        palette.edgeTint.swiftUIColor(opacity: 0.52),
-                        lineWidth: 0.75
-                    )
-            }
     }
 }
