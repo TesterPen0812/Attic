@@ -224,7 +224,10 @@ struct AtticPanelSurface: ViewModifier {
     }
 
     private var surfaceEdgeColor: Color {
-        let opacity = treatment.surfaceEdgeOpacity(for: colorSchemeContrast)
+        let opacity = treatment.surfaceEdgeOpacity(
+            for: colorSchemeContrast,
+            isElevated: showsElevation && treatment.surfaceElevation != nil
+        )
         if treatment.usesSystemOpaqueSurface {
             return Color.primary.opacity(opacity)
         }

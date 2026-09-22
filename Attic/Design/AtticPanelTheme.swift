@@ -583,7 +583,10 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         }
     }
 
-    func surfaceEdgeOpacity(for contrast: ColorSchemeContrast) -> Double {
+    /// `isElevated` is true only when the host draws `surfaceElevation`
+    /// beneath this surface. Hosts without that shadow keep the stronger
+    /// edge, because nothing else separates them from the content behind.
+    func surfaceEdgeOpacity(for contrast: ColorSchemeContrast, isElevated: Bool = false) -> Double {
         let standardOpacity: Double
         let increasedContrastAdjustment: Double
 
@@ -591,7 +594,7 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
             switch kind {
             case .glassmorphism:
                 standardOpacity = 0.055
-            case .opaque where appearance == .light:
+            case .opaque where appearance == .light && isElevated:
                 // A pure-white opaque panel only needs a barely visible
                 // boundary against another light window; the shape elevation
                 // carries the rest of the separation.

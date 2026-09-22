@@ -1714,10 +1714,13 @@ final class PanelGeometryTests: XCTestCase {
         )
         let panel = AtticPanel(contentRect: visible, styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: true)
+        // Mirror `AtticPanelController.configurePanel`: the native frame keeps
+        // the elevation margin, wider than the resize grip, around the surface.
         panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
+        panel.surfaceMargin = AtticStyle.panelElevationMargin
         panel.setVisibleContentFrame(visible, display: false)
         panel.contentView = AtticPanelContentContainer(
-            hostingView: host, visibleSize: visible.size, perimeter: panel.resizePerimeter
+            hostingView: host, visibleSize: visible.size, perimeter: panel.nativeMargin
         )
         defer {
             host.cancelActiveInteraction(reason: .lostWindow)

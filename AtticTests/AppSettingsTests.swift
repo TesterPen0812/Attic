@@ -423,13 +423,22 @@ final class AppSettingsTests: XCTestCase {
             contrast: .standard,
             kind: .opaque
         )
-        // The pure-white opaque Light surface carries a barely visible edge;
-        // Increased Contrast strengthens it by the same step as every other
-        // Original surface.
-        XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard), 0.07)
+        // The pure-white opaque Light surface carries a barely visible edge
+        // only where the shape elevation is drawn beneath it; Increased
+        // Contrast strengthens it by the same step as every other Original
+        // surface.
+        XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard, isElevated: true), 0.07)
+        XCTAssertEqual(
+            original.surfaceEdgeOpacity(for: .increased, isElevated: true),
+            0.17,
+            accuracy: 0.000_000_001
+        )
+        // Hosts without the elevation (the subtask surfaces) keep the edge
+        // they had before the elevation existed.
+        XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard), 0.11)
         XCTAssertEqual(
             original.surfaceEdgeOpacity(for: .increased),
-            0.17,
+            0.21,
             accuracy: 0.000_000_001
         )
 
