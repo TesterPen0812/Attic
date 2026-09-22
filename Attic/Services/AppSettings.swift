@@ -94,6 +94,7 @@ final class AppSettings: ObservableObject {
         static let panelTheme = AppearanceMigration.Key.theme
         static let panelSurfaceStyle = AppearanceMigration.Key.surfaceStyle
         static let panelTint = AppearanceMigration.Key.tint
+        static let panelTintLength = AppearanceMigration.Key.tintLength
         static let appearance = AppearanceMigration.Key.appearance
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
@@ -118,9 +119,22 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(panelSurfaceStyle.rawValue, forKey: Key.panelSurfaceStyle) }
     }
 
-    /// The accent wash across the top of the panel.
+    /// The Tint across the top of the panel: Original's neutral shade or a
+    /// custom palette's accent wash.
     @Published var panelTint: PanelTintLevel {
         didSet { defaults.set(panelTint.rawValue, forKey: Key.panelTint) }
+    }
+
+    /// How far down the panel the Tint reaches (`PanelTintLength.range`).
+    @Published var panelTintLength: Double {
+        didSet {
+            let clamped = PanelTintLength.clamped(panelTintLength)
+            if clamped != panelTintLength {
+                panelTintLength = clamped
+                return
+            }
+            defaults.set(panelTintLength, forKey: Key.panelTintLength)
+        }
     }
 
     @Published var appearance: AppearancePreference {
@@ -267,6 +281,9 @@ final class AppSettings: ObservableObject {
         panelTint = PanelTintLevel(
             rawValue: defaults.string(forKey: Key.panelTint) ?? ""
         ) ?? .defaultLevel
+        panelTintLength = PanelTintLength.clamped(
+            defaults.object(forKey: Key.panelTintLength) as? Double ?? PanelTintLength.defaultValue
+        )
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
@@ -307,6 +324,7 @@ final class AppSettings: ObservableObject {
             contrast: contrast,
             surface: panelSurfaceStyle,
             tint: panelTint,
+            tintLength: panelTintLength,
             reduceTransparency: reduceTransparency
         )
     }

@@ -15,6 +15,7 @@ enum AppearanceMigration {
         static let surfaceStyle = "panelSurfaceStyle"
         static let staleDepth = "panelDepth"
         static let tint = "panelTint"
+        static let tintLength = "panelTintLength"
         static let theme = "panelTheme"
         static let appearance = "appearancePreference"
 
@@ -55,6 +56,7 @@ enum AppearanceMigration {
     struct Resolved: Equatable {
         var surface: PanelSurfaceStyle
         var tint: PanelTintLevel
+        var tintLength: Double = PanelTintLength.defaultValue
     }
 
     static let freshInstall = Resolved(surface: .glass, tint: .off)
@@ -97,13 +99,32 @@ enum AppearanceMigration {
             }
         }
 
+        let coverage = legacy.gradientCoverage ?? legacyDefaultGradientCoverage
+        if theme.usesNeutralTint {
+            // Original's old top gradient was a neutral pole (black in Dark,
+            // white in Light) at 0.82 fading to the coverage, and the old
+            // Clear surface drew the same crown over the full height. Both
+            // are exactly Original's neutral Tint at Bold, so keep the look.
+            if legacy.isTranslucent != false, glassStyle == .clear {
+                return Resolved(surface: surface, tint: .bold, tintLength: 1)
+            }
+            guard coverage.isFinite, coverage > 0 else {
+                return Resolved(surface: surface, tint: .off)
+            }
+            return Resolved(surface: surface, tint: .bold, tintLength: PanelTintLength.clamped(coverage))
+        }
+
         let tint = legacyTintLevel(
             theme: theme,
             gradientCoverage: legacy.gradientCoverage,
             gradientColorHex: legacy.gradientColorHex
         )
-        return Resolved(surface: surface, tint: tint)
+        guard tint != .off else { return Resolved(surface: surface, tint: .off) }
+        return Resolved(surface: surface, tint: tint, tintLength: PanelTintLength.clamped(coverage))
     }
+
+    /// The old loader's gradient coverage when none was stored.
+    static let legacyDefaultGradientCoverage = 0.55
 
     /// The Tint step matching what the old gradient actually showed: the
     /// old top-edge colour difference (the pole mixed with 12% of the tint,
@@ -114,7 +135,7 @@ enum AppearanceMigration {
         gradientCoverage: Double?,
         gradientColorHex: String?
     ) -> PanelTintLevel {
-        let coverage = gradientCoverage ?? 0.55
+        let coverage = gradientCoverage ?? legacyDefaultGradientCoverage
         guard coverage.isFinite, coverage > 0 else { return .off }
         let difference = legacyGradientColorDifference(theme: theme, gradientColorHex: gradientColorHex)
         return PanelTintLevel.level(forLegacyColorDifference: difference)
@@ -146,6 +167,7 @@ enum AppearanceMigration {
         let resolved = resolve(read(from: defaults))
         defaults.set(resolved.surface.rawValue, forKey: Key.surfaceStyle)
         defaults.set(resolved.tint.rawValue, forKey: Key.tint)
+        defaults.set(resolved.tintLength, forKey: Key.tintLength)
         for key in Key.obsolete {
             defaults.removeObject(forKey: key)
         }

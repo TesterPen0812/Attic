@@ -460,13 +460,23 @@ final class AtticUITests: XCTestCase {
             }
         }
 
+        let tintLength = settings.sliders["setting-panel-tint-length"]
+        XCTAssertTrue(tintLength.waitForExistence(timeout: 3), "Tint has a Length slider")
         for level in ["Subtle", "Vivid", "Bold", "Off"] {
             let levelControl = segment(level, in: tint)
             reveal(levelControl)
             levelControl.click()
             assertSelected(levelControl)
+            if level == "Bold" {
+                reveal(tintLength)
+                XCTAssertTrue(tintLength.isEnabled, "Length is adjustable while a Tint step is on")
+                tintLength.adjust(toNormalizedSliderPosition: 0.3)
+                recordPanel("Tint-\(level)-Short")
+                tintLength.adjust(toNormalizedSliderPosition: 1)
+            }
             recordPanel("Tint-\(level)")
         }
+        waitFor("Length is disabled while Tint is Off") { !tintLength.isEnabled }
 
         let glass = segment("Glass", in: surface)
         reveal(glass)

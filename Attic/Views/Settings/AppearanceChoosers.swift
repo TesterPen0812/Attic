@@ -271,10 +271,10 @@ struct TintChooser: View {
                     .contentShape(RoundedRectangle(cornerRadius: SettingsDesign.tileCornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help(level.detail)
+                .help(level.detail(neutral: treatment.usesNeutralTint))
                 .accessibilityLabel(level.title)
                 .accessibilityValue(isSelected ? "Selected" : "Not selected")
-                .accessibilityHint(level.detail)
+                .accessibilityHint(level.detail(neutral: treatment.usesNeutralTint))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
                 .accessibilityIdentifier(level.accessibilityIdentifier)
@@ -299,25 +299,56 @@ private struct TintSample: View {
         let sample = AtticPanelSurfaceTreatment(
             theme: treatment.theme, kind: treatment.kind, palette: treatment.palette,
             appearance: treatment.appearance, usesSystemOpaqueSurface: treatment.usesSystemOpaqueSurface,
-            tint: level
+            tint: level, tintLength: treatment.tintLength
         )
         let backdrop = AtticPanelSurfaceTreatment.worstCaseUnderlay(
             kind: treatment.kind,
             appearance: treatment.appearance
         )
         ZStack {
-            shape.fill(sample.compositedSurface(over: backdrop, location: 1).swiftUIColor())
+            // The untinted surface; the Tint is drawn over it below. At the
+            // full length the Tint never fully fades, so the bottom of the
+            // composite is not an untinted colour to reuse.
+            shape.fill(backdrop.mixed(
+                with: sample.palette.opaqueSurface, amount: sample.foundationOpacity
+            ).swiftUIColor())
             if sample.tintTopOpacity > 0 {
-                let wash = sample.washColor
-                LinearGradient(stops: [
-                    .init(color: wash.swiftUIColor(opacity: sample.tintTopOpacity), location: 0),
-                    .init(color: wash.swiftUIColor(opacity: 0), location: PanelTintCalibration.fadeEnd),
-                    .init(color: wash.swiftUIColor(opacity: 0), location: 1)
-                ], startPoint: .top, endPoint: .bottom)
-                .clipShape(shape)
+                LinearGradient(stops: sample.tintGradientStops, startPoint: .top, endPoint: .bottom)
+                    .clipShape(shape)
             }
             shape.stroke(treatment.palette.edgeTint.swiftUIColor(opacity: 0.4), lineWidth: 0.75)
         }
         .frame(height: 34)
+    }
+}
+
+/// How far down the panel the Tint reaches, from a short band at the top to
+/// the full height. Disabled (and explained) while Tint is Off.
+struct TintLengthSlider: View {
+    @Binding var length: Double
+    let isEnabled: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Length")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text("Short")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Slider(value: $length, in: PanelTintLength.range)
+                .controlSize(.small)
+                .accessibilityLabel("Tint length")
+                .accessibilityValue(AppearanceSettingsPresentation.tintLengthDescription(length))
+                .accessibilityIdentifier("setting-panel-tint-length")
+            Text("Long")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
+        .help(isEnabled
+              ? "How far down the panel the tint reaches."
+              : "Choose a Tint step to set its length.")
     }
 }

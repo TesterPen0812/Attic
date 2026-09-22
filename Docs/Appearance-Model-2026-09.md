@@ -8,16 +8,17 @@ This is the source-of-truth ledger for Attic's current local-first macOS appeara
 |---|---|---|---|
 | Palette | Original + six custom palettes | `panelTheme` | accent, opaque surface, tint hue, edge |
 | Surface | Solid / Glass / Frosted | `panelSurfaceStyle` | base surface implementation |
-| Tint | Off / Subtle / Vivid / Bold | `panelTint` | calibrated accent wash at the top |
+| Tint | Off / Subtle / Vivid / Bold | `panelTint` | Original: neutral shade; custom palettes: calibrated accent wash |
+| Tint length | 30–100% of the panel height, default 100% | `panelTintLength` | how far down the Tint reaches (§4.3) |
 | Mode | System / Light / Dark | `appearancePreference` | effective appearance |
 
 `AtticPanelTheme.surfaceTreatment(...)` is the single settings-to-rendering resolver. The main panel, subtask panel and Settings preview use the same `AtticPanelSurfaceTreatment` model.
 
 The in-shape order is:
 
-**surface → readable foundation (translucent surfaces only) → Tint wash → hairline edge**
+**surface → readable foundation (translucent surfaces only) → Tint → hairline edge**
 
-The outside-only elevation remains outside the clip. Reduce Transparency resolves the surface to Solid while preserving the selected Tint step and stored Surface choice.
+The outside-only elevation remains outside the clip. Reduce Transparency resolves the surface to Solid while preserving the selected Tint step, Tint length and stored Surface choice.
 
 ## 2. Surfaces and readable foundation
 
@@ -83,13 +84,25 @@ The uncredited fallback deliberately reproduces the previous whole-percent found
 
 ## 3. Removed: Depth
 
-The neutral black/white crown was removed from every surface and setting. The owner's reason is that it did not add a distinct useful dimension: on Original it was effectively another tint, while on the other palettes it complicated the surface model and had been masking Tint's lack of contrast headroom. The current model gives Tint the necessary headroom through its calibrated foundation instead.
+The Depth toggle (a neutral black/white crown over any surface) was removed. The owner's reason: on Original it was effectively another tint, and as a separate toggle over a heavy foundation it looked muddy rather than like the Siri-style panel it came from. The crown itself lives on as **Original's Tint** (§4.1): the same profile, as a Tint step, over the lighter credited foundation.
 
-## 4. Tint calibration
+## 4. Tint
 
-Tint is a saturated version of the palette accent hue. It fades linearly from its calibrated top opacity to zero at 60% of the panel height. The three non-off steps target CIE Lab ΔE76 values of **3 / 7 / 12** for Subtle / Vivid / Bold.
+Tint is one layer across the top of the panel, in one of two forms. Both are drawn from `AtticPanelSurfaceTreatment.tintStops`, which the readability model interpolates too, so what is tested is what is drawn.
 
-The generated calibration has **7 palettes × 2 appearances × 3 surface kinds × 3 non-off steps = 126 cells**. There is no additional axis. Each cell stores:
+### 4.1 Original: the neutral shade
+
+Original is Attic's neutral palette, so its Tint has no colour: it is black in Dark and white in Light (`PanelNeutralShade`), with the long crown profile of the old Original Dark Clear surface: opacity 0.82 at the top, 0.58 at 42%, 0.18 at 74% and 0.02 at the bottom. Subtle, Vivid and Bold scale those opacities by 0.35, 0.65 and 1.00; Bold is the old Clear crown. The owner compared it with the Siri panel on macOS 27 (captures in the September 2026 thread): Bold over Glass gives the near-black top fading down the panel, while the credited foundation (§2) keeps the lower half as readable as Glass with Tint Off.
+
+The shade can only raise contrast: it moves the surface toward black under white text (Dark) and toward white under dark text (Light). It therefore keeps the Tint-Off foundation, never clamps, and has no calibration table. `testNeutralShadeNeverLowersContrastAnywhere` checks this at every 5% of the height, for every step and length, over all eight desktop extremes, on both the credited and uncredited paths. Original's coloured (blue) wash from the previous model is gone.
+
+On Original Light Solid, whose surface is exactly `#FFFFFF`, a white shade is invisible by construction.
+
+### 4.2 Custom palettes: the calibrated accent wash
+
+The custom palettes' Tint is a saturated version of the palette accent hue. It fades linearly from its calibrated top opacity to zero at the Tint length (§4.3). The three non-off steps target CIE Lab ΔE76 values of **3 / 7 / 12** for Subtle / Vivid / Bold.
+
+The generated calibration has **6 palettes × 2 appearances × 3 surface kinds × 3 non-off steps = 108 cells** (Original is not in it). There is no additional axis. Each cell stores:
 
 - `foundationOpacity`
 - `topOpacity`
@@ -102,7 +115,11 @@ Solid keeps foundation 1.00 and its existing Tint behaviour. On the native-credi
 
 The generated table currently contains **zero clamped cells**. The presentation helper retains neutral fallback wording for a future pathological palette, but Settings shows no clamp footer for the current table. Tests independently convert sRGB to Lab, require every cell to land within ±0.25 ΔE of its target, require zero clamps, and require the tint-aware foundation to be monotone non-decreasing by step.
 
-The eight-desktop-extremes readability check transforms each RGB extreme through the measured native-surface endpoint model, samples the wash fade at multiple vertical positions, and requires at least 4.5:1 at every location. The stricter generation boundary remains 4.75:1 at the calibrated worst-case top edge.
+The eight-desktop-extremes readability check transforms each RGB extreme through the measured native-surface endpoint model, samples the wash fade at multiple vertical positions for Tint lengths 30%, 60% and 100%, and requires at least 4.5:1 at every location. The stricter generation boundary remains 4.75:1 at the calibrated worst-case top edge.
+
+### 4.3 Tint length
+
+One slider under the Tint steps (`setting-panel-tint-length`, 30–100%, default 100%) sets how far down either Tint reaches. For the accent wash it is where the linear fade reaches zero; for the neutral shade it scales the crown's stop locations. It is disabled while Tint is Off. Readability does not depend on it: at every height the Tint's opacity is at most its top-edge opacity, and the calibration is judged at the top edge, so a longer Tint never needs more foundation. It replaces the retired gradient coverage slider, and the migration carries an old coverage into it (§5).
 
 ## 5. Appearance migration
 
@@ -116,7 +133,17 @@ This branch is unreleased, so `appearanceSchemaVersion` remains **2**. The migra
 | `panelGlassStyle == stable` or `liveStable` | Frosted |
 | `panelGlassStyle == clear`, unknown, or missing old default | Glass |
 
-Tint migration is unchanged: coverage 0 maps to Off; otherwise the old gradient's visible Light-mode colour difference is measured on the same ΔE76 scale and mapped to the closest product step thresholds already defined by `PanelTintLevel`.
+Tint and Tint length:
+
+| retired state | current result |
+|---|---|
+| Original, `panelGlassStyle == clear` (or missing) and translucent | neutral Tint **Bold**, length 100% (the old Clear crown) |
+| Original otherwise, coverage > 0 (missing = old default 0.55) | neutral Tint **Bold**, length = coverage (the old gradient was that same neutral pole at 0.82) |
+| Original otherwise, coverage 0 | Tint Off |
+| custom palette, coverage 0 | Tint Off |
+| custom palette, coverage > 0 | the step matching the old gradient's Light-mode ΔE76 (thresholds in `PanelTintLevel`), length = coverage |
+
+A stored custom gradient colour on Original was only mixed 12% into the neutral pole, so it also maps to the neutral shade. Coverage is clamped to the slider's 30–100%. This is a change from the previous mapping, which measured Original's gradient over its opaque Light surface (white on white, ΔE ≈ 0) and so put almost every Original user on Tint Off, although in Dark and on translucent surfaces they saw a clear neutral shade.
 
 Preview builds of this unreleased branch may have written the retired crown preference. `AppearanceMigration.migrateIfNeeded` therefore removes that stale key **unconditionally before the schema-version guard**, including stores already at version 2. Repeating the migration remains idempotent and does not rewrite current Surface or Tint choices.
 
@@ -130,4 +157,4 @@ Native-glass control treatment remains separate from the panel surface selection
 
 The old conservative solver used the raw desktop extreme below every translucent surface. Across the palettes that produced roughly 54–58% foundations in Light and 66–69% in Dark. The measured native-surface model credits the tone already supplied by the system surface, reducing Tint-Off Glass to 23–39% and Frosted to 30–49% across the current palettes.
 
-Tint may deliberately raise that foundation just enough to preserve text while reaching its colour target. At Bold, Glass ranges from 24% to 50% and Frosted from 31% to 59% depending on palette and appearance. The result keeps more of the native surface visible at Tint Off, then spends opacity only when a stronger Tint step needs contrast headroom.
+The accent wash may deliberately raise that foundation just enough to preserve text while reaching its colour target; Original's neutral shade never does. At Bold, Glass ranges from 24% to 50% and Frosted from 31% to 59% depending on palette and appearance. The result keeps more of the native surface visible at Tint Off, then spends opacity only when a stronger Tint step needs contrast headroom.

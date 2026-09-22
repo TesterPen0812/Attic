@@ -21,6 +21,10 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
 
     var usesSystemAccent: Bool { self == .original }
 
+    /// Original's Tint is a neutral shade (`PanelNeutralShade`); the custom
+    /// palettes wash in their own accent colour (`PanelTintCalibration`).
+    var usesNeutralTint: Bool { self == .original }
+
     var title: String {
         switch self {
         case .original: return "Original"
@@ -244,6 +248,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
         contrast: ColorSchemeContrast = .standard,
         surface: PanelSurfaceStyle,
         tint: PanelTintLevel,
+        tintLength: Double = PanelTintLength.defaultValue,
         reduceTransparency: Bool
     ) -> AtticPanelSurfaceTreatment {
         surfaceTreatment(
@@ -253,6 +258,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
             contrast: contrast,
             surface: surface,
             tint: tint,
+            tintLength: tintLength,
             reduceTransparency: reduceTransparency
         )
     }
@@ -265,6 +271,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
         contrast: ColorSchemeContrast = .standard,
         surface: PanelSurfaceStyle,
         tint: PanelTintLevel,
+        tintLength: Double = PanelTintLength.defaultValue,
         reduceTransparency: Bool
     ) -> AtticPanelSurfaceTreatment {
         AtticPanelSurfaceTreatment(
@@ -273,7 +280,8 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
             palette: palette(for: appearance, contrast: contrast),
             appearance: appearance,
             usesSystemOpaqueSurface: self == .original,
-            tint: tint
+            tint: tint,
+            tintLength: tintLength
         )
     }
 }
@@ -458,8 +466,11 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     /// It comes from whichever cell this treatment used (the generated
     /// table, or the pre-macOS-26 solve), so the Settings note follows it.
     let isTintClamped: Bool
-    /// The accent wash across the top of the panel (`PanelTintCalibration`).
+    /// The Tint step: Original's neutral shade (`PanelNeutralShade`) or a
+    /// custom palette's accent wash (`PanelTintCalibration`).
     let tint: PanelTintLevel
+    /// How far down the panel the Tint reaches (`PanelTintLength`).
+    let tintLength: Double
 
     // A small buffer above 4.5:1, without retaining an arbitrary heavy fill.
     static let readableContrastTarget = 4.75
@@ -467,6 +478,7 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     init(theme: AtticPanelTheme, kind: Kind, palette: AtticPanelThemePalette,
          appearance: AtticPanelThemeAppearance, usesSystemOpaqueSurface: Bool,
          tint: PanelTintLevel = .off,
+         tintLength: Double = PanelTintLength.defaultValue,
          creditsNativeSurface: Bool = AtticGlassControlTreatment.systemSupportsNativeGlass) {
         self.theme = theme
         self.kind = kind
@@ -474,6 +486,20 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         self.appearance = appearance
         self.usesSystemOpaqueSurface = usesSystemOpaqueSurface
         self.tint = tint
+        self.tintLength = PanelTintLength.clamped(tintLength)
+        if theme.usesNeutralTint {
+            // The neutral shade only moves the surface away from the text
+            // colour, so it keeps the Tint-Off foundation and never clamps.
+            foundationOpacity = kind == .solid ? 1 : Self.minimumReadableOpacity(
+                palette: palette,
+                appearance: appearance,
+                kind: kind,
+                creditsNativeSurface: creditsNativeSurface
+            )
+            tintTopOpacity = PanelNeutralShade.stops(level: tint, length: tintLength).first?.opacity ?? 0
+            isTintClamped = false
+            return
+        }
         switch kind {
         case .solid:
             foundationOpacity = 1
@@ -582,19 +608,45 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
 
     // MARK: Tint
 
-    /// The wash colour: the palette accent's hue, saturated.
+    /// Whether this treatment's Tint is Original's neutral shade.
+    var usesNeutralTint: Bool { theme.usesNeutralTint }
+
+    /// The wash colour: black or white for the neutral shade, otherwise the
+    /// palette accent's hue, saturated.
     var washColor: AtticThemeColor {
-        PanelTintCalibration.washColor(for: palette, appearance: appearance)
+        usesNeutralTint
+            ? PanelNeutralShade.color(for: appearance)
+            : PanelTintCalibration.washColor(for: palette, appearance: appearance)
     }
 
-    /// The wash fades linearly from its top opacity to nothing at
-    /// `PanelTintCalibration.fadeEnd`, matching the drawn gradient.
+    /// The drawn gradient, top to bottom. The neutral shade follows the
+    /// crown profile; the accent wash fades linearly to nothing. Both end at
+    /// `tintLength`, and past the last stop the gradient holds its value.
+    var tintStops: [PanelTintStop] {
+        guard tintTopOpacity > 0 else { return [] }
+        if usesNeutralTint {
+            return PanelNeutralShade.stops(level: tint, length: tintLength)
+        }
+        return [
+            PanelTintStop(opacity: tintTopOpacity, location: 0),
+            PanelTintStop(opacity: 0, location: tintLength)
+        ]
+    }
+
+    /// The Tint's opacity at a normalised height, interpolated between
+    /// `tintStops` exactly as the gradient draws it.
     func tintOpacity(at location: Double) -> Double {
-        guard location.isFinite, tintTopOpacity > 0 else { return 0 }
+        let stops = tintStops
+        guard location.isFinite, let first = stops.first, let last = stops.last else { return 0 }
         let clamped = min(max(location, 0), 1)
-        let fadeEnd = PanelTintCalibration.fadeEnd
-        guard clamped < fadeEnd else { return 0 }
-        return tintTopOpacity * (1 - clamped / fadeEnd)
+        if clamped <= first.location { return first.opacity }
+        if clamped >= last.location { return last.opacity }
+        for (lower, upper) in zip(stops, stops.dropFirst()) where clamped <= upper.location {
+            let span = upper.location - lower.location
+            guard span > 0 else { return upper.opacity }
+            return lower.opacity + (upper.opacity - lower.opacity) * (clamped - lower.location) / span
+        }
+        return last.opacity
     }
 
     // MARK: Composite model

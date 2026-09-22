@@ -136,9 +136,11 @@ final class AppearanceMigrationTests: XCTestCase {
         defaults.set("dark", forKey: "appearancePreference")
 
         let written = AppearanceMigration.migrateIfNeeded(defaults)
-        XCTAssertEqual(written, Resolved(surface: .glass, tint: .off))
+        // Original on Clear drew the full-height crown: neutral Bold, full length.
+        XCTAssertEqual(written, Resolved(surface: .glass, tint: .bold, tintLength: 1))
         XCTAssertEqual(defaults.string(forKey: "panelSurfaceStyle"), "glass")
-        XCTAssertEqual(defaults.string(forKey: "panelTint"), "off")
+        XCTAssertEqual(defaults.string(forKey: "panelTint"), "bold")
+        XCTAssertEqual(defaults.object(forKey: "panelTintLength") as? Double, 1)
         XCTAssertEqual(defaults.integer(forKey: "appearanceSchemaVersion"), 2)
         for key in ["isTranslucent", "panelGlassStyle", "panelGradientCoverage", "panelGradientColorHex"] {
             XCTAssertNil(defaults.object(forKey: key), key)
@@ -191,6 +193,7 @@ final class AppearanceMigrationTests: XCTestCase {
             XCTAssertEqual(settings.appearance, .system)
             XCTAssertEqual(settings.panelSurfaceStyle, .glass)
             XCTAssertEqual(settings.panelTint, .off)
+            XCTAssertEqual(settings.panelTintLength, PanelTintLength.defaultValue)
         }
         XCTAssertEqual(defaults.integer(forKey: "appearanceSchemaVersion"), 2)
         XCTAssertNil(defaults.object(forKey: "panelTheme"), "the theme default is still not written")
@@ -208,16 +211,20 @@ final class AppearanceMigrationTests: XCTestCase {
             let theme: AtticPanelTheme
             let expected: Resolved
         }
+        // Every case stores the old default coverage of 0.55. Original's old
+        // gradient was a neutral shade to that coverage and its Clear surface
+        // the same crown over the full height, so Original keeps a neutral
+        // Bold Tint; the custom palettes keep the step their colour showed.
         let cases: [Case] = [
-            Case(translucent: false, style: "clear", theme: .original, expected: Resolved(surface: .solid, tint: .off)),
+            Case(translucent: false, style: "clear", theme: .original, expected: Resolved(surface: .solid, tint: .bold, tintLength: 0.55)),
             Case(translucent: false, style: "frosted", theme: .amethyst, expected: Resolved(surface: .solid, tint: .off)),
-            Case(translucent: true, style: "frosted", theme: .original, expected: Resolved(surface: .glass, tint: .off)),
-            Case(translucent: true, style: "stable", theme: .original, expected: Resolved(surface: .frosted, tint: .off)),
+            Case(translucent: true, style: "frosted", theme: .original, expected: Resolved(surface: .glass, tint: .bold, tintLength: 0.55)),
+            Case(translucent: true, style: "stable", theme: .original, expected: Resolved(surface: .frosted, tint: .bold, tintLength: 0.55)),
             Case(translucent: true, style: "liveStable", theme: .midnightCobalt, expected: Resolved(surface: .frosted, tint: .off)),
-            Case(translucent: true, style: "clear", theme: .original, expected: Resolved(surface: .glass, tint: .off)),
+            Case(translucent: true, style: "clear", theme: .original, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
             // Electric Blue's theme gradient was the one that visibly showed.
-            Case(translucent: true, style: "clear", theme: .electricBlue, expected: Resolved(surface: .glass, tint: .vivid)),
-            Case(translucent: nil, style: nil, theme: .original, expected: Resolved(surface: .glass, tint: .off)),
+            Case(translucent: true, style: "clear", theme: .electricBlue, expected: Resolved(surface: .glass, tint: .vivid, tintLength: 0.55)),
+            Case(translucent: nil, style: nil, theme: .original, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
             Case(translucent: nil, style: "unknown-style", theme: .seaGlass, expected: Resolved(surface: .glass, tint: .off))
         ]
         for testCase in cases {
@@ -232,6 +239,7 @@ final class AppearanceMigrationTests: XCTestCase {
             MainActor.assumeIsolated {
                 XCTAssertEqual(settings.panelSurfaceStyle, testCase.expected.surface, context)
                 XCTAssertEqual(settings.panelTint, testCase.expected.tint, context)
+                XCTAssertEqual(settings.panelTintLength, testCase.expected.tintLength, accuracy: 1e-12, context)
                 XCTAssertEqual(settings.panelTheme, testCase.theme, context)
             }
             XCTAssertNil(defaults.object(forKey: "isTranslucent"), context)
@@ -246,15 +254,42 @@ final class AppearanceMigrationTests: XCTestCase {
         defaults.set(true, forKey: "isTranslucent")
         defaults.set("frosted", forKey: "panelGlassStyle")
         defaults.set(0.8, forKey: "panelGradientCoverage")
-        defaults.set("000000", forKey: "panelGradientColorHex")
-        defaults.set("original", forKey: "panelTheme")
+        defaults.set("FF0000", forKey: "panelGradientColorHex")
+        defaults.set("amethyst", forKey: "panelTheme")
         let settings = try MainActor.assumeIsolated { AppSettings(defaults: defaults) }
-        let expected = AppearanceMigration.legacyTintLevel(theme: .original, gradientCoverage: 0.8, gradientColorHex: "000000")
+        let expected = AppearanceMigration.legacyTintLevel(theme: .amethyst, gradientCoverage: 0.8, gradientColorHex: "FF0000")
         XCTAssertNotEqual(expected, .off)
         MainActor.assumeIsolated {
             XCTAssertEqual(settings.panelTint, expected)
+            XCTAssertEqual(settings.panelTintLength, 0.8, accuracy: 1e-12, "the old coverage becomes the Tint length")
         }
         XCTAssertNil(defaults.object(forKey: "panelGradientColorHex"))
+    }
+
+    func testOriginalLegacyGradientBecomesNeutralBoldAtItsCoverage() {
+        // Any custom colour on Original was only mixed 12% into the neutral
+        // pole, so the shade is what those users saw too.
+        for hex in [nil, "", "000000", "FF0000"] as [String?] {
+            let resolved = AppearanceMigration.resolve(
+                Legacy(isTranslucent: true, glassStyle: .frosted, gradientCoverage: 0.7,
+                       gradientColorHex: hex, theme: .original)
+            )
+            XCTAssertEqual(resolved, Resolved(surface: .glass, tint: .bold, tintLength: 0.7), "\(String(describing: hex))")
+        }
+        // A tiny coverage is clamped to the shortest Tint the slider allows.
+        XCTAssertEqual(
+            AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .stable, gradientCoverage: 0.1, theme: .original)),
+            Resolved(surface: .frosted, tint: .bold, tintLength: PanelTintLength.range.lowerBound)
+        )
+        // Coverage 0 was "off", except that Clear drew its own crown.
+        XCTAssertEqual(
+            AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .frosted, gradientCoverage: 0, theme: .original)),
+            Resolved(surface: .glass, tint: .off)
+        )
+        XCTAssertEqual(
+            AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .clear, gradientCoverage: 0, theme: .original)),
+            Resolved(surface: .glass, tint: .bold, tintLength: 1)
+        )
     }
 
     func testNewPreferencesRoundTripAndFallBackSafely() throws {
@@ -272,6 +307,20 @@ final class AppearanceMigrationTests: XCTestCase {
                 XCTAssertEqual(defaults.string(forKey: "panelTint"), level.rawValue)
                 XCTAssertEqual(AppSettings(defaults: defaults).panelTint, level)
             }
+            for length in [0.3, 0.45, 1.0] {
+                settings.panelTintLength = length
+                XCTAssertEqual(defaults.object(forKey: "panelTintLength") as? Double, length)
+                XCTAssertEqual(AppSettings(defaults: defaults).panelTintLength, length)
+            }
+            settings.panelTintLength = 5
+            XCTAssertEqual(settings.panelTintLength, 1, "an out-of-range length is clamped")
+            XCTAssertEqual(defaults.object(forKey: "panelTintLength") as? Double, 1)
+            XCTAssertEqual(settings.panelSurfaceTreatment(colorScheme: .dark, contrast: .standard,
+                                                          reduceTransparency: false).tintLength, 1)
+        }
+        defaults.set(0.05, forKey: "panelTintLength")
+        MainActor.assumeIsolated {
+            XCTAssertEqual(AppSettings(defaults: defaults).panelTintLength, PanelTintLength.range.lowerBound)
         }
         defaults.set("future-surface", forKey: "panelSurfaceStyle")
         defaults.set("future-tint", forKey: "panelTint")

@@ -40,11 +40,73 @@ enum ColorDifference {
     }
 }
 
-/// The Tint wash, calibrated so each step has the same perceived strength on
-/// every palette, mode and surface.
+/// One point of the Tint gradient, top (0) to bottom (1) of the panel. The
+/// drawn gradient and the readability model both read the same stops, so
+/// what is tested is what is drawn.
+struct PanelTintStop: Equatable, Sendable {
+    let opacity: Double
+    let location: Double
+}
+
+/// How far down the panel the Tint reaches, as a fraction of its height.
+/// One setting for both kinds of Tint; readability does not depend on it,
+/// because every step is judged at the top edge, where the Tint is strongest
+/// and the opacity only falls from there.
+enum PanelTintLength {
+    static let range: ClosedRange<Double> = 0.3...1.0
+    /// The full height: the long, Siri-like fade.
+    static let defaultValue = 1.0
+
+    static func clamped(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultValue }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+}
+
+/// Original's Tint: a neutral shade (black in Dark, white in Light) with the
+/// long crown profile of the old Original Dark Clear surface. It only ever
+/// moves the surface away from the text colour, so it can never lower
+/// contrast and needs no calibration table or extra foundation.
+enum PanelNeutralShade {
+    /// Bold at the full length. Other steps scale the opacities; the Length
+    /// setting scales the locations.
+    static let profile: [PanelTintStop] = [
+        PanelTintStop(opacity: 0.82, location: 0.00),
+        PanelTintStop(opacity: 0.58, location: 0.42),
+        PanelTintStop(opacity: 0.18, location: 0.74),
+        PanelTintStop(opacity: 0.02, location: 1.00)
+    ]
+
+    static func strength(for level: PanelTintLevel) -> Double {
+        switch level {
+        case .off: 0
+        case .subtle: 0.35
+        case .vivid: 0.65
+        case .bold: 1
+        }
+    }
+
+    static func color(for appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
+        let value = appearance == .dark ? 0.0 : 1.0
+        return AtticThemeColor(red: value, green: value, blue: value)
+    }
+
+    static func stops(level: PanelTintLevel, length: Double) -> [PanelTintStop] {
+        let strength = strength(for: level)
+        guard strength > 0 else { return [] }
+        let length = PanelTintLength.clamped(length)
+        return profile.map {
+            PanelTintStop(opacity: $0.opacity * strength, location: $0.location * length)
+        }
+    }
+}
+
+/// The coloured Tint of the custom palettes, calibrated so each step has the
+/// same perceived strength on every palette, mode and surface. Original is
+/// not in it: its Tint is `PanelNeutralShade`.
 ///
-/// The wash is the palette's accent hue at full saturation, fading from its
-/// top opacity at the top edge to nothing at `fadeEnd` of the panel height.
+/// The wash is the palette's accent hue at full saturation, fading linearly
+/// from its top opacity at the top edge to nothing at the Tint length.
 /// `table` holds the tint-aware foundation and top opacities: for each cell
 /// the smallest whole-percent foundation at or above Tint Off that lets the
 /// wash hit its target ΔE76 while primary and secondary text keep at least
@@ -53,8 +115,11 @@ enum ColorDifference {
 /// `Docs/Appearance-Model-2026-09.md`) and pinned by a unit test that
 /// recomputes every cell; nothing solves at draw time.
 enum PanelTintCalibration {
-    /// Normalised height at which the wash has faded to nothing.
-    static let fadeEnd: Double = 0.6
+    /// The palettes with a coloured Tint, in table order.
+    static var colouredThemes: [AtticPanelTheme] {
+        AtticPanelTheme.allCases.filter { !$0.usesNeutralTint }
+    }
+
     /// HSV saturation of the wash colour.
     static let saturation: Double = 0.85
     /// HSV value of the wash colour per appearance.
@@ -85,7 +150,7 @@ enum PanelTintCalibration {
         kind: AtticPanelSurfaceTreatment.Kind,
         level: PanelTintLevel
     ) -> Cell? {
-        guard level != .off else { return nil }
+        guard level != .off, !theme.usesNeutralTint else { return nil }
         return table[Key(theme: theme, appearance: appearance, kind: kind)]?[level]
     }
 
@@ -270,7 +335,7 @@ enum PanelTintCalibration {
 
     static func solveTable() -> [Key: [PanelTintLevel: Cell]] {
         var table: [Key: [PanelTintLevel: Cell]] = [:]
-        for theme in AtticPanelTheme.allCases {
+        for theme in colouredThemes {
             for appearance in AtticPanelThemeAppearance.allCases {
                 for kind in AtticPanelSurfaceTreatment.Kind.allCases {
                     let palette = theme.palette(for: appearance)
@@ -303,7 +368,7 @@ enum PanelTintCalibration {
     static func swiftSource(for table: [Key: [PanelTintLevel: Cell]]) -> String {
         var lines: [String] = ["    static let table: [Key: [PanelTintLevel: Cell]] = ["]
         var clamped: [String] = []
-        for theme in AtticPanelTheme.allCases {
+        for theme in colouredThemes {
             for appearance in AtticPanelThemeAppearance.allCases {
                 for kind in AtticPanelSurfaceTreatment.Kind.allCases {
                     let key = Key(theme: theme, appearance: appearance, kind: kind)
@@ -368,12 +433,6 @@ enum PanelTintCalibration {
     // Regenerate by running PanelTintCalibrationTests with
     // ATTIC_PRINT_TINT_TABLE=1 and pasting the printed source here.
     static let table: [Key: [PanelTintLevel: Cell]] = [
-        k(.original, .light, .solid): [.subtle: c(1.00, 0.035, 2.98), .vivid: c(1.00, 0.082, 6.98), .bold: c(1.00, 0.141, 12.02)],
-        k(.original, .light, .glass): [.subtle: c(0.23, 0.038, 3.02), .vivid: c(0.24, 0.089, 7.02), .bold: c(0.24, 0.153, 11.98)],
-        k(.original, .light, .frosted): [.subtle: c(0.30, 0.038, 3.02), .vivid: c(0.31, 0.089, 7.02), .bold: c(0.31, 0.153, 11.98)],
-        k(.original, .dark, .solid): [.subtle: c(1.00, 0.027, 2.99), .vivid: c(1.00, 0.065, 6.96), .bold: c(1.00, 0.116, 11.99)],
-        k(.original, .dark, .glass): [.subtle: c(0.36, 0.038, 3.02), .vivid: c(0.37, 0.089, 7.02), .bold: c(0.38, 0.154, 12.01)],
-        k(.original, .dark, .frosted): [.subtle: c(0.46, 0.038, 3.01), .vivid: c(0.47, 0.089, 7.01), .bold: c(0.48, 0.154, 12.00)],
         k(.midnightCobalt, .light, .solid): [.subtle: c(1.00, 0.033, 2.96), .vivid: c(1.00, 0.078, 7.01), .bold: c(1.00, 0.133, 11.99)],
         k(.midnightCobalt, .light, .glass): [.subtle: c(0.25, 0.034, 3.00), .vivid: c(0.27, 0.080, 7.03), .bold: c(0.28, 0.137, 12.00)],
         k(.midnightCobalt, .light, .frosted): [.subtle: c(0.33, 0.034, 2.98), .vivid: c(0.34, 0.080, 6.99), .bold: c(0.35, 0.138, 12.04)],

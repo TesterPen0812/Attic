@@ -345,4 +345,25 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertEqual(size.width, SettingsWindowLayout.minimumContentSize.width)
         XCTAssertEqual(size.height, 472)
     }
+
+    func testTintLengthAndNeutralTintCopy() {
+        XCTAssertEqual(AppearanceSettingsPresentation.tintLengthDescription(1), "Full height")
+        XCTAssertEqual(AppearanceSettingsPresentation.tintLengthDescription(0.5), "50 percent of the panel")
+        XCTAssertEqual(AppearanceSettingsPresentation.tintLengthDescription(0.01), "30 percent of the panel")
+        for level in PanelTintLevel.allCases {
+            let neutral = level.detail(neutral: true)
+            let coloured = level.detail(neutral: false)
+            XCTAssertFalse(neutral.isEmpty)
+            XCTAssertFalse(coloured.isEmpty)
+            if level == .off {
+                XCTAssertEqual(neutral, coloured)
+            } else {
+                XCTAssertNotEqual(neutral, coloured, level.rawValue)
+                XCTAssertFalse(neutral.localizedCaseInsensitiveContains("accent"), level.rawValue)
+                XCTAssertFalse(neutral.localizedCaseInsensitiveContains("colour"), level.rawValue)
+            }
+        }
+        XCTAssertTrue(AtticPanelTheme.original.usesNeutralTint)
+        XCTAssertTrue(AtticPanelTheme.allCases.dropFirst().allSatisfy { !$0.usesNeutralTint })
+    }
 }

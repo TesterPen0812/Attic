@@ -85,6 +85,7 @@ All of these are constants in `SettingsDesign`, `AppearancePreviewLayout`,
 | `PaletteChooser` | AppearanceChoosers.swift | palette tiles |
 | `SurfaceChooser` | AppearanceChoosers.swift | Solid · Glass · Frosted tiles |
 | `TintChooser` | AppearanceChoosers.swift | Off · Subtle · Vivid · Bold pills |
+| `TintLengthSlider` | AppearanceChoosers.swift | Tint length, Short to Long; disabled while Tint is Off |
 | `AppearancePreviewCard` | AppearancePreview.swift | the live miniature over a representative backdrop |
 
 Removed: `SettingsGroup` (a hand-drawn group box) and `SettingsDivider`; the
@@ -124,11 +125,13 @@ and hide delay sliders with readouts (`setting-reveal-delay`,
 3. Palette: tiles (`setting-panel-theme`, `setting-panel-theme-<theme>`).
 4. Surface: three tiles (`setting-panel-surface`, `setting-panel-surface-<style>`,
    each labelled Solid / Glass / Frosted with a selected trait); Tint pills
-   (`setting-panel-tint`, `setting-panel-tint-<level>`). The section footer is
-   reserved for the calibration fallback described in
-   `Docs/Appearance-Model-2026-09.md`; the current table needs no warning.
+   (`setting-panel-tint`, `setting-panel-tint-<level>`), whose descriptions
+   say "shade" on Original and "accent" on the custom palettes; a Tint length
+   slider (`setting-panel-tint-length`, Short to Long, disabled while Tint is
+   Off). The section footer is reserved for the calibration fallback described
+   in `Docs/Appearance-Model-2026-09.md`; the current table needs no warning.
 
-Nothing else: no sliders, no colour pickers.
+Nothing else: one slider (Tint length), no colour pickers.
 
 ### Agent Access
 Access: the toggle (`setting-agent-access`) and, while off, "Agent Access is

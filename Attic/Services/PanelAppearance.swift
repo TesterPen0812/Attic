@@ -40,9 +40,10 @@ enum PanelSurfaceStyle: String, CaseIterable, Identifiable, Sendable {
     var accessibilityIdentifier: String { "setting-panel-surface-\(rawValue)" }
 }
 
-/// The strength of the accent wash across the top of the panel. Every step
-/// is calibrated per palette, mode and surface to the same
-/// perceived strength (`PanelTintCalibration`).
+/// The strength of the Tint across the top of the panel: Original's neutral
+/// shade (`PanelNeutralShade`) or a custom palette's accent wash, which is
+/// calibrated per palette, mode and surface to the same perceived strength
+/// (`PanelTintCalibration`).
 enum PanelTintLevel: String, CaseIterable, Identifiable, Sendable {
     // These raw values are persisted (`AppSettings.Key.panelTint`).
     case off
@@ -63,12 +64,17 @@ enum PanelTintLevel: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var detail: String {
-        switch self {
-        case .off: "No wash. Just the palette surface."
-        case .subtle: "A hint of the accent at the top."
-        case .vivid: "Clearly coloured, still calm."
-        case .bold: "The strongest step that keeps text readable."
+    /// One line, from the user's side. Original's Tint is a neutral shade;
+    /// the custom palettes' Tint is their accent colour.
+    func detail(neutral: Bool) -> String {
+        switch (self, neutral) {
+        case (.off, _): "No tint. Just the palette surface."
+        case (.subtle, true): "A faint shade across the top."
+        case (.vivid, true): "A clear shade that fades down the panel."
+        case (.bold, true): "A deep shade at the top, fading to glass."
+        case (.subtle, false): "A hint of the accent at the top."
+        case (.vivid, false): "Clearly coloured, still calm."
+        case (.bold, false): "The strongest colour that keeps text readable."
         }
     }
 

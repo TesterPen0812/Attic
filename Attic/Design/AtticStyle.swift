@@ -44,7 +44,7 @@ enum AtticStyle {
     static let taskScrollTopPadding: CGFloat = 22
 }
 
-/// The one panel surface: fill, Tint wash, hairline edge and
+/// The one panel surface: fill, Tint, hairline edge and
 /// outside-only elevation, in that order. The main panel and the subtask
 /// checklist windows both render through this modifier, so they can only
 /// ever look the same.
@@ -121,15 +121,14 @@ struct AtticPanelSurface: ViewModifier {
         }
     }
 
-    /// The accent wash, from its calibrated top opacity to nothing at
-    /// `PanelTintCalibration.fadeEnd`, above the fill.
+    /// The Tint (neutral shade or accent wash) along `tintStops`, above
+    /// the fill.
     private func tintWash(shape: Squircle) -> some View {
-        let wash = treatment.washColor
-        return LinearGradient(stops: [
-            .init(color: wash.swiftUIColor(opacity: treatment.tintTopOpacity), location: 0),
-            .init(color: wash.swiftUIColor(opacity: 0), location: PanelTintCalibration.fadeEnd),
-            .init(color: wash.swiftUIColor(opacity: 0), location: 1)
-        ], startPoint: .top, endPoint: .bottom)
+        LinearGradient(
+            stops: treatment.tintGradientStops,
+            startPoint: .top,
+            endPoint: .bottom
+        )
         .clipShape(shape)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -451,5 +450,16 @@ struct AtticPointerShield: View {
             .frame(height: Self.shieldedHeight(height))
             .contentShape(Rectangle())
             .accessibilityHidden(true)
+    }
+}
+
+extension AtticPanelSurfaceTreatment {
+    /// `tintStops` as SwiftUI gradient stops in the wash colour. The panel
+    /// and the Settings samples both draw these.
+    var tintGradientStops: [Gradient.Stop] {
+        let wash = washColor
+        return tintStops.map {
+            Gradient.Stop(color: wash.swiftUIColor(opacity: $0.opacity), location: $0.location)
+        }
     }
 }
