@@ -472,8 +472,25 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     /// How far down the panel the Tint reaches (`PanelTintLength`).
     let tintLength: Double
 
-    // A small buffer above 4.5:1, without retaining an arbitrary heavy fill.
+    /// The historical floor: a small buffer above 4.5:1. Solid, and every
+    /// surface on the uncredited (pre-macOS-26) path, keep it.
     static let readableContrastTarget = 4.75
+
+    /// The worst-case contrast floor each surface is solved to. On native
+    /// Liquid Glass the owner chose the Siri panel's level of transparency:
+    /// its lower third measures about 2.4-3:1 for white text over a white
+    /// page, so Glass keeps 3:1 over the worst-case desktop (a pure white page
+    /// behind Dark, pure black behind Light). Frosted stays the calmer,
+    /// easier-to-read choice at 3.5:1. Typical desktops read far better than
+    /// these extremes; see `Docs/Appearance-Model-2026-09.md` §2.
+    static func readableContrastTarget(kind: Kind, creditsNativeSurface: Bool) -> Double {
+        guard creditsNativeSurface else { return readableContrastTarget }
+        switch kind {
+        case .solid: return readableContrastTarget
+        case .glass: return 3.0
+        case .frosted: return 3.5
+        }
+    }
 
     init(theme: AtticPanelTheme, kind: Kind, palette: AtticPanelThemePalette,
          appearance: AtticPanelThemeAppearance, usesSystemOpaqueSurface: Bool,
@@ -566,6 +583,7 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
             appearance: appearance,
             creditsNativeSurface: creditsNativeSurface
         )
+        let target = readableContrastTarget(kind: kind, creditsNativeSurface: creditsNativeSurface)
         var lower = 0.0
         var upper = 1.0
         for _ in 0..<16 {
@@ -573,7 +591,7 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
             let surface = backdrop.mixed(with: palette.opaqueSurface, amount: alpha)
             let ratio = min(palette.primaryForeground.contrastRatio(with: surface),
                             palette.secondaryForeground.contrastRatio(with: surface))
-            if ratio >= readableContrastTarget { upper = alpha } else { lower = alpha }
+            if ratio >= target { upper = alpha } else { lower = alpha }
         }
         // The first whole percentage point that clears the target.
         return min(ceil(upper * 100) / 100, 1)

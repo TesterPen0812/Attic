@@ -539,6 +539,12 @@ final class AppSettingsTests: XCTestCase {
         for contrast in colorSchemeContrasts {
             for appearance in AtticPanelThemeAppearance.allCases {
                 for kind in AtticPanelSurfaceTreatment.Kind.allCases {
+                    // Light Glass and Frosted carry only a few percent of the
+                    // near-white Light surfaces (the owner's Siri-level
+                    // transparency), so there the palettes are told apart by
+                    // accent, edge and Tint, not by the fill; that identity is
+                    // covered by testPanelThemeIdentityIsQuantizedDistinct...
+                    if appearance == .light && kind != .solid { continue }
                     let entries = customThemes.map { theme in
                         let surface = visibleSurface(
                             for: treatment(

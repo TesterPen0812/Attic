@@ -57,28 +57,38 @@ vs 98, Light Frosted 140 vs 139).
 
 These credits apply only when the native macOS 26+ surface is in use. `creditsNativeSurface` defaults to `AtticGlassControlTreatment.systemSupportsNativeGlass`, but tests pin both paths explicitly. Below macOS 26 the underlay remains the historical raw extreme: white for Dark and black for Light.
 
-For Tint Off, `minimumReadableOpacity` solves the first whole-percent foundation whose composite keeps **both** fixed palette foregrounds at or above **4.75:1**. Solid is always 1.00.
+For Tint Off, `minimumReadableOpacity` solves the first whole-percent foundation whose composite keeps **both** fixed palette foregrounds at or above the surface's floor, `readableContrastTarget(kind:creditsNativeSurface:)`. Solid is always 1.00.
+
+| surface | worst-case floor | why |
+|---|---:|---|
+| Glass (macOS 26+) | **3.0:1** | the owner asked for Siri-level transparency; the Siri panel's lower third measures about 2.4–3:1 for white text over a white page (captured on macOS 27, September 2026) |
+| Frosted (macOS 26+) | **3.5:1** | the calmer, easier-to-read translucent choice, always more opaque than Glass |
+| Solid, and every surface below macOS 26 | 4.75:1 | the historical floor, a small buffer above WCAG AA 4.5:1 |
+
+The floors are for the worst case only: a pure white page behind a Dark panel, pure black behind a Light one. Over a typical desktop the native surface transmits mid-tones and the text reads far better. This is a deliberate trade: small text in the lower half of a Dark Glass panel over a bright white page is about as readable as Siri's, below WCAG AA. In the running app the floors measured exactly: Original Dark Glass 3.0:1 and Frosted 3.6:1 over white, Original Light Glass 3.0–3.1:1 and Frosted 3.6:1 over black; with neutral Bold, Dark Glass runs from 13.9:1 at the top to 3.8:1 near the bottom.
+
+A second consequence: Light Glass carries about 1% foundation and Light Frosted about 17%, and the custom palettes' Light surfaces are all near-white, so in Light on those surfaces the palettes are no longer told apart by their fill. Their accent, edge and Tint still differ (`testPanelThemeIdentityIsQuantizedDistinctInEveryVisibleSurfaceState`); the fill-only distinctness test now covers Solid and every Dark surface.
 
 For arbitrary desktop colours used by the contrast tests, the measured black/white native-surface endpoints are interpolated linearly per sRGB channel. The prototype gives the endpoints and a mid-grey observation; this interpolation is the explicit validation assumption for intermediate backdrops, not a claim that the system compositor is physically linear in every condition.
 
-### 2.3 Current Tint-Off foundation
+### 2.3 Current Tint-Off foundation (Glass at 3.0:1, Frosted at 3.5:1)
 
 | palette | appearance | Glass | Frosted |
 |---|---|---:|---:|
-| Original | Light | 0.23 | 0.30 |
-| Original | Dark | 0.36 | 0.46 |
-| Midnight Cobalt | Light | 0.25 | 0.32 |
-| Midnight Cobalt | Dark | 0.35 | 0.45 |
-| Porcelain Vapor | Light | 0.24 | 0.31 |
-| Porcelain Vapor | Dark | 0.39 | 0.49 |
-| Smoked Umber | Light | 0.25 | 0.33 |
-| Smoked Umber | Dark | 0.36 | 0.46 |
-| Electric Blue | Light | 0.23 | 0.30 |
-| Electric Blue | Dark | 0.36 | 0.46 |
-| Sea Glass | Light | 0.24 | 0.31 |
-| Sea Glass | Dark | 0.37 | 0.48 |
-| Amethyst | Light | 0.24 | 0.32 |
-| Amethyst | Dark | 0.37 | 0.47 |
+| Original | Light | 0.01 | 0.16 |
+| Original | Dark | 0.10 | 0.32 |
+| Midnight Cobalt | Light | 0.01 | 0.18 |
+| Midnight Cobalt | Dark | 0.10 | 0.31 |
+| Porcelain Vapor | Light | 0.01 | 0.17 |
+| Porcelain Vapor | Dark | 0.11 | 0.34 |
+| Smoked Umber | Light | 0.01 | 0.18 |
+| Smoked Umber | Dark | 0.10 | 0.32 |
+| Electric Blue | Light | 0.01 | 0.17 |
+| Electric Blue | Dark | 0.10 | 0.31 |
+| Sea Glass | Light | 0.01 | 0.17 |
+| Sea Glass | Dark | 0.10 | 0.33 |
+| Amethyst | Light | 0.01 | 0.17 |
+| Amethyst | Dark | 0.10 | 0.32 |
 
 The uncredited fallback deliberately reproduces the previous whole-percent foundations exactly: Original 0.54/0.66 (Light/Dark), Midnight Cobalt 0.57/0.66, Porcelain Vapor 0.56/0.69, Smoked Umber 0.58/0.67, Electric Blue 0.55/0.66, Sea Glass 0.57/0.68, and Amethyst 0.57/0.67. The same fallback foundation applies to Glass and Frosted because the old model did not credit either material.
 
@@ -109,13 +119,13 @@ The generated calibration has **6 palettes × 2 appearances × 3 surface kinds �
 - the resulting ΔE76
 - a clamp flag retained only as a defensive fallback
 
-For Glass and Frosted, calibration begins at the Tint-Off foundation. For each whole-percent foundation `f` from there through 1.00, the solver finds the wash opacity `α` that reaches the step's ΔE target over the base composite at `f`. It accepts the first `f` whose top-edge tinted composite keeps primary and secondary foreground contrast at or above 4.75:1. This makes the foundation monotone non-decreasing as Tint gets stronger and lets the wash reach its intended colour difference instead of being forced almost invisible.
+For Glass and Frosted, calibration begins at the Tint-Off foundation. For each whole-percent foundation `f` from there through 1.00, the solver finds the wash opacity `α` that reaches the step's ΔE target over the base composite at `f`. It accepts the first `f` whose top-edge tinted composite keeps primary and secondary foreground contrast at or above the surface's floor (Glass 3.0, Frosted 3.5, Solid 4.75). This makes the foundation monotone non-decreasing as Tint gets stronger and lets the wash reach its intended colour difference instead of being forced almost invisible.
 
 Solid keeps foundation 1.00 and its existing Tint behaviour. On the native-credited path nothing solves at draw time: `PanelTintCalibration.table` supplies both values. On the uncredited fallback path the same cell solver runs once when the treatment is initialized over the raw white/black extreme, and that treatment stores both its solved foundation and its solved top opacity.
 
 The generated table currently contains **zero clamped cells**. The presentation helper retains neutral fallback wording for a future pathological palette, but Settings shows no clamp footer for the current table. Tests independently convert sRGB to Lab, require every cell to land within ±0.25 ΔE of its target, require zero clamps, and require the tint-aware foundation to be monotone non-decreasing by step.
 
-The eight-desktop-extremes readability check transforms each RGB extreme through the measured native-surface endpoint model, samples the wash fade at multiple vertical positions for Tint lengths 30%, 60% and 100%, and requires at least 4.5:1 at every location. The stricter generation boundary remains 4.75:1 at the calibrated worst-case top edge.
+The eight-desktop-extremes readability check transforms each RGB extreme through the measured native-surface endpoint model, samples the wash fade at multiple vertical positions for Tint lengths 30%, 60% and 100%, and requires the surface's floor at every location: the wash only fades from the top edge, where it is calibrated.
 
 ### 4.3 Tint length
 
@@ -155,6 +165,6 @@ Native-glass control treatment remains separate from the panel surface selection
 
 ## 7. Readable foundation: old versus current model
 
-The old conservative solver used the raw desktop extreme below every translucent surface. Across the palettes that produced roughly 54–58% foundations in Light and 66–69% in Dark. The measured native-surface model credits the tone already supplied by the system surface, reducing Tint-Off Glass to 23–39% and Frosted to 30–49% across the current palettes.
+The old conservative solver used the raw desktop extreme below every translucent surface. Across the palettes that produced roughly 54–58% foundations in Light and 66–69% in Dark. The measured native-surface model credits the tone already supplied by the system surface, and the per-surface floors (Glass 3.0, Frosted 3.5) reduce Tint-Off Glass to 1% in Light and 10–11% in Dark, and Frosted to 16–18% in Light and 31–34% in Dark.
 
-The accent wash may deliberately raise that foundation just enough to preserve text while reaching its colour target; Original's neutral shade never does. At Bold, Glass ranges from 24% to 50% and Frosted from 31% to 59% depending on palette and appearance. The result keeps more of the native surface visible at Tint Off, then spends opacity only when a stronger Tint step needs contrast headroom.
+The accent wash may deliberately raise that foundation just enough to preserve text while reaching its colour target; Original's neutral shade never does. At Bold, Glass ranges from 1% to 20% and Frosted from 17% to 42% depending on palette and appearance. The result keeps more of the native surface visible at Tint Off, then spends opacity only when a stronger Tint step needs contrast headroom.

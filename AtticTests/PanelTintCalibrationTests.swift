@@ -127,7 +127,8 @@ final class PanelTintCalibrationTests: XCTestCase {
                         let base = PanelTintCalibration.baseComposite(palette: tinted.palette, foundationOpacity: tinted.foundationOpacity, backdrop: worst)
                         let top = PanelTintCalibration.tintedComposite(base: base, wash: tinted.washColor, topOpacity: tinted.tintTopOpacity)
                         XCTAssertEqual(independentDeltaE(base, top), level.targetColorDifference ?? 0, accuracy: 0.25, context)
-                        XCTAssertGreaterThanOrEqual(PanelTintCalibration.minimumForegroundContrast(palette: tinted.palette, over: top), 4.75 - 0.0001, context)
+                        let floor = AtticPanelSurfaceTreatment.readableContrastTarget(kind: kind, creditsNativeSurface: true)
+                        XCTAssertGreaterThanOrEqual(PanelTintCalibration.minimumForegroundContrast(palette: tinted.palette, over: top), floor - 0.0001, context)
 
                         // Every Tint length: the wash only falls from the top
                         // edge, so a longer Tint must not cost readability.
@@ -142,7 +143,7 @@ final class PanelTintCalibrationTests: XCTestCase {
                                     let color = long.compositedSurface(over: underlay, location: location)
                                     XCTAssertGreaterThanOrEqual(
                                         PanelTintCalibration.minimumForegroundContrast(palette: long.palette, over: color),
-                                        4.5,
+                                        floor - 0.0001,
                                         "\(context) length=\(length) desktop=\(desktop.hexString) location=\(location)"
                                     )
                                 }
@@ -248,8 +249,11 @@ final class PanelTintCalibrationTests: XCTestCase {
                         )
                     }
                     let context = "\(theme.rawValue) \(appearance.rawValue) \(kind.rawValue)"
-                    XCTAssertGreaterThanOrEqual(contrastAt(surface.foundationOpacity), 4.75, context)
-                    XCTAssertLessThan(contrastAt(surface.foundationOpacity - 0.01), 4.75, context)
+                    let floor = AtticPanelSurfaceTreatment.readableContrastTarget(kind: kind, creditsNativeSurface: true)
+                    XCTAssertGreaterThanOrEqual(contrastAt(surface.foundationOpacity), floor, context)
+                    if surface.foundationOpacity > 0.01 {
+                        XCTAssertLessThan(contrastAt(surface.foundationOpacity - 0.01), floor, context)
+                    }
                 }
             }
         }
@@ -432,5 +436,24 @@ final class PanelTintCalibrationTests: XCTestCase {
             XCTAssertFalse(drawn.isEmpty)
         }
         XCTAssertTrue(treatment(.original, .dark, .glass).tintGradientStops.isEmpty)
+    }
+
+    func testSurfaceFloorsArePinned() {
+        typealias T = AtticPanelSurfaceTreatment
+        XCTAssertEqual(T.readableContrastTarget, 4.75)
+        XCTAssertEqual(T.readableContrastTarget(kind: .glass, creditsNativeSurface: true), 3.0)
+        XCTAssertEqual(T.readableContrastTarget(kind: .frosted, creditsNativeSurface: true), 3.5)
+        XCTAssertEqual(T.readableContrastTarget(kind: .solid, creditsNativeSurface: true), 4.75)
+        for kind in Kind.allCases {
+            XCTAssertEqual(T.readableContrastTarget(kind: kind, creditsNativeSurface: false), 4.75, kind.rawValue)
+        }
+        // Frosted is never the more transparent of the two.
+        for theme in AtticPanelTheme.allCases {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                XCTAssertLessThan(treatment(theme, appearance, .glass).foundationOpacity,
+                                  treatment(theme, appearance, .frosted).foundationOpacity,
+                                  "\(theme.rawValue) \(appearance.rawValue)")
+            }
+        }
     }
 }
