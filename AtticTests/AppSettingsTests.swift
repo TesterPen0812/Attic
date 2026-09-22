@@ -416,101 +416,37 @@ final class AppSettingsTests: XCTestCase {
         }
     }
 
-    func testSurfaceEdgeMetricsPreserveExistingProductionConstants() {
-        let original = treatment(
-            for: .original,
-            appearance: .light,
-            contrast: .standard,
-            kind: .opaque
-        )
-        // The pure-white opaque Light surface carries a barely visible edge
-        // only where the shape elevation is drawn beneath it; Increased
-        // Contrast strengthens it by the same step as every other Original
-        // surface.
-        XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard, isElevated: true), 0.07)
-        XCTAssertEqual(
-            original.surfaceEdgeOpacity(for: .increased, isElevated: true),
-            0.17,
-            accuracy: 0.000_000_001
-        )
-        // Hosts without the elevation (the subtask surfaces) keep the edge
-        // they had before the elevation existed.
-        XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard), 0.11)
-        XCTAssertEqual(
-            original.surfaceEdgeOpacity(for: .increased),
-            0.21,
-            accuracy: 0.000_000_001
-        )
-
-        let originalDark = treatment(
-            for: .original,
-            appearance: .dark,
-            contrast: .standard,
-            kind: .opaque
-        )
-        XCTAssertEqual(originalDark.surfaceEdgeOpacity(for: .standard), 0.11)
-        XCTAssertEqual(
-            originalDark.surfaceEdgeOpacity(for: .increased),
-            0.21,
-            accuracy: 0.000_000_001
-        )
-
-        let originalFrosted = treatment(
-            for: .original,
-            appearance: .light,
-            contrast: .standard,
-            kind: .frostedGlass
-        )
-        XCTAssertEqual(originalFrosted.surfaceEdgeOpacity(for: .standard), 0.11)
-        XCTAssertEqual(
-            originalFrosted.surfaceEdgeOpacity(for: .increased),
-            0.21,
-            accuracy: 0.000_000_001
-        )
-
-        let originalGlassmorphism = treatment(
-            for: .original,
-            appearance: .light,
-            contrast: .standard,
-            kind: .glassmorphism
-        )
-        XCTAssertEqual(
-            originalGlassmorphism.surfaceEdgeOpacity(for: .standard),
-            0.055
-        )
-        XCTAssertEqual(
-            originalGlassmorphism.surfaceEdgeOpacity(for: .increased),
-            0.155,
-            accuracy: 0.000_000_001
-        )
-
-        let expectedCustomOpacities: [AtticPanelSurfaceTreatment.Kind: Double] = [
-            .opaque: 0.18,
-            // Custom themes resolve a saved Clear preference to Frosted.
-            .clearGlass: 0.20,
-            .frostedGlass: 0.20,
-            .glassmorphism: 0.17
-        ]
-        for (kind, expectedOpacity) in expectedCustomOpacities {
-            let custom = treatment(
-                for: .midnightCobalt,
-                appearance: .dark,
-                contrast: .standard,
-                kind: kind
-            )
-            XCTAssertEqual(
-                custom.surfaceEdgeOpacity(for: .standard),
-                expectedOpacity,
-                kind.rawValue
-            )
-            XCTAssertEqual(
-                custom.surfaceEdgeOpacity(for: .increased),
-                expectedOpacity + 0.14,
-                accuracy: 0.000_000_001,
-                kind.rawValue
-            )
+    func testSurfaceEdgeIsOneHairlinePerPaletteFamilyOnEverySurface() {
+        // One semantic hairline per family: Original strokes `Color.primary`
+        // at one strength, custom palettes stroke `edgeTint` at another, and
+        // the number never changes with the surface kind, the appearance or
+        // the host window. Increased Contrast adds exactly one step.
+        for appearance in AtticPanelThemeAppearance.allCases {
+            for kind in AtticPanelSurfaceTreatment.Kind.allCases {
+                let original = treatment(for: .original, appearance: appearance, contrast: .standard, kind: kind)
+                XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard),
+                               AtticPanelSurfaceTreatment.originalEdgeOpacity, kind.rawValue)
+                XCTAssertEqual(original.surfaceEdgeOpacity(for: .increased),
+                               AtticPanelSurfaceTreatment.originalEdgeOpacity
+                                   + AtticPanelSurfaceTreatment.originalIncreasedContrastEdgeStep,
+                               accuracy: 0.000_000_001, kind.rawValue)
+                for theme in AtticPanelTheme.allCases where theme != .original {
+                    let custom = treatment(for: theme, appearance: appearance, contrast: .standard, kind: kind)
+                    XCTAssertEqual(custom.surfaceEdgeOpacity(for: .standard),
+                                   AtticPanelSurfaceTreatment.customEdgeOpacity, "\(theme.rawValue) \(kind.rawValue)")
+                    XCTAssertEqual(custom.surfaceEdgeOpacity(for: .increased),
+                                   AtticPanelSurfaceTreatment.customEdgeOpacity
+                                       + AtticPanelSurfaceTreatment.customIncreasedContrastEdgeStep,
+                                   accuracy: 0.000_000_001, "\(theme.rawValue) \(kind.rawValue)")
+                }
+            }
         }
+        XCTAssertEqual(AtticPanelSurfaceTreatment.originalEdgeOpacity, 0.09)
+        XCTAssertEqual(AtticPanelSurfaceTreatment.customEdgeOpacity, 0.19)
+        XCTAssertEqual(AtticPanelSurfaceTreatment.originalIncreasedContrastEdgeStep, 0.10)
+        XCTAssertEqual(AtticPanelSurfaceTreatment.customIncreasedContrastEdgeStep, 0.14)
 
+        let original = treatment(for: .original, appearance: .light, contrast: .standard, kind: .opaque)
         XCTAssertEqual(original.surfaceEdgeLineWidth(for: .standard), 0.75)
         XCTAssertEqual(original.surfaceEdgeLineWidth(for: .increased), 1)
     }
@@ -568,29 +504,24 @@ final class AppSettingsTests: XCTestCase {
         )
     }
 
-    func testOnlyOpaqueSurfacesReceiveShapeElevation() {
+    func testEverySurfaceReceivesTheSameShapeElevation() {
         for theme in AtticPanelTheme.allCases {
             for appearance in AtticPanelThemeAppearance.allCases {
                 for contrast in colorSchemeContrasts {
                     for kind in AtticPanelSurfaceTreatment.Kind.allCases {
                         let surface = treatment(for: theme, appearance: appearance, contrast: contrast, kind: kind)
-                        let context = "\(theme.rawValue) \(appearance.rawValue) \(kind.rawValue)"
-                        guard surface.kind == .opaque else {
-                            XCTAssertNil(surface.surfaceElevation, context)
-                            continue
-                        }
                         XCTAssertEqual(
                             surface.surfaceElevation,
-                            appearance == .dark ? .opaqueDark : .opaqueLight,
-                            context
+                            appearance == .dark ? .dark : .light,
+                            "\(theme.rawValue) \(appearance.rawValue) \(kind.rawValue)"
                         )
                     }
                 }
             }
         }
 
-        let light = AtticPanelSurfaceElevation.opaqueLight
-        let dark = AtticPanelSurfaceElevation.opaqueDark
+        let light = AtticPanelSurfaceElevation.light
+        let dark = AtticPanelSurfaceElevation.dark
         // Broad, soft, low opacity, nearly no offset, no dark halo.
         XCTAssertLessThanOrEqual(light.opacity, 0.12)
         XCTAssertLessThan(light.opacity, dark.opacity)

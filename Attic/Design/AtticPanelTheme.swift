@@ -583,52 +583,37 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         }
     }
 
-    /// `isElevated` is true only when the host draws `surfaceElevation`
-    /// beneath this surface. Hosts without that shadow keep the stronger
-    /// edge, because nothing else separates them from the content behind.
-    func surfaceEdgeOpacity(for contrast: ColorSchemeContrast, isElevated: Bool = false) -> Double {
-        let standardOpacity: Double
-        let increasedContrastAdjustment: Double
-
-        if usesSystemOpaqueSurface {
-            switch kind {
-            case .glassmorphism:
-                standardOpacity = 0.055
-            case .opaque where appearance == .light && isElevated:
-                // A pure-white opaque panel only needs a barely visible
-                // boundary against another light window; the shape elevation
-                // carries the rest of the separation.
-                standardOpacity = 0.07
-            default:
-                standardOpacity = 0.11
-            }
-            increasedContrastAdjustment = 0.10
-        } else {
-            switch kind {
-            case .opaque: standardOpacity = 0.18
-            case .clearGlass: standardOpacity = 0.22
-            case .frostedGlass: standardOpacity = 0.20
-            case .glassmorphism: standardOpacity = 0.17
-            }
-            increasedContrastAdjustment = 0.14
-        }
-
+    /// One semantic hairline per palette family, the same strength on every
+    /// surface kind and on every panel window. It reads as a boundary against
+    /// a same-coloured backdrop without becoming a border; Increased Contrast
+    /// adds one step. Original strokes `Color.primary`, custom palettes their
+    /// `edgeTint`, so the numbers differ by family, never by surface.
+    func surfaceEdgeOpacity(for contrast: ColorSchemeContrast) -> Double {
+        let standardOpacity = usesSystemOpaqueSurface
+            ? Self.originalEdgeOpacity
+            : Self.customEdgeOpacity
+        let increasedContrastAdjustment = usesSystemOpaqueSurface
+            ? Self.originalIncreasedContrastEdgeStep
+            : Self.customIncreasedContrastEdgeStep
         return contrast == .increased
             ? min(standardOpacity + increasedContrastAdjustment, 1)
             : standardOpacity
     }
 
+    static let originalEdgeOpacity = 0.09
+    static let customEdgeOpacity = 0.19
+    static let originalIncreasedContrastEdgeStep = 0.10
+    static let customIncreasedContrastEdgeStep = 0.14
+
     func surfaceEdgeLineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
         contrast == .increased ? 1 : 0.75
     }
 
-    /// Exterior elevation for the visible squircle. Only opaque surfaces
-    /// receive it: their fill hides the shadow's interior, so the shadow
-    /// reads purely as separation from similarly coloured content behind the
-    /// panel. Glass surfaces keep their native lighting and stay untouched.
-    var surfaceElevation: AtticPanelSurfaceElevation? {
-        guard kind == .opaque else { return nil }
-        return appearance == .dark ? .opaqueDark : .opaqueLight
+    /// Exterior elevation for the visible squircle, on every surface kind.
+    /// The host draws it outside the shape only (`AtticPanelOutsideShadow`),
+    /// so a translucent interior is never darkened by its own shadow.
+    var surfaceElevation: AtticPanelSurfaceElevation {
+        appearance == .dark ? .dark : .light
     }
 }
 
@@ -640,8 +625,8 @@ struct AtticPanelSurfaceElevation: Equatable, Sendable {
     let radius: CGFloat
     let offsetY: CGFloat
 
-    static let opaqueLight = AtticPanelSurfaceElevation(opacity: 0.10, radius: 10, offsetY: 1)
-    static let opaqueDark = AtticPanelSurfaceElevation(opacity: 0.30, radius: 10, offsetY: 1)
+    static let light = AtticPanelSurfaceElevation(opacity: 0.10, radius: 10, offsetY: 1)
+    static let dark = AtticPanelSurfaceElevation(opacity: 0.30, radius: 10, offsetY: 1)
 
     /// Room the shadow needs beyond the visible surface before it fades out.
     var extent: CGFloat { radius * 2 + abs(offsetY) }

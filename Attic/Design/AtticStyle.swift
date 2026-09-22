@@ -91,21 +91,17 @@ struct AtticPanelSurface: ViewModifier {
             .background {
                 // Outside the clip on purpose: the shadow belongs to the
                 // visible squircle, not to the rectangular AppKit window.
-                if showsElevation, let elevation = treatment.surfaceElevation {
-                    shape
-                        .fill(treatment.palette.opaqueSurfaceColor)
-                        .shadow(
-                            color: Color.black.opacity(elevation.opacity),
-                            radius: elevation.radius,
-                            x: 0,
-                            y: elevation.offsetY
-                        )
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                        .animation(
-                            (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
-                            value: surfaceAnimationIdentity
-                        )
+                if showsElevation {
+                    AtticPanelOutsideShadow(
+                        shape: shape,
+                        elevation: treatment.surfaceElevation
+                    )
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                    .animation(
+                        (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
+                        value: surfaceAnimationIdentity
+                    )
                 }
             }
     }
@@ -224,10 +220,7 @@ struct AtticPanelSurface: ViewModifier {
     }
 
     private var surfaceEdgeColor: Color {
-        let opacity = treatment.surfaceEdgeOpacity(
-            for: colorSchemeContrast,
-            isElevated: showsElevation && treatment.surfaceElevation != nil
-        )
+        let opacity = treatment.surfaceEdgeOpacity(for: colorSchemeContrast)
         if treatment.usesSystemOpaqueSurface {
             return Color.primary.opacity(opacity)
         }
@@ -239,6 +232,45 @@ struct AtticPanelSurface: ViewModifier {
 
 private enum SurfaceAnimationIdentity: Equatable {
     case themed(AtticPanelSurfaceTreatment)
+}
+
+/// The panel's exterior elevation: a soft shadow of the squircle with the
+/// squircle itself cut back out, so nothing is ever drawn under the surface.
+/// A translucent Glass or Frosted interior therefore stays exactly as
+/// see-through as its own composite; only the room outside the shape (the
+/// window's transparent margin) carries the shadow.
+///
+/// The shadow-casting fill is inset by `casterInset` while the cut-out is
+/// the exact shape: the caster's anti-aliased rim then lies wholly inside
+/// the cut-out and can never survive as a dark ring under the edge stroke,
+/// and the cut-out removes nothing beyond the true edge, so there is no
+/// bright seam between the hairline and the shadow either. Half a point of
+/// inset moves a 10pt-radius shadow by an invisible amount.
+struct AtticPanelOutsideShadow: View {
+    let shape: Squircle
+    let elevation: AtticPanelSurfaceElevation
+
+    /// How far inside the shape the shadow-casting fill stops, in points.
+    static let casterInset: CGFloat = 0.5
+
+    var body: some View {
+        ZStack {
+            shape
+                .fill(Color.black)
+                .padding(Self.casterInset)
+                .shadow(
+                    color: Color.black.opacity(elevation.opacity),
+                    radius: elevation.radius,
+                    x: 0,
+                    y: elevation.offsetY
+                )
+            shape
+                .fill(Color.black)
+                .blendMode(.destinationOut)
+        }
+        .compositingGroup()
+        .accessibilityHidden(true)
+    }
 }
 
 private struct AtticPanelGlassStyleKey: EnvironmentKey {
@@ -290,6 +322,21 @@ enum AtticGlassControlTreatment: Equatable {
     static func resolve(reduceTransparency: Bool, supportsNativeGlass: Bool) -> Self {
         if reduceTransparency { return .opaque }
         return supportsNativeGlass ? .nativeGlass : .material
+    }
+
+    /// Native Liquid Glass takes its tone from whatever is behind it, so on a
+    /// pure-white Solid surface a control's fill lands within a couple of
+    /// levels of the panel and the pill all but disappears. This faint
+    /// `Color.primary` outline keeps every native-glass control legible on
+    /// white and on busy glass alike; Increased Contrast is one step stronger.
+    /// Measured on the Light Solid `#FFFFFF` composer field (see
+    /// `Docs/Appearance-Model-2026-09.md`).
+    static func nativeGlassOutlineOpacity(for contrast: ColorSchemeContrast) -> Double {
+        contrast == .increased ? 0.20 : 0.10
+    }
+
+    static func nativeGlassOutlineLineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
+        contrast == .increased ? 1 : 0.75
     }
 }
 
@@ -344,17 +391,17 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
     }
 
     @available(macOS 26.0, *)
-    @ViewBuilder
     private func nativeGlassControl(content: Content, glass: Glass) -> some View {
-        if colorSchemeContrast == .increased {
-            content
-                .glassEffect(glass, in: shape)
-                .overlay {
-                    shape.stroke(Color.primary.opacity(0.18), lineWidth: 1)
-                }
-        } else {
-            content.glassEffect(glass, in: shape)
-        }
+        content
+            .glassEffect(glass, in: shape)
+            .overlay {
+                shape.stroke(
+                    Color.primary.opacity(
+                        AtticGlassControlTreatment.nativeGlassOutlineOpacity(for: colorSchemeContrast)
+                    ),
+                    lineWidth: AtticGlassControlTreatment.nativeGlassOutlineLineWidth(for: colorSchemeContrast)
+                )
+            }
     }
 
     private var opaqueControlColor: Color {
