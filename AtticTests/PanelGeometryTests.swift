@@ -117,8 +117,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testSwipeReportsFingerProgressAndRestoresAfterReversalBelowThreshold() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         var samples: [CGFloat] = []
         var cancellations = 0
         var hides = 0
@@ -139,8 +138,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testCommittedSwipeDoesNotRestoreBeforeStartingTheCommonHideTransition() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         var events: [String] = []
         panel.onTrackpadDismissProgress = { _ in events.append("progress") }
         panel.onTrackpadDismissCancelled = { events.append("restore") }
@@ -154,8 +152,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testInterruptedSwipeRestoresOnceAndRequiresAnotherBegin() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         var cancellations = 0
         var hides = 0
         panel.onTrackpadDismissCancelled = { cancellations += 1 }
@@ -170,8 +167,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testDirectInputSettlesTheCancelledSwipeBeforeResponderDispatch() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         var events: [String] = []
         panel.onTrackpadDismissCancelled = { events.append("restore") }
         panel.onDirectContentInteraction = { events.append("settle") }
@@ -527,8 +523,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testBlockedPanelGestureKeepsItsContentOwnershipUntilNextBegin() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         var eligible = false
         panel.canBeginTrackpadSwipe = { _ in eligible }
         var hides = 0
@@ -544,9 +539,29 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     @MainActor
+    func testHeldPointerButtonOwnsTheGestureUntilItIsReleased() throws {
+        var pressedButtons = 1
+        let panel = makeSwipePanel()
+        panel.pressedMouseButtonsQuery = { pressedButtons }
+        var hides = 0
+        panel.onTrackpadDismissRequest = { hides += 1 }
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 0, "A button held at the first sample keeps the gesture out of the panel")
+        pressedButtons = 0
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        pressedButtons = 1
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 0, "A button pressed after the first sample invalidates the sequence")
+        pressedButtons = 0
+        panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
+        panel.sendEvent(try panelScrollEvent(deltaX: 0, deltaY: 0, phase: .ended))
+        XCTAssertEqual(hides, 1)
+    }
+
+    @MainActor
     func testPanelSwipeCannotFinishAfterLosingKeyWindow() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         var hides = 0
         panel.onTrackpadDismissRequest = { hides += 1 }
         panel.sendEvent(try panelScrollEvent(deltaX: -60, deltaY: 0, phase: .began))
@@ -560,8 +575,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testInteractionLockStartingDuringSwipeCancelsDismissal() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         var eligible = true
         panel.canBeginTrackpadSwipe = { _ in eligible }
         var hides = 0
@@ -574,8 +588,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testReregisteredNotesTargetRequiresFreshSwipe() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         let target = SwipeNotesTarget(frame: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000))
         panel.contentView = SwipeHitTargetView(target: target)
         panel.notesSwipeTarget = target
@@ -591,8 +604,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testPanelNeverClaimsCanvasPanBeforeCanvasReceivesItsEvents() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         let target = CanvasNSView()
         let root = SwipeHitTargetView(target: target)
         panel.contentView = root
@@ -605,8 +617,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testNotesNavigationAndPanelHidingHaveOneDirectionOwner() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         let target = SwipeNotesTarget(frame: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000))
         panel.contentView = SwipeHitTargetView(target: target)
         panel.notesSwipeTarget = target
@@ -633,8 +644,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testNotesGestureCannotNavigateReplacementWorkspace() throws {
-        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        let panel = makeSwipePanel()
         let original = SwipeNotesTarget(frame: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000))
         panel.contentView = SwipeHitTargetView(target: original)
         panel.notesSwipeTarget = original
@@ -907,12 +917,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testPanelRoutesPreciseTrackpadSwipeToInteractiveHideCallback() throws {
-        let panel = AtticPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: true
-        )
+        let panel = makeSwipePanel()
         panel.trackpadDismissCorner = .topRight
         var hideRequestCount = 0
         panel.onTrackpadDismissRequest = {
@@ -928,12 +933,7 @@ final class PanelGeometryTests: XCTestCase {
 
     @MainActor
     func testModifiedScrollCancelsPendingPanelDismissGesture() throws {
-        let panel = AtticPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: true
-        )
+        let panel = makeSwipePanel()
         panel.trackpadDismissCorner = .topRight
         var hideRequestCount = 0
         panel.onTrackpadDismissRequest = {
@@ -1714,6 +1714,7 @@ final class PanelGeometryTests: XCTestCase {
         )
         let panel = AtticPanel(contentRect: visible, styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: true)
+        panel.pressedMouseButtonsQuery = { 0 }
         panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
         panel.setVisibleContentFrame(visible, display: false)
         panel.contentView = AtticPanelContentContainer(
@@ -1738,6 +1739,18 @@ final class PanelGeometryTests: XCTestCase {
             modifierFlags: [], timestamp: timestamp, windowNumber: panel.windowNumber,
             context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1
         ))
+    }
+
+    /// Swipe delivery consults live pointer-button state, which belongs to the
+    /// physical trackpad rather than the synthesized event. Pinning it keeps a
+    /// stray click during the suite from silently rejecting the gesture.
+    @MainActor
+    private func makeSwipePanel() -> AtticPanel {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        panel.pressedMouseButtonsQuery = { 0 }
+        return panel
     }
 
     private func panelScrollEvent(

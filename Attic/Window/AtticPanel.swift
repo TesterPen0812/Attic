@@ -27,6 +27,11 @@ final class AtticPanel: NSPanel {
         }
     }
     var canBeginTrackpadSwipe: ((NSEvent) -> Bool)?
+    /// Physical button state is live HID input rather than part of the
+    /// delivered event, so the swipe gate reads it through this query. Tests
+    /// and previews supply the state they mean to exercise instead of
+    /// inheriting whatever the real pointer happens to be doing.
+    var pressedMouseButtonsQuery: @MainActor () -> Int = { NSEvent.pressedMouseButtons }
     private var trackpadDismissTracker = PanelTrackpadDismissTracker()
     private enum SwipeRoute { case hide, notes, content }
     private var swipeRoute: SwipeRoute?
@@ -92,7 +97,7 @@ final class AtticPanel: NSPanel {
         if phase == .began {
             cancelTrackpadSwipe()
             swipeSequenceActive = event.hasPreciseScrollingDeltas
-                && NSEvent.pressedMouseButtons == 0
+                && pressedMouseButtonsQuery() == 0
                 && (canBeginTrackpadSwipe?(event) ?? true)
                 && !contentOwnsHorizontalScrolling(at: event.locationInWindow)
             swipeRoute = swipeSequenceActive ? nil : .content
@@ -110,7 +115,7 @@ final class AtticPanel: NSPanel {
         }
         // Imports, modal presentation, or other interaction locks may start
         // after the initial sample. They must invalidate this sequence too.
-        if NSEvent.pressedMouseButtons != 0 || !(canBeginTrackpadSwipe?(event) ?? true) {
+        if pressedMouseButtonsQuery() != 0 || !(canBeginTrackpadSwipe?(event) ?? true) {
             cancelTrackpadSwipe()
             super.sendEvent(event)
             return
