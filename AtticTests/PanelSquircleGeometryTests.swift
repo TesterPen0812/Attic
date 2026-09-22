@@ -46,6 +46,48 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(panel.accessibilityFrame(), visible)
     }
 
+    @MainActor
+    func testSurfaceMarginWidensTheNativeFrameWithoutMovingTheVisibleSurface() {
+        let visible = CGRect(x: 100, y: 200, width: 480, height: 620)
+        let panel = AtticPanel(contentRect: visible, styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
+        panel.surfaceMargin = AtticStyle.panelElevationMargin
+        XCTAssertEqual(panel.nativeMargin, AtticStyle.panelElevationMargin)
+        panel.setVisibleContentFrame(visible, display: false)
+        XCTAssertEqual(panel.visibleContentFrame, visible)
+        XCTAssertEqual(panel.frame, visible.insetBy(dx: -24, dy: -24))
+        XCTAssertEqual(panel.accessibilityFrame(), visible)
+
+        // A margin smaller than the grip never shrinks the acquisition band.
+        panel.surfaceMargin = 2
+        XCTAssertEqual(panel.nativeMargin, AtticPanelResizePolicy.outsideGripThickness)
+    }
+
+    func testElevationMarginBeyondTheGripStaysClickThrough() {
+        let bounds = CGRect(x: 0, y: 0, width: 480, height: 620)
+        let grip = AtticPanelResizePolicy.outsideGripThickness
+        let margin = AtticStyle.panelElevationMargin
+        for corner in ScreenCorner.allCases {
+            for distance in stride(from: grip + 1, through: margin, by: 1) {
+                for point in [
+                    CGPoint(x: -distance, y: bounds.midY),
+                    CGPoint(x: bounds.maxX + distance, y: bounds.midY),
+                    CGPoint(x: bounds.midX, y: -distance),
+                    CGPoint(x: bounds.midX, y: bounds.maxY + distance),
+                    CGPoint(x: -distance, y: -distance),
+                    CGPoint(x: bounds.maxX + distance, y: bounds.maxY + distance)
+                ] {
+                    XCTAssertFalse(Squircle.contains(point, in: bounds, cornerRadius: 80,
+                                                     exponent: AtticStyle.panelSquircleExponent))
+                    XCTAssertNil(AtticPanelResizePolicy.resizeEdges(
+                        at: point, in: bounds, cornerRadius: 80, dockedAt: corner, acquisitionInset: grip
+                    ), "Shadow room at \(point) must not become a resize grip")
+                }
+            }
+        }
+    }
+
     func testBlankHeaderAboveControlsIsDraggableAcrossItsWidth() {
         let bounds = CGRect(x: 0, y: 0, width: 480, height: 620)
         let radius: CGFloat = 80

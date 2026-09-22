@@ -106,7 +106,10 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 // Match the existing AccentColor asset in both schemes so
                 // choosing (or defaulting to) Original is visually inert.
                 accent: .init(red: 0.116, green: 0.478, blue: 0.980),
-                opaqueSurface: .init(red: 0.965, green: 0.965, blue: 0.975),
+                // The Original opaque Light surface is exactly #FFFFFF. Its
+                // boundary comes from the hairline edge and the shape
+                // elevation, never from an off-white or grey fill.
+                opaqueSurface: .init(red: 1, green: 1, blue: 1),
                 surfaceTint: .init(red: 1, green: 1, blue: 1),
                 edgeTint: .init(red: 0, green: 0, blue: 0),
                 clearTintOpacity: 0.08,
@@ -585,7 +588,17 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         let increasedContrastAdjustment: Double
 
         if usesSystemOpaqueSurface {
-            standardOpacity = kind == .glassmorphism ? 0.055 : 0.11
+            switch kind {
+            case .glassmorphism:
+                standardOpacity = 0.055
+            case .opaque where appearance == .light:
+                // A pure-white opaque panel only needs a barely visible
+                // boundary against another light window; the shape elevation
+                // carries the rest of the separation.
+                standardOpacity = 0.07
+            default:
+                standardOpacity = 0.11
+            }
             increasedContrastAdjustment = 0.10
         } else {
             switch kind {
@@ -605,6 +618,30 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     func surfaceEdgeLineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
         contrast == .increased ? 1 : 0.75
     }
+
+    /// Exterior elevation for the visible squircle. Only opaque surfaces
+    /// receive it: their fill hides the shadow's interior, so the shadow
+    /// reads purely as separation from similarly coloured content behind the
+    /// panel. Glass surfaces keep their native lighting and stay untouched.
+    var surfaceElevation: AtticPanelSurfaceElevation? {
+        guard kind == .opaque else { return nil }
+        return appearance == .dark ? .opaqueDark : .opaqueLight
+    }
+}
+
+/// A soft, broad, low-opacity shadow that follows the panel shape. The
+/// AppKit window keeps its own shadow disabled so nothing rectangular stacks
+/// beneath this treatment.
+struct AtticPanelSurfaceElevation: Equatable, Sendable {
+    let opacity: Double
+    let radius: CGFloat
+    let offsetY: CGFloat
+
+    static let opaqueLight = AtticPanelSurfaceElevation(opacity: 0.10, radius: 10, offsetY: 1)
+    static let opaqueDark = AtticPanelSurfaceElevation(opacity: 0.30, radius: 10, offsetY: 1)
+
+    /// Room the shadow needs beyond the visible surface before it fades out.
+    var extent: CGFloat { radius * 2 + abs(offsetY) }
 }
 
 private struct AtticPanelThemePaletteKey: EnvironmentKey {

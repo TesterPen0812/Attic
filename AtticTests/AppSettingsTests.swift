@@ -423,9 +423,38 @@ final class AppSettingsTests: XCTestCase {
             contrast: .standard,
             kind: .opaque
         )
-        XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard), 0.11)
+        // The pure-white opaque Light surface carries a barely visible edge;
+        // Increased Contrast strengthens it by the same step as every other
+        // Original surface.
+        XCTAssertEqual(original.surfaceEdgeOpacity(for: .standard), 0.07)
         XCTAssertEqual(
             original.surfaceEdgeOpacity(for: .increased),
+            0.17,
+            accuracy: 0.000_000_001
+        )
+
+        let originalDark = treatment(
+            for: .original,
+            appearance: .dark,
+            contrast: .standard,
+            kind: .opaque
+        )
+        XCTAssertEqual(originalDark.surfaceEdgeOpacity(for: .standard), 0.11)
+        XCTAssertEqual(
+            originalDark.surfaceEdgeOpacity(for: .increased),
+            0.21,
+            accuracy: 0.000_000_001
+        )
+
+        let originalFrosted = treatment(
+            for: .original,
+            appearance: .light,
+            contrast: .standard,
+            kind: .frostedGlass
+        )
+        XCTAssertEqual(originalFrosted.surfaceEdgeOpacity(for: .standard), 0.11)
+        XCTAssertEqual(
+            originalFrosted.surfaceEdgeOpacity(for: .increased),
             0.21,
             accuracy: 0.000_000_001
         )
@@ -475,6 +504,97 @@ final class AppSettingsTests: XCTestCase {
 
         XCTAssertEqual(original.surfaceEdgeLineWidth(for: .standard), 0.75)
         XCTAssertEqual(original.surfaceEdgeLineWidth(for: .increased), 1)
+    }
+
+    func testOriginalOpaqueLightSurfaceIsPureWhiteWithoutGradient() {
+        let white = AtticThemeColor(red: 1, green: 1, blue: 1)
+        let light = AtticPanelTheme.original.palette(for: AtticPanelThemeAppearance.light)
+        XCTAssertEqual(light.opaqueSurface, white)
+        XCTAssertEqual(light.opaqueSurface.hexString, "FFFFFF")
+        XCTAssertEqual(
+            AtticPanelTheme.original.palette(for: AtticPanelThemeAppearance.light, contrast: .increased).opaqueSurface,
+            white
+        )
+
+        for reduceTransparency in [false, true] {
+            for style in PanelGlassStyle.allCases {
+                let treatment = AtticPanelTheme.original.surfaceTreatment(
+                    appearance: .light,
+                    contrast: .standard,
+                    glassStyle: style,
+                    isTranslucent: reduceTransparency,
+                    reduceTransparency: reduceTransparency
+                )
+                XCTAssertEqual(treatment.kind, .opaque)
+                XCTAssertEqual(treatment.foundationOpacity, 1)
+                XCTAssertEqual(treatment.tintOpacity, 0)
+                // Gradient 0 draws nothing, so the composited surface is the
+                // fill itself whatever sits behind the panel.
+                for backdrop in [AtticThemeColor(red: 0, green: 0, blue: 0),
+                                 AtticThemeColor(red: 0.5, green: 0.2, blue: 0.8)] {
+                    XCTAssertEqual(
+                        treatment.compositedSurface(over: backdrop, location: 0, gradientCoverage: 0),
+                        white
+                    )
+                    XCTAssertEqual(
+                        treatment.compositedSurface(over: backdrop, location: 1, gradientCoverage: 0),
+                        white
+                    )
+                }
+                XCTAssertEqual(treatment.gradientOpacity(at: 0, coverage: 0), 0)
+            }
+        }
+
+        // Custom themes keep their own intentional surfaces.
+        for theme in AtticPanelTheme.allCases where theme != .original {
+            XCTAssertNotEqual(
+                theme.palette(for: AtticPanelThemeAppearance.light).opaqueSurface,
+                white,
+                theme.rawValue
+            )
+        }
+        XCTAssertNotEqual(
+            AtticPanelTheme.original.palette(for: AtticPanelThemeAppearance.dark).opaqueSurface,
+            white
+        )
+    }
+
+    func testOnlyOpaqueSurfacesReceiveShapeElevation() {
+        for theme in AtticPanelTheme.allCases {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for contrast in colorSchemeContrasts {
+                    for kind in AtticPanelSurfaceTreatment.Kind.allCases {
+                        let surface = treatment(for: theme, appearance: appearance, contrast: contrast, kind: kind)
+                        let context = "\(theme.rawValue) \(appearance.rawValue) \(kind.rawValue)"
+                        guard surface.kind == .opaque else {
+                            XCTAssertNil(surface.surfaceElevation, context)
+                            continue
+                        }
+                        XCTAssertEqual(
+                            surface.surfaceElevation,
+                            appearance == .dark ? .opaqueDark : .opaqueLight,
+                            context
+                        )
+                    }
+                }
+            }
+        }
+
+        let light = AtticPanelSurfaceElevation.opaqueLight
+        let dark = AtticPanelSurfaceElevation.opaqueDark
+        // Broad, soft, low opacity, nearly no offset, no dark halo.
+        XCTAssertLessThanOrEqual(light.opacity, 0.12)
+        XCTAssertLessThan(light.opacity, dark.opacity)
+        XCTAssertLessThanOrEqual(dark.opacity, 0.35)
+        XCTAssertGreaterThanOrEqual(light.radius, 8)
+        XCTAssertEqual(light.radius, dark.radius)
+        XCTAssertLessThanOrEqual(abs(light.offsetY), 2)
+        XCTAssertLessThanOrEqual(abs(dark.offsetY), 2)
+        // The native window must leave room for the shadow to fade out.
+        XCTAssertGreaterThanOrEqual(AtticStyle.panelElevationMargin, light.extent)
+        XCTAssertGreaterThanOrEqual(AtticStyle.panelElevationMargin, dark.extent)
+        XCTAssertGreaterThan(AtticStyle.panelElevationMargin, AtticPanelResizePolicy.outsideGripThickness)
+        XCTAssertFalse(AtticStyle.panelUsesSystemShadow, "The AppKit shadow would stack under the shape shadow")
     }
 
     func testOriginalThemeKeepsTheExistingAccentAndSurfaceContract() {

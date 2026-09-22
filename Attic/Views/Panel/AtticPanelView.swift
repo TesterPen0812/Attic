@@ -160,7 +160,8 @@ struct AtticPanelView: View {
             treatment: panelSurfaceTreatment,
             cornerRadius: cornerRadius,
             gradientCoverage: settings.panelGradientCoverage,
-            gradientColorHex: settings.panelGradientColorHex
+            gradientColorHex: settings.panelGradientColorHex,
+            showsElevation: true
         )
         .contextMenu {
             Button("Settings…", systemImage: "gearshape") {

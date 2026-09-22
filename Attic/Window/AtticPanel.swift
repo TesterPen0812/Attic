@@ -40,12 +40,17 @@ final class AtticPanel: NSPanel {
     /// The invisible acquisition perimeter is part of the native window only.
     /// Content geometry and saved sizes always describe the visible surface.
     var resizePerimeter: CGFloat = 0
+    /// Transparent room for the surface's exterior shadow. Pointer events in
+    /// this band beyond the resize perimeter pass through to the app behind.
+    var surfaceMargin: CGFloat = 0
+    /// How far the native frame extends beyond the visible surface.
+    var nativeMargin: CGFloat { max(resizePerimeter, surfaceMargin) }
     var visibleContentFrame: CGRect {
-        frame.insetBy(dx: resizePerimeter, dy: resizePerimeter)
+        frame.insetBy(dx: nativeMargin, dy: nativeMargin)
     }
 
     func nativeFrame(forVisibleFrame frame: CGRect) -> CGRect {
-        frame.insetBy(dx: -resizePerimeter, dy: -resizePerimeter)
+        frame.insetBy(dx: -nativeMargin, dy: -nativeMargin)
     }
 
     func setVisibleContentFrame(_ frame: CGRect, display: Bool) {
@@ -338,7 +343,7 @@ enum AtticPanelResizePolicy {
         // capable of ignoring AppKit's min/max properties and delegate clamp.
         // Keep one resize authority: the generous custom grips below.
         panel.styleMask.remove(.resizable)
-        let perimeter = (panel as? AtticPanel)?.resizePerimeter ?? 0
+        let perimeter = (panel as? AtticPanel)?.nativeMargin ?? 0
         let minimumSize = CGSize(
             width: min(PanelGeometry.minimumPanelSize.width, maximumSize?.width ?? .greatestFiniteMagnitude) + perimeter * 2,
             height: min(PanelGeometry.minimumPanelSize.height, maximumSize?.height ?? .greatestFiniteMagnitude) + perimeter * 2

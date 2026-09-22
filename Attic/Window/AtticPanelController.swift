@@ -500,11 +500,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func configurePanel() {
         let visibleFrame = panel.frame
         panel.resizePerimeter = AtticPanelResizePolicy.outsideGripThickness
+        panel.surfaceMargin = AtticStyle.panelElevationMargin
         panel.setVisibleContentFrame(visibleFrame, display: false)
         panel.contentView = AtticPanelContentContainer(
             hostingView: hostingView,
             visibleSize: visibleFrame.size,
-            perimeter: panel.resizePerimeter
+            perimeter: panel.nativeMargin
         )
         panel.isOpaque = false
         panel.backgroundColor = .clear

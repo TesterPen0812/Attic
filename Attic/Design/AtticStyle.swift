@@ -10,6 +10,10 @@ enum AtticStyle {
     /// The AppKit window remains rectangular while the visible panel is a squircle.
     /// Disabling its system shadow prevents square bounds from showing beyond large corners.
     static let panelUsesSystemShadow = false
+    /// Transparent, click-through room the native window keeps around the
+    /// visible surface so the SwiftUI shape elevation can fade out instead of
+    /// being cut at the window edge. It never becomes a resize grip.
+    static let panelElevationMargin: CGFloat = 24
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4
@@ -45,6 +49,9 @@ struct AtticPanelSurface: ViewModifier {
     let cornerRadius: CGFloat
     let gradientCoverage: Double
     let gradientColorHex: String
+    /// Only hosts whose native window leaves `AtticStyle.panelElevationMargin`
+    /// around the surface should draw the exterior shadow.
+    let showsElevation: Bool
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -81,6 +88,26 @@ struct AtticPanelSurface: ViewModifier {
             }
             .clipShape(shape)
             .contentShape(shape)
+            .background {
+                // Outside the clip on purpose: the shadow belongs to the
+                // visible squircle, not to the rectangular AppKit window.
+                if showsElevation, let elevation = treatment.surfaceElevation {
+                    shape
+                        .fill(treatment.palette.opaqueSurfaceColor)
+                        .shadow(
+                            color: Color.black.opacity(elevation.opacity),
+                            radius: elevation.radius,
+                            x: 0,
+                            y: elevation.offsetY
+                        )
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                        .animation(
+                            (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
+                            value: surfaceAnimationIdentity
+                        )
+                }
+            }
     }
 
     @ViewBuilder
@@ -369,14 +396,16 @@ extension View {
         treatment: AtticPanelSurfaceTreatment,
         cornerRadius: CGFloat = AtticStyle.panelCornerRadius,
         gradientCoverage: Double = 0.55,
-        gradientColorHex: String = ""
+        gradientColorHex: String = "",
+        showsElevation: Bool = false
     ) -> some View {
         modifier(
             AtticPanelSurface(
                 treatment: treatment,
                 cornerRadius: cornerRadius,
                 gradientCoverage: gradientCoverage,
-                gradientColorHex: gradientColorHex
+                gradientColorHex: gradientColorHex,
+                showsElevation: showsElevation
             )
         )
     }
