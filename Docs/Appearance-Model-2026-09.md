@@ -109,8 +109,9 @@ Fidelity to the old Original Dark Clear: see §7.
 
 ### 3.1 Depth on Solid, dark palettes
 
-Captured over white (`after-<palette>-dark-solid-depthtrue-tintoff-white.png`
-in the PR's capture set). The crown is 0.82 black at the top edge, so on a
+Captured over white (`Docs/Appearance-Model-2026-09/depth-on-solid-<palette>-dark.jpg`;
+the full matrix is in the PR's capture set and summarised in the
+`sheet-<palette>-<backdrop>.jpg` contact sheets in the same folder). The crown is 0.82 black at the top edge, so on a
 dark Solid palette the top third reads as near-black whatever the palette:
 Midnight Cobalt's navy `#071127` becomes about `#040914` at the top and only
 returns to navy below the middle; Smoked Umber, Porcelain Vapor, Amethyst and
@@ -267,6 +268,13 @@ six columns):
 | old Clear (main 5451490) | 72 71 23 | 63 70 27 | 64 74 45 | 75 51 92 | 68 38 100 | 65 41 100 |
 | new Glass + Depth | 29 30 15 | 27 29 15 | 25 30 18 | 34 22 42 | 32 21 44 | 31 21 44 |
 | new Glass, Depth off | 57 62 27 | 51 62 29 | 50 63 38 | 73 45 81 | 73 40 88 | 68 43 88 |
+
+Images: `Docs/Appearance-Model-2026-09/original-dark-old-clear-busy.jpg`,
+`original-dark-glass-depth-busy.jpg`, `original-dark-glass-nodepth-busy.jpg`.
+The checklist-versus-panel parity captures are `parity-subtask-*.jpg` /
+`parity-main-*.jpg` in the same folder (over white the interiors agree to
+within one level; over the busy backdrop each window samples its own patch
+of desktop).
 
 The crown itself is pixel-identical in construction (same stops, same pole).
 What differs is what sits under it: the old Clear had no foundation, so the
