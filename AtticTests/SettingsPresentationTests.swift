@@ -69,7 +69,13 @@ final class SettingsPresentationTests: XCTestCase {
             AppearancePreviewLayout.accessibilityLabel(
                 theme: .seaGlass, surface: .glass, tint: .vivid,
                 appearance: .dark, reduceTransparency: false),
-            "Panel preview: Sea Glass palette, Glass surface, Tint Vivid, Dark appearance."
+            "Panel preview: Sea Glass palette, Glass surface, Tint Vivid (full height), Dark appearance."
+        )
+        XCTAssertEqual(
+            AppearancePreviewLayout.accessibilityLabel(
+                theme: .original, surface: .glass, tint: .bold, tintLength: 0.5,
+                appearance: .dark, reduceTransparency: false),
+            "Panel preview: Original palette, Glass surface, Tint Bold (50 percent of the panel), Dark appearance."
         )
         XCTAssertEqual(
             AppearancePreviewLayout.accessibilityLabel(

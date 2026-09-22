@@ -22,15 +22,15 @@ enum AppearanceSettingsPresentation {
         SettingsDesign.tileBoundaryLineWidth(for: contrast)
     }
 
-    /// The one line the pane shows when the readability floor, not the
-    /// chosen step, sets the wash for this palette and surface; nil when the
-    /// step reaches its full strength.
     /// What VoiceOver reads for the Tint length slider.
     static func tintLengthDescription(_ length: Double) -> String {
         let percent = Int((PanelTintLength.clamped(length) * 100).rounded())
         return percent >= 100 ? "Full height" : "\(percent) percent of the panel"
     }
 
+    /// The one line the pane shows when the readability floor, not the
+    /// chosen step, sets the wash for this palette and surface; nil when the
+    /// step reaches its full strength.
     static func tintFloorNote(for treatment: AtticPanelSurfaceTreatment) -> String? {
         guard treatment.tint != .off, treatment.isTintClamped else { return nil }
         return "Tint is kept faint here so text stays readable."

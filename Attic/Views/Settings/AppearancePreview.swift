@@ -25,13 +25,17 @@ enum AppearancePreviewLayout {
         theme: AtticPanelTheme,
         surface: PanelSurfaceStyle,
         tint: PanelTintLevel,
+        tintLength: Double = PanelTintLength.defaultValue,
         appearance: AtticPanelThemeAppearance,
         reduceTransparency: Bool
     ) -> String {
         let surfaceName = reduceTransparency ? "Solid (Reduce Transparency)" : surface.title
         let mode = appearance == .dark ? "Dark" : "Light"
+        let length = tint == .off
+            ? ""
+            : " (" + AppearanceSettingsPresentation.tintLengthDescription(tintLength).lowercased() + ")"
         return "Panel preview: \(theme.title) palette, \(surfaceName) surface, "
-            + "Tint \(tint.title), \(mode) appearance."
+            + "Tint \(tint.title)\(length), \(mode) appearance."
     }
 }
 
@@ -99,6 +103,7 @@ struct AppearancePreviewCard: View {
             theme: settings.panelTheme,
             surface: settings.panelSurfaceStyle,
             tint: settings.panelTint,
+            tintLength: settings.panelTintLength,
             appearance: appearance,
             reduceTransparency: reduceTransparency
         ))

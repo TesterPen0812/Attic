@@ -312,11 +312,17 @@ final class AppearanceMigrationTests: XCTestCase {
                 XCTAssertEqual(defaults.object(forKey: "panelTintLength") as? Double, length)
                 XCTAssertEqual(AppSettings(defaults: defaults).panelTintLength, length)
             }
+            settings.panelTintLength = 0.45
             settings.panelTintLength = 5
             XCTAssertEqual(settings.panelTintLength, 1, "an out-of-range length is clamped")
-            XCTAssertEqual(defaults.object(forKey: "panelTintLength") as? Double, 1)
+            XCTAssertEqual(defaults.object(forKey: "panelTintLength") as? Double, 1, "and the clamp is saved")
+            XCTAssertEqual(AppSettings(defaults: defaults).panelTintLength, 1)
+            settings.panelTintLength = 0.45
+            settings.panelTintLength = 0.1
+            XCTAssertEqual(settings.panelTintLength, 0.3)
+            XCTAssertEqual(defaults.object(forKey: "panelTintLength") as? Double, 0.3)
             XCTAssertEqual(settings.panelSurfaceTreatment(colorScheme: .dark, contrast: .standard,
-                                                          reduceTransparency: false).tintLength, 1)
+                                                          reduceTransparency: false).tintLength, 0.3)
         }
         defaults.set(0.05, forKey: "panelTintLength")
         MainActor.assumeIsolated {

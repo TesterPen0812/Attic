@@ -84,7 +84,7 @@ The uncredited fallback deliberately reproduces the previous whole-percent found
 
 ## 3. Removed: Depth
 
-The Depth toggle (a neutral black/white crown over any surface) was removed. The owner's reason: on Original it was effectively another tint, and as a separate toggle over a heavy foundation it looked muddy rather than like the Siri-style panel it came from. The crown itself lives on as **Original's Tint** (§4.1): the same profile, as a Tint step, over the lighter credited foundation.
+The Depth toggle (a neutral black/white crown over any surface) was removed. The owner's reasons: the dark-mode and Depth combination was messy, on Original Depth was effectively another tint, and they preferred it off in every mode; over the heavy foundation of the time it also did not read like the Siri-style panel it came from. The crown itself lives on as **Original's Tint** (§4.1): the same profile, as a Tint step, over the lighter credited foundation.
 
 ## 4. Tint
 
@@ -94,7 +94,7 @@ Tint is one layer across the top of the panel, in one of two forms. Both are dra
 
 Original is Attic's neutral palette, so its Tint has no colour: it is black in Dark and white in Light (`PanelNeutralShade`), with the long crown profile of the old Original Dark Clear surface: opacity 0.82 at the top, 0.58 at 42%, 0.18 at 74% and 0.02 at the bottom. Subtle, Vivid and Bold scale those opacities by 0.35, 0.65 and 1.00; Bold is the old Clear crown. The owner compared it with the Siri panel on macOS 27 (captures in the September 2026 thread): Bold over Glass gives the near-black top fading down the panel, while the credited foundation (§2) keeps the lower half as readable as Glass with Tint Off.
 
-The shade can only raise contrast: it moves the surface toward black under white text (Dark) and toward white under dark text (Light). It therefore keeps the Tint-Off foundation, never clamps, and has no calibration table. `testNeutralShadeNeverLowersContrastAnywhere` checks this at every 5% of the height, for every step and length, over all eight desktop extremes, on both the credited and uncredited paths. Original's coloured (blue) wash from the previous model is gone.
+The shade can only raise contrast: it moves the surface toward black under white text (Dark) and toward white under dark text (Light). It therefore keeps the Tint-Off foundation, never clamps, and has no calibration table. `testNeutralShadeNeverLowersContrastAnywhere` checks this at every 5% of the height, for every step at lengths 30%, 60% and 100%, over all eight desktop extremes, on both the credited and uncredited paths. Original's coloured (blue) wash from the previous model is gone.
 
 On Original Light Solid, whose surface is exactly `#FFFFFF`, a white shade is invisible by construction.
 
@@ -137,13 +137,13 @@ Tint and Tint length:
 
 | retired state | current result |
 |---|---|
-| Original, `panelGlassStyle == clear` (or missing) and translucent | neutral Tint **Bold**, length 100% (the old Clear crown) |
+| Original, `panelGlassStyle == clear`, missing or an unknown spelling, and translucent | neutral Tint **Bold**, length 100% (the old Clear crown) |
 | Original otherwise, coverage > 0 (missing = old default 0.55) | neutral Tint **Bold**, length = coverage (the old gradient was that same neutral pole at 0.82) |
 | Original otherwise, coverage 0 | Tint Off |
 | custom palette, coverage 0 | Tint Off |
 | custom palette, coverage > 0 | the step matching the old gradient's Light-mode ΔE76 (thresholds in `PanelTintLevel`), length = coverage |
 
-A stored custom gradient colour on Original was only mixed 12% into the neutral pole, so it also maps to the neutral shade. Coverage is clamped to the slider's 30–100%. This is a change from the previous mapping, which measured Original's gradient over its opaque Light surface (white on white, ΔE ≈ 0) and so put almost every Original user on Tint Off, although in Dark and on translucent surfaces they saw a clear neutral shade.
+A stored custom gradient colour on Original was only mixed 12% into the neutral pole, so it also maps to the neutral shade. Coverage is clamped to the slider's 30–100%. Preview installs of this branch are already at version 2 and are not migrated again: an Original user who had picked a (blue) Tint step now sees the neutral shade at that step, at the default full length. This is a change from the previous mapping, which measured Original's gradient over its opaque Light surface (white on white, ΔE ≈ 0) and so put almost every Original user on Tint Off, although in Dark and on translucent surfaces they saw a clear neutral shade.
 
 Preview builds of this unreleased branch may have written the retired crown preference. `AppearanceMigration.migrateIfNeeded` therefore removes that stale key **unconditionally before the schema-version guard**, including stores already at version 2. Repeating the migration remains idempotent and does not rewrite current Surface or Tint choices.
 

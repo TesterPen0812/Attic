@@ -128,12 +128,11 @@ final class AppSettings: ObservableObject {
     /// How far down the panel the Tint reaches (`PanelTintLength.range`).
     @Published var panelTintLength: Double {
         didSet {
+            // Assigning inside the observer does not re-run it, so the
+            // clamped value is stored here rather than by a second didSet.
             let clamped = PanelTintLength.clamped(panelTintLength)
-            if clamped != panelTintLength {
-                panelTintLength = clamped
-                return
-            }
-            defaults.set(panelTintLength, forKey: Key.panelTintLength)
+            if clamped != panelTintLength { panelTintLength = clamped }
+            defaults.set(clamped, forKey: Key.panelTintLength)
         }
     }
 

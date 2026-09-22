@@ -330,12 +330,16 @@ struct TintLengthSlider: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            // The slider carries "Tint length" and its value for VoiceOver;
+            // these visible words would only repeat it.
             Text("Length")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text("Short")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Slider(value: $length, in: PanelTintLength.range)
                 .controlSize(.small)
                 .accessibilityLabel("Tint length")
@@ -344,6 +348,7 @@ struct TintLengthSlider: View {
             Text("Long")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
         }
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.5)

@@ -469,10 +469,14 @@ final class AtticUITests: XCTestCase {
             assertSelected(levelControl)
             if level == "Bold" {
                 reveal(tintLength)
-                XCTAssertTrue(tintLength.isEnabled, "Length is adjustable while a Tint step is on")
-                tintLength.adjust(toNormalizedSliderPosition: 0.3)
+                waitFor("Length is adjustable while a Tint step is on") { tintLength.isEnabled }
+                tintLength.adjust(toNormalizedSliderPosition: 0)
+                waitFor("Length moves to its shortest") {
+                    (tintLength.value as? String) == "30 percent of the panel"
+                }
                 recordPanel("Tint-\(level)-Short")
                 tintLength.adjust(toNormalizedSliderPosition: 1)
+                waitFor("Length moves back to full height") { (tintLength.value as? String) == "Full height" }
             }
             recordPanel("Tint-\(level)")
         }
