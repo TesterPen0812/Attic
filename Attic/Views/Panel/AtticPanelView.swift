@@ -76,17 +76,16 @@ struct AtticPanelView: View {
         )
     }
     private var panelSurfaceTreatment: AtticPanelSurfaceTreatment {
-        settings.panelTheme.surfaceTreatment(
+        settings.panelSurfaceTreatment(
             colorScheme: systemColorScheme,
             contrast: colorSchemeContrast,
-            glassStyle: effectiveGlassStyle,
-            isTranslucent: settings.isTranslucent,
             reduceTransparency: reduceTransparency
         )
     }
-    private var effectiveGlassStyle: PanelGlassStyle {
-        settings.panelGlassStyle.resolved(for: settings.panelTheme, colorScheme: systemColorScheme)
-    }
+
+    /// The native window leaves `AtticStyle.panelElevationMargin` around the
+    /// surface, so the exterior elevation is drawn here.
+    static let showsSurfaceElevation = true
     private var panelAccentColor: Color {
         settings.panelTheme.usesSystemAccent
             ? Color.accentColor
@@ -145,23 +144,11 @@ struct AtticPanelView: View {
         panelContent
         .environment(\.colorScheme, systemColorScheme)
         .foregroundStyle(panelThemePalette.primaryForegroundColor, panelThemePalette.secondaryForegroundColor)
-        .environment(\.atticPanelGlassStyle, effectiveGlassStyle)
-        .environment(\.atticPanelTranslucencyEnabled, settings.isTranslucent)
-        .environment(
-            \.atticClearGlassForegroundReadabilityEnabled,
-            AtticClearGlassReadabilityPolicy.isEnabled(
-                isTranslucent: settings.isTranslucent,
-                isClearStyle: effectiveGlassStyle == .clear,
-                reduceTransparency: reduceTransparency
-            )
-        )
         .environment(\.controlActiveState, .key)
         .atticPanelSurface(
             treatment: panelSurfaceTreatment,
             cornerRadius: cornerRadius,
-            gradientCoverage: settings.panelGradientCoverage,
-            gradientColorHex: settings.panelGradientColorHex,
-            showsElevation: true
+            showsElevation: Self.showsSurfaceElevation
         )
         .contextMenu {
             Button("Settings…", systemImage: "gearshape") {

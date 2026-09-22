@@ -117,22 +117,18 @@ struct SubtaskPanelContent: View {
         settings.panelTheme.palette(for: systemColorScheme, contrast: colorSchemeContrast)
     }
 
-    private var effectiveGlassStyle: PanelGlassStyle {
-        settings.panelGlassStyle.resolved(
-            for: settings.panelTheme,
-            colorScheme: systemColorScheme
-        )
-    }
-
+    /// The same treatment the main panel draws (`AppSettings.panelSurfaceTreatment`).
     private var panelSurfaceTreatment: AtticPanelSurfaceTreatment {
-        settings.panelTheme.surfaceTreatment(
+        settings.panelSurfaceTreatment(
             colorScheme: systemColorScheme,
             contrast: colorSchemeContrast,
-            glassStyle: effectiveGlassStyle,
-            isTranslucent: settings.isTranslucent,
             reduceTransparency: reduceTransparency
         )
     }
+
+    /// The checklist windows leave `PanelSurfaceWindow.surfaceMargin` around
+    /// the surface, so they draw the same exterior elevation as the main panel.
+    static let showsSurfaceElevation = true
 
     private var panelAccentColor: Color {
         settings.panelTheme.usesSystemAccent
@@ -201,16 +197,6 @@ struct SubtaskPanelContent: View {
             panelThemePalette.primaryForegroundColor,
             panelThemePalette.secondaryForegroundColor
         )
-        .environment(\.atticPanelGlassStyle, effectiveGlassStyle)
-        .environment(\.atticPanelTranslucencyEnabled, settings.isTranslucent)
-        .environment(
-            \.atticClearGlassForegroundReadabilityEnabled,
-            AtticClearGlassReadabilityPolicy.isEnabled(
-                isTranslucent: settings.isTranslucent,
-                isClearStyle: effectiveGlassStyle == .clear,
-                reduceTransparency: reduceTransparency
-            )
-        )
         .environment(\.atticPanelThemePalette, panelThemePalette)
         .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
         .environment(
@@ -222,8 +208,7 @@ struct SubtaskPanelContent: View {
         .atticPanelSurface(
             treatment: panelSurfaceTreatment,
             cornerRadius: surfaceCornerRadius,
-            gradientCoverage: settings.panelGradientCoverage,
-            gradientColorHex: settings.panelGradientColorHex
+            showsElevation: Self.showsSurfaceElevation
         )
         .coordinateSpace(name: Self.surfaceSpace)
         .onPreferenceChange(PanelSurfaceDragGeometryPreferenceKey.self) { geometry in

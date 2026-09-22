@@ -1,0 +1,161 @@
+import Foundation
+
+/// One-time, versioned migration of the appearance preferences from the
+/// translucency toggle / glass-style picker / gradient model to Surface,
+/// Depth and Tint. It runs on load, before any view reads settings, against
+/// whatever `UserDefaults` `AppSettings` was given, and it is idempotent:
+/// once `appearanceSchemaVersion` is current it does nothing.
+///
+/// The full mapping is recorded in `Docs/Appearance-Model-2026-09.md`.
+enum AppearanceMigration {
+    static let currentSchemaVersion = 2
+
+    enum Key {
+        static let schemaVersion = "appearanceSchemaVersion"
+        static let surfaceStyle = "panelSurfaceStyle"
+        static let depth = "panelDepth"
+        static let tint = "panelTint"
+        static let theme = "panelTheme"
+        static let appearance = "appearancePreference"
+
+        /// Keys of the retired model. They are read once and then removed.
+        static let legacyTranslucent = "isTranslucent"
+        static let legacyGlassStyle = "panelGlassStyle"
+        static let legacyGradientCoverage = "panelGradientCoverage"
+        static let legacyGradientColorHex = "panelGradientColorHex"
+        static let obsolete = [legacyTranslucent, legacyGlassStyle, legacyGradientCoverage, legacyGradientColorHex]
+    }
+
+    /// The retired model's raw glass styles. `liveStable` was an even earlier
+    /// spelling of `stable` that the old loader folded in.
+    enum LegacyGlassStyle: String {
+        case clear
+        case frosted
+        case stable
+        case liveStable
+    }
+
+    /// What the retired preferences said, as stored.
+    struct Legacy: Equatable {
+        var isTranslucent: Bool?
+        var glassStyle: LegacyGlassStyle?
+        var gradientCoverage: Double?
+        var gradientColorHex: String?
+        var theme: AtticPanelTheme?
+        var hasAppearancePreference = false
+
+        /// No stored appearance at all: a fresh install, which gets the new
+        /// defaults rather than a mapping of "nothing".
+        var isFresh: Bool {
+            isTranslucent == nil && glassStyle == nil && gradientCoverage == nil
+                && gradientColorHex == nil && theme == nil && !hasAppearancePreference
+        }
+    }
+
+    struct Resolved: Equatable {
+        var surface: PanelSurfaceStyle
+        var depth: Bool
+        var tint: PanelTintLevel
+    }
+
+    static let freshInstall = Resolved(surface: .glass, depth: true, tint: .off)
+
+    static func read(from defaults: UserDefaults) -> Legacy {
+        var legacy = Legacy()
+        legacy.isTranslucent = defaults.object(forKey: Key.legacyTranslucent) as? Bool
+        if let raw = defaults.string(forKey: Key.legacyGlassStyle) {
+            // An unknown spelling still means "this install existed"; the old
+            // loader fell back to Clear for it, and so does the mapping.
+            legacy.glassStyle = LegacyGlassStyle(rawValue: raw) ?? .clear
+        }
+        legacy.gradientCoverage = defaults.object(forKey: Key.legacyGradientCoverage) as? Double
+        legacy.gradientColorHex = defaults.string(forKey: Key.legacyGradientColorHex)
+        if let raw = defaults.string(forKey: Key.theme) {
+            legacy.theme = AtticPanelTheme(rawValue: raw) ?? .defaultTheme
+        }
+        legacy.hasAppearancePreference = defaults.string(forKey: Key.appearance) != nil
+        return legacy
+    }
+
+    /// The mapping itself. Pure, so the whole matrix is unit-testable.
+    static func resolve(_ legacy: Legacy) -> Resolved {
+        guard !legacy.isFresh else { return freshInstall }
+        let theme = legacy.theme ?? .defaultTheme
+        // The old loader defaulted a missing style to Clear.
+        let glassStyle = legacy.glassStyle ?? .clear
+
+        let surface: PanelSurfaceStyle
+        var depth = false
+        if legacy.isTranslucent == false {
+            surface = .solid
+        } else {
+            switch glassStyle {
+            case .frosted:
+                surface = .glass
+            case .stable, .liveStable:
+                surface = .frosted
+            case .clear:
+                surface = .glass
+                // Only Original resolved Clear to Clear, and only in Dark:
+                // those users saw the crown. Custom palettes always saw
+                // Frosted, so their panels must not change.
+                depth = theme == .original
+            }
+        }
+
+        let tint = legacyTintLevel(
+            theme: theme,
+            gradientCoverage: legacy.gradientCoverage,
+            gradientColorHex: legacy.gradientColorHex
+        )
+        return Resolved(surface: surface, depth: depth, tint: tint)
+    }
+
+    /// The Tint step matching what the old gradient actually showed: the
+    /// old top-edge colour difference (the pole mixed with 12% of the tint,
+    /// drawn at 0.82 over the surface) for the palette in Light, on the same
+    /// ΔE76 scale the new steps are calibrated to. Coverage 0 was "off".
+    static func legacyTintLevel(
+        theme: AtticPanelTheme,
+        gradientCoverage: Double?,
+        gradientColorHex: String?
+    ) -> PanelTintLevel {
+        let coverage = gradientCoverage ?? 0.55
+        guard coverage.isFinite, coverage > 0 else { return .off }
+        let difference = legacyGradientColorDifference(theme: theme, gradientColorHex: gradientColorHex)
+        return PanelTintLevel.level(forLegacyColorDifference: difference)
+    }
+
+    static let legacyGradientTintMix = 0.12
+    static let legacyGradientTopOpacity = 0.82
+
+    static func legacyGradientColorDifference(
+        theme: AtticPanelTheme,
+        gradientColorHex: String?
+    ) -> Double {
+        let palette = theme.palette(for: AtticPanelThemeAppearance.light)
+        let tint = gradientColorHex.flatMap { AtticThemeColor(hex: $0) } ?? palette.surfaceTint
+        let pole = AtticThemeColor(red: 1, green: 1, blue: 1)
+        let gradientColor = pole.mixed(with: tint, amount: legacyGradientTintMix)
+        let base = palette.opaqueSurface
+        let top = base.mixed(with: gradientColor, amount: legacyGradientTopOpacity)
+        return ColorDifference.deltaE76(base, top)
+    }
+
+    /// Runs the migration if it has not run yet. Returns what it wrote, or
+    /// nil when the store was already current.
+    @discardableResult
+    static func migrateIfNeeded(_ defaults: UserDefaults) -> Resolved? {
+        let storedVersion = defaults.object(forKey: Key.schemaVersion) as? Int ?? 0
+        guard storedVersion < currentSchemaVersion else { return nil }
+        let resolved = resolve(read(from: defaults))
+        defaults.set(resolved.surface.rawValue, forKey: Key.surfaceStyle)
+        defaults.set(resolved.depth, forKey: Key.depth)
+        defaults.set(resolved.tint.rawValue, forKey: Key.tint)
+        for key in Key.obsolete {
+            defaults.removeObject(forKey: key)
+        }
+        defaults.set(currentSchemaVersion, forKey: Key.schemaVersion)
+        return resolved
+    }
+}

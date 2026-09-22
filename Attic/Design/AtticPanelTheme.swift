@@ -95,9 +95,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.075, green: 0.075, blue: 0.082),
                 surfaceTint: .init(red: 0, green: 0, blue: 0),
                 edgeTint: .init(red: 1, green: 1, blue: 1),
-                clearTintOpacity: 0.06,
-                frostedTintOpacity: 0.22,
-                glassmorphismTintOpacity: 0,
+                frostedTintOpacity: 0,
                 selectedFillOpacity: 0.15,
                 selectedStrokeOpacity: 0.22
             )
@@ -112,9 +110,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 1, green: 1, blue: 1),
                 surfaceTint: .init(red: 1, green: 1, blue: 1),
                 edgeTint: .init(red: 0, green: 0, blue: 0),
-                clearTintOpacity: 0.08,
-                frostedTintOpacity: 0.24,
-                glassmorphismTintOpacity: 0,
+                frostedTintOpacity: 0,
                 selectedFillOpacity: 0.12,
                 selectedStrokeOpacity: 0.20
             )
@@ -124,9 +120,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.027, green: 0.067, blue: 0.153),
                 surfaceTint: .init(red: 0.157, green: 0.247, blue: 0.541),
                 edgeTint: .init(red: 0.490, green: 0.612, blue: 1.000),
-                clearTintOpacity: 0.065,
-                frostedTintOpacity: 0.145,
-                glassmorphismTintOpacity: 0.045,
+                frostedTintOpacity: 0.045,
                 selectedFillOpacity: 0.17,
                 selectedStrokeOpacity: 0.42
             )
@@ -136,9 +130,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.933, green: 0.953, blue: 0.988),
                 surfaceTint: .init(red: 0.302, green: 0.412, blue: 0.698),
                 edgeTint: .init(red: 0.176, green: 0.345, blue: 0.722),
-                clearTintOpacity: 0.045,
-                frostedTintOpacity: 0.105,
-                glassmorphismTintOpacity: 0.032,
+                frostedTintOpacity: 0.032,
                 selectedFillOpacity: 0.12,
                 selectedStrokeOpacity: 0.34
             )
@@ -148,9 +140,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.102, green: 0.118, blue: 0.141),
                 surfaceTint: .init(red: 0.533, green: 0.604, blue: 0.651),
                 edgeTint: .init(red: 0.718, green: 0.800, blue: 0.847),
-                clearTintOpacity: 0.030,
-                frostedTintOpacity: 0.075,
-                glassmorphismTintOpacity: 0.018,
+                frostedTintOpacity: 0.018,
                 selectedFillOpacity: 0.12,
                 selectedStrokeOpacity: 0.30
             )
@@ -160,9 +150,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.965, green: 0.965, blue: 0.957),
                 surfaceTint: .init(red: 0.718, green: 0.776, blue: 0.808),
                 edgeTint: .init(red: 0.392, green: 0.494, blue: 0.545),
-                clearTintOpacity: 0.030,
-                frostedTintOpacity: 0.070,
-                glassmorphismTintOpacity: 0.018,
+                frostedTintOpacity: 0.018,
                 selectedFillOpacity: 0.09,
                 selectedStrokeOpacity: 0.28
             )
@@ -174,9 +162,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.090, green: 0.078, blue: 0.067),
                 surfaceTint: .init(red: 0.420, green: 0.329, blue: 0.259),
                 edgeTint: .init(red: 0.827, green: 0.694, blue: 0.553),
-                clearTintOpacity: 0.050,
-                frostedTintOpacity: 0.115,
-                glassmorphismTintOpacity: 0.035,
+                frostedTintOpacity: 0.035,
                 selectedFillOpacity: 0.15,
                 selectedStrokeOpacity: 0.36
             )
@@ -186,9 +172,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.961, green: 0.933, blue: 0.906),
                 surfaceTint: .init(red: 0.663, green: 0.518, blue: 0.400),
                 edgeTint: .init(red: 0.510, green: 0.349, blue: 0.231),
-                clearTintOpacity: 0.040,
-                frostedTintOpacity: 0.095,
-                glassmorphismTintOpacity: 0.028,
+                frostedTintOpacity: 0.028,
                 selectedFillOpacity: 0.10,
                 selectedStrokeOpacity: 0.30
             )
@@ -198,9 +182,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.067, green: 0.075, blue: 0.090),
                 surfaceTint: .init(red: 0.086, green: 0.459, blue: 0.910),
                 edgeTint: .init(red: 0.231, green: 0.600, blue: 1.000),
-                clearTintOpacity: 0.040,
-                frostedTintOpacity: 0.085,
-                glassmorphismTintOpacity: 0.022,
+                frostedTintOpacity: 0.022,
                 selectedFillOpacity: 0.16,
                 selectedStrokeOpacity: 0.40
             )
@@ -210,9 +192,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.980, green: 0.984, blue: 0.992),
                 surfaceTint: .init(red: 0.227, green: 0.561, blue: 0.941),
                 edgeTint: .init(red: 0.067, green: 0.427, blue: 0.863),
-                clearTintOpacity: 0.032,
-                frostedTintOpacity: 0.072,
-                glassmorphismTintOpacity: 0.018,
+                frostedTintOpacity: 0.018,
                 selectedFillOpacity: 0.10,
                 selectedStrokeOpacity: 0.32
             )
@@ -222,9 +202,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.063, green: 0.110, blue: 0.110),
                 surfaceTint: .init(red: 0.239, green: 0.561, blue: 0.490),
                 edgeTint: .init(red: 0.459, green: 0.843, blue: 0.765),
-                clearTintOpacity: 0.045,
-                frostedTintOpacity: 0.095,
-                glassmorphismTintOpacity: 0.028,
+                frostedTintOpacity: 0.028,
                 selectedFillOpacity: 0.15,
                 selectedStrokeOpacity: 0.37
             )
@@ -234,9 +212,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.949, green: 0.965, blue: 0.945),
                 surfaceTint: .init(red: 0.510, green: 0.718, blue: 0.655),
                 edgeTint: .init(red: 0.184, green: 0.502, blue: 0.435),
-                clearTintOpacity: 0.038,
-                frostedTintOpacity: 0.082,
-                glassmorphismTintOpacity: 0.024,
+                frostedTintOpacity: 0.024,
                 selectedFillOpacity: 0.10,
                 selectedStrokeOpacity: 0.30
             )
@@ -246,9 +222,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.094, green: 0.082, blue: 0.133),
                 surfaceTint: .init(red: 0.439, green: 0.322, blue: 0.659),
                 edgeTint: .init(red: 0.729, green: 0.588, blue: 1.000),
-                clearTintOpacity: 0.045,
-                frostedTintOpacity: 0.100,
-                glassmorphismTintOpacity: 0.030,
+                frostedTintOpacity: 0.030,
                 selectedFillOpacity: 0.15,
                 selectedStrokeOpacity: 0.38
             )
@@ -258,9 +232,7 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 opaqueSurface: .init(red: 0.969, green: 0.953, blue: 0.984),
                 surfaceTint: .init(red: 0.667, green: 0.576, blue: 0.820),
                 edgeTint: .init(red: 0.459, green: 0.325, blue: 0.737),
-                clearTintOpacity: 0.038,
-                frostedTintOpacity: 0.085,
-                glassmorphismTintOpacity: 0.024,
+                frostedTintOpacity: 0.024,
                 selectedFillOpacity: 0.10,
                 selectedStrokeOpacity: 0.30
             )
@@ -269,24 +241,10 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
 
     func surfaceTreatment(
         colorScheme: ColorScheme,
-        glassStyle: PanelGlassStyle,
-        isTranslucent: Bool,
-        reduceTransparency: Bool
-    ) -> AtticPanelSurfaceTreatment {
-        surfaceTreatment(
-            colorScheme: colorScheme,
-            contrast: .standard,
-            glassStyle: glassStyle,
-            isTranslucent: isTranslucent,
-            reduceTransparency: reduceTransparency
-        )
-    }
-
-    func surfaceTreatment(
-        colorScheme: ColorScheme,
-        contrast: ColorSchemeContrast,
-        glassStyle: PanelGlassStyle,
-        isTranslucent: Bool,
+        contrast: ColorSchemeContrast = .standard,
+        surface: PanelSurfaceStyle,
+        depth: Bool,
+        tint: PanelTintLevel,
         reduceTransparency: Bool
     ) -> AtticPanelSurfaceTreatment {
         surfaceTreatment(
@@ -294,53 +252,51 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 ? AtticPanelThemeAppearance.dark
                 : AtticPanelThemeAppearance.light,
             contrast: contrast,
-            glassStyle: glassStyle,
-            isTranslucent: isTranslucent,
+            surface: surface,
+            depth: depth,
+            tint: tint,
             reduceTransparency: reduceTransparency
         )
     }
 
+    /// The one resolution from settings to a drawable surface. Reduce
+    /// Transparency forces Solid rendering and keeps the chosen Depth and
+    /// Tint; Increased Contrast only changes the palette's edges.
     func surfaceTreatment(
         appearance: AtticPanelThemeAppearance,
-        glassStyle: PanelGlassStyle,
-        isTranslucent: Bool,
+        contrast: ColorSchemeContrast = .standard,
+        surface: PanelSurfaceStyle,
+        depth: Bool,
+        tint: PanelTintLevel,
         reduceTransparency: Bool
     ) -> AtticPanelSurfaceTreatment {
-        surfaceTreatment(
+        AtticPanelSurfaceTreatment(
+            theme: self,
+            kind: reduceTransparency ? .solid : surface.treatmentKind,
+            palette: palette(for: appearance, contrast: contrast),
             appearance: appearance,
-            contrast: .standard,
-            glassStyle: glassStyle,
-            isTranslucent: isTranslucent,
-            reduceTransparency: reduceTransparency
+            usesSystemOpaqueSurface: self == .original,
+            depth: depth,
+            tint: tint
         )
     }
+}
 
-    func surfaceTreatment(
-        appearance: AtticPanelThemeAppearance,
-        contrast: ColorSchemeContrast,
-        glassStyle: PanelGlassStyle,
-        isTranslucent: Bool,
-        reduceTransparency: Bool
-    ) -> AtticPanelSurfaceTreatment {
-        let palette = palette(for: appearance, contrast: contrast)
-        let kind: AtticPanelSurfaceTreatment.Kind
-
-        if !isTranslucent || reduceTransparency {
-            kind = .opaque
-        } else {
-            switch glassStyle.resolved(for: self, colorScheme: appearance == .dark ? .dark : .light) {
-            case .clear: kind = .clearGlass
-            case .frosted: kind = .frostedGlass
-            case .glassmorphism: kind = .glassmorphism
-            }
+extension PanelSurfaceStyle {
+    var treatmentKind: AtticPanelSurfaceTreatment.Kind {
+        switch self {
+        case .solid: .solid
+        case .glass: .glass
+        case .frosted: .frosted
         }
+    }
 
-        return AtticPanelSurfaceTreatment(
-            kind: kind,
-            palette: palette,
-            appearance: appearance,
-            usesSystemOpaqueSurface: self == .original
-        )
+    init(_ kind: AtticPanelSurfaceTreatment.Kind) {
+        switch kind {
+        case .solid: self = .solid
+        case .glass: self = .glass
+        case .frosted: self = .frosted
+        }
     }
 }
 
@@ -431,18 +387,17 @@ struct AtticPanelThemePalette: Equatable, Sendable {
     let opaqueSurface: AtticThemeColor
     let surfaceTint: AtticThemeColor
     let edgeTint: AtticThemeColor
-    let clearTintOpacity: Double
+    /// Opacity of `surfaceTint` washed over the Frosted material. Glass
+    /// and Solid never use it: their colour comes from the foundation and
+    /// the fill.
     let frostedTintOpacity: Double
-    let glassmorphismTintOpacity: Double
     let selectedFillOpacity: Double
     let selectedStrokeOpacity: Double
 
     var isValid: Bool {
         [accent, opaqueSurface, surfaceTint, edgeTint].allSatisfy(\.isValid)
             && [
-                clearTintOpacity,
                 frostedTintOpacity,
-                glassmorphismTintOpacity,
                 selectedFillOpacity,
                 selectedStrokeOpacity
             ].allSatisfy { $0.isFinite && (0...1).contains($0) }
@@ -479,9 +434,7 @@ struct AtticPanelThemePalette: Equatable, Sendable {
             opaqueSurface: opaqueSurface,
             surfaceTint: surfaceTint,
             edgeTint: edgeTint.mixed(with: edgeTarget, amount: 0.14),
-            clearTintOpacity: clearTintOpacity,
             frostedTintOpacity: frostedTintOpacity,
-            glassmorphismTintOpacity: glassmorphismTintOpacity,
             selectedFillOpacity: min(selectedFillOpacity + 0.04, 1),
             selectedStrokeOpacity: min(selectedStrokeOpacity + 0.14, 1)
         )
@@ -490,31 +443,41 @@ struct AtticPanelThemePalette: Equatable, Sendable {
 
 struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     enum Kind: String, CaseIterable, Sendable {
-        case opaque
-        case clearGlass
-        case frostedGlass
-        case glassmorphism
+        /// The palette `opaqueSurface`, fully opaque.
+        case solid
+        /// Native Liquid Glass (`.regular`) under a calibrated foundation.
+        case glass
+        /// A material blur under the same foundation, with a palette wash.
+        case frosted
     }
 
+    let theme: AtticPanelTheme
     let kind: Kind
     let palette: AtticPanelThemePalette
     let appearance: AtticPanelThemeAppearance
     let usesSystemOpaqueSurface: Bool
     let foundationOpacity: Double
+    /// The neutral crown across the top of the panel (`PanelDepthCrown`).
+    let depth: Bool
+    /// The accent wash across the top of the panel (`PanelTintCalibration`).
+    let tint: PanelTintLevel
 
     // A small buffer above 4.5:1, without retaining an arbitrary heavy fill.
     static let readableContrastTarget = 4.75
 
-    init(kind: Kind, palette: AtticPanelThemePalette,
-         appearance: AtticPanelThemeAppearance, usesSystemOpaqueSurface: Bool) {
+    init(theme: AtticPanelTheme, kind: Kind, palette: AtticPanelThemePalette,
+         appearance: AtticPanelThemeAppearance, usesSystemOpaqueSurface: Bool,
+         depth: Bool = false, tint: PanelTintLevel = .off) {
+        self.theme = theme
         self.kind = kind
         self.palette = palette
         self.appearance = appearance
         self.usesSystemOpaqueSurface = usesSystemOpaqueSurface
+        self.depth = depth
+        self.tint = tint
         switch kind {
-        case .opaque: foundationOpacity = 1
-        case .clearGlass: foundationOpacity = 0
-        case .frostedGlass, .glassmorphism:
+        case .solid: foundationOpacity = 1
+        case .glass, .frosted:
             foundationOpacity = Self.minimumReadableOpacity(palette: palette, appearance: appearance)
         }
     }
@@ -542,46 +505,56 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         return min(ceil(upper * 100) / 100, 1)
     }
 
-    func gradientColor(customHex: String) -> AtticThemeColor {
-        let tint = AtticThemeColor(hex: customHex) ?? palette.surfaceTint
-        let pole = appearance == .dark
-            ? AtticThemeColor(red: 0, green: 0, blue: 0)
-            : AtticThemeColor(red: 1, green: 1, blue: 1)
-        // Preserve the chosen hue without allowing a white top in Dark or a
-        // black top in Light to invalidate the foreground contrast floor.
-        return pole.mixed(with: tint, amount: 0.12)
+    // MARK: Tint
+
+    /// The wash colour: the palette accent's hue, saturated.
+    var washColor: AtticThemeColor {
+        PanelTintCalibration.washColor(for: palette, appearance: appearance)
     }
 
-    static func normalizedGradientCoverage(_ coverage: Double) -> Double {
-        coverage.isFinite ? min(max(coverage, 0), 1) : 0.55
+    /// The calibrated top-edge opacity of the wash for this exact cell, or
+    /// zero when Tint is off. A cell missing from the table draws nothing
+    /// rather than guessing; the calibration test guarantees none is.
+    var tintTopOpacity: Double {
+        PanelTintCalibration.cell(
+            theme: theme, appearance: appearance, kind: kind, depth: depth, level: tint
+        )?.topOpacity ?? 0
     }
 
-    func gradientOpacity(at location: Double, coverage: Double) -> Double {
-        guard kind != .clearGlass else { return 0 }
-        let coverage = Self.normalizedGradientCoverage(coverage)
-        guard coverage > 0, location.isFinite else { return 0 }
-        return 0.82 * max(0, 1 - min(max(location, 0), 1) / coverage)
+    /// The wash fades linearly from its top opacity to nothing at
+    /// `PanelTintCalibration.fadeEnd`, matching the drawn gradient.
+    func tintOpacity(at location: Double) -> Double {
+        guard location.isFinite, tintTopOpacity > 0 else { return 0 }
+        let clamped = min(max(location, 0), 1)
+        let fadeEnd = PanelTintCalibration.fadeEnd
+        guard clamped < fadeEnd else { return 0 }
+        return tintTopOpacity * (1 - clamped / fadeEnd)
     }
 
-    func compositedSurface(over backdrop: AtticThemeColor, location: Double = 1,
-                           gradientCoverage: Double = 0.55, gradientColorHex: String = "") -> AtticThemeColor {
-        backdrop.mixed(with: palette.opaqueSurface, amount: foundationOpacity)
-            .mixed(with: gradientColor(customHex: gradientColorHex),
-                   amount: gradientOpacity(at: location, coverage: gradientCoverage))
+    // MARK: Composite model
+
+    /// What a point of the surface looks like over a backdrop: foundation,
+    /// then the Depth crown, then the Tint wash, in drawing order. Solid
+    /// surfaces transmit nothing, so the backdrop is irrelevant there.
+    func compositedSurface(over backdrop: AtticThemeColor, location: Double = 1) -> AtticThemeColor {
+        var color = backdrop.mixed(with: palette.opaqueSurface, amount: foundationOpacity)
+        if depth {
+            color = PanelDepthCrown.composite(over: color, appearance: appearance, location: location)
+        }
+        return color.mixed(with: washColor, amount: tintOpacity(at: location))
     }
 
-    var tintOpacity: Double {
+    /// Opacity of `surfaceTint` over the Frosted material. Solid is filled
+    /// with `opaqueSurface` and Glass carries its colour in the foundation,
+    /// so both are zero and an accidental overlay use stays harmless.
+    var materialTintOpacity: Double {
         switch kind {
-        // Opaque surfaces are filled with `opaqueSurface`; they are never a
-        // full-strength tint overlay. Keeping this at zero makes accidental
-        // overlay use harmless and keeps style choices irrelevant in opaque
-        // and Reduce Transparency states.
-        case .opaque: 0
-        case .clearGlass: palette.clearTintOpacity
-        case .frostedGlass: palette.frostedTintOpacity
-        case .glassmorphism: palette.glassmorphismTintOpacity
+        case .solid, .glass: 0
+        case .frosted: palette.frostedTintOpacity
         }
     }
+
+    // MARK: Frame
 
     /// One semantic hairline per palette family, the same strength on every
     /// surface kind and on every panel window. It reads as a boundary against

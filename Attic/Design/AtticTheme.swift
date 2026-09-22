@@ -85,10 +85,13 @@ struct TaskStatusMark: View {
     }
 }
 
-/// Keeps small foreground details legible when Clear glass transmits a
-/// similarly coloured desktop underneath. The treatment is deliberately
-/// local to the rendered foreground: it does not add a fill, scrim, material,
-/// or any background sampling work to the panel surface.
+/// Keeps small foreground details legible when an unbacked surface transmits
+/// a similarly coloured desktop underneath. No panel surface is unbacked any
+/// more (Glass and Frosted carry a readable foundation), so nothing enables
+/// this today; the canvas and attachment renderers still share its edge
+/// metrics for their own glyph treatment. It is deliberately local to the
+/// rendered foreground: it adds no fill, scrim, material or background
+/// sampling to the panel surface.
 private struct ClearGlassForegroundReadabilityEnabledKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -107,14 +110,6 @@ enum AtticClearGlassReadabilityPolicy {
 
     static func edgeOpacity(increasedContrast: Bool) -> Double {
         increasedContrast ? 1 : 0.90
-    }
-
-    static func isEnabled(
-        isTranslucent: Bool,
-        isClearStyle: Bool,
-        reduceTransparency: Bool
-    ) -> Bool {
-        isTranslucent && isClearStyle && !reduceTransparency
     }
 }
 

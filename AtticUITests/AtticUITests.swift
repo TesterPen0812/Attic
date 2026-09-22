@@ -11,12 +11,6 @@ final class AtticUITests: XCTestCase {
         if name.contains("testMainPanelIdle") {
             app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
         }
-        if name.contains("testAppearanceThemesResolveClearAndGradientControls")
-            || name.contains("testGradientCoverageReachesExactEndpoints") {
-            // Seed only the gradient tests. The model still changes in
-            // response to real native input after this initial defaults read.
-            app.launchArguments += ["-panelGradientCoverage", "0.55"]
-        }
         forwardOwnedAttachmentRoot(to: app)
         app.launch()
         app.activate()
@@ -392,15 +386,15 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(settings.descendants(matching: .any)["settings-agent-disabled-message"].waitForExistence(timeout: 3))
     }
 
-    func testAppearanceThemesResolveClearAndGradientControls() throws {
+    func testAppearanceControlsCoverEveryPaletteSurfaceDepthAndTint() throws {
         let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         let appearance = settings.descendants(matching: .any)["setting-appearance"]
-        let glass = settings.descendants(matching: .any)["setting-glass-style"]
-        let translucency = settings.descendants(matching: .any)["setting-translucency"]
-        let coverage = settings.sliders["setting-panel-gradient-coverage"]
-        let original = settings.buttons["setting-panel-theme-original"]
+        let surface = settings.descendants(matching: .any)["setting-panel-surface"]
+        let depth = settings.descendants(matching: .any)["setting-panel-depth"]
+        let tint = settings.descendants(matching: .any)["setting-panel-tint"]
+        let preview = settings.descendants(matching: .any)["setting-appearance-preview"]
 
         func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
             picker.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
@@ -414,7 +408,7 @@ final class AtticUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message)
         }
         func assertSelected(_ element: XCUIElement) {
-            waitFor("Expected selected glass style: \(element.label)") {
+            waitFor("Expected selection: \(element.label)") {
                 element.isSelected || (element.value as? String) == "1"
                     || (element.value as? NSNumber)?.boolValue == true
             }
@@ -426,77 +420,63 @@ final class AtticUITests: XCTestCase {
             add(attachment)
         }
 
-        // One app launch covers every preset in both explicit appearances.
-        // Establish Clear once, then prove unavailable states do not erase it.
-        reveal(original)
-        original.click()
-        let darkScheme = segment("Dark", in: appearance)
-        reveal(darkScheme)
-        darkScheme.click()
-        if !glass.exists {
-            reveal(translucency)
-            translucency.click()
-        }
-        XCTAssertTrue(glass.waitForExistence(timeout: 3))
-        let clear = segment("Clear", in: glass)
-        reveal(clear)
-        waitFor("Original Dark must enable Clear") { clear.isEnabled }
-        clear.click()
-        assertSelected(clear)
+        XCTAssertTrue(preview.waitForExistence(timeout: 3), "the live preview is one element")
+        XCTAssertTrue(surface.exists)
+        XCTAssertTrue(depth.exists)
+        XCTAssertTrue(tint.exists)
+        XCTAssertFalse(settings.descendants(matching: .any)["setting-translucency"].exists)
+        XCTAssertFalse(settings.descendants(matching: .any)["setting-glass-style"].exists)
+        XCTAssertFalse(settings.sliders["setting-panel-gradient-coverage"].exists)
 
+        // Every surface, on every palette, in both explicit appearances,
+        // with Depth and Tint exercised once each: nothing is ever
+        // unavailable and no choice is erased by another.
         let themes = ["original", "midnightCobalt", "porcelainVapor", "smokedUmber",
                       "electricBlue", "seaGlass", "amethyst"]
         for scheme in ["Light", "Dark"] {
             let schemeControl = segment(scheme, in: appearance)
             reveal(schemeControl)
             schemeControl.click()
+            assertSelected(schemeControl)
             for theme in themes {
                 let choice = settings.buttons["setting-panel-theme-\(theme)"]
                 XCTAssertTrue(choice.waitForExistence(timeout: 3))
                 reveal(choice)
                 choice.click()
                 waitFor("Selected theme must update") { (choice.value as? String) == "Selected" }
-                let clearIsAvailable = theme == "original" && scheme == "Dark"
-                waitFor("Clear availability must follow the selected preset and appearance") {
-                    clear.exists == clearIsAvailable
+                for style in ["Solid", "Glass", "Frosted"] {
+                    let styleControl = segment(style, in: surface)
+                    reveal(styleControl)
+                    styleControl.click()
+                    assertSelected(styleControl)
                 }
-                if clearIsAvailable { XCTAssertTrue(clear.isEnabled) }
-                assertSelected(segment(clearIsAvailable ? "Clear" : "Frosted", in: glass))
-                XCTAssertEqual(settings.descendants(matching: .any)["setting-clear-availability"].exists,
-                               !clearIsAvailable)
                 // Evidence only: these screenshots do not assert contrast or
                 // physical desktop readability on their own.
                 recordPanel("Theme-\(theme)-\(scheme)")
             }
         }
 
-        reveal(original)
-        original.click()
-        assertSelected(clear)
-        reveal(translucency)
-        translucency.click()
-        waitFor("Opaque mode hides the glass picker") { !glass.exists }
-        recordPanel("Original-Dark-Opaque")
-        reveal(translucency)
-        translucency.click()
-        XCTAssertTrue(glass.waitForExistence(timeout: 3))
-        assertSelected(clear)
-
-        // Explicit Frosted makes the gradient active; Original Dark Clear
-        // intentionally preserves its existing surface instead.
-        let frosted = segment("Frosted", in: glass)
-        reveal(frosted)
-        frosted.click()
-        assertSelected(frosted)
-        reveal(coverage)
-        XCTAssertTrue(coverage.isEnabled)
-        for endpoint: CGFloat in [0, 1] {
-            dragGradientCoverage(coverage, to: endpoint)
-            recordPanel(endpoint == 0 ? "Gradient-Off" : "Gradient-Full-Coverage")
+        reveal(depth)
+        let depthWasOn = (depth.value as? String) == "1" || (depth.value as? NSNumber)?.boolValue == true
+        depth.click()
+        waitFor("Depth toggles") {
+            ((depth.value as? String) == "1" || (depth.value as? NSNumber)?.boolValue == true) != depthWasOn
         }
-        coverage.adjust(toNormalizedSliderPosition: 0.55)
-        reveal(clear)
-        clear.click()
+        recordPanel(depthWasOn ? "Depth-Off" : "Depth-On")
+        depth.click()
+
+        for level in ["Subtle", "Vivid", "Bold", "Off"] {
+            let levelControl = segment(level, in: tint)
+            reveal(levelControl)
+            levelControl.click()
+            assertSelected(levelControl)
+            recordPanel("Tint-\(level)")
+        }
+
+        let glass = segment("Glass", in: surface)
+        reveal(glass)
+        glass.click()
+        assertSelected(glass)
         let systemAppearance = segment("System", in: appearance)
         reveal(systemAppearance)
         systemAppearance.click()
@@ -509,8 +489,7 @@ final class AtticUITests: XCTestCase {
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         let appearance = settings.descendants(matching: .any)["setting-appearance"]
-        let glass = settings.descendants(matching: .any)["setting-glass-style"]
-        let translucency = settings.descendants(matching: .any)["setting-translucency"]
+        let surface = settings.descendants(matching: .any)["setting-panel-surface"]
         func reveal(_ element: XCUIElement) {
             revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable)
@@ -526,116 +505,25 @@ final class AtticUITests: XCTestCase {
         let original = settings.buttons["setting-panel-theme-original"]
         reveal(original)
         original.click()
-        if !glass.exists {
-            reveal(translucency)
-            translucency.click()
-        }
-        XCTAssertTrue(glass.waitForExistence(timeout: 3))
-        let clear = segment("Clear", in: glass)
+        // Surface never depends on the mode or the palette.
         for scheme in ["Dark", "Light", "Dark"] {
             let choice = segment(scheme, in: appearance)
             reveal(choice)
             choice.click()
-            waitFor("Model-backed Clear eligibility must follow \(scheme)") {
-                clear.exists == (scheme == "Dark")
+            waitFor("Every surface stays available in \(scheme)") {
+                ["Solid", "Glass", "Frosted"].allSatisfy { segment($0, in: surface).exists }
             }
         }
-        for style in ["Frosted", "Clear", "Frosted"] {
-            let choice = segment(style, in: glass)
+        for style in ["Frosted", "Solid", "Glass"] {
+            let choice = segment(style, in: surface)
             reveal(choice)
             choice.click()
-            waitFor("Glass selection must settle on \(style)") {
+            waitFor("Surface selection must settle on \(style)") {
                 choice.isSelected || (choice.value as? String) == "1"
                     || (choice.value as? NSNumber)?.boolValue == true
             }
         }
         settings.buttons[XCUIIdentifierCloseWindow].click()
-    }
-
-    func testGradientCoverageReachesExactEndpoints() throws {
-        let settings = openSettings(section: "settings-nav-appearance")
-        let page = settings.descendants(matching: .any)["settings-page-appearance"]
-        XCTAssertTrue(page.waitForExistence(timeout: 3))
-        // Light makes the gradient available even if the previous run stored
-        // Original Clear, without replaying the whole theme matrix.
-        settings.descendants(matching: .any)["setting-appearance"]
-            .descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Light")).firstMatch.click()
-        let coverage = settings.sliders["setting-panel-gradient-coverage"]
-        for _ in 0..<5 where !coverage.isHittable {
-            page.scroll(byDeltaX: 0, deltaY: -450)
-        }
-        XCTAssertTrue(coverage.isHittable)
-        XCTAssertTrue(coverage.isEnabled)
-        for endpoint: CGFloat in [0, 1] {
-            dragGradientCoverage(coverage, to: endpoint)
-            let attachment = XCTAttachment(screenshot: settings.screenshot())
-            attachment.name = "Gradient-Endpoint-\(endpoint)"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-        coverage.adjust(toNormalizedSliderPosition: 0.55)
-        settings.buttons[XCUIIdentifierCloseWindow].click()
-    }
-
-    private func dragGradientCoverage(_ slider: XCUIElement, to endpoint: CGFloat) {
-        // The XCTest normalized-position convenience gesture stops inside
-        // this native track (1% / 99%). Drag the actual thumb past the track
-        // boundary so AppKit clamps to the exact endpoint, without relying
-        // on keyboard focus or accepting a near-zero gradient as off.
-        // Hosted macOS can occasionally drop the first native drag entirely.
-        // Retry once from the slider's newly reported position while keeping
-        // the same real pointer input and exact endpoint requirement.
-        for attempt in 0..<2 {
-            let frame = slider.frame
-            let inset = min(frame.height / 2, frame.width / 2)
-            let origin = slider.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            let thumb = origin.withOffset(CGVector(
-                dx: inset + (frame.width - 2 * inset) * slider.normalizedSliderPosition,
-                dy: frame.height / 2
-            ))
-            let beyondTrack = origin.withOffset(CGVector(
-                dx: endpoint == 0 ? -24 : frame.width + 24,
-                dy: frame.height / 2
-            ))
-            // Keep the final mouse-down position separate from mouse-up. The
-            // 99% hosted failure recorded release at the same timestamp as the
-            // move ended; hold the final position before releasing it.
-            thumb.click(forDuration: 0.1, thenDragTo: beyondTrack,
-                        withVelocity: .slow, thenHoldForDuration: 0.2)
-            let reachedEndpoint = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                slider.normalizedSliderPosition == endpoint
-            }, object: nil)
-            let timeout: TimeInterval = attempt == 0 ? 1 : 3
-            if XCTWaiter.wait(for: [reachedEndpoint], timeout: timeout) == .completed {
-                return
-            }
-        }
-
-        // Hosted macOS occasionally releases a real pointer drag several
-        // native slider steps before the end of the track after a long UI
-        // suite. Keep the exact endpoint contract: focus the same native
-        // control, then finish the remaining 1% steps with keyboard input.
-        // This is a second input path, not tolerance for a near-end value.
-        let focusFrame = slider.frame
-        let focusInset = min(focusFrame.height / 2, focusFrame.width / 2)
-        let focusOrigin = slider.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-        focusOrigin.withOffset(CGVector(
-            dx: focusInset + (focusFrame.width - 2 * focusInset) * slider.normalizedSliderPosition,
-            dy: focusFrame.height / 2
-        )).click()
-        let stepKey: XCUIKeyboardKey = endpoint == 0 ? .leftArrow : .rightArrow
-        for _ in 0..<110 {
-            if slider.normalizedSliderPosition == endpoint { return }
-            slider.typeKey(stepKey, modifierFlags: [])
-        }
-        let keyboardEndpoint = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            slider.normalizedSliderPosition == endpoint
-        }, object: nil)
-        if XCTWaiter.wait(for: [keyboardEndpoint], timeout: 2) == .completed {
-            return
-        }
-        XCTFail("Gradient must reach \(endpoint); actual: \(slider.normalizedSliderPosition), value: \(String(describing: slider.value))")
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
