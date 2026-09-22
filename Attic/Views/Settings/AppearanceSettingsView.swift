@@ -95,7 +95,11 @@ struct AppearanceSettingsView: View {
                     selection: $settings.panelSurfaceStyle,
                     palette: palette,
                     appearance: appearance,
-                    accent: accent
+                    accent: accent,
+                    glassFoundation: settings.panelTheme.surfaceTreatment(
+                        appearance: appearance, surface: .glass, depth: false, tint: .off,
+                        reduceTransparency: false
+                    ).foundationOpacity
                 )
 
                 SettingsRow(

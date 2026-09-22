@@ -536,6 +536,9 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     /// What a point of the surface looks like over a backdrop: foundation,
     /// then the Depth crown, then the Tint wash, in drawing order. Solid
     /// surfaces transmit nothing, so the backdrop is irrelevant there.
+    /// Frosted's own `surfaceTint` wash (at most 0.045, drawn under the
+    /// foundation) and the native material are deliberately not modelled:
+    /// the model is a source-over bound, not a claim about the compositor.
     func compositedSurface(over backdrop: AtticThemeColor, location: Double = 1) -> AtticThemeColor {
         var color = backdrop.mixed(with: palette.opaqueSurface, amount: foundationOpacity)
         if depth {

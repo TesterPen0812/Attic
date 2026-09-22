@@ -56,7 +56,11 @@ final class SettingsPresentationTests: XCTestCase {
                        (PanelGeometry.defaultPanelSize.width * 0.46).rounded())
         XCTAssertEqual(AppearancePreviewLayout.panelSize.height,
                        (PanelGeometry.defaultPanelSize.height * 0.46).rounded())
-        XCTAssertGreaterThan(AppearancePreviewLayout.cardHeight, AppearancePreviewLayout.panelSize.height)
+        // Room for the miniature and its outside shadow above and below.
+        XCTAssertGreaterThanOrEqual(
+            AppearancePreviewLayout.cardHeight,
+            AppearancePreviewLayout.panelSize.height + AtticPanelSurfaceElevation.dark.extent * 2
+        )
         XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: 80), 80 * 0.46)
         XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: 0), 4)
         XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: .nan),

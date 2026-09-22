@@ -194,7 +194,17 @@ final class AppCoordinator: ObservableObject {
         _ = store.create(title: "Write the announcement", parentID: parent.id)
         _ = store.create(title: "Check the build", parentID: parent.id)
         DispatchQueue.main.async { [weak self] in
-            self?.subtaskPanels.pinFamily(parent.id)
+            guard let self else { return }
+            subtaskPanels.pinFamily(parent.id)
+            // Clear of the panel, on the main display, so the checklist is
+            // photographed over the harness backdrop rather than the panel.
+            if let screen = NSScreen.main?.visibleFrame {
+                subtaskPanels.placePinnedWindowForUITesting(
+                    parent.id,
+                    visibleOrigin: CGPoint(x: screen.midX - SubtaskPanelLayout.panelWidth / 2,
+                                           y: screen.midY - 120)
+                )
+            }
         }
     }
     private let settingsWindowController: SettingsWindowController

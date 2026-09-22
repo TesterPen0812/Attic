@@ -96,19 +96,19 @@ final class PanelTintCalibrationTests: XCTestCase {
                             XCTAssertGreaterThanOrEqual(contrast, AtticPanelSurfaceTreatment.readableContrastTarget - 0.0001,
                                                         "\(context): text falls below 4.75:1")
                             // And everywhere below the top edge, where the
-                            // wash only fades, over the eight desktop extremes.
-                            for extreme in [0.0, 1.0] {
-                                for red in [0.0, 1.0] { for green in [0.0, 1.0] { for blue in [0.0, 1.0] {
-                                    _ = extreme
-                                    let desktop = AtticThemeColor(red: red, green: green, blue: blue)
-                                    for location in [0.0, 0.2, 0.42, 0.6, 0.74, 1.0] {
-                                        let color = tinted.compositedSurface(over: desktop, location: location)
-                                        XCTAssertGreaterThanOrEqual(
-                                            PanelTintCalibration.minimumForegroundContrast(palette: tinted.palette, over: color),
-                                            4.5, "\(context) desktop=\(desktop.hexString) location=\(location)")
-                                    }
-                                } } }
-                            }
+                            // wash only fades, over the eight desktop extremes:
+                            // the same floor, since contrast along the fade is
+                            // bounded by its two ends.
+                            for red in [0.0, 1.0] { for green in [0.0, 1.0] { for blue in [0.0, 1.0] {
+                                let desktop = AtticThemeColor(red: red, green: green, blue: blue)
+                                for location in [0.0, 0.2, 0.42, 0.6, 0.74, 1.0] {
+                                    let color = tinted.compositedSurface(over: desktop, location: location)
+                                    XCTAssertGreaterThanOrEqual(
+                                        PanelTintCalibration.minimumForegroundContrast(palette: tinted.palette, over: color),
+                                        AtticPanelSurfaceTreatment.readableContrastTarget - 0.0001,
+                                        "\(context) desktop=\(desktop.hexString) location=\(location)")
+                                }
+                            } } }
                         }
                     }
                 }

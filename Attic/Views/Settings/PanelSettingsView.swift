@@ -25,7 +25,8 @@ struct PanelSettingsView: View {
                 Text("Corner")
             } footer: {
                 SettingsFootnote(
-                    "Drag the panel's top edge to move it to another corner. "
+                    "The same corner works on every connected display. "
+                    + "Drag the panel's top edge to move it to another corner; its buttons stay clickable. "
                     + "Swipe two fingers toward the screen edge to hide it, even while it's pinned; "
                     + "canvas gestures stay on the canvas. Hot Corners can trigger at the same time."
                 )

@@ -76,6 +76,8 @@ readability test computes against.
   both before and after; the outline adds a 221 rim. The brief's 253 reading
   shows native glass can render far lighter (activation, OS), which is what the
   outline guards against.
+- The hairline token is the stroke width; the stroke is centred on the edge
+  and clipped by the shape, so about half of it is visible, as before.
 - The window keeps `panelUsesSystemShadow = false` and the 24 pt
   `panelElevationMargin`; the outer corners stay transparent and click-through
   and the margin is never a resize grip.
@@ -219,6 +221,22 @@ What that gives real installs: every palette's own gradient computes below
 ΔE 3 except Electric Blue in Light (ΔE ≈ 5.6 → Vivid), so almost everyone keeps
 Tint Off; a saturated custom colour (pure red ≈ 11.3, black ≈ 8.7 on Original)
 becomes Bold or Vivid.
+
+Three consequences of these rules, raised by review and kept as specified:
+
+- In Dark, the old gradient's pole was black, so every Dark user on Solid,
+  Glass or Frosted had a strong neutral darkening across the top half of the
+  panel (0.82 fading to nothing at 55 % height), which is close to what Depth
+  now draws. The rule turns Depth on only for Original + Clear, whose users
+  saw the Clear crown; every other existing user starts with Depth off and
+  can turn it on. This is the owner's mapping ("existing users' panels must
+  not change unexpectedly"), and it is a visible change for those Dark users.
+- The Tint step is measured from the Light appearance only, whatever
+  appearance the user ran, as the rule says. A custom colour that looked
+  stronger in Dark may map to a weaker step.
+- Original + Clear users saw no gradient in Dark (Clear drew none) but did in
+  Light, where Clear resolved to Frosted; a stored custom colour is therefore
+  mapped by its Light appearance, as for everyone else.
 
 After mapping, the four obsolete keys are removed and the schema version
 written. Tests: `AppearanceMigrationTests` (pure matrix, defaults round trip,

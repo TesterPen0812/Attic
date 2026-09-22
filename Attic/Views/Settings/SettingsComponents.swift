@@ -61,13 +61,15 @@ struct SettingsPage<Content: View>: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
                 .padding(.top, SettingsDesign.headerTopInset)
                 .padding(.bottom, SettingsDesign.headerBottomInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
-            .listRowBackground(Color.clear)
 
             content
         }
@@ -107,6 +109,8 @@ struct SettingsRow<Trailing: View>: View {
     let description: String?
     let systemImage: String
     let tint: Color
+    /// Lets the description be selected and copied (an error to report).
+    let selectableDescription: Bool
     private let trailing: Trailing
 
     init(
@@ -114,12 +118,14 @@ struct SettingsRow<Trailing: View>: View {
         description: String? = nil,
         systemImage: String,
         tint: Color = .gray,
+        selectableDescription: Bool = false,
         @ViewBuilder trailing: () -> Trailing
     ) {
         self.title = title
         self.description = description
         self.systemImage = systemImage
         self.tint = tint
+        self.selectableDescription = selectableDescription
         self.trailing = trailing()
     }
 
@@ -127,7 +133,8 @@ struct SettingsRow<Trailing: View>: View {
         LabeledContent {
             trailing
         } label: {
-            SettingsRowLabel(title: title, description: description, systemImage: systemImage, tint: tint)
+            SettingsRowLabel(title: title, description: description, systemImage: systemImage,
+                             tint: tint, selectableDescription: selectableDescription)
         }
     }
 }
@@ -137,6 +144,7 @@ struct SettingsRowLabel: View {
     let description: String?
     let systemImage: String
     var tint: Color = .gray
+    var selectableDescription = false
 
     var body: some View {
         Label {
@@ -144,10 +152,15 @@ struct SettingsRowLabel: View {
                 Text(title)
                     .foregroundStyle(.primary)
                 if let description, !description.isEmpty {
-                    Text(description)
+                    let text = Text(description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if selectableDescription {
+                        text.textSelection(.enabled)
+                    } else {
+                        text
+                    }
                 }
             }
         } icon: {

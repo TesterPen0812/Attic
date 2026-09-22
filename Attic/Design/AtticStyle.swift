@@ -158,10 +158,9 @@ struct AtticPanelSurface: ViewModifier {
             if #available(macOS 26.0, *) {
                 nativeGlassBackground(shape: shape)
             } else {
-                ZStack {
-                    shape.fill(.regularMaterial)
-                    shape.fill(themedSurfaceTint)
-                }
+                // The foundation carries the colour here too; Glass has no
+                // material wash of its own.
+                shape.fill(.regularMaterial)
             }
         }
     }

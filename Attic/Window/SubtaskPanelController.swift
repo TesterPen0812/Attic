@@ -42,8 +42,10 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     private var outsideClickMonitors: [Any] = []
     /// Mouse-moved monitors that keep each surface window's
     /// `ignoresMouseEvents` in step with the pointer while any surface is
-    /// on screen (see `PanelSurfacePointerPolicy`).
-    private var pointerMonitors: [Any] = []
+    /// on screen (see `PanelSurfacePointerPolicy`). Removed on the main
+    /// actor by `tearDown`; the deinit sweep is a last resort, which is why
+    /// the property opts out of isolation checking there.
+    nonisolated(unsafe) private var pointerMonitors: [Any] = []
     private var cancellables: Set<AnyCancellable> = []
     private var notificationTokens: [NSObjectProtocol] = []
     /// Unit-test seams: the test host cannot order a real main panel
@@ -716,6 +718,15 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     /// Test seam: whether the pass-through monitors are installed.
     var isMonitoringPointerPassthrough: Bool { !pointerMonitors.isEmpty }
 
+    /// Capture seam: moves a pinned window so the harness can photograph it
+    /// clear of the main panel. Visible-frame origin, like everything else.
+    func placePinnedWindowForUITesting(_ familyID: UUID, visibleOrigin: CGPoint) {
+        guard let window = pinnedSurfaces[familyID]?.window else { return }
+        var frame = window.visibleContentFrame
+        frame.origin = visibleOrigin
+        window.setVisibleContentFrame(frame, display: true)
+    }
+
     /// Monitors run only while a surface is presented; a controller with
     /// nothing on screen costs nothing per pointer move.
     private func syncPointerPassthroughMonitoring() {
@@ -730,7 +741,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
 
     private func startPointerPassthroughMonitoring() {
         guard pointerMonitors.isEmpty else { return }
-        let mask: NSEvent.EventTypeMask = [.mouseMoved]
+        // Mouse-up as well: a header drag moves the window under a pressed
+        // pointer, and the flag is frozen while a button is down.
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseUp, .rightMouseUp, .otherMouseUp]
         if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
             MainActor.assumeIsolated { self?.updateSurfacePointerPassthrough(at: NSEvent.mouseLocation) }
             return event
@@ -760,7 +773,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     /// behind, including the main panel a transient sits beside. A pressed
     /// button (a header drag in flight) never flips the flag mid-gesture.
     func updateSurfacePointerPassthrough(at point: CGPoint) {
-        guard NSEvent.pressedMouseButtons == 0 else { return }
+        guard presentationEnabled, NSEvent.pressedMouseButtons == 0 else { return }
         for surface in surfaceWindows where surface.isVisible {
             let shouldIgnore = PanelSurfacePointerPolicy.shouldIgnoreMouseEvents(
                 at: point,
@@ -882,7 +895,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             occupiedFrames: visiblePinnedFrames
         ))
         pair.window.orderFrontRegardless()
-
+        // A reused window may carry a stale pass-through flag from its last
+        // presentation, and the pointer may already be parked on it.
+        updateSurfacePointerPassthrough(at: NSEvent.mouseLocation)
     }
 
     private func presentPinned(_ familyID: UUID) {
@@ -892,8 +907,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
         pinnedSurfaces[familyID] = pair
         configureSurface(pair.window, host: pair.host, familyID: familyID, mode: .pinned)
         if !wasVisible {
-            // Saved and restored frames are visible frames: a position kept
-            // from before the shadow margin existed lands exactly where it was.
+            // Visible-frame semantics: the controller does not persist pinned
+            // frames today (`saved` is nil, as on main), but a frame saved by
+            // the tight-bounds window would land exactly where it was.
             pair.window.setVisibleContentFrame(SubtaskPanelLayout.restoredPinnedFrame(
                 saved: nil, size: fittingSize(of: pair.host),
                 screenVisibleFrames: NSScreen.screens.map(\.visibleFrame),
@@ -901,6 +917,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             ), display: true)
         }
         pair.window.orderFrontRegardless()
+        updateSurfacePointerPassthrough(at: NSEvent.mouseLocation)
     }
 
     private func repositionTransient() {
@@ -994,6 +1011,9 @@ final class SubtaskPanelController: NSObject, ObservableObject {
                 guard let self, let surface,
                       self.frameAnimationTargets.target(for: surface) == frame else { return }
                 self.frameAnimationTargets.clear(for: surface)
+                // The window has finished moving under a possibly parked
+                // pointer: the pass-through flag must follow the new frame.
+                self.updateSurfacePointerPassthrough(at: NSEvent.mouseLocation)
             }
         }
     }
@@ -1007,6 +1027,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             context.duration = 0
             surface.animator().setFrame(native, display: true)
         }
+        updateSurfacePointerPassthrough(at: NSEvent.mouseLocation)
     }
 
     private func fittingSize(of host: NSHostingView<SubtaskPanelContent>) -> CGSize {
@@ -1092,6 +1113,7 @@ final class SubtaskPanelController: NSObject, ObservableObject {
             resizeDetachedSurface(pair.window, host: pair.host)
         }
         repositionTransient()
+        updateSurfacePointerPassthrough(at: NSEvent.mouseLocation)
     }
 
     private func reconcileStore() {

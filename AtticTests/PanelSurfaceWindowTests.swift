@@ -191,7 +191,20 @@ final class PanelSurfaceWindowTests: XCTestCase {
         XCTAssertFalse(controller.isMonitoringPointerPassthrough)
     }
 
-    func testMainPanelAndChecklistResolveTheSameTreatment() throws {
+    func testPaintAndHitTestingShareOneSquircleExponent() {
+        // The drawn shape and the hosting view's hit test use
+        // AtticStyle.panelSquircleExponent; placement, coverage and the
+        // pointer policy go through PanelGeometry.squircleExponent. They
+        // must be the same number or paint and clicks could disagree.
+        XCTAssertEqual(AtticStyle.panelSquircleExponent, PanelGeometry.squircleExponent)
+    }
+
+    /// Pins the plumbing: both windows resolve through
+    /// `AppSettings.panelSurfaceTreatment`, which is the theme's own
+    /// resolver, so every frame token they read is the same value. That the
+    /// two views call it (rather than a hand-rolled treatment) is checked by
+    /// reading; the captures compare what they draw.
+    func testSharedResolverIsTheThemeResolverForEverySetting() throws {
         let suite = "PanelSurfaceWindowTests-parity-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }

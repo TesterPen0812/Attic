@@ -11,7 +11,8 @@ enum AppearancePreviewLayout {
         width: (PanelGeometry.defaultPanelSize.width * scale).rounded(),
         height: (PanelGeometry.defaultPanelSize.height * scale).rounded()
     )
-    static let cardHeight: CGFloat = 248
+    /// Tall enough for the miniature plus its outside shadow on both sides.
+    static let cardHeight: CGFloat = 260
     static let cardCornerRadius: CGFloat = 14
 
     static func cornerRadius(forPanelCornerSize cornerSize: Double) -> CGFloat {
@@ -164,8 +165,8 @@ private struct AppearancePreviewBackdrop: View {
 }
 
 /// The miniature panel: the real surface modifier around a few real
-/// controls, scaled by fixed points rather than a transform so native glass
-/// samples the backdrop at the right place.
+/// controls, laid out in scaled points rather than under a transform, so
+/// native glass and the shadow render at their true size.
 private struct AppearancePreviewPanel: View {
     let treatment: AtticPanelSurfaceTreatment
     let palette: AtticPanelThemePalette

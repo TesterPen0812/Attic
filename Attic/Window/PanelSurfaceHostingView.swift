@@ -39,6 +39,12 @@ final class PanelSurfaceWindow: NSPanel {
         visibleContentFrame
     }
 
+    /// An assistive client that moves or sizes the window describes the
+    /// surface it can see; the native frame follows with its margin.
+    override func setAccessibilityFrame(_ accessibilityFrame: NSRect) {
+        setVisibleContentFrame(accessibilityFrame, display: true)
+    }
+
     /// Whether a screen point lies on the painted squircle. Everything else
     /// inside the native frame (the margin and the corner wedges) is
     /// click-through; the owner keeps `ignoresMouseEvents` in step with the

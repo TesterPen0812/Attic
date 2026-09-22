@@ -116,8 +116,7 @@ final class PanelFrameTests: XCTestCase {
         // must lie inside the exact cut-out, and the cut-out must not reach
         // beyond the true edge, or a bright seam opens between the hairline
         // and the shadow (measured on the Light Solid capture).
-        XCTAssertGreaterThanOrEqual(AtticPanelOutsideShadow.casterInset, 0.5)
-        XCTAssertLessThanOrEqual(AtticPanelOutsideShadow.casterInset, 1)
+        XCTAssertEqual(AtticPanelOutsideShadow.casterInset, 0.5)
         let margin = AtticStyle.panelElevationMargin
         let (canvas, sample) = try renderOutsideShadow(elevation: .light)
         let inner = CGRect(x: margin, y: margin,

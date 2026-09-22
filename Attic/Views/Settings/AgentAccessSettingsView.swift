@@ -120,7 +120,7 @@ struct AgentAccessSettingsView: View {
             .font(.callout.monospaced())
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
-            .lineLimit(1)
+            .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("settings-agent-endpoint")
     }
 
@@ -158,7 +158,8 @@ struct AgentAccessSettingsView: View {
                 title: "Could not start the server",
                 description: message,
                 systemImage: "exclamationmark.triangle.fill",
-                tint: .red
+                tint: .red,
+                selectableDescription: true
             ) {
                 Button("Retry") {
                     agentServer.start()

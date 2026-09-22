@@ -114,6 +114,9 @@ struct SurfaceChooser: View {
     let palette: AtticPanelThemePalette
     let appearance: AtticPanelThemeAppearance
     let accent: Color
+    /// The solved readable foundation for the glass surfaces of this
+    /// palette and appearance, so the hint shows the real coverage.
+    let glassFoundation: Double
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
@@ -125,7 +128,8 @@ struct SurfaceChooser: View {
                     selection = style
                 } label: {
                     VStack(alignment: .leading, spacing: 8) {
-                        SurfaceHint(style: style, palette: palette, appearance: appearance)
+                        SurfaceHint(style: style, palette: palette, appearance: appearance,
+                                    glassFoundation: glassFoundation)
                             .accessibilityHidden(true)
                         Text(style.title)
                             .font(.callout.weight(.medium))
@@ -169,6 +173,7 @@ private struct SurfaceHint: View {
     let style: PanelSurfaceStyle
     let palette: AtticPanelThemePalette
     let appearance: AtticPanelThemeAppearance
+    let glassFoundation: Double
 
     var body: some View {
         ZStack {
@@ -179,7 +184,7 @@ private struct SurfaceHint: View {
             }
             .blur(radius: style == .frosted ? 3 : 0)
             Squircle(cornerRadius: 14, exponent: AtticStyle.panelSquircleExponent)
-                .fill(palette.opaqueSurfaceColor.opacity(Self.foundation(for: style)))
+                .fill(palette.opaqueSurfaceColor.opacity(Self.foundation(for: style, glassFoundation: glassFoundation)))
                 .overlay {
                     if Self.wash(for: style) > 0 {
                         Squircle(cornerRadius: 14, exponent: AtticStyle.panelSquircleExponent)
@@ -205,9 +210,9 @@ private struct SurfaceHint: View {
     }
 
     /// How much of the surface colour covers the little desktop: all of it
-    /// for Solid, a readable-foundation share for Glass and Frosted.
-    static func foundation(for style: PanelSurfaceStyle) -> Double {
-        style == .solid ? 1 : 0.6
+    /// for Solid, the solved readable foundation for Glass and Frosted.
+    static func foundation(for style: PanelSurfaceStyle, glassFoundation: Double) -> Double {
+        style == .solid ? 1 : min(max(glassFoundation, 0), 1)
     }
 
     /// Frosted adds its palette wash; the others carry none.
