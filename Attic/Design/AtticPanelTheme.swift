@@ -243,7 +243,6 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
         colorScheme: ColorScheme,
         contrast: ColorSchemeContrast = .standard,
         surface: PanelSurfaceStyle,
-        depth: Bool,
         tint: PanelTintLevel,
         reduceTransparency: Bool
     ) -> AtticPanelSurfaceTreatment {
@@ -253,20 +252,18 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
                 : AtticPanelThemeAppearance.light,
             contrast: contrast,
             surface: surface,
-            depth: depth,
             tint: tint,
             reduceTransparency: reduceTransparency
         )
     }
 
     /// The one resolution from settings to a drawable surface. Reduce
-    /// Transparency forces Solid rendering and keeps the chosen Depth and
-    /// Tint; Increased Contrast only changes the palette's edges.
+    /// Transparency forces Solid rendering and keeps the chosen Tint;
+    /// Increased Contrast only changes the palette's edges.
     func surfaceTreatment(
         appearance: AtticPanelThemeAppearance,
         contrast: ColorSchemeContrast = .standard,
         surface: PanelSurfaceStyle,
-        depth: Bool,
         tint: PanelTintLevel,
         reduceTransparency: Bool
     ) -> AtticPanelSurfaceTreatment {
@@ -276,7 +273,6 @@ enum AtticPanelTheme: String, CaseIterable, Identifiable, Sendable {
             palette: palette(for: appearance, contrast: contrast),
             appearance: appearance,
             usesSystemOpaqueSurface: self == .original,
-            depth: depth,
             tint: tint
         )
     }
@@ -457,8 +453,11 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     let appearance: AtticPanelThemeAppearance
     let usesSystemOpaqueSurface: Bool
     let foundationOpacity: Double
-    /// The neutral crown across the top of the panel (`PanelDepthCrown`).
-    let depth: Bool
+    let tintTopOpacity: Double
+    /// True when the readability floor, not the chosen step, set the wash.
+    /// It comes from whichever cell this treatment used (the generated
+    /// table, or the pre-macOS-26 solve), so the Settings note follows it.
+    let isTintClamped: Bool
     /// The accent wash across the top of the panel (`PanelTintCalibration`).
     let tint: PanelTintLevel
 
@@ -467,31 +466,80 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
 
     init(theme: AtticPanelTheme, kind: Kind, palette: AtticPanelThemePalette,
          appearance: AtticPanelThemeAppearance, usesSystemOpaqueSurface: Bool,
-         depth: Bool = false, tint: PanelTintLevel = .off) {
+         tint: PanelTintLevel = .off,
+         creditsNativeSurface: Bool = AtticGlassControlTreatment.systemSupportsNativeGlass) {
         self.theme = theme
         self.kind = kind
         self.palette = palette
         self.appearance = appearance
         self.usesSystemOpaqueSurface = usesSystemOpaqueSurface
-        self.depth = depth
         self.tint = tint
         switch kind {
-        case .solid: foundationOpacity = 1
+        case .solid:
+            foundationOpacity = 1
+            let cell = tint == .off
+                ? nil
+                : PanelTintCalibration.cell(
+                    theme: theme,
+                    appearance: appearance,
+                    kind: kind,
+                    level: tint
+                )
+            tintTopOpacity = cell?.topOpacity ?? 0
+            isTintClamped = cell?.isClamped ?? false
         case .glass, .frosted:
-            foundationOpacity = Self.minimumReadableOpacity(palette: palette, appearance: appearance)
+            let plain = Self.minimumReadableOpacity(
+                palette: palette,
+                appearance: appearance,
+                kind: kind,
+                creditsNativeSurface: creditsNativeSurface
+            )
+            if tint == .off {
+                foundationOpacity = plain
+                tintTopOpacity = 0
+                isTintClamped = false
+            } else if creditsNativeSurface,
+                      let cell = PanelTintCalibration.cell(
+                          theme: theme,
+                          appearance: appearance,
+                          kind: kind,
+                          level: tint
+                      ) {
+                foundationOpacity = cell.foundationOpacity
+                tintTopOpacity = cell.topOpacity
+                isTintClamped = cell.isClamped
+            } else {
+                let cell = PanelTintCalibration.solve(
+                    theme: theme,
+                    appearance: appearance,
+                    kind: kind,
+                    palette: palette,
+                    level: tint,
+                    minimumFoundationOpacity: plain,
+                    creditsNativeSurface: false
+                )
+                foundationOpacity = cell?.foundationOpacity ?? plain
+                tintTopOpacity = cell?.topOpacity ?? 0
+                isTintClamped = cell?.isClamped ?? false
+            }
         }
     }
 
-    /// Solve once per treatment, not per gradient sample or drawing layer.
-    /// Black/white bound an sRGB source-over backdrop for these fixed light/dark
-    /// foregrounds. Native glass is deliberately not credited with extra
-    /// contrast: its appearance varies with activation, OS, and background.
-    /// This model still needs native screenshot checks; it is not a claim
-    /// about every system compositor or physical display.
-    private static func minimumReadableOpacity(palette: AtticPanelThemePalette,
-                                               appearance: AtticPanelThemeAppearance) -> Double {
-        let extreme = appearance == .dark ? 1.0 : 0.0
-        let backdrop = AtticThemeColor(red: extreme, green: extreme, blue: extreme)
+    /// Solve once per treatment, not per gradient sample or drawing layer. On
+    /// macOS 26+ the measured bare native surface is credited before the
+    /// readable foundation is applied. Older material fallbacks keep the raw
+    /// black/white worst case so their historical foundation is unchanged.
+    static func minimumReadableOpacity(
+        palette: AtticPanelThemePalette,
+        appearance: AtticPanelThemeAppearance,
+        kind: Kind,
+        creditsNativeSurface: Bool
+    ) -> Double {
+        let backdrop = worstCaseUnderlay(
+            kind: kind,
+            appearance: appearance,
+            creditsNativeSurface: creditsNativeSurface
+        )
         var lower = 0.0
         var upper = 1.0
         for _ in 0..<16 {
@@ -505,20 +553,38 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         return min(ceil(upper * 100) / 100, 1)
     }
 
+    /// Measured bare-surface rendering beneath the foundation. Values are
+    /// neutral sRGB samples from macOS 26+/27 prototypes over white for Dark
+    /// panels and black for Light panels; see the measurement table in
+    /// `Docs/Appearance-Model-2026-09.md`.
+    static func worstCaseUnderlay(
+        kind: Kind,
+        appearance: AtticPanelThemeAppearance,
+        creditsNativeSurface: Bool = AtticGlassControlTreatment.systemSupportsNativeGlass
+    ) -> AtticThemeColor {
+        guard creditsNativeSurface else {
+            let raw = appearance == .dark ? 1.0 : 0.0
+            return AtticThemeColor(red: raw, green: raw, blue: raw)
+        }
+
+        let byte: Double
+        switch (kind, appearance) {
+        case (.glass, .dark): byte = 143
+        case (.glass, .light): byte = 104
+        case (.frosted, .dark): byte = 166
+        case (.frosted, .light): byte = 89
+        case (.solid, .dark): byte = 255
+        case (.solid, .light): byte = 0
+        }
+        let value = byte / 255
+        return AtticThemeColor(red: value, green: value, blue: value)
+    }
+
     // MARK: Tint
 
     /// The wash colour: the palette accent's hue, saturated.
     var washColor: AtticThemeColor {
         PanelTintCalibration.washColor(for: palette, appearance: appearance)
-    }
-
-    /// The calibrated top-edge opacity of the wash for this exact cell, or
-    /// zero when Tint is off. A cell missing from the table draws nothing
-    /// rather than guessing; the calibration test guarantees none is.
-    var tintTopOpacity: Double {
-        PanelTintCalibration.cell(
-            theme: theme, appearance: appearance, kind: kind, depth: depth, level: tint
-        )?.topOpacity ?? 0
     }
 
     /// The wash fades linearly from its top opacity to nothing at
@@ -534,16 +600,13 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     // MARK: Composite model
 
     /// What a point of the surface looks like over a backdrop: foundation,
-    /// then the Depth crown, then the Tint wash, in drawing order. Solid
+    /// then the Tint wash, in drawing order. Solid
     /// surfaces transmit nothing, so the backdrop is irrelevant there.
     /// Frosted's own `surfaceTint` wash (at most 0.045, drawn under the
     /// foundation) and the native material are deliberately not modelled:
     /// the model is a source-over bound, not a claim about the compositor.
     func compositedSurface(over backdrop: AtticThemeColor, location: Double = 1) -> AtticThemeColor {
-        var color = backdrop.mixed(with: palette.opaqueSurface, amount: foundationOpacity)
-        if depth {
-            color = PanelDepthCrown.composite(over: color, appearance: appearance, location: location)
-        }
+        let color = backdrop.mixed(with: palette.opaqueSurface, amount: foundationOpacity)
         return color.mixed(with: washColor, amount: tintOpacity(at: location))
     }
 

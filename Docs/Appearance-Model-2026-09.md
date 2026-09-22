@@ -1,298 +1,133 @@
-# Attic appearance model (September 2026)
+# Appearance model — September 2026
 
-This is the record of the appearance simplification: what the user can set,
-how each setting renders, how the old preferences were migrated, and how the
-Tint steps were calibrated. Every number here is pinned by a unit test named
-in the relevant section.
+This is the source-of-truth ledger for Attic's current local-first macOS appearance model. It records what each setting owns, how translucent surfaces stay readable, how Tint is calibrated, and how the unreleased appearance migration behaves.
 
-## 1. The model
+## 1. User-facing model
 
-| Control | Options | Stored key | Notes |
+| control | values | persisted key | owns |
 |---|---|---|---|
-| Mode | System · Light · Dark | `appearancePreference` | unchanged |
-| Palette | Original, Midnight Cobalt, Porcelain Vapor, Smoked Umber, Electric Blue, Sea Glass, Amethyst | `panelTheme` | unchanged palettes; Original Light Solid is exactly `#FFFFFF` |
-| Surface | Solid · Glass · Frosted | `panelSurfaceStyle` (`solid` · `glass` · `frosted`) | see §2 |
-| Depth | on / off | `panelDepth` (Bool) | the neutral crown, §3 |
-| Tint | Off · Subtle · Vivid · Bold | `panelTint` (`off` · `subtle` · `vivid` · `bold`) | the accent wash, §4 |
-| | | `appearanceSchemaVersion` = 2 | migration marker, §5 |
+| Palette | Original + six custom palettes | `panelTheme` | accent, opaque surface, tint hue, edge |
+| Surface | Solid / Glass / Frosted | `panelSurfaceStyle` | base surface implementation |
+| Tint | Off / Subtle / Vivid / Bold | `panelTint` | calibrated accent wash at the top |
+| Mode | System / Light / Dark | `appearancePreference` | effective appearance |
 
-Removed entirely: the translucent toggle (`isTranslucent`), the glass-style
-picker and its Clear option (`panelGlassStyle`), the gradient coverage slider
-(`panelGradientCoverage`) and the custom gradient colour
-(`panelGradientColorHex`), the 12%-pole gradient itself, and the Clear-only
-"foreground readability" enable rule. The keys are deleted by the migration.
+`AtticPanelTheme.surfaceTreatment(...)` is the single settings-to-rendering resolver. The main panel, subtask panel and Settings preview use the same `AtticPanelSurfaceTreatment` model.
 
-Types: `PanelSurfaceStyle`, `PanelTintLevel` (`Attic/Services/PanelAppearance.swift`),
-`PanelDepthCrown` (`Attic/Design/PanelDepth.swift`), `PanelTintCalibration`
-(`Attic/Design/PanelTintCalibration.swift`), `AppearanceMigration`
-(`Attic/Services/AppearanceMigration.swift`). The drawable result is one
-`AtticPanelSurfaceTreatment` (`Attic/Design/AtticPanelTheme.swift`) built by
-`AtticPanelTheme.surfaceTreatment(appearance:contrast:surface:depth:tint:reduceTransparency:)`.
+The in-shape order is:
 
-## 2. Surfaces
+**surface → readable foundation (translucent surfaces only) → Tint wash → hairline edge**
 
-| Surface | Rendering (`AtticPanelSurface`, `Attic/Design/AtticStyle.swift`) | Was |
-|---|---|---|
-| Solid | the palette `opaqueSurface`, fully opaque | `.opaque` |
-| Glass | native Liquid Glass `.regular` under the calibrated foundation | "Frosted" (`.frostedGlass`) |
-| Frosted | `ultraThinMaterial` + the palette `surfaceTint` at `frostedTintOpacity`, under the same foundation | "Glassmorphism" (`.glassmorphism`) |
+The outside-only elevation remains outside the clip. Reduce Transparency resolves the surface to Solid while preserving the selected Tint step and stored Surface choice.
 
-The foundation is the palette `opaqueSurface` at the lowest whole percent that
-keeps primary **and** secondary text at ≥ 4.75:1 over a worst-case backdrop
-(black behind Light, white behind Dark). Unchanged from before:
-`testReadableFoundationIsTheLowestWholePercentMeetingContrastTarget`.
+## 2. Surfaces and readable foundation
 
-Layer order inside the squircle clip: surface → foundation (not Solid) →
-Depth crown → Tint wash → hairline edge. Outside the clip: the outside-only
-elevation. `AtticPanelSurfaceTreatment.compositedSurface(over:location:)` is
-the arithmetic model of the same stack and is what every calibration and
-readability test computes against.
+### 2.1 Solid
 
-### 2.1 The frame (identical on every surface and every panel window)
+Solid is the palette's `opaqueSurface` at opacity 1. It does not transmit the desktop. Original Light remains exactly white; the edge and elevation provide its boundary.
 
-- **Edge:** one hairline per palette family. Original strokes `Color.primary`
-  at 0.09; custom palettes stroke their `edgeTint` at 0.19. Increased Contrast
-  adds 0.10 / 0.14. Line width 0.75 pt (1 pt in Increased Contrast). The old
-  per-surface values (0.055 … 0.22) and the `isElevated` special case are
-  gone. `testSurfaceEdgeIsOneHairlinePerPaletteFamilyOnEverySurface`.
-- **Outer shadow:** `AtticPanelSurfaceElevation.light` 0.10 / radius 10 / y 1,
-  `.dark` 0.30 / 10 / 1, on **all** surfaces, drawn by
-  `AtticPanelOutsideShadow`: a shadow of the squircle with the squircle cut
-  back out (`compositingGroup` + `destinationOut`), so a translucent interior
-  is never darkened. The shadow caster is inset 0.5 pt so its anti-aliased rim
-  lies inside the cut-out; the cut-out is the exact shape so no bright seam
-  opens next to the hairline (that seam was measured at one pixel on the
-  first capture and is what motivated the inset). Verified by rendering:
-  `PanelFrameTests.testOutsideShadowNeverDrawsInsideTheShape`,
-  `testShadowCasterInsetHidesItsRimWithoutOpeningASeam`. Pixel evidence on the
-  Light Solid capture: interior 255, edge 240, then 243 → 245 → 248 → 251 →
-  255 over the 24 pt margin, no gap.
-- **Control outlines:** native-glass controls (composer field, pin, mode dock,
-  round buttons, view switches) carry a `Color.primary` outline at 0.10 / 0.75 pt
-  on every surface (Increased Contrast 0.20 / 1 pt). The Reduce Transparency
-  (opaque) control path keeps its existing edge.
-  `PanelFrameTests.testNativeGlassControlsCarryAFaintOutlineOnEverySurface`.
-  On this machine the composer field measured 236 on the 255 Solid surface
-  both before and after; the outline adds a 221 rim. The brief's 253 reading
-  shows native glass can render far lighter (activation, OS), which is what the
-  outline guards against.
-- The hairline token is the stroke width; the stroke is centred on the edge
-  and clipped by the shape, so about half of it is visible, as before.
-- The window keeps `panelUsesSystemShadow = false` and the 24 pt
-  `panelElevationMargin`; the outer corners stay transparent and click-through
-  and the margin is never a resize grip.
+### 2.2 Glass and Frosted
 
-### 2.2 Accessibility
+Glass uses native `.glassEffect(.regular)` on macOS 26+ and its existing material fallback below macOS 26. Frosted uses `.ultraThinMaterial` on the native-surface path and the existing fallback below macOS 26. Both put the palette's `opaqueSurface` above the native surface as a readable foundation.
 
-- Reduce Transparency → `kind = .solid` with the chosen Depth and Tint kept
-  (`testReduceTransparencyRendersSolidButKeepsDepthAndTint`).
-- Increased Contrast → edge and control outlines one step stronger; the
-  composite the tint table depends on is unchanged
-  (`testIncreasedContrastChangesNothingTheTableDependsOn`).
-- Reduce Motion → the surface, depth and tint crossfade is `nil`
-  (`AtticPanelSurface.surfaceAnimationIdentity`).
+The previous model solved that foundation as though raw white or black sat immediately below it. That ignored the native surface's own movement of the desktop toward a mid-tone and made Glass and Frosted much more opaque than required.
 
-## 3. Depth
+The owner brief supplied these 2× sRGB measurements from a macOS 27 SwiftUI prototype with **0% foundation**. The panel interior was averaged for each bare native surface:
 
-`PanelDepthCrown`: a linear gradient with exactly the owner's stops, opacity
-0.82 @ 0.00, 0.58 @ 0.42, 0.18 @ 0.74, 0.02 @ 1.00, top to bottom; black in
-Dark, white in Light; clipped to the squircle; drawn above the fill and below
-the tint. It applies to every surface and palette and never changes the
-foundation. `testDepthCrownUsesTheExactStops`,
-`testDepthAppliesToEverySurfaceAndPaletteAndKeepsTheFloor`.
+| surface | appearance | over white | over black | over mid-grey 128 |
+|---|---:|---:|---:|---:|
+| `.glassEffect(.regular)` | Dark | 139 | 20 | 117 |
+| `.glassEffect(.regular)` | Light | 236 | 104 | 173 |
+| `.ultraThinMaterial` | Dark | 166 | 24 | 93 |
+| `.ultraThinMaterial` | Light | 241 | 89 | 166 |
 
-Everything about Depth is `PanelDepthCrown` + `PanelDepthCrownView`, the
-`depth` field of the treatment, and `AppSettings.panelDepthEnabled`; removing
-it is those three places plus the Settings toggle.
+For readability, the worst desktop extreme is white for a Dark panel and black for a Light panel. `AtticPanelSurfaceTreatment.worstCaseUnderlay(kind:appearance:creditsNativeSurface:)` is the named source of truth for the resulting neutral underlay beneath the foundation:
 
-Fidelity to the old Original Dark Clear: see §7.
+- Glass: Dark `143/255`, Light `104/255`
 
-### 3.1 Depth on Solid, dark palettes
+Dark Glass is the one value not taken straight from the prototype table. In the
+running app, over a full-screen white backdrop, Original Dark Glass at 33 %
+foundation measured 102 at the top of the panel where the prototype model
+predicted 99, so real Liquid Glass over the desktop transmits slightly more
+than it did inside the prototype window. Solving back from that capture gives
+an underlay of 143, which is what the code uses. The other three values agreed
+with the running app within one level (Light Glass 139 vs 139, Dark Frosted 99
+vs 98, Light Frosted 140 vs 139).
+- Frosted: Dark `166/255`, Light `89/255`
 
-Captured over white (`Docs/Appearance-Model-2026-09/depth-on-solid-<palette>-dark.jpg`;
-the full matrix is in the PR's capture set and summarised in the
-`sheet-<palette>-<backdrop>.jpg` contact sheets in the same folder). The crown is 0.82 black at the top edge, so on a
-dark Solid palette the top third reads as near-black whatever the palette:
-Midnight Cobalt's navy `#071127` becomes about `#040914` at the top and only
-returns to navy below the middle; Smoked Umber, Porcelain Vapor, Amethyst and
-Sea Glass behave the same way (interior mid-height strips in the capture
-log). Original Dark Solid stays a neutral near-black, which is its intent.
-Whether that muddies the custom palettes is the owner's call; the brief
-anticipated removing Depth if it does not work, and Depth is self-contained
-for that reason (§3). Light Solid with Depth is a white crown over a
-near-white surface and reads as a soft lift, not a colour loss.
+These credits apply only when the native macOS 26+ surface is in use. `creditsNativeSurface` defaults to `AtticGlassControlTreatment.systemSupportsNativeGlass`, but tests pin both paths explicitly. Below macOS 26 the underlay remains the historical raw extreme: white for Dark and black for Light.
 
-## 4. Tint
+For Tint Off, `minimumReadableOpacity` solves the first whole-percent foundation whose composite keeps **both** fixed palette foregrounds at or above **4.75:1**. Solid is always 1.00.
 
-The wash is the palette accent's hue at HSV saturation 0.85 and value 1.0
-(Light) / 0.95 (Dark), fading linearly from its top opacity at the top edge to
-nothing at 60 % of the panel height, clipped to the squircle.
+For arbitrary desktop colours used by the contrast tests, the measured black/white native-surface endpoints are interpolated linearly per sRGB channel. The prototype gives the endpoints and a mid-grey observation; this interpolation is the explicit validation assumption for intermediate backdrops, not a claim that the system compositor is physically linear in every condition.
 
-### 4.1 Calibration method
+### 2.3 Current Tint-Off foundation
 
-For each cell (palette × mode × surface × depth), and each step:
+| palette | appearance | Glass | Frosted |
+|---|---|---:|---:|
+| Original | Light | 0.23 | 0.30 |
+| Original | Dark | 0.36 | 0.46 |
+| Midnight Cobalt | Light | 0.25 | 0.32 |
+| Midnight Cobalt | Dark | 0.35 | 0.45 |
+| Porcelain Vapor | Light | 0.24 | 0.31 |
+| Porcelain Vapor | Dark | 0.39 | 0.49 |
+| Smoked Umber | Light | 0.25 | 0.33 |
+| Smoked Umber | Dark | 0.36 | 0.46 |
+| Electric Blue | Light | 0.23 | 0.30 |
+| Electric Blue | Dark | 0.36 | 0.46 |
+| Sea Glass | Light | 0.24 | 0.31 |
+| Sea Glass | Dark | 0.37 | 0.48 |
+| Amethyst | Light | 0.24 | 0.32 |
+| Amethyst | Dark | 0.37 | 0.47 |
 
-1. **Base composite** at the top edge (location 0): worst-case backdrop
-   (black for Light, white for Dark) → foundation (`opaqueSurface` at the
-   foundation opacity; 1 for Solid) → Depth crown at 0.82 when Depth is on.
-2. **Solve** the top opacity α by bisection so that ΔE76 (CIE Lab, D65)
-   between the base and `base mixed α with wash` equals the target: Subtle 3,
-   Vivid 7, Bold 12.
-3. **Clamp**: if primary or secondary foreground contrast against the tinted
-   composite falls below 4.75:1, bisect α down until it holds and mark the
-   cell clamped. Readability always wins.
-4. Store α to three decimals (rounded down when clamped) with the ΔE it
-   actually produces.
+The uncredited fallback deliberately reproduces the previous whole-percent foundations exactly: Original 0.54/0.66 (Light/Dark), Midnight Cobalt 0.57/0.66, Porcelain Vapor 0.56/0.69, Smoked Umber 0.58/0.67, Electric Blue 0.55/0.66, Sea Glass 0.57/0.68, and Amethyst 0.57/0.67. The same fallback foundation applies to Glass and Frosted because the old model did not credit either material.
 
-Blending is sRGB source-over in gamma space, the same arithmetic as the
-foundation solver and the existing readability tests. The table is
-`PanelTintCalibration.table`, generated by `PanelTintCalibration.solveTable()`
-and pasted into the source (run `PanelTintCalibrationTests` with
-`ATTIC_PRINT_TINT_TABLE=1`). Nothing solves at draw time.
+## 3. Removed: Depth
 
-Tests: `testTableHasEveryCell` (252 cells),
-`testEveryCellReproducesItsTargetDifferenceAndKeepsTextReadable` (independent
-Lab implementation, ΔE ± 0.25 for unclamped cells, ≥ 4.75:1 at the top edge
-and ≥ 4.5:1 at every location over the eight desktop extremes),
-`testTableMatchesTheSolver`, `testGlassCellsHoldTheirStrengthOverAMidGreyBackdropToo`
-(the same α over a mid-grey desktop stays within 0.5×–1.8× of the solved ΔE
-and keeps the floor), and the Solid-without-Depth cells agree with the
-prototype's `tint-calibration-prototype.json` within 0.002.
+The neutral black/white crown was removed from every surface and setting. The owner's reason is that it did not add a distinct useful dimension: on Original it was effectively another tint, while on the other palettes it complicated the surface model and had been masking Tint's lack of contrast headroom. The current model gives Tint the necessary headroom through its calibrated foundation instead.
 
-Increased Contrast needs no second table: it changes only `edgeTint` and the
-selection opacities, none of which the composite depends on.
+## 4. Tint calibration
 
-### 4.2 Cells that clamp
+Tint is a saturated version of the palette accent hue. It fades linearly from its calibrated top opacity to zero at 60% of the panel height. The three non-off steps target CIE Lab ΔE76 values of **3 / 7 / 12** for Subtle / Vivid / Bold.
 
-No Solid cell clamps, and no cell with Depth on clamps. On Glass and Frosted
-**without Depth** the foundation already sits exactly at the 4.75:1 floor over
-the worst-case backdrop, so a saturated wash of any strength breaks it and
-the solver clamps the step to what the floor allows. Where the surface luminance
-happens to leave headroom (Porcelain Vapor Light, Smoked Umber Light, Sea Glass
-Light, Midnight Cobalt Dark, Amethyst Dark) the steps calibrate normally.
+The generated calibration has **7 palettes × 2 appearances × 3 surface kinds × 3 non-off steps = 126 cells**. There is no additional axis. Each cell stores:
 
-| Cell (Glass and Frosted behave identically) | Subtle | Vivid | Bold |
-|---|---|---|---|
-| Original · Light | α 0.023, ΔE 1.83 | same | same |
-| Original · Dark | α 0.011, ΔE 0.87 | same | same |
-| Midnight Cobalt · Light | α 0.029, ΔE 2.50 | same | same |
-| Porcelain Vapor · Dark | α 0.001, ΔE 0.07 | same | same |
-| Smoked Umber · Dark | α 0.023, ΔE 2.04 | same | same |
-| Electric Blue · Light | ΔE 3.02 (not clamped) | α 0.044, ΔE 3.41 | same |
-| Electric Blue · Dark | α 0.016, ΔE 1.20 | same | same |
-| Sea Glass · Dark | α 0.005, ΔE 0.46 | same | same |
-| Amethyst · Light | ΔE 3.05 (not clamped) | α 0.030, ΔE 3.82 | same |
+- `foundationOpacity`
+- `topOpacity`
+- the resulting ΔE76
+- a clamp flag retained only as a defensive fallback
 
-In words: **on Glass or Frosted with Depth off, Tint is nearly invisible on
-Original, Electric Blue, and the Dark modes of Porcelain Vapor, Smoked Umber
-and Sea Glass, and Vivid/Bold collapse to Subtle on Midnight Cobalt Light,
-Electric Blue Light and Amethyst Light.** With Depth on, every step reaches its
-target on every palette and surface. This follows directly from the brief's
-rule (clamp to the floor over the worst-case backdrop) and is the honest
-consequence of a foundation solved to the minimum readable opacity.
+For Glass and Frosted, calibration begins at the Tint-Off foundation. For each whole-percent foundation `f` from there through 1.00, the solver finds the wash opacity `α` that reaches the step's ΔE target over the base composite at `f`. It accepts the first `f` whose top-edge tinted composite keeps primary and secondary foreground contrast at or above 4.75:1. This makes the foundation monotone non-decreasing as Tint gets stronger and lets the wash reach its intended colour difference instead of being forced almost invisible.
 
-The Settings preview shows the real result, and the Appearance pane says so
-when the chosen cell is clamped. If the owner wants Tint to reach its target
-on Glass without Depth, the alternative is a tint-aware foundation (raise the
-foundation just enough for the tinted top edge to keep 4.75:1), which trades a
-few percent of transparency for the colour; that is a small, separate change
-(`PanelTintCalibration.solve` plus `minimumReadableOpacity`) and is not done here.
+Solid keeps foundation 1.00 and its existing Tint behaviour. On the native-credited path nothing solves at draw time: `PanelTintCalibration.table` supplies both values. On the uncredited fallback path the same cell solver runs once when the treatment is initialized over the raw white/black extreme, and that treatment stores both its solved foundation and its solved top opacity.
 
-## 5. Migration
+The generated table currently contains **zero clamped cells**. The presentation helper retains neutral fallback wording for a future pathological palette, but Settings shows no clamp footer for the current table. Tests independently convert sRGB to Lab, require every cell to land within ±0.25 ΔE of its target, require zero clamps, and require the tint-aware foundation to be monotone non-decreasing by step.
 
-`AppearanceMigration.migrateIfNeeded` runs in `AppSettings.init` before any
-appearance key is read, on whatever `UserDefaults` the settings were given
-(the isolated test suites included). It is a no-op once
-`appearanceSchemaVersion` is 2.
+The eight-desktop-extremes readability check transforms each RGB extreme through the measured native-surface endpoint model, samples the wash fade at multiple vertical positions, and requires at least 4.5:1 at every location. The stricter generation boundary remains 4.75:1 at the calibrated worst-case top edge.
 
-| Old state | New state |
+## 5. Appearance migration
+
+This branch is unreleased, so `appearanceSchemaVersion` remains **2**. The migration maps the retired translucency / glass-style / gradient preferences directly into Surface and Tint:
+
+| retired state | current result |
 |---|---|
-| no stored appearance key at all (fresh install) | Surface Glass, **Depth on**, Tint Off (Mode System and Palette Original are the read defaults) |
-| `isTranslucent == false` | Solid, Depth off |
-| `panelGlassStyle == frosted` | Glass, Depth off |
-| `panelGlassStyle == stable` or `liveStable` (Glassmorphism) | Frosted, Depth off |
-| `panelGlassStyle == clear` (or missing: the old default) and palette Original | Glass, **Depth on** |
-| `panelGlassStyle == clear` (or missing) and a custom palette | Glass, Depth off |
-| unknown `panelGlassStyle` spelling | treated as `clear` (the old loader's fallback) |
-| gradient coverage 0 | Tint Off |
-| gradient coverage > 0 (or missing: old default 0.55) | Tint = the step matching the old top-edge ΔE in Light (pole white mixed 12 % with the tint colour, drawn at 0.82 over the palette's Light `opaqueSurface`): < 3 Off, 3–5 Subtle, 5–9.5 Vivid, ≥ 9.5 Bold |
-| custom gradient colour | used for that ΔE, then discarded |
+| no stored appearance key at all (fresh install) | Surface Glass, Tint Off |
+| `isTranslucent == false` | Solid |
+| `panelGlassStyle == frosted` | Glass |
+| `panelGlassStyle == stable` or `liveStable` | Frosted |
+| `panelGlassStyle == clear`, unknown, or missing old default | Glass |
 
-What that gives real installs: every palette's own gradient computes below
-ΔE 3 except Electric Blue in Light (ΔE ≈ 5.6 → Vivid), so almost everyone keeps
-Tint Off; a saturated custom colour (pure red ≈ 11.3, black ≈ 8.7 on Original)
-becomes Bold or Vivid.
+Tint migration is unchanged: coverage 0 maps to Off; otherwise the old gradient's visible Light-mode colour difference is measured on the same ΔE76 scale and mapped to the closest product step thresholds already defined by `PanelTintLevel`.
 
-Three consequences of these rules, raised by review and kept as specified:
+Preview builds of this unreleased branch may have written the retired crown preference. `AppearanceMigration.migrateIfNeeded` therefore removes that stale key **unconditionally before the schema-version guard**, including stores already at version 2. Repeating the migration remains idempotent and does not rewrite current Surface or Tint choices.
 
-- In Dark, the old gradient's pole was black, so every Dark user on Solid,
-  Glass or Frosted had a strong neutral darkening across the top half of the
-  panel (0.82 fading to nothing at 55 % height), which is close to what Depth
-  now draws. The rule turns Depth on only for Original + Clear, whose users
-  saw the Clear crown; every other existing user starts with Depth off and
-  can turn it on. This is the owner's mapping ("existing users' panels must
-  not change unexpectedly"), and it is a visible change for those Dark users.
-- The Tint step is measured from the Light appearance only, whatever
-  appearance the user ran, as the rule says. A custom colour that looked
-  stronger in Dark may map to a weaker step.
-- Original + Clear users saw no gradient in Dark (Clear drew none) but did in
-  Light, where Clear resolved to Frosted; a stored custom colour is therefore
-  mapped by its Light appearance, as for everyone else.
+## 6. Shared rendering and accessibility
 
-After mapping, the four obsolete keys are removed and the schema version
-written. Tests: `AppearanceMigrationTests` (pure matrix, defaults round trip,
-idempotence including "old key reappears", fresh install through `AppSettings`,
-custom colour → step → discarded, unknown future values not destroyed).
+The main panel, subtask checklist and Settings preview all resolve through the same treatment. Increased Contrast changes edge/selection presentation but not the palette values that the foundation/Tint calibration depends on. Reduce Transparency forces the drawable kind to Solid without changing the persisted Surface choice.
 
-Launch arguments for previews and UI tests use the new keys with plist
-syntax: `-panelSurfaceStyle glass -panelDepth '<true/>' -panelTint vivid
--panelTheme amethyst -appearancePreference dark`.
+Native-glass control treatment remains separate from the panel surface selection. Interactive controls use the existing native Liquid Glass path when supported, material fallback on older systems, and the opaque accessibility treatment when Reduce Transparency is enabled.
 
-## 6. Subtask checklist windows
+## 7. Readable foundation: old versus current model
 
-See `PanelSurfaceWindow` (`Attic/Window/PanelSurfaceHostingView.swift`): the
-transient and pinned checklists carry the same 24 pt transparent margin as the
-main panel, the same `visibleContentFrame` / `nativeFrame(forVisibleFrame:)` /
-`setVisibleContentFrame` conversions, an accessibility frame equal to the
-visible frame, click-through outside the squircle, and render through the
-same `atticPanelSurface(showsElevation: true)`. Persisted pinned frames stay
-visible-frame based. Details and tests are listed in the PR.
+The old conservative solver used the raw desktop extreme below every translucent surface. Across the palettes that produced roughly 54–58% foundations in Light and 66–69% in Dark. The measured native-surface model credits the tone already supplied by the system surface, reducing Tint-Off Glass to 23–39% and Frosted to 30–49% across the current palettes.
 
-## 7. Original Dark: old Clear versus Glass + Depth
-
-Measured over the busy backdrop (harness interior strips at 35–65 % height,
-six columns):
-
-| | strip 1 | strip 2 | strip 3 | strip 4 | strip 5 | strip 6 |
-|---|---|---|---|---|---|---|
-| old Clear (main 5451490) | 72 71 23 | 63 70 27 | 64 74 45 | 75 51 92 | 68 38 100 | 65 41 100 |
-| new Glass + Depth | 29 30 15 | 27 29 15 | 25 30 18 | 34 22 42 | 32 21 44 | 31 21 44 |
-| new Glass, Depth off | 57 62 27 | 51 62 29 | 50 63 38 | 73 45 81 | 73 40 88 | 68 43 88 |
-
-Images: `Docs/Appearance-Model-2026-09/original-dark-old-clear-busy.jpg`,
-`original-dark-glass-depth-busy.jpg`, `original-dark-glass-nodepth-busy.jpg`.
-The checklist-versus-panel parity captures are `parity-subtask-*.jpg` /
-`parity-main-*.jpg` in the same folder (over white the interiors agree to
-within one level; over the busy backdrop each window samples its own patch
-of desktop).
-
-The crown itself is pixel-identical in construction (same stops, same pole).
-What differs is what sits under it: the old Clear had no foundation, so the
-lower half showed the desktop at nearly full strength; Glass carries the 66 %
-readable foundation, so the desktop shows at about a third of that. Glass
-without Depth is in fact the closer match to old Clear's *lower* half, and
-Glass with Depth to its *upper* half. A foundation that varies with height
-(clear under the crown, readable at the bottom) was considered and rejected:
-the owner chose from prototype captures made with the uniform foundation
-under the crown, and the brief asks for Depth to be one layer above the
-fill.
-
-The old Clear surface was clear Liquid Glass with a black 0.06 tint, no
-foundation, and the crown. Glass is `.regular` Liquid Glass under the
-readable foundation (Original Dark: 66 %). With Depth on, the crown is
-identical; the lower half is as clear as the foundation allows, which is what
-the readability floor requires. The side-by-side captures over the busy
-backdrop are in the PR. A lighter foundation under Depth was considered and
-rejected: the crown is 0.02 at the bottom edge, so the floor at the bottom
-needs the same foundation with or without Depth, and a location-varying
-foundation would couple Depth to the fill the brief asks to keep separate.
+Tint may deliberately raise that foundation just enough to preserve text while reaching its colour target. At Bold, Glass ranges from 24% to 50% and Frosted from 31% to 59% depending on palette and appearance. The result keeps more of the native surface visible at Tint Off, then spends opacity only when a stronger Tint step needs contrast headroom.

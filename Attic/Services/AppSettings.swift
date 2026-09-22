@@ -93,7 +93,6 @@ final class AppSettings: ObservableObject {
         static let hasShownWelcome = "hasShownWelcome"
         static let panelTheme = AppearanceMigration.Key.theme
         static let panelSurfaceStyle = AppearanceMigration.Key.surfaceStyle
-        static let panelDepth = AppearanceMigration.Key.depth
         static let panelTint = AppearanceMigration.Key.tint
         static let appearance = AppearanceMigration.Key.appearance
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
@@ -117,11 +116,6 @@ final class AppSettings: ObservableObject {
     /// changing this choice.
     @Published var panelSurfaceStyle: PanelSurfaceStyle {
         didSet { defaults.set(panelSurfaceStyle.rawValue, forKey: Key.panelSurfaceStyle) }
-    }
-
-    /// The neutral crown across the top of the panel.
-    @Published var panelDepthEnabled: Bool {
-        didSet { defaults.set(panelDepthEnabled, forKey: Key.panelDepth) }
     }
 
     /// The accent wash across the top of the panel.
@@ -261,7 +255,7 @@ final class AppSettings: ObservableObject {
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
         // Before any appearance key is read: the retired translucency /
-        // glass-style / gradient preferences become Surface, Depth and Tint
+        // glass-style / gradient preferences become Surface and Tint
         // exactly once, and a fresh install receives the new defaults.
         AppearanceMigration.migrateIfNeeded(defaults)
         panelTheme = AtticPanelTheme(
@@ -270,8 +264,6 @@ final class AppSettings: ObservableObject {
         panelSurfaceStyle = PanelSurfaceStyle(
             rawValue: defaults.string(forKey: Key.panelSurfaceStyle) ?? ""
         ) ?? .defaultStyle
-        panelDepthEnabled = (defaults.object(forKey: Key.panelDepth) as? Bool)
-            ?? AppearanceMigration.freshInstall.depth
         panelTint = PanelTintLevel(
             rawValue: defaults.string(forKey: Key.panelTint) ?? ""
         ) ?? .defaultLevel
@@ -314,7 +306,6 @@ final class AppSettings: ObservableObject {
             colorScheme: colorScheme,
             contrast: contrast,
             surface: panelSurfaceStyle,
-            depth: panelDepthEnabled,
             tint: panelTint,
             reduceTransparency: reduceTransparency
         )

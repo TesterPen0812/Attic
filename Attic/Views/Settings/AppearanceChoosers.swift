@@ -237,8 +237,8 @@ private struct SurfaceHint: View {
 }
 
 /// Off · Subtle · Vivid · Bold as four pills, each showing the accent wash at
-/// the strength it really gets on the current palette, surface and Depth
-/// state; a clamped cell therefore shows the faintness it will have.
+/// the strength it really gets on the current palette and surface; a clamped
+/// cell therefore shows the faintness it will have.
 struct TintChooser: View {
     @Binding var selection: PanelTintLevel
     let treatment: AtticPanelSurfaceTreatment
@@ -288,8 +288,8 @@ struct TintChooser: View {
 }
 
 /// The top of the panel at one tint step: the surface's own composite over
-/// the worst-case backdrop, the crown if Depth is on, then the wash at the
-/// calibrated opacity, fading over the sample's height.
+/// the worst-case backdrop, then the wash at the calibrated opacity, fading
+/// over the sample's height.
 private struct TintSample: View {
     let treatment: AtticPanelSurfaceTreatment
     let level: PanelTintLevel
@@ -299,14 +299,14 @@ private struct TintSample: View {
         let sample = AtticPanelSurfaceTreatment(
             theme: treatment.theme, kind: treatment.kind, palette: treatment.palette,
             appearance: treatment.appearance, usesSystemOpaqueSurface: treatment.usesSystemOpaqueSurface,
-            depth: treatment.depth, tint: level
+            tint: level
         )
-        let backdrop = PanelTintCalibration.worstCaseBackdrop(for: treatment.appearance)
+        let backdrop = AtticPanelSurfaceTreatment.worstCaseUnderlay(
+            kind: treatment.kind,
+            appearance: treatment.appearance
+        )
         ZStack {
             shape.fill(sample.compositedSurface(over: backdrop, location: 1).swiftUIColor())
-            if sample.depth {
-                PanelDepthCrownView(appearance: sample.appearance, shape: shape)
-            }
             if sample.tintTopOpacity > 0 {
                 let wash = sample.washColor
                 LinearGradient(stops: [

@@ -119,15 +119,14 @@ and hide delay sliders with readouts (`setting-reveal-delay`,
    Reduce Transparency and Increased Contrast through the same environment
    the panel reads, and its crossfade obeys Reduce Motion because the modifier
    does. VoiceOver reads one element: "Panel preview: Sea Glass palette, Glass
-   surface, Depth on, Tint Vivid, Dark appearance."
+   surface, Tint Vivid, Dark appearance."
 2. Mode: System · Light · Dark (`setting-appearance`).
 3. Palette: tiles (`setting-panel-theme`, `setting-panel-theme-<theme>`).
 4. Surface: three tiles (`setting-panel-surface`, `setting-panel-surface-<style>`,
-   each labelled Solid / Glass / Frosted with a selected trait); Depth toggle
-   (`setting-panel-depth`); Tint pills (`setting-panel-tint`,
-   `setting-panel-tint-<level>`). The section footer states when the
-   readability floor keeps the chosen tint faint (see
-   `Docs/Appearance-Model-2026-09.md` §4.2).
+   each labelled Solid / Glass / Frosted with a selected trait); Tint pills
+   (`setting-panel-tint`, `setting-panel-tint-<level>`). The section footer is
+   reserved for the calibration fallback described in
+   `Docs/Appearance-Model-2026-09.md`; the current table needs no warning.
 
 Nothing else: no sliders, no colour pickers.
 
@@ -174,6 +173,6 @@ Mac"; Source with **Open Repository** (`settings-open-repository`).
 What changed at a glance: hand-drawn group boxes with uppercase tracked
 headers became native grouped sections; grey circle glyphs became tinted
 symbol tiles; the translucency toggle, glass picker, gradient slider and
-colour picker became the live preview, palette tiles, surface tiles, a Depth
-toggle and tint pills; the corner picker became a display; every footer
+colour picker became the live preview, palette tiles, surface tiles and tint
+pills; the corner picker became a display; every footer
 explains one thing in one sentence.

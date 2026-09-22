@@ -1,7 +1,7 @@
 import Foundation
 
-/// How the panel surface is built. Together with the palette, the Depth
-/// toggle and the Tint step this is the whole user-facing appearance model.
+/// How the panel surface is built. Together with the palette and Tint step,
+/// this is the whole user-facing appearance model.
 enum PanelSurfaceStyle: String, CaseIterable, Identifiable, Sendable {
     // These raw values are persisted (`AppSettings.Key.panelSurfaceStyle`).
     case solid
@@ -41,7 +41,7 @@ enum PanelSurfaceStyle: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// The strength of the accent wash across the top of the panel. Every step
-/// is calibrated per palette, mode, surface and Depth state to the same
+/// is calibrated per palette, mode and surface to the same
 /// perceived strength (`PanelTintCalibration`).
 enum PanelTintLevel: String, CaseIterable, Identifiable, Sendable {
     // These raw values are persisted (`AppSettings.Key.panelTint`).

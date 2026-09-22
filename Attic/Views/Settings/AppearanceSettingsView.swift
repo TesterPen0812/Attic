@@ -22,21 +22,12 @@ enum AppearanceSettingsPresentation {
         SettingsDesign.tileBoundaryLineWidth(for: contrast)
     }
 
-    static let depthDescription = "A soft shade across the top of the panel."
-
     /// The one line the pane shows when the readability floor, not the
-    /// chosen step, sets the wash for this palette, surface and Depth state;
-    /// nil when the step reaches its full strength.
+    /// chosen step, sets the wash for this palette and surface; nil when the
+    /// step reaches its full strength.
     static func tintFloorNote(for treatment: AtticPanelSurfaceTreatment) -> String? {
-        guard treatment.tint != .off,
-              let cell = PanelTintCalibration.cell(
-                  theme: treatment.theme, appearance: treatment.appearance,
-                  kind: treatment.kind, depth: treatment.depth, level: treatment.tint
-              ),
-              cell.isClamped else { return nil }
-        return treatment.depth
-            ? "Tint is kept faint here so text stays readable."
-            : "Tint is kept faint on this surface so text stays readable. Turn on Depth for the full range."
+        guard treatment.tint != .off, treatment.isTintClamped else { return nil }
+        return "Tint is kept faint here so text stays readable."
     }
 }
 
@@ -97,24 +88,10 @@ struct AppearanceSettingsView: View {
                     appearance: appearance,
                     accent: accent,
                     glassFoundation: settings.panelTheme.surfaceTreatment(
-                        appearance: appearance, surface: .glass, depth: false, tint: .off,
+                        appearance: appearance, surface: .glass, tint: .off,
                         reduceTransparency: false
                     ).foundationOpacity
                 )
-
-                SettingsRow(
-                    title: "Depth",
-                    description: AppearanceSettingsPresentation.depthDescription,
-                    systemImage: "rectangle.tophalf.filled",
-                    tint: .indigo
-                ) {
-                    Toggle("Depth", isOn: $settings.panelDepthEnabled)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .help("Shade the top of the panel")
-                        .accessibilityLabel("Depth")
-                        .accessibilityIdentifier("setting-panel-depth")
-                }
 
                 VStack(alignment: .leading, spacing: 10) {
                     SettingsRowLabel(

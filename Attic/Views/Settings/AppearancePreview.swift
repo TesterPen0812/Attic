@@ -24,7 +24,6 @@ enum AppearancePreviewLayout {
     static func accessibilityLabel(
         theme: AtticPanelTheme,
         surface: PanelSurfaceStyle,
-        depth: Bool,
         tint: PanelTintLevel,
         appearance: AtticPanelThemeAppearance,
         reduceTransparency: Bool
@@ -32,12 +31,12 @@ enum AppearancePreviewLayout {
         let surfaceName = reduceTransparency ? "Solid (Reduce Transparency)" : surface.title
         let mode = appearance == .dark ? "Dark" : "Light"
         return "Panel preview: \(theme.title) palette, \(surfaceName) surface, "
-            + "Depth \(depth ? "on" : "off"), Tint \(tint.title), \(mode) appearance."
+            + "Tint \(tint.title), \(mode) appearance."
     }
 }
 
-/// The live preview: the actual `AtticPanelSurface` pipeline (surface, depth,
-/// tint, edge, outside shadow and native-glass controls) drawn at a small
+/// The live preview: the actual `AtticPanelSurface` pipeline (surface, tint,
+/// edge, outside shadow and native-glass controls) drawn at a small
 /// scale over a representative backdrop. It is never a picture: every
 /// setting change re-renders the same modifier the panel uses, in the
 /// effective appearance, and the crossfade obeys Reduce Motion because the
@@ -99,7 +98,6 @@ struct AppearancePreviewCard: View {
         .accessibilityLabel(AppearancePreviewLayout.accessibilityLabel(
             theme: settings.panelTheme,
             surface: settings.panelSurfaceStyle,
-            depth: settings.panelDepthEnabled,
             tint: settings.panelTint,
             appearance: appearance,
             reduceTransparency: reduceTransparency

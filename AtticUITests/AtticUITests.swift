@@ -386,13 +386,12 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(settings.descendants(matching: .any)["settings-agent-disabled-message"].waitForExistence(timeout: 3))
     }
 
-    func testAppearanceControlsCoverEveryPaletteSurfaceDepthAndTint() throws {
+    func testAppearanceControlsCoverEveryPaletteSurfaceAndTint() throws {
         let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         let appearance = settings.descendants(matching: .any)["setting-appearance"]
         let surface = settings.descendants(matching: .any)["setting-panel-surface"]
-        let depth = settings.descendants(matching: .any)["setting-panel-depth"]
         let tint = settings.descendants(matching: .any)["setting-panel-tint"]
         let preview = settings.descendants(matching: .any)["setting-appearance-preview"]
 
@@ -428,14 +427,13 @@ final class AtticUITests: XCTestCase {
 
         XCTAssertTrue(preview.waitForExistence(timeout: 3), "the live preview is one element")
         XCTAssertTrue(surface.exists)
-        XCTAssertTrue(depth.exists)
         XCTAssertTrue(tint.exists)
         XCTAssertFalse(settings.descendants(matching: .any)["setting-translucency"].exists)
         XCTAssertFalse(settings.descendants(matching: .any)["setting-glass-style"].exists)
         XCTAssertFalse(settings.sliders["setting-panel-gradient-coverage"].exists)
 
         // Every surface, on every palette, in both explicit appearances,
-        // with Depth and Tint exercised once each: nothing is ever
+        // with Tint exercised once: nothing is ever
         // unavailable and no choice is erased by another.
         let themes = ["original", "midnightCobalt", "porcelainVapor", "smokedUmber",
                       "electricBlue", "seaGlass", "amethyst"]
@@ -461,15 +459,6 @@ final class AtticUITests: XCTestCase {
                 recordPanel("Theme-\(theme)-\(scheme)")
             }
         }
-
-        reveal(depth)
-        let depthWasOn = (depth.value as? String) == "1" || (depth.value as? NSNumber)?.boolValue == true
-        depth.click()
-        waitFor("Depth toggles") {
-            ((depth.value as? String) == "1" || (depth.value as? NSNumber)?.boolValue == true) != depthWasOn
-        }
-        recordPanel(depthWasOn ? "Depth-Off" : "Depth-On")
-        depth.click()
 
         for level in ["Subtle", "Vivid", "Bold", "Off"] {
             let levelControl = segment(level, in: tint)

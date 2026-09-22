@@ -1,8 +1,8 @@
 import Foundation
 
 /// One-time, versioned migration of the appearance preferences from the
-/// translucency toggle / glass-style picker / gradient model to Surface,
-/// Depth and Tint. It runs on load, before any view reads settings, against
+/// translucency toggle / glass-style picker / gradient model to Surface and
+/// Tint. It runs on load, before any view reads settings, against
 /// whatever `UserDefaults` `AppSettings` was given, and it is idempotent:
 /// once `appearanceSchemaVersion` is current it does nothing.
 ///
@@ -13,7 +13,7 @@ enum AppearanceMigration {
     enum Key {
         static let schemaVersion = "appearanceSchemaVersion"
         static let surfaceStyle = "panelSurfaceStyle"
-        static let depth = "panelDepth"
+        static let staleDepth = "panelDepth"
         static let tint = "panelTint"
         static let theme = "panelTheme"
         static let appearance = "appearancePreference"
@@ -54,11 +54,10 @@ enum AppearanceMigration {
 
     struct Resolved: Equatable {
         var surface: PanelSurfaceStyle
-        var depth: Bool
         var tint: PanelTintLevel
     }
 
-    static let freshInstall = Resolved(surface: .glass, depth: true, tint: .off)
+    static let freshInstall = Resolved(surface: .glass, tint: .off)
 
     static func read(from defaults: UserDefaults) -> Legacy {
         var legacy = Legacy()
@@ -85,7 +84,6 @@ enum AppearanceMigration {
         let glassStyle = legacy.glassStyle ?? .clear
 
         let surface: PanelSurfaceStyle
-        var depth = false
         if legacy.isTranslucent == false {
             surface = .solid
         } else {
@@ -96,10 +94,6 @@ enum AppearanceMigration {
                 surface = .frosted
             case .clear:
                 surface = .glass
-                // Only Original resolved Clear to Clear, and only in Dark:
-                // those users saw the crown. Custom palettes always saw
-                // Frosted, so their panels must not change.
-                depth = theme == .original
             }
         }
 
@@ -108,7 +102,7 @@ enum AppearanceMigration {
             gradientCoverage: legacy.gradientCoverage,
             gradientColorHex: legacy.gradientColorHex
         )
-        return Resolved(surface: surface, depth: depth, tint: tint)
+        return Resolved(surface: surface, tint: tint)
     }
 
     /// The Tint step matching what the old gradient actually showed: the
@@ -146,11 +140,11 @@ enum AppearanceMigration {
     /// nil when the store was already current.
     @discardableResult
     static func migrateIfNeeded(_ defaults: UserDefaults) -> Resolved? {
+        defaults.removeObject(forKey: Key.staleDepth)
         let storedVersion = defaults.object(forKey: Key.schemaVersion) as? Int ?? 0
         guard storedVersion < currentSchemaVersion else { return nil }
         let resolved = resolve(read(from: defaults))
         defaults.set(resolved.surface.rawValue, forKey: Key.surfaceStyle)
-        defaults.set(resolved.depth, forKey: Key.depth)
         defaults.set(resolved.tint.rawValue, forKey: Key.tint)
         for key in Key.obsolete {
             defaults.removeObject(forKey: key)

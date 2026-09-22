@@ -683,14 +683,12 @@ final class AppSettingsTests: XCTestCase {
         appearance: AtticPanelThemeAppearance,
         contrast: ColorSchemeContrast,
         kind: AtticPanelSurfaceTreatment.Kind,
-        depth: Bool = false,
         tint: PanelTintLevel = .off
     ) -> AtticPanelSurfaceTreatment {
         theme.surfaceTreatment(
             appearance: appearance,
             contrast: contrast,
             surface: PanelSurfaceStyle(kind),
-            depth: depth,
             tint: tint,
             reduceTransparency: false
         )

@@ -4,7 +4,7 @@ import XCTest
 @testable import Attic
 
 /// The one-time move from translucency / glass style / gradient to Surface,
-/// Depth and Tint: the whole matrix, idempotence, a fresh install, and the
+/// and Tint: the whole matrix, idempotence, a fresh install, and the
 /// obsolete keys being removed.
 final class AppearanceMigrationTests: XCTestCase {
     private func makeDefaults() throws -> (UserDefaults, String) {
@@ -19,15 +19,15 @@ final class AppearanceMigrationTests: XCTestCase {
 
     // MARK: Pure mapping
 
-    func testFreshInstallGetsGlassWithDepthAndNoTint() {
+    func testFreshInstallGetsGlassAndNoTint() {
         XCTAssertEqual(AppearanceMigration.resolve(Legacy()), AppearanceMigration.freshInstall)
-        XCTAssertEqual(AppearanceMigration.freshInstall, Resolved(surface: .glass, depth: true, tint: .off))
+        XCTAssertEqual(AppearanceMigration.freshInstall, Resolved(surface: .glass, tint: .off))
     }
 
     func testAnyStoredAppearanceKeyMeansAnExistingInstall() {
         // Old builds wrote the gradient keys back on every launch, so any
         // launched install has them; a theme or appearance preference alone
-        // still counts. None of these may receive the fresh-install crown.
+        // still counts and follows the same surface mapping.
         let variants: [Legacy] = [
             Legacy(isTranslucent: true),
             Legacy(glassStyle: .frosted),
@@ -39,21 +39,15 @@ final class AppearanceMigrationTests: XCTestCase {
         for legacy in variants {
             XCTAssertFalse(legacy.isFresh, "\(legacy)")
         }
-        // Theme Original with a missing style resolved to Clear before, so
-        // that one user did see the crown; everyone else did not.
-        XCTAssertEqual(AppearanceMigration.resolve(Legacy(gradientCoverage: 0.55)).depth, true)
-        XCTAssertEqual(AppearanceMigration.resolve(Legacy(gradientCoverage: 0.55, theme: .seaGlass)).depth, false)
-        XCTAssertEqual(AppearanceMigration.resolve(Legacy(glassStyle: .frosted)).depth, false)
     }
 
-    func testTranslucencyOffAlwaysBecomesSolidAndKeepsDepthOff() {
+    func testTranslucencyOffAlwaysBecomesSolid() {
         for style in [AppearanceMigration.LegacyGlassStyle.clear, .frosted, .stable, .liveStable] {
             for theme in AtticPanelTheme.allCases {
                 let resolved = AppearanceMigration.resolve(
                     Legacy(isTranslucent: false, glassStyle: style, gradientCoverage: 0.55, theme: theme)
                 )
                 XCTAssertEqual(resolved.surface, .solid, "\(theme.rawValue) \(style)")
-                XCTAssertFalse(resolved.depth, "\(theme.rawValue) \(style)")
             }
         }
     }
@@ -62,15 +56,12 @@ final class AppearanceMigrationTests: XCTestCase {
         for theme in AtticPanelTheme.allCases {
             let frosted = AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .frosted, theme: theme))
             XCTAssertEqual(frosted.surface, .glass, theme.rawValue)
-            XCTAssertFalse(frosted.depth, theme.rawValue)
             for stable in [AppearanceMigration.LegacyGlassStyle.stable, .liveStable] {
                 let resolved = AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: stable, theme: theme))
                 XCTAssertEqual(resolved.surface, .frosted, "\(theme.rawValue) \(stable)")
-                XCTAssertFalse(resolved.depth, "\(theme.rawValue) \(stable)")
             }
             let clear = AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .clear, theme: theme))
             XCTAssertEqual(clear.surface, .glass, theme.rawValue)
-            XCTAssertEqual(clear.depth, theme == .original, theme.rawValue)
         }
     }
 
@@ -145,9 +136,8 @@ final class AppearanceMigrationTests: XCTestCase {
         defaults.set("dark", forKey: "appearancePreference")
 
         let written = AppearanceMigration.migrateIfNeeded(defaults)
-        XCTAssertEqual(written, Resolved(surface: .glass, depth: true, tint: .off))
+        XCTAssertEqual(written, Resolved(surface: .glass, tint: .off))
         XCTAssertEqual(defaults.string(forKey: "panelSurfaceStyle"), "glass")
-        XCTAssertEqual(defaults.object(forKey: "panelDepth") as? Bool, true)
         XCTAssertEqual(defaults.string(forKey: "panelTint"), "off")
         XCTAssertEqual(defaults.integer(forKey: "appearanceSchemaVersion"), 2)
         for key in ["isTranslucent", "panelGlassStyle", "panelGradientCoverage", "panelGradientColorHex"] {
@@ -166,22 +156,33 @@ final class AppearanceMigrationTests: XCTestCase {
         XCTAssertNotNil(AppearanceMigration.migrateIfNeeded(defaults))
         // The user then changes their mind; a second run must not undo it.
         defaults.set("frosted", forKey: "panelSurfaceStyle")
-        defaults.set(true, forKey: "panelDepth")
         defaults.set("bold", forKey: "panelTint")
         // Even if an old key somehow reappears.
         defaults.set("clear", forKey: "panelGlassStyle")
-        let snapshot = defaults.dictionaryRepresentation()
         XCTAssertNil(AppearanceMigration.migrateIfNeeded(defaults))
         XCTAssertNil(AppearanceMigration.migrateIfNeeded(defaults))
         let after = defaults.dictionaryRepresentation()
         XCTAssertEqual(after["panelSurfaceStyle"] as? String, "frosted")
-        XCTAssertEqual(after["panelDepth"] as? Bool, true)
         XCTAssertEqual(after["panelTint"] as? String, "bold")
         XCTAssertEqual(after["appearanceSchemaVersion"] as? Int, 2)
-        XCTAssertEqual(NSDictionary(dictionary: after), NSDictionary(dictionary: snapshot))
     }
 
-    func testFreshInstallThroughAppSettingsStartsOnGlassWithDepth() throws {
+    func testCurrentSchemaStillRemovesStaleDepthKey() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(2, forKey: "appearanceSchemaVersion")
+        defaults.set("frosted", forKey: "panelSurfaceStyle")
+        defaults.set("bold", forKey: "panelTint")
+        defaults.set(true, forKey: AppearanceMigration.Key.staleDepth)
+
+        XCTAssertNil(AppearanceMigration.migrateIfNeeded(defaults))
+        XCTAssertNil(defaults.object(forKey: AppearanceMigration.Key.staleDepth))
+        XCTAssertEqual(defaults.string(forKey: "panelSurfaceStyle"), "frosted")
+        XCTAssertEqual(defaults.string(forKey: "panelTint"), "bold")
+        XCTAssertNil(AppearanceMigration.migrateIfNeeded(defaults))
+    }
+
+    func testFreshInstallThroughAppSettingsStartsOnGlass() throws {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = try MainActor.assumeIsolated { AppSettings(defaults: defaults) }
@@ -189,7 +190,6 @@ final class AppearanceMigrationTests: XCTestCase {
             XCTAssertEqual(settings.panelTheme, .original)
             XCTAssertEqual(settings.appearance, .system)
             XCTAssertEqual(settings.panelSurfaceStyle, .glass)
-            XCTAssertTrue(settings.panelDepthEnabled)
             XCTAssertEqual(settings.panelTint, .off)
         }
         XCTAssertEqual(defaults.integer(forKey: "appearanceSchemaVersion"), 2)
@@ -197,7 +197,6 @@ final class AppearanceMigrationTests: XCTestCase {
         // A relaunch is still the same install.
         let relaunched = try MainActor.assumeIsolated { AppSettings(defaults: defaults) }
         MainActor.assumeIsolated {
-            XCTAssertTrue(relaunched.panelDepthEnabled)
             XCTAssertEqual(relaunched.panelSurfaceStyle, .glass)
         }
     }
@@ -210,16 +209,16 @@ final class AppearanceMigrationTests: XCTestCase {
             let expected: Resolved
         }
         let cases: [Case] = [
-            Case(translucent: false, style: "clear", theme: .original, expected: Resolved(surface: .solid, depth: false, tint: .off)),
-            Case(translucent: false, style: "frosted", theme: .amethyst, expected: Resolved(surface: .solid, depth: false, tint: .off)),
-            Case(translucent: true, style: "frosted", theme: .original, expected: Resolved(surface: .glass, depth: false, tint: .off)),
-            Case(translucent: true, style: "stable", theme: .original, expected: Resolved(surface: .frosted, depth: false, tint: .off)),
-            Case(translucent: true, style: "liveStable", theme: .midnightCobalt, expected: Resolved(surface: .frosted, depth: false, tint: .off)),
-            Case(translucent: true, style: "clear", theme: .original, expected: Resolved(surface: .glass, depth: true, tint: .off)),
+            Case(translucent: false, style: "clear", theme: .original, expected: Resolved(surface: .solid, tint: .off)),
+            Case(translucent: false, style: "frosted", theme: .amethyst, expected: Resolved(surface: .solid, tint: .off)),
+            Case(translucent: true, style: "frosted", theme: .original, expected: Resolved(surface: .glass, tint: .off)),
+            Case(translucent: true, style: "stable", theme: .original, expected: Resolved(surface: .frosted, tint: .off)),
+            Case(translucent: true, style: "liveStable", theme: .midnightCobalt, expected: Resolved(surface: .frosted, tint: .off)),
+            Case(translucent: true, style: "clear", theme: .original, expected: Resolved(surface: .glass, tint: .off)),
             // Electric Blue's theme gradient was the one that visibly showed.
-            Case(translucent: true, style: "clear", theme: .electricBlue, expected: Resolved(surface: .glass, depth: false, tint: .vivid)),
-            Case(translucent: nil, style: nil, theme: .original, expected: Resolved(surface: .glass, depth: true, tint: .off)),
-            Case(translucent: nil, style: "unknown-style", theme: .seaGlass, expected: Resolved(surface: .glass, depth: false, tint: .off))
+            Case(translucent: true, style: "clear", theme: .electricBlue, expected: Resolved(surface: .glass, tint: .vivid)),
+            Case(translucent: nil, style: nil, theme: .original, expected: Resolved(surface: .glass, tint: .off)),
+            Case(translucent: nil, style: "unknown-style", theme: .seaGlass, expected: Resolved(surface: .glass, tint: .off))
         ]
         for testCase in cases {
             let (defaults, suite) = try makeDefaults()
@@ -232,7 +231,6 @@ final class AppearanceMigrationTests: XCTestCase {
             let context = "\(String(describing: testCase.translucent)) \(String(describing: testCase.style)) \(testCase.theme.rawValue)"
             MainActor.assumeIsolated {
                 XCTAssertEqual(settings.panelSurfaceStyle, testCase.expected.surface, context)
-                XCTAssertEqual(settings.panelDepthEnabled, testCase.expected.depth, context)
                 XCTAssertEqual(settings.panelTint, testCase.expected.tint, context)
                 XCTAssertEqual(settings.panelTheme, testCase.theme, context)
             }
@@ -274,9 +272,6 @@ final class AppearanceMigrationTests: XCTestCase {
                 XCTAssertEqual(defaults.string(forKey: "panelTint"), level.rawValue)
                 XCTAssertEqual(AppSettings(defaults: defaults).panelTint, level)
             }
-            settings.panelDepthEnabled = false
-            XCTAssertEqual(defaults.object(forKey: "panelDepth") as? Bool, false)
-            XCTAssertFalse(AppSettings(defaults: defaults).panelDepthEnabled)
         }
         defaults.set("future-surface", forKey: "panelSurfaceStyle")
         defaults.set("future-tint", forKey: "panelTint")

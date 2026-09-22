@@ -44,7 +44,7 @@ enum AtticStyle {
     static let taskScrollTopPadding: CGFloat = 22
 }
 
-/// The one panel surface: fill, Depth crown, Tint wash, hairline edge and
+/// The one panel surface: fill, Tint wash, hairline edge and
 /// outside-only elevation, in that order. The main panel and the subtask
 /// checklist windows both render through this modifier, so they can only
 /// ever look the same.
@@ -115,9 +115,6 @@ struct AtticPanelSurface: ViewModifier {
             if treatment.kind != .solid {
                 shape.fill(treatment.palette.opaqueSurfaceColor.opacity(treatment.foundationOpacity))
             }
-            if treatment.depth {
-                PanelDepthCrownView(appearance: treatment.appearance, shape: shape)
-            }
             if treatment.tintTopOpacity > 0 {
                 tintWash(shape: shape)
             }
@@ -125,7 +122,7 @@ struct AtticPanelSurface: ViewModifier {
     }
 
     /// The accent wash, from its calibrated top opacity to nothing at
-    /// `PanelTintCalibration.fadeEnd`, above the fill and the crown.
+    /// `PanelTintCalibration.fadeEnd`, above the fill.
     private func tintWash(shape: Squircle) -> some View {
         let wash = treatment.washColor
         return LinearGradient(stops: [
@@ -180,7 +177,7 @@ struct AtticPanelSurface: ViewModifier {
         treatment.palette.surfaceTint.swiftUIColor(opacity: treatment.materialTintOpacity)
     }
 
-    /// Every surface, Depth and Tint change is one crossfade of the whole
+    /// Every surface and Tint change is one crossfade of the whole
     /// background; Reduce Motion (and Reduce Transparency) disable it.
     private var surfaceAnimationIdentity: SurfaceAnimationIdentity {
         .themed(treatment)

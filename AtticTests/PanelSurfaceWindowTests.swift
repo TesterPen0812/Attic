@@ -211,27 +211,24 @@ final class PanelSurfaceWindowTests: XCTestCase {
         let settings = AppSettings(defaults: defaults)
         for theme in AtticPanelTheme.allCases {
             for surface in PanelSurfaceStyle.allCases {
-                for depth in [false, true] {
-                    for tint in PanelTintLevel.allCases {
-                        settings.panelTheme = theme
-                        settings.panelSurfaceStyle = surface
-                        settings.panelDepthEnabled = depth
-                        settings.panelTint = tint
-                        for scheme in [ColorScheme.light, .dark] {
-                            for contrast in [ColorSchemeContrast.standard, .increased] {
-                                for reduce in [false, true] {
-                                    let shared = settings.panelSurfaceTreatment(
-                                        colorScheme: scheme, contrast: contrast, reduceTransparency: reduce)
-                                    let direct = theme.surfaceTreatment(
-                                        colorScheme: scheme, contrast: contrast, surface: surface,
-                                        depth: depth, tint: tint, reduceTransparency: reduce)
-                                    XCTAssertEqual(shared, direct)
-                                    // The frame tokens are properties of the
-                                    // treatment, so both windows get the same.
-                                    XCTAssertEqual(shared.surfaceEdgeOpacity(for: contrast),
-                                                   direct.surfaceEdgeOpacity(for: contrast))
-                                    XCTAssertEqual(shared.surfaceElevation, direct.surfaceElevation)
-                                }
+                for tint in PanelTintLevel.allCases {
+                    settings.panelTheme = theme
+                    settings.panelSurfaceStyle = surface
+                    settings.panelTint = tint
+                    for scheme in [ColorScheme.light, .dark] {
+                        for contrast in [ColorSchemeContrast.standard, .increased] {
+                            for reduce in [false, true] {
+                                let shared = settings.panelSurfaceTreatment(
+                                    colorScheme: scheme, contrast: contrast, reduceTransparency: reduce)
+                                let direct = theme.surfaceTreatment(
+                                    colorScheme: scheme, contrast: contrast, surface: surface,
+                                    tint: tint, reduceTransparency: reduce)
+                                XCTAssertEqual(shared, direct)
+                                // The frame tokens are properties of the
+                                // treatment, so both windows get the same.
+                                XCTAssertEqual(shared.surfaceEdgeOpacity(for: contrast),
+                                               direct.surfaceEdgeOpacity(for: contrast))
+                                XCTAssertEqual(shared.surfaceElevation, direct.surfaceElevation)
                             }
                         }
                     }
