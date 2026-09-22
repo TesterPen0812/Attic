@@ -63,19 +63,42 @@ enum PanelTintLength {
     }
 }
 
-/// Original's Tint: a neutral shade (black in Dark, white in Light) with the
-/// long crown profile of the old Original Dark Clear surface. It only ever
-/// moves the surface away from the text colour, so it can never lower
-/// contrast and needs no calibration table or extra foundation.
+/// Original's Tint: a neutral shade (black in Dark, white in Light) shaped
+/// like the macOS 27 Siri panel: nearly opaque at the top, falling almost
+/// linearly to a quarter at the bottom.
+///
+/// On Solid, and below macOS 26, it is simply drawn over the surface and can
+/// only raise contrast. On native Glass and Frosted it *is* the readability
+/// layer (`AtticPanelSurfaceTreatment.usesShadeAsFoundation`): the glass is
+/// drawn bright, there is no flat foundation, and each height takes the
+/// darker of the step's ramp and a readability floor that relaxes from
+/// 4.75:1 at the top to Siri's level at the bottom (`readableFloor`).
 enum PanelNeutralShade {
-    /// Bold at the full length. Other steps scale the opacities; the Length
-    /// setting scales the locations.
+    /// Bold at the full length, fitted to a capture of the Siri panel over a
+    /// white page (brightness 5 at the top, about 100 at mid-height, about
+    /// 180 at the bottom, over bright Liquid Glass). Other steps scale the
+    /// opacities; the Length setting scales the locations.
     static let profile: [PanelTintStop] = [
-        PanelTintStop(opacity: 0.82, location: 0.00),
-        PanelTintStop(opacity: 0.58, location: 0.42),
-        PanelTintStop(opacity: 0.18, location: 0.74),
-        PanelTintStop(opacity: 0.02, location: 1.00)
+        PanelTintStop(opacity: 0.98, location: 0.00),
+        PanelTintStop(opacity: 0.80, location: 0.25),
+        PanelTintStop(opacity: 0.57, location: 0.50),
+        PanelTintStop(opacity: 0.38, location: 0.75),
+        PanelTintStop(opacity: 0.25, location: 1.00)
     ]
+
+    /// Where the drawn gradient samples the readable shade: every 5%.
+    static let sampleCount = 21
+
+    /// The worst-case contrast the shade must keep at a normalised height on
+    /// native Glass and Frosted: 4.75:1 at the top edge, relaxing linearly
+    /// to the bottom value, which is Siri's lower edge for Glass (about 2:1
+    /// for white text over a white page) and a little firmer for Frosted.
+    static func readableFloor(kind: AtticPanelSurfaceTreatment.Kind, at location: Double) -> Double {
+        let top = AtticPanelSurfaceTreatment.readableContrastTarget
+        let bottom = kind == .frosted ? 2.5 : 2.0
+        let y = min(max(location, 0), 1)
+        return top + (bottom - top) * y
+    }
 
     static func strength(for level: PanelTintLevel) -> Double {
         switch level {
@@ -97,6 +120,54 @@ enum PanelNeutralShade {
         let length = PanelTintLength.clamped(length)
         return profile.map {
             PanelTintStop(opacity: $0.opacity * strength, location: $0.location * length)
+        }
+    }
+
+    /// The step's ramp at a height, holding its last value below the length.
+    static func rampOpacity(level: PanelTintLevel, length: Double, at location: Double) -> Double {
+        let ramp = stops(level: level, length: length)
+        guard let first = ramp.first, let last = ramp.last else { return 0 }
+        let y = min(max(location, 0), 1)
+        if y <= first.location { return first.opacity }
+        if y >= last.location { return last.opacity }
+        for (lower, upper) in zip(ramp, ramp.dropFirst()) where y <= upper.location {
+            let span = upper.location - lower.location
+            guard span > 0 else { return upper.opacity }
+            return lower.opacity + (upper.opacity - lower.opacity) * (y - lower.location) / span
+        }
+        return last.opacity
+    }
+
+    /// The shade as the readability layer: at each sampled height, the darker
+    /// (Dark) or lighter (Light) of the step's ramp and the least shade that
+    /// keeps both foregrounds at `readableFloor` over `underlay`.
+    static func readableStops(
+        level: PanelTintLevel,
+        length: Double,
+        kind: AtticPanelSurfaceTreatment.Kind,
+        palette: AtticPanelThemePalette,
+        appearance: AtticPanelThemeAppearance,
+        underlay: AtticThemeColor
+    ) -> [PanelTintStop] {
+        guard strength(for: level) > 0 else { return [] }
+        let pole = color(for: appearance)
+        return (0..<sampleCount).map { index in
+            let y = Double(index) / Double(sampleCount - 1)
+            let floor = readableFloor(kind: kind, at: y)
+            var lower = 0.0
+            var upper = 1.0
+            for _ in 0..<30 {
+                let middle = (lower + upper) / 2
+                let surface = underlay.mixed(with: pole, amount: middle)
+                if PanelTintCalibration.minimumForegroundContrast(palette: palette, over: surface) >= floor {
+                    upper = middle
+                } else {
+                    lower = middle
+                }
+            }
+            let opacity = max(rampOpacity(level: level, length: length, at: y), upper)
+            // Thousandths, rounded up so the stored stop stays readable.
+            return PanelTintStop(opacity: min((opacity * 1000).rounded(.up) / 1000, 1), location: y)
         }
     }
 }

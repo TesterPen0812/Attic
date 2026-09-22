@@ -301,10 +301,7 @@ private struct TintSample: View {
             appearance: treatment.appearance, usesSystemOpaqueSurface: treatment.usesSystemOpaqueSurface,
             tint: level, tintLength: treatment.tintLength
         )
-        let backdrop = AtticPanelSurfaceTreatment.worstCaseUnderlay(
-            kind: treatment.kind,
-            appearance: treatment.appearance
-        )
+        let backdrop = sample.worstCaseBackdrop()
         ZStack {
             // The untinted surface; the Tint is drawn over it below. At the
             // full length the Tint never fully fades, so the bottom of the

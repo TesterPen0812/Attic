@@ -338,70 +338,150 @@ final class PanelTintCalibrationTests: XCTestCase {
 
     // MARK: Original's neutral shade
 
-    func testNeutralShadeProfileAndStepsArePinned() {
-        XCTAssertEqual(PanelNeutralShade.profile.map(\.opacity), [0.82, 0.58, 0.18, 0.02])
-        XCTAssertEqual(PanelNeutralShade.profile.map(\.location), [0, 0.42, 0.74, 1])
+    private func brightMeasuredUnderlay(kind: Kind, desktop: AtticThemeColor) -> AtticThemeColor {
+        // The bright (Light-appearance) native surface, per channel between
+        // its measured black and white endpoints, in either panel mode.
+        let black = AtticPanelSurfaceTreatment.brightUnderlay(kind: kind, appearance: .light).red
+        let white = AtticPanelSurfaceTreatment.brightUnderlay(kind: kind, appearance: .dark).red
+        func channel(_ source: Double) -> Double { black + (white - black) * source }
+        return AtticThemeColor(red: channel(desktop.red), green: channel(desktop.green), blue: channel(desktop.blue))
+    }
+
+    func testNeutralShadeProfileFloorsAndStepsArePinned() {
+        XCTAssertEqual(PanelNeutralShade.profile.map(\.opacity), [0.98, 0.80, 0.57, 0.38, 0.25])
+        XCTAssertEqual(PanelNeutralShade.profile.map(\.location), [0, 0.25, 0.5, 0.75, 1])
         XCTAssertEqual(PanelTintLevel.allCases.map(PanelNeutralShade.strength(for:)), [0, 0.35, 0.65, 1])
         XCTAssertEqual(PanelNeutralShade.color(for: .dark), .init(red: 0, green: 0, blue: 0))
         XCTAssertEqual(PanelNeutralShade.color(for: .light), .init(red: 1, green: 1, blue: 1))
         XCTAssertTrue(PanelNeutralShade.stops(level: .off, length: 1).isEmpty)
-        XCTAssertEqual(PanelNeutralShade.stops(level: .vivid, length: 0.5).map(\.location), [0, 0.21, 0.37, 0.5])
-        XCTAssertEqual(PanelNeutralShade.stops(level: .vivid, length: 0.5).first?.opacity ?? 0, 0.82 * 0.65, accuracy: 1e-12)
+        XCTAssertEqual(PanelNeutralShade.stops(level: .vivid, length: 0.5).map(\.location), [0, 0.125, 0.25, 0.375, 0.5])
+        XCTAssertEqual(PanelNeutralShade.rampOpacity(level: .bold, length: 0.5, at: 0.9), 0.25, accuracy: 1e-12)
+        XCTAssertEqual(PanelNeutralShade.rampOpacity(level: .bold, length: 1, at: 0.125), 0.89, accuracy: 1e-12)
+        XCTAssertEqual(PanelNeutralShade.readableFloor(kind: .glass, at: 0), 4.75)
+        XCTAssertEqual(PanelNeutralShade.readableFloor(kind: .glass, at: 1), 2.0)
+        XCTAssertEqual(PanelNeutralShade.readableFloor(kind: .glass, at: 0.5), 3.375, accuracy: 1e-12)
+        XCTAssertEqual(PanelNeutralShade.readableFloor(kind: .frosted, at: 1), 2.5)
+        XCTAssertEqual(PanelNeutralShade.sampleCount, 21)
+        XCTAssertEqual(AtticPanelSurfaceTreatment.brightUnderlay(kind: .glass, appearance: .dark), .init(red: 254.0 / 255, green: 254.0 / 255, blue: 254.0 / 255))
+        XCTAssertEqual(AtticPanelSurfaceTreatment.brightUnderlay(kind: .frosted, appearance: .light), .init(red: 89.0 / 255, green: 89.0 / 255, blue: 89.0 / 255))
     }
 
-    func testOriginalTintIsTheNeutralShadeAndKeepsTheTintOffFoundation() {
+    /// Original with a Tint on native Glass or Frosted: bright surface, no
+    /// flat foundation, and at every sampled height the shade is the darker
+    /// of the step's ramp and the least shade that meets the relaxing floor
+    /// over the worst-case bright surface.
+    func testShadeCarriesReadabilityOnNativeTranslucentSurfaces() {
         for appearance in AtticPanelThemeAppearance.allCases {
-            for kind in Kind.allCases {
-                let off = treatment(.original, appearance, kind)
-                XCTAssertTrue(off.tintStops.isEmpty)
+            for kind in [Kind.glass, .frosted] {
+                XCTAssertFalse(treatment(.original, appearance, kind).usesShadeAsFoundation, "Tint Off keeps the flat foundation")
+                var previous: [PanelTintStop]?
                 for level in [PanelTintLevel.subtle, .vivid, .bold] {
                     for length in [0.3, 0.6, 1.0] {
-                        for credits in [true, false] {
-                            let tinted = treatment(.original, appearance, kind, tint: level, tintLength: length, creditsNativeSurface: credits)
-                            let plain = treatment(.original, appearance, kind, creditsNativeSurface: credits)
-                            let context = "\(appearance.rawValue) \(kind.rawValue) \(level.rawValue) \(length) credits=\(credits)"
-                            XCTAssertTrue(tinted.usesNeutralTint, context)
-                            XCTAssertEqual(tinted.washColor, PanelNeutralShade.color(for: appearance), context)
-                            XCTAssertEqual(tinted.foundationOpacity, plain.foundationOpacity, context)
-                            XCTAssertFalse(tinted.isTintClamped, context)
-                            XCTAssertEqual(tinted.tintStops, PanelNeutralShade.stops(level: level, length: length), context)
-                            XCTAssertEqual(tinted.tintTopOpacity, 0.82 * PanelNeutralShade.strength(for: level), accuracy: 1e-12)
+                        let shaded = treatment(.original, appearance, kind, tint: level, tintLength: length)
+                        let context = "\(appearance.rawValue) \(kind.rawValue) \(level.rawValue) \(length)"
+                        XCTAssertTrue(shaded.usesShadeAsFoundation, context)
+                        XCTAssertEqual(shaded.foundationOpacity, 0, context)
+                        XCTAssertFalse(shaded.isTintClamped, context)
+                        XCTAssertEqual(shaded.worstCaseBackdrop(), AtticPanelSurfaceTreatment.brightUnderlay(kind: kind, appearance: appearance), context)
+                        let stops = shaded.tintStops
+                        XCTAssertEqual(stops.count, 21, context)
+                        let worst = AtticPanelSurfaceTreatment.brightUnderlay(kind: kind, appearance: appearance)
+                        for stop in stops {
+                            let floor = PanelNeutralShade.readableFloor(kind: kind, at: stop.location)
+                            let ramp = PanelNeutralShade.rampOpacity(level: level, length: length, at: stop.location)
+                            let color = shaded.compositedSurface(over: worst, location: stop.location)
+                            XCTAssertGreaterThanOrEqual(
+                                PanelTintCalibration.minimumForegroundContrast(palette: shaded.palette, over: color),
+                                floor - 1e-9, "\(context) @\(stop.location)")
+                            XCTAssertGreaterThanOrEqual(stop.opacity, ramp - 1e-12, "\(context) @\(stop.location)")
+                            // Never more shade than the ramp or the floor asks for.
+                            let lighter = worst.mixed(with: shaded.washColor, amount: stop.opacity - 0.002)
+                            XCTAssertTrue(
+                                stop.opacity - 0.002 < ramp
+                                    || PanelTintCalibration.minimumForegroundContrast(palette: shaded.palette, over: lighter) < floor,
+                                "\(context) @\(stop.location) is darker than needed")
                         }
+                        if length == 1 {
+                            if let previous {
+                                for (weaker, stronger) in zip(previous, stops) {
+                                    XCTAssertLessThanOrEqual(weaker.opacity, stronger.opacity, "\(context) @\(stronger.location)")
+                                }
+                            }
+                            previous = stops
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testShadeKeepsItsFloorOverEveryDesktopExtreme() {
+        for appearance in AtticPanelThemeAppearance.allCases {
+            for kind in [Kind.glass, .frosted] {
+                for level in [PanelTintLevel.subtle, .vivid, .bold] {
+                    let shaded = treatment(.original, appearance, kind, tint: level)
+                    for red in [0.0, 1.0] { for green in [0.0, 1.0] { for blue in [0.0, 1.0] {
+                        let desktop = AtticThemeColor(red: red, green: green, blue: blue)
+                        let underlay = brightMeasuredUnderlay(kind: kind, desktop: desktop)
+                        for location in stride(from: 0.0, through: 1.0, by: 0.05) {
+                            let contrast = PanelTintCalibration.minimumForegroundContrast(
+                                palette: shaded.palette, over: shaded.compositedSurface(over: underlay, location: location))
+                            XCTAssertGreaterThanOrEqual(contrast, PanelNeutralShade.readableFloor(kind: kind, at: location) - 1e-9,
+                                "\(appearance.rawValue) \(kind.rawValue) \(level.rawValue) \(desktop.hexString) @\(location)")
+                        }
+                    } } }
+                }
+            }
+        }
+    }
+
+    /// Bold on Glass over a white page is the Siri ramp (about 5, 50, 100,
+    /// 145 and 175 at the top, quarter, middle, three-quarter and bottom),
+    /// except that the 2:1 floor keeps the lower edge a little darker; and it
+    /// is lighter than today's flat Glass at the bottom.
+    func testBoldGlassFollowsTheSiriRamp() {
+        let bold = treatment(.original, .dark, .glass, tint: .bold)
+        let worst = AtticPanelSurfaceTreatment.brightUnderlay(kind: .glass, appearance: .dark)
+        func brightness(_ location: Double) -> Double { bold.compositedSurface(over: worst, location: location).red * 255 }
+        XCTAssertLessThan(brightness(0), 10)
+        XCTAssertEqual(brightness(0.25), 50, accuracy: 6)
+        XCTAssertEqual(brightness(0.5), 100, accuracy: 10)
+        XCTAssertEqual(brightness(0.75), 145, accuracy: 8)
+        XCTAssertEqual(brightness(1), 163, accuracy: 6)
+        let flat = treatment(.original, .dark, .glass)
+        let flatBrightness = flat.compositedSurface(over: AtticPanelSurfaceTreatment.worstCaseUnderlay(kind: .glass, appearance: .dark, creditsNativeSurface: true)).red * 255
+        XCTAssertGreaterThan(brightness(1), flatBrightness + 20, "the lower edge is more see-through than flat Glass")
+    }
+
+    /// On Solid and below macOS 26 the shade is drawn over the usual surface
+    /// and only moves it away from the text colour.
+    func testShadeOverTheUsualSurfaceNeverLowersContrast() {
+        for appearance in AtticPanelThemeAppearance.allCases {
+            for (kind, credits) in [(Kind.solid, true), (.solid, false), (.glass, false), (.frosted, false)] {
+                let plain = treatment(.original, appearance, kind, creditsNativeSurface: credits)
+                for level in [PanelTintLevel.subtle, .vivid, .bold] {
+                    for length in [0.3, 0.6, 1.0] {
+                        let shaded = treatment(.original, appearance, kind, tint: level, tintLength: length, creditsNativeSurface: credits)
+                        let context = "\(appearance.rawValue) \(kind.rawValue) credits=\(credits) \(level.rawValue) \(length)"
+                        XCTAssertFalse(shaded.usesShadeAsFoundation, context)
+                        XCTAssertEqual(shaded.foundationOpacity, plain.foundationOpacity, context)
+                        XCTAssertEqual(shaded.tintStops, PanelNeutralShade.stops(level: level, length: length), context)
+                        for red in [0.0, 1.0] { for green in [0.0, 1.0] { for blue in [0.0, 1.0] {
+                            let desktop = AtticThemeColor(red: red, green: green, blue: blue)
+                            for location in stride(from: 0.0, through: 1.0, by: 0.05) {
+                                let before = PanelTintCalibration.minimumForegroundContrast(
+                                    palette: plain.palette, over: plain.compositedSurface(over: desktop, location: location))
+                                let after = PanelTintCalibration.minimumForegroundContrast(
+                                    palette: shaded.palette, over: shaded.compositedSurface(over: desktop, location: location))
+                                XCTAssertGreaterThanOrEqual(after, before - 1e-9, "\(context) \(desktop.hexString) @\(location)")
+                            }
+                        } } }
                     }
                 }
             }
         }
         XCTAssertFalse(treatment(.amethyst, .dark, .glass, tint: .bold).usesNeutralTint)
-    }
-
-    /// The shade moves the surface toward black in Dark and white in Light,
-    /// away from the text, so at every height, over every desktop extreme,
-    /// with or without the native-surface credit, it can only raise contrast.
-    func testNeutralShadeNeverLowersContrastAnywhere() {
-        for appearance in AtticPanelThemeAppearance.allCases {
-            for kind in Kind.allCases {
-                for credits in [true, false] {
-                    let plain = treatment(.original, appearance, kind, creditsNativeSurface: credits)
-                    for level in [PanelTintLevel.subtle, .vivid, .bold] {
-                        for length in [0.3, 0.6, 1.0] {
-                            let shaded = treatment(.original, appearance, kind, tint: level, tintLength: length, creditsNativeSurface: credits)
-                            for red in [0.0, 1.0] { for green in [0.0, 1.0] { for blue in [0.0, 1.0] {
-                                let desktop = AtticThemeColor(red: red, green: green, blue: blue)
-                                let underlay = kind == .solid || !credits ? desktop : measuredUnderlay(kind: kind, appearance: appearance, desktop: desktop)
-                                for location in stride(from: 0.0, through: 1.0, by: 0.05) {
-                                    let before = PanelTintCalibration.minimumForegroundContrast(
-                                        palette: plain.palette, over: plain.compositedSurface(over: underlay, location: location))
-                                    let after = PanelTintCalibration.minimumForegroundContrast(
-                                        palette: shaded.palette, over: shaded.compositedSurface(over: underlay, location: location))
-                                    XCTAssertGreaterThanOrEqual(after, before - 1e-9,
-                                        "\(appearance.rawValue) \(kind.rawValue) \(level.rawValue) \(length) \(desktop.hexString) @\(location)")
-                                }
-                            } } }
-                        }
-                    }
-                }
-            }
-        }
+        XCTAssertFalse(treatment(.amethyst, .dark, .glass, tint: .bold).usesShadeAsFoundation)
     }
 
     // MARK: Tint length

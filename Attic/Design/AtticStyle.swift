@@ -145,6 +145,7 @@ struct AtticPanelSurface: ViewModifier {
             ZStack {
                 if #available(macOS 26.0, *) {
                     shape.fill(.ultraThinMaterial)
+                        .environment(\.colorScheme, nativeSurfaceColorScheme)
                 } else {
                     shape.fill(.thinMaterial)
                 }
@@ -153,6 +154,7 @@ struct AtticPanelSurface: ViewModifier {
         case .glass:
             if #available(macOS 26.0, *) {
                 nativeGlassBackground(shape: shape)
+                    .environment(\.colorScheme, nativeSurfaceColorScheme)
             } else {
                 // The foundation carries the colour here too; Glass has no
                 // material wash of its own.
@@ -170,6 +172,15 @@ struct AtticPanelSurface: ViewModifier {
         shape
             .fill(Color.clear)
             .glassEffect(.regular, in: shape)
+    }
+
+    /// With Original's shade as the readability layer the native surface is
+    /// drawn bright, as the Siri panel's is, so the desktop keeps its own
+    /// brightness and all the darkness comes from the shade. Otherwise the
+    /// surface follows the panel's appearance.
+    private var nativeSurfaceColorScheme: ColorScheme {
+        if treatment.usesShadeAsFoundation { return .light }
+        return treatment.appearance == .dark ? .dark : .light
     }
 
     private var themedSurfaceTint: Color {

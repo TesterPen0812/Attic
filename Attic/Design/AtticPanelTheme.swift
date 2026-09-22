@@ -471,6 +471,12 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
     let tint: PanelTintLevel
     /// How far down the panel the Tint reaches (`PanelTintLength`).
     let tintLength: Double
+    /// True for Original's neutral Tint on native Glass or Frosted: the
+    /// native surface is drawn bright (its Light appearance, in both modes),
+    /// there is no flat foundation, and the shade carries readability.
+    let usesShadeAsFoundation: Bool
+    /// Original's shade, as drawn; empty for the custom palettes.
+    private let neutralStops: [PanelTintStop]
 
     /// The historical floor: a small buffer above 4.5:1. Solid, and every
     /// surface on the uncredited (pre-macOS-26) path, keep it.
@@ -505,18 +511,37 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         self.tint = tint
         self.tintLength = PanelTintLength.clamped(tintLength)
         if theme.usesNeutralTint {
-            // The neutral shade only moves the surface away from the text
-            // colour, so it keeps the Tint-Off foundation and never clamps.
-            foundationOpacity = kind == .solid ? 1 : Self.minimumReadableOpacity(
-                palette: palette,
-                appearance: appearance,
-                kind: kind,
-                creditsNativeSurface: creditsNativeSurface
-            )
-            tintTopOpacity = PanelNeutralShade.stops(level: tint, length: tintLength).first?.opacity ?? 0
             isTintClamped = false
+            if tint != .off, kind != .solid, creditsNativeSurface {
+                // The Siri construction: bright native glass, no flat
+                // foundation, and the shade as the readability layer.
+                usesShadeAsFoundation = true
+                foundationOpacity = 0
+                neutralStops = PanelNeutralShade.readableStops(
+                    level: tint,
+                    length: self.tintLength,
+                    kind: kind,
+                    palette: palette,
+                    appearance: appearance,
+                    underlay: Self.brightUnderlay(kind: kind, appearance: appearance)
+                )
+            } else {
+                // Solid, Tint Off, or no native glass: the shade is drawn over
+                // the usual surface and only moves it away from the text.
+                usesShadeAsFoundation = false
+                foundationOpacity = kind == .solid ? 1 : Self.minimumReadableOpacity(
+                    palette: palette,
+                    appearance: appearance,
+                    kind: kind,
+                    creditsNativeSurface: creditsNativeSurface
+                )
+                neutralStops = PanelNeutralShade.stops(level: tint, length: self.tintLength)
+            }
+            tintTopOpacity = neutralStops.first?.opacity ?? 0
             return
         }
+        usesShadeAsFoundation = false
+        neutralStops = []
         switch kind {
         case .solid:
             foundationOpacity = 1
@@ -624,6 +649,35 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
         return AtticThemeColor(red: value, green: value, blue: value)
     }
 
+    /// The bright (Light-appearance) native surface over the worst-case
+    /// desktop for the text colour: white behind a Dark panel, black behind a
+    /// Light one. Measured in the running panel: bright Liquid Glass drawn
+    /// inside a Dark panel passes a white page almost untouched (254; the
+    /// stand-alone prototype read 236), and renders black as 104; bright
+    /// `ultraThinMaterial` renders them as 241 and 89.
+    static func brightUnderlay(kind: Kind, appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
+        let byte: Double
+        switch (kind, appearance) {
+        case (.glass, .dark): byte = 254
+        case (.glass, .light): byte = 104
+        case (.frosted, .dark): byte = 241
+        case (.frosted, .light): byte = 89
+        case (.solid, .dark): byte = 255
+        case (.solid, .light): byte = 0
+        }
+        let value = byte / 255
+        return AtticThemeColor(red: value, green: value, blue: value)
+    }
+
+    /// The worst-case colour under this treatment's foundation and Tint: the
+    /// bright native surface when the shade carries readability, otherwise
+    /// the measured (or, below macOS 26, raw) underlay.
+    func worstCaseBackdrop(creditsNativeSurface: Bool = AtticGlassControlTreatment.systemSupportsNativeGlass) -> AtticThemeColor {
+        usesShadeAsFoundation
+            ? Self.brightUnderlay(kind: kind, appearance: appearance)
+            : Self.worstCaseUnderlay(kind: kind, appearance: appearance, creditsNativeSurface: creditsNativeSurface)
+    }
+
     // MARK: Tint
 
     /// Whether this treatment's Tint is Original's neutral shade.
@@ -637,13 +691,15 @@ struct AtticPanelSurfaceTreatment: Equatable, Sendable {
             : PanelTintCalibration.washColor(for: palette, appearance: appearance)
     }
 
-    /// The drawn gradient, top to bottom. The neutral shade follows the
-    /// crown profile; the accent wash fades linearly to nothing. Both end at
-    /// `tintLength`, and past the last stop the gradient holds its value.
+    /// The drawn gradient, top to bottom. The neutral shade follows
+    /// `PanelNeutralShade` (on native Glass and Frosted, its readable stops);
+    /// the accent wash fades linearly to nothing. The wash and the plain
+    /// ramp end at `tintLength`; the readable stops span the full height.
+    /// Past the last stop the gradient holds its value.
     var tintStops: [PanelTintStop] {
         guard tintTopOpacity > 0 else { return [] }
         if usesNeutralTint {
-            return PanelNeutralShade.stops(level: tint, length: tintLength)
+            return neutralStops
         }
         return [
             PanelTintStop(opacity: tintTopOpacity, location: 0),
