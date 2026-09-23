@@ -40,7 +40,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             SettingsSidebar(selection: sidebarSelection)
-                .navigationSplitViewColumnWidth(min: 156, ideal: 180, max: 210)
+                .navigationSplitViewColumnWidth(min: 172, ideal: 196, max: 230)
         } detail: {
             detail
         }
@@ -77,6 +77,7 @@ struct SettingsView: View {
         SettingsSection.restored(from: selectedSectionRawValue)
     }
 
+    /// Settings follow the panel's palette accent, as they always have.
     private var settingsAccentColor: Color {
         settings.panelTheme.usesSystemAccent
             ? Color.accentColor
@@ -109,21 +110,33 @@ struct SettingsView: View {
     }
 }
 
+/// The sidebar: Attic's identity at the top, then one tinted row per pane.
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsSection?
 
     var body: some View {
-        VStack(spacing: 0) {
+        List(SettingsSection.allCases, selection: $selection) { section in
+            Label {
+                Text(section.title)
+            } icon: {
+                SettingsIcon(systemImage: section.systemImage, tint: section.tint)
+            }
+            .tag(section)
+            .help(section.title)
+            .accessibilityIdentifier(section.accessibilityIdentifier)
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) {
             HStack(spacing: 10) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 32, height: 32)
+                    .frame(width: 40, height: 40)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Attic")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                     Text("Settings")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -131,22 +144,13 @@ private struct SettingsSidebar: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 13)
-            .padding(.top, 13)
-            .padding(.bottom, 9)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Attic Settings")
-
-            List(SettingsSection.allCases, selection: $selection) { section in
-                Label(section.title, systemImage: section.systemImage)
-                    .font(.system(size: 13))
-                    .tag(section)
-                    .help(section.title)
-                    .accessibilityIdentifier(section.accessibilityIdentifier)
-            }
-            .listStyle(.sidebar)
-            .accessibilityLabel("Settings sections")
-            .accessibilityIdentifier("settings-sidebar")
         }
+        .accessibilityLabel("Settings sections")
+        .accessibilityIdentifier("settings-sidebar")
     }
 }

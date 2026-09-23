@@ -3,6 +3,13 @@ import SwiftUI
 
 /// A key-capable auxiliary surface. Lifetime and content belong to its
 /// owner; every scroll event reaches the content untouched.
+///
+/// Like `AtticPanel`, the native window is larger than the visible squircle:
+/// `surfaceMargin` of transparent, click-through room on every side lets the
+/// surface's exterior shadow fade out instead of being cut at the window
+/// edge. Owners describe the window by its *visible* frame
+/// (`visibleContentFrame`, `setVisibleContentFrame`), never the native one,
+/// so placement, animation and saved positions are unchanged by the margin.
 final class PanelSurfaceWindow: NSPanel {
     var onEscape: (() -> Void)?
     /// Test seam: receives the events the window would hand to AppKit.
@@ -10,9 +17,53 @@ final class PanelSurfaceWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    convenience init(contentView: NSView, initialSize: CGSize) {
-        self.init(contentRect: CGRect(origin: .zero, size: initialSize),
+    /// Transparent room for the surface's exterior shadow, never a grip.
+    private(set) var surfaceMargin: CGFloat = 0
+    /// The content the owner supplied: the painted squircle's host.
+    private(set) weak var surfaceContentView: NSView?
+
+    var visibleContentFrame: CGRect {
+        frame.insetBy(dx: surfaceMargin, dy: surfaceMargin)
+    }
+
+    func nativeFrame(forVisibleFrame frame: CGRect) -> CGRect {
+        frame.insetBy(dx: -surfaceMargin, dy: -surfaceMargin)
+    }
+
+    func setVisibleContentFrame(_ frame: CGRect, display: Bool) {
+        setFrame(nativeFrame(forVisibleFrame: frame), display: display)
+    }
+
+    /// Assistive technology and UI tests see the surface, not its margin.
+    override func accessibilityFrame() -> NSRect {
+        visibleContentFrame
+    }
+
+    /// An assistive client that moves or sizes the window describes the
+    /// surface it can see; the native frame follows with its margin.
+    override func setAccessibilityFrame(_ accessibilityFrame: NSRect) {
+        setVisibleContentFrame(accessibilityFrame, display: true)
+    }
+
+    /// Whether a screen point lies on the painted squircle. Everything else
+    /// inside the native frame (the margin and the corner wedges) is
+    /// click-through; the owner keeps `ignoresMouseEvents` in step with the
+    /// pointer through `PanelSurfacePointerPolicy`.
+    func surfaceContains(screenPoint point: CGPoint, cornerSize: CGFloat) -> Bool {
+        PanelSurfacePointerPolicy.surfaceContains(
+            point, visibleFrame: visibleContentFrame, cornerSize: cornerSize
+        )
+    }
+
+    convenience init(contentView: NSView, initialSize: CGSize,
+                     surfaceMargin: CGFloat = AtticStyle.panelElevationMargin) {
+        let margin = max(0, surfaceMargin)
+        self.init(contentRect: CGRect(origin: .zero, size: CGSize(
+                      width: initialSize.width + margin * 2,
+                      height: initialSize.height + margin * 2
+                  )),
                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        self.surfaceMargin = margin
         animationBehavior = .none
         isReleasedWhenClosed = false
         isOpaque = false
@@ -24,7 +75,10 @@ final class PanelSurfaceWindow: NSPanel {
         acceptsMouseMovedEvents = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         AtticPanelInteractionPolicy.configure(self)
-        self.contentView = contentView
+        surfaceContentView = contentView
+        self.contentView = PanelSurfaceContentContainer(
+            surfaceView: contentView, visibleSize: initialSize, margin: margin
+        )
     }
 
     override func keyDown(with event: NSEvent) {
@@ -41,6 +95,57 @@ final class PanelSurfaceWindow: NSPanel {
         } else {
             super.sendEvent(event)
         }
+    }
+}
+
+/// Insets the surface host by the window's margin, the way
+/// `AtticPanelContentContainer` does for the main panel, and hands hit tests
+/// straight to the host: the host answers `nil` outside its squircle, so
+/// neither the margin nor the corner wedges ever own a press.
+final class PanelSurfaceContentContainer: NSView {
+    let surfaceView: NSView
+
+    init(surfaceView: NSView, visibleSize: CGSize, margin: CGFloat) {
+        self.surfaceView = surfaceView
+        super.init(frame: CGRect(origin: .zero, size: CGSize(
+            width: visibleSize.width + margin * 2,
+            height: visibleSize.height + margin * 2
+        )))
+        surfaceView.frame = bounds.insetBy(dx: margin, dy: margin)
+        surfaceView.autoresizingMask = [.width, .height]
+        addSubview(surfaceView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        guard surfaceView.frame.contains(local) else { return nil }
+        return surfaceView.hitTest(local)
+    }
+}
+
+/// Pointer pass-through for the auxiliary surfaces, mirroring the main
+/// panel's `updateMousePassthrough`: a borderless window swallows clicks on
+/// its transparent pixels, so while the pointer is inside the native frame
+/// but off the painted squircle the window must ignore mouse events. Pure
+/// geometry, so the rule is unit-testable without a window.
+enum PanelSurfacePointerPolicy {
+    static func surfaceContains(_ point: CGPoint, visibleFrame: CGRect, cornerSize: CGFloat) -> Bool {
+        SubtaskPanelLayout.surfaceContains(
+            CGPoint(x: point.x - visibleFrame.minX, y: point.y - visibleFrame.minY),
+            in: CGRect(origin: .zero, size: visibleFrame.size),
+            cornerSize: cornerSize
+        )
+    }
+
+    /// True when the window should ignore mouse events for this pointer.
+    static func shouldIgnoreMouseEvents(
+        at point: CGPoint, nativeFrame: CGRect, visibleFrame: CGRect, cornerSize: CGFloat
+    ) -> Bool {
+        nativeFrame.contains(point)
+            && !surfaceContains(point, visibleFrame: visibleFrame, cornerSize: cornerSize)
     }
 }
 

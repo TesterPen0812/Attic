@@ -44,11 +44,13 @@ enum AtticStyle {
     static let taskScrollTopPadding: CGFloat = 22
 }
 
+/// The one panel surface: fill, Tint, hairline edge and
+/// outside-only elevation, in that order. The main panel and the subtask
+/// checklist windows both render through this modifier, so they can only
+/// ever look the same.
 struct AtticPanelSurface: ViewModifier {
     let treatment: AtticPanelSurfaceTreatment
     let cornerRadius: CGFloat
-    let gradientCoverage: Double
-    let gradientColorHex: String
     /// Only hosts whose native window leaves `AtticStyle.panelElevationMargin`
     /// around the surface should draw the exterior shadow.
     let showsElevation: Bool
@@ -91,143 +93,108 @@ struct AtticPanelSurface: ViewModifier {
             .background {
                 // Outside the clip on purpose: the shadow belongs to the
                 // visible squircle, not to the rectangular AppKit window.
-                if showsElevation, let elevation = treatment.surfaceElevation {
-                    shape
-                        .fill(treatment.palette.opaqueSurfaceColor)
-                        .shadow(
-                            color: Color.black.opacity(elevation.opacity),
-                            radius: elevation.radius,
-                            x: 0,
-                            y: elevation.offsetY
-                        )
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                        .animation(
-                            (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
-                            value: surfaceAnimationIdentity
-                        )
+                if showsElevation {
+                    AtticPanelOutsideShadow(
+                        shape: shape,
+                        elevation: treatment.surfaceElevation
+                    )
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                    .animation(
+                        (reduceMotion || reduceTransparency) ? nil : AtticMotion.background,
+                        value: surfaceAnimationIdentity
+                    )
                 }
             }
     }
 
     @ViewBuilder
     private func surfaceBackground(shape: Squircle) -> some View {
-        if treatment.kind == .clearGlass {
-            originalSurfaceBackground(shape: shape)
-        } else {
-            ZStack {
-                themedSurfaceBackground(shape: shape)
-                if treatment.kind != .opaque {
-                    shape.fill(treatment.palette.opaqueSurfaceColor.opacity(treatment.foundationOpacity))
-                }
-                let coverage = AtticPanelSurfaceTreatment.normalizedGradientCoverage(gradientCoverage)
-                if coverage > 0 {
-                    let tint = treatment.gradientColor(customHex: gradientColorHex)
-                    LinearGradient(stops: [
-                        .init(color: tint.swiftUIColor(
-                            opacity: treatment.gradientOpacity(at: 0, coverage: coverage)), location: 0),
-                        .init(color: tint.swiftUIColor(opacity: 0), location: coverage),
-                        .init(color: tint.swiftUIColor(opacity: 0), location: 1)
-                    ], startPoint: .top, endPoint: .bottom)
-                    .clipShape(shape)
-                }
+        ZStack {
+            themedSurfaceBackground(shape: shape)
+            if treatment.kind != .solid {
+                shape.fill(treatment.palette.opaqueSurfaceColor.opacity(treatment.foundationOpacity))
+            }
+            if treatment.tintTopOpacity > 0 {
+                tintWash(shape: shape)
             }
         }
     }
 
-    @ViewBuilder
-    private func originalSurfaceBackground(shape: Squircle) -> some View {
-        // Only Original Dark can resolve to Clear. Keep its established
-        // glass and lighting intact, outside the readable-material path.
-        if #available(macOS 26.0, *) {
-            originalNativeGlassBackground(shape: shape)
-        } else {
-            shape.fill(.ultraThinMaterial)
-        }
+    /// The Tint (neutral shade or accent wash) along `tintStops`, above
+    /// the fill.
+    private func tintWash(shape: Squircle) -> some View {
+        LinearGradient(
+            stops: treatment.tintGradientStops,
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .clipShape(shape)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
     private func themedSurfaceBackground(shape: Squircle) -> some View {
         switch treatment.kind {
-        case .opaque:
-            // Opaque themes use their solid seed directly; `surfaceTint`
-            // remains a glass-only wash regardless of its treatment token.
+        case .solid:
+            // Solid uses the palette seed directly; `surfaceTint` remains a
+            // Frosted-only wash regardless of its treatment token.
             shape.fill(treatment.palette.opaqueSurfaceColor)
-        case .glassmorphism:
+        case .frosted:
             ZStack {
                 if #available(macOS 26.0, *) {
                     shape.fill(.ultraThinMaterial)
+                        .environment(\.colorScheme, nativeSurfaceColorScheme)
                 } else {
                     shape.fill(.thinMaterial)
                 }
                 shape.fill(themedSurfaceTint)
             }
-        case .clearGlass, .frostedGlass:
+        case .glass:
             if #available(macOS 26.0, *) {
-                themedNativeGlassBackground(shape: shape)
-            } else if treatment.kind == .clearGlass {
-                ZStack {
-                    shape.fill(.ultraThinMaterial)
-                    shape.fill(themedSurfaceTint)
-                }
+                nativeGlassBackground(shape: shape)
+                    .environment(\.colorScheme, nativeSurfaceColorScheme)
             } else {
-                ZStack {
-                    shape.fill(.regularMaterial)
-                    shape.fill(themedSurfaceTint)
-                }
+                // The foundation carries the colour here too; Glass has no
+                // material wash of its own.
+                shape.fill(.regularMaterial)
             }
         }
     }
 
     @available(macOS 26.0, *)
-    private func originalNativeGlassBackground(shape: Squircle) -> some View {
-        let glass: Glass = .clear.tint(Color.black.opacity(0.06))
-        let lightingStops: [Gradient.Stop] = [
-            .init(color: Color.black.opacity(0.82), location: 0),
-            .init(color: Color.black.opacity(0.58), location: 0.42),
-            .init(color: Color.black.opacity(0.18), location: 0.74),
-            .init(color: Color.black.opacity(0.02), location: 1)
-        ]
-
-        return ZStack {
-            shape
-                .fill(Color.clear)
-                .glassEffect(glass, in: shape)
-            LinearGradient(
-                stops: lightingStops,
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .clipShape(shape)
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private func themedNativeGlassBackground(shape: Squircle) -> some View {
-        // The calibrated foundation and optional gradient already carry the
-        // theme color. A second tint inside native glass only adds opacity.
-        // Keep regular glass's blur so background lettering does not compete
-        // with foreground content. Original Clear has its own untouched path.
-        return shape
+    private func nativeGlassBackground(shape: Squircle) -> some View {
+        // The calibrated foundation already carries the palette colour. A
+        // second tint inside native glass only adds opacity. Keep regular
+        // glass's blur so background lettering does not compete with
+        // foreground content.
+        shape
             .fill(Color.clear)
             .glassEffect(.regular, in: shape)
     }
 
-    private var themedSurfaceTint: Color {
-        treatment.palette.surfaceTint.swiftUIColor(opacity: treatment.tintOpacity)
+    /// With Original's shade as the readability layer the native surface is
+    /// drawn bright, as the Siri panel's is, so the desktop keeps its own
+    /// brightness and all the darkness comes from the shade. Otherwise the
+    /// surface follows the panel's appearance.
+    private var nativeSurfaceColorScheme: ColorScheme {
+        if treatment.usesShadeAsFoundation { return .light }
+        return treatment.appearance == .dark ? .dark : .light
     }
 
+    private var themedSurfaceTint: Color {
+        treatment.palette.surfaceTint.swiftUIColor(opacity: treatment.materialTintOpacity)
+    }
+
+    /// Every surface and Tint change is one crossfade of the whole
+    /// background; Reduce Motion (and Reduce Transparency) disable it.
     private var surfaceAnimationIdentity: SurfaceAnimationIdentity {
-        // Coverage follows the slider directly; animate appearance/theme changes
-        // only, so scrubbing does not continuously restart a transition.
-        return .themed(treatment)
+        .themed(treatment)
     }
 
     private var surfaceEdgeColor: Color {
-        let opacity = treatment.surfaceEdgeOpacity(
-            for: colorSchemeContrast,
-            isElevated: showsElevation && treatment.surfaceElevation != nil
-        )
+        let opacity = treatment.surfaceEdgeOpacity(for: colorSchemeContrast)
         if treatment.usesSystemOpaqueSurface {
             return Color.primary.opacity(opacity)
         }
@@ -241,23 +208,42 @@ private enum SurfaceAnimationIdentity: Equatable {
     case themed(AtticPanelSurfaceTreatment)
 }
 
-private struct AtticPanelGlassStyleKey: EnvironmentKey {
-    static let defaultValue: PanelGlassStyle = .clear
-}
+/// The panel's exterior elevation: a soft shadow of the squircle with the
+/// squircle itself cut back out, so nothing is ever drawn under the surface.
+/// A translucent Glass or Frosted interior therefore stays exactly as
+/// see-through as its own composite; only the room outside the shape (the
+/// window's transparent margin) carries the shadow.
+///
+/// The shadow-casting fill is inset by `casterInset` while the cut-out is
+/// the exact shape: the caster's anti-aliased rim then lies wholly inside
+/// the cut-out and can never survive as a dark ring under the edge stroke,
+/// and the cut-out removes nothing beyond the true edge, so there is no
+/// bright seam between the hairline and the shadow either. Half a point of
+/// inset moves a 10pt-radius shadow by an invisible amount.
+struct AtticPanelOutsideShadow: View {
+    let shape: Squircle
+    let elevation: AtticPanelSurfaceElevation
 
-private struct AtticPanelTranslucencyEnabledKey: EnvironmentKey {
-    static let defaultValue = true
-}
+    /// How far inside the shape the shadow-casting fill stops, in points.
+    static let casterInset: CGFloat = 0.5
 
-extension EnvironmentValues {
-    var atticPanelTranslucencyEnabled: Bool {
-        get { self[AtticPanelTranslucencyEnabledKey.self] }
-        set { self[AtticPanelTranslucencyEnabledKey.self] = newValue }
-    }
-
-    var atticPanelGlassStyle: PanelGlassStyle {
-        get { self[AtticPanelGlassStyleKey.self] }
-        set { self[AtticPanelGlassStyleKey.self] = newValue }
+    var body: some View {
+        ZStack {
+            shape
+                .fill(Color.black)
+                .padding(Self.casterInset)
+                .shadow(
+                    color: Color.black.opacity(elevation.opacity),
+                    radius: elevation.radius,
+                    x: 0,
+                    y: elevation.offsetY
+                )
+            shape
+                .fill(Color.black)
+                .blendMode(.destinationOut)
+        }
+        .compositingGroup()
+        .accessibilityHidden(true)
     }
 }
 
@@ -290,6 +276,21 @@ enum AtticGlassControlTreatment: Equatable {
     static func resolve(reduceTransparency: Bool, supportsNativeGlass: Bool) -> Self {
         if reduceTransparency { return .opaque }
         return supportsNativeGlass ? .nativeGlass : .material
+    }
+
+    /// Native Liquid Glass takes its tone from whatever is behind it, so on a
+    /// pure-white Solid surface a control's fill lands within a couple of
+    /// levels of the panel and the pill all but disappears. This faint
+    /// `Color.primary` outline keeps every native-glass control legible on
+    /// white and on busy glass alike; Increased Contrast is one step stronger.
+    /// Measured on the Light Solid `#FFFFFF` composer field (see
+    /// `Docs/Appearance-Model-2026-09.md`).
+    static func nativeGlassOutlineOpacity(for contrast: ColorSchemeContrast) -> Double {
+        contrast == .increased ? 0.20 : 0.10
+    }
+
+    static func nativeGlassOutlineLineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
+        contrast == .increased ? 1 : 0.75
     }
 }
 
@@ -344,17 +345,17 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
     }
 
     @available(macOS 26.0, *)
-    @ViewBuilder
     private func nativeGlassControl(content: Content, glass: Glass) -> some View {
-        if colorSchemeContrast == .increased {
-            content
-                .glassEffect(glass, in: shape)
-                .overlay {
-                    shape.stroke(Color.primary.opacity(0.18), lineWidth: 1)
-                }
-        } else {
-            content.glassEffect(glass, in: shape)
-        }
+        content
+            .glassEffect(glass, in: shape)
+            .overlay {
+                shape.stroke(
+                    Color.primary.opacity(
+                        AtticGlassControlTreatment.nativeGlassOutlineOpacity(for: colorSchemeContrast)
+                    ),
+                    lineWidth: AtticGlassControlTreatment.nativeGlassOutlineLineWidth(for: colorSchemeContrast)
+                )
+            }
     }
 
     private var opaqueControlColor: Color {
@@ -398,16 +399,12 @@ extension View {
     func atticPanelSurface(
         treatment: AtticPanelSurfaceTreatment,
         cornerRadius: CGFloat = AtticStyle.panelCornerRadius,
-        gradientCoverage: Double = 0.55,
-        gradientColorHex: String = "",
         showsElevation: Bool = false
     ) -> some View {
         modifier(
             AtticPanelSurface(
                 treatment: treatment,
                 cornerRadius: cornerRadius,
-                gradientCoverage: gradientCoverage,
-                gradientColorHex: gradientColorHex,
                 showsElevation: showsElevation
             )
         )
@@ -464,5 +461,16 @@ struct AtticPointerShield: View {
             .frame(height: Self.shieldedHeight(height))
             .contentShape(Rectangle())
             .accessibilityHidden(true)
+    }
+}
+
+extension AtticPanelSurfaceTreatment {
+    /// `tintStops` as SwiftUI gradient stops in the wash colour. The panel
+    /// and the Settings samples both draw these.
+    var tintGradientStops: [Gradient.Stop] {
+        let wash = washColor
+        return tintStops.map {
+            Gradient.Stop(color: wash.swiftUIColor(opacity: $0.opacity), location: $0.location)
+        }
     }
 }

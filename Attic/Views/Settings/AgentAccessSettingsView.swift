@@ -11,14 +11,15 @@ struct AgentAccessSettingsView: View {
     var body: some View {
         SettingsPage(
             title: "Agent Access",
-            subtitle: "Connect trusted local AI tools to Attic through MCP.",
+            subtitle: "Let trusted AI tools on this Mac work with your tasks through MCP.",
             accessibilityIdentifier: "settings-page-agentAccess"
         ) {
-            SettingsGroup("Access") {
+            Section {
                 SettingsRow(
                     title: "Allow agent access",
-                    description: "Local agents can read, create, update, and permanently delete items.",
-                    systemImage: "sparkles"
+                    description: "Local agents can read, create, update and permanently delete items.",
+                    systemImage: "sparkles",
+                    tint: .orange
                 ) {
                     Toggle("Allow local AI agent access", isOn: $settings.isAgentAccessEnabled)
                         .labelsHidden()
@@ -27,90 +28,85 @@ struct AgentAccessSettingsView: View {
                         .accessibilityLabel("Allow local AI agent access")
                         .accessibilityIdentifier("setting-agent-access")
                 }
+
+                if !SettingsVisibility.showsAgentConnection(isEnabled: settings.isAgentAccessEnabled) {
+                    SettingsMessage(text: "Agent Access is off. Nothing is listening.", tone: .information)
+                        .accessibilityIdentifier("settings-agent-disabled-message")
+                }
+            } header: {
+                Text("Access")
             }
 
             if SettingsVisibility.showsAgentConnection(
                 isEnabled: settings.isAgentAccessEnabled
             ) {
-                SettingsGroup("Local server") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        agentServerStatus
-
-                        Text("Attic listens only on this Mac at the loopback address below.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(15)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Section {
+                    agentServerStatus
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("settings-agent-server-status")
+                } header: {
+                    Text("Local server")
+                } footer: {
+                    SettingsFootnote("Attic listens only on this Mac, at the loopback address below.")
                 }
-                .accessibilityIdentifier("settings-agent-server-status")
 
-                SettingsGroup("Connection") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Endpoint")
-                            .font(.system(size: 12, weight: .medium))
-
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 10) {
-                                endpointText
-                                Spacer(minLength: 10)
-                                copyEndpointButton
-                            }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                endpointText
-                                copyEndpointButton
-                            }
+                Section {
+                    LabeledContent {
+                        HStack(spacing: 10) {
+                            endpointText
+                            copyEndpointButton
                         }
+                    } label: {
+                        SettingsRowLabel(
+                            title: "Endpoint",
+                            description: nil,
+                            systemImage: "link",
+                            tint: .blue
+                        )
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-agent-connection")
 
-                        Divider()
-
-                        Text("Authorization")
-                            .font(.system(size: 12, weight: .medium))
-
-                        Label(AgentSetupPrompt.authorizationSummary, systemImage: "key.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("settings-agent-authorization-summary")
-
+                    LabeledContent {
                         HStack(alignment: .center, spacing: 10) {
-                            Button(action: copyAgentSetupPrompt) {
-                                Label(
-                                    didCopyAgentSetupPrompt ? "Copy setup prompt again" : "Copy setup prompt",
-                                    systemImage: didCopyAgentSetupPrompt ? "checkmark" : "doc.on.clipboard"
-                                )
-                            }
-                            .controlSize(.regular)
-                            .disabled(!AgentAccessTokenStore.isValid(agentServer.setupToken))
-                            .accessibilityIdentifier("settings-copy-agent-setup")
-                            .help("Copy connection instructions with the private token")
-
                             if didCopyAgentSetupPrompt {
                                 Text("Ready to paste")
                                     .font(.caption)
                                     .foregroundStyle(.green)
                                     .accessibilityIdentifier("settings-agent-setup-copied")
                             }
+                            Button(action: copyAgentSetupPrompt) {
+                                Label(
+                                    didCopyAgentSetupPrompt ? "Copy Setup Prompt Again" : "Copy Setup Prompt",
+                                    systemImage: didCopyAgentSetupPrompt ? "checkmark" : "doc.on.clipboard"
+                                )
+                            }
+                            .disabled(!AgentAccessTokenStore.isValid(agentServer.setupToken))
+                            .accessibilityIdentifier("settings-copy-agent-setup")
+                            .help("Copy connection instructions with the private token")
                         }
-
-                        Text("The setup prompt places the private token on your clipboard. Paste it only into a trusted local AI client.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Authorization")
+                                Text(AgentSetupPrompt.authorizationSummary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("settings-agent-authorization-summary")
+                            }
+                        } icon: {
+                            SettingsIcon(systemImage: "key.fill", tint: .gray)
+                        }
                     }
-                    .padding(15)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                } header: {
+                    Text("Connection")
+                } footer: {
+                    SettingsFootnote(
+                        "The setup prompt puts the private token on your clipboard. "
+                        + "Paste it only into a trusted local AI client."
+                    )
                 }
-                .accessibilityIdentifier("settings-agent-connection")
-            } else {
-                Text("Agent Access is off. No local MCP listener is available.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
-                    .accessibilityIdentifier("settings-agent-disabled-message")
             }
         }
     }
@@ -121,7 +117,7 @@ struct AgentAccessSettingsView: View {
 
     private var endpointText: some View {
         Text(endpoint)
-            .font(.caption.monospaced())
+            .font(.callout.monospaced())
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -146,32 +142,31 @@ struct AgentAccessSettingsView: View {
     private var agentServerStatus: some View {
         switch agentServer.state {
         case .stopped:
-            Label("Server stopped", systemImage: "circle")
-                .foregroundStyle(.secondary)
+            SettingsRow(title: "Server stopped", systemImage: "circle", tint: .gray) { EmptyView() }
         case .starting:
-            Label("Starting local server…", systemImage: "circle.dotted")
-                .foregroundStyle(.secondary)
+            SettingsRow(title: "Starting the local server…", systemImage: "circle.dotted", tint: .gray) {
+                ProgressView().controlSize(.small)
+            }
         case .running:
-            Label("Listening on this Mac only", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+            SettingsRow(
+                title: "Listening on this Mac only",
+                systemImage: "checkmark.circle.fill",
+                tint: .green
+            ) { EmptyView() }
         case let .failed(message):
-            VStack(alignment: .leading, spacing: 7) {
-                Label("Could not start the server", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .help(message)
-
+            SettingsRow(
+                title: "Could not start the server",
+                description: message,
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .red,
+                selectableDescription: true
+            ) {
                 Button("Retry") {
                     agentServer.start()
                 }
-                .controlSize(.small)
                 .accessibilityIdentifier("settings-agent-retry")
             }
+            .help(message)
         }
     }
 

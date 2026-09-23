@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general
@@ -23,11 +23,22 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .general: "gearshape"
-        case .panel: "rectangle.on.rectangle"
-        case .appearance: "circle.lefthalf.filled"
+        case .general: "gearshape.fill"
+        case .panel: "rectangle.inset.topright.filled"
+        case .appearance: "paintpalette.fill"
         case .agentAccess: "sparkles"
-        case .about: "info.circle"
+        case .about: "info"
+        }
+    }
+
+    /// The sidebar tile colour, one per section, in the System Settings idiom.
+    var tint: Color {
+        switch self {
+        case .general: .gray
+        case .panel: .blue
+        case .appearance: .purple
+        case .agentAccess: .orange
+        case .about: .teal
         }
     }
 

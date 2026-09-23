@@ -27,40 +27,6 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
-enum PanelGlassStyle: String, CaseIterable, Identifiable {
-    case clear
-    case frosted
-    /// Keeps the earlier `stable` preference compatible while restoring the
-    /// original live macOS material used by Attic.
-    case glassmorphism = "stable"
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .clear: return "Clear"
-        case .frosted: return "Frosted"
-        case .glassmorphism: return "Glassmorphism"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .clear:
-            return "Live transparency and native refraction, available with Original in Dark appearance."
-        case .frosted:
-            return "Native blur with stronger contrast."
-        case .glassmorphism:
-            return "Classic live macOS blur and vibrancy, matching Attic's original surface."
-        }
-    }
-
-    /// Resolve presentation without overwriting the user's saved glass choice.
-    func resolved(for theme: AtticPanelTheme, colorScheme: ColorScheme) -> Self {
-        self == .clear && (theme != .original || colorScheme != .dark) ? .frosted : self
-    }
-}
-
 /// User-adjustable corner radius of the panel squircle, in points.
 enum PanelCornerSize: Double, CaseIterable, Identifiable {
     case small = 10
@@ -125,12 +91,11 @@ final class AppSettings: ObservableObject {
         static let hasAdoptedQuickerReveal = "hasAdoptedQuickerRevealV2"
         static let hasAdoptedInstantReveal = "hasAdoptedInstantRevealV3"
         static let hasShownWelcome = "hasShownWelcome"
-        static let isTranslucent = "isTranslucent"
-        static let panelGlassStyle = "panelGlassStyle"
-        static let panelTheme = "panelTheme"
-        static let panelGradientCoverage = "panelGradientCoverage"
-        static let panelGradientColorHex = "panelGradientColorHex"
-        static let appearance = "appearancePreference"
+        static let panelTheme = AppearanceMigration.Key.theme
+        static let panelSurfaceStyle = AppearanceMigration.Key.surfaceStyle
+        static let panelTint = AppearanceMigration.Key.tint
+        static let panelTintLength = AppearanceMigration.Key.tintLength
+        static let appearance = AppearanceMigration.Key.appearance
         static let isAgentAccessEnabled = "isAgentAccessEnabled"
         static let agentServerPort = "agentServerPort"
         static let hasAdoptedAgentAccessOptIn = "hasAdoptedAgentAccessOptIn"
@@ -144,32 +109,30 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(corner.rawValue, forKey: Key.corner) }
     }
 
-    @Published var isTranslucent: Bool {
-        didSet { defaults.set(isTranslucent, forKey: Key.isTranslucent) }
-    }
-
-    @Published var panelGlassStyle: PanelGlassStyle {
-        didSet { defaults.set(panelGlassStyle.rawValue, forKey: Key.panelGlassStyle) }
-    }
-
     @Published var panelTheme: AtticPanelTheme {
         didSet { defaults.set(panelTheme.rawValue, forKey: Key.panelTheme) }
     }
 
-    @Published var panelGradientCoverage: Double {
-        didSet {
-            let normalized = Self.clamp(panelGradientCoverage, to: 0...1, fallback: 0.55)
-            if panelGradientCoverage != normalized { panelGradientCoverage = normalized }
-            defaults.set(normalized, forKey: Key.panelGradientCoverage)
-        }
+    /// Solid, Glass or Frosted. Reduce Transparency renders Solid without
+    /// changing this choice.
+    @Published var panelSurfaceStyle: PanelSurfaceStyle {
+        didSet { defaults.set(panelSurfaceStyle.rawValue, forKey: Key.panelSurfaceStyle) }
     }
 
-    /// Empty follows the adaptive theme; custom colors are opaque sRGB RRGGBB.
-    @Published var panelGradientColorHex: String {
+    /// The Tint across the top of the panel: Original's neutral shade or a
+    /// custom palette's accent wash.
+    @Published var panelTint: PanelTintLevel {
+        didSet { defaults.set(panelTint.rawValue, forKey: Key.panelTint) }
+    }
+
+    /// How far down the panel the Tint reaches (`PanelTintLength.range`).
+    @Published var panelTintLength: Double {
         didSet {
-            let normalized = AtticThemeColor(hex: panelGradientColorHex)?.hexString ?? ""
-            if panelGradientColorHex != normalized { panelGradientColorHex = normalized }
-            defaults.set(normalized, forKey: Key.panelGradientColorHex)
+            // Assigning inside the observer does not re-run it, so the
+            // clamped value is stored here rather than by a second didSet.
+            let clamped = PanelTintLength.clamped(panelTintLength)
+            if clamped != panelTintLength { panelTintLength = clamped }
+            defaults.set(clamped, forKey: Key.panelTintLength)
         }
     }
 
@@ -304,25 +267,22 @@ final class AppSettings: ObservableObject {
         revealDelay = Self.clamp(resolvedDelay, to: 0.2...2.0, fallback: 0.2)
         let storedHideDelay = defaults.object(forKey: Key.hideDelay) as? Double
         hideDelay = Self.clamp(storedHideDelay ?? 0.3, to: 0.1...2.0, fallback: 0.3)
-        isTranslucent = (defaults.object(forKey: Key.isTranslucent) as? Bool) ?? true
-        let storedGlassStyle = defaults.string(forKey: Key.panelGlassStyle) ?? ""
-        if storedGlassStyle == "liveStable" {
-            panelGlassStyle = .glassmorphism
-            defaults.set(PanelGlassStyle.glassmorphism.rawValue, forKey: Key.panelGlassStyle)
-        } else {
-            panelGlassStyle = PanelGlassStyle(rawValue: storedGlassStyle) ?? .clear
-        }
+        // Before any appearance key is read: the retired translucency /
+        // glass-style / gradient preferences become Surface and Tint
+        // exactly once, and a fresh install receives the new defaults.
+        AppearanceMigration.migrateIfNeeded(defaults)
         panelTheme = AtticPanelTheme(
             rawValue: defaults.string(forKey: Key.panelTheme) ?? ""
         ) ?? .defaultTheme
-        panelGradientCoverage = Self.clamp(
-            defaults.object(forKey: Key.panelGradientCoverage) as? Double ?? 0.55,
-            to: 0...1,
-            fallback: 0.55
+        panelSurfaceStyle = PanelSurfaceStyle(
+            rawValue: defaults.string(forKey: Key.panelSurfaceStyle) ?? ""
+        ) ?? .defaultStyle
+        panelTint = PanelTintLevel(
+            rawValue: defaults.string(forKey: Key.panelTint) ?? ""
+        ) ?? .defaultLevel
+        panelTintLength = PanelTintLength.clamped(
+            defaults.object(forKey: Key.panelTintLength) as? Double ?? PanelTintLength.defaultValue
         )
-        panelGradientColorHex = AtticThemeColor(
-            hex: defaults.string(forKey: Key.panelGradientColorHex) ?? ""
-        )?.hexString ?? ""
         appearance = AppearancePreference(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         if !defaults.bool(forKey: Key.hasAdoptedAgentAccessOptIn) {
             // Earlier MCP builds enabled the mutating local server implicitly.
@@ -348,8 +308,24 @@ final class AppSettings: ObservableObject {
             minimum: PanelGeometry.minimumHeight,
             fallback: PanelGeometry.defaultPanelSize.height
         )
-        defaults.set(panelGradientCoverage, forKey: Key.panelGradientCoverage)
-        defaults.set(panelGradientColorHex, forKey: Key.panelGradientColorHex)
+    }
+
+    /// The one place the appearance settings become a drawable surface. The
+    /// main panel and the subtask checklist windows both call this, so they
+    /// can only ever render the same treatment.
+    func panelSurfaceTreatment(
+        colorScheme: ColorScheme,
+        contrast: ColorSchemeContrast,
+        reduceTransparency: Bool
+    ) -> AtticPanelSurfaceTreatment {
+        panelTheme.surfaceTreatment(
+            colorScheme: colorScheme,
+            contrast: contrast,
+            surface: panelSurfaceStyle,
+            tint: panelTint,
+            tintLength: panelTintLength,
+            reduceTransparency: reduceTransparency
+        )
     }
 
     var agentServerPort: UInt16 {

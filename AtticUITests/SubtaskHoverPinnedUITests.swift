@@ -646,9 +646,9 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
         try assertUnpinnedDragAndEntry()
     }
 
-    func testFrostedHeaderDragAndSingleClickEntry() throws {
+    func testGlassHeaderDragAndSingleClickEntry() throws {
         app.terminate()
-        app.launchArguments += ["-panelGlassStyle", "frosted", "-panelCornerSize", "70"]
+        app.launchArguments += ["-panelSurfaceStyle", "glass", "-panelCornerSize", "70"]
         app.launch()
         app.activate()
         XCTAssertTrue(element(identifiedBy: "panel-section-picker").waitForExistence(timeout: 5))

@@ -286,8 +286,11 @@ final class PanelSurfaceHostingViewTests: XCTestCase {
 
     private func assertSurfaceUntouched(_ fixture: ScrollFixture,
                                         file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertTrue(fixture.window.contentView === fixture.content,
+        XCTAssertTrue(fixture.window.surfaceContentView === fixture.content,
                       "the surface presents its content directly — no motion layer remains to transform it",
+                      file: file, line: line)
+        XCTAssertTrue(fixture.content.superview === fixture.window.contentView,
+                      "only the shadow-margin container sits between window and content",
                       file: file, line: line)
         if let layer = fixture.content.layer {
             XCTAssertTrue(CATransform3DEqualToTransform(layer.transform, CATransform3DIdentity),

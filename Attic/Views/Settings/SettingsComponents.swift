@@ -1,6 +1,35 @@
 import AppKit
 import SwiftUI
 
+/// Shared metrics for the Settings window, pinned by
+/// `SettingsPresentationTests` so the panes stay on one scale.
+enum SettingsDesign {
+    /// Pane title and subtitle, the first row of the scrolling form.
+    static let titleSize: CGFloat = 22
+    static let headerTopInset: CGFloat = 8
+    static let headerBottomInset: CGFloat = 2
+    /// The tinted symbol tile in front of a row label.
+    static let iconSize: CGFloat = 24
+    static let iconCornerRadius: CGFloat = 6
+    static let iconSymbolSize: CGFloat = 11.5
+    /// Selection ring around a chosen tile (palette, surface, tint, corner).
+    static func selectionLineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
+        contrast == .increased ? 2.5 : 2
+    }
+    static func tileBoundaryOpacity(for contrast: ColorSchemeContrast) -> Double {
+        contrast == .increased ? 0.42 : 0.14
+    }
+    static func tileBoundaryLineWidth(for contrast: ColorSchemeContrast) -> CGFloat {
+        contrast == .increased ? 1.5 : 1
+    }
+    static let tileCornerRadius: CGFloat = 10
+}
+
+/// One pane: a title block and a grouped `Form`, the way System Settings
+/// lays out a pane on macOS 26. Sections, rows, separators, focus rings and
+/// the Light / Dark / Increased Contrast treatments all come from the native
+/// form; only the controls inside are Attic's. The title scrolls with the
+/// content, so the whole pane is one scrolling surface.
 struct SettingsPage<Content: View>: View {
     let title: String
     let subtitle: String
@@ -20,11 +49,11 @@ struct SettingsPage<Content: View>: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 5) {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.system(size: 25, weight: .semibold))
+                        .font(.system(size: SettingsDesign.titleSize, weight: .semibold))
                         .foregroundStyle(.primary)
                         .accessibilityAddTraits(.isHeader)
 
@@ -34,124 +63,113 @@ struct SettingsPage<Content: View>: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
-
-                content
+                .padding(.top, SettingsDesign.headerTopInset)
+                .padding(.bottom, SettingsDesign.headerBottomInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
-            .frame(maxWidth: 720, alignment: .leading)
-            .padding(.horizontal, 28)
-            .padding(.top, 26)
-            .padding(.bottom, 32)
+
+            content
         }
-        .scrollIndicators(.automatic)
+        .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // One container element for the pane, so the identifier lands on
+        // it alone and not on every child the stack would otherwise expose.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
-struct SettingsGroup<Content: View>: View {
-    let title: String
-    private let content: Content
-
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
+/// The tinted rounded-square symbol tile System Settings puts in front of a
+/// row: a white symbol on a gradient of the row's colour.
+struct SettingsIcon: View {
+    let systemImage: String
+    var tint: Color = .gray
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.5)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 4)
-                .accessibilityAddTraits(.isHeader)
-
-            VStack(spacing: 0) {
-                content
-            }
+        Image(systemName: systemImage)
+            .font(.system(size: SettingsDesign.iconSymbolSize, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: SettingsDesign.iconSize, height: SettingsDesign.iconSize)
             .background(
-                Color(nsColor: .controlBackgroundColor),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                tint.gradient,
+                in: RoundedRectangle(cornerRadius: SettingsDesign.iconCornerRadius, style: .continuous)
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.58), lineWidth: 0.5)
-            }
-            .shadow(color: Color.black.opacity(0.035), radius: 8, y: 3)
-        }
-        .accessibilityElement(children: .contain)
+            .accessibilityHidden(true)
     }
 }
 
+/// A labelled row: icon tile, title, optional one-line description, and the
+/// control on the trailing side. `LabeledContent` gives the native grouped
+/// alignment and wraps the control to its own line when the row is narrow.
 struct SettingsRow<Trailing: View>: View {
     let title: String
-    let description: String
+    let description: String?
     let systemImage: String
+    let tint: Color
+    /// Lets the description be selected and copied (an error to report).
+    let selectableDescription: Bool
     private let trailing: Trailing
 
     init(
         title: String,
-        description: String,
+        description: String? = nil,
         systemImage: String,
+        tint: Color = .gray,
+        selectableDescription: Bool = false,
         @ViewBuilder trailing: () -> Trailing
     ) {
         self.title = title
         self.description = description
         self.systemImage = systemImage
+        self.tint = tint
+        self.selectableDescription = selectableDescription
         self.trailing = trailing()
     }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 13) {
-                rowLabel
-                trailing
-            }
-
-            VStack(alignment: .leading, spacing: 11) {
-                rowLabel
-                trailing
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
+        LabeledContent {
+            trailing
+        } label: {
+            SettingsRowLabel(title: title, description: description, systemImage: systemImage,
+                             tint: tint, selectableDescription: selectableDescription)
         }
-        .padding(.horizontal, 15)
-        .padding(.vertical, 12)
-        .accessibilityElement(children: .contain)
-    }
-
-    private var rowLabel: some View {
-        HStack(alignment: .center, spacing: 13) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 26, height: 26)
-                .background(Color.primary.opacity(0.045), in: Circle())
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
-
-                Text(description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-struct SettingsDivider: View {
+struct SettingsRowLabel: View {
+    let title: String
+    let description: String?
+    let systemImage: String
+    var tint: Color = .gray
+    var selectableDescription = false
+
     var body: some View {
-        Divider()
-            .padding(.leading, 54)
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .foregroundStyle(.primary)
+                if let description, !description.isEmpty {
+                    let text = Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if selectableDescription {
+                        text.textSelection(.enabled)
+                    } else {
+                        text
+                    }
+                }
+            }
+        } icon: {
+            SettingsIcon(systemImage: systemImage, tint: tint)
+        }
     }
 }
 
+/// A short status line inside a section: information, a warning, or an error.
 struct SettingsMessage: View {
     enum Tone {
         case information
@@ -169,8 +187,8 @@ struct SettingsMessage: View {
         var systemImage: String {
             switch self {
             case .information: "info.circle"
-            case .warning: "exclamationmark.triangle"
-            case .error: "exclamationmark.octagon"
+            case .warning: "exclamationmark.triangle.fill"
+            case .error: "exclamationmark.octagon.fill"
             }
         }
     }
@@ -186,10 +204,60 @@ struct SettingsMessage: View {
         } icon: {
             Image(systemName: tone.systemImage)
         }
-        .font(.caption)
+        .font(.callout)
         .foregroundStyle(tone.color)
-        .padding(.horizontal, 15)
-        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A section footer in the native secondary style.
+struct SettingsFootnote: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The ring and boundary shared by every choosable tile in Settings.
+struct SettingsTileSelection: ViewModifier {
+    let isSelected: Bool
+    let accent: Color
+    let contrast: ColorSchemeContrast
+    var cornerRadius: CGFloat = SettingsDesign.tileCornerRadius
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        isSelected
+                            ? accent
+                            : Color.primary.opacity(SettingsDesign.tileBoundaryOpacity(for: contrast)),
+                        lineWidth: isSelected
+                            ? SettingsDesign.selectionLineWidth(for: contrast)
+                            : SettingsDesign.tileBoundaryLineWidth(for: contrast)
+                    )
+            }
+    }
+}
+
+extension View {
+    func settingsTileSelection(
+        isSelected: Bool,
+        accent: Color,
+        contrast: ColorSchemeContrast,
+        cornerRadius: CGFloat = SettingsDesign.tileCornerRadius
+    ) -> some View {
+        modifier(SettingsTileSelection(
+            isSelected: isSelected, accent: accent, contrast: contrast, cornerRadius: cornerRadius
+        ))
     }
 }

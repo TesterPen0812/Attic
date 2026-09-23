@@ -1,0 +1,555 @@
+import Foundation
+
+/// CIE Lab colour difference for sRGB colours (D65, ΔE76). Used to calibrate
+/// the tint steps and to map legacy gradients onto them; never at draw time.
+enum ColorDifference {
+    struct Lab: Equatable {
+        let l: Double
+        let a: Double
+        let b: Double
+    }
+
+    private static func linear(_ component: Double) -> Double {
+        component <= 0.04045
+            ? component / 12.92
+            : pow((component + 0.055) / 1.055, 2.4)
+    }
+
+    static func lab(_ color: AtticThemeColor) -> Lab {
+        let r = linear(min(max(color.red, 0), 1))
+        let g = linear(min(max(color.green, 0), 1))
+        let b = linear(min(max(color.blue, 0), 1))
+        // sRGB (D65) to XYZ, then relative to the D65 white point.
+        let x = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047
+        let y = (0.2126729 * r + 0.7151522 * g + 0.0721750 * b) / 1.00000
+        let z = (0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883
+        func f(_ t: Double) -> Double {
+            let delta = 6.0 / 29.0
+            return t > pow(delta, 3)
+                ? cbrt(t)
+                : t / (3 * delta * delta) + 4.0 / 29.0
+        }
+        let fx = f(x), fy = f(y), fz = f(z)
+        return Lab(l: 116 * fy - 16, a: 500 * (fx - fy), b: 200 * (fy - fz))
+    }
+
+    static func deltaE76(_ first: AtticThemeColor, _ second: AtticThemeColor) -> Double {
+        let lhs = lab(first)
+        let rhs = lab(second)
+        return sqrt(pow(lhs.l - rhs.l, 2) + pow(lhs.a - rhs.a, 2) + pow(lhs.b - rhs.b, 2))
+    }
+}
+
+/// One point of the Tint gradient, top (0) to bottom (1) of the panel. The
+/// drawn gradient and the readability model both read the same stops, so
+/// what is tested is what is drawn.
+struct PanelTintStop: Equatable, Sendable {
+    let opacity: Double
+    let location: Double
+}
+
+/// How far down the panel the Tint reaches, as a fraction of its height.
+/// One setting for both kinds of Tint; readability does not depend on it,
+/// because every step is judged at the top edge, where the Tint is strongest
+/// and the opacity only falls from there.
+enum PanelTintLength {
+    static let range: ClosedRange<Double> = 0.3...1.0
+    /// The full height: the long, Siri-like fade.
+    static let defaultValue = 1.0
+
+    static func clamped(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultValue }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+}
+
+/// Original's Tint: a neutral shade (black in Dark, white in Light) shaped
+/// like the macOS 27 Siri panel: nearly opaque at the top, falling almost
+/// linearly to a quarter at the bottom.
+///
+/// On Solid, and below macOS 26, it is simply drawn over the surface and can
+/// only raise contrast. On native Glass and Frosted it *is* the readability
+/// layer (`AtticPanelSurfaceTreatment.usesShadeAsFoundation`): the glass is
+/// drawn bright, there is no flat foundation, and each height takes the
+/// darker of the step's ramp and a readability floor that relaxes from
+/// 4.75:1 at the top to Siri's level at the bottom (`readableFloor`).
+enum PanelNeutralShade {
+    /// Bold at the full length, fitted to a capture of the Siri panel over a
+    /// white page (brightness 5 at the top, about 100 at mid-height, about
+    /// 180 at the bottom, over bright Liquid Glass). Other steps scale the
+    /// opacities; the Length setting scales the locations.
+    static let profile: [PanelTintStop] = [
+        PanelTintStop(opacity: 0.98, location: 0.00),
+        PanelTintStop(opacity: 0.80, location: 0.25),
+        PanelTintStop(opacity: 0.57, location: 0.50),
+        PanelTintStop(opacity: 0.38, location: 0.75),
+        PanelTintStop(opacity: 0.25, location: 1.00)
+    ]
+
+    /// Where the drawn gradient samples the readable shade: every 5%.
+    static let sampleCount = 21
+
+    /// The worst-case contrast the shade must keep at a normalised height on
+    /// native Glass and Frosted: 4.75:1 at the top edge, relaxing linearly
+    /// to the bottom value, which is Siri's lower edge for Glass (about 2:1
+    /// for white text over a white page) and a little firmer for Frosted.
+    static func readableFloor(kind: AtticPanelSurfaceTreatment.Kind, at location: Double) -> Double {
+        let top = AtticPanelSurfaceTreatment.readableContrastTarget
+        let bottom = kind == .frosted ? 2.5 : 2.0
+        let y = min(max(location, 0), 1)
+        return top + (bottom - top) * y
+    }
+
+    static func strength(for level: PanelTintLevel) -> Double {
+        switch level {
+        case .off: 0
+        case .subtle: 0.35
+        case .vivid: 0.65
+        case .bold: 1
+        }
+    }
+
+    /// Black in Dark. In Light, a soft grey rather than white: the bright
+    /// glass already passes a light desktop almost untouched, so a white
+    /// shade vanished over light windows. Near-black text keeps about 11:1
+    /// on this grey.
+    static let lightShade = 0.84
+
+    static func color(for appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
+        let value = appearance == .dark ? 0.0 : lightShade
+        return AtticThemeColor(red: value, green: value, blue: value)
+    }
+
+    static func stops(level: PanelTintLevel, length: Double) -> [PanelTintStop] {
+        let strength = strength(for: level)
+        guard strength > 0 else { return [] }
+        let length = PanelTintLength.clamped(length)
+        return profile.map {
+            PanelTintStop(opacity: $0.opacity * strength, location: $0.location * length)
+        }
+    }
+
+    /// The step's ramp at a height, holding its last value below the length.
+    static func rampOpacity(level: PanelTintLevel, length: Double, at location: Double) -> Double {
+        let ramp = stops(level: level, length: length)
+        guard let first = ramp.first, let last = ramp.last else { return 0 }
+        let y = min(max(location, 0), 1)
+        if y <= first.location { return first.opacity }
+        if y >= last.location { return last.opacity }
+        for (lower, upper) in zip(ramp, ramp.dropFirst()) where y <= upper.location {
+            let span = upper.location - lower.location
+            guard span > 0 else { return upper.opacity }
+            return lower.opacity + (upper.opacity - lower.opacity) * (y - lower.location) / span
+        }
+        return last.opacity
+    }
+
+    /// The shade as the readability layer: at each sampled height, the more
+    /// opaque of the step's ramp and the least shade that
+    /// keeps both foregrounds at `readableFloor` over `underlay`.
+    static func readableStops(
+        level: PanelTintLevel,
+        length: Double,
+        kind: AtticPanelSurfaceTreatment.Kind,
+        palette: AtticPanelThemePalette,
+        appearance: AtticPanelThemeAppearance,
+        underlay: AtticThemeColor
+    ) -> [PanelTintStop] {
+        guard strength(for: level) > 0 else { return [] }
+        let pole = color(for: appearance)
+        return (0..<sampleCount).map { index in
+            let y = Double(index) / Double(sampleCount - 1)
+            let floor = readableFloor(kind: kind, at: y)
+            var lower = 0.0
+            var upper = 1.0
+            for _ in 0..<30 {
+                let middle = (lower + upper) / 2
+                let surface = underlay.mixed(with: pole, amount: middle)
+                if PanelTintCalibration.minimumForegroundContrast(palette: palette, over: surface) >= floor {
+                    upper = middle
+                } else {
+                    lower = middle
+                }
+            }
+            let opacity = max(rampOpacity(level: level, length: length, at: y), upper)
+            // Thousandths, rounded up so the stored stop stays readable.
+            return PanelTintStop(opacity: min((opacity * 1000).rounded(.up) / 1000, 1), location: y)
+        }
+    }
+}
+
+/// The coloured Tint of the custom palettes, calibrated so each step has the
+/// same perceived strength on every palette, mode and surface. Original is
+/// not in it: its Tint is `PanelNeutralShade`.
+///
+/// The wash is the palette's accent hue at full saturation, fading linearly
+/// from its top opacity at the top edge to nothing at the Tint length.
+/// `table` holds the tint-aware foundation and top opacities: for each cell
+/// the smallest whole-percent foundation at or above Tint Off that lets the
+/// wash hit its target ΔE76 while primary and secondary text keep at least
+/// `AtticPanelSurfaceTreatment.readableContrastTarget(kind:creditsNativeSurface:)` over the worst-case
+/// measured native-surface underlay. The table is generated by `solve` (see
+/// `Docs/Appearance-Model-2026-09.md`) and pinned by a unit test that
+/// recomputes every cell; nothing solves at draw time.
+enum PanelTintCalibration {
+    /// The palettes with a coloured Tint, in table order.
+    static var colouredThemes: [AtticPanelTheme] {
+        AtticPanelTheme.allCases.filter { !$0.usesNeutralTint }
+    }
+
+    /// HSV saturation of the wash colour.
+    static let saturation: Double = 0.85
+    /// HSV value of the wash colour per appearance.
+    static func value(for appearance: AtticPanelThemeAppearance) -> Double {
+        appearance == .dark ? 0.95 : 1.0
+    }
+
+    struct Cell: Equatable, Sendable {
+        /// Opacity of the readable foundation under the wash.
+        let foundationOpacity: Double
+        /// Opacity of the wash at the top edge.
+        let topOpacity: Double
+        /// ΔE76 the solved opacity actually produces at the top edge.
+        let colorDifference: Double
+        /// True when the readability floor, not the ΔE target, set the opacity.
+        let isClamped: Bool
+    }
+
+    struct Key: Hashable, Sendable {
+        let theme: AtticPanelTheme
+        let appearance: AtticPanelThemeAppearance
+        let kind: AtticPanelSurfaceTreatment.Kind
+    }
+
+    static func cell(
+        theme: AtticPanelTheme,
+        appearance: AtticPanelThemeAppearance,
+        kind: AtticPanelSurfaceTreatment.Kind,
+        level: PanelTintLevel
+    ) -> Cell? {
+        guard level != .off, !theme.usesNeutralTint else { return nil }
+        return table[Key(theme: theme, appearance: appearance, kind: kind)]?[level]
+    }
+
+    // MARK: Wash colour
+
+    /// The accent's hue at HSV saturation `saturation` and the appearance's
+    /// `value`: a saturated version of the palette accent so the wash reads
+    /// as colour, not as a lighter or darker surface.
+    static func washColor(
+        for palette: AtticPanelThemePalette,
+        appearance: AtticPanelThemeAppearance
+    ) -> AtticThemeColor {
+        let hue = hue(of: palette.accent)
+        return color(hue: hue, saturation: saturation, value: value(for: appearance))
+    }
+
+    static func hue(of color: AtticThemeColor) -> Double {
+        let maximum = max(color.red, color.green, color.blue)
+        let minimum = min(color.red, color.green, color.blue)
+        let delta = maximum - minimum
+        guard delta > 0 else { return 0 }
+        let sector: Double
+        if maximum == color.red {
+            sector = ((color.green - color.blue) / delta).truncatingRemainder(dividingBy: 6)
+        } else if maximum == color.green {
+            sector = (color.blue - color.red) / delta + 2
+        } else {
+            sector = (color.red - color.green) / delta + 4
+        }
+        let normalized = sector / 6
+        return normalized < 0 ? normalized + 1 : normalized
+    }
+
+    static func color(hue: Double, saturation: Double, value: Double) -> AtticThemeColor {
+        let h = (hue - floor(hue)) * 6
+        let sector = Int(floor(h))
+        let f = h - Double(sector)
+        let p = value * (1 - saturation)
+        let q = value * (1 - saturation * f)
+        let t = value * (1 - saturation * (1 - f))
+        switch sector {
+        case 0: return AtticThemeColor(red: value, green: t, blue: p)
+        case 1: return AtticThemeColor(red: q, green: value, blue: p)
+        case 2: return AtticThemeColor(red: p, green: value, blue: t)
+        case 3: return AtticThemeColor(red: p, green: q, blue: value)
+        case 4: return AtticThemeColor(red: t, green: p, blue: value)
+        default: return AtticThemeColor(red: value, green: p, blue: q)
+        }
+    }
+
+    // MARK: Composite model
+
+    /// The raw desktop extreme used by the pre-macOS-26 fallback path and by
+    /// tests that deliberately bypass the native-surface credit.
+    static func worstCaseBackdrop(for appearance: AtticPanelThemeAppearance) -> AtticThemeColor {
+        let value = appearance == .dark ? 1.0 : 0.0
+        return AtticThemeColor(red: value, green: value, blue: value)
+    }
+
+    /// The top-edge composite before the wash.
+    static func baseComposite(
+        palette: AtticPanelThemePalette,
+        foundationOpacity: Double,
+        backdrop: AtticThemeColor
+    ) -> AtticThemeColor {
+        backdrop.mixed(with: palette.opaqueSurface, amount: foundationOpacity)
+    }
+
+    static func tintedComposite(
+        base: AtticThemeColor,
+        wash: AtticThemeColor,
+        topOpacity: Double
+    ) -> AtticThemeColor {
+        base.mixed(with: wash, amount: topOpacity)
+    }
+
+    static func minimumForegroundContrast(
+        palette: AtticPanelThemePalette,
+        over color: AtticThemeColor
+    ) -> Double {
+        min(palette.primaryForeground.contrastRatio(with: color),
+            palette.secondaryForeground.contrastRatio(with: color))
+    }
+
+    // MARK: Solver (generation and tests only)
+
+    /// Solves one cell by walking whole-percent foundations from the Tint-Off
+    /// minimum upward. At each foundation it solves the wash opacity to the
+    /// target ΔE, then accepts the first combination that keeps both text
+    /// colours at or above the readability floor.
+    static func solve(
+        theme: AtticPanelTheme,
+        appearance: AtticPanelThemeAppearance,
+        kind: AtticPanelSurfaceTreatment.Kind,
+        palette: AtticPanelThemePalette,
+        level: PanelTintLevel,
+        minimumFoundationOpacity: Double,
+        creditsNativeSurface: Bool
+    ) -> Cell? {
+        guard let target = level.targetColorDifference else { return nil }
+        let floor = AtticPanelSurfaceTreatment.readableContrastTarget(
+            kind: kind, creditsNativeSurface: creditsNativeSurface
+        )
+        let backdrop = AtticPanelSurfaceTreatment.worstCaseUnderlay(
+            kind: kind,
+            appearance: appearance,
+            creditsNativeSurface: creditsNativeSurface
+        )
+        let wash = washColor(for: palette, appearance: appearance)
+        let startPercent = Int(ceil(minimumFoundationOpacity * 100 - 0.000_000_1))
+
+        for percent in startPercent...100 {
+            let foundation = Double(percent) / 100
+            let base = baseComposite(
+                palette: palette,
+                foundationOpacity: foundation,
+                backdrop: backdrop
+            )
+            func difference(_ opacity: Double) -> Double {
+                ColorDifference.deltaE76(base, tintedComposite(base: base, wash: wash, topOpacity: opacity))
+            }
+
+            var lower = 0.0
+            var upper = 1.0
+            if difference(1) >= target {
+                for _ in 0..<40 {
+                    let middle = (lower + upper) / 2
+                    if difference(middle) < target { lower = middle } else { upper = middle }
+                }
+            }
+            // Judge readability at the opacity the table stores, not the
+            // unrounded one: rounding up can otherwise cross the floor.
+            let storedOpacity = (upper * 1000).rounded() / 1000
+            let tinted = tintedComposite(base: base, wash: wash, topOpacity: storedOpacity)
+            if minimumForegroundContrast(palette: palette, over: tinted) >= floor {
+                return Cell(
+                    foundationOpacity: foundation,
+                    topOpacity: storedOpacity,
+                    colorDifference: (difference(storedOpacity) * 100).rounded() / 100,
+                    isClamped: false
+                )
+            }
+        }
+
+        // Preserve the historical clamp fallback for a future pathological
+        // palette. The generated credited table is required to contain none.
+        let foundation = 1.0
+        let base = baseComposite(palette: palette, foundationOpacity: foundation, backdrop: backdrop)
+        func difference(_ opacity: Double) -> Double {
+            ColorDifference.deltaE76(base, tintedComposite(base: base, wash: wash, topOpacity: opacity))
+        }
+        func contrast(_ opacity: Double) -> Double {
+            minimumForegroundContrast(palette: palette,
+                                      over: tintedComposite(base: base, wash: wash, topOpacity: opacity))
+        }
+        var lower = 0.0
+        var targetOpacity = 1.0
+        if difference(1) >= target {
+            var upper = 1.0
+            for _ in 0..<40 {
+                let middle = (lower + upper) / 2
+                if difference(middle) < target { lower = middle } else { upper = middle }
+            }
+            targetOpacity = upper
+        }
+        var low = 0.0
+        var high = targetOpacity
+        if contrast(targetOpacity) < floor {
+            for _ in 0..<40 {
+                let middle = (low + high) / 2
+                if contrast(middle) >= floor { low = middle } else { high = middle }
+            }
+        } else {
+            low = targetOpacity
+        }
+        let stored = (low * 1000).rounded(.down) / 1000
+        return Cell(
+            foundationOpacity: foundation,
+            topOpacity: stored,
+            colorDifference: (difference(stored) * 100).rounded() / 100,
+            isClamped: true
+        )
+    }
+
+    static func solveTable() -> [Key: [PanelTintLevel: Cell]] {
+        var table: [Key: [PanelTintLevel: Cell]] = [:]
+        for theme in colouredThemes {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for kind in AtticPanelSurfaceTreatment.Kind.allCases {
+                    let palette = theme.palette(for: appearance)
+                    let minimum = kind == .solid ? 1 : AtticPanelSurfaceTreatment.minimumReadableOpacity(
+                        palette: palette, appearance: appearance, kind: kind, creditsNativeSurface: true
+                    )
+                    var cells: [PanelTintLevel: Cell] = [:]
+                    for level in PanelTintLevel.allCases {
+                        if let cell = solve(
+                            theme: theme,
+                            appearance: appearance,
+                            kind: kind,
+                            palette: palette,
+                            level: level,
+                            minimumFoundationOpacity: minimum,
+                            creditsNativeSurface: true
+                        ) {
+                            cells[level] = cell
+                        }
+                    }
+                    table[Key(theme: theme, appearance: appearance, kind: kind)] = cells
+                }
+            }
+        }
+        return table
+    }
+
+    /// Swift source for `table` and `clampedCellDescriptions`, in the order
+    /// the file lists them.
+    static func swiftSource(for table: [Key: [PanelTintLevel: Cell]]) -> String {
+        var lines: [String] = ["    static let table: [Key: [PanelTintLevel: Cell]] = ["]
+        var clamped: [String] = []
+        for theme in colouredThemes {
+            for appearance in AtticPanelThemeAppearance.allCases {
+                for kind in AtticPanelSurfaceTreatment.Kind.allCases {
+                    let key = Key(theme: theme, appearance: appearance, kind: kind)
+                    guard let cells = table[key] else { continue }
+                    let levels = [PanelTintLevel.subtle, .vivid, .bold].compactMap { level -> String? in
+                        guard let cell = cells[level] else { return nil }
+                        if cell.isClamped {
+                            clamped.append("\(theme.rawValue) \(appearance.rawValue) \(kind.rawValue) \(level.rawValue)")
+                        }
+                        return String(
+                            format: ".%@: c(%.2f, %.3f, %.2f%@)",
+                            level.rawValue,
+                            cell.foundationOpacity,
+                            cell.topOpacity,
+                            cell.colorDifference,
+                            cell.isClamped ? ", clamped: true" : ""
+                        )
+                    }
+                    lines.append(String(
+                        format: "        k(.%@, .%@, .%@): [%@],",
+                        theme.rawValue,
+                        appearance.rawValue,
+                        kind.rawValue,
+                        levels.joined(separator: ", ")
+                    ))
+                }
+            }
+        }
+        lines.append("    ]")
+        lines.append("")
+        lines.append("    static let clampedCellDescriptions: [String] = [")
+        lines.append(contentsOf: clamped.map { "        \"\($0)\"," })
+        lines.append("    ]")
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: Generated table
+
+    private static func k(
+        _ theme: AtticPanelTheme,
+        _ appearance: AtticPanelThemeAppearance,
+        _ kind: AtticPanelSurfaceTreatment.Kind
+    ) -> Key {
+        Key(theme: theme, appearance: appearance, kind: kind)
+    }
+
+    private static func c(
+        _ foundationOpacity: Double,
+        _ topOpacity: Double,
+        _ colorDifference: Double,
+        clamped: Bool = false
+    ) -> Cell {
+        Cell(
+            foundationOpacity: foundationOpacity,
+            topOpacity: topOpacity,
+            colorDifference: colorDifference,
+            isClamped: clamped
+        )
+    }
+
+    // GENERATED by PanelTintCalibration.solveTable(); do not edit by hand.
+    // Regenerate by running PanelTintCalibrationTests with
+    // ATTIC_PRINT_TINT_TABLE=1 and pasting the printed source here.
+    static let table: [Key: [PanelTintLevel: Cell]] = [
+        k(.midnightCobalt, .light, .solid): [.subtle: c(1.00, 0.033, 2.96), .vivid: c(1.00, 0.078, 7.01), .bold: c(1.00, 0.133, 11.99)],
+        k(.midnightCobalt, .light, .glass): [.subtle: c(0.01, 0.032, 2.97), .vivid: c(0.01, 0.076, 7.02), .bold: c(0.01, 0.130, 11.96)],
+        k(.midnightCobalt, .light, .frosted): [.subtle: c(0.18, 0.033, 2.98), .vivid: c(0.18, 0.078, 7.02), .bold: c(0.19, 0.134, 12.00)],
+        k(.midnightCobalt, .dark, .solid): [.subtle: c(1.00, 0.024, 3.03), .vivid: c(1.00, 0.056, 6.97), .bold: c(1.00, 0.102, 11.95)],
+        k(.midnightCobalt, .dark, .glass): [.subtle: c(0.10, 0.030, 2.95), .vivid: c(0.10, 0.071, 7.00), .bold: c(0.10, 0.121, 11.95)],
+        k(.midnightCobalt, .dark, .frosted): [.subtle: c(0.31, 0.031, 2.99), .vivid: c(0.31, 0.072, 6.95), .bold: c(0.31, 0.124, 11.99)],
+        k(.porcelainVapor, .light, .solid): [.subtle: c(1.00, 0.043, 3.03), .vivid: c(1.00, 0.100, 7.00), .bold: c(1.00, 0.173, 11.98)],
+        k(.porcelainVapor, .light, .glass): [.subtle: c(0.01, 0.040, 2.97), .vivid: c(0.01, 0.097, 7.02), .bold: c(0.01, 0.171, 11.99)],
+        k(.porcelainVapor, .light, .frosted): [.subtle: c(0.17, 0.041, 2.97), .vivid: c(0.17, 0.099, 6.99), .bold: c(0.17, 0.175, 11.98)],
+        k(.porcelainVapor, .dark, .solid): [.subtle: c(1.00, 0.034, 3.04), .vivid: c(1.00, 0.081, 7.02), .bold: c(1.00, 0.143, 12.00)],
+        k(.porcelainVapor, .dark, .glass): [.subtle: c(0.11, 0.046, 3.03), .vivid: c(0.12, 0.108, 6.98), .bold: c(0.13, 0.191, 12.02)],
+        k(.porcelainVapor, .dark, .frosted): [.subtle: c(0.35, 0.045, 2.98), .vivid: c(0.36, 0.108, 7.00), .bold: c(0.38, 0.190, 12.00)],
+        k(.smokedUmber, .light, .solid): [.subtle: c(1.00, 0.040, 2.99), .vivid: c(1.00, 0.093, 6.98), .bold: c(1.00, 0.159, 12.01)],
+        k(.smokedUmber, .light, .glass): [.subtle: c(0.01, 0.032, 2.97), .vivid: c(0.01, 0.075, 6.97), .bold: c(0.01, 0.129, 11.99)],
+        k(.smokedUmber, .light, .frosted): [.subtle: c(0.18, 0.034, 3.04), .vivid: c(0.18, 0.078, 6.98), .bold: c(0.18, 0.134, 12.00)],
+        k(.smokedUmber, .dark, .solid): [.subtle: c(1.00, 0.023, 2.95), .vivid: c(1.00, 0.054, 7.06), .bold: c(1.00, 0.093, 12.00)],
+        k(.smokedUmber, .dark, .glass): [.subtle: c(0.11, 0.037, 3.03), .vivid: c(0.13, 0.085, 7.01), .bold: c(0.16, 0.144, 12.00)],
+        k(.smokedUmber, .dark, .frosted): [.subtle: c(0.33, 0.036, 3.03), .vivid: c(0.35, 0.083, 7.03), .bold: c(0.38, 0.140, 12.01)],
+        k(.electricBlue, .light, .solid): [.subtle: c(1.00, 0.036, 2.96), .vivid: c(1.00, 0.085, 7.00), .bold: c(1.00, 0.146, 12.02)],
+        k(.electricBlue, .light, .glass): [.subtle: c(0.01, 0.037, 3.03), .vivid: c(0.01, 0.086, 6.97), .bold: c(0.01, 0.150, 12.00)],
+        k(.electricBlue, .light, .frosted): [.subtle: c(0.17, 0.037, 2.96), .vivid: c(0.17, 0.088, 6.98), .bold: c(0.17, 0.153, 12.00)],
+        k(.electricBlue, .dark, .solid): [.subtle: c(1.00, 0.028, 3.05), .vivid: c(1.00, 0.068, 6.98), .bold: c(1.00, 0.122, 12.00)],
+        k(.electricBlue, .dark, .glass): [.subtle: c(0.10, 0.041, 2.98), .vivid: c(0.10, 0.097, 6.99), .bold: c(0.10, 0.168, 11.97)],
+        k(.electricBlue, .dark, .frosted): [.subtle: c(0.31, 0.041, 2.99), .vivid: c(0.32, 0.097, 7.02), .bold: c(0.32, 0.168, 11.99)],
+        k(.seaGlass, .light, .solid): [.subtle: c(1.00, 0.038, 2.99), .vivid: c(1.00, 0.090, 7.02), .bold: c(1.00, 0.155, 11.97)],
+        k(.seaGlass, .light, .glass): [.subtle: c(0.01, 0.030, 3.02), .vivid: c(0.01, 0.070, 6.96), .bold: c(0.01, 0.123, 12.01)],
+        k(.seaGlass, .light, .frosted): [.subtle: c(0.17, 0.031, 3.01), .vivid: c(0.17, 0.073, 7.01), .bold: c(0.17, 0.127, 11.98)],
+        k(.seaGlass, .dark, .solid): [.subtle: c(1.00, 0.024, 2.97), .vivid: c(1.00, 0.058, 7.00), .bold: c(1.00, 0.102, 11.96)],
+        k(.seaGlass, .dark, .glass): [.subtle: c(0.12, 0.034, 2.98), .vivid: c(0.15, 0.080, 6.97), .bold: c(0.20, 0.139, 12.03)],
+        k(.seaGlass, .dark, .frosted): [.subtle: c(0.35, 0.034, 3.02), .vivid: c(0.38, 0.079, 7.00), .bold: c(0.42, 0.136, 11.99)],
+        k(.amethyst, .light, .solid): [.subtle: c(1.00, 0.024, 3.03), .vivid: c(1.00, 0.055, 6.97), .bold: c(1.00, 0.094, 11.96)],
+        k(.amethyst, .light, .glass): [.subtle: c(0.02, 0.022, 2.94), .vivid: c(0.02, 0.052, 6.96), .bold: c(0.03, 0.090, 12.05)],
+        k(.amethyst, .light, .frosted): [.subtle: c(0.18, 0.023, 3.02), .vivid: c(0.19, 0.053, 6.96), .bold: c(0.20, 0.091, 11.96)],
+        k(.amethyst, .dark, .solid): [.subtle: c(1.00, 0.020, 2.98), .vivid: c(1.00, 0.048, 7.04), .bold: c(1.00, 0.083, 11.97)],
+        k(.amethyst, .dark, .glass): [.subtle: c(0.10, 0.024, 2.97), .vivid: c(0.10, 0.056, 6.96), .bold: c(0.10, 0.096, 11.97)],
+        k(.amethyst, .dark, .frosted): [.subtle: c(0.32, 0.024, 2.97), .vivid: c(0.32, 0.057, 7.06), .bold: c(0.32, 0.097, 12.04)],
+    ]
+
+    static let clampedCellDescriptions: [String] = [
+    ]
+}
