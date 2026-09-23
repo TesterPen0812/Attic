@@ -472,8 +472,10 @@ final class AtticUITests: XCTestCase {
                 waitFor("Length is adjustable while a Tint step is on") { tintLength.isEnabled }
                 // XCUITest reports a macOS slider's raw value (0.3...1), not
                 // the spoken description; accept either. The drag is
-                // pixel-positioned, so it can stop a few percent short of
-                // either end (CI read 33% and 97.6%).
+                // pixel-positioned and lands differently from run to run
+                // (CI has read 0.33, 0.87 and 0.976 for the two ends), so
+                // check that each drag clearly moves the length, not where
+                // it lands exactly.
                 func length() -> Double? {
                     if let number = tintLength.value as? NSNumber { return number.doubleValue }
                     guard let text = tintLength.value as? String else { return nil }
@@ -482,13 +484,14 @@ final class AtticUITests: XCTestCase {
                     return percent / 100
                 }
                 tintLength.adjust(toNormalizedSliderPosition: 0)
-                waitFor("Length moves to its shortest; it reads \(String(describing: tintLength.value))") {
-                    length().map { (0.3...0.35).contains($0) } ?? false
+                waitFor("Length moves toward its shortest; it reads \(String(describing: tintLength.value))") {
+                    length().map { $0 <= 0.45 } ?? false
                 }
+                let short = length() ?? 0
                 recordPanel("Tint-\(level)-Short")
                 tintLength.adjust(toNormalizedSliderPosition: 1)
-                waitFor("Length moves back to its longest; it reads \(String(describing: tintLength.value))") {
-                    length().map { $0 >= 0.95 } ?? false
+                waitFor("Length moves toward its longest; it reads \(String(describing: tintLength.value))") {
+                    length().map { $0 >= 0.8 && $0 - short >= 0.35 } ?? false
                 }
             }
             recordPanel("Tint-\(level)")
