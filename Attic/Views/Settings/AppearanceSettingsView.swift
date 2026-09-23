@@ -93,10 +93,12 @@ struct AppearanceSettingsView: View {
                     palette: palette,
                     appearance: appearance,
                     accent: accent,
-                    glassFoundation: settings.panelTheme.surfaceTreatment(
-                        appearance: appearance, surface: .glass, tint: .off,
-                        reduceTransparency: false
-                    ).foundationOpacity
+                    treatment: { [theme = settings.panelTheme, appearance] style in
+                        theme.surfaceTreatment(
+                            appearance: appearance, surface: style, tint: .off,
+                            reduceTransparency: false
+                        )
+                    }
                 )
 
                 VStack(alignment: .leading, spacing: 10) {

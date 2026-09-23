@@ -188,11 +188,25 @@ Tint and Tint length:
 
 | retired state | current result |
 |---|---|
-| Original, `panelGlassStyle == clear`, missing or an unknown spelling, and translucent | neutral Tint **Bold**, length 100% (the nearest step to the old Clear crown) |
+| Original, `panelGlassStyle == clear`, missing or an unknown spelling, translucent, and mode Dark or System | neutral Tint **Bold**, length 100% (the nearest step to the old Clear crown) |
+| Original, Clear, mode Light | as "Original otherwise" below: the old loader resolved Clear to Frosted outside Dark, which drew the ordinary gradient at the saved coverage |
 | Original otherwise, coverage > 0 (missing = old default 0.55) | neutral Tint **Bold**, length = coverage (the old gradient was that same neutral pole at 0.82) |
 | Original otherwise, coverage 0 | Tint Off |
 | custom palette, coverage 0 | Tint Off |
-| custom palette, coverage > 0 | the step matching the old gradient's Light-mode ΔE76 (thresholds in `PanelTintLevel`), length = coverage |
+| custom palette, coverage > 0 | the step matching the old gradient's top-edge ΔE76 (thresholds in `PanelTintLevel`) in the saved mode; System, or no stored mode, takes the stronger of Light and Dark; length = coverage |
+
+The mode matters for the custom palettes. In Light the old white pole barely moved their near-white surfaces (ΔE under 3, except Electric Blue at 5.6); in Dark the black pole over the dark surface showed on every palette. With the default theme colour and coverage:
+
+| palette | Light | Dark | System |
+|---|---|---|---|
+| Midnight Cobalt | Off (1.7) | Bold (10.7) | Bold |
+| Porcelain Vapor | Off (1.5) | Vivid (5.5) | Vivid |
+| Smoked Umber | Off (1.7) | Subtle (3.2) | Subtle |
+| Electric Blue | Vivid (5.6) | Vivid (6.1) | Vivid |
+| Sea Glass | Off (1.5) | Subtle (4.6) | Subtle |
+| Amethyst | Off (0.6) | Vivid (5.2) | Vivid |
+
+An earlier version of this mapping measured Light only, so Dark users of every palette but Electric Blue would have lost a visible gradient (found in review, September 2026).
 
 A stored custom gradient colour on Original was only mixed 12% into the neutral pole, so it also maps to the neutral shade. Coverage is clamped to the slider's 30–100%. Preview installs of this branch are already at version 2 and are not migrated again: an Original user who had picked a (blue) Tint step now sees the neutral shade at that step, at the default full length. This is a change from the previous mapping, which measured Original's gradient over its opaque Light surface (white on white, ΔE ≈ 0) and so put almost every Original user on Tint Off, although in Dark and on translucent surfaces they saw a clear neutral shade.
 

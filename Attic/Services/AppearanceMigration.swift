@@ -44,6 +44,8 @@ enum AppearanceMigration {
         var gradientColorHex: String?
         var theme: AtticPanelTheme?
         var hasAppearancePreference = false
+        /// The saved Light / Dark / System choice; nil means System.
+        var appearance: AppearancePreference?
 
         /// No stored appearance at all: a fresh install, which gets the new
         /// defaults rather than a mapping of "nothing".
@@ -74,7 +76,9 @@ enum AppearanceMigration {
         if let raw = defaults.string(forKey: Key.theme) {
             legacy.theme = AtticPanelTheme(rawValue: raw) ?? .defaultTheme
         }
-        legacy.hasAppearancePreference = defaults.string(forKey: Key.appearance) != nil
+        let appearance = defaults.string(forKey: Key.appearance)
+        legacy.hasAppearancePreference = appearance != nil
+        legacy.appearance = appearance.flatMap(AppearancePreference.init(rawValue:))
         return legacy
     }
 
@@ -105,7 +109,10 @@ enum AppearanceMigration {
             // white in Light) at 0.82 fading to the coverage, and the old
             // Clear surface drew the same crown over the full height. Both
             // are exactly Original's neutral Tint at Bold, so keep the look.
-            if legacy.isTranslucent != false, glassStyle == .clear {
+            // Clear drew the crown only in Dark; in Light the old loader
+            // resolved it to Frosted with the ordinary gradient, so an
+            // explicit Light user falls through to the coverage.
+            if legacy.isTranslucent != false, glassStyle == .clear, legacy.appearance != .light {
                 return Resolved(surface: surface, tint: .bold, tintLength: 1)
             }
             guard coverage.isFinite, coverage > 0 else {
@@ -117,7 +124,8 @@ enum AppearanceMigration {
         let tint = legacyTintLevel(
             theme: theme,
             gradientCoverage: legacy.gradientCoverage,
-            gradientColorHex: legacy.gradientColorHex
+            gradientColorHex: legacy.gradientColorHex,
+            appearance: legacy.appearance
         )
         guard tint != .off else { return Resolved(surface: surface, tint: .off) }
         return Resolved(surface: surface, tint: tint, tintLength: PanelTintLength.clamped(coverage))
@@ -128,16 +136,25 @@ enum AppearanceMigration {
 
     /// The Tint step matching what the old gradient actually showed: the
     /// old top-edge colour difference (the pole mixed with 12% of the tint,
-    /// drawn at 0.82 over the surface) for the palette in Light, on the same
-    /// ΔE76 scale the new steps are calibrated to. Coverage 0 was "off".
+    /// drawn at 0.82 over the surface) on the same ΔE76 scale the new steps
+    /// are calibrated to, in the saved appearance. System saw both modes, so
+    /// it keeps the stronger. Coverage 0 was "off".
     static func legacyTintLevel(
         theme: AtticPanelTheme,
         gradientCoverage: Double?,
-        gradientColorHex: String?
+        gradientColorHex: String?,
+        appearance: AppearancePreference? = nil
     ) -> PanelTintLevel {
         let coverage = gradientCoverage ?? legacyDefaultGradientCoverage
         guard coverage.isFinite, coverage > 0 else { return .off }
-        let difference = legacyGradientColorDifference(theme: theme, gradientColorHex: gradientColorHex)
+        let appearances: [AtticPanelThemeAppearance] = switch appearance {
+        case .light: [.light]
+        case .dark: [.dark]
+        case .system, nil: [.light, .dark]
+        }
+        let difference = appearances
+            .map { legacyGradientColorDifference(theme: theme, gradientColorHex: gradientColorHex, appearance: $0) }
+            .max() ?? 0
         return PanelTintLevel.level(forLegacyColorDifference: difference)
     }
 
@@ -146,11 +163,13 @@ enum AppearanceMigration {
 
     static func legacyGradientColorDifference(
         theme: AtticPanelTheme,
-        gradientColorHex: String?
+        gradientColorHex: String?,
+        appearance: AtticPanelThemeAppearance = .light
     ) -> Double {
-        let palette = theme.palette(for: AtticPanelThemeAppearance.light)
+        let palette = theme.palette(for: appearance)
         let tint = gradientColorHex.flatMap { AtticThemeColor(hex: $0) } ?? palette.surfaceTint
-        let pole = AtticThemeColor(red: 1, green: 1, blue: 1)
+        let value = appearance == .dark ? 0.0 : 1.0
+        let pole = AtticThemeColor(red: value, green: value, blue: value)
         let gradientColor = pole.mixed(with: tint, amount: legacyGradientTintMix)
         let base = palette.opaqueSurface
         let top = base.mixed(with: gradientColor, amount: legacyGradientTopOpacity)

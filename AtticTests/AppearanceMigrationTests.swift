@@ -76,24 +76,40 @@ final class AppearanceMigrationTests: XCTestCase {
     }
 
     func testThemeGradientsMapToTheStepTheyActuallyShowed() {
-        // The 12% pole mix at 0.82 barely moved most palettes' own surface,
-        // which is why the gradient looked invisible: those users keep Tint
-        // off. Electric Blue's saturated surface tint was the one theme
-        // colour that visibly showed in Light (ΔE about 5.6), so its users
-        // keep a Vivid wash rather than losing what they saw.
-        for theme in AtticPanelTheme.allCases {
-            let difference = AppearanceMigration.legacyGradientColorDifference(theme: theme, gradientColorHex: nil)
-            let expected: PanelTintLevel = theme == .electricBlue ? .vivid : .off
-            if theme == .electricBlue {
-                XCTAssertEqual(difference, 5.6, accuracy: 0.3, "\(theme.rawValue) ΔE \(difference)")
-            } else {
-                XCTAssertLessThan(difference, 3, "\(theme.rawValue) ΔE \(difference)")
-            }
-            XCTAssertEqual(AppearanceMigration.legacyTintLevel(theme: theme, gradientCoverage: 0.55,
-                                                              gradientColorHex: ""), expected, theme.rawValue)
+        // In Light the white pole mixed with 12% of the tint barely moved
+        // most palettes' near-white surface, so the gradient looked
+        // invisible; only Electric Blue's saturated tint showed (ΔE about
+        // 5.6). In Dark the black pole over the dark surface showed on every
+        // palette, Midnight Cobalt most (ΔE about 10.7). System users saw
+        // both and keep the stronger.
+        let light: [AtticPanelTheme: PanelTintLevel] = [
+            .midnightCobalt: .off, .porcelainVapor: .off, .smokedUmber: .off,
+            .electricBlue: .vivid, .seaGlass: .off, .amethyst: .off
+        ]
+        let dark: [AtticPanelTheme: PanelTintLevel] = [
+            .midnightCobalt: .bold, .porcelainVapor: .vivid, .smokedUmber: .subtle,
+            .electricBlue: .vivid, .seaGlass: .subtle, .amethyst: .vivid
+        ]
+        XCTAssertEqual(Set(light.keys), Set(PanelTintCalibration.colouredThemes))
+        XCTAssertEqual(AppearanceMigration.legacyGradientColorDifference(theme: .electricBlue, gradientColorHex: nil),
+                       5.6, accuracy: 0.3)
+        XCTAssertEqual(AppearanceMigration.legacyGradientColorDifference(theme: .midnightCobalt, gradientColorHex: nil,
+                                                                        appearance: .dark),
+                       10.7, accuracy: 0.3)
+        func level(_ theme: AtticPanelTheme, _ appearance: AppearancePreference?, coverage: Double? = 0.55) -> PanelTintLevel {
+            AppearanceMigration.legacyTintLevel(theme: theme, gradientCoverage: coverage,
+                                                gradientColorHex: nil, appearance: appearance)
+        }
+        for theme in PanelTintCalibration.colouredThemes {
+            let lightLevel = light[theme]!
+            let darkLevel = dark[theme]!
+            let stronger = PanelTintLevel.allCases.last { $0 == lightLevel || $0 == darkLevel }!
+            XCTAssertEqual(level(theme, .light), lightLevel, theme.rawValue)
+            XCTAssertEqual(level(theme, .dark), darkLevel, theme.rawValue)
+            XCTAssertEqual(level(theme, .system), stronger, theme.rawValue)
+            XCTAssertEqual(level(theme, nil), stronger, "\(theme.rawValue): no stored mode was System")
             // A missing coverage key meant the old default of 0.55.
-            XCTAssertEqual(AppearanceMigration.legacyTintLevel(theme: theme, gradientCoverage: nil,
-                                                              gradientColorHex: nil), expected, theme.rawValue)
+            XCTAssertEqual(level(theme, .dark, coverage: nil), darkLevel, theme.rawValue)
         }
     }
 
@@ -101,11 +117,11 @@ final class AppearanceMigrationTests: XCTestCase {
         // A saturated custom colour did show: pure red over the white
         // Original surface is a clearly visible wash, a near-white one is not.
         XCTAssertEqual(AppearanceMigration.legacyTintLevel(theme: .original, gradientCoverage: 0.55,
-                                                          gradientColorHex: "FAFAFF"), .off)
+                                                          gradientColorHex: "FAFAFF", appearance: .light), .off)
         let red = AppearanceMigration.legacyGradientColorDifference(theme: .original, gradientColorHex: "FF0000")
         XCTAssertGreaterThanOrEqual(red, 3)
         XCTAssertEqual(AppearanceMigration.legacyTintLevel(theme: .original, gradientCoverage: 1,
-                                                          gradientColorHex: "FF0000"),
+                                                          gradientColorHex: "FF0000", appearance: .light),
                        PanelTintLevel.level(forLegacyColorDifference: red))
         // Black, the other extreme, also showed clearly.
         let black = AppearanceMigration.legacyGradientColorDifference(theme: .original, gradientColorHex: "000000")
@@ -120,7 +136,11 @@ final class AppearanceMigrationTests: XCTestCase {
         XCTAssertEqual(PanelTintLevel.level(forLegacyColorDifference: .nan), .off)
         // An unparseable custom colour falls back to the theme colour.
         XCTAssertEqual(AppearanceMigration.legacyTintLevel(theme: .amethyst, gradientCoverage: 0.55,
-                                                          gradientColorHex: "not-a-colour"), .off)
+                                                          gradientColorHex: "not-a-colour", appearance: .light), .off)
+        XCTAssertEqual(AppearanceMigration.legacyTintLevel(theme: .amethyst, gradientCoverage: 0.55,
+                                                          gradientColorHex: "not-a-colour", appearance: .dark),
+                       AppearanceMigration.legacyTintLevel(theme: .amethyst, gradientCoverage: 0.55,
+                                                          gradientColorHex: nil, appearance: .dark))
     }
 
     // MARK: Against UserDefaults
@@ -209,33 +229,45 @@ final class AppearanceMigrationTests: XCTestCase {
             let translucent: Bool?
             let style: String?
             let theme: AtticPanelTheme
+            var mode: String? = nil
+            var coverage = 0.55
             let expected: Resolved
         }
-        // Every case stores the old default coverage of 0.55. Original's old
-        // gradient was a neutral shade to that coverage and its Clear surface
-        // the same crown over the full height, so Original keeps a neutral
-        // Bold Tint; the custom palettes keep the step their colour showed.
+        // Unless stated, a case stores the old default coverage of 0.55 and
+        // no mode (System). Original's old gradient was a neutral shade to
+        // that coverage and its Clear surface (Dark only) the same crown over
+        // the full height, so Original keeps a neutral Bold Tint; the custom
+        // palettes keep the step their colour showed in the modes they saw.
         let cases: [Case] = [
             Case(translucent: false, style: "clear", theme: .original, expected: Resolved(surface: .solid, tint: .bold, tintLength: 0.55)),
-            Case(translucent: false, style: "frosted", theme: .amethyst, expected: Resolved(surface: .solid, tint: .off)),
+            Case(translucent: false, style: "frosted", theme: .amethyst, expected: Resolved(surface: .solid, tint: .vivid, tintLength: 0.55)),
             Case(translucent: true, style: "frosted", theme: .original, expected: Resolved(surface: .glass, tint: .bold, tintLength: 0.55)),
             Case(translucent: true, style: "stable", theme: .original, expected: Resolved(surface: .frosted, tint: .bold, tintLength: 0.55)),
-            Case(translucent: true, style: "liveStable", theme: .midnightCobalt, expected: Resolved(surface: .frosted, tint: .off)),
+            Case(translucent: true, style: "liveStable", theme: .midnightCobalt, expected: Resolved(surface: .frosted, tint: .bold, tintLength: 0.55)),
             Case(translucent: true, style: "clear", theme: .original, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
-            // Electric Blue's theme gradient was the one that visibly showed.
             Case(translucent: true, style: "clear", theme: .electricBlue, expected: Resolved(surface: .glass, tint: .vivid, tintLength: 0.55)),
             Case(translucent: nil, style: nil, theme: .original, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
-            Case(translucent: nil, style: "unknown-style", theme: .seaGlass, expected: Resolved(surface: .glass, tint: .off))
+            Case(translucent: nil, style: "unknown-style", theme: .seaGlass, expected: Resolved(surface: .glass, tint: .subtle, tintLength: 0.55)),
+            // A Dark user's gradient is measured in Dark, a Light user's in Light.
+            Case(translucent: false, style: "frosted", theme: .midnightCobalt, mode: "dark", expected: Resolved(surface: .solid, tint: .bold, tintLength: 0.55)),
+            Case(translucent: false, style: "frosted", theme: .midnightCobalt, mode: "light", expected: Resolved(surface: .solid, tint: .off)),
+            // Clear drew the crown only in Dark; Light resolved it to Frosted
+            // with the ordinary gradient at the saved coverage.
+            Case(translucent: true, style: "clear", theme: .original, mode: "light", coverage: 0, expected: Resolved(surface: .glass, tint: .off)),
+            Case(translucent: true, style: "clear", theme: .original, mode: "light", coverage: 0.7, expected: Resolved(surface: .glass, tint: .bold, tintLength: 0.7)),
+            Case(translucent: true, style: "clear", theme: .original, mode: "dark", coverage: 0, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
+            Case(translucent: true, style: "clear", theme: .original, mode: "system", coverage: 0, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1))
         ]
         for testCase in cases {
             let (defaults, suite) = try makeDefaults()
             defer { defaults.removePersistentDomain(forName: suite) }
             if let translucent = testCase.translucent { defaults.set(translucent, forKey: "isTranslucent") }
             if let style = testCase.style { defaults.set(style, forKey: "panelGlassStyle") }
-            defaults.set(0.55, forKey: "panelGradientCoverage")
+            defaults.set(testCase.coverage, forKey: "panelGradientCoverage")
             defaults.set(testCase.theme.rawValue, forKey: "panelTheme")
+            if let mode = testCase.mode { defaults.set(mode, forKey: "appearancePreference") }
             let settings = try MainActor.assumeIsolated { AppSettings(defaults: defaults) }
-            let context = "\(String(describing: testCase.translucent)) \(String(describing: testCase.style)) \(testCase.theme.rawValue)"
+            let context = "\(String(describing: testCase.translucent)) \(String(describing: testCase.style)) \(testCase.theme.rawValue) \(testCase.mode ?? "none") \(testCase.coverage)"
             MainActor.assumeIsolated {
                 XCTAssertEqual(settings.panelSurfaceStyle, testCase.expected.surface, context)
                 XCTAssertEqual(settings.panelTint, testCase.expected.tint, context)
@@ -281,7 +313,13 @@ final class AppearanceMigrationTests: XCTestCase {
             AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .stable, gradientCoverage: 0.1, theme: .original)),
             Resolved(surface: .frosted, tint: .bold, tintLength: PanelTintLength.range.lowerBound)
         )
-        // Coverage 0 was "off", except that Clear drew its own crown.
+        // Coverage 0 was "off", except that Clear drew its own crown in Dark
+        // (and possibly Dark, under System); in Light Clear was Frosted.
+        XCTAssertEqual(
+            AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .clear, gradientCoverage: 0, theme: .original,
+                                               hasAppearancePreference: true, appearance: .light)),
+            Resolved(surface: .glass, tint: .off)
+        )
         XCTAssertEqual(
             AppearanceMigration.resolve(Legacy(isTranslucent: true, glassStyle: .frosted, gradientCoverage: 0, theme: .original)),
             Resolved(surface: .glass, tint: .off)
@@ -353,4 +391,5 @@ final class AppearanceMigrationTests: XCTestCase {
             XCTAssertFalse(style.detail.localizedCaseInsensitiveContains("glassmorphism"))
         }
     }
+
 }

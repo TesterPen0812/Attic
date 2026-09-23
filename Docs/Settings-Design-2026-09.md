@@ -63,7 +63,7 @@ identifier that tests rely on was kept. Screenshots are in
 | Surface tile | three equal columns; 44 pt hint, callout title, caption line |
 | Tint pill | four equal columns; 34 pt sample, caption title |
 | Corner picker | 116 × 74 pt display, 22 pt targets, name underneath |
-| Live preview card | full width, 248 pt tall, corner 14 pt; miniature panel = real panel × 0.46 |
+| Live preview card | full width, 260 pt tall, corner 14 pt; miniature panel = real panel × 0.46 |
 
 All of these are constants in `SettingsDesign`, `AppearancePreviewLayout`,
 `AppearanceSettingsPresentation` and `CornerPicker`, pinned by

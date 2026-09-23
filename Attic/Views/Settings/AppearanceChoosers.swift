@@ -117,9 +117,9 @@ struct SurfaceChooser: View {
     let palette: AtticPanelThemePalette
     let appearance: AtticPanelThemeAppearance
     let accent: Color
-    /// The solved readable foundation for the glass surfaces of this
-    /// palette and appearance, so the hint shows the real coverage.
-    let glassFoundation: Double
+    /// Each surface as the panel would draw it (Tint Off), so every hint
+    /// shows the real foundation and material tint.
+    let treatment: (PanelSurfaceStyle) -> AtticPanelSurfaceTreatment
 
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
@@ -131,8 +131,7 @@ struct SurfaceChooser: View {
                     selection = style
                 } label: {
                     VStack(alignment: .leading, spacing: 8) {
-                        SurfaceHint(style: style, palette: palette, appearance: appearance,
-                                    glassFoundation: glassFoundation)
+                        SurfaceHint(style: style, treatment: treatment(style))
                             .accessibilityHidden(true)
                         Text(style.title)
                             .font(.callout.weight(.medium))
@@ -170,29 +169,28 @@ struct SurfaceChooser: View {
     }
 }
 
-/// A tiny desktop with the surface over it: Solid hides it, Glass shows it
-/// through the readable foundation, Frosted blurs it under the palette wash.
+/// A tiny desktop with the surface over it, layered as the panel draws it:
+/// Solid hides it; Glass shows it through the readable foundation; Frosted
+/// blurs it, then adds the palette's material tint under the foundation.
 private struct SurfaceHint: View {
     let style: PanelSurfaceStyle
-    let palette: AtticPanelThemePalette
-    let appearance: AtticPanelThemeAppearance
-    let glassFoundation: Double
+    let treatment: AtticPanelSurfaceTreatment
+
+    private var palette: AtticPanelThemePalette { treatment.palette }
 
     var body: some View {
         ZStack {
             HStack(spacing: 0) {
                 ForEach(0..<6, id: \.self) { index in
-                    Rectangle().fill(SurfaceHint.stripe(index, dark: appearance == .dark))
+                    Rectangle().fill(SurfaceHint.stripe(index, dark: treatment.appearance == .dark))
                 }
             }
             .blur(radius: style == .frosted ? 3 : 0)
             Squircle(cornerRadius: 14, exponent: AtticStyle.panelSquircleExponent)
-                .fill(palette.opaqueSurfaceColor.opacity(Self.foundation(for: style, glassFoundation: glassFoundation)))
+                .fill(palette.surfaceTint.swiftUIColor(opacity: treatment.materialTintOpacity))
                 .overlay {
-                    if Self.wash(for: style) > 0 {
-                        Squircle(cornerRadius: 14, exponent: AtticStyle.panelSquircleExponent)
-                            .fill(palette.surfaceTint.swiftUIColor(opacity: Self.wash(for: style)))
-                    }
+                    Squircle(cornerRadius: 14, exponent: AtticStyle.panelSquircleExponent)
+                        .fill(palette.opaqueSurfaceColor.opacity(min(max(treatment.foundationOpacity, 0), 1)))
                 }
                 .overlay(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -210,17 +208,6 @@ private struct SurfaceHint: View {
         }
         .frame(height: 44)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-
-    /// How much of the surface colour covers the little desktop: all of it
-    /// for Solid, the solved readable foundation for Glass and Frosted.
-    static func foundation(for style: PanelSurfaceStyle, glassFoundation: Double) -> Double {
-        style == .solid ? 1 : min(max(glassFoundation, 0), 1)
-    }
-
-    /// Frosted adds its palette wash; the others carry none.
-    static func wash(for style: PanelSurfaceStyle) -> Double {
-        style == .frosted ? 0.18 : 0
     }
 
     private static func stripe(_ index: Int, dark: Bool) -> Color {
