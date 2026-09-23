@@ -472,8 +472,8 @@ final class AtticUITests: XCTestCase {
                 waitFor("Length is adjustable while a Tint step is on") { tintLength.isEnabled }
                 // XCUITest reports a macOS slider's raw value (0.3...1), not
                 // the spoken description; accept either. The drag is
-                // pixel-positioned, so it can land a little above the 30%
-                // minimum.
+                // pixel-positioned, so it can stop a few percent short of
+                // either end (CI read 33% and 97.6%).
                 func length() -> Double? {
                     if let number = tintLength.value as? NSNumber { return number.doubleValue }
                     guard let text = tintLength.value as? String else { return nil }
@@ -487,8 +487,8 @@ final class AtticUITests: XCTestCase {
                 }
                 recordPanel("Tint-\(level)-Short")
                 tintLength.adjust(toNormalizedSliderPosition: 1)
-                waitFor("Length moves back to full height; it reads \(String(describing: tintLength.value))") {
-                    length().map { $0 >= 0.995 } ?? false
+                waitFor("Length moves back to its longest; it reads \(String(describing: tintLength.value))") {
+                    length().map { $0 >= 0.95 } ?? false
                 }
             }
             recordPanel("Tint-\(level)")
