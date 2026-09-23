@@ -402,9 +402,9 @@ final class AtticUITests: XCTestCase {
             revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable, "Settings control must be reachable without resizing the window")
         }
-        func waitFor(_ message: String, _ condition: @escaping () -> Bool) {
+        func waitFor(_ message: @autoclosure () -> String, _ condition: @escaping () -> Bool) {
             let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message())
         }
         func assertSelected(_ element: XCUIElement) {
             waitFor("Expected selection: \(element.label)") {
@@ -470,13 +470,22 @@ final class AtticUITests: XCTestCase {
             if level == "Bold" {
                 reveal(tintLength)
                 waitFor("Length is adjustable while a Tint step is on") { tintLength.isEnabled }
+                // The drag is pixel-positioned, so it can land a step or two
+                // above the 30% minimum; the value must read as a short
+                // percentage, not an exact one.
+                func percent() -> Int? {
+                    guard let text = tintLength.value as? String, text.hasSuffix(" percent of the panel") else { return nil }
+                    return Int(text.prefix { $0.isNumber })
+                }
                 tintLength.adjust(toNormalizedSliderPosition: 0)
-                waitFor("Length moves to its shortest") {
-                    (tintLength.value as? String) == "30 percent of the panel"
+                waitFor("Length moves to its shortest; it reads \(String(describing: tintLength.value))") {
+                    percent().map { (30...35).contains($0) } ?? false
                 }
                 recordPanel("Tint-\(level)-Short")
                 tintLength.adjust(toNormalizedSliderPosition: 1)
-                waitFor("Length moves back to full height") { (tintLength.value as? String) == "Full height" }
+                waitFor("Length moves back to full height; it reads \(String(describing: tintLength.value))") {
+                    (tintLength.value as? String) == "Full height"
+                }
             }
             recordPanel("Tint-\(level)")
         }
@@ -507,9 +516,9 @@ final class AtticUITests: XCTestCase {
             picker.descendants(matching: .any)
                 .matching(NSPredicate(format: "label == %@", title)).firstMatch
         }
-        func waitFor(_ message: String, _ condition: @escaping () -> Bool) {
+        func waitFor(_ message: @autoclosure () -> String, _ condition: @escaping () -> Bool) {
             let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message())
         }
         let original = settings.buttons["setting-panel-theme-original"]
         reveal(original)
