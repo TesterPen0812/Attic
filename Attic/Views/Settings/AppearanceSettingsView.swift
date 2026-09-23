@@ -93,9 +93,9 @@ struct AppearanceSettingsView: View {
                     palette: palette,
                     appearance: appearance,
                     accent: accent,
-                    treatment: { [theme = settings.panelTheme, appearance] style in
+                    treatment: { [theme = settings.panelTheme, appearance, colorSchemeContrast] style in
                         theme.surfaceTreatment(
-                            appearance: appearance, surface: style, tint: .off,
+                            appearance: appearance, contrast: colorSchemeContrast, surface: style, tint: .off,
                             reduceTransparency: false
                         )
                     }

@@ -256,7 +256,10 @@ final class AppearanceMigrationTests: XCTestCase {
             Case(translucent: true, style: "clear", theme: .original, mode: "light", coverage: 0, expected: Resolved(surface: .glass, tint: .off)),
             Case(translucent: true, style: "clear", theme: .original, mode: "light", coverage: 0.7, expected: Resolved(surface: .glass, tint: .bold, tintLength: 0.7)),
             Case(translucent: true, style: "clear", theme: .original, mode: "dark", coverage: 0, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
-            Case(translucent: true, style: "clear", theme: .original, mode: "system", coverage: 0, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1))
+            Case(translucent: true, style: "clear", theme: .original, mode: "system", coverage: 0, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
+            // An unknown mode string is read as System.
+            Case(translucent: true, style: "clear", theme: .original, mode: "sepia", coverage: 0, expected: Resolved(surface: .glass, tint: .bold, tintLength: 1)),
+            Case(translucent: false, style: "frosted", theme: .midnightCobalt, mode: "sepia", expected: Resolved(surface: .solid, tint: .bold, tintLength: 0.55))
         ]
         for testCase in cases {
             let (defaults, suite) = try makeDefaults()
