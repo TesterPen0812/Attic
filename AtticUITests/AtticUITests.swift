@@ -470,21 +470,25 @@ final class AtticUITests: XCTestCase {
             if level == "Bold" {
                 reveal(tintLength)
                 waitFor("Length is adjustable while a Tint step is on") { tintLength.isEnabled }
-                // The drag is pixel-positioned, so it can land a step or two
-                // above the 30% minimum; the value must read as a short
-                // percentage, not an exact one.
-                func percent() -> Int? {
-                    guard let text = tintLength.value as? String, text.hasSuffix(" percent of the panel") else { return nil }
-                    return Int(text.prefix { $0.isNumber })
+                // XCUITest reports a macOS slider's raw value (0.3...1), not
+                // the spoken description; accept either. The drag is
+                // pixel-positioned, so it can land a little above the 30%
+                // minimum.
+                func length() -> Double? {
+                    if let number = tintLength.value as? NSNumber { return number.doubleValue }
+                    guard let text = tintLength.value as? String else { return nil }
+                    if text == "Full height" { return 1 }
+                    guard text.hasSuffix(" percent of the panel"), let percent = Double(text.prefix { $0.isNumber }) else { return nil }
+                    return percent / 100
                 }
                 tintLength.adjust(toNormalizedSliderPosition: 0)
                 waitFor("Length moves to its shortest; it reads \(String(describing: tintLength.value))") {
-                    percent().map { (30...35).contains($0) } ?? false
+                    length().map { (0.3...0.35).contains($0) } ?? false
                 }
                 recordPanel("Tint-\(level)-Short")
                 tintLength.adjust(toNormalizedSliderPosition: 1)
                 waitFor("Length moves back to full height; it reads \(String(describing: tintLength.value))") {
-                    (tintLength.value as? String) == "Full height"
+                    length().map { $0 >= 0.995 } ?? false
                 }
             }
             recordPanel("Tint-\(level)")
