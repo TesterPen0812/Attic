@@ -1594,7 +1594,7 @@ final class NoteAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testRemovingAttachmentClearsEveryVisibleNoteMapForDivergentReplicas() throws {
+    func testRemovingAnAttachmentWhoseCopiesClaimDifferentNotesIsRefused() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
         let firstNoteID = UUID()
@@ -1629,12 +1629,15 @@ final class NoteAttachmentTests: XCTestCase {
             store.attachmentsByNoteID.values.flatMap { $0 }.first
         )
 
-        XCTAssertTrue(store.removeAttachment(visible))
-        XCTAssertTrue(store.attachmentsByNoteID.values.allSatisfy(\.isEmpty))
-        // Removal is soft on every replica, whichever note it claims.
+        // Which note owns it is unresolved: removing it from one must not
+        // hide it from the other, so nothing changes.
+        XCTAssertFalse(store.removeAttachment(visible))
+        XCTAssertEqual(store.lastErrorMessage,
+                       "Copies of this attachment belong to different notes, so it can’t be removed safely. Refresh and try again.")
+        XCTAssertEqual(store.attachmentsByNoteID.values.flatMap { $0 }.map(\.id), [attachmentID], "still shown")
         let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertTrue(rows.allSatisfy { $0.deletedAt != nil })
+        XCTAssertEqual(Set(rows.map(\.noteID)), [firstNoteID, secondNoteID])
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil }, "both copies stay live")
     }
 
     @MainActor

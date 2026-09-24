@@ -68,6 +68,7 @@ private struct PresentationIndex {
 private enum NoteReplicaMutationError: LocalizedError {
     case missingReplica(UUID)
     case notRecentlyDeleted(UUID)
+    case attachmentOwnersDisagree(UUID)
 
     var errorDescription: String? {
         switch self {
@@ -75,6 +76,8 @@ private enum NoteReplicaMutationError: LocalizedError {
             "The note replicas for \(id.uuidString) could not be loaded safely."
         case let .notRecentlyDeleted(id):
             "The note \(id.uuidString) is not in Recently Deleted."
+        case .attachmentOwnersDisagree:
+            "Copies of this attachment belong to different notes, so it can’t be removed safely. Refresh and try again."
         }
     }
 }
@@ -697,6 +700,9 @@ final class NoteStore: ObservableObject {
     /// Removes one attachment into Recently Deleted: every replica is
     /// marked, and its bytes and file stay until the removal is purged 30 days
     /// later. The note moves up the list as for any attachment change.
+    /// Replicas that claim different notes are refused and left exactly as
+    /// they are: which note owns the attachment is unresolved, and removing
+    /// it from one note must not hide it from another.
     @discardableResult
     func removeAttachment(_ attachment: NoteAttachment) -> Bool {
         let replicas: [NoteAttachment]
@@ -706,12 +712,13 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = error.localizedDescription
             return false
         }
-        let ownerIDs = Set(replicas.map(\.noteID))
+        guard let noteID = replicas.first?.noteID, replicas.allSatisfy({ $0.noteID == noteID }) else {
+            lastErrorMessage = NoteReplicaMutationError.attachmentOwnersDisagree(attachment.id).localizedDescription
+            return false
+        }
         let timestamp = now()
         do {
-            for noteID in ownerIDs {
-                for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
-            }
+            for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
