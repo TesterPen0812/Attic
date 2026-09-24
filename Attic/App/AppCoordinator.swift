@@ -229,7 +229,17 @@ final class AppCoordinator: ObservableObject {
         let runtime = AppRuntimeEnvironment(environment: environment)
         let isUITesting = runtime.isUITesting
         let isRunningTests = runtime.isRunningTests
-        let performanceRoot = PerformanceProbe.validatedRoot(environment: environment)
+        let externalPerformanceRoot = PerformanceProbe.validatedRoot(environment: environment)
+        if environment["ATTIC_PERF_STORE_ROOT"] != nil && externalPerformanceRoot == nil {
+            fatalError("Performance store root is not an owned temporary directory")
+        }
+        let uiPerformanceRoot: URL?
+        do {
+            uiPerformanceRoot = try PerformanceProbe.uiTestRoot(environment: environment)
+        } catch {
+            fatalError("Unable to create the isolated performance UI test root: \(error)")
+        }
+        let performanceRoot = externalPerformanceRoot ?? uiPerformanceRoot
         let performanceSeedOnly = environment["ATTIC_PERF_SEED_ONLY"] == "1"
         self.isUITesting = isUITesting
         self.isRunningTests = isRunningTests
@@ -238,9 +248,6 @@ final class AppCoordinator: ObservableObject {
         // owns a temporary root. It can never fall through to the normal store.
         self.performanceRoot = performanceRoot
         isPerformanceSeedOnly = performanceSeedOnly
-        if environment["ATTIC_PERF_STORE_ROOT"] != nil && performanceRoot == nil {
-            fatalError("Performance store root is not an owned temporary directory")
-        }
         let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
             && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
 

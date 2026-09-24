@@ -3,6 +3,35 @@ import Foundation
 
 /// Test-only control plane. Marker writes are event-driven and outside samples.
 enum PerformanceProbe {
+    /// XCTest's runner is sandboxed separately and cannot write the app's
+    /// container. For the UI metrics lane, create the disposable root from
+    /// inside the app, using only a validated identifier supplied by XCTest.
+    static func uiTestRoot(environment: [String: String]) throws -> URL? {
+        guard environment["ATTIC_UI_TESTING"] == "1",
+              environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1",
+              environment["ATTIC_PERF_UI_TEST"] == "1",
+              let identifier = environment["ATTIC_PERF_UI_IDENTIFIER"],
+              let uuid = UUID(uuidString: identifier),
+              let bundleID = Bundle.main.bundleIdentifier,
+              let account = getpwuid(getuid()) else { return nil }
+        let base = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
+            .appendingPathComponent("Library/Containers/\(bundleID)/Data/Library/Application Support/AtticPerformanceStores",
+                                isDirectory: true)
+        let root = base.appendingPathComponent("attic-perf-ui-\(uuid.uuidString)", isDirectory: true)
+        if environment["ATTIC_PERF_UI_CLEANUP"] == "1" {
+            if FileManager.default.fileExists(atPath: root.path) {
+                try FileManager.default.removeItem(at: root)
+            }
+            return nil
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        guard root.standardizedFileURL.resolvingSymlinksInPath().path.hasPrefix(
+            base.standardizedFileURL.resolvingSymlinksInPath().path + "/"
+        ) else { throw CocoaError(.fileReadNoPermission) }
+        try Data(identifier.utf8).write(to: root.appendingPathComponent(".attic-perf-owner"), options: .atomic)
+        return root
+    }
+
     static func validatedRoot(environment: [String: String]) -> URL? {
         guard environment["ATTIC_UI_TESTING"] == "1",
               environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1",
