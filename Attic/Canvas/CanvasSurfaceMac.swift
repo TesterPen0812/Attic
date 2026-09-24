@@ -684,6 +684,7 @@ final class CanvasNSView: NSView {
                 viewport: interaction.viewport, viewportSize: bounds.size,
                 color: selectionAccentColor.cgColor)
         }
+        PerformanceSignposts.canvasDidDraw()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -803,6 +804,7 @@ final class CanvasNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if interaction.machine.state == .drawing { PerformanceSignposts.beginCanvasDrag() }
         let viewPoint = convert(event.locationInWindow, from: nil)
         let worldPoint = interaction.viewport.worldPoint(
             for: viewPoint,

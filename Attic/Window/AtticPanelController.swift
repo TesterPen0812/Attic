@@ -391,6 +391,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             if makeKey { panel.makeKey() }
             panel.orderFrontRegardless()
             animateShow(to: safeFrame)
+            PerformanceSignposts.panelOrderedFront()
             return
         }
 
@@ -412,6 +413,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
 
             animateShow(to: finalFrame)
+            PerformanceSignposts.panelOrderedFront()
             return
         }
 
@@ -426,6 +428,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         animateShow(to: finalFrame)
+        PerformanceSignposts.panelOrderedFront()
     }
 
     private func animateShow(to finalFrame: CGRect) {

@@ -173,6 +173,7 @@ final class CornerHoverMonitor {
 
     func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
+        PerformanceSignposts.beginReveal()
         guard preparePresentation(openComposer: openComposer, section: section) else { return }
         refreshStoreForReveal()
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
@@ -278,6 +279,7 @@ final class CornerHoverMonitor {
             break
         case .reveal:
             guard let activeScreen else { return }
+            PerformanceSignposts.beginReveal()
             // Pull any CloudKit import out of SwiftData's context cache before
             // calculating the panel contents. This only runs on reveal, not on
             // the pointer sampling path.

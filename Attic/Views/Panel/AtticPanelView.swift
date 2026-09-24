@@ -167,6 +167,7 @@ struct AtticPanelView: View {
             syncComposerInteractionHeight()
             syncTaskEntryInteractionLocks()
             openMostRecentNoteIfNeeded()
+            DispatchQueue.main.async { PerformanceSignposts.pageLaidOut() }
         }
         .task {
             _ = await noteDraft.restoreRecoveryIfNeeded()
@@ -806,6 +807,7 @@ struct AtticPanelView: View {
             focusedModeSection = nil
         }
         guard uiState.selectedSection != section else { return }
+        PerformanceSignposts.beginPageSwitch()
         // A refused Notes close must leave every other state untouched, so
         // the refusal is decided before any focus or lock changes.
         if uiState.selectedSection.isNotes, noteDraft.isActive {

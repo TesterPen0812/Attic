@@ -56,7 +56,7 @@ extension CanvasStore {
         }
 
         do {
-            try persist(context)
+            try PerformanceSignposts.storeSave { try persist(context) }
             if CanvasCloudInfrastructurePolicy.isEnabled {
                 cloudSyncProtection.noteLocalSave()
                 reconcileProtectedCloudSyncActivity(for: .exportData)

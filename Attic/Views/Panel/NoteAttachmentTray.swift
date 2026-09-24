@@ -1546,6 +1546,20 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
 }
 
 final class AttachmentAcceptingTextView: NSTextView {
+    override func keyDown(with event: NSEvent) {
+        if event.charactersIgnoringModifiers?.isEmpty == false,
+           !event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.control) {
+            PerformanceSignposts.beginNoteKey()
+        }
+        super.keyDown(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        PerformanceSignposts.noteDidDraw()
+    }
+
     override func scrollRangeToVisible(_ range: NSRange) {
         super.scrollRangeToVisible(range)
         guard let document = superview as? NoteEditorDocumentView,

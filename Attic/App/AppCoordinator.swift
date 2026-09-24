@@ -220,13 +220,27 @@ final class AppCoordinator: ObservableObject {
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private let newTaskHotKey: GlobalHotKey
+    private let performanceRoot: URL?
+    private let isPerformanceSeedOnly: Bool
 
     private init() {
+        PerformanceSignposts.beginLaunch()
         let environment = ProcessInfo.processInfo.environment
         let runtime = AppRuntimeEnvironment(environment: environment)
-        isUITesting = runtime.isUITesting
-        isRunningTests = runtime.isRunningTests
+        let isUITesting = runtime.isUITesting
+        let isRunningTests = runtime.isRunningTests
+        let performanceRoot = PerformanceProbe.validatedRoot(environment: environment)
+        let performanceSeedOnly = environment["ATTIC_PERF_SEED_ONLY"] == "1"
+        self.isUITesting = isUITesting
+        self.isRunningTests = isRunningTests
         shouldStartInteractiveShellServices = runtime.shouldStartInteractiveShellServices
+        // A performance run must opt into the UI-test identity and prove it
+        // owns a temporary root. It can never fall through to the normal store.
+        self.performanceRoot = performanceRoot
+        isPerformanceSeedOnly = performanceSeedOnly
+        if environment["ATTIC_PERF_STORE_ROOT"] != nil && performanceRoot == nil {
+            fatalError("Performance store root is not an owned temporary directory")
+        }
         let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
             && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
 
@@ -244,35 +258,51 @@ final class AppCoordinator: ObservableObject {
         }
         #endif
         let container: ModelContainer
-        if usesCanvasUITestPersistence {
+        if let performanceRoot {
             do {
-                container = try PersistenceController.makeCanvasUITestContainer(
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
+                    reset: performanceSeedOnly, baseDirectory: performanceRoot
+                ) }
+                if performanceSeedOnly {
+                    PerformanceProbe.writePhase("seeding", root: performanceRoot)
+                    try PerformanceSeed.generate(
+                        in: container, root: performanceRoot,
+                        includeDoneHistory: environment["ATTIC_PERF_DONE_HISTORY"] == "1"
+                    )
+                    PerformanceProbe.writePhase("seed_complete", root: performanceRoot)
+                }
+            } catch {
+                fatalError("Unable to create the isolated performance store: \(error)")
+            }
+        } else if usesCanvasUITestPersistence {
+            do {
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
                     reset: environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1"
-                )
+                ) }
             } catch {
                 fatalError("Unable to create the isolated Canvas UI test store: \(error)")
             }
         } else {
             #if ATTIC_LOCAL_ONLY
             do {
-                container = try PersistenceController.makeContainer(
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
                     inMemory: isUITesting || isRunningTests,
                     cloudSyncEnabled: false
-                )
+                ) }
             } catch {
                 fatalError("Unable to create the local-only SwiftData container: \(error)")
             }
             #else
             do {
-                container = try PersistenceController.makeContainer(
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
                     inMemory: isUITesting || isRunningTests
-                )
+                ) }
             } catch let cloudError {
                 do {
-                    container = try PersistenceController.makeContainer(
+                    container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
                         inMemory: isUITesting || isRunningTests,
                         cloudSyncEnabled: false
-                    )
+                    ) }
                     settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
                 } catch {
                     fatalError(
@@ -284,10 +314,17 @@ final class AppCoordinator: ObservableObject {
             #endif
         }
 
-        let store = TaskStore(container: container)
+        let store = TaskStore(
+            container: container,
+            taskImageFiles: performanceRoot.map {
+                TaskImageFiles(rootURL: $0.appendingPathComponent("TaskImages", isDirectory: true))
+            } ?? .shared
+        )
         let noteStore = NoteStore(
             container: container,
-            attachmentFileStore: runtime.makeAttachmentFileStore()
+            attachmentFileStore: performanceRoot.map {
+                AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
+            } ?? runtime.makeAttachmentFileStore()
         )
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
@@ -373,6 +410,9 @@ final class AppCoordinator: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
         guard shouldStartInteractiveShellServices else { return }
+        if isPerformanceSeedOnly {
+            return
+        }
         NSApp.appearance = settings.appearance.nsAppearance
         appearanceObservation = settings.$appearance
             .removeDuplicates()
@@ -389,6 +429,34 @@ final class AppCoordinator: ObservableObject {
             // key panel so AppKit, not a test-only model shortcut, owns mouse
             // and keyboard delivery through the installed UI hierarchy.
             NSApp.activate()
+            if let performanceRoot,
+               ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
+                hoverMonitor.start()
+                PerformanceProbe.writePhase("hidden_idle", root: performanceRoot)
+                let stages: [(Double, String, () -> Void)] = [
+                    (20, "tasks_open", { [weak self] in self?.showPanel() }),
+                    (40, "canvas_open", { [weak self] in
+                        self?.hoverMonitor.revealProgrammatically(section: .canvas)
+                    }),
+                    (60, "after_hide", { [weak self] in
+                        guard let self else { return }
+                        _ = self.panelController.requestHide { _ in
+                            PerformanceProbe.writePhase("after_hide", root: performanceRoot)
+                        }
+                    })
+                ]
+                for (delay, phase, action) in stages {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        action()
+                        if phase != "after_hide" {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                                PerformanceProbe.writePhase(phase, root: performanceRoot)
+                            }
+                        }
+                    }
+                }
+                return
+            }
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {
                 hoverMonitor.start()
                 hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)

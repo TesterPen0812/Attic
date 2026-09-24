@@ -774,7 +774,7 @@ final class NoteStore: ObservableObject {
     @discardableResult
     private func save() -> Bool {
         do {
-            try persist(context)
+            try PerformanceSignposts.storeSave { try persist(context) }
             lastErrorMessage = nil
             registerSuccessfulLocalSave()
             return true

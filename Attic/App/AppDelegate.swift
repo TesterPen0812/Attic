@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.registerForRemoteNotifications()
         #endif
         AppCoordinator.shared.start()
+        PerformanceSignposts.menuReady()
     }
 
     func application(

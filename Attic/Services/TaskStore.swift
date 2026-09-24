@@ -1187,7 +1187,7 @@ final class TaskStore: ObservableObject {
     @discardableResult
     private func save(owner: UUID? = nil) -> Bool {
         do {
-            try persist(context)
+            try PerformanceSignposts.storeSave { try persist(context) }
             errorNotice = nil
             revision &+= 1
             #if !ATTIC_LOCAL_ONLY
