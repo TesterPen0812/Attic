@@ -107,9 +107,12 @@ final class PerformanceUITests: XCTestCase {
         app = probe
         probe.launch()
         let picker = probe.descendants(matching: .any)["panel-section-picker"]
+        let tasks = probe.buttons["panel-section-tasks"]
         XCTAssertTrue(waitUntil(timeout: 90) { picker.isHittable }, "Tasks panel did not open")
+        XCTAssertTrue(tasks.isSelected, "Tasks was not selected before the sample")
         measureState("Tasks open", application: probe)
         XCTAssertTrue(picker.isHittable, "Tasks panel hid during the sample")
+        XCTAssertTrue(tasks.isSelected, "Tasks sample overlapped the Canvas switch")
     }
 
     func testLargeCanvasMemoryAndCPU() {
@@ -118,8 +121,10 @@ final class PerformanceUITests: XCTestCase {
         probe.launch()
         let canvas = probe.descendants(matching: .any)["canvas-surface"]
         XCTAssertTrue(waitUntil(timeout: 120) { canvas.isHittable }, "Large canvas did not open")
+        XCTAssertTrue(probe.buttons["panel-section-canvas"].isSelected)
         measureState("large canvas open", application: probe)
         XCTAssertTrue(canvas.isHittable, "Canvas panel hid during the sample")
+        XCTAssertTrue(probe.buttons["panel-section-canvas"].isSelected)
     }
 
     func testAfterHideMemoryAndCPU() {
@@ -129,6 +134,8 @@ final class PerformanceUITests: XCTestCase {
         let canvas = probe.descendants(matching: .any)["canvas-surface"]
         XCTAssertTrue(waitUntil(timeout: 120) { canvas.isHittable }, "Large canvas did not open")
         XCTAssertTrue(waitUntil(timeout: 180) { !canvas.isHittable }, "Canvas panel did not hide")
+        Thread.sleep(forTimeInterval: 30)
+        XCTAssertFalse(canvas.isHittable, "Canvas panel reappeared during the settle")
         measureState("after hiding canvas", application: probe)
         XCTAssertFalse(canvas.isHittable)
     }

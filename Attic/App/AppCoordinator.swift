@@ -450,12 +450,15 @@ final class AppCoordinator: ObservableObject {
                 hoverMonitor.start()
                 let window = Double(ProcessInfo.processInfo.environment["ATTIC_PERF_WINDOW_SECONDS"] ?? "10") ?? 10
                 func write(_ phase: String) {
+                    let pointer = NSEvent.mouseLocation
                     PerformanceProbe.writePhase(phase, root: performanceRoot, details: [
                         "panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0,
                         "hover_hidden": hoverMonitor.isHiddenForPerformanceProbe ? 1 : 0,
                         "visibility_changes": panelController.performanceVisibilityChanges,
                         "visible_strokes": canvasSession.strokes.count,
-                        "section_canvas": uiState.selectedSection == .canvas ? 1 : 0
+                        "section_canvas": uiState.selectedSection == .canvas ? 1 : 0,
+                        "pointer_x": Int(pointer.x.rounded()),
+                        "pointer_y": Int(pointer.y.rounded())
                     ])
                 }
                 func later(_ seconds: Double, _ action: @escaping () -> Void) {
