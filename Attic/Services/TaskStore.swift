@@ -172,6 +172,38 @@ private struct TaskReplicaSnapshot: Equatable {
     }
 }
 
+/// What a task holds, without when it was last touched or how it was
+/// deleted: two replicas with equal content show the same task.
+private struct TaskContentSnapshot: Equatable {
+    let title: String
+    let statusRaw: String
+    let priorityRaw: String
+    let createdAt: Date
+    let completedAt: Date?
+    let manualOrder: Int64?
+    let parentID: UUID?
+    let imageReferencesData: Data?
+    let removedAttachmentsData: Data?
+    let doneLoggedAt: Date?
+    let tagsRaw: String
+    let dueDayRaw: String?
+
+    init(_ task: TaskItem) {
+        title = task.title
+        statusRaw = task.statusRaw
+        priorityRaw = task.priorityRaw
+        createdAt = task.createdAt
+        completedAt = task.completedAt
+        manualOrder = task.manualOrder
+        parentID = task.parentID
+        imageReferencesData = task.imageReferencesData
+        removedAttachmentsData = task.removedAttachmentsData
+        doneLoggedAt = task.doneLoggedAt
+        tagsRaw = task.tagsRaw
+        dueDayRaw = task.dueDayRaw
+    }
+}
+
 /// The fields an undo step puts back on a task: everything a person can
 /// edit in the list, plus the ordering and completion time they imply.
 struct TaskEditableState: Equatable {
@@ -202,6 +234,7 @@ private enum TaskReplicaMutationError: LocalizedError {
     case incompleteRestore(UUID)
     case parentNotLive(UUID)
     case attachmentNotRemoved(UUID)
+    case divergentLiveCopy(UUID)
 
     var errorDescription: String? {
         switch self {
@@ -215,6 +248,8 @@ private enum TaskReplicaMutationError: LocalizedError {
             "Restore its main task first; this subtask returns to it."
         case .attachmentNotRemoved:
             "That attachment is not in Recently Deleted."
+        case .divergentLiveCopy:
+            "Another copy of this task changed after it was deleted, so it can’t be restored safely. Refresh and try again."
         }
     }
 }
@@ -1274,10 +1309,13 @@ final class TaskStore: ObservableObject {
     /// Several restores in one save (redoing a batch creation). Before
     /// anything is written, every physical replica of every task the delete
     /// recorded is inspected, live duplicates included: each member must still
-    /// have its deleted rows, no replica may belong to a different delete, and
-    /// the copies must agree on who was deleted together. A subtask deleted on
-    /// its own comes back only while its main task is live (restore the main
-    /// task first), so it always returns to its family, never as a stray row.
+    /// have its deleted rows, no replica may belong to a different delete,
+    /// the copies must agree on who was deleted together, and a live
+    /// duplicate must hold the same content as the deleted copies (a changed
+    /// one refuses the restore rather than being reconciled by guesswork).
+    /// A subtask deleted on its own comes back only while its main task is
+    /// live (restore the main task first), so it always returns to its
+    /// family, never as a stray row.
     @discardableResult
     func restoreDeleted(taskIDs: [UUID]) -> Bool {
         guard !taskIDs.isEmpty else { return false }
@@ -1314,6 +1352,18 @@ final class TaskStore: ObservableObject {
                 ))
                 guard replicas.allSatisfy({ $0.deletedAt == nil || $0.deletionRootID == rootID }) else {
                     throw TaskReplicaMutationError.incompleteRestore(rootID)
+                }
+                // A copy that stayed live (a late replica the delete never
+                // reached) must hold what the deleted copies hold. If it was
+                // changed, restoring would put two different versions of the
+                // task side by side and let the list pick one, so nothing is
+                // restored until the copies agree.
+                for copies in Dictionary(grouping: replicas, by: \.id).values
+                where copies.contains(where: { $0.deletedAt == nil }) {
+                    let content = TaskContentSnapshot(copies[0])
+                    guard copies.allSatisfy({ TaskContentSnapshot($0) == content }) else {
+                        throw TaskReplicaMutationError.divergentLiveCopy(rootID)
+                    }
                 }
                 restoring.formUnion(members)
             }

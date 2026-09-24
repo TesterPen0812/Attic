@@ -2,8 +2,9 @@ import SwiftData
 import XCTest
 @testable import Attic
 
-/// Task restores are complete or refused, and a subtask returns only to a live
-/// main task (data review findings 5 and 6).
+/// Task restores are complete or refused, a subtask returns only to a live
+/// main task, and a purge removes only a delete that is whole and agreed
+/// (data review findings 5 and 6, re-review items 2 and 6).
 @MainActor
 final class TaskRestoreSafetyTests: XCTestCase {
     private let day: TimeInterval = 24 * 3_600
@@ -43,18 +44,48 @@ final class TaskRestoreSafetyTests: XCTestCase {
         XCTAssertTrue(store.tasks.isEmpty)
     }
 
-    func testTaskRestoreInspectsLiveDuplicatesAndBringsEveryDeletedReplicaBack() throws {
+    func testTaskRestoreIsRefusedWhileALiveDuplicateDivergesAndProceedsOnceItAgrees() throws {
         let store = try makeTestStore()
         let task = try XCTUnwrap(store.create(title: "Task"))
+        XCTAssertTrue(store.setTags(["home"], for: task))
         XCTAssertTrue(store.delete(task))
         let context = ModelContext(store.container)
-        context.insert(TaskItem(id: task.id, title: "Task", updatedAt: Date(timeIntervalSince1970: 0)))
+        let taskID = task.id
+        let deleted = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })).first)
+        // A late copy from another device that the delete never reached, and
+        // that was renamed there: identical to the deleted row but for its
+        // title.
+        let live = TaskItem(id: task.id, title: "Task, renamed elsewhere", status: deleted.status,
+                            priority: deleted.priority, createdAt: deleted.createdAt,
+                            updatedAt: Date(timeIntervalSince1970: 0), completedAt: deleted.completedAt,
+                            manualOrder: deleted.manualOrder, parentID: deleted.parentID)
+        live.tagsRaw = deleted.tagsRaw
+        live.dueDayRaw = deleted.dueDayRaw
+        live.imageReferencesData = deleted.imageReferencesData
+        live.removedAttachmentsData = deleted.removedAttachmentsData
+        live.doneLoggedAt = deleted.doneLoggedAt
+        context.insert(live)
         try context.save()
 
+        XCTAssertFalse(store.restoreDeleted(taskID: task.id))
+        XCTAssertEqual(store.lastErrorMessage,
+                       "Another copy of this task changed after it was deleted, so it can’t be restored safely. Refresh and try again.")
+        var rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.filter { $0.deletedAt != nil }.map(\.title), ["Task"], "the deleted copy is untouched")
+        XCTAssertEqual(rows.filter { $0.deletedAt == nil }.map(\.title), ["Task, renamed elsewhere"],
+                       "the live copy is untouched")
+        XCTAssertTrue(rows.first { $0.deletedAt != nil }?.deletionRootID == task.id)
+
+        // Once the copies hold the same task, the restore brings every
+        // deleted replica back.
+        live.title = "Task"
+        try context.save()
         XCTAssertTrue(store.restoreDeleted(taskID: task.id))
-        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
         XCTAssertEqual(rows.count, 2)
         XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil && $0.deletionRootID == nil && $0.deletionMembersRaw.isEmpty })
+        XCTAssertEqual(store.tasks.map(\.title), ["Task"])
     }
 
 
