@@ -1,0 +1,500 @@
+{
+  "schema": 2,
+  "date": "2026-09-24T22:49:05Z",
+  "commit": "cecd6af610bcb9da7101643f466c4f8ba4648823",
+  "branch": "redesign/phase-0",
+  "machine": "Apple M4",
+  "os": "27.0",
+  "xcode": "27.0",
+  "bundle_id": "com.taha.Attic.perf.9c77866cfd",
+  "executable": "/Users/taha/Developer/attic-p0-integration/.build/performance/dd/Build/Products/Local/AtticPerf9c77866cfd.app/Contents/MacOS/AtticPerf9c77866cfd",
+  "seed_version": 2,
+  "seed_counts": {
+    "tasks": 500,
+    "notes": 200,
+    "canvases": 20,
+    "objects_per_canvas": 2000,
+    "extra_done_tasks": 5000
+  },
+  "done_history": true,
+  "window_s": 10.0,
+  "runs": [
+    {
+      "run": 1,
+      "pid": 83497,
+      "seed_pid": 83442,
+      "phases": [
+        {
+          "phase": "hidden_idle",
+          "duration_s": 10.156634707999999,
+          "physical_footprint_bytes_start": 171738264,
+          "physical_footprint_bytes_end": 171738264,
+          "cpu_time_s": 0.003028,
+          "cpu_percent_one_core": 0.029813024560339445,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 10,
+          "interrupt_wakeups_per_s": 0.9845780898394797,
+          "ps_time_end": "0:01.34",
+          "end_marker": {
+            "pointer_y": 53,
+            "section_canvas": 0,
+            "visibility_changes": 0,
+            "timestamp": 1790289813.640043,
+            "pointer_x": 594,
+            "panel_visible": 0,
+            "hover_hidden": 1,
+            "visible_strokes": 1700,
+            "phase": "hidden_idle_end",
+            "pid": 83497
+          }
+        },
+        {
+          "phase": "tasks_open",
+          "duration_s": 10.136201084,
+          "physical_footprint_bytes_start": 184288432,
+          "physical_footprint_bytes_end": 182355096,
+          "cpu_time_s": 0.003454084,
+          "cpu_percent_one_core": 0.034076711495515555,
+          "package_idle_wakeups": 1,
+          "package_idle_wakeups_per_s": 0.09865629062731408,
+          "interrupt_wakeups": 9,
+          "interrupt_wakeups_per_s": 0.8879066156458267,
+          "ps_time_end": "0:01.77",
+          "end_marker": {
+            "pointer_y": 53,
+            "section_canvas": 0,
+            "timestamp": 1790289827.230053,
+            "panel_visible": 1,
+            "visibility_changes": 1,
+            "pointer_x": 594,
+            "hover_hidden": 0,
+            "visible_strokes": 1700,
+            "phase": "tasks_open_end",
+            "pid": 83497
+          }
+        },
+        {
+          "phase": "canvas_open",
+          "duration_s": 10.130290833000004,
+          "physical_footprint_bytes_start": 125355184,
+          "physical_footprint_bytes_end": 123503792,
+          "cpu_time_s": 0.001709666,
+          "cpu_percent_one_core": 0.016876771142943545,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 8,
+          "interrupt_wakeups_per_s": 0.7897107923041599,
+          "ps_time_end": "0:02.03",
+          "end_marker": {
+            "pid": 83497,
+            "visible_strokes": 1700,
+            "panel_visible": 1,
+            "visibility_changes": 1,
+            "timestamp": 1790289840.610711,
+            "section_canvas": 1,
+            "phase": "canvas_open_end",
+            "pointer_x": 594,
+            "pointer_y": 53,
+            "hover_hidden": 0
+          }
+        },
+        {
+          "phase": "after_hide",
+          "duration_s": 10.121455957999999,
+          "physical_footprint_bytes_start": 127141040,
+          "physical_footprint_bytes_end": 127141040,
+          "cpu_time_s": 0.003822375,
+          "cpu_percent_one_core": 0.037765070715728356,
+          "package_idle_wakeups": 2,
+          "package_idle_wakeups_per_s": 0.19760002990668551,
+          "interrupt_wakeups": 11,
+          "interrupt_wakeups_per_s": 1.0868001644867704,
+          "ps_time_end": "0:02.18",
+          "end_marker": {
+            "pointer_y": 53,
+            "phase": "after_hide_end",
+            "section_canvas": 1,
+            "panel_visible": 0,
+            "hover_hidden": 1,
+            "timestamp": 1790289881.1679502,
+            "pid": 83497,
+            "visibility_changes": 2,
+            "pointer_x": 594,
+            "visible_strokes": 1700
+          }
+        },
+        {
+          "phase": "hidden_idle_final",
+          "duration_s": 10.129975625,
+          "physical_footprint_bytes_start": 127141040,
+          "physical_footprint_bytes_end": 127141040,
+          "cpu_time_s": 0.003340417,
+          "cpu_percent_one_core": 0.032975567994024665,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 11,
+          "interrupt_wakeups_per_s": 1.0858861271939142,
+          "ps_time_end": "0:02.19",
+          "end_marker": {
+            "pointer_y": 53,
+            "phase": "hidden_idle_final_end",
+            "section_canvas": 1,
+            "panel_visible": 0,
+            "hover_hidden": 1,
+            "timestamp": 1790289893.522039,
+            "pid": 83497,
+            "visibility_changes": 2,
+            "pointer_x": 594,
+            "visible_strokes": 1700
+          }
+        }
+      ],
+      "timings": [
+        {
+          "name": "StoreOpen",
+          "milliseconds": 9.847875,
+          "timestamp": 1790289771.9136581
+        },
+        {
+          "name": "CoordinatorInitToMenuStarted",
+          "timestamp": 1790289773.058642,
+          "milliseconds": 1155.179333
+        },
+        {
+          "name": "PanelRevealToOrderedFront",
+          "timestamp": 1790289813.928714,
+          "milliseconds": 282.0995
+        },
+        {
+          "name": "PanelRevealToOrderedFront",
+          "milliseconds": 1.084042,
+          "timestamp": 1790289827.243013
+        },
+        {
+          "milliseconds": 282.083458,
+          "name": "PageSwitch",
+          "timestamp": 1790289827.5151029
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "pid": 83708,
+      "seed_pid": 83675,
+      "phases": [
+        {
+          "phase": "hidden_idle",
+          "duration_s": 10.146976082999998,
+          "physical_footprint_bytes_start": 172786792,
+          "physical_footprint_bytes_end": 172786792,
+          "cpu_time_s": 0.004241333,
+          "cpu_percent_one_core": 0.04179898489270935,
+          "package_idle_wakeups": 1,
+          "package_idle_wakeups_per_s": 0.09855152824055396,
+          "interrupt_wakeups": 11,
+          "interrupt_wakeups_per_s": 1.0840668106460936,
+          "ps_time_end": "0:01.07",
+          "end_marker": {
+            "pointer_y": 53,
+            "hover_hidden": 1,
+            "panel_visible": 0,
+            "visible_strokes": 1700,
+            "section_canvas": 0,
+            "phase": "hidden_idle_end",
+            "visibility_changes": 0,
+            "pointer_x": 594,
+            "pid": 83708,
+            "timestamp": 1790289939.738389
+          }
+        },
+        {
+          "phase": "tasks_open",
+          "duration_s": 10.128315250000014,
+          "physical_footprint_bytes_start": 184632448,
+          "physical_footprint_bytes_end": 182961280,
+          "cpu_time_s": 0.001595751,
+          "cpu_percent_one_core": 0.01575534489805694,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 8,
+          "interrupt_wakeups_per_s": 0.7898648296911955,
+          "ps_time_end": "0:01.47",
+          "end_marker": {
+            "pointer_y": 53,
+            "pid": 83708,
+            "hover_hidden": 0,
+            "visible_strokes": 1700,
+            "section_canvas": 0,
+            "visibility_changes": 1,
+            "timestamp": 1790289953.317419,
+            "panel_visible": 1,
+            "phase": "tasks_open_end",
+            "pointer_x": 594
+          }
+        },
+        {
+          "phase": "canvas_open",
+          "duration_s": 10.128886625000007,
+          "physical_footprint_bytes_start": 125846704,
+          "physical_footprint_bytes_end": 124355760,
+          "cpu_time_s": 0.001802042,
+          "cpu_percent_one_core": 0.017791116306428188,
+          "package_idle_wakeups": 1,
+          "package_idle_wakeups_per_s": 0.09872753413310116,
+          "interrupt_wakeups": 7,
+          "interrupt_wakeups_per_s": 0.6910927389317081,
+          "ps_time_end": "0:01.72",
+          "end_marker": {
+            "section_canvas": 1,
+            "pointer_x": 594,
+            "phase": "canvas_open_end",
+            "visible_strokes": 1700,
+            "pid": 83708,
+            "panel_visible": 1,
+            "hover_hidden": 0,
+            "visibility_changes": 1,
+            "timestamp": 1790289966.698051,
+            "pointer_y": 53
+          }
+        },
+        {
+          "phase": "after_hide",
+          "duration_s": 10.140900541999997,
+          "physical_footprint_bytes_start": 127714480,
+          "physical_footprint_bytes_end": 127714480,
+          "cpu_time_s": 0.005734958,
+          "cpu_percent_one_core": 0.05655274870557942,
+          "package_idle_wakeups": 1,
+          "package_idle_wakeups_per_s": 0.09861057170005329,
+          "interrupt_wakeups": 11,
+          "interrupt_wakeups_per_s": 1.0847162887005861,
+          "ps_time_end": "0:01.87",
+          "end_marker": {
+            "visible_strokes": 1700,
+            "pointer_x": 594,
+            "panel_visible": 0,
+            "pointer_y": 53,
+            "section_canvas": 1,
+            "phase": "after_hide_end",
+            "hover_hidden": 1,
+            "timestamp": 1790290007.279262,
+            "pid": 83708,
+            "visibility_changes": 2
+          }
+        },
+        {
+          "phase": "hidden_idle_final",
+          "duration_s": 10.134642874999997,
+          "physical_footprint_bytes_start": 127714480,
+          "physical_footprint_bytes_end": 127714480,
+          "cpu_time_s": 0.0044425,
+          "cpu_percent_one_core": 0.043834795708082616,
+          "package_idle_wakeups": 2,
+          "package_idle_wakeups_per_s": 0.19734291821309002,
+          "interrupt_wakeups": 11,
+          "interrupt_wakeups_per_s": 1.0853860501719952,
+          "ps_time_end": "0:01.88",
+          "end_marker": {
+            "visible_strokes": 1700,
+            "pointer_x": 594,
+            "panel_visible": 0,
+            "pointer_y": 53,
+            "section_canvas": 1,
+            "phase": "hidden_idle_final_end",
+            "hover_hidden": 1,
+            "timestamp": 1790290019.64333,
+            "pid": 83708,
+            "visibility_changes": 2
+          }
+        }
+      ],
+      "timings": [
+        {
+          "timestamp": 1790289898.561913,
+          "name": "StoreOpen",
+          "milliseconds": 7.843792
+        },
+        {
+          "name": "CoordinatorInitToMenuStarted",
+          "milliseconds": 794.328333,
+          "timestamp": 1790289899.3481731
+        },
+        {
+          "name": "PanelRevealToOrderedFront",
+          "timestamp": 1790289940.051509,
+          "milliseconds": 308.4685
+        },
+        {
+          "milliseconds": 1.169291,
+          "timestamp": 1790289953.328654,
+          "name": "PanelRevealToOrderedFront"
+        },
+        {
+          "name": "PageSwitch",
+          "milliseconds": 301.973834,
+          "timestamp": 1790289953.6222792
+        }
+      ]
+    },
+    {
+      "run": 3,
+      "pid": 83933,
+      "seed_pid": 83888,
+      "phases": [
+        {
+          "phase": "hidden_idle",
+          "duration_s": 10.137685083000008,
+          "physical_footprint_bytes_start": 174310552,
+          "physical_footprint_bytes_end": 174310552,
+          "cpu_time_s": 0.003714291,
+          "cpu_percent_one_core": 0.036638453153654715,
+          "package_idle_wakeups": 1,
+          "package_idle_wakeups_per_s": 0.09864184888490082,
+          "interrupt_wakeups": 10,
+          "interrupt_wakeups_per_s": 0.9864184888490082,
+          "ps_time_end": "0:01.04",
+          "end_marker": {
+            "visible_strokes": 1700,
+            "visibility_changes": 0,
+            "hover_hidden": 1,
+            "pointer_x": 594,
+            "panel_visible": 0,
+            "pointer_y": 53,
+            "phase": "hidden_idle_end",
+            "pid": 83933,
+            "section_canvas": 0,
+            "timestamp": 1790290065.4083781
+          }
+        },
+        {
+          "phase": "tasks_open",
+          "duration_s": 10.139937165999982,
+          "physical_footprint_bytes_start": 186352816,
+          "physical_footprint_bytes_end": 179061912,
+          "cpu_time_s": 0.001633208,
+          "cpu_percent_one_core": 0.016106687578659528,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 8,
+          "interrupt_wakeups_per_s": 0.7889595240121051,
+          "ps_time_end": "0:01.36",
+          "end_marker": {
+            "visible_strokes": 1700,
+            "panel_visible": 1,
+            "section_canvas": 0,
+            "phase": "tasks_open_end",
+            "visibility_changes": 1,
+            "pid": 83933,
+            "hover_hidden": 0,
+            "pointer_y": 53,
+            "timestamp": 1790290078.801268,
+            "pointer_x": 594
+          }
+        },
+        {
+          "phase": "canvas_open",
+          "duration_s": 10.138348625000049,
+          "physical_footprint_bytes_start": 104547552,
+          "physical_footprint_bytes_end": 102909128,
+          "cpu_time_s": 0.001848125,
+          "cpu_percent_one_core": 0.018229053550621918,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 7,
+          "interrupt_wakeups_per_s": 0.6904477503110095,
+          "ps_time_end": "0:01.60",
+          "end_marker": {
+            "visible_strokes": 1700,
+            "visibility_changes": 1,
+            "pointer_x": 594,
+            "hover_hidden": 0,
+            "panel_visible": 1,
+            "pointer_y": 53,
+            "pid": 83933,
+            "phase": "canvas_open_end",
+            "section_canvas": 1,
+            "timestamp": 1790290092.193198
+          }
+        },
+        {
+          "phase": "after_hide",
+          "duration_s": 10.135582291999981,
+          "physical_footprint_bytes_start": 106611912,
+          "physical_footprint_bytes_end": 106611912,
+          "cpu_time_s": 0.004552584,
+          "cpu_percent_one_core": 0.04491684709218292,
+          "package_idle_wakeups": 2,
+          "package_idle_wakeups_per_s": 0.19732462747390456,
+          "interrupt_wakeups": 11,
+          "interrupt_wakeups_per_s": 1.0852854511064751,
+          "ps_time_end": "0:01.75",
+          "end_marker": {
+            "visible_strokes": 1700,
+            "pointer_x": 594,
+            "section_canvas": 1,
+            "phase": "after_hide_end",
+            "visibility_changes": 2,
+            "pid": 83933,
+            "hover_hidden": 1,
+            "timestamp": 1790290132.7711902,
+            "panel_visible": 0,
+            "pointer_y": 53
+          }
+        },
+        {
+          "phase": "hidden_idle_final",
+          "duration_s": 10.137537709000014,
+          "physical_footprint_bytes_start": 106611912,
+          "physical_footprint_bytes_end": 106611912,
+          "cpu_time_s": 0.004308959,
+          "cpu_percent_one_core": 0.042504986158271404,
+          "package_idle_wakeups": 7,
+          "package_idle_wakeups_per_s": 0.6905029802044991,
+          "interrupt_wakeups": 11,
+          "interrupt_wakeups_per_s": 1.0850761117499272,
+          "ps_time_end": "0:01.76",
+          "end_marker": {
+            "visible_strokes": 1700,
+            "pointer_x": 594,
+            "section_canvas": 1,
+            "phase": "hidden_idle_final_end",
+            "visibility_changes": 2,
+            "pid": 83933,
+            "hover_hidden": 1,
+            "timestamp": 1790290145.139924,
+            "panel_visible": 0,
+            "pointer_y": 53
+          }
+        }
+      ],
+      "timings": [
+        {
+          "name": "StoreOpen",
+          "milliseconds": 15.735625,
+          "timestamp": 1790290024.478211
+        },
+        {
+          "milliseconds": 754.583583,
+          "timestamp": 1790290025.216609,
+          "name": "CoordinatorInitToMenuStarted"
+        },
+        {
+          "name": "PanelRevealToOrderedFront",
+          "milliseconds": 129.972583,
+          "timestamp": 1790290065.541017
+        },
+        {
+          "milliseconds": 1.276083,
+          "name": "PanelRevealToOrderedFront",
+          "timestamp": 1790290078.813394
+        },
+        {
+          "name": "PageSwitch",
+          "milliseconds": 312.15,
+          "timestamp": 1790290079.1162581
+        }
+      ]
+    }
+  ]
+}

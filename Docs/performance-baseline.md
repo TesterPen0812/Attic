@@ -197,7 +197,57 @@ all individual samples and start/end footprint values. CPU and interrupt
 wake-ups can vary with unrelated Mac activity despite the build lock; a single
 run is not a regression verdict.
 
-## Limits and observed waste
+## Baseline B results
+
+The machine-readable result is [performance-baseline-B.json](performance-baseline-B.json)
+and the probe's short summary is [performance-baseline-B.md](performance-baseline-B.md).
+Recorded 2026-09-24 22:49:05 UTC on an Apple M4, macOS 27.0, Xcode 27.0,
+branch `redesign/phase-0`, commit `cecd6af610bcb9da7101643f466c4f8ba4648823`.
+The ad-hoc local-only executable was
+`.build/performance/dd/Build/Products/Local/AtticPerf9c77866cfd.app/Contents/MacOS/AtticPerf9c77866cfd`
+with bundle ID `com.taha.Attic.perf.9c77866cfd`. The three fresh stores used
+seed version 2: the same 500 tasks, 200 notes, and 20 × 2,000 canvas objects
+as A, plus 5,000 finished rows with past-day `completedAt` and `doneLoggedAt`
+set. Those extra rows are in the Done log, outside Now. A has no extra Done
+history and retains seed version 1. The integrated data-foundation code and
+fixture differ from A, so these are separate workloads, not a same-seed
+regression comparison.
+
+Each cell gives runs 1/2/3 followed by the run-to-run spread (maximum minus
+minimum). Physical footprint is the end reading in MiB; CPU is percent of one
+core, and wake-ups are process interrupt wake-ups per second. Spreads use the
+unrounded readings. Every sampled window lasted 10.12–10.16 seconds.
+
+| Phase | Footprint MiB, runs 1/2/3; spread | CPU %, runs 1/2/3; spread | Wake-ups/s, runs 1/2/3; spread |
+| --- | ---: | ---: | ---: |
+| Hidden idle, settled | 163.78 / 164.78 / 166.24; 2.45 | 0.03 / 0.04 / 0.04; 0.01 | 0.98 / 1.08 / 0.99; 0.10 |
+| Tasks open | 173.91 / 174.49 / 170.77; 3.72 | 0.03 / 0.02 / 0.02; 0.02 | 0.89 / 0.79 / 0.79; 0.10 |
+| Large canvas open | 117.78 / 118.59 / 98.14; 20.45 | 0.02 / 0.02 / 0.02; 0.00 | 0.79 / 0.69 / 0.69; 0.10 |
+| After hide, settled | 121.25 / 121.80 / 101.67; 20.12 | 0.04 / 0.06 / 0.04; 0.02 | 1.09 / 1.08 / 1.09; 0.00 |
+| Final hidden idle | 121.25 / 121.80 / 101.67; 20.12 | 0.03 / 0.04 / 0.04; 0.01 | 1.09 / 1.09 / 1.09; 0.00 |
+
+All 15 end markers agreed with their start visibility and hover state. Every
+Canvas marker reported 1,700 strokes. The pointer marker was fixed at
+`(594, 53)` for all 15 phase ends, away from the configured top-right corner.
+The build lock covered seeding and measurement. The Canvas and after-hide
+footprint in run 3 was roughly 20 MiB below runs 1–2; the JSON has both start
+and end readings for inspection. No pass/fail target is inferred from this
+three-run local measurement.
+
+| Event | Run values, ms | Run-to-run spread, ms |
+| --- | ---: | ---: |
+| Coordinator init to menu shell started | 1155.18 / 794.33 / 754.58 | 400.60 |
+| Store open | 9.85 / 7.84 / 15.74 | 7.89 |
+| First reveal to order-front | 282.10 / 308.47 / 129.97 | 178.50 |
+| Later in-panel order-front | 1.08 / 1.17 / 1.28 | 0.19 |
+| Tasks-to-Canvas page switch proxy | 282.08 / 301.97 / 312.15 | 30.07 |
+
+The reveal and page-switch signposts have the same pre-scan-out endpoints as
+in A. Their values remain profiling leads, not pixel-visible latency or new
+targets. The probe's three-run spread and the UI metrics do not establish a
+same-run regression verdict.
+
+## Baseline A limits and observed waste
 
 - The corner monitor still polls on a one-second hidden cadence, with a
   250 ms leeway, and switches to 50 ms near the corner. This conflicts with
