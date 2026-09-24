@@ -758,7 +758,7 @@ private struct EdgeBlurBoard: View {
             VStack(spacing: 0) {
                 ForEach(rows) { AtticTaskRow(model: $0) }
             }
-            .offset(y: 12)
+            .offset(y: -4)
             .environment(\.atticProbesDisabled, true)
         } else {
             ScrollView {

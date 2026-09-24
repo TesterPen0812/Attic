@@ -120,7 +120,12 @@ enum AtticAppearanceCheck {
             ("Stress · Midnight Cobalt, Dark, Glass, Bold tint", AtticDesignContext(mode: .dark, palette: .midnightCobalt, surface: .glass, tint: .bold)),
             ("Stress · \(lightest.title) (lightest), Light, Frosted", AtticDesignContext(mode: .light, palette: lightest, surface: .frosted)),
             ("Stress · Increase Contrast + Reduce Transparency, Light", AtticDesignContext(mode: .light, increaseContrast: true, reduceTransparency: true)),
-            ("Stress · Increase Contrast + Reduce Transparency, Dark", AtticDesignContext(mode: .dark, increaseContrast: true, reduceTransparency: true))
+            ("Stress · Increase Contrast + Reduce Transparency, Dark", AtticDesignContext(mode: .dark, increaseContrast: true, reduceTransparency: true)),
+            ("Compare · stress 1 on the PR #5 glass floor", {
+                var context = AtticDesignContext(mode: .dark, palette: .midnightCobalt, surface: .glass, tint: .bold)
+                context.translucencyPolicy = .transparencyFirst
+                return context
+            }())
         ]
     }
 

@@ -117,7 +117,9 @@ final class AtticDesignSystemTests: XCTestCase {
     /// Set `ATTIC_APPEARANCE_QUICK=1` to check only the curated sheet set.
     func testAppearanceCheckAndContactSheets() throws {
         let quick = ProcessInfo.processInfo.environment["ATTIC_APPEARANCE_QUICK"] == "1"
-        let contexts = quick ? AtticAppearanceCheck.sheetContexts().map(\.context) : AtticAppearanceCheck.allContexts()
+        let contexts = quick
+            ? AtticAppearanceCheck.sheetContexts().map(\.context).filter { $0.translucencyPolicy == .fullContrast }
+            : AtticAppearanceCheck.allContexts()
         let started = Date()
         let report = AtticAppearanceCheck.run(contexts: contexts)
         let elapsed = Date().timeIntervalSince(started)
