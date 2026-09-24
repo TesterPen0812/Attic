@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import SwiftData
 
 struct AppRuntimeEnvironment {
@@ -222,6 +223,8 @@ final class AppCoordinator: ObservableObject {
     private let newTaskHotKey: GlobalHotKey
     private let performanceRoot: URL?
     private let isPerformanceSeedOnly: Bool
+    private var performanceSignalSource: (any DispatchSourceSignal)?
+    private var performancePhaseIndex = 0
 
     private init() {
         PerformanceSignposts.beginLaunch()
@@ -446,9 +449,6 @@ final class AppCoordinator: ObservableObject {
                ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
                 hoverMonitor.start()
                 let window = Double(ProcessInfo.processInfo.environment["ATTIC_PERF_WINDOW_SECONDS"] ?? "10") ?? 10
-                let tasksAt = 30 + window + 18
-                let canvasAt = tasksAt + window + 18
-                let hideAt = canvasAt + window + 18
                 func write(_ phase: String) {
                     PerformanceProbe.writePhase(phase, root: performanceRoot, details: [
                         "panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0,
@@ -461,29 +461,63 @@ final class AppCoordinator: ObservableObject {
                 func later(_ seconds: Double, _ action: @escaping () -> Void) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: action)
                 }
+                if ProcessInfo.processInfo.environment["ATTIC_PERF_EXTERNAL_CONTROL"] == "1" {
+                    // A signal arrives only after the sampler finishes its
+                    // window. End markers and the next phase cannot race a
+                    // slow reveal, footprint call, or AppKit hide completion.
+                    signal(SIGUSR1, SIG_IGN)
+                    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                    source.setEventHandler { [weak self] in
+                        guard let self, self.performancePhaseIndex < 5 else { return }
+                        let phases = ["hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"]
+                        write(phases[self.performancePhaseIndex] + "_end")
+                        self.performancePhaseIndex += 1
+                        switch self.performancePhaseIndex {
+                        case 1:
+                            self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
+                            later(1) { write("tasks_open") }
+                        case 2:
+                            self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
+                            later(1) { write("canvas_open") }
+                        case 3:
+                            let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
+                                write(outcome == .hidden ? "after_hide" : "hide_failed")
+                            }
+                            if !result.isAccepted { write("hide_failed") }
+                        case 4:
+                            write("hidden_idle_final")
+                        default:
+                            break
+                        }
+                    }
+                    performanceSignalSource = source
+                    source.resume()
+                    write("hidden_idle")
+                    return
+                }
                 write("hidden_idle")
                 later(30 + window + 8) { write("hidden_idle_end") }
-                later(tasksAt) {
+                later(30 + window + 18) {
                     self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
                     later(1) { write("tasks_open") }
                     later(window + 8) { write("tasks_open_end") }
-                }
-                later(canvasAt) {
-                    self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
-                    later(1) { write("canvas_open") }
-                    later(window + 8) { write("canvas_open_end") }
-                }
-                later(hideAt) {
-                    let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
-                        write(outcome == .hidden ? "after_hide" : "hide_failed")
-                        guard outcome == .hidden else { return }
-                        later(30 + window + 8) {
-                            write("after_hide_end")
-                            later(1) { write("hidden_idle_final") }
-                            later(window + 16) { write("hidden_idle_final_end") }
+                    later(window + 18) {
+                        self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
+                        later(1) { write("canvas_open") }
+                        later(window + 8) { write("canvas_open_end") }
+                        later(window + 18) {
+                            let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
+                                write(outcome == .hidden ? "after_hide" : "hide_failed")
+                                guard outcome == .hidden else { return }
+                                later(30 + window + 8) {
+                                    write("after_hide_end")
+                                    later(1) { write("hidden_idle_final") }
+                                    later(window + 16) { write("hidden_idle_final_end") }
+                                }
+                            }
+                            if !result.isAccepted { write("hide_failed") }
                         }
                     }
-                    if !result.isAccepted { write("hide_failed") }
                 }
                 return
             }
@@ -530,6 +564,8 @@ final class AppCoordinator: ObservableObject {
     }
 
     func stop() {
+        performanceSignalSource?.cancel()
+        performanceSignalSource = nil
         if isRunningTests && !isUITesting {
             hasStarted = false
             return

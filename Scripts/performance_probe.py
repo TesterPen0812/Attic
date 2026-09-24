@@ -105,6 +105,7 @@ def launch(app, root, token, logs, seed=False, done=False):
         "ATTIC_PERF_SEED_ONLY": "1" if seed else "0",
         "ATTIC_PERF_DONE_HISTORY": "1" if done else "0",
         "ATTIC_PERF_PROBE": "0" if seed else "1",
+        "ATTIC_PERF_EXTERNAL_CONTROL": "0" if seed else "1",
         "ATTIC_PERF_WINDOW_SECONDS": os.environ.get("ATTIC_PERF_WINDOW_SECONDS", "10"),
     }
     command("/usr/bin/open", "-n", "--stdout", str(logs.with_suffix(".stdout.log")),
@@ -221,6 +222,7 @@ def measure(args, app, executable, bundle, helper):
                                                    or marker.get("visible_strokes") != 1700):
                         raise RuntimeError(f"Large canvas was not selected: {marker}")
                     sample = sample_phase(helper, pid, phase, args.window, run_dir)
+                    command("/bin/kill", "-USR1", str(pid))
                     end = wait_for_phase(root, phase + "_end", timeout=30, pid=pid)
                     if end.get("panel_visible") != marker.get("panel_visible") or \
                        end.get("visibility_changes") != marker.get("visibility_changes") or \
