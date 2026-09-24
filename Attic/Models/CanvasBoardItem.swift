@@ -28,6 +28,17 @@ final class CanvasBoardItem {
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
     var deletedAt: Date? = nil
+    /// Normalised tags (see `AtticTag`), space-separated and sorted.
+    var tagsRaw: String = ""
+    /// Set when a deleted canvas is removed for good after 30 days. Its
+    /// content rows are gone; the tombstoned board row is kept (name cleared)
+    /// so a late replica can never resurrect the canvas.
+    var purgedAt: Date? = nil
+    /// When the canvas entered Recently Deleted, which starts its 30 days.
+    /// nil on a canvas deleted before Recently Deleted existed: it is listed
+    /// and restorable but never removed automatically, so upgrading can
+    /// never cause an old deletion to be purged at the first cleanup.
+    var recentlyDeletedAt: Date? = nil
 
     init(
         id: UUID = CanvasBoardItem.logicalBoardID,
@@ -51,5 +62,10 @@ final class CanvasBoardItem {
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.deletedAt = deletedAt
+    }
+
+    var tags: [String] {
+        get { AtticTag.decode(tagsRaw) }
+        set { tagsRaw = AtticTag.encode(newValue) }
     }
 }

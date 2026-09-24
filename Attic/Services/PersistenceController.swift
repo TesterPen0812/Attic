@@ -17,6 +17,35 @@ enum PersistenceController {
     @MainActor private static var retainedSchemaContainers: [NSPersistentCloudKitContainer] = []
     #endif
 
+    /// Every model the app stores, registered identically in the normal and
+    /// the UI-test containers so the two can never drift apart. New models are
+    /// added here once. The schema changes only additively (new entities and
+    /// optional or defaulted attributes), which Core Data migrates in place
+    /// with an inferred lightweight mapping; see `SchemaMigrationTests`.
+    static var appModelTypes: [any PersistentModel.Type] {
+        #if os(macOS)
+        [
+            TaskItem.self,
+            NoteItem.self,
+            NoteAttachment.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            CanvasSemanticObjectItem.self,
+            ItemLink.self
+        ]
+        #else
+        [
+            TaskItem.self,
+            NoteItem.self,
+            CanvasBoardItem.self,
+            CanvasStrokeItem.self,
+            CanvasImageItem.self,
+            ItemLink.self
+        ]
+        #endif
+    }
+
     static func makeConfiguration(
         inMemory: Bool = false,
         cloudSyncEnabled: Bool = true,
@@ -62,27 +91,10 @@ enum PersistenceController {
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
         }
-        #if os(macOS)
         return try ModelContainer(
-            for: TaskItem.self,
-            NoteItem.self,
-            NoteAttachment.self,
-            CanvasBoardItem.self,
-            CanvasStrokeItem.self,
-            CanvasImageItem.self,
-            CanvasSemanticObjectItem.self,
+            for: Schema(appModelTypes),
             configurations: configuration
         )
-        #else
-        return try ModelContainer(
-            for: TaskItem.self,
-            NoteItem.self,
-            CanvasBoardItem.self,
-            CanvasStrokeItem.self,
-            CanvasImageItem.self,
-            configurations: configuration
-        )
-        #endif
     }
 
     /// A durable, CloudKit-free store used only by controlled UI tests that
@@ -117,27 +129,10 @@ enum PersistenceController {
             url: storeURL,
             cloudKitDatabase: .none
         )
-        #if os(macOS)
         return try ModelContainer(
-            for: TaskItem.self,
-            NoteItem.self,
-            NoteAttachment.self,
-            CanvasBoardItem.self,
-            CanvasStrokeItem.self,
-            CanvasImageItem.self,
-            CanvasSemanticObjectItem.self,
+            for: Schema(appModelTypes),
             configurations: configuration
         )
-        #else
-        return try ModelContainer(
-            for: TaskItem.self,
-            NoteItem.self,
-            CanvasBoardItem.self,
-            CanvasStrokeItem.self,
-            CanvasImageItem.self,
-            configurations: configuration
-        )
-        #endif
     }
 
     #if DEBUG

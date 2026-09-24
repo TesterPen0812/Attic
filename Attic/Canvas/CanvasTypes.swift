@@ -258,6 +258,8 @@ struct CanvasBoard: Identifiable, Equatable {
     let mutationVersion: Int64
     let createdAt: Date
     let updatedAt: Date
+    /// Normalised tags (see `AtticTag`).
+    var tags: [String] = []
 
     static let defaultBoard = CanvasBoard(
         id: CanvasBoardItem.logicalBoardID,
