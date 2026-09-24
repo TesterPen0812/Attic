@@ -991,6 +991,12 @@ final class TaskStore: ObservableObject {
     /// Removes one attachment from a task into Recently Deleted: the
     /// reference moves to the task's removed list on every replica, and its
     /// file stays until the removal is purged 30 days later.
+    ///
+    /// Each replica is changed from its own lists, never overwritten from the
+    /// visible one: a duplicate that holds attachments the visible task does
+    /// not keeps every one of them, so no reference (and no file the launch
+    /// sweep would then treat as unreferenced) is lost. A replica whose lists
+    /// can't be read refuses the removal.
     @discardableResult
     func removeAttachment(_ attachmentID: UUID, from taskID: UUID) -> Bool {
         guard let task = tasks.first(where: { $0.id == taskID }),
@@ -1001,14 +1007,23 @@ final class TaskStore: ObservableObject {
         let owner = familyOwner(of: task)
         do {
             let timestamp = now()
-            let kept = try JSONEncoder().encode(task.attachments.filter { $0.id != attachmentID })
-            let removedList = try JSONEncoder().encode(
-                task.removedAttachments + [RemovedTaskAttachment(reference: removed, removedAt: timestamp)]
-            )
+            let shownCopy = TaskReplicaSnapshot(task)
             for replica in try storedTasks(matching: taskID) {
-                replica.imageReferencesData = kept
-                replica.removedAttachmentsData = removedList
-                replica.updatedAt = timestamp
+                // An identical copy is stamped with the shown one and stays
+                // identical. A differing duplicate keeps its time, so the
+                // shown copy stays the one shown: restamping it could let it
+                // win the next refresh and change what the task displays.
+                let stamp = replica === task || TaskReplicaSnapshot(replica) == shownCopy
+                let lists = try Self.attachmentLists(of: replica)
+                // The replica's own copy of the reference, if it holds one.
+                let reference = lists.shown.first { $0.id == attachmentID } ?? removed
+                let kept = lists.shown.filter { $0.id != attachmentID }
+                let removedList = lists.removed.filter { $0.reference.id != attachmentID }
+                    + [RemovedTaskAttachment(reference: reference, removedAt: timestamp)]
+                replica.imageReferencesData = kept.isEmpty && replica.imageReferencesData == nil
+                    ? nil : try JSONEncoder().encode(kept)
+                replica.removedAttachmentsData = try JSONEncoder().encode(removedList)
+                if stamp { replica.updatedAt = timestamp }
             }
         } catch {
             context.rollback()
@@ -1016,6 +1031,18 @@ final class TaskStore: ObservableObject {
             return false
         }
         return save(owner: owner)
+    }
+
+    /// A replica's shown and removed attachments, decoded strictly: callers
+    /// that rewrite them refuse rather than drop what they can't read.
+    private static func attachmentLists(of replica: TaskItem) throws
+        -> (shown: [TaskImageReference], removed: [RemovedTaskAttachment]) {
+        let decoder = JSONDecoder()
+        let shown = try replica.imageReferencesData.flatMap { $0.isEmpty ? nil : $0 }
+            .map { try decoder.decode([TaskImageReference].self, from: $0) } ?? []
+        let removed = try replica.removedAttachmentsData.flatMap { $0.isEmpty ? nil : $0 }
+            .map { try decoder.decode([RemovedTaskAttachment].self, from: $0) } ?? []
+        return (shown, removed)
     }
 
     /// Attachments removed from tasks that are still shown, newest first.
@@ -1034,7 +1061,8 @@ final class TaskStore: ObservableObject {
     }
 
     /// Puts a removed attachment back at the end of its task's attachments,
-    /// on every replica, in one save.
+    /// on every replica, in one save. As with removal, each replica is
+    /// changed from its own lists, so references only a duplicate holds stay.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
         guard let task = tasks.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
@@ -1048,14 +1076,17 @@ final class TaskStore: ObservableObject {
             return false
         }
         do {
-            let restored = try JSONEncoder().encode(task.attachments + [entry.reference])
-            let remaining = task.removedAttachments.filter { $0.reference.id != attachmentID }
-            let remainingData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
             let timestamp = now()
+            let shownCopy = TaskReplicaSnapshot(task)
             for replica in try storedTasks(matching: task.id) {
-                replica.imageReferencesData = restored
-                replica.removedAttachmentsData = remainingData
-                replica.updatedAt = timestamp
+                let stamp = replica === task || TaskReplicaSnapshot(replica) == shownCopy
+                let lists = try Self.attachmentLists(of: replica)
+                let reference = lists.removed.first { $0.reference.id == attachmentID }?.reference ?? entry.reference
+                let shown = lists.shown.contains { $0.id == attachmentID } ? lists.shown : lists.shown + [reference]
+                let remaining = lists.removed.filter { $0.reference.id != attachmentID }
+                replica.imageReferencesData = try JSONEncoder().encode(shown)
+                replica.removedAttachmentsData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
+                if stamp { replica.updatedAt = timestamp }
             }
         } catch {
             context.rollback()

@@ -610,6 +610,50 @@ final class TaskAttachmentDropTests: XCTestCase {
         XCTAssertNotNil(stillThere)
     }
 
+    func testRemovingAndRestoringAnAttachmentKeepsWhatOnlyADuplicateHoldsThroughTheLaunchSweep() async throws {
+        let (store, container, files) = try makeStore()
+        let day: TimeInterval = 24 * 60 * 60
+        let trip = try XCTUnwrap(store.create(title: "Trip"))
+        _ = await store.attachStagedFiles(to: trip.id) { [self] in TaskAttachmentStaging(urls: [try pngFile()]) }
+        let bound = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments.first)
+
+        // A physical duplicate that holds the shown attachment and one more.
+        let replicaImport = try await files.importAttachments([try textFile(named: "Replica.txt")], existing: [])
+        let replicaOnly = try XCTUnwrap(replicaImport.first)
+        let other = ModelContext(container)
+        let duplicate = TaskItem(title: "Trip", createdAt: trip.createdAt)
+        duplicate.id = trip.id
+        duplicate.updatedAt = trip.updatedAt.addingTimeInterval(-60)
+        duplicate.imageReferencesData = try JSONEncoder().encode([bound, replicaOnly])
+        other.insert(duplicate)
+        try other.save()
+        store.refresh()
+        XCTAssertEqual(store.tasks.first { $0.id == trip.id }?.attachments, [bound], "the visible replica differs")
+
+        XCTAssertTrue(store.removeAttachment(bound.id, from: trip.id))
+        XCTAssertTrue(store.restoreAttachment(bound.id))
+        XCTAssertTrue(store.removeAttachment(bound.id, from: trip.id))
+        store.refresh()
+        XCTAssertEqual(store.tasks.first { $0.id == trip.id }?.attachments, [], "the shown copy is still the one shown")
+
+        let tripID = trip.id
+        let rows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == tripID }))
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.contains { $0.attachments == [replicaOnly] }, "the duplicate keeps its own attachment")
+        XCTAssertTrue(rows.allSatisfy { $0.removedAttachments.map(\.reference) == [bound] })
+
+        // The next launch's sweep, with every copy old enough to judge.
+        for url in [privateDirectory(bound), privateDirectory(replicaOnly)] {
+            try backdate(url, by: 3 * day)
+        }
+        let removed = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: root.appendingPathComponent("drops"))
+        XCTAssertEqual(removed, 0, "no file is lost")
+        for reference in [bound, replicaOnly] {
+            let kept = try await files.verifiedURL(for: reference)
+            XCTAssertNotNil(kept, "\(reference.filename) is still referenced by a replica")
+        }
+    }
+
     func testLaunchSweepDoesNothingWhenAReplicaIsUnreadableOrAnImportIsRunning() async throws {
         let (store, container, files) = try makeStore()
         let orphans = try await files.importAttachments([try textFile(named: "Draft.txt")], existing: [])
