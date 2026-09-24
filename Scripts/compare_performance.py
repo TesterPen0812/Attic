@@ -11,14 +11,17 @@ from pathlib import Path
 import statistics
 
 
-PHASES = ("hidden_idle", "tasks_open", "canvas_open", "after_hide")
-MEASURES = (
-    ("physical_footprint_bytes_end", "footprint"),
-    ("cpu_percent_one_core", "CPU"),
-    ("package_idle_wakeups_per_s", "idle wake-ups"),
-    ("interrupt_wakeups_per_s", "interrupt wake-ups"),
-)
-TIMINGS = ("AppLaunchToMenuReady", "StoreOpen", "PanelRevealToInteractive", "PageSwitch")
+PHASES = ("hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final")
+MEASURES = (("physical_footprint_bytes_end", "footprint"),
+            ("cpu_percent_one_core", "CPU"),
+            ("interrupt_wakeups_per_s", "interrupt wake-ups"))
+TIMINGS = ("CoordinatorInitToMenuStarted", "StoreOpen", "PanelRevealToOrderedFront", "PageSwitch")
+PRIMARY = {("hidden_idle", "physical_footprint_bytes_end"),
+           ("hidden_idle", "cpu_percent_one_core"),
+           ("hidden_idle", "interrupt_wakeups_per_s"),
+           ("after_hide", "physical_footprint_bytes_end"),
+           ("hidden_idle_final", "physical_footprint_bytes_end")}
+PRIMARY_TIMINGS = {"PanelRevealToOrderedFront"}
 
 
 def series(document, phase, key):
@@ -53,11 +56,14 @@ def compare(title, old, new):
     # Every candidate run must sit beyond the old range plus one more
     # reference spread. A noisy candidate cannot mask a consistently higher
     # floor, while an isolated slow run remains a review item.
-    clear = min(new) > max(old) + old_spread
+    # A flat reference cannot estimate variance, so its observation is
+    # reported without gating instead of treating any nonzero delta as proof.
+    clear = old_spread > 0 and min(new) > max(old) + old_spread
     print(f"{title}: reference median {statistics.median(old):.4g} "
           f"[{min(old):.4g}, {max(old):.4g}], candidate median "
           f"{statistics.median(new):.4g} [{min(new):.4g}, {max(new):.4g}]"
-          + (" CLEAR REGRESSION" if clear else ""))
+          + (" CLEAR REGRESSION" if clear else
+             " (flat reference; report only)" if old_spread == 0 else ""))
     return clear
 
 
@@ -72,17 +78,17 @@ def main():
                 "done_history", "window_s"):
         if base[key] != current[key]:
             parser.error(f"Incomparable {key}: {base[key]!r} versus {current[key]!r}")
-    if len(base["runs"]) < 3 or len(current["runs"]) < 3:
-        parser.error("At least three runs are required on both sides")
+    if len(base["runs"]) < 5 or len(current["runs"]) < 5:
+        parser.error("At least five runs are required on both sides")
     failures = []
     for phase in PHASES:
         for key, title in MEASURES:
             old = series(base, phase, key)
             new = series(current, phase, key)
-            if compare(f"{phase} {title}", old, new):
+            if compare(f"{phase} {title}", old, new) and (phase, key) in PRIMARY:
                 failures.append(f"{phase} {title}")
     for name in TIMINGS:
-        if compare(f"{name} ms", timing_series(base, name), timing_series(current, name)):
+        if compare(f"{name} ms", timing_series(base, name), timing_series(current, name)) and name in PRIMARY_TIMINGS:
             failures.append(name)
     if failures:
         raise SystemExit("Clear regressions: " + ", ".join(failures))

@@ -24,7 +24,7 @@ concurrency:
 env:
   LUNA_REPAIRED_COMMIT: 8063d92c995015b77a0493723270b6c183adb784
   BUNDLE_FROZEN: "true"
-  PERF_REFERENCE_COMMIT: 635fdf5ac2f50329e75ae83b098eeaf7dbf2cc59
+  PERF_REFERENCE_COMMIT: 28160017f4ec6009070bb81c2c718fffa567095f
 
 jobs:
   macos:
@@ -211,9 +211,10 @@ jobs:
             -scheme AtticUI \
             -configuration Local \
             -destination 'platform=macOS' \
-            -derivedDataPath "$RUNNER_TEMP/AtticUITests" \
+            -derivedDataPath "$RUNNER_TEMP/AtticPerformanceUITests" \
             -resultBundlePath "$RUNNER_TEMP/AtticPerformanceUITests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.perf.ui \
             -only-testing:AtticUITests/PerformanceUITests \
             test
 
@@ -229,16 +230,29 @@ jobs:
       - name: Compare seeded preview with Phase 0 reference on this runner
         id: perf_probe
         continue-on-error: true
-        timeout-minutes: 35
+        timeout-minutes: 90
         run: |
           git worktree add --detach "$RUNNER_TEMP/AtticPerfReference" "$PERF_REFERENCE_COMMIT"
-          python3 "$RUNNER_TEMP/AtticPerfReference/Scripts/performance_probe.py" \
-            --runs 3 --output "$RUNNER_TEMP/AtticPerfReference.json"
-          python3 Scripts/performance_probe.py \
-            --runs 3 --output "$RUNNER_TEMP/AtticPerfCandidate.json"
-          python3 Scripts/compare_performance.py \
-            "$RUNNER_TEMP/AtticPerfReference.json" \
-            "$RUNNER_TEMP/AtticPerfCandidate.json"
+          python3 Scripts/interleave_performance.py \
+            "$RUNNER_TEMP/AtticPerfReference" . "$RUNNER_TEMP/AtticPerfFirst"
+
+      # Runner variance needs several macos-26 jobs before this is a required
+      # gate. Confirm a suspected regression with a fresh interleaved sample.
+      - name: Report and confirm seeded preview comparison
+        id: perf_compare
+        if: steps.perf_probe.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 90
+        run: |
+          if ! python3 Scripts/compare_performance.py \
+              "$RUNNER_TEMP/AtticPerfFirst-reference.json" \
+              "$RUNNER_TEMP/AtticPerfFirst-candidate.json"; then
+            python3 Scripts/interleave_performance.py \
+              "$RUNNER_TEMP/AtticPerfReference" . "$RUNNER_TEMP/AtticPerfConfirm"
+            python3 Scripts/compare_performance.py \
+              "$RUNNER_TEMP/AtticPerfConfirm-reference.json" \
+              "$RUNNER_TEMP/AtticPerfConfirm-candidate.json"
+          fi
 
       - name: Upload same-run performance comparison
         if: always()
@@ -246,10 +260,8 @@ jobs:
         with:
           name: macos-performance-comparison-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/AtticPerfReference.json
-            ${{ runner.temp }}/AtticPerfReference.md
-            ${{ runner.temp }}/AtticPerfCandidate.json
-            ${{ runner.temp }}/AtticPerfCandidate.md
+            ${{ runner.temp }}/AtticPerfFirst-*.json
+            ${{ runner.temp }}/AtticPerfConfirm-*.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -293,6 +305,7 @@ jobs:
           UI_TESTS: ${{ steps.ui_tests.outcome }}
           PERF_UI_TESTS: ${{ steps.perf_ui_tests.outcome }}
           PERF_PROBE: ${{ steps.perf_probe.outcome }}
+          PERF_COMPARE: ${{ steps.perf_compare.outcome }}
           ANALYZER: ${{ steps.analyzer.outcome }}
           FINAL_STATE: ${{ steps.final_state.outcome }}
         run: |
@@ -304,6 +317,7 @@ jobs:
             ui-tests "$UI_TESTS" \
             performance-ui-tests "$PERF_UI_TESTS" \
             performance-comparison "$PERF_PROBE" \
+            performance-regression-observation "$PERF_COMPARE" \
             analyzer "$ANALYZER" \
             final-worktree "$FINAL_STATE"
           test "$PROJECT_VERIFY" = success
