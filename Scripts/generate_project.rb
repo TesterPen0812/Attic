@@ -111,7 +111,9 @@ shared_mobile_sources = [
   'Services/CanvasStoreStrokes.swift',
   'Services/PersistenceController.swift',
   'Services/NoteStore.swift',
-  'Services/TaskStore.swift'
+  'Services/TaskDrafts.swift',
+  'Services/TaskStore.swift',
+  'Services/TaskTextParser.swift'
 ]
 shared_mobile_sources.each do |path|
   reference = app_group.files.find { |file| file.path == path }
