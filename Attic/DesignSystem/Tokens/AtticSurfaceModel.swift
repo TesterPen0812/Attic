@@ -95,9 +95,10 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// The desktops this surface is judged over (Solid transmits nothing).
     var desktops: [Desktop] { kind == .solid ? [.midGrey] : Desktop.allCases }
 
-    /// Helper-level text: helper, placeholder and the sidebar's hint.
+    /// Helper-level text: helper, placeholder, the sidebar's hint, and
+    /// disabled text (the quiet end of the ladder, with the same floor).
     static func isHelperText(_ ink: AtticInk) -> Bool {
-        ink == .helper || ink == .placeholder || ink == .chromeHint
+        ink == .helper || ink == .placeholder || ink == .chromeHint || ink == .disabledText
     }
 
     /// The least contrast a role must keep on this surface (the rule above).
@@ -107,7 +108,6 @@ struct AtticSurfaceModel: Equatable, Sendable {
 
     static func floor(for ink: AtticInk, kind: AtticPanelSurfaceTreatment.Kind, increaseContrast: Bool) -> Double {
         switch ink.floor {
-        case .exempt: return 1
         case .nonText: return 3
         case .text:
             if kind != .solid, !increaseContrast, isHelperText(ink) { return 3 }
@@ -150,7 +150,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// >= 1 means every pair passes.
     func worstMargin(_ pairs: [Pair]) -> Double {
         var margin = Double.infinity
-        for pair in pairs where pair.ink.floor != .exempt {
+        for pair in pairs {
             for background in backgrounds(for: pair) {
                 margin = min(margin, pair.foreground.contrast(on: background) / floor(for: pair.ink))
             }
@@ -293,7 +293,11 @@ struct AtticSurfaceModel: Equatable, Sendable {
             p(.priorityHigh, [pressed]), p(.priorityMedium, [pressed]),
             p(.priorityLow, [pressed]), p(.priorityNone, [pressed]), p(.doneFill, [pressed]),
             p(.priorityHigh, [recessed, hover]), p(.priorityMedium, [recessed, hover]),
-            p(.priorityLow, [recessed, hover]), p(.priorityNone, [recessed, hover])
+            p(.priorityLow, [recessed, hover]), p(.priorityNone, [recessed, hover]),
+            // Disabled rows and the ghost of a raised control (no hover or
+            // press while disabled).
+            p(.disabledText, []), p(.disabledText, [recessed]), p(.disabledText, [controlFace]),
+            p(.disabledIcon, []), p(.disabledIcon, [recessed]), p(.disabledIcon, [controlFace])
         ]
     }
 

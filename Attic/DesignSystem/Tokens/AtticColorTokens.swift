@@ -17,22 +17,25 @@ enum AtticInk: String, CaseIterable, Sendable {
     /// The one near-black (Light) / near-white (Dark) primary fill: the send
     /// button and the drag-stack count. Near-black is never used for chips.
     case inverseFill, onInverse
-    /// Disabled controls are a ghost; WCAG exempts inactive components.
-    case disabled
+    /// Disabled controls are a ghost (a faint rim, a light glyph), but
+    /// nothing is exempt from the readability rule: disabled text keeps the
+    /// text floor at the helper level (4.5 : 1 on Solid, tinted Solid and
+    /// under Increase Contrast or Reduce Transparency; 3 : 1 on Glass and
+    /// Frosted), and disabled icons keep the icons' 3 : 1. The ghost comes
+    /// from the faint control material and the lighter weight of the ladder,
+    /// not from unreadable ink.
+    case disabledText, disabledIcon
 
     enum Floor: Equatable, Sendable {
         /// 4.5 : 1, including helper and inactive text.
         case text
         /// 3 : 1 for icons, rings, circles and other non-text UI.
         case nonText
-        /// Not judged (disabled ghosts).
-        case exempt
 
         var ratio: Double {
             switch self {
             case .text: 4.5
             case .nonText: 3.0
-            case .exempt: 1.0
             }
         }
     }
@@ -41,14 +44,12 @@ enum AtticInk: String, CaseIterable, Sendable {
         switch self {
         case .heading, .body, .label, .helper, .placeholder,
              .chromeHeading, .chromeBody, .chromeHint,
-             .accentText, .dueText, .warningText, .onInverse:
+             .accentText, .dueText, .warningText, .onInverse, .disabledText:
             .text
         case .icon, .chromeIcon, .glyph, .chevron, .accent,
              .priorityNone, .priorityLow, .priorityMedium, .priorityHigh,
-             .doneFill, .onDone, .inverseFill:
+             .doneFill, .onDone, .inverseFill, .disabledIcon:
             .nonText
-        case .disabled:
-            .exempt
         }
     }
 }
@@ -182,6 +183,7 @@ struct AtticColorTokens: Equatable, Sendable {
         /// the ladder (helper would climb to the label's grey).
         func backgrounds(for ink: AtticInk, on surface: AtticRGBA) -> [AtticRGBA] {
             let face = recipes.rest.face.over(basePanel)
+            let ghostFace = recipes.disabled.face.over(basePanel)
             let card = recessed.over(surface)
             let rows = [surface, hover.over(surface), selected.over(surface), pressed.over(surface), card, hover.over(card)]
             let menus = [popoverFill, selected.over(popoverFill), pressed.over(popoverFill), chipHover.over(popoverFill)]
@@ -200,6 +202,10 @@ struct AtticColorTokens: Equatable, Sendable {
                 return [face]
             case .icon, .chevron:
                 return rows + menus + [face, chipHover.over(face), chipSelected.over(face)]
+            case .disabledText, .disabledIcon:
+                // Disabled rows, menu rows, and the ghost of a raised control.
+                // A disabled control shows no hover or press.
+                return [surface, card, popoverFill, contentCard, groupCard, ghostFace, face]
             default:
                 return rows + menus + settings
             }
@@ -217,8 +223,14 @@ struct AtticColorTokens: Equatable, Sendable {
         for ink in [AtticInk.helper, .label, .placeholder, .body, .heading] {
             inks[ink] = inks[ink]!.tuned(toContrast: textTarget, against: backgrounds(for: ink, on: basePanel), lighten: dark)
         }
-        for ink in [AtticInk.icon, .chevron, .glyph] {
+        for ink in [AtticInk.icon, .chevron, .glyph, .disabledIcon] {
             inks[ink] = inks[ink]!.tuned(toContrast: nonTextTarget, against: backgrounds(for: ink, on: basePanel), lighten: dark)
+        }
+        // Disabled text sits at the text floor, and never louder than the
+        // helper grey: it is the quiet end of the ladder.
+        inks[.disabledText] = inks[.disabledText]!.tuned(toContrast: textTarget, against: backgrounds(for: .disabledText, on: basePanel), lighten: dark)
+        if inks[.disabledText]!.contrast(on: basePanel) > inks[.helper]!.contrast(on: basePanel) {
+            inks[.disabledText] = inks[.helper]!
         }
         // Keep the ladder in order: a label is never quieter than helper text.
         let helperOnBase = inks[.helper]!.contrast(on: basePanel)
@@ -304,7 +316,7 @@ struct AtticColorTokens: Equatable, Sendable {
         // Twice: the second pass sees the tag fills of a retuned accent.
         for _ in 0..<(translucentOrTinted ? 2 : 0) {
             for (model, pairs) in [(panel, panelPairs()), (chrome, chromePairs())] {
-                for (ink, group) in Dictionary(grouping: pairs, by: \.ink) where ink.floor != .exempt {
+                for (ink, group) in Dictionary(grouping: pairs, by: \.ink) {
                     let backgrounds = group.flatMap { model.backgrounds(for: $0) }
                     let target = model.floor(for: ink) * (ink.floor == .text ? textTarget / 4.5 : nonTextTarget / 3)
                     inks[ink] = inks[ink]!.tuned(toContrast: target, against: backgrounds, lighten: dark)
@@ -405,7 +417,7 @@ struct AtticColorTokens: Equatable, Sendable {
                     .chromeHeading: AtticRGBA(0x1E1F1F), .chromeBody: AtticRGBA(0x494B4A), .chromeHint: AtticRGBA(0x676867),
                     .icon: AtticRGBA(0x7D7E7D), .chromeIcon: AtticRGBA(0x7A7B7A), .glyph: AtticRGBA(0x2F3130), .chevron: AtticRGBA(0x7D7E7D),
                     .inverseFill: AtticRGBA(0x2A2B2B), .onInverse: AtticRGBA(0xFAFAFA),
-                    .disabled: AtticRGBA(0xB9BAB9)
+                    .disabledText: AtticRGBA(0x767776), .disabledIcon: AtticRGBA(0xA3A4A3)
                 ]
             case (false, true):
                 return [
@@ -414,7 +426,7 @@ struct AtticColorTokens: Equatable, Sendable {
                     .chromeHeading: AtticRGBA(0x111212), .chromeBody: AtticRGBA(0x2A2B2B), .chromeHint: AtticRGBA(0x4B4C4B),
                     .icon: AtticRGBA(0x5B5C5B), .chromeIcon: AtticRGBA(0x5B5C5B), .glyph: AtticRGBA(0x161717), .chevron: AtticRGBA(0x5B5C5B),
                     .inverseFill: AtticRGBA(0x161717), .onInverse: AtticRGBA(0xFFFFFF),
-                    .disabled: AtticRGBA(0x9A9B9A)
+                    .disabledText: AtticRGBA(0x575857), .disabledIcon: AtticRGBA(0x8A8B8A)
                 ]
             case (true, false):
                 return [
@@ -423,7 +435,7 @@ struct AtticColorTokens: Equatable, Sendable {
                     .chromeHeading: AtticRGBA(0xF5F5F5), .chromeBody: AtticRGBA(0xE2E2E2), .chromeHint: AtticRGBA(0xC4C4C4),
                     .icon: AtticRGBA(0x9A9A9A), .chromeIcon: AtticRGBA(0xB4B4B4), .glyph: AtticRGBA(0xEAEAEA), .chevron: AtticRGBA(0x9A9A9A),
                     .inverseFill: AtticRGBA(0xEDEDED), .onInverse: AtticRGBA(0x1E1E1F),
-                    .disabled: AtticRGBA(0x5E5E5F)
+                    .disabledText: AtticRGBA(0x939394), .disabledIcon: AtticRGBA(0x6E6E6F)
                 ]
             case (true, true):
                 return [
@@ -432,7 +444,7 @@ struct AtticColorTokens: Equatable, Sendable {
                     .chromeHeading: AtticRGBA(0xFAFAFA), .chromeBody: AtticRGBA(0xF0F0F0), .chromeHint: AtticRGBA(0xD8D8D8),
                     .icon: AtticRGBA(0xB4B4B4), .chromeIcon: AtticRGBA(0xC8C8C8), .glyph: AtticRGBA(0xF5F5F5), .chevron: AtticRGBA(0xB4B4B4),
                     .inverseFill: AtticRGBA(0xFAFAFA), .onInverse: AtticRGBA(0x161617),
-                    .disabled: AtticRGBA(0x6E6E6F)
+                    .disabledText: AtticRGBA(0xB0B0B1), .disabledIcon: AtticRGBA(0x7E7E7F)
                 ]
             }
         }
