@@ -29,7 +29,7 @@ import UniformTypeIdentifiers
 @MainActor
 enum AtticAppearanceCheck {
     struct Failure: Hashable {
-        enum Kind: String { case contrast, clipped, overlap, outOfBounds, size, radius, model, render }
+        enum Kind: String { case contrast, glyphContrast, clipped, overlap, outOfBounds, size, radius, geometry, model, render, native }
         let kind: Kind
         let family: String
         let specimen: String
@@ -41,19 +41,27 @@ enum AtticAppearanceCheck {
         var renders = 0
         var probesChecked = 0
         var contrastPairsChecked = 0
+        /// Glyphs whose contrast was read from their own pixels.
+        var glyphsMeasured = 0
+        /// Controls whose corner radius and size were fitted from pixels.
+        var geometryMeasured = 0
         /// Unique failures, each with the combinations it happened in.
         var failures: [Failure: [String]] = [:]
         /// Foundation and Tint strength per palette, mode and surface, under
         /// both translucency policies: the numbers behind the look.
         var surfaceTable: [String] = []
         var worstContrast: [String: (ratio: Double, floor: Double, where: String)] = [:]
+        /// The lowest glyph contrast read from pixels, per role.
+        var worstGlyph: [String: (ratio: Double, floor: Double, where: String)] = [:]
+        /// Measured corner radii and sizes (control, measured, token).
+        var geometryTable: [String] = []
 
         mutating func fail(_ failure: Failure, in combination: String) {
             failures[failure, default: []].append(combination)
         }
 
         var headline: String {
-            "\(combinations) combinations, \(renders) renders, \(probesChecked) probes, \(contrastPairsChecked) contrast checks, \(failures.count) distinct failures"
+            "\(combinations) combinations, \(renders) renders, \(probesChecked) probes, \(contrastPairsChecked) contrast checks, \(glyphsMeasured) glyphs measured from pixels, \(geometryMeasured) corners and sizes fitted from pixels, \(failures.count) distinct failures"
         }
 
         var summary: String {
@@ -70,9 +78,21 @@ enum AtticAppearanceCheck {
             lines.append("Surfaces: coverage over the desktop, and each Tint step's colour difference at the top edge (ΔE76; designed 3 / 7 / 12):")
             lines.append(contentsOf: surfaceTable.map { "  " + $0 })
             lines.append("")
-            lines.append("Lowest contrast per role (ratio / floor):")
+            lines.append("Lowest contrast per role, declared ink on the sampled background (ratio / floor):")
             for (role, value) in worstContrast.sorted(by: { $0.key < $1.key }) {
                 lines.append(String(format: "  %@: %.2f / %.1f  (%@)", role, value.ratio, value.floor, value.where))
+            }
+            if !worstGlyph.isEmpty {
+                lines.append("")
+                lines.append("Lowest contrast per role, read from the glyph's own pixels (ratio / floor):")
+                for (role, value) in worstGlyph.sorted(by: { $0.key < $1.key }) {
+                    lines.append(String(format: "  %@: %.2f / %.1f  (%@)", role, value.ratio, value.floor, value.where))
+                }
+            }
+            if !geometryTable.isEmpty {
+                lines.append("")
+                lines.append("Corners and sizes fitted from pixels (measured / token):")
+                lines.append(contentsOf: geometryTable.map { "  " + $0 })
             }
             return lines.joined(separator: "\n")
         }
@@ -130,6 +150,7 @@ enum AtticAppearanceCheck {
         var report = Report()
         report.combinations = contexts.count
         checkModel(contexts: contexts, report: &report)
+        checkGeometry(report: &report)
         for context in contexts {
             let desktops: [AtticSurfaceModel.Desktop] = context.isTranslucent ? AtticSurfaceModel.Desktop.allCases : [.midGrey]
             for desktop in desktops {
@@ -154,9 +175,10 @@ enum AtticAppearanceCheck {
             if tokens.panel.worstMargin(pairs) < 0.999 {
                 report.fail(.init(kind: .model, family: "Model", specimen: "Panel surface", detail: String(format: "worst margin %.3f", tokens.panel.worstMargin(pairs))), in: context.caption)
             }
-            // Cards are base style: their text is judged on the card itself.
-            for (card, name) in [(tokens.contentCard, "content card"), (tokens.groupCard, "group card")] {
-                for ink in [AtticInk.heading, .body, .label, .helper] {
+            // Cards and menus are base style: their text is judged on the
+            // card itself. Disabled text and icons included (nothing is exempt).
+            for (card, name) in [(tokens.contentCard, "content card"), (tokens.groupCard, "group card"), (tokens.popoverFill, "menu")] {
+                for ink in [AtticInk.heading, .body, .label, .helper, .disabledText, .disabledIcon] {
                     let ratio = tokens.ink(ink).contrast(on: card)
                     let floor = AtticSurfaceModel.floor(for: ink, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
                     if ratio < floor {
@@ -166,6 +188,18 @@ enum AtticAppearanceCheck {
             }
         }
         report.surfaceTable = surfaceTable()
+    }
+
+    /// Corner radii and sizes fitted from the pixels of a representative
+    /// set of controls (`AtticGeometryCheck`).
+    static func checkGeometry(report: inout Report) {
+        for result in AtticGeometryCheck.run() {
+            report.geometryMeasured += 1
+            report.geometryTable.append(result.line)
+            for problem in result.problems {
+                report.fail(.init(kind: .geometry, family: "Geometry", specimen: result.specimen, detail: problem), in: "Light · Original · Solid")
+            }
+        }
     }
 
     static func surfaceTable() -> [String] {
@@ -259,7 +293,7 @@ enum AtticAppearanceCheck {
 
         // Contrast against the rendered pixels.
         for probe in visual {
-            guard let ink = probe.ink, ink.floor != .exempt, let foreground = probe.foreground,
+            guard let ink = probe.ink, let foreground = probe.foreground,
                   !probe.frame.isNull, probe.frame.width > 1, probe.frame.height > 1 else { continue }
             let isIcon: Bool = if case .icon = probe.kind { true } else { false }
             guard let background = bitmap.background(around: probe.frame, outside: isIcon, foreground: foreground, scale: scale) else { continue }
@@ -281,6 +315,24 @@ enum AtticAppearanceCheck {
                     specimen: displayName(probe.specimen),
                     detail: "\(label(probe)) \(ink.rawValue) below \(floor == 4.5 ? "4.5" : String(format: "%.1f", floor)) : 1"
                 ), in: combination + String(format: " (%.2f on %@)", ratio, background.hexString))
+            }
+            // Independently, the glyph's own pixels (needs 2× to resolve
+            // a glyph's core from its antialiased edge).
+            if scale >= 2, let glyph = bitmap.glyphContrast(in: probe.frame, background: background, scale: scale) {
+                report.glyphsMeasured += 1
+                let place = "\(family.title) › \(label(probe)) · \(combination)"
+                if let current = report.worstGlyph[role] {
+                    if glyph.ratio / floor < current.ratio / current.floor { report.worstGlyph[role] = (glyph.ratio, floor, place) }
+                } else {
+                    report.worstGlyph[role] = (glyph.ratio, floor, place)
+                }
+                if glyph.ratio + glyphTolerance < floor {
+                    report.fail(.init(
+                        kind: .glyphContrast, family: family.title,
+                        specimen: displayName(probe.specimen),
+                        detail: "\(label(probe)) \(ink.rawValue) glyph pixels below \(floor == 4.5 ? "4.5" : String(format: "%.1f", floor)) : 1"
+                    ), in: combination + String(format: " (%.2f: %@ on %@)", glyph.ratio, glyph.ink.hexString, background.hexString))
+                }
             }
         }
 
@@ -308,10 +360,14 @@ enum AtticAppearanceCheck {
         }
     }
 
+    /// Rendering (8-bit, antialiased, the core percentile) can read a glyph
+    /// a touch lighter than its ink; a glyph fails only below this slack.
+    static let glyphTolerance = 0.12
+
     /// Controls whose radius must follow the 32 %-of-height rule.
     static let controlRuleNames: Set<String> = [
         "Single button", "Label button", "Page switch", "Add bar", "Small control",
-        "Selection bar", "Toast", "Menu row", "Tag"
+        "Selection bar", "Toast", "Pop-over row", "Title menu", "Tag"
     ]
 
     /// "Family / Caption#id" → "Caption".
