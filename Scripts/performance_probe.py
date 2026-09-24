@@ -328,7 +328,9 @@ def main():
                                       or output("/usr/bin/xcode-select", "-p")).parent
                                   / "Info.plist").read_bytes()).get("CFBundleShortVersionString", "unknown"),
         "bundle_id": bundle, "executable": str(executable),
-        "seed_version": 1, "seed_counts": {"tasks": 500, "notes": 200, "canvases": 20,
+        # The no-history fixture is unchanged and remains comparable to A.
+        "seed_version": 2 if args.done_history else 1,
+        "seed_counts": {"tasks": 500, "notes": 200, "canvases": 20,
                                       "objects_per_canvas": 2000, "extra_done_tasks": 5000 if args.done_history else 0},
         "done_history": args.done_history, "window_s": args.window, "runs": runs,
     }

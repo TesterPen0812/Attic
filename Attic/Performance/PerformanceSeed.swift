@@ -7,7 +7,8 @@ import SwiftData
 /// a temporary directory; no production container or attachment root is used.
 @MainActor
 enum PerformanceSeed {
-    static let version = 1
+    // Version 1 remains the no-history fixture; version 2 changes Done history.
+    static let version = 2
     static let taskCount = 500
     static let noteCount = 200
     static let canvasCount = 20
@@ -83,12 +84,21 @@ enum PerformanceSeed {
 
         if includeDoneHistory {
             for index in 0..<doneHistoryCount {
-                let created = today.addingTimeInterval(TimeInterval(-random.number(365) * 86_400 - 3_600))
-                context.insert(TaskItem(
+                let completed = today.addingTimeInterval(
+                    TimeInterval(-(1 + index % 365) * 86_400 + 1 + index % 3_600)
+                )
+                let created = completed.addingTimeInterval(
+                    TimeInterval(-(1 + random.number(30)) * 86_400 - 3_600)
+                )
+                let item = TaskItem(
                     id: random.identifier(), title: "Finished item \(index)", status: .done,
                     priority: priorities[random.number(priorities.count)], createdAt: created,
-                    completedAt: today.addingTimeInterval(TimeInterval(1 + index % 3_600))
-                ))
+                    completedAt: completed
+                )
+                // The daily move keeps the row and completion date, marking
+                // every moved task with the same cleanup timestamp.
+                item.doneLoggedAt = now
+                context.insert(item)
                 if index % 500 == 499 { try context.save() }
             }
             try context.save()

@@ -36,6 +36,21 @@ def document(primary=None):
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_different_seed_versions_are_incomparable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference = root / "reference.json"
+            candidate = root / "candidate.json"
+            reference.write_text(json.dumps(document()))
+            changed = document()
+            changed["seed_version"] = 2
+            candidate.write_text(json.dumps(changed))
+
+            result = subprocess.run([sys.executable, str(SCRIPT), str(reference), str(candidate)],
+                                    text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Incomparable seed_version", result.stderr)
+
     def test_first_reveal_is_selected_even_when_later_event_is_slower(self):
         self.assertEqual(timing_series(document(), "PanelRevealToOrderedFront"), [1] * 6)
 

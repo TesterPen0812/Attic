@@ -30,11 +30,11 @@ store roots; its cleanup launch uses an in-memory store.
 python3 Scripts/performance_probe.py --runs 3 --window 10 --output Docs/performance-baseline-A.json
 ```
 
-`--done-history` currently adds 5,000 finished `TaskItem` rows with today's
-`completedAt` so daily cleanup cannot remove them. Once data foundation adds
-`doneLoggedAt`, these rows would still be visible tasks, not genuine Done-log
-history. On the integration branch, seed past completions plus `doneLoggedAt`,
-bump the seed version, then record Baseline B in one command:
+`--done-history` adds 5,000 finished `TaskItem` rows completed on past days,
+with `doneLoggedAt` set to the seed's cleanup time. They remain stored in the
+Done log and do not appear in Now. This is seed version 2. Without the option,
+the original 500-task fixture and seed version 1 remain unchanged, so Baseline A
+can be reproduced and compared with another no-history run. Record B with:
 
 ```zsh
 python3 Scripts/performance_probe.py --runs 3 --window 10 --done-history --output Docs/performance-baseline-B.json
