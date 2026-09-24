@@ -23,12 +23,13 @@ enum PerformanceProbe {
         return root
     }
 
-    static func writePhase(_ phase: String, root: URL) {
-        let record: [String: Any] = [
+    static func writePhase(_ phase: String, root: URL, details: [String: Int] = [:]) {
+        var record: [String: Any] = [
             "phase": phase,
             "pid": ProcessInfo.processInfo.processIdentifier,
             "timestamp": Date().timeIntervalSince1970
         ]
+        for (key, value) in details { record[key] = value }
         guard let data = try? JSONSerialization.data(withJSONObject: record) else { return }
         try? data.write(to: root.appendingPathComponent("phase.json"), options: .atomic)
     }

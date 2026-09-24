@@ -157,6 +157,15 @@ enum PerformanceSeed {
             }
             try context.save()
         }
+        guard try context.fetchCount(FetchDescriptor<TaskItem>()) == taskCount
+                    + (includeDoneHistory ? doneHistoryCount : 0),
+              try context.fetchCount(FetchDescriptor<NoteItem>()) == noteCount,
+              try context.fetchCount(FetchDescriptor<CanvasBoardItem>()) == canvasCount,
+              try context.fetchCount(FetchDescriptor<CanvasStrokeItem>()) == canvasCount * 1_700,
+              try context.fetchCount(FetchDescriptor<CanvasSemanticObjectItem>()) == canvasCount * 200,
+              try context.fetchCount(FetchDescriptor<CanvasImageItem>()) == canvasCount * 100 else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
     }
 
     private static func makeImage() throws -> Data {

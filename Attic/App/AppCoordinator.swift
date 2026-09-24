@@ -440,8 +440,11 @@ final class AppCoordinator: ObservableObject {
                     }),
                     (60, "after_hide", { [weak self] in
                         guard let self else { return }
-                        _ = self.panelController.requestHide { _ in
-                            PerformanceProbe.writePhase("after_hide", root: performanceRoot)
+                        _ = self.panelController.requestHide { outcome in
+                            PerformanceProbe.writePhase(
+                                outcome == .hidden ? "after_hide" : "hide_failed",
+                                root: performanceRoot
+                            )
                         }
                     })
                 ]
@@ -450,7 +453,14 @@ final class AppCoordinator: ObservableObject {
                         action()
                         if phase != "after_hide" {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                                PerformanceProbe.writePhase(phase, root: performanceRoot)
+                                let strokeCount = self.canvasSession.strokes.count
+                                let valid = phase != "canvas_open"
+                                    || (self.uiState.selectedSection == .canvas
+                                        && strokeCount == 1_700)
+                                PerformanceProbe.writePhase(
+                                    valid ? phase : "canvas_failed", root: performanceRoot,
+                                    details: ["visible_strokes": strokeCount]
+                                )
                             }
                         }
                     }
