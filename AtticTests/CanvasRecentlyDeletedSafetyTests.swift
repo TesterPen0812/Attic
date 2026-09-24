@@ -63,6 +63,57 @@ final class CanvasRecentlyDeletedSafetyTests: XCTestCase {
         XCTAssertEqual(try strokeCount(store, canvasID), 1)
     }
 
+    func testCanvasPurgeDefersWhenEqualVersionStrokeReplicasHoldDifferentContent() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
+        let (store, canvasID, stroke) = try deletedCanvas(clock)
+        let context = ModelContext(store.container)
+        let strokeID = stroke.id
+        let original = try XCTUnwrap(context.fetch(FetchDescriptor<CanvasStrokeItem>(
+            predicate: #Predicate { $0.id == strokeID }
+        )).first)
+        XCTAssertTrue(original.tombstoned)
+        // Same version, same deletion time, same everything but the ink.
+        let peer = CanvasStrokeItem(id: original.id, canvasID: canvasID, payloadVersion: original.payloadVersion,
+                                    payload: original.payload + Data([0xFF]), boardGeneration: original.boardGeneration,
+                                    mutationVersion: original.mutationVersion, tombstoned: true,
+                                    createdAt: original.createdAt, updatedAt: original.updatedAt,
+                                    deletedAt: original.deletedAt)
+        context.insert(peer)
+        try context.save()
+
+        XCTAssertTrue(store.purgeDeletedCanvases(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try strokeCount(store, canvasID), 2, "neither version of the stroke was destroyed")
+
+        // Once the copies agree, the purge goes ahead.
+        peer.payload = original.payload
+        try context.save()
+        XCTAssertEqual(store.purgeDeletedCanvases(before: .distantFuture), [canvasID])
+        XCTAssertEqual(try strokeCount(store, canvasID), 0)
+    }
+
+    func testCanvasPurgeDefersWhenEqualVersionImageReplicasHoldDifferentBytes() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
+        let (store, canvasID, _) = try deletedCanvas(clock)
+        let context = ModelContext(store.container)
+        let board = try XCTUnwrap(context.fetch(FetchDescriptor<CanvasBoardItem>(
+            predicate: #Predicate { $0.id == canvasID }
+        )).first)
+        let imageID = UUID()
+        let created = Date(timeIntervalSince1970: 50_000)
+        for bytes in [Data([1, 2, 3]), Data([4, 5, 6])] {
+            context.insert(CanvasImageItem(id: imageID, canvasID: canvasID, encodedData: bytes, pixelWidth: 1,
+                                           pixelHeight: 1, mutationVersion: 7, tombstoned: true, createdAt: created,
+                                           updatedAt: board.deletedAt, deletedAt: board.deletedAt))
+        }
+        try context.save()
+
+        XCTAssertTrue(store.purgeDeletedCanvases(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<CanvasImageItem>(
+            predicate: #Predicate { $0.id == imageID }
+        )), 2, "both images are kept")
+        XCTAssertEqual(try strokeCount(store, canvasID), 1)
+    }
+
 
     func testCanvasRestoreIsRefusedWhenAReplicaWasPurgedOrContentIsMissing() throws {
         let clock = MutableNow(Date(timeIntervalSince1970: 100_000))

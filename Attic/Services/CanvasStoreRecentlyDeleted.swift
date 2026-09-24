@@ -241,31 +241,48 @@ extension CanvasStore {
     }
 
     /// Every content row of the canvas is deleted, and the replicas of each
-    /// object agree on its deletion and version.
+    /// object are identical: same deletion, same version and the same
+    /// content. Two copies that agree on version and deletion time but hold
+    /// different strokes, image bytes or object payloads are a conflict no
+    /// one has seen yet, so the whole canvas waits.
     private func contentIsSafeToPurge(canvasID: UUID) throws -> Bool {
         func agree<Row>(_ rows: [Row], id: (Row) -> UUID, tombstoned: (Row) -> Bool,
-                        version: (Row) -> Int64, deletedAt: (Row) -> Date?) -> Bool {
+                        snapshot: (Row) -> [AnyHashable]) -> Bool {
             guard rows.allSatisfy(tombstoned) else { return false }
             return Dictionary(grouping: rows, by: id).values.allSatisfy { group in
-                let first = group[0]
-                return group.allSatisfy { version($0) == version(first) && deletedAt($0) == deletedAt(first) }
+                let first = snapshot(group[0])
+                return group.dropFirst().allSatisfy { snapshot($0) == first }
             }
         }
         let strokes = try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
             predicate: #Predicate { $0.canvasID == canvasID }
         ))
-        guard agree(strokes, id: \.id, tombstoned: \.tombstoned, version: \.mutationVersion, deletedAt: \.deletedAt) else {
+        guard agree(strokes, id: \.id, tombstoned: \.tombstoned, snapshot: {
+            [$0.payloadVersion, $0.payload, $0.boardGeneration, $0.mutationVersion, $0.tombstoned,
+             $0.createdAt, $0.updatedAt, $0.deletedAt]
+        }) else {
             return false
         }
         let images = try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
             predicate: #Predicate { $0.canvasID == canvasID }
         ))
-        guard agree(images, id: \.id, tombstoned: \.tombstoned, version: \.mutationVersion, deletedAt: \.deletedAt) else {
+        // The bytes are compared through their scalar digest and size; only
+        // a legacy row without them is read to compute them.
+        guard agree(images, id: \.id, tombstoned: \.tombstoned, snapshot: {
+            let payload = $0.payloadMetadata
+            return [payload.byteCount, payload.digest, $0.contentType, $0.pixelWidth, $0.pixelHeight,
+                    $0.centerX, $0.centerY, $0.width, $0.height, $0.zIndex, $0.boardGeneration,
+                    $0.mutationVersion, $0.tombstoned, $0.createdAt, $0.updatedAt, $0.deletedAt]
+        }) else {
             return false
         }
         #if os(macOS)
         let objects = try storedSemanticReplicas(canvasID: canvasID)
-        guard agree(objects, id: \.id, tombstoned: \.tombstoned, version: \.mutationVersion, deletedAt: \.deletedAt) else {
+        guard agree(objects, id: \.id, tombstoned: \.tombstoned, snapshot: {
+            [$0.kind, $0.payloadVersion, $0.payload, $0.centerX, $0.centerY, $0.width, $0.height,
+             $0.rotation, $0.zIndex, $0.boardGeneration, $0.mutationVersion, $0.tombstoned,
+             $0.createdAt, $0.updatedAt, $0.deletedAt]
+        }) else {
             return false
         }
         #endif
