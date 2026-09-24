@@ -118,14 +118,14 @@ final class SchemaMigrationTests: XCTestCase {
             purgeRecentlyDeleted: { now, calendar in library.purgeExpired(now: now, calendar: calendar) }
         )
 
-        // The long-finished task moves to the Done log; nothing is deleted,
-        // and the canvas deleted before Phase 0 is never purged automatically.
+        // The long-finished task moves to the Done log; nothing is deleted.
         XCTAssertEqual(cleanup.performCleanup(), 1)
         XCTAssertEqual(cleanup.performCleanup(), 0)
         XCTAssertEqual(try rowCounts(in: container), rowsBefore)
         XCTAssertEqual(tasks.doneLog().map(\.id), [fixture.oldDoneTaskID])
         XCTAssertTrue(library.recentlyDeleted().contains { $0.ref == AtticItemRef(.canvas, fixture.legacyDeletedCanvasID) })
-        XCTAssertNil(library.recentlyDeleted().first { $0.ref.id == fixture.legacyDeletedCanvasID }?.retentionStart)
+        // The first cleanup gives it its 30 days (it removes nothing yet).
+        XCTAssertNotNil(library.recentlyDeleted().first { $0.ref.id == fixture.legacyDeletedCanvasID }?.retentionStart)
 
         // Deleting and restoring migrated items keeps every row too.
         XCTAssertTrue(library.delete(AtticItemRef(.task, fixture.parentTaskID)))

@@ -131,15 +131,20 @@ extension CanvasStore {
         return save().succeeded
     }
 
-    func tombstoneSemanticObjects(canvasID: UUID, at timestamp: Date) throws {
+    /// Returns how many objects this hid.
+    @discardableResult
+    func tombstoneSemanticObjects(canvasID: UUID, at timestamp: Date) throws -> Int {
         let groups = Dictionary(grouping: try storedSemanticReplicas(canvasID: canvasID), by: \.id)
+        var hidden = 0
         for rows in groups.values {
             // An object already deleted keeps its own deletion time, so
             // restoring the canvas brings back only what the canvas delete hid.
             if let winner = Self.winningSemanticReplica(rows), !winner.tombstoned {
                 try stageSemanticTombstone(rows, winner: winner, at: timestamp)
+                hidden += 1
             }
         }
+        return hidden
     }
 
     private func stageSemanticTombstone(_ rows: [CanvasSemanticObjectItem], winner: CanvasSemanticObjectItem, at timestamp: Date) throws {

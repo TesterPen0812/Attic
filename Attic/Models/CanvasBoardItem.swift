@@ -39,6 +39,10 @@ final class CanvasBoardItem {
     /// and restorable but never removed automatically, so upgrading can
     /// never cause an old deletion to be purged at the first cleanup.
     var recentlyDeletedAt: Date? = nil
+    /// How many content objects (strokes, images, objects) the delete hid, so
+    /// a restore can refuse when some of them are no longer there. nil for a
+    /// canvas deleted before this was recorded.
+    var deletedContentCount: Int64? = nil
 
     init(
         id: UUID = CanvasBoardItem.logicalBoardID,

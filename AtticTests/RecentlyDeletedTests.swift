@@ -319,7 +319,7 @@ final class RecentlyDeletedTests: XCTestCase {
         XCTAssertTrue(store.recentlyDeletedCanvases().isEmpty)
     }
 
-    func testCanvasPurgeRemovesContentKeepsANamelessTombstoneAndSkipsLegacyDeletes() throws {
+    func testCanvasPurgeRemovesContentKeepsANamelessTombstoneAndStampsLegacyDeletes() throws {
         let clock = MutableNow(Date(timeIntervalSince1970: 10_000))
         let store = try makeTestCanvasStore(now: { clock.value })
         XCTAssertNotNil(store.createCanvas(name: "Keep"), "the last canvas cannot be deleted")
@@ -334,7 +334,8 @@ final class RecentlyDeletedTests: XCTestCase {
                                     deletedAt: Date(timeIntervalSince1970: 1)))
         try seed.save()
 
-        XCTAssertEqual(store.purgeDeletedCanvases(before: clock.value.addingTimeInterval(1)), [board.id])
+        clock.value = clock.value.addingTimeInterval(100)
+        XCTAssertEqual(store.purgeDeletedCanvases(before: clock.value), [board.id])
         let context = ModelContext(store.container)
         let canvasID = board.id
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<CanvasStrokeItem>(predicate: #Predicate { $0.canvasID == canvasID })), 0)
@@ -342,8 +343,13 @@ final class RecentlyDeletedTests: XCTestCase {
         XCTAssertFalse(tombstones.isEmpty)
         XCTAssertTrue(tombstones.allSatisfy { $0.tombstoned && $0.name.isEmpty && $0.purgedAt != nil })
         XCTAssertFalse(store.restoreCanvas(board.id), "a purged canvas cannot come back")
-        XCTAssertEqual(store.recentlyDeletedCanvases().map(\.ref.id), [legacyID])
-        XCTAssertTrue(store.purgeDeletedCanvases(before: .distantFuture).isEmpty, "legacy deletes are never purged automatically")
+
+        // The legacy canvas got its 30 days from the first cleanup that saw it.
+        let legacy = try XCTUnwrap(store.recentlyDeletedCanvases().first)
+        XCTAssertEqual(legacy.ref.id, legacyID)
+        XCTAssertEqual(legacy.retentionStart, clock.value)
+        XCTAssertTrue(store.purgeDeletedCanvases(before: clock.value).isEmpty, "not before its 30 days")
+        XCTAssertEqual(store.purgeDeletedCanvases(before: clock.value.addingTimeInterval(1)), [legacyID])
     }
 
     // MARK: - Library

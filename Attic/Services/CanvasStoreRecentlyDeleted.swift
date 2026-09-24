@@ -4,6 +4,7 @@ import SwiftData
 enum CanvasRecentlyDeletedError: LocalizedError {
     case notRecentlyDeleted(UUID)
     case replicasDisagree(UUID)
+    case incompleteRestore(UUID)
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +12,8 @@ enum CanvasRecentlyDeletedError: LocalizedError {
             "The canvas \(id.uuidString) is not in Recently Deleted."
         case let .replicasDisagree(id):
             "Copies of the canvas \(id.uuidString) disagree about its deletion. Refresh and try again."
+        case .incompleteRestore:
+            "Part of this deleted canvas is no longer there, so it can’t be restored safely."
         }
     }
 }
@@ -61,6 +64,18 @@ extension CanvasStore {
             guard winner.tombstoned, winner.purgedAt == nil, let deletedAt = winner.deletedAt else {
                 throw CanvasRecentlyDeletedError.notRecentlyDeleted(id)
             }
+            // Every physical board replica must be this same delete; a copy
+            // already purged (its content gone) or deleted differently makes
+            // the restore incomplete, so nothing is written.
+            guard boards.allSatisfy({
+                $0.tombstoned && $0.purgedAt == nil && $0.deletedAt == deletedAt
+                    && $0.recentlyDeletedAt == winner.recentlyDeletedAt
+                    && $0.deletedContentCount == winner.deletedContentCount
+            }) else {
+                throw CanvasRecentlyDeletedError.replicasDisagree(id)
+            }
+            // Read before the loop below clears it on every replica.
+            let recordedContent = winner.deletedContentCount
             let timestamp = now()
             let nextVersion = try Self.nextMutationVersion(
                 after: boards.map(\.mutationVersion).max() ?? 0,
@@ -78,8 +93,12 @@ extension CanvasStore {
                 replica.updatedAt = timestamp
                 replica.deletedAt = nil
                 replica.recentlyDeletedAt = nil
+                replica.deletedContentCount = nil
             }
-            try restoreContent(canvasID: id, deletedAt: deletedAt, at: timestamp)
+            let restored = try restoreContent(canvasID: id, deletedAt: deletedAt, at: timestamp)
+            if let recordedContent, Int64(restored) != recordedContent {
+                throw CanvasRecentlyDeletedError.incompleteRestore(id)
+            }
         } catch {
             discardPendingChanges(after: error)
             return false
@@ -87,7 +106,9 @@ extension CanvasStore {
         return save().succeeded
     }
 
-    private func restoreContent(canvasID: UUID, deletedAt: Date, at timestamp: Date) throws {
+    /// Returns how many objects it brought back.
+    private func restoreContent(canvasID: UUID, deletedAt: Date, at timestamp: Date) throws -> Int {
+        var restored = 0
         let strokeGroups = Dictionary(
             grouping: try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
                 predicate: #Predicate { $0.canvasID == canvasID }
@@ -99,6 +120,7 @@ extension CanvasStore {
         for (id, replicas) in strokeGroups {
             let winner = try Self.winningStrokeReplica(in: replicas)
             guard winner.tombstoned, winner.deletedAt == deletedAt else { continue }
+            restored += 1
             let version = try Self.nextMutationVersion(
                 after: replicas.map(\.mutationVersion).max() ?? 0,
                 objectID: id
@@ -124,6 +146,7 @@ extension CanvasStore {
         for (id, replicas) in imageGroups {
             let winner = try Self.winningImageReplica(in: replicas)
             guard winner.tombstoned, winner.deletedAt == deletedAt else { continue }
+            restored += 1
             let version = try Self.nextMutationVersion(
                 after: replicas.map(\.mutationVersion).max() ?? 0,
                 objectID: id
@@ -143,6 +166,7 @@ extension CanvasStore {
         for rows in Dictionary(grouping: try storedSemanticReplicas(canvasID: canvasID), by: \.id).values {
             guard let winner = Self.winningSemanticReplica(rows),
                   winner.tombstoned, winner.deletedAt == deletedAt else { continue }
+            restored += 1
             let snapshot = CanvasSemanticObject(winner)
             let version = try Self.nextMutationVersion(
                 after: rows.map(\.mutationVersion).max() ?? 0,
@@ -157,30 +181,39 @@ extension CanvasStore {
             }
         }
         #endif
+        return restored
     }
 
-    /// Removes for good the canvases deleted before `cutoff`: their stroke,
-    /// image and object rows are deleted, and the board rows stay as nameless
-    /// tombstones marked `purgedAt`. A canvas whose board replicas disagree is
-    /// kept. Returns the purged canvas ids.
+    /// Removes for good the canvases whose 30 days started before `cutoff`:
+    /// their stroke, image and object rows are deleted, and the board rows
+    /// stay as nameless tombstones marked `purgedAt`. Destructive only when
+    /// everything agrees: every board replica is identical, and every content
+    /// row of the canvas is deleted with its replicas agreeing. A live or
+    /// divergent row anywhere defers the whole canvas.
+    ///
+    /// A canvas deleted before Recently Deleted existed has no start date; the
+    /// first run stamps it with "now", so it is removed 30 days after the app
+    /// first saw it. Returns the purged canvas ids.
     @discardableResult
     func purgeDeletedCanvases(before cutoff: Date) -> Set<UUID> {
         var purged = Set<UUID>()
+        var stamped = false
         do {
             let boards = try context.fetchCanvasReplicas(FetchDescriptor<CanvasBoardItem>(
                 predicate: #Predicate { $0.tombstoned && $0.purgedAt == nil }
             ))
             let timestamp = now()
-            for (id, rows) in Dictionary(grouping: boards, by: \.id) {
+            for id in Set(boards.map(\.id)) {
                 let replicas = try storedBoardReplicas(matching: id)
-                // Only a delete made since Recently Deleted existed starts the
-                // 30 days; every replica must agree on it.
-                guard let first = replicas.first, let started = first.recentlyDeletedAt, started < cutoff,
-                      replicas.allSatisfy({
-                          $0.tombstoned && $0.purgedAt == nil
-                              && $0.deletedAt == first.deletedAt && $0.recentlyDeletedAt == started
-                      }),
-                      replicas.count == rows.count else { continue }
+                guard let first = replicas.first else { continue }
+                if replicas.allSatisfy({ $0.tombstoned && $0.purgedAt == nil && $0.recentlyDeletedAt == nil }) {
+                    for replica in replicas { replica.recentlyDeletedAt = timestamp }
+                    stamped = true
+                    continue
+                }
+                guard let started = first.recentlyDeletedAt, started < cutoff,
+                      replicas.allSatisfy({ Self.boardDeletionSnapshot($0) == Self.boardDeletionSnapshot(first) }),
+                      try contentIsSafeToPurge(canvasID: id) else { continue }
                 let canvasID = id
                 try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
                     predicate: #Predicate { $0.canvasID == canvasID }
@@ -203,8 +236,66 @@ extension CanvasStore {
             discardPendingChanges(after: error)
             return []
         }
-        guard !purged.isEmpty else { return [] }
+        guard !purged.isEmpty || stamped else { return [] }
         return save().succeeded ? purged : []
+    }
+
+    /// Every content row of the canvas is deleted, and the replicas of each
+    /// object agree on its deletion and version.
+    private func contentIsSafeToPurge(canvasID: UUID) throws -> Bool {
+        func agree<Row>(_ rows: [Row], id: (Row) -> UUID, tombstoned: (Row) -> Bool,
+                        version: (Row) -> Int64, deletedAt: (Row) -> Date?) -> Bool {
+            guard rows.allSatisfy(tombstoned) else { return false }
+            return Dictionary(grouping: rows, by: id).values.allSatisfy { group in
+                let first = group[0]
+                return group.allSatisfy { version($0) == version(first) && deletedAt($0) == deletedAt(first) }
+            }
+        }
+        let strokes = try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))
+        guard agree(strokes, id: \.id, tombstoned: \.tombstoned, version: \.mutationVersion, deletedAt: \.deletedAt) else {
+            return false
+        }
+        let images = try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))
+        guard agree(images, id: \.id, tombstoned: \.tombstoned, version: \.mutationVersion, deletedAt: \.deletedAt) else {
+            return false
+        }
+        #if os(macOS)
+        let objects = try storedSemanticReplicas(canvasID: canvasID)
+        guard agree(objects, id: \.id, tombstoned: \.tombstoned, version: \.mutationVersion, deletedAt: \.deletedAt) else {
+            return false
+        }
+        #endif
+        return true
+    }
+
+    private struct BoardDeletionSnapshot: Equatable {
+        let name: String
+        let sortIndex: Int64
+        let formatVersion: Int
+        let clearGeneration: Int64
+        let mutationVersion: Int64
+        let tombstoned: Bool
+        let createdAt: Date
+        let updatedAt: Date
+        let deletedAt: Date?
+        let tagsRaw: String
+        let purgedAt: Date?
+        let recentlyDeletedAt: Date?
+        let deletedContentCount: Int64?
+    }
+
+    private static func boardDeletionSnapshot(_ board: CanvasBoardItem) -> BoardDeletionSnapshot {
+        BoardDeletionSnapshot(
+            name: board.name, sortIndex: board.sortIndex, formatVersion: board.formatVersion,
+            clearGeneration: board.clearGeneration, mutationVersion: board.mutationVersion,
+            tombstoned: board.tombstoned, createdAt: board.createdAt, updatedAt: board.updatedAt,
+            deletedAt: board.deletedAt, tagsRaw: board.tagsRaw, purgedAt: board.purgedAt,
+            recentlyDeletedAt: board.recentlyDeletedAt, deletedContentCount: board.deletedContentCount
+        )
     }
 
     /// Sets a live canvas's tags on every board replica.

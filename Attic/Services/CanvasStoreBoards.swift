@@ -154,7 +154,10 @@ extension CanvasStore {
                 }
             }
 
-            try tombstoneAllContent(canvasID: id, at: timestamp)
+            let hidden = Int64(try tombstoneAllContent(canvasID: id, at: timestamp))
+            for replica in try storedBoardReplicas(matching: id) {
+                replica.deletedContentCount = hidden
+            }
             if selectedCanvasID == id {
                 selectedCanvasID = canvases.first { $0.id != id }?.id
                     ?? CanvasBoardItem.logicalBoardID

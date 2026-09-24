@@ -554,9 +554,12 @@ extension CanvasStore {
         )
     }
 
-    func tombstoneAllContent(canvasID: UUID, at timestamp: Date) throws {
+    /// Returns how many content objects (strokes, images, objects) it hid.
+    @discardableResult
+    func tombstoneAllContent(canvasID: UUID, at timestamp: Date) throws -> Int {
+        var hidden = 0
         #if os(macOS)
-        try tombstoneSemanticObjects(canvasID: canvasID, at: timestamp)
+        hidden += try tombstoneSemanticObjects(canvasID: canvasID, at: timestamp)
         #endif
         let strokeGroups = Dictionary(
             grouping: try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
@@ -570,6 +573,7 @@ extension CanvasStore {
             // this delete hides carries the board's `deletedAt`, which is how
             // `restoreCanvas` knows what to bring back.
             guard !winner.tombstoned else { continue }
+            hidden += 1
             let nextVersion = try Self.nextMutationVersion(
                 after: replicas.map(\.mutationVersion).max() ?? 0,
                 objectID: id
@@ -595,6 +599,7 @@ extension CanvasStore {
         for (id, replicas) in imageGroups {
             let winner = try Self.winningImageReplica(in: replicas)
             guard !winner.tombstoned else { continue }
+            hidden += 1
             let nextVersion = try Self.nextMutationVersion(
                 after: replicas.map(\.mutationVersion).max() ?? 0,
                 objectID: id
@@ -609,6 +614,7 @@ extension CanvasStore {
                 replica.deletedAt = timestamp
             }
         }
+        return hidden
     }
 
 }
