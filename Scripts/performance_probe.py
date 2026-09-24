@@ -250,8 +250,8 @@ def measure(args, app, executable, bundle, helper):
 
 def summarize(doc):
     lines = ["# Attic performance probe", "",
-             f"Date: {doc['date']}  ", f"Commit: `{doc['commit']}`  ",
-             f"Preview: `{doc['bundle_id']}`  ",
+             f"Date: {doc['date']}", f"Commit: `{doc['commit']}`",
+             f"Preview: `{doc['bundle_id']}`",
              f"Fixture: {'B, 5,000 Done tasks included' if doc['done_history'] else 'A, no extra Done history'}",
              "", "| Phase | Footprint end, MiB range | CPU, one-core % range | Interrupt wakeups/s range |",
              "| --- | ---: | ---: | ---: |"]

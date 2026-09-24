@@ -45,8 +45,9 @@ def timing_series(document, name):
         samples = [item["milliseconds"] for item in run["timings"] if item["name"] == name]
         if not samples:
             raise ValueError(f"Missing {name} timing in run {run['run']}")
-        # A slow first reveal must not disappear behind later warm reveals.
-        result.append(max(samples) if name == "PanelRevealToInteractive"
+        # The initial reveal from hidden is slower than a later in-panel
+        # order-front. Keep it visible in the primary comparison.
+        result.append(max(samples) if name == "PanelRevealToOrderedFront"
                       else statistics.median(samples))
     return result
 
