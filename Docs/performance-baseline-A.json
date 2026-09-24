@@ -1,0 +1,291 @@
+{
+  "schema": 1,
+  "date": "2026-09-24T17:30:13Z",
+  "commit": "635fdf5ac2f50329e75ae83b098eeaf7dbf2cc59",
+  "branch": "redesign/p0-perf",
+  "machine": "Apple M4",
+  "os": "27.0",
+  "xcode": "27.0",
+  "bundle_id": "com.taha.Attic.perf.250539c622",
+  "executable": "/Users/taha/Developer/attic-p0-perf/.build/performance/dd/Build/Products/Local/AtticPerf250539c622.app/Contents/MacOS/AtticPerf250539c622",
+  "seed_version": 1,
+  "seed_counts": {
+    "tasks": 500,
+    "notes": 200,
+    "canvases": 20,
+    "objects_per_canvas": 2000,
+    "extra_done_tasks": 0
+  },
+  "done_history": false,
+  "window_s": 10.0,
+  "runs": [
+    {
+      "run": 1,
+      "pid": 6242,
+      "seed_pid": 6191,
+      "phases": [
+        {
+          "phase": "hidden_idle",
+          "duration_s": 10.123338749999998,
+          "physical_footprint_bytes_start": 173753448,
+          "physical_footprint_bytes_end": 167412816,
+          "cpu_time_s": 0.005240959,
+          "cpu_percent_one_core": 0.05177105231216332,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 20,
+          "ps_time_end": "0:01.19",
+          "interrupt_wakeups_per_s": 1.9756327920963825
+        },
+        {
+          "phase": "tasks_open",
+          "duration_s": 10.092311541000004,
+          "physical_footprint_bytes_start": 171410512,
+          "physical_footprint_bytes_end": 171541584,
+          "cpu_time_s": 0.068112084,
+          "cpu_percent_one_core": 0.6748908188505154,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 83,
+          "ps_time_end": "0:01.54",
+          "interrupt_wakeups_per_s": 8.224082229607419
+        },
+        {
+          "phase": "canvas_open",
+          "duration_s": 10.093433791999999,
+          "physical_footprint_bytes_start": 111559808,
+          "physical_footprint_bytes_end": 97928320,
+          "cpu_time_s": 0.001020791,
+          "cpu_percent_one_core": 0.010113416514497509,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 9,
+          "ps_time_end": "0:01.82",
+          "interrupt_wakeups_per_s": 0.8916688002781918
+        },
+        {
+          "phase": "after_hide",
+          "duration_s": 10.096180290999996,
+          "physical_footprint_bytes_start": 98141312,
+          "physical_footprint_bytes_end": 97961088,
+          "cpu_time_s": 0.002197042,
+          "cpu_percent_one_core": 0.021761120905878648,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 10,
+          "ps_time_end": "0:01.88",
+          "interrupt_wakeups_per_s": 0.9904735961296438
+        }
+      ],
+      "timings": [
+        {
+          "timestamp": 1790270781.366795,
+          "milliseconds": 7.48225,
+          "name": "StoreOpen"
+        },
+        {
+          "name": "AppLaunchToMenuReady",
+          "milliseconds": 884.225458,
+          "timestamp": 1790270782.243295
+        },
+        {
+          "milliseconds": 72.263875,
+          "name": "PanelRevealToInteractive",
+          "timestamp": 1790270802.5647612
+        },
+        {
+          "name": "PanelRevealToInteractive",
+          "timestamp": 1790270822.539952,
+          "milliseconds": 3.015958
+        },
+        {
+          "name": "PageSwitch",
+          "milliseconds": 313.382458,
+          "timestamp": 1790270822.845374
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "pid": 6556,
+      "seed_pid": 6514,
+      "phases": [
+        {
+          "phase": "hidden_idle",
+          "duration_s": 10.089049541000009,
+          "physical_footprint_bytes_start": 172409984,
+          "physical_footprint_bytes_end": 169870464,
+          "cpu_time_s": 0.003775584,
+          "cpu_percent_one_core": 0.03742259352238022,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 18,
+          "ps_time_end": "0:01.11",
+          "interrupt_wakeups_per_s": 1.78411255954799
+        },
+        {
+          "phase": "tasks_open",
+          "duration_s": 10.113268875000003,
+          "physical_footprint_bytes_start": 174163096,
+          "physical_footprint_bytes_end": 209749168,
+          "cpu_time_s": 5.888170667,
+          "cpu_percent_one_core": 58.22223002055801,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 428,
+          "ps_time_end": "0:07.31",
+          "interrupt_wakeups_per_s": 42.32063888442795
+        },
+        {
+          "phase": "canvas_open",
+          "duration_s": 10.106127249999986,
+          "physical_footprint_bytes_start": 188187872,
+          "physical_footprint_bytes_end": 122635488,
+          "cpu_time_s": 2.717739583,
+          "cpu_percent_one_core": 26.891998445794396,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 1118,
+          "ps_time_end": "0:17.11",
+          "interrupt_wakeups_per_s": 110.62595713902193
+        },
+        {
+          "phase": "after_hide",
+          "duration_s": 10.11691291699998,
+          "physical_footprint_bytes_start": 109855968,
+          "physical_footprint_bytes_end": 110134496,
+          "cpu_time_s": 0.003732833,
+          "cpu_percent_one_core": 0.0368969569138776,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 11,
+          "ps_time_end": "0:17.17",
+          "interrupt_wakeups_per_s": 1.0872881965323753
+        }
+      ],
+      "timings": [
+        {
+          "name": "StoreOpen",
+          "timestamp": 1790270860.996541,
+          "milliseconds": 7.933375
+        },
+        {
+          "name": "AppLaunchToMenuReady",
+          "timestamp": 1790270861.866768,
+          "milliseconds": 878.399416
+        },
+        {
+          "name": "PanelRevealToInteractive",
+          "milliseconds": 62.422542,
+          "timestamp": 1790270882.1767879
+        },
+        {
+          "timestamp": 1790270886.4571729,
+          "name": "PanelRevealToInteractive",
+          "milliseconds": 1.2095
+        },
+        {
+          "name": "PanelRevealToInteractive",
+          "milliseconds": 0.417708,
+          "timestamp": 1790270902.80621
+        },
+        {
+          "name": "PageSwitch",
+          "milliseconds": 352.355625,
+          "timestamp": 1790270903.155226
+        },
+        {
+          "name": "PanelRevealToInteractive",
+          "milliseconds": 2.767625,
+          "timestamp": 1790270907.625809
+        }
+      ]
+    },
+    {
+      "run": 3,
+      "pid": 6989,
+      "seed_pid": 6920,
+      "phases": [
+        {
+          "phase": "hidden_idle",
+          "duration_s": 10.102040750000015,
+          "physical_footprint_bytes_start": 172655672,
+          "physical_footprint_bytes_end": 171050064,
+          "cpu_time_s": 0.004240917,
+          "cpu_percent_one_core": 0.041980794821085965,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 17,
+          "ps_time_end": "0:00.98",
+          "interrupt_wakeups_per_s": 1.682828293877153
+        },
+        {
+          "phase": "tasks_open",
+          "duration_s": 10.12321345800001,
+          "physical_footprint_bytes_start": 170886272,
+          "physical_footprint_bytes_end": 171017344,
+          "cpu_time_s": 0.089553542,
+          "cpu_percent_one_core": 0.8846355198529285,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 111,
+          "ps_time_end": "0:01.32",
+          "interrupt_wakeups_per_s": 10.964897703730697
+        },
+        {
+          "phase": "canvas_open",
+          "duration_s": 10.135207834,
+          "physical_footprint_bytes_start": 129631408,
+          "physical_footprint_bytes_end": 95667376,
+          "cpu_time_s": 0.000963833,
+          "cpu_percent_one_core": 0.009509750720322526,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 6,
+          "ps_time_end": "0:01.61",
+          "interrupt_wakeups_per_s": 0.5919957536412963
+        },
+        {
+          "phase": "after_hide",
+          "duration_s": 10.128468167000023,
+          "physical_footprint_bytes_start": 96027824,
+          "physical_footprint_bytes_end": 96158896,
+          "cpu_time_s": 0.223427541,
+          "cpu_percent_one_core": 2.205936152595695,
+          "package_idle_wakeups": 0,
+          "package_idle_wakeups_per_s": 0.0,
+          "interrupt_wakeups": 470,
+          "ps_time_end": "0:01.90",
+          "interrupt_wakeups_per_s": 46.403858140298674
+        }
+      ],
+      "timings": [
+        {
+          "timestamp": 1790270938.72351,
+          "milliseconds": 12.498208,
+          "name": "StoreOpen"
+        },
+        {
+          "milliseconds": 706.498709,
+          "timestamp": 1790270939.41713,
+          "name": "AppLaunchToMenuReady"
+        },
+        {
+          "timestamp": 1790270959.743312,
+          "name": "PanelRevealToInteractive",
+          "milliseconds": 78.842875
+        },
+        {
+          "milliseconds": 6.574625,
+          "timestamp": 1790270979.7049441,
+          "name": "PanelRevealToInteractive"
+        },
+        {
+          "name": "PageSwitch",
+          "timestamp": 1790270979.96586,
+          "milliseconds": 277.234583
+        }
+      ]
+    }
+  ]
+}
