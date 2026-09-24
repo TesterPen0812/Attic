@@ -134,39 +134,154 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
     }
 
-    // MARK: The appearance check
+    func testDisabledTextAndIconsMeetTheRule() {
+        for context in AtticAppearanceCheck.allContexts() {
+            let tokens = context.tokens
+            let text = tokens.ink(.disabledText)
+            let icon = tokens.ink(.disabledIcon)
+            let textFloor = AtticSurfaceModel.floor(for: .disabledText, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
+            XCTAssertEqual(AtticInk.disabledText.floor, .text)
+            XCTAssertEqual(AtticInk.disabledIcon.floor, .nonText)
+            // Menus and cards are base style; the panel is judged over every desktop.
+            for background in [tokens.popoverFill, tokens.contentCard, tokens.groupCard] {
+                XCTAssertGreaterThanOrEqual(text.contrast(on: background), textFloor, "\(context.caption) disabled text")
+                XCTAssertGreaterThanOrEqual(icon.contrast(on: background), 3, "\(context.caption) disabled icon")
+            }
+            let pairs = [
+                AtticSurfaceModel.Pair(ink: .disabledText, foreground: text, overlays: []),
+                AtticSurfaceModel.Pair(ink: .disabledIcon, foreground: icon, overlays: [])
+            ]
+            XCTAssertGreaterThanOrEqual(tokens.panel.worstMargin(pairs), 0.999, context.caption)
+        }
+        // Still a ghost: never louder than the helper grey.
+        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
+            let tokens = context.tokens
+            XCTAssertLessThanOrEqual(tokens.ink(.disabledText).contrast(on: tokens.panel.base), tokens.ink(.helper).contrast(on: tokens.panel.base) + 0.001)
+            XCTAssertLessThan(tokens.ink(.disabledIcon).contrast(on: tokens.panel.base), tokens.ink(.glyph).contrast(on: tokens.panel.base))
+        }
+    }
 
-    /// Renders every family in every combination and checks contrast,
-    /// clipping, overlap, sizes and radii; writes the contact sheets.
-    /// Set `ATTIC_APPEARANCE_QUICK=1` to check only the curated sheet set.
-    func testAppearanceCheckAndContactSheets() throws {
-        let quick = ProcessInfo.processInfo.environment["ATTIC_APPEARANCE_QUICK"] == "1"
-        let contexts = quick
-            ? AtticAppearanceCheck.sheetContexts().map(\.context)
-            : AtticAppearanceCheck.allContexts()
+    func testTintLengthKeyIsQuantisedAndTheCacheIsBounded() {
+        let a = AtticDesignContext(mode: .light, tint: .bold, tintLength: 0.6512).colourKey
+        let b = AtticDesignContext(mode: .light, tint: .bold, tintLength: 0.6488).colourKey
+        XCTAssertEqual(a, b, "Slider positions within the same percent share a key")
+        XCTAssertEqual(a.tintLength, 0.65, accuracy: 0.000_1)
+        var keys = Set<AtticDesignContext.ColourKey>()
+        for step in 0...10_000 {
+            keys.insert(AtticDesignContext(tint: .bold, tintLength: 0.3 + 0.7 * Double(step) / 10_000).colourKey)
+        }
+        XCTAssertEqual(keys.count, 71, "30 % to 100 % in whole percent")
+
+        let cache = AtticColorTokenCache(capacity: 8)
+        for step in 0..<40 {
+            _ = cache.tokens(for: AtticDesignContext(tint: .bold, tintLength: 0.3 + Double(step) / 100).colourKey)
+        }
+        XCTAssertEqual(cache.count, 8, "The cache never holds more than its capacity")
+        XCTAssertLessThanOrEqual(AtticColorTokenCache.shared.capacity, 64)
+    }
+
+    func testSendButtonNestsInsideTheAddBar() {
+        let send = AtticControlSize.sendButton
+        XCTAssertEqual(send, CGSize(width: 28, height: 28), "Owner's decision: 28 × 28 inside the bar")
+        XCTAssertEqual(send.height, AtticControlSize.addBarHeight - 2 * AtticControlSize.sendInset)
+        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 7.5)
+    }
+
+    func testTaskKeysMapToDistinctCommands() {
+        func command(_ key: KeyEquivalent, _ characters: String, _ modifiers: EventModifiers, list: Bool = true) -> AtticTaskKeys.Command? {
+            AtticTaskKeys.command(key: key, characters: characters, modifiers: modifiers, listCommands: list)
+        }
+        XCTAssertEqual(command(.space, " ", []), .advance)
+        XCTAssertEqual(command(.space, "\u{A0}", .option), .complete)
+        XCTAssertEqual(command(.return, "\r", .command), .openPage)
+        XCTAssertNil(command(.return, "\r", []), "Return edits the title (Phase 1), it never opens the page")
+        XCTAssertEqual(command(KeyEquivalent("b"), "b", .command), .moveToBacklog)
+        XCTAssertEqual(command(.delete, "\u{7F}", []), .delete)
+        XCTAssertNil(command(.delete, "\u{7F}", [], list: false), "Cards in notes don't take list commands")
+        XCTAssertNil(command(.space, " ", .command))
+    }
+
+    // MARK: Motion keeps layout still
+
+    func testPageSwitchKeepsItsSizeForEverySelection() {
+        let titles = AtticGallerySamples.pages.map(\.title)
+        let geometry = AtticPageSwitch<Int>.Geometry(titles: titles)
+        var sizes: Set<String> = []
+        for page in 0..<titles.count {
+            // Every chip's frame and every icon position fits in the same capsule.
+            for index in 0..<titles.count {
+                XCTAssertLessThanOrEqual(geometry.x(of: index, selected: page) + geometry.width(of: index, selected: page), geometry.innerWidth + 0.001)
+            }
+            // The label only fades: its place never depends on the selection.
+            XCTAssertEqual(geometry.labelX(of: page), geometry.iconX(of: page, selected: page) + AtticPageSwitchMetrics.iconSlot + AtticPageSwitchMetrics.iconLabelGap)
+            let host = NSHostingView(rootView: AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(page)).atticDesign(.default))
+            sizes.insert("\(host.fittingSize)")
+        }
+        XCTAssertEqual(sizes.count, 1, "The capsule is the same size whichever page is selected: \(sizes)")
+    }
+
+    func testAddBarFieldKeepsItsWidthWhenTheSendButtonAppears() throws {
+        func fieldFrame(text: String) throws -> CGRect {
+            let collector = AtticProbeCollector()
+            let view = AtticAddBar(placeholder: "Add a task…", text: .constant(text), onSubmit: {})
+                .frame(width: 296)
+                .atticDesign(.default)
+                .environment(\.atticCapture, AtticCaptureContext(collector: collector, backdrop: .desktop(.midGrey)))
+                .coordinateSpace(.named(AtticCaptureContext.coordinateSpace))
+            let renderer = ImageRenderer(content: view)
+            _ = renderer.cgImage
+            let field = collector.all.first { probe in
+                if case let .control(name, _, _, _) = probe.kind { return name == "Add bar field" }
+                return false
+            }
+            return try XCTUnwrap(field?.frame)
+        }
+        let empty = try fieldFrame(text: "")
+        let typed = try fieldFrame(text: "Call the printer")
+        XCTAssertEqual(empty, typed, "The send button's slot is reserved: the field never changes size")
+        XCTAssertGreaterThan(empty.width, 200)
+    }
+
+    // MARK: The appearance check (representative subset)
+
+    /// The fast, representative part of the appearance check that runs in
+    /// every unit-test run: the model for every combination (above), the
+    /// geometry fitted from pixels, and every family rendered at 2× in the
+    /// curated combinations (default Light and Dark and the stress cases),
+    /// with each glyph's contrast read from its own pixels.
+    ///
+    /// The full matrix (every combination, every family) and the contact
+    /// sheets run separately: `Scripts/run_appearance_matrix.zsh`
+    /// (`AtticAppearanceMatrixTests`).
+    func testRepresentativeAppearanceSubset() {
         let started = Date()
-        let report = AtticAppearanceCheck.run(contexts: contexts)
-        let elapsed = Date().timeIntervalSince(started)
-
-        // Application Support inside the test host's container: temporary
-        // folders are purged after the run, and the host is sandboxed.
-        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let directory = support.appendingPathComponent("AtticAppearance", isDirectory: true)
-        try? FileManager.default.removeItem(at: directory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let sheets = AtticAppearanceCheck.writeContactSheets(to: directory)
-        let summary = report.summary + String(format: "\n\nChecked in %.0f s.\nContact sheets:\n", elapsed) + sheets.map(\.path).joined(separator: "\n")
-        try summary.write(to: directory.appendingPathComponent("appearance-check.txt"), atomically: true, encoding: .utf8)
-        print("ATTIC_APPEARANCE_OUTPUT=\(directory.path)")
-        print(summary)
-
+        let report = AtticAppearanceCheck.run(contexts: AtticAppearanceCheck.sheetContexts().map(\.context), scale: 2)
+        let summary = report.summary + String(format: "\n\nChecked in %.0f s.", Date().timeIntervalSince(started))
         let attachment = XCTAttachment(string: summary)
-        attachment.name = "appearance-check.txt"
+        attachment.name = "appearance-subset.txt"
         attachment.lifetime = .keepAlways
         add(attachment)
-
-        XCTAssertEqual(sheets.count, AtticGalleryFamily.allCases.count, "Every family gets a contact sheet")
-        XCTAssertGreaterThan(report.contrastPairsChecked, 0)
+        print(summary)
+        XCTAssertGreaterThan(report.glyphsMeasured, 1_000)
+        XCTAssertGreaterThanOrEqual(report.geometryMeasured, 15)
         XCTAssertTrue(report.failures.isEmpty, report.summary)
+    }
+
+    func testGeometryIsFittedFromPixels() {
+        // The fit itself: a plain continuous rectangle of known radius.
+        for radius in [6.0, 9.0, 11.5, 17.0] as [CGFloat] {
+            let measured = AtticCornerMeasure.measure(
+                RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Color.gray),
+                layoutSize: CGSize(width: 120, height: 48), context: .default
+            )
+            XCTAssertEqual(measured?.radius ?? 0, radius, accuracy: 0.26)
+            XCTAssertEqual(measured?.size.width ?? 0, 120, accuracy: 0.26)
+        }
+        // A deliberately wrong radius is caught.
+        let wrong = AtticCornerMeasure.measure(
+            RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.gray),
+            layoutSize: CGSize(width: 36, height: 32), context: .default
+        )
+        XCTAssertGreaterThan(abs((wrong?.radius ?? 10) - 10), 1)
     }
 }
