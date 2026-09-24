@@ -1397,12 +1397,6 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
     }
 
     private func resizeCursor(for edges: PanelResizeEdges) -> NSCursor {
-        guard #available(macOS 15.0, *) else {
-            if edges == .left || edges == .right { return .resizeLeftRight }
-            if edges == .top || edges == .bottom { return .resizeUpDown }
-            return .crosshair
-        }
-
         let position: NSCursor.FrameResizePosition
         switch edges {
         case [.left, .bottom]: position = .bottomLeft

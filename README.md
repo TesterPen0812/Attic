@@ -27,8 +27,8 @@ Attic lives in the menu bar and reveals a lightweight panel when the pointer res
 
 ## Requirements
 
-- macOS 14 or newer
-- Xcode 16 or newer
+- macOS 26 or newer
+- Xcode 26 or newer
 
 ## Build and run
 

@@ -887,17 +887,9 @@ extension CanvasNSView {
         case .openHand: .openHand
         case .closedHand: .closedHand
         case .resizeTopLeftBottomRight:
-            if #available(macOS 15.0, *) {
-                .frameResize(position: .topLeft, directions: .all)
-            } else {
-                .crosshair
-            }
+            .frameResize(position: .topLeft, directions: .all)
         case .resizeTopRightBottomLeft:
-            if #available(macOS 15.0, *) {
-                .frameResize(position: .topRight, directions: .all)
-            } else {
-                .crosshair
-            }
+            .frameResize(position: .topRight, directions: .all)
         }
     }
 
