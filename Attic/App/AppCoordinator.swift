@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import SwiftData
 
 struct AppRuntimeEnvironment {
@@ -220,15 +221,44 @@ final class AppCoordinator: ObservableObject {
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private let newTaskHotKey: GlobalHotKey
+    private let performanceRoot: URL?
+    private let isPerformanceSeedOnly: Bool
+    private var performanceSignalSource: (any DispatchSourceSignal)?
+    private var performancePhaseIndex = 0
 
     private init() {
+        PerformanceSignposts.beginLaunch()
         let environment = ProcessInfo.processInfo.environment
         let runtime = AppRuntimeEnvironment(environment: environment)
-        isUITesting = runtime.isUITesting
-        isRunningTests = runtime.isRunningTests
+        let isUITesting = runtime.isUITesting
+        let isRunningTests = runtime.isRunningTests
+        let externalPerformanceRoot = PerformanceProbe.validatedRoot(environment: environment)
+        if environment["ATTIC_PERF_STORE_ROOT"] != nil && externalPerformanceRoot == nil {
+            fatalError("Performance store root is not an owned temporary directory")
+        }
+        let uiPerformanceRoot: URL?
+        do {
+            uiPerformanceRoot = try PerformanceProbe.uiTestRoot(environment: environment)
+        } catch {
+            fatalError("Unable to create the isolated performance UI test root: \(error)")
+        }
+        let performanceUICleanup = environment["ATTIC_PERF_UI_CLEANUP"] == "1"
+        if environment["ATTIC_PERF_UI_TEST"] == "1",
+           uiPerformanceRoot == nil, !performanceUICleanup {
+            fatalError("Performance UI tests require their isolated preview bundle")
+        }
+        let performanceRoot = externalPerformanceRoot ?? uiPerformanceRoot
+        let performanceSeedOnly = environment["ATTIC_PERF_SEED_ONLY"] == "1"
+        self.isUITesting = isUITesting
+        self.isRunningTests = isRunningTests
         shouldStartInteractiveShellServices = runtime.shouldStartInteractiveShellServices
+        // A performance run must opt into the UI-test identity and prove it
+        // owns a temporary root. It can never fall through to the normal store.
+        self.performanceRoot = performanceRoot
+        isPerformanceSeedOnly = performanceSeedOnly
         let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
             && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
+            && !performanceUICleanup
 
         let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
         #if DEBUG && !ATTIC_LOCAL_ONLY
@@ -244,35 +274,51 @@ final class AppCoordinator: ObservableObject {
         }
         #endif
         let container: ModelContainer
-        if usesCanvasUITestPersistence {
+        if let performanceRoot {
             do {
-                container = try PersistenceController.makeCanvasUITestContainer(
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
+                    reset: performanceSeedOnly, baseDirectory: performanceRoot
+                ) }
+                if performanceSeedOnly {
+                    PerformanceProbe.writePhase("seeding", root: performanceRoot)
+                    try PerformanceSeed.generate(
+                        in: container, root: performanceRoot,
+                        includeDoneHistory: environment["ATTIC_PERF_DONE_HISTORY"] == "1"
+                    )
+                    PerformanceProbe.writePhase("seed_complete", root: performanceRoot)
+                }
+            } catch {
+                fatalError("Unable to create the isolated performance store: \(error)")
+            }
+        } else if usesCanvasUITestPersistence {
+            do {
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
                     reset: environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1"
-                )
+                ) }
             } catch {
                 fatalError("Unable to create the isolated Canvas UI test store: \(error)")
             }
         } else {
             #if ATTIC_LOCAL_ONLY
             do {
-                container = try PersistenceController.makeContainer(
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
                     inMemory: isUITesting || isRunningTests,
                     cloudSyncEnabled: false
-                )
+                ) }
             } catch {
                 fatalError("Unable to create the local-only SwiftData container: \(error)")
             }
             #else
             do {
-                container = try PersistenceController.makeContainer(
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
                     inMemory: isUITesting || isRunningTests
-                )
+                ) }
             } catch let cloudError {
                 do {
-                    container = try PersistenceController.makeContainer(
+                    container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
                         inMemory: isUITesting || isRunningTests,
                         cloudSyncEnabled: false
-                    )
+                    ) }
                     settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
                 } catch {
                     fatalError(
@@ -284,10 +330,17 @@ final class AppCoordinator: ObservableObject {
             #endif
         }
 
-        let store = TaskStore(container: container)
+        let store = TaskStore(
+            container: container,
+            taskImageFiles: performanceRoot.map {
+                TaskImageFiles(rootURL: $0.appendingPathComponent("TaskImages", isDirectory: true))
+            } ?? .shared
+        )
         let noteStore = NoteStore(
             container: container,
-            attachmentFileStore: runtime.makeAttachmentFileStore()
+            attachmentFileStore: performanceRoot.map {
+                AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
+            } ?? runtime.makeAttachmentFileStore()
         )
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
@@ -373,6 +426,9 @@ final class AppCoordinator: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
         guard shouldStartInteractiveShellServices else { return }
+        if isPerformanceSeedOnly {
+            return
+        }
         NSApp.appearance = settings.appearance.nsAppearance
         appearanceObservation = settings.$appearance
             .removeDuplicates()
@@ -389,6 +445,85 @@ final class AppCoordinator: ObservableObject {
             // key panel so AppKit, not a test-only model shortcut, owns mouse
             // and keyboard delivery through the installed UI hierarchy.
             NSApp.activate()
+            if let performanceRoot,
+               ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
+                hoverMonitor.start()
+                let window = Double(ProcessInfo.processInfo.environment["ATTIC_PERF_WINDOW_SECONDS"] ?? "10") ?? 10
+                func write(_ phase: String) {
+                    let pointer = NSEvent.mouseLocation
+                    PerformanceProbe.writePhase(phase, root: performanceRoot, details: [
+                        "panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0,
+                        "hover_hidden": hoverMonitor.isHiddenForPerformanceProbe ? 1 : 0,
+                        "visibility_changes": panelController.performanceVisibilityChanges,
+                        "visible_strokes": canvasSession.strokes.count,
+                        "section_canvas": uiState.selectedSection == .canvas ? 1 : 0,
+                        "pointer_x": Int(pointer.x.rounded()),
+                        "pointer_y": Int(pointer.y.rounded())
+                    ])
+                }
+                func later(_ seconds: Double, _ action: @escaping () -> Void) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: action)
+                }
+                if ProcessInfo.processInfo.environment["ATTIC_PERF_EXTERNAL_CONTROL"] == "1" {
+                    // A signal arrives only after the sampler finishes its
+                    // window. End markers and the next phase cannot race a
+                    // slow reveal, footprint call, or AppKit hide completion.
+                    signal(SIGUSR1, SIG_IGN)
+                    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                    source.setEventHandler { [weak self] in
+                        guard let self, self.performancePhaseIndex < 5 else { return }
+                        let phases = ["hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"]
+                        write(phases[self.performancePhaseIndex] + "_end")
+                        self.performancePhaseIndex += 1
+                        switch self.performancePhaseIndex {
+                        case 1:
+                            self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
+                            later(1) { write("tasks_open") }
+                        case 2:
+                            self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
+                            later(1) { write("canvas_open") }
+                        case 3:
+                            let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
+                                write(outcome == .hidden ? "after_hide" : "hide_failed")
+                            }
+                            if !result.isAccepted { write("hide_failed") }
+                        case 4:
+                            write("hidden_idle_final")
+                        default:
+                            break
+                        }
+                    }
+                    performanceSignalSource = source
+                    source.resume()
+                    write("hidden_idle")
+                    return
+                }
+                write("hidden_idle")
+                later(30 + window + 8) { write("hidden_idle_end") }
+                later(30 + window + 18) {
+                    self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
+                    later(1) { write("tasks_open") }
+                    later(window + 8) { write("tasks_open_end") }
+                    later(window + 18) {
+                        self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
+                        later(1) { write("canvas_open") }
+                        later(window + 8) { write("canvas_open_end") }
+                        later(window + 18) {
+                            let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
+                                write(outcome == .hidden ? "after_hide" : "hide_failed")
+                                guard outcome == .hidden else { return }
+                                later(30 + window + 8) {
+                                    write("after_hide_end")
+                                    later(1) { write("hidden_idle_final") }
+                                    later(window + 16) { write("hidden_idle_final_end") }
+                                }
+                            }
+                            if !result.isAccepted { write("hide_failed") }
+                        }
+                    }
+                }
+                return
+            }
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {
                 hoverMonitor.start()
                 hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
@@ -432,6 +567,8 @@ final class AppCoordinator: ObservableObject {
     }
 
     func stop() {
+        performanceSignalSource?.cancel()
+        performanceSignalSource = nil
         if isRunningTests && !isUITesting {
             hasStarted = false
             return

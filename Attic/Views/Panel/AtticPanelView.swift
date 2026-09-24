@@ -167,6 +167,9 @@ struct AtticPanelView: View {
             syncComposerInteractionHeight()
             syncTaskEntryInteractionLocks()
             openMostRecentNoteIfNeeded()
+            if PerformanceSignposts.hasPendingPageSwitch {
+                DispatchQueue.main.async { PerformanceSignposts.pageLaidOut() }
+            }
         }
         .task {
             _ = await noteDraft.restoreRecoveryIfNeeded()
@@ -811,6 +814,7 @@ struct AtticPanelView: View {
         if uiState.selectedSection.isNotes, noteDraft.isActive {
             guard noteDraft.close() else { return }
         }
+        PerformanceSignposts.beginPageSwitch()
         isQuickEntryFocused = false
         uiState.setInteractionLock(.quickEntryFocus, isActive: false)
         if uiState.selectedSection.isCanvas {

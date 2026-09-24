@@ -56,7 +56,11 @@ extension CanvasStore {
         }
 
         do {
+            #if os(macOS)
+            try PerformanceSignposts.storeSave { try persist(context) }
+            #else
             try persist(context)
+            #endif
             if CanvasCloudInfrastructurePolicy.isEnabled {
                 cloudSyncProtection.noteLocalSave()
                 reconcileProtectedCloudSyncActivity(for: .exportData)

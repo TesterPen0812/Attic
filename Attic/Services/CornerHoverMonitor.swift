@@ -77,6 +77,7 @@ final class CornerHoverMonitor {
     private static let eventSampleInterval: TimeInterval = 1.0 / 30
     /// Test seam: how many full pointer samples ran.
     private(set) var sampleCount = 0
+    var isHiddenForPerformanceProbe: Bool { !stateMachine.isVisible }
 
     init(
         settings: AppSettings,
@@ -174,10 +175,36 @@ final class CornerHoverMonitor {
     func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
         guard preparePresentation(openComposer: openComposer, section: section) else { return }
+        PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
         panelController.show(on: screen, corner: settings.corner, makeKey: openComposer)
+    }
+
+    /// Keep the real panel on screen through a performance sample, including
+    /// a section change made while it is already visible.
+    func revealForPerformanceProbe(section: PanelSection) {
+        guard let screen = NSScreen.main,
+              preparePresentation(openComposer: false, section: section) else { return }
+        PerformanceSignposts.beginReveal()
+        refreshStoreForReveal()
+        stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
+        refreshSamplingCadence(at: NSEvent.mouseLocation)
+        panelController.show(on: screen, corner: settings.corner, makeKey: true)
+    }
+
+    @discardableResult
+    func hideForPerformanceProbe(
+        completion: @escaping (PanelHideCompletion) -> Void
+    ) -> PanelHideRequestResult {
+        panelController.requestHide { [weak self] outcome in
+            if outcome == .hidden {
+                self?.stateMachine.forceHidden(untilHotspotExit: true)
+                self?.refreshSamplingCadence(at: NSEvent.mouseLocation)
+            }
+            completion(outcome)
+        }
     }
 
     func keepVisibleForUITesting(openComposer: Bool = false) {
@@ -198,12 +225,16 @@ final class CornerHoverMonitor {
             if uiState.selectedSection.isNotes, noteDraft.isActive {
                 guard noteDraft.close() else { return false }
             }
+            PerformanceSignposts.beginPageSwitch()
             uiState.selectSection(targetSection)
         }
 
         guard openComposer else { return true }
         if targetSection.isNotes {
-            guard noteDraft.beginNew() else { return false }
+            guard noteDraft.beginNew() else {
+                PerformanceSignposts.cancelPageSwitch()
+                return false
+            }
         }
 
         var transaction = Transaction()
@@ -278,6 +309,7 @@ final class CornerHoverMonitor {
             break
         case .reveal:
             guard let activeScreen else { return }
+            PerformanceSignposts.beginReveal()
             // Pull any CloudKit import out of SwiftData's context cache before
             // calculating the panel contents. This only runs on reveal, not on
             // the pointer sampling path.

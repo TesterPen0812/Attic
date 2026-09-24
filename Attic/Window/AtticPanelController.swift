@@ -153,6 +153,8 @@ enum PanelHideRequestResult: Equatable {
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
+    var isVisibleForPerformanceProbe: Bool { panel.isVisible }
+    private(set) var performanceVisibilityChanges = 0
     private let hostingView: AtticPanelHostingView
     private let store: TaskStore
     private let noteStore: NoteStore
@@ -366,6 +368,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         stopPanelMotion()
         let frameBeforeWorkAreaRefresh = panel.visibleContentFrame
         guard let workArea = refreshCurrentWorkArea(preferredScreen: screen) else {
+            PerformanceSignposts.cancelReveal()
+            PerformanceSignposts.cancelPageSwitch()
             return
         }
         let visibleFrame = workArea.visibleFrame
@@ -391,6 +395,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             if makeKey { panel.makeKey() }
             panel.orderFrontRegardless()
             animateShow(to: safeFrame)
+            PerformanceSignposts.panelOrderedFront()
             return
         }
 
@@ -412,12 +417,15 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
 
             animateShow(to: finalFrame)
+            PerformanceSignposts.panelOrderedFront()
             return
         }
 
         panel.setVisibleContentFrame(finalFrame, display: true)
         contentContainer?.setCollapseProgress(1, corner: corner, reduceMotion: false)
         panel.alphaValue = 1
+
+        performanceVisibilityChanges += 1
 
         if makeKey {
             panel.makeKeyAndOrderFront(nil)
@@ -426,6 +434,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
 
         animateShow(to: finalFrame)
+        PerformanceSignposts.panelOrderedFront()
     }
 
     private func animateShow(to finalFrame: CGRect) {
@@ -488,6 +497,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             MainActor.assumeIsolated {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
+                self.performanceVisibilityChanges += 1
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
                 self.subtaskPanels.mainPanelDidHide()
