@@ -271,7 +271,12 @@ final class TaskImageTests: XCTestCase {
         let survivingURL = try await files.verifiedURL(for: reference)
         XCTAssertNotNil(survivingURL)
 
+        // Phase 0: a deleted task keeps its files in Recently Deleted; the
+        // purge after 30 days releases the last reference.
         XCTAssertTrue(store.delete(store.task(withID: twin.id)!))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(storedAttachmentDirectories(storage).count, 1, "a soft-deleted task keeps its file")
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [twin.id])
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(storedAttachmentDirectories(storage).count, 0, "the last reference releases the file")
     }

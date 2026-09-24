@@ -45,6 +45,8 @@ private struct NoteReplicaSnapshot: Equatable {
     let body: String
     let createdAt: Date
     let updatedAt: Date
+    let deletedAt: Date?
+    let tagsRaw: String
 
     init(_ note: NoteItem) {
         id = note.id
@@ -52,6 +54,8 @@ private struct NoteReplicaSnapshot: Equatable {
         body = note.body
         createdAt = note.createdAt
         updatedAt = note.updatedAt
+        deletedAt = note.deletedAt
+        tagsRaw = note.tagsRaw
     }
 }
 
@@ -63,11 +67,14 @@ private struct PresentationIndex {
 
 private enum NoteReplicaMutationError: LocalizedError {
     case missingReplica(UUID)
+    case notRecentlyDeleted(UUID)
 
     var errorDescription: String? {
         switch self {
         case let .missingReplica(id):
             "The note replicas for \(id.uuidString) could not be loaded safely."
+        case let .notRecentlyDeleted(id):
+            "The note \(id.uuidString) is not in Recently Deleted."
         }
     }
 }
@@ -113,7 +120,7 @@ final class NoteStore: ObservableObject {
     }
 #endif
 
-    private let container: ModelContainer
+    let container: ModelContainer
 #if os(macOS)
     private let attachmentFileStore: AttachmentFileStore
     private let attachmentImporter: any NoteAttachmentFileImporting
@@ -170,9 +177,18 @@ final class NoteStore: ObservableObject {
         let normalizedTitle = Self.normalizedTitle(title)
         guard !normalizedTitle.isEmpty || Self.hasMeaningfulBody(body) else { return nil }
 
+        // An id that belongs to a note in Recently Deleted is never reused: a
+        // live replica beside deleted ones would make the copies disagree and
+        // could resurrect the deleted note's attachments. A draft that reserved
+        // that id simply gets a new note (callers adopt the returned id).
+        var resolvedID = id
+        if let existing = try? storedNotesIncludingDeleted(matching: id),
+           existing.contains(where: { $0.deletedAt != nil }) {
+            resolvedID = UUID()
+        }
         let timestamp = now()
         let note = NoteItem(
-            id: id,
+            id: resolvedID,
             title: normalizedTitle,
             body: body,
             createdAt: timestamp,
@@ -182,7 +198,7 @@ final class NoteStore: ObservableObject {
         notes.append(note)
         guard save() else { return nil }
 #if os(macOS)
-        markAttachmentImportOriginPersisted(noteID: id)
+        markAttachmentImportOriginPersisted(noteID: resolvedID)
 #endif
         return note
     }
@@ -247,11 +263,35 @@ final class NoteStore: ObservableObject {
             replica.title = destinationTitle
             replica.body = destinationBody
             replica.createdAt = note.createdAt
+            replica.tagsRaw = note.tagsRaw
+            replica.deletedAt = nil
             replica.updatedAt = timestamp
         }
         return save()
     }
 
+    /// Tags are metadata: setting them does not move the note in the
+    /// newest-first list (its `updatedAt` is kept), on every replica.
+    @discardableResult
+    func setTags(_ tags: [String], for note: NoteItem) -> Bool {
+        guard let note = notes.first(where: { $0.id == note.id }) else { return false }
+        let encoded = AtticTag.encode(tags)
+        do {
+            let replicas = try storedNotes(matching: note.id)
+            guard replicas.contains(where: { $0.tagsRaw != encoded }) else { return true }
+            for replica in replicas { replica.tagsRaw = encoded }
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+        return save()
+    }
+
+    /// Moves a note to Recently Deleted. Every replica is marked; the note's
+    /// attachment rows, their bytes and their files are left exactly as they
+    /// are, so a restore brings everything back. An import still copying into
+    /// this note is refused when it finishes, as before.
     @discardableResult
     func delete(_ note: NoteItem) -> Bool {
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
@@ -263,23 +303,15 @@ final class NoteStore: ObservableObject {
             return false
         }
 #if os(macOS)
-        let attachmentReplicas: [NoteAttachment]
-        do {
-            attachmentReplicas = try storedAttachments(forNoteID: note.id)
-        } catch {
-            lastErrorMessage = error.localizedDescription
-            return false
-        }
-        let references = attachmentReplicas.map { AttachmentFileReference($0) }
         let attachmentImportIDToInvalidate = attachmentImportInFlight
             && attachmentImportActivity?.origin.noteID == note.id
             ? attachmentImportActivity?.requestID
             : nil
 #endif
-        replicas.forEach(context.delete)
-#if os(macOS)
-        attachmentReplicas.forEach(context.delete)
-#endif
+        // `updatedAt` is kept, so a restored note returns to its place in
+        // the newest-first list.
+        let timestamp = now()
+        for replica in replicas { replica.deletedAt = timestamp }
         notes.removeAll { $0.id == note.id }
 #if os(macOS)
         attachmentsByNoteID[note.id] = nil
@@ -289,9 +321,110 @@ final class NoteStore: ObservableObject {
         if let attachmentImportIDToInvalidate {
             invalidatedAttachmentImportIDs.insert(attachmentImportIDToInvalidate)
         }
-        removeMaterializationsAfterSuccessfulSave(references)
 #endif
         return true
+    }
+
+    /// Notes in Recently Deleted, newest deletion first.
+    func recentlyDeletedNotes() -> [DeletedItemSummary] {
+        do {
+            let freshContext = try makeFreshContext()
+            let deleted = try freshContext.fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { $0.deletedAt != nil }
+            ))
+#if os(macOS)
+            let attachmentNoteIDs = try freshContext.fetch(FetchDescriptor<NoteAttachment>()).map(\.noteID)
+            var attachmentCounts: [UUID: Int] = [:]
+            for noteID in attachmentNoteIDs { attachmentCounts[noteID, default: 0] += 1 }
+#else
+            let attachmentCounts: [UUID: Int] = [:]
+#endif
+            return visibleUniqueNotes(from: deleted).compactMap { note -> DeletedItemSummary? in
+                guard let deletedAt = note.deletedAt else { return nil }
+                let title = note.title.isEmpty
+                    ? String(note.body.split(whereSeparator: \.isNewline).first ?? "")
+                    : note.title
+                return DeletedItemSummary(
+                    ref: AtticItemRef(.note, note.id),
+                    title: title,
+                    deletedAt: deletedAt,
+                    includedCount: attachmentCounts[note.id] ?? 0,
+                    retentionStart: deletedAt
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.deletedAt != rhs.deletedAt
+                    ? lhs.deletedAt > rhs.deletedAt
+                    : lhs.ref.id.uuidString < rhs.ref.id.uuidString
+            }
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    /// Brings a note back with its attachments, on every replica, in one
+    /// save. Its place in the list is where it was (its `updatedAt` is kept).
+    @discardableResult
+    func restoreDeleted(noteID: UUID) -> Bool {
+        do {
+            let replicas = try storedNotesIncludingDeleted(matching: noteID)
+            guard replicas.contains(where: { $0.deletedAt != nil }) else {
+                throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
+            }
+            for replica in replicas { replica.deletedAt = nil }
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+        guard save() else { return false }
+        do {
+            try reloadModels()
+        } catch {
+            lastErrorMessage = "Restored, but the list could not be refreshed: \(error.localizedDescription)"
+        }
+        return true
+    }
+
+    /// Removes for good the notes deleted before `cutoff`, with their
+    /// attachment rows and private files. A note is purged only when every
+    /// replica agrees; a divergent copy keeps it. Returns the purged ids.
+    @discardableResult
+    func purgeDeleted(before cutoff: Date) -> Set<UUID> {
+        var purgedIDs = Set<UUID>()
+#if os(macOS)
+        var references: [AttachmentFileReference] = []
+#endif
+        do {
+            let deleted = try context.fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { $0.deletedAt != nil }
+            ))
+            let expiredIDs = Set(deleted.filter { ($0.deletedAt ?? .distantFuture) < cutoff }.map(\.id))
+            for id in expiredIDs {
+                let replicas = try storedNotesIncludingDeleted(matching: id)
+                guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
+                let snapshot = NoteReplicaSnapshot(first)
+                guard replicas.allSatisfy({ NoteReplicaSnapshot($0) == snapshot }) else { continue }
+#if os(macOS)
+                let attachments = try storedAttachments(forNoteID: id)
+                references += attachments.map { AttachmentFileReference($0, includePayload: false) }
+                attachments.forEach(context.delete)
+#endif
+                replicas.forEach(context.delete)
+                purgedIDs.insert(id)
+            }
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return []
+        }
+        guard !purgedIDs.isEmpty else { return [] }
+        guard save() else { return [] }
+#if os(macOS)
+        removeMaterializationsAfterSuccessfulSave(references)
+#endif
+        return purgedIDs
     }
 
 #if os(macOS)
@@ -826,8 +959,13 @@ final class NoteStore: ObservableObject {
         using sourceContext: ModelContext
     ) {
         context = sourceContext
-        notes = visibleUniqueNotes(from: presentation.notes)
+        let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
+        notes = uniqueNotes.filter { $0.deletedAt == nil }
+        // A deleted note's attachments stay stored (and their files stay
+        // reconciled below) but are not presented.
+        let deletedNoteIDs = Set(uniqueNotes.filter { $0.deletedAt != nil }.map(\.id))
         attachmentsByNoteID = visibleUniqueAttachments(from: presentation.attachments)
+            .filter { !deletedNoteIDs.contains($0.key) }
         let availableIDs = Set(attachmentsByNoteID.values.flatMap { $0.map(\.id) })
         attachmentFailures = attachmentFailures.filter { availableIDs.contains($0.key) }
         attachmentRetryVersions = attachmentRetryVersions.filter { availableIDs.contains($0.key) }
@@ -875,7 +1013,7 @@ final class NoteStore: ObservableObject {
 
     private func installPresentation(_ fetchedNotes: [NoteItem], using sourceContext: ModelContext) {
         context = sourceContext
-        notes = visibleUniqueNotes(from: fetchedNotes)
+        notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
         revision &+= 1
     }
 #endif
@@ -918,6 +1056,17 @@ final class NoteStore: ObservableObject {
     }
 
     private func storedNotesIfPresent(
+        matching id: UUID,
+        in sourceContext: ModelContext? = nil
+    ) throws -> [NoteItem] {
+        // A note in Recently Deleted is absent for every edit and import: only
+        // a restore brings it back. Copies that disagree (some deleted) stay
+        // editable, and the edit makes them agree again.
+        let replicas = try storedNotesIncludingDeleted(matching: id, in: sourceContext)
+        return replicas.allSatisfy({ $0.deletedAt != nil }) ? [] : replicas
+    }
+
+    private func storedNotesIncludingDeleted(
         matching id: UUID,
         in sourceContext: ModelContext? = nil
     ) throws -> [NoteItem] {
@@ -1313,6 +1462,8 @@ final class NoteStore: ObservableObject {
             note.body,
             String(note.createdAt.timeIntervalSinceReferenceDate.bitPattern),
             String(note.updatedAt.timeIntervalSinceReferenceDate.bitPattern),
+            note.deletedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
+            note.tagsRaw,
             String(reflecting: note.persistentModelID)
         ].joined(separator: "\u{1F}")
     }

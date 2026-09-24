@@ -566,6 +566,10 @@ extension CanvasStore {
         )
         for (id, replicas) in strokeGroups {
             let winner = try Self.winningStrokeReplica(in: replicas)
+            // Already-deleted content keeps its own deletion time: only what
+            // this delete hides carries the board's `deletedAt`, which is how
+            // `restoreCanvas` knows what to bring back.
+            guard !winner.tombstoned else { continue }
             let nextVersion = try Self.nextMutationVersion(
                 after: replicas.map(\.mutationVersion).max() ?? 0,
                 objectID: id
@@ -590,6 +594,7 @@ extension CanvasStore {
         )
         for (id, replicas) in imageGroups {
             let winner = try Self.winningImageReplica(in: replicas)
+            guard !winner.tombstoned else { continue }
             let nextVersion = try Self.nextMutationVersion(
                 after: replicas.map(\.mutationVersion).max() ?? 0,
                 objectID: id

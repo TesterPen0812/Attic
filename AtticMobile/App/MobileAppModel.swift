@@ -147,6 +147,6 @@ final class MobileAppModel: ObservableObject {
     private func purgeCompletedBeforeToday() {
         guard let store else { return }
         let startOfToday = Calendar.autoupdatingCurrent.startOfDay(for: Date())
-        store.purgeCompleted(before: startOfToday)
+        store.moveCompletedToDoneLog(before: startOfToday)
     }
 }

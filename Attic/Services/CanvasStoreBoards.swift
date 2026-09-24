@@ -117,7 +117,7 @@ extension CanvasStore {
             let boardReplicas = try storedBoardReplicas(matching: id)
             if boardReplicas.isEmpty {
                 let board = canvases.first { $0.id == id } ?? .defaultBoard
-                context.insert(CanvasBoardItem(
+                let inserted = CanvasBoardItem(
                     id: id,
                     name: board.name,
                     sortIndex: board.sortIndex,
@@ -131,7 +131,9 @@ extension CanvasStore {
                     createdAt: board.createdAt,
                     updatedAt: timestamp,
                     deletedAt: timestamp
-                ))
+                )
+                inserted.recentlyDeletedAt = timestamp
+                context.insert(inserted)
             } else {
                 let winner = Self.winningBoardReplica(in: boardReplicas)
                 let nextVersion = try Self.nextMutationVersion(
@@ -148,6 +150,7 @@ extension CanvasStore {
                     replica.createdAt = winner.createdAt
                     replica.updatedAt = timestamp
                     replica.deletedAt = timestamp
+                    replica.recentlyDeletedAt = timestamp
                 }
             }
 

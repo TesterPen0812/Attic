@@ -143,6 +143,11 @@ private struct TaskReplicaSnapshot: Equatable {
     let manualOrder: Int64?
     let parentID: UUID?
     let imageReferencesData: Data?
+    let deletedAt: Date?
+    let deletionRootID: UUID?
+    let doneLoggedAt: Date?
+    let tagsRaw: String
+    let dueDayRaw: String?
 
     init(_ task: TaskItem) {
         id = task.id
@@ -155,16 +160,48 @@ private struct TaskReplicaSnapshot: Equatable {
         manualOrder = task.manualOrder
         parentID = task.parentID
         imageReferencesData = task.imageReferencesData
+        deletedAt = task.deletedAt
+        deletionRootID = task.deletionRootID
+        doneLoggedAt = task.doneLoggedAt
+        tagsRaw = task.tagsRaw
+        dueDayRaw = task.dueDayRaw
+    }
+}
+
+/// The fields an undo step puts back on a task: everything a person can
+/// edit in the list, plus the ordering and completion time they imply.
+struct TaskEditableState: Equatable {
+    let id: UUID
+    let title: String
+    let statusRaw: String
+    let priorityRaw: String
+    let completedAt: Date?
+    let manualOrder: Int64?
+    let tagsRaw: String
+    let dueDayRaw: String?
+
+    init(_ task: TaskItem) {
+        id = task.id
+        title = task.title
+        statusRaw = task.statusRaw
+        priorityRaw = task.priorityRaw
+        completedAt = task.completedAt
+        manualOrder = task.manualOrder
+        tagsRaw = task.tagsRaw
+        dueDayRaw = task.dueDayRaw
     }
 }
 
 private enum TaskReplicaMutationError: LocalizedError {
     case missingReplica(UUID)
+    case notRecentlyDeleted(UUID)
 
     var errorDescription: String? {
         switch self {
         case let .missingReplica(id):
             "The task replicas for \(id.uuidString) could not be loaded safely."
+        case let .notRecentlyDeleted(id):
+            "The task \(id.uuidString) is not in Recently Deleted."
         }
     }
 }
@@ -246,7 +283,7 @@ final class TaskStore: ObservableObject {
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
 
-    private let container: ModelContainer
+    let container: ModelContainer
     private var context: ModelContext
     private let now: () -> Date
     let taskImageFiles: TaskImageFiles
@@ -446,55 +483,86 @@ final class TaskStore: ObservableObject {
         parentID: UUID? = nil,
         attachments: [TaskImageReference] = []
     ) -> TaskItem? {
-        let normalizedTitle = Self.normalized(title)
-        guard !normalizedTitle.isEmpty else { return nil }
+        commit([TaskDraft(
+            title: title,
+            priority: priority,
+            status: status,
+            parentID: parentID,
+            attachments: attachments
+        )])?.first
+    }
+
+    /// Turns drafts into tasks in one save: either every draft becomes a
+    /// task or none does. Drafts keep their order: the first ends up highest
+    /// in its group, as if each later one had been added below it. Returns
+    /// the tasks in draft order, or nil after reporting why nothing changed
+    /// (a draft with no title is refused silently, like an empty add bar).
+    @discardableResult
+    func commit(_ drafts: [TaskDraft]) -> [TaskItem]? {
+        guard !drafts.isEmpty else { return [] }
+        let titles = drafts.map { Self.normalized($0.title) }
+        guard titles.allSatisfy({ !$0.isEmpty }) else { return nil }
 
         let timestamp = now()
         // Resolved before the first failure can be reported: a composer error
         // belongs to the family panel that asked for the subtask.
-        let owner = familyOwner(forParentID: parentID)
-        let manualOrder: Int64?
+        let parentIDs = Set(drafts.map(\.parentID))
+        let owner = parentIDs.count == 1 ? familyOwner(forParentID: parentIDs.first ?? nil) : nil
+        var created: [TaskItem?] = Array(repeating: nil, count: drafts.count)
         do {
-            if let parentID {
+            for parentID in parentIDs.compactMap({ $0 }) {
                 let parents = try storedTasks(matching: parentID)
-                guard parents.allSatisfy({ $0.parentID == nil && $0.status != .done }) else {
+                guard task(withID: parentID) != nil,
+                      parents.allSatisfy({ $0.parentID == nil && $0.status != .done
+                          && $0.deletedAt == nil && $0.doneLoggedAt == nil }) else {
                     report("Subtasks need an unfinished main task. Reopen the main task first.", owner: owner)
                     return nil
                 }
             }
-            manualOrder = try nextManualOrder(
-                status: status,
-                priority: priority,
-                parentID: parentID,
-                updatedAt: timestamp
-            )
+            // Inserted last-first: each new task is placed above the ones
+            // already in its group, so the first draft ends up on top.
+            for index in drafts.indices.reversed() {
+                let draft = drafts[index]
+                // A lone task in an unordered group stays unordered, exactly as
+                // before; a batch is ordered explicitly so its tasks, which
+                // share one timestamp, keep the drafts' order.
+                let manualOrder = try nextManualOrder(
+                    status: draft.status,
+                    priority: draft.priority,
+                    parentID: draft.parentID,
+                    updatedAt: timestamp
+                ) ?? (drafts.count > 1 ? Self.manualOrderStride : nil)
+                let task = TaskItem(
+                    title: titles[index],
+                    status: draft.status,
+                    priority: draft.priority,
+                    createdAt: timestamp,
+                    completedAt: draft.status == .done ? timestamp : nil,
+                    manualOrder: manualOrder,
+                    parentID: draft.parentID
+                )
+                task.tags = draft.tags
+                task.dueDay = draft.dueDay
+                // References the composer already imported are bound in this
+                // same save, so a new task never exists without them (or they
+                // without it).
+                if !draft.attachments.isEmpty {
+                    task.imageReferencesData = try JSONEncoder().encode(draft.attachments)
+                }
+                context.insert(task)
+                tasks.append(task)
+                created[index] = task
+            }
         } catch {
+            if created.contains(where: { $0 != nil }) {
+                context.rollback()
+                try? reloadTasks()
+            }
             report(error.localizedDescription, owner: owner)
             return nil
         }
-        let task = TaskItem(
-            title: normalizedTitle,
-            status: status,
-            priority: priority,
-            createdAt: timestamp,
-            completedAt: status == .done ? timestamp : nil,
-            manualOrder: manualOrder,
-            parentID: parentID
-        )
-        // References the composer already imported are bound in this same
-        // save, so a new task never exists without them (or they without it).
-        if !attachments.isEmpty {
-            do {
-                task.imageReferencesData = try JSONEncoder().encode(attachments)
-            } catch {
-                report(error.localizedDescription, owner: owner)
-                return nil
-            }
-        }
-        context.insert(task)
-        tasks.append(task)
         guard save(owner: owner) else { return nil }
-        return task
+        return created.compactMap { $0 }
     }
 
     @discardableResult
@@ -520,6 +588,8 @@ final class TaskStore: ObservableObject {
         title: String? = nil,
         priority: TaskPriority? = nil,
         status: TaskStatus? = nil,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil,
         allowingUnfinishedSubtasks: Bool = false
     ) -> Bool {
         guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
@@ -540,6 +610,8 @@ final class TaskStore: ObservableObject {
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
         let destinationStatus = status ?? task.status
+        let destinationTagsRaw = tags.map { AtticTag.encode($0) } ?? task.tagsRaw
+        let destinationDueDayRaw = dueDay.map { $0?.rawValue } ?? task.dueDayRaw
         // Status rules are checked against every stored replica, but only
         // the rows they concern: a title or priority edit fetches nothing.
         if destinationStatus != task.status {
@@ -548,7 +620,9 @@ final class TaskStore: ObservableObject {
                 if destinationStatus == .done, !allowingUnfinishedSubtasks {
                     let taskID = task.id
                     var unfinishedChildren = FetchDescriptor<TaskItem>(
-                        predicate: #Predicate { $0.parentID == taskID && $0.statusRaw != doneRaw }
+                        predicate: #Predicate {
+                            $0.parentID == taskID && $0.statusRaw != doneRaw && $0.deletedAt == nil
+                        }
                     )
                     unfinishedChildren.fetchLimit = 1
                     if try !context.fetch(unfinishedChildren).isEmpty {
@@ -558,7 +632,9 @@ final class TaskStore: ObservableObject {
                 }
                 if destinationStatus != .done, task.status == .done, let parentID = task.parentID {
                     var doneParents = FetchDescriptor<TaskItem>(
-                        predicate: #Predicate { $0.id == parentID && $0.statusRaw == doneRaw }
+                        predicate: #Predicate {
+                            $0.id == parentID && $0.statusRaw == doneRaw && $0.deletedAt == nil
+                        }
                     )
                     doneParents.fetchLimit = 1
                     if try !context.fetch(doneParents).isEmpty {
@@ -574,11 +650,14 @@ final class TaskStore: ObservableObject {
         let titleChanged = destinationTitle != task.title
         let priorityChanged = destinationPriority != task.priority
         let statusChanged = destinationStatus != task.status
+        let tagsChanged = destinationTagsRaw != task.tagsRaw
+        let dueChanged = destinationDueDayRaw != task.dueDayRaw
         let visibleSnapshot = TaskReplicaSnapshot(task)
         let replicasNeedRepair = replicas.contains {
             TaskReplicaSnapshot($0) != visibleSnapshot
         }
-        guard titleChanged || priorityChanged || statusChanged || replicasNeedRepair else {
+        guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged
+            || replicasNeedRepair else {
             return true
         }
 
@@ -616,7 +695,64 @@ final class TaskStore: ObservableObject {
             replica.imageReferencesData = task.imageReferencesData
             replica.manualOrder = destinationManualOrder
             replica.completedAt = destinationCompletedAt
+            replica.tagsRaw = destinationTagsRaw
+            replica.dueDayRaw = destinationDueDayRaw
+            // An edit to a visible task wins on every replica, including one
+            // another device hid: the list only ever shows live tasks.
+            replica.deletedAt = task.deletedAt
+            replica.deletionRootID = task.deletionRootID
+            replica.doneLoggedAt = task.doneLoggedAt
             replica.updatedAt = timestamp
+        }
+        return save(owner: owner)
+    }
+
+    @discardableResult
+    func setTags(_ tags: [String], for task: TaskItem) -> Bool {
+        update(task, tags: tags)
+    }
+
+    @discardableResult
+    func setDueDay(_ dueDay: DueDay?, for task: TaskItem) -> Bool {
+        update(task, dueDay: .some(dueDay))
+    }
+
+    /// The editable fields of a visible task, for an undo step.
+    func editableState(of id: UUID) -> TaskEditableState? {
+        task(withID: id).map(TaskEditableState.init)
+    }
+
+    /// Puts earlier editable fields back on visible tasks, every replica, in
+    /// one save. Used only by undo and redo, which restore a state the store
+    /// itself produced, so the status rules are not re-applied: undoing a
+    /// completion brings back the exact earlier completion time and order.
+    @discardableResult
+    func restoreEditableStates(_ states: [TaskEditableState]) -> Bool {
+        guard !states.isEmpty else { return true }
+        guard states.allSatisfy({ task(withID: $0.id) != nil }) else {
+            report("The task is no longer available.", owner: nil)
+            return false
+        }
+        let owner = states.count == 1 ? familyOwner(forTaskID: states[0].id) : nil
+        let timestamp = now()
+        do {
+            let groups = try storedTaskGroups(matching: Set(states.map(\.id)))
+            for state in states {
+                for replica in groups[state.id] ?? [] {
+                    replica.title = state.title
+                    replica.statusRaw = state.statusRaw
+                    replica.priorityRaw = state.priorityRaw
+                    replica.completedAt = state.completedAt
+                    replica.manualOrder = state.manualOrder
+                    replica.tagsRaw = state.tagsRaw
+                    replica.dueDayRaw = state.dueDayRaw
+                    replica.updatedAt = timestamp
+                }
+            }
+        } catch {
+            context.rollback()
+            report(error.localizedDescription, owner: owner)
+            return false
         }
         return save(owner: owner)
     }
@@ -879,14 +1015,57 @@ final class TaskStore: ObservableObject {
         return setStatus(task.status.primaryActionDestination, for: task)
     }
 
+    /// Moves a task, and its subtasks when it is a main task, to Recently
+    /// Deleted. Nothing is removed: every replica is marked with the deletion
+    /// time and the id of the task this delete started from, and files stay
+    /// in private storage, so `restoreDeleted(taskID:)` can bring back the
+    /// family exactly as it was. The same family rules as before refuse an
+    /// ambiguous or nested family instead of hiding a peer's task.
     @discardableResult
     func delete(_ task: TaskItem) -> Bool {
-        guard let task = tasks.first(where: { $0.id == task.id }) else { return false }
-        // Read while the row is still there: the family a deleted subtask
+        delete(taskIDs: [task.id])
+    }
+
+    /// Several deletes in one save (undoing a batch creation): each task and
+    /// its family move to Recently Deleted as their own entry, or nothing
+    /// changes when any of them is refused.
+    @discardableResult
+    func delete(taskIDs: [UUID]) -> Bool {
+        let visible = taskIDs.compactMap { id in tasks.first(where: { $0.id == id }) }
+        guard !visible.isEmpty, visible.count == Set(taskIDs).count else { return false }
+        // Read while the rows are still there: the family a deleted subtask
         // belonged to is the panel the user is looking at, and a refusal has
         // to appear beside the row it refused.
-        let owner = familyOwner(of: task)
-        let replicas: [TaskItem]
+        let owner = visible.count == 1 ? familyOwner(of: visible[0]) : nil
+        // A subtask whose main task is in the same batch goes with it.
+        let requested = Set(taskIDs)
+        let roots = visible.filter { task in
+            guard let parentID = task.parentID, parent(of: task) != nil else { return true }
+            return !requested.contains(parentID)
+        }
+        var staged: [(root: UUID, rows: [TaskItem])] = []
+        for task in roots {
+            guard let family = deletionFamily(of: task, owner: owner) else { return false }
+            staged.append((task.id, family))
+        }
+        let timestamp = now()
+        var deletedIDs = Set<UUID>()
+        for (root, rows) in staged {
+            for replica in rows {
+                replica.deletedAt = timestamp
+                replica.deletionRootID = root
+                deletedIDs.insert(replica.id)
+            }
+        }
+        tasks.removeAll { deletedIDs.contains($0.id) }
+        return save(owner: owner)
+    }
+
+    /// The rows one delete of `task` hides: every replica of the task and,
+    /// for a main task, of its subtasks. The same family rules as before
+    /// refuse an ambiguous or nested family instead of hiding a peer's task;
+    /// a refusal is reported and returns nil.
+    private func deletionFamily(of task: TaskItem, owner: UUID?) -> [TaskItem]? {
         do {
             // Only the task's own replicas and its direct children are read;
             // anything linked below a child is unsupported nesting, checked
@@ -900,47 +1079,183 @@ final class TaskStore: ObservableObject {
             // that claims a different parent: that conflict must refuse the
             // deletion rather than slip past a parent-only predicate.
             let linkedIDs = Array(Set(linked.map(\.id)))
-            let family = try context.fetch(FetchDescriptor<TaskItem>(
+            let stored = try context.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { linkedIDs.contains($0.id) }
             ))
+            // A subtask already in Recently Deleted on its own keeps its own
+            // deletion (and its own restore); it is not part of this one.
+            let family = Dictionary(grouping: stored, by: \.id)
+                .filter { id, rows in id == taskID || !rows.allSatisfy { $0.deletedAt != nil } }
+                .values.flatMap { $0 }
             let groups = Dictionary(grouping: family, by: \.id)
             guard groups[task.id]?.isEmpty == false else {
                 throw TaskReplicaMutationError.missingReplica(task.id)
             }
             guard groups.values.allSatisfy({ Set($0.map(\.parentID)).count == 1 }) else {
                 report("Conflicting subtask links prevent safe deletion. Refresh and resolve them first.", owner: owner)
-                return false
+                return nil
             }
             guard family.allSatisfy({ item in
                 item.id == task.id || (task.parentID == nil && item.parentID == task.id)
             }) else {
                 report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: owner)
-                return false
+                return nil
             }
             for childID in Set(family.map(\.id)).subtracting([task.id]) {
-                var nested = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == childID })
+                var nested = FetchDescriptor<TaskItem>(
+                    predicate: #Predicate { $0.parentID == childID && $0.deletedAt == nil }
+                )
                 nested.fetchLimit = 1
                 if try !context.fetch(nested).isEmpty {
                     report("An unsupported nested or cyclic subtask link prevents safe deletion.", owner: owner)
-                    return false
+                    return nil
                 }
             }
-            replicas = family
+            return family
         } catch {
             report(error.localizedDescription, owner: owner)
+            return nil
+        }
+    }
+
+    /// One entry per delete: the task a delete started from, newest first.
+    /// Subtasks that went with their parent are counted, not listed.
+    func recentlyDeletedTasks() -> [DeletedItemSummary] {
+        let deleted: [TaskItem]
+        do {
+            deleted = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.deletedAt != nil }
+            ))
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return []
+        }
+        return Dictionary(grouping: deleted) { $0.deletionRootID ?? $0.id }
+            .compactMap { rootID, rows -> DeletedItemSummary? in
+                let rootRows = rows.filter { $0.id == rootID }
+                guard let root = visibleUniqueTasks(from: rootRows).first,
+                      let deletedAt = root.deletedAt else { return nil }
+                return DeletedItemSummary(
+                    ref: AtticItemRef(.task, rootID),
+                    title: root.title,
+                    deletedAt: deletedAt,
+                    includedCount: Set(rows.map(\.id)).count - 1,
+                    retentionStart: deletedAt
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.deletedAt != rhs.deletedAt
+                    ? lhs.deletedAt > rhs.deletedAt
+                    : lhs.ref.id.uuidString < rhs.ref.id.uuidString
+            }
+    }
+
+    /// Brings back exactly what one delete hid (the task and the subtasks
+    /// that went with it), on every replica, in one save: all of it comes
+    /// back or none of it. Order, parent link, files and tags are untouched,
+    /// so the family returns where it was.
+    @discardableResult
+    func restoreDeleted(taskID: UUID) -> Bool {
+        restoreDeleted(taskIDs: [taskID])
+    }
+
+    /// Several restores in one save (redoing a batch creation).
+    @discardableResult
+    func restoreDeleted(taskIDs: [UUID]) -> Bool {
+        guard !taskIDs.isEmpty else { return false }
+        do {
+            for taskID in Set(taskIDs) {
+                let batch = try context.fetch(FetchDescriptor<TaskItem>(
+                    predicate: #Predicate { $0.deletionRootID == taskID && $0.deletedAt != nil }
+                ))
+                guard batch.contains(where: { $0.id == taskID }) else {
+                    throw TaskReplicaMutationError.notRecentlyDeleted(taskID)
+                }
+                // Every deleted replica of those ids, so copies agree afterwards.
+                let ids = Array(Set(batch.map(\.id)))
+                let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+                    predicate: #Predicate { ids.contains($0.id) && $0.deletedAt != nil }
+                ))
+                for replica in replicas {
+                    replica.deletedAt = nil
+                    replica.deletionRootID = nil
+                }
+            }
+        } catch {
+            context.rollback()
+            report(error.localizedDescription, owner: nil)
             return false
         }
-        let removedImages = replicas.flatMap(\.attachments)
-        replicas.forEach(context.delete)
-        let deletedIDs = Set(replicas.map(\.id))
-        tasks.removeAll { deletedIDs.contains($0.id) }
-        guard save(owner: owner) else { return false }
-        removeAttachmentFiles(removedImages, excludingTaskIDs: deletedIDs)
+        guard save(owner: nil) else { return false }
+        do {
+            try reloadTasks()
+        } catch {
+            report("Restored, but the list could not be refreshed: \(error.localizedDescription)", owner: nil)
+        }
         return true
     }
 
+    /// Removes for good what was deleted before `cutoff` (30 days ago, at
+    /// the daily cleanup). A delete is purged only when every replica of
+    /// every task in it agrees; a divergent copy keeps the whole family.
+    /// Files go only once no surviving replica references them. Returns the
+    /// ids of the purged deletes' tasks.
     @discardableResult
-    func purgeCompleted(before cutoff: Date) -> Int {
+    func purgeDeleted(before cutoff: Date) -> Set<UUID> {
+        let rootsByID: [UUID: [TaskItem]]
+        let storedByID: [UUID: [TaskItem]]
+        do {
+            let deleted = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.deletedAt != nil }
+            ))
+            let expiredRoots = Set(deleted.compactMap { row -> UUID? in
+                guard let deletedAt = row.deletedAt, deletedAt < cutoff else { return nil }
+                return row.deletionRootID ?? row.id
+            })
+            guard !expiredRoots.isEmpty else { return [] }
+            rootsByID = Dictionary(grouping: deleted.filter { expiredRoots.contains($0.deletionRootID ?? $0.id) }) {
+                $0.deletionRootID ?? $0.id
+            }
+            let ids = Array(Set(rootsByID.values.flatMap { $0.map(\.id) }))
+            storedByID = Dictionary(grouping: try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { ids.contains($0.id) }
+            )), by: \.id)
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return []
+        }
+
+        var purgedIDs = Set<UUID>()
+        var removed: [TaskItem] = []
+        for (rootID, batch) in rootsByID {
+            let ids = Set(batch.map(\.id))
+            let agreed = ids.allSatisfy { id in
+                guard let replicas = storedByID[id], let first = replicas.first,
+                      first.deletedAt.map({ $0 < cutoff }) == true,
+                      (first.deletionRootID ?? first.id) == rootID else { return false }
+                let snapshot = TaskReplicaSnapshot(first)
+                return replicas.allSatisfy { TaskReplicaSnapshot($0) == snapshot }
+            }
+            guard agreed else { continue }
+            purgedIDs.formUnion(ids)
+            removed += ids.flatMap { storedByID[$0] ?? [] }
+        }
+        guard !removed.isEmpty else { return [] }
+        let removedFiles = removed.flatMap(\.attachments)
+        removed.forEach(context.delete)
+        guard save() else { return [] }
+        removeAttachmentFiles(removedFiles, excludingTaskIDs: purgedIDs)
+        return purgedIDs
+    }
+
+    /// The daily cleanup: finished tasks completed before `cutoff` (the start
+    /// of the current local day) leave today's list and move to the Done log.
+    /// Nothing is deleted. Same rules as the old purge: every replica of a
+    /// candidate must agree (a divergent duplicate blocks it), and a family
+    /// moves together or not at all. Running it again changes nothing, so a
+    /// repeated wake, clock or time-zone change can never log twice.
+    @discardableResult
+    func moveCompletedToDoneLog(before cutoff: Date) -> Int {
         // Fetch done rows and parent-linked rows in batches, then retain the
         // expiry candidates and their immediate families. Every candidate's
         // replicas participate so divergent duplicates still refuse cleanup.
@@ -952,7 +1267,9 @@ final class TaskStore: ObservableObject {
             // expression used by the previous completedAt comparison. This
             // batch query avoids that unsupported optional operation.
             let candidates = try context.fetch(FetchDescriptor<TaskItem>(
-                predicate: #Predicate { $0.statusRaw == doneRaw }
+                predicate: #Predicate {
+                    $0.statusRaw == doneRaw && $0.deletedAt == nil && $0.doneLoggedAt == nil
+                }
             )).filter { task in
                 guard let completedAt = task.completedAt else { return false }
                 return completedAt < cutoff
@@ -979,7 +1296,13 @@ final class TaskStore: ObservableObject {
                 return candidateIDSet.contains(parentID)
             }
             var seen = Set<PersistentIdentifier>()
-            stored = (replicas + children).filter { seen.insert($0.persistentModelID).inserted }
+            let related = (replicas + children).filter { seen.insert($0.persistentModelID).inserted }
+            // A subtask in Recently Deleted on its own is no longer part of
+            // the family shown in the list, exactly as when deletes removed
+            // it: it neither blocks nor follows its parent.
+            let hiddenIDs = Set(Dictionary(grouping: related, by: \.id)
+                .filter { $0.value.allSatisfy { $0.deletedAt != nil } }.keys)
+            stored = related.filter { !hiddenIDs.contains($0.id) }
         } catch {
             report(error.localizedDescription, owner: nil)
             return 0
@@ -993,6 +1316,8 @@ final class TaskStore: ObservableObject {
                 return nil
             }
             return first.status == .done
+                && first.deletedAt == nil
+                && first.doneLoggedAt == nil
                 && first.completedAt.map { $0 < cutoff } == true
                 ? id
                 : nil
@@ -1010,13 +1335,31 @@ final class TaskStore: ObservableObject {
             }
         }
         guard !expiredIDs.isEmpty else { return 0 }
-        let expired = stored.filter { expiredIDs.contains($0.id) }
-        let removedImages = expired.flatMap(\.attachments)
-        expired.forEach(context.delete)
+        let timestamp = now()
+        for replica in stored where expiredIDs.contains(replica.id) {
+            replica.doneLoggedAt = timestamp
+        }
         tasks.removeAll { expiredIDs.contains($0.id) }
         guard save() else { return 0 }
-        removeAttachmentFiles(removedImages, excludingTaskIDs: expiredIDs)
         return expiredIDs.count
+    }
+
+    /// Everything the daily cleanup moved out of today's list, most recently
+    /// completed first (the Done page arrives in phase 1).
+    func doneLog() -> [TaskItem] {
+        do {
+            let logged = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.doneLoggedAt != nil && $0.deletedAt == nil }
+            ))
+            return visibleUniqueTasks(from: logged).sorted { lhs, rhs in
+                let left = lhs.completedAt ?? lhs.updatedAt
+                let right = rhs.completedAt ?? rhs.updatedAt
+                return left != right ? left > right : lhs.id.uuidString < rhs.id.uuidString
+            }
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return []
+        }
     }
 
     func orderedTasks(for status: TaskStatus) -> [TaskItem] {
@@ -1216,7 +1559,12 @@ final class TaskStore: ObservableObject {
         let refreshedContext = ModelContext(container)
         let fetched = try refreshedContext.fetch(FetchDescriptor<TaskItem>())
         context = refreshedContext
-        tasks = visibleUniqueTasks(from: fetched)
+        // Deduplicate first, then hide: the replica presentation would show
+        // decides whether the logical task is in Recently Deleted or the Done
+        // log, exactly as it decides every other field.
+        tasks = visibleUniqueTasks(from: fetched).filter {
+            $0.deletedAt == nil && $0.doneLoggedAt == nil
+        }
         revision &+= 1
     }
 
@@ -1530,6 +1878,11 @@ final class TaskStore: ObservableObject {
             task.manualOrder.map(String.init) ?? "",
             task.parentID?.uuidString ?? "",
             task.imageReferencesData?.base64EncodedString() ?? "",
+            task.deletedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
+            task.deletionRootID?.uuidString ?? "",
+            task.doneLoggedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
+            task.tagsRaw,
+            task.dueDayRaw ?? "",
             String(reflecting: task.persistentModelID)
         ].joined(separator: "\u{1F}")
     }

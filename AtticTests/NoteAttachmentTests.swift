@@ -1629,7 +1629,9 @@ final class NoteAttachmentTests: XCTestCase {
     }
 
     @MainActor
-    func testDeletingNoteDeletesAllAttachmentReplicas() throws {
+    // Phase 0: deleting a note is soft. Its attachment replicas stay until
+    // the note is purged from Recently Deleted, which removes them all.
+    func testDeletingNoteKeepsAllAttachmentReplicasUntilItIsPurged() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
         let noteID = UUID()
@@ -1644,6 +1646,12 @@ final class NoteAttachmentTests: XCTestCase {
         let note = try XCTUnwrap(store.notes.first)
 
         XCTAssertTrue(store.delete(note))
+        XCTAssertTrue(store.notes.isEmpty)
+        XCTAssertTrue(store.attachments(for: noteID).isEmpty)
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).map(\.deletedAt).count, 1)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 2)
+
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [noteID])
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).isEmpty)
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
     }
