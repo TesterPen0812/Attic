@@ -239,6 +239,11 @@ final class AppCoordinator: ObservableObject {
         } catch {
             fatalError("Unable to create the isolated performance UI test root: \(error)")
         }
+        let performanceUICleanup = environment["ATTIC_PERF_UI_CLEANUP"] == "1"
+        if environment["ATTIC_PERF_UI_TEST"] == "1",
+           uiPerformanceRoot == nil, !performanceUICleanup {
+            fatalError("Performance UI tests require their isolated preview bundle")
+        }
         let performanceRoot = externalPerformanceRoot ?? uiPerformanceRoot
         let performanceSeedOnly = environment["ATTIC_PERF_SEED_ONLY"] == "1"
         self.isUITesting = isUITesting
@@ -250,6 +255,7 @@ final class AppCoordinator: ObservableObject {
         isPerformanceSeedOnly = performanceSeedOnly
         let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
             && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
+            && !performanceUICleanup
 
         let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
         #if DEBUG && !ATTIC_LOCAL_ONLY
@@ -439,44 +445,42 @@ final class AppCoordinator: ObservableObject {
             if let performanceRoot,
                ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
                 hoverMonitor.start()
-                PerformanceProbe.writePhase(
-                    "hidden_idle", root: performanceRoot,
-                    details: ["panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0]
-                )
-                let stages: [(Double, String, () -> Void)] = [
-                    (20, "tasks_open", { [weak self] in self?.showPanel() }),
-                    (40, "canvas_open", { [weak self] in
-                        self?.hoverMonitor.revealProgrammatically(section: .canvas)
-                    }),
-                    (60, "after_hide", { [weak self] in
-                        guard let self else { return }
-                        _ = self.panelController.requestHide { outcome in
-                            PerformanceProbe.writePhase(
-                                outcome == .hidden ? "after_hide" : "hide_failed",
-                                root: performanceRoot,
-                                details: ["panel_visible": self.panelController.isVisibleForPerformanceProbe ? 1 : 0]
-                            )
-                        }
-                    })
-                ]
-                for (delay, phase, action) in stages {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        action()
-                        if phase != "after_hide" {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                                let strokeCount = self.canvasSession.strokes.count
-                                let valid = phase != "canvas_open"
-                                    || (self.uiState.selectedSection == .canvas
-                                        && strokeCount == 1_700)
-                                PerformanceProbe.writePhase(
-                                    valid ? phase : "canvas_failed", root: performanceRoot,
-                                    details: [
-                                        "visible_strokes": strokeCount,
-                                        "panel_visible": self.panelController.isVisibleForPerformanceProbe ? 1 : 0
-                                    ]
-                                )
-                            }
-                        }
+                let window = Double(ProcessInfo.processInfo.environment["ATTIC_PERF_WINDOW_SECONDS"] ?? "10") ?? 10
+                let tasksAt = 30 + window + 18
+                let canvasAt = tasksAt + window + 18
+                let hideAt = canvasAt + window + 18
+                func write(_ phase: String) {
+                    PerformanceProbe.writePhase(phase, root: performanceRoot, details: [
+                        "panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0,
+                        "visibility_changes": panelController.performanceVisibilityChanges,
+                        "visible_strokes": canvasSession.strokes.count,
+                        "section_canvas": uiState.selectedSection == .canvas ? 1 : 0
+                    ])
+                }
+                func later(_ seconds: Double, _ action: @escaping () -> Void) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: action)
+                }
+                write("hidden_idle")
+                later(30 + window + 8) { write("hidden_idle_end") }
+                later(tasksAt) {
+                    self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
+                    later(1) { write("tasks_open") }
+                    later(window + 8) { write("tasks_open_end") }
+                }
+                later(canvasAt) {
+                    self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
+                    later(1) { write("canvas_open") }
+                    later(window + 8) { write("canvas_open_end") }
+                }
+                later(hideAt) {
+                    let result = self.panelController.requestHide { outcome in
+                        write(outcome == .hidden ? "after_hide" : "hide_failed")
+                    }
+                    if !result.isAccepted { write("hide_failed") }
+                    later(30 + window + 8) {
+                        write("after_hide_end")
+                        later(1) { write("hidden_idle_final") }
+                        later(window + 16) { write("hidden_idle_final_end") }
                     }
                 }
                 return

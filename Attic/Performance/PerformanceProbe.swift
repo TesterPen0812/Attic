@@ -13,6 +13,7 @@ enum PerformanceProbe {
               let identifier = environment["ATTIC_PERF_UI_IDENTIFIER"],
               let uuid = UUID(uuidString: identifier),
               let bundleID = Bundle.main.bundleIdentifier,
+              bundleID == "com.taha.Attic.perf.ui",
               let account = getpwuid(getuid()) else { return nil }
         let base = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
             .appendingPathComponent("Library/Containers/\(bundleID)/Data/Library/Application Support/AtticPerformanceStores",
@@ -61,6 +62,9 @@ enum PerformanceProbe {
         for (key, value) in details { record[key] = value }
         guard let data = try? JSONSerialization.data(withJSONObject: record) else { return }
         try? data.write(to: root.appendingPathComponent("phase.json"), options: .atomic)
+        let markers = root.appendingPathComponent("phase-markers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: markers, withIntermediateDirectories: true)
+        try? data.write(to: markers.appendingPathComponent("\(phase).json"), options: .atomic)
     }
 
     static func writeTiming(_ name: String, milliseconds: Double, root: URL) {

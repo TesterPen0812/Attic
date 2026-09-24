@@ -862,6 +862,8 @@ final class CanvasNSView: NSView {
             continuePan(to: viewPoint)
         } else if interaction.appendInk(at: viewPoint, in: bounds.size) {
             needsDisplay = true
+        } else {
+            PerformanceSignposts.cancelCanvasDrag()
         }
     }
 

@@ -6,6 +6,7 @@ production bundle or store is ever opened. Baseline B: add --done-history.
 """
 
 import argparse
+import re
 import json
 import os
 from pathlib import Path
@@ -34,12 +35,16 @@ def output(*args):
 
 def wait_for_phase(root, expected, timeout=300, pid=None):
     deadline = time.monotonic() + timeout
-    phase_file = root / "phase.json"
+    phase_file = root / "phase-markers" / f"{expected}.json"
     while time.monotonic() < deadline:
         try:
+            latest = json.loads((root / "phase.json").read_text())
+            if latest["phase"].endswith("_failed"):
+                raise RuntimeError(f"Preview reported {latest}")
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        try:
             phase = json.loads(phase_file.read_text())
-            if phase["phase"].endswith("_failed"):
-                raise RuntimeError(f"Preview reported {phase}")
             if phase["phase"] == expected:
                 return phase
         except (FileNotFoundError, json.JSONDecodeError):
@@ -66,7 +71,8 @@ def footprint(pid, destination):
 
 
 def sample_phase(helper, pid, phase, seconds, run_dir):
-    time.sleep(2)  # settle after each transition; excluded from CPU/wakeup rate
+    # Fixed quiet time keeps cold launch and post-hide transients out of idle.
+    time.sleep(30 if phase in ("hidden_idle", "after_hide") else 2)
     before = process_sample(helper, pid)
     started = time.monotonic()
     first_footprint = footprint(pid, run_dir / f"{phase}-start-footprint.json")
@@ -99,6 +105,7 @@ def launch(app, root, token, logs, seed=False, done=False):
         "ATTIC_PERF_SEED_ONLY": "1" if seed else "0",
         "ATTIC_PERF_DONE_HISTORY": "1" if done else "0",
         "ATTIC_PERF_PROBE": "0" if seed else "1",
+        "ATTIC_PERF_WINDOW_SECONDS": os.environ.get("ATTIC_PERF_WINDOW_SECONDS", "10"),
     }
     command("/usr/bin/open", "-n", "--stdout", str(logs.with_suffix(".stdout.log")),
             "--stderr", str(logs.with_suffix(".stderr.log")),
@@ -183,6 +190,7 @@ def measure(args, app, executable, bundle, helper):
             else:
                 raise RuntimeError(f"Seed process {seed_pid} did not exit")
             (root / "phase.json").unlink()
+            shutil.rmtree(root / "phase-markers", ignore_errors=True)
             (root / "timings.ndjson").unlink(missing_ok=True)
             launch(app, root, token, run_dir / "probe")
             first = wait_for_phase(root, "hidden_idle")
@@ -195,23 +203,36 @@ def measure(args, app, executable, bundle, helper):
                 raise RuntimeError(f"Unexpected preview process: {actual}")
             phases = []
             try:
-                for phase in ("hidden_idle", "tasks_open", "canvas_open", "after_hide"):
+                for phase in ("hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"):
                     if phase != "hidden_idle":
                         marker = wait_for_phase(root, phase)
                         if marker["pid"] != pid:
                             raise RuntimeError("Preview process changed during probe")
-                        expected_visible = 0 if phase == "after_hide" else 1
+                        expected_visible = 0 if phase in ("after_hide", "hidden_idle_final") else 1
                         if marker.get("panel_visible") != expected_visible:
                             raise RuntimeError(f"Panel visibility mismatch: {marker}")
-                    phases.append(sample_phase(helper, pid, phase, args.window, run_dir))
+                    else:
+                        marker = first
+                    if phase == "tasks_open" and marker.get("section_canvas") != 0:
+                        raise RuntimeError(f"Tasks was not selected: {marker}")
+                    if phase == "canvas_open" and (marker.get("section_canvas") != 1
+                                                   or marker.get("visible_strokes") != 1700):
+                        raise RuntimeError(f"Large canvas was not selected: {marker}")
+                    sample = sample_phase(helper, pid, phase, args.window, run_dir)
+                    end = wait_for_phase(root, phase + "_end", timeout=30, pid=pid)
+                    if end.get("panel_visible") != marker.get("panel_visible") or \
+                       end.get("visibility_changes") != marker.get("visibility_changes"):
+                        raise RuntimeError(f"Panel visibility changed during {phase}: {marker} -> {end}")
+                    sample["end_marker"] = end
+                    phases.append(sample)
             finally:
                 command("/bin/kill", "-TERM", str(pid))
             timing_file = root / "timings.ndjson"
             timings = [json.loads(line) for line in timing_file.read_text().splitlines()] \
                 if timing_file.exists() else []
             names = [item["name"] for item in timings]
-            for required, minimum in (("AppLaunchToMenuReady", 1), ("StoreOpen", 1),
-                                      ("PanelRevealToInteractive", 2), ("PageSwitch", 1)):
+            for required, minimum in (("CoordinatorInitToMenuStarted", 1), ("StoreOpen", 1),
+                                      ("PanelRevealToOrderedFront", 2), ("PageSwitch", 1)):
                 if names.count(required) < minimum:
                     raise RuntimeError(f"Missing {required} timing in run {run}: {names}")
             (run_dir / "timings.ndjson").write_text(
@@ -227,19 +248,18 @@ def summarize(doc):
              f"Date: {doc['date']}  ", f"Commit: `{doc['commit']}`  ",
              f"Preview: `{doc['bundle_id']}`  ",
              f"Fixture: {'B, 5,000 Done tasks included' if doc['done_history'] else 'A, no extra Done history'}",
-             "", "| Phase | Footprint end, MiB range | CPU, one-core % range | Idle wakeups/s range | Interrupt wakeups/s range |",
-             "| --- | ---: | ---: | ---: | ---: |"]
-    for index, phase in enumerate(("hidden_idle", "tasks_open", "canvas_open", "after_hide")):
+             "", "| Phase | Footprint end, MiB range | CPU, one-core % range | Interrupt wakeups/s range |",
+             "| --- | ---: | ---: | ---: |"]
+    for index, phase in enumerate(("hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final")):
         values = [run["phases"][index] for run in doc["runs"]]
         def span(key, divisor=1):
             samples = [v[key] / divisor for v in values]
             return f"{min(samples):.2f}–{max(samples):.2f}"
         lines.append(f"| {phase} | {span('physical_footprint_bytes_end', 2**20)} | "
-                     f"{span('cpu_percent_one_core')} | {span('package_idle_wakeups_per_s')} | "
-                     f"{span('interrupt_wakeups_per_s')} |")
-    lines += ["", "CPU and wake-ups are process-counter deltas over each fixed window; "
+                     f"{span('cpu_percent_one_core')} | {span('interrupt_wakeups_per_s')} |")
+    lines += ["", "CPU and interrupt wake-ups are process-counter deltas over each fixed window; "
               "footprint is Apple's physical footprint. Transition/settling time is excluded.", ""]
-    for name in ("AppLaunchToMenuReady", "StoreOpen", "PanelRevealToInteractive", "PageSwitch"):
+    for name in ("CoordinatorInitToMenuStarted", "StoreOpen", "PanelRevealToOrderedFront", "PageSwitch"):
         values = [entry["milliseconds"] for run in doc["runs"]
                   for entry in run.get("timings", []) if entry["name"] == name]
         if values:
@@ -256,6 +276,7 @@ def main():
     parser.add_argument("--done-history", action="store_true")
     parser.add_argument("--output", type=Path, default=ROOT / "Docs" / "performance-baseline-A.json")
     parser.add_argument("--measure", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--build-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--identity", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.runs < 1 or not 0 < args.window <= 12:
@@ -263,6 +284,8 @@ def main():
     identity = args.identity or secrets.token_hex(5)
     if not args.measure:
         build_preview(identity)
+        if args.build_only:
+            return
         return command("/usr/bin/lockf", "-k", LOCK, sys.executable, __file__,
                        "--measure", "--identity", identity, "--runs", str(args.runs),
                        "--window", str(args.window), *( ["--done-history"] if args.done_history else []),
@@ -273,9 +296,25 @@ def main():
     helper = BUILD / "perf_process_sample"
     command("/usr/bin/clang", "-O2", str(ROOT / "Scripts" / "perf_process_sample.c"),
             "-o", str(helper))
-    runs = measure(args, app, executable, bundle, helper)
+    container = Path.home() / "Library" / "Containers" / bundle
+    if not re.fullmatch(r"[0-9a-f]{10}", identity):
+        raise ValueError("The preview identity must be a generated ten-digit hex token")
+    try:
+        os.environ["ATTIC_PERF_WINDOW_SECONDS"] = str(args.window)
+        runs = measure(args, app, executable, bundle, helper)
+    finally:
+        # Remove all probe-owned data. macOS protects its container-manager
+        # metadata even from this user, so an empty system-managed shell may
+        # remain; never let that permission error discard valid measurements.
+        owned_stores = container / "Data" / "Library" / "Application Support" / "AtticPerformanceStores"
+        if owned_stores.is_dir():
+            shutil.rmtree(owned_stores)
+        if container.is_dir():
+            shutil.rmtree(container, ignore_errors=True)
+            if container.exists():
+                print(f"macOS container shell remains: {container}", file=sys.stderr)
     doc = {
-        "schema": 1, "date": output("/bin/date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
+        "schema": 2, "date": output("/bin/date", "-u", "+%Y-%m-%dT%H:%M:%SZ"),
         "commit": output("/usr/bin/git", "-C", str(ROOT), "rev-parse", "HEAD"),
         "branch": output("/usr/bin/git", "-C", str(ROOT), "branch", "--show-current"),
         "machine": output("/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"),

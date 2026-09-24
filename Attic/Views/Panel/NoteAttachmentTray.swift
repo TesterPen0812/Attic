@@ -1553,6 +1553,7 @@ final class AttachmentAcceptingTextView: NSTextView {
             PerformanceSignposts.beginNoteKey()
         }
         super.keyDown(with: event)
+        if !needsDisplay { PerformanceSignposts.cancelNoteKey() }
     }
 
     override func draw(_ dirtyRect: NSRect) {

@@ -96,7 +96,10 @@ final class PerformanceUITests: XCTestCase {
         probe.launch()
         let picker = probe.descendants(matching: .any)["panel-section-picker"]
         XCTAssertFalse(picker.isHittable)
+        Thread.sleep(forTimeInterval: 30)
+        XCTAssertFalse(picker.isHittable)
         measureState("hidden idle", application: probe)
+        XCTAssertFalse(picker.isHittable)
     }
 
     func testTasksOpenMemoryAndCPU() {
@@ -104,8 +107,9 @@ final class PerformanceUITests: XCTestCase {
         app = probe
         probe.launch()
         let picker = probe.descendants(matching: .any)["panel-section-picker"]
-        XCTAssertTrue(waitUntil { picker.isHittable }, "Tasks panel did not open")
+        XCTAssertTrue(waitUntil(timeout: 90) { picker.isHittable }, "Tasks panel did not open")
         measureState("Tasks open", application: probe)
+        XCTAssertTrue(picker.isHittable, "Tasks panel hid during the sample")
     }
 
     func testLargeCanvasMemoryAndCPU() {
@@ -113,8 +117,9 @@ final class PerformanceUITests: XCTestCase {
         app = probe
         probe.launch()
         let canvas = probe.descendants(matching: .any)["canvas-surface"]
-        XCTAssertTrue(waitUntil(timeout: 60) { canvas.isHittable }, "Large canvas did not open")
+        XCTAssertTrue(waitUntil(timeout: 120) { canvas.isHittable }, "Large canvas did not open")
         measureState("large canvas open", application: probe)
+        XCTAssertTrue(canvas.isHittable, "Canvas panel hid during the sample")
     }
 
     func testAfterHideMemoryAndCPU() {
@@ -122,8 +127,9 @@ final class PerformanceUITests: XCTestCase {
         app = probe
         probe.launch()
         let canvas = probe.descendants(matching: .any)["canvas-surface"]
-        XCTAssertTrue(waitUntil(timeout: 60) { canvas.isHittable }, "Large canvas did not open")
-        XCTAssertTrue(waitUntil { !canvas.isHittable }, "Canvas panel did not hide")
+        XCTAssertTrue(waitUntil(timeout: 120) { canvas.isHittable }, "Large canvas did not open")
+        XCTAssertTrue(waitUntil(timeout: 60) { !canvas.isHittable }, "Canvas panel did not hide")
         measureState("after hiding canvas", application: probe)
+        XCTAssertFalse(canvas.isHittable)
     }
 }

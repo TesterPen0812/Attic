@@ -181,6 +181,18 @@ final class CornerHoverMonitor {
         panelController.show(on: screen, corner: settings.corner, makeKey: openComposer)
     }
 
+    /// Keep the real panel on screen through a performance sample, including
+    /// a section change made while it is already visible.
+    func revealForPerformanceProbe(section: PanelSection) {
+        guard let screen = NSScreen.main,
+              preparePresentation(openComposer: false, section: section) else { return }
+        PerformanceSignposts.beginReveal()
+        refreshStoreForReveal()
+        stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
+        refreshSamplingCadence(at: NSEvent.mouseLocation)
+        panelController.show(on: screen, corner: settings.corner, makeKey: true)
+    }
+
     func keepVisibleForUITesting(openComposer: Bool = false) {
         guard let screen = NSScreen.main else { return }
         guard preparePresentation(openComposer: openComposer, section: nil) else { return }
@@ -205,7 +217,10 @@ final class CornerHoverMonitor {
 
         guard openComposer else { return true }
         if targetSection.isNotes {
-            guard noteDraft.beginNew() else { return false }
+            guard noteDraft.beginNew() else {
+                PerformanceSignposts.cancelPageSwitch()
+                return false
+            }
         }
 
         var transaction = Transaction()

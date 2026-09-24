@@ -20,6 +20,7 @@ enum PerformanceSignposts {
     private static var pageStart: UInt64?
     private static var noteStart: UInt64?
     private static var canvasStart: UInt64?
+    static var hasPendingPageSwitch: Bool { pageSwitch != nil || pageStart != nil }
 
     private static func started() -> UInt64? {
         captureRoot == nil ? nil : DispatchTime.now().uptimeNanoseconds
@@ -33,26 +34,32 @@ enum PerformanceSignposts {
 
     static func beginLaunch() {
         launchStart = started()
-        if signposter.isEnabled { launch = signposter.beginInterval("AppLaunchToMenuReady") }
+        if signposter.isEnabled { launch = signposter.beginInterval("CoordinatorInitToMenuStarted") }
     }
 
     static func menuReady() {
-        if let launch { signposter.endInterval("AppLaunchToMenuReady", launch) }
+        if let launch { signposter.endInterval("CoordinatorInitToMenuStarted", launch) }
         self.launch = nil
-        record("AppLaunchToMenuReady", from: launchStart)
+        record("CoordinatorInitToMenuStarted", from: launchStart)
         launchStart = nil
     }
 
     static func beginReveal() {
         guard reveal == nil, revealStart == nil else { return }
         revealStart = started()
-        if signposter.isEnabled { reveal = signposter.beginInterval("PanelRevealToInteractive") }
+        if signposter.isEnabled { reveal = signposter.beginInterval("PanelRevealToOrderedFront") }
     }
 
     static func panelOrderedFront() {
-        if let reveal { signposter.endInterval("PanelRevealToInteractive", reveal) }
+        if let reveal { signposter.endInterval("PanelRevealToOrderedFront", reveal) }
         self.reveal = nil
-        record("PanelRevealToInteractive", from: revealStart)
+        record("PanelRevealToOrderedFront", from: revealStart)
+        revealStart = nil
+    }
+
+    static func cancelReveal() {
+        if let reveal { signposter.endInterval("PanelRevealToOrderedFront", reveal) }
+        reveal = nil
         revealStart = nil
     }
 
@@ -69,6 +76,12 @@ enum PerformanceSignposts {
         pageStart = nil
     }
 
+    static func cancelPageSwitch() {
+        if let pageSwitch { signposter.endInterval("PageSwitch", pageSwitch) }
+        pageSwitch = nil
+        pageStart = nil
+    }
+
     static func beginNoteKey() {
         guard noteKey == nil, noteStart == nil else { return }
         noteStart = started()
@@ -82,6 +95,12 @@ enum PerformanceSignposts {
         noteStart = nil
     }
 
+    static func cancelNoteKey() {
+        if let noteKey { signposter.endInterval("NoteKeystrokeToDraw", noteKey) }
+        noteKey = nil
+        noteStart = nil
+    }
+
     static func beginCanvasDrag() {
         guard canvasDrag == nil, canvasStart == nil else { return }
         canvasStart = started()
@@ -92,6 +111,12 @@ enum PerformanceSignposts {
         if let canvasDrag { signposter.endInterval("CanvasDragToDraw", canvasDrag) }
         self.canvasDrag = nil
         record("CanvasDragToDraw", from: canvasStart)
+        canvasStart = nil
+    }
+
+    static func cancelCanvasDrag() {
+        if let canvasDrag { signposter.endInterval("CanvasDragToDraw", canvasDrag) }
+        canvasDrag = nil
         canvasStart = nil
     }
 
