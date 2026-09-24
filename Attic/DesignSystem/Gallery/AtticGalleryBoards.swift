@@ -213,6 +213,8 @@ struct AtticGalleryPanelComposition: View {
     @Bindable var demo: AtticGalleryDemo
     var rows: [AtticTaskRowModel] = AtticGallerySamples.rows
     var selectedIndex: Int? = 1
+    /// Expands the first row's quick look (puts label text in the panel).
+    var showsQuickLook = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -222,7 +224,10 @@ struct AtticGalleryPanelComposition: View {
                     .padding(.leading, AtticLayout.circleX)
                 Color.clear.frame(height: AtticLayout.statusTabsToList)
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    AtticTaskRow(model: row, isSelected: index == selectedIndex)
+                    AtticTaskRow(model: row, isSelected: index == selectedIndex, isExpanded: showsQuickLook && index == 0)
+                    if showsQuickLook, index == 0 {
+                        AtticQuickLook(subtasks: AtticGallerySamples.subtasks)
+                    }
                 }
                 AtticEmptyLine(text: String(localized: "Done tasks move to Done tomorrow"))
                 Spacer(minLength: 0)

@@ -418,7 +418,7 @@ struct AtticContactSheet: View {
                                 .lineLimit(1)
                             AtticGalleryStage(family: family, demo: AtticGalleryDemo())
                                 .atticDesign(column.context)
-                                .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .wallpaper))
+                                .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .wallpaper(.matchingMode)))
                                 .padding(16)
                                 .background(
                                     AtticStandInWallpaper(dark: column.context.mode == .dark)

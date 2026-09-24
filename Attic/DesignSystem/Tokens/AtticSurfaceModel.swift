@@ -73,15 +73,22 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// The measured native render of a grey desktop (`desktop` 0 = black,
     /// 1 = white) under this surface kind, before the foundation.
     static func underlay(kind: AtticPanelSurfaceTreatment.Kind, appearance: AtticPanelThemeAppearance, desktop: Double) -> AtticRGBA {
-        let endpoints: (black: Double, white: Double)
-        switch (kind, appearance) {
-        case (.glass, .dark): endpoints = (20, 143)
-        case (.glass, .light): endpoints = (104, 236)
-        case (.frosted, .dark): endpoints = (24, 166)
-        case (.frosted, .light): endpoints = (89, 241)
-        case (.solid, _): endpoints = (desktop * 255, desktop * 255)
+        guard let endpoints = renderEndpoints(kind: kind, appearance: appearance) else {
+            return .grey(desktop * 255)
         }
         return .grey(endpoints.black + (endpoints.white - endpoints.black) * desktop)
+    }
+
+    /// The measured native renders (sRGB bytes) of a black and a white
+    /// desktop; nil for Solid, which transmits nothing.
+    static func renderEndpoints(kind: AtticPanelSurfaceTreatment.Kind, appearance: AtticPanelThemeAppearance) -> (black: Double, white: Double)? {
+        switch (kind, appearance) {
+        case (.glass, .dark): (20, 143)
+        case (.glass, .light): (104, 236)
+        case (.frosted, .dark): (24, 166)
+        case (.frosted, .light): (89, 241)
+        case (.solid, _): nil
+        }
     }
 
     func underlay(_ desktop: Desktop) -> AtticRGBA {
@@ -155,6 +162,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
         tint: PanelTintLevel,
         tintLength: Double,
         policy: Policy = .fullContrast,
+        designedTintStrength: Bool = false,
         pairs: [Pair]
     ) -> AtticSurfaceModel {
         let wash = washColor(palette: palette, themePalette: themePalette, appearance: appearance)
@@ -210,7 +218,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
         // steps to 70 % (Vivid) and 40 % (Subtle) of that, so the three steps
         // stay distinct even where the base cannot afford the designed ones.
         var scale = 1.0
-        if let top = stops.first?.opacity, top > 0 {
+        if !designedTintStrength, let top = stops.first?.opacity, top > 0 {
             let bold = designedStops(.bold)
             var boldScale = 1.0
             if model(foundation: foundation, stops: bold, scale: 1).worstMargin(pairs) < Self.solverMargin {

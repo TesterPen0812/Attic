@@ -7,8 +7,9 @@ import SwiftUI
 /// and controls landed. Outside capture mode none of this runs.
 struct AtticCaptureContext {
     enum Backdrop: Equatable {
-        /// A stand-in wallpaper, blurred as glass would blur it (contact sheets).
-        case wallpaper
+        /// A stand-in wallpaper, blurred as glass would blur it (contact
+        /// sheets and the decision sheet).
+        case wallpaper(AtticWallpaperTone)
         /// A flat grey desktop, drawn as its measured native render under
         /// each translucent surface (the check).
         case desktop(AtticSurfaceModel.Desktop)
@@ -188,4 +189,14 @@ struct AtticIdealSizeReporter: View {
             }
             .accessibilityHidden(true)
     }
+}
+
+/// Which stand-in wallpaper sits behind a capture.
+enum AtticWallpaperTone: String, Hashable, Sendable {
+    /// The mockups' pastel gradient, darkened for Dark mode.
+    case matchingMode
+    /// The pastel gradient, lifted: a light desktop.
+    case light
+    /// The same hues, deep: a dark desktop.
+    case dark
 }

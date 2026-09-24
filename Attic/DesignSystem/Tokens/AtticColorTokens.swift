@@ -269,8 +269,18 @@ struct AtticColorTokens: Equatable, Sendable {
         let panel = AtticSurfaceModel.solve(
             base: panelBase, kind: key.surface, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
-            tint: key.tint, tintLength: key.tintLength, policy: key.policy, pairs: pairs
+            tint: key.tint, tintLength: key.tintLength, policy: key.policy,
+            designedTintStrength: key.variant.designedTintStrength, pairs: pairs
         )
+        // Option under review: one rung stronger text where the surface is
+        // translucent or tinted. Applied after solving, so the foundation
+        // and Tint are exactly those of the unchanged ladder.
+        if key.variant.strongerTextOnTranslucentOrTint, key.surface != .solid || key.tint != .off {
+            inks[.helper] = inks[.label]
+            inks[.placeholder] = inks[.label]
+            inks[.chromeHint] = inks[.label]
+            inks[.label] = inks[.body]
+        }
         // The chrome is a sidebar material: modelled as Frosted when the
         // panel surface is translucent, and never tinted.
         let chrome = AtticSurfaceModel.solve(

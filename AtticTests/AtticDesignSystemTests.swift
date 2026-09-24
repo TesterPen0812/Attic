@@ -110,6 +110,44 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
     }
 
+    func testDecisionOptionsLeaveTheDefaultsUntouched() {
+        // A3 changes only the text: its coverage is A2's.
+        var a2 = AtticDesignContext(mode: .light, palette: .amethyst, surface: .glass)
+        a2.translucencyPolicy = .transparencyFirst
+        var a3 = a2
+        a3.variant.strongerTextOnTranslucentOrTint = true
+        XCTAssertEqual(a3.tokens.panel.foundationOpacity, a2.tokens.panel.foundationOpacity)
+        XCTAssertEqual(a3.tokens.ink(.helper), a2.tokens.ink(.label))
+        XCTAssertEqual(a3.tokens.ink(.label), a2.tokens.ink(.body))
+        // On an untinted Solid panel the stronger ladder does nothing.
+        var solid = AtticDesignContext(mode: .light)
+        solid.variant.strongerTextOnTranslucentOrTint = true
+        XCTAssertEqual(solid.tokens.ink(.helper), AtticDesignContext(mode: .light).tokens.ink(.helper))
+        // B2 draws the designed tint; B1 (the default) holds it back.
+        var b2 = AtticDesignContext(mode: .light, palette: .amethyst, tint: .bold)
+        b2.variant.designedTintStrength = true
+        XCTAssertEqual(b2.tokens.panel.tintScale, 1)
+        XCTAssertLessThan(AtticDesignContext(mode: .light, palette: .amethyst, tint: .bold).tokens.panel.tintScale, 1)
+    }
+
+    /// Renders the glass-and-tint decision sheet and pins what it shows:
+    /// the current rules (A1, B1) keep every text role at 4.5 : 1.
+    func testDecisionSheet() throws {
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let directory = support.appendingPathComponent("AtticDecisions", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let result = AtticDecisionSheet.write(to: directory)
+        XCTAssertNotNil(result.url)
+        print("ATTIC_DECISION_SHEET=\(result.url?.path ?? "")")
+        XCTAssertFalse(result.measurements.isEmpty)
+        for (key, measured) in result.measurements where key.hasPrefix("A1") || key.hasPrefix("B1") {
+            for value in [measured.body, measured.helper].compactMap({ $0 }) {
+                XCTAssertGreaterThanOrEqual(value, 4.49, key)
+            }
+            XCTAssertNotNil(measured.label, "\(key) has no label text to measure")
+        }
+    }
+
     // MARK: The appearance check
 
     /// Renders every family in every combination and checks contrast,

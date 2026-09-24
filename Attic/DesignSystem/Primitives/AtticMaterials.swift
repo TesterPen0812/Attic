@@ -248,10 +248,16 @@ struct AtticSurfaceBackground<S: Shape>: View {
             switch capture.backdrop {
             case .desktop(let desktop):
                 shape.fill(model.underlay(desktop).color)
-            case .wallpaper:
-                AtticStandInWallpaper(dark: model.appearance == .dark)
-                    .blur(radius: model.kind == .frosted ? 28 : 16)
-                    .overlay(model.kind == .glass ? Color.white.opacity(model.appearance == .dark ? 0.02 : 0.12) : Color.clear)
+            case .wallpaper(let tone):
+                // The wallpaper as the native surface renders it: blurred,
+                // then each channel mapped through the measured black and
+                // white renders of this surface kind (a linear model).
+                let endpoints = AtticSurfaceModel.renderEndpoints(kind: model.kind, appearance: model.appearance) ?? (0, 255)
+                AtticStandInWallpaper(tone: tone, dark: model.appearance == .dark)
+                    .blur(radius: model.kind == .frosted ? 28 : 16, opaque: true)
+                    .colorMultiply(Color(.sRGB, white: (endpoints.white - endpoints.black) / 255))
+                    .overlay(Color(.sRGB, white: endpoints.black / 255, opacity: 1).blendMode(BlendMode.plusLighter))
+                    .compositingGroup()
                     .clipShape(shape)
             }
         } else if isChrome {
@@ -268,7 +274,18 @@ struct AtticSurfaceBackground<S: Shape>: View {
 /// A stand-in desktop for gallery stages and contact sheets: the soft
 /// gradient the redesign mockups use, so glass has something to show.
 struct AtticStandInWallpaper: View {
+    var tone: AtticWallpaperTone = .matchingMode
     var dark = false
+
+    init(dark: Bool = false) {
+        self.tone = .matchingMode
+        self.dark = dark
+    }
+
+    init(tone: AtticWallpaperTone, dark: Bool) {
+        self.tone = tone
+        self.dark = dark
+    }
 
     var body: some View {
         LinearGradient(
@@ -281,8 +298,16 @@ struct AtticStandInWallpaper: View {
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
-        .overlay(dark ? Color.black.opacity(0.35) : Color.clear)
+        .overlay(veil)
         .accessibilityHidden(true)
+    }
+
+    private var veil: Color {
+        switch tone {
+        case .matchingMode: dark ? Color.black.opacity(0.35) : Color.clear
+        case .light: Color.white.opacity(0.35)
+        case .dark: Color.black.opacity(0.68)
+        }
     }
 }
 

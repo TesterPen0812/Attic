@@ -29,6 +29,20 @@ enum AtticGalleryLaunch {
     @discardableResult
     static func startIfRequested() -> Bool {
         guard isRequested else { return false }
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--decision-sheet"), index + 1 < arguments.count {
+            let directory = URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let result = AtticDecisionSheet.write(to: directory)
+            let lines = result.measurements.keys.sorted().map { key -> String in
+                let m = result.measurements[key]!
+                func f(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "-" }
+                return "\(key): body \(f(m.body)) label \(f(m.label)) helper \(f(m.helper))" + (m.tintDifference.map { String(format: " tintΔE %.1f", $0) } ?? "")
+            }
+            try? lines.joined(separator: "\n").write(to: directory.appendingPathComponent("decisions-glass-and-tint.txt"), atomically: true, encoding: .utf8)
+            print("Decision sheet: \(result.url?.path ?? "not written")")
+            exit(result.url == nil ? 1 : 0)
+        }
         if let directory = captureDirectory {
             runCapture(into: directory)
             return true
@@ -157,6 +171,9 @@ private struct AtticGalleryControls: View {
                 Toggle("Reduce transparency", isOn: $context.reduceTransparency)
                 Toggle("Reduce motion", isOn: $context.reduceMotion)
                 Toggle("Differentiate without colour", isOn: $context.differentiateWithoutColor)
+                Toggle("Stronger text (option)", isOn: $context.variant.strongerTextOnTranslucentOrTint)
+                    .help("On translucent or tinted panels, helper text uses the label colour and labels use body")
+                Toggle("PR #5 tint strengths (option)", isOn: $context.variant.designedTintStrength)
                 Picker("Glass readability", selection: $context.translucencyPolicy) {
                     ForEach(AtticSurfaceModel.Policy.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
