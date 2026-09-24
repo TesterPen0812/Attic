@@ -1402,7 +1402,8 @@ final class TaskStore: ObservableObject {
     }
 
     /// Removes for good what was deleted before `cutoff` (30 days ago, at
-    /// the daily cleanup). A delete is purged only when every replica of
+    /// the daily cleanup). A delete is purged only when every task it
+    /// recorded is still there under the same deletion, and every replica of
     /// every task in it agrees; a divergent copy keeps the whole family.
     /// Files go only once no surviving replica references them. Returns the
     /// ids of the purged deletes' tasks.
@@ -1435,6 +1436,18 @@ final class TaskStore: ObservableObject {
         var removed: [TaskItem] = []
         for (rootID, batch) in rootsByID {
             let ids = Set(batch.map(\.id))
+            // The delete must be exactly the one it recorded: every row names
+            // the same root, time and member list, and every recorded member
+            // is still here. A family missing a member, or mixing rows from
+            // different deletes, is one a restore would refuse, so it is kept
+            // rather than purged in part.
+            let first = batch[0]
+            let members = first.deletionMembers
+            guard !members.isEmpty, members.contains(rootID), ids == members,
+                  batch.allSatisfy({
+                      $0.deletionRootID == rootID && $0.deletedAt == first.deletedAt
+                          && $0.deletionMembersRaw == first.deletionMembersRaw
+                  }) else { continue }
             let agreed = ids.allSatisfy { id in
                 guard let replicas = storedByID[id], let first = replicas.first,
                       first.deletedAt.map({ $0 < cutoff }) == true,

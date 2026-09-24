@@ -89,6 +89,50 @@ final class TaskRestoreSafetyTests: XCTestCase {
     }
 
 
+    // MARK: - Purge
+
+    func testTaskPurgeKeepsAFamilyWithAMissingMember() throws {
+        let store = try makeTestStore()
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let child = try XCTUnwrap(store.create(title: "Child", parentID: parent.id))
+        XCTAssertTrue(store.delete(parent))
+        // The child's rows vanished (a partial purge elsewhere): the restore
+        // refuses this family, so the purge must not finish it off either.
+        let context = ModelContext(store.container)
+        let childID = child.id
+        try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID })).forEach(context.delete)
+        try context.save()
+        store.refresh()
+
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
+        let parentID = parent.id
+        XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.id == parentID }
+        )), 1, "the main task is kept")
+    }
+
+    func testTaskPurgeKeepsAFamilyWhoseRowsRecordDifferentMembers() throws {
+        let store = try makeTestStore()
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let child = try XCTUnwrap(store.create(title: "Child", parentID: parent.id))
+        XCTAssertTrue(store.delete(parent))
+        let context = ModelContext(store.container)
+        let childID = child.id
+        let childRow = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == childID })).first)
+        childRow.deletionMembersRaw = childID.uuidString
+        try context.save()
+
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 2)
+
+        // Put back what the delete recorded, and the purge goes ahead.
+        childRow.deletionMembersRaw = [parent.id, child.id].map(\.uuidString).sorted().joined(separator: " ")
+        try context.save()
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [parent.id, child.id])
+        XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 0)
+    }
+
+
     // MARK: - Subtasks
 
 
