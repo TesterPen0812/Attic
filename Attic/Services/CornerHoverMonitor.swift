@@ -173,8 +173,8 @@ final class CornerHoverMonitor {
 
     func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
-        PerformanceSignposts.beginReveal()
         guard preparePresentation(openComposer: openComposer, section: section) else { return }
+        PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
@@ -199,6 +199,7 @@ final class CornerHoverMonitor {
             if uiState.selectedSection.isNotes, noteDraft.isActive {
                 guard noteDraft.close() else { return false }
             }
+            PerformanceSignposts.beginPageSwitch()
             uiState.selectSection(targetSection)
         }
 

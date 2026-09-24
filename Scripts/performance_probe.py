@@ -182,8 +182,11 @@ def measure(args, app, executable, bundle, helper):
             else:
                 raise RuntimeError(f"Seed process {seed_pid} did not exit")
             (root / "phase.json").unlink()
+            (root / "timings.ndjson").unlink(missing_ok=True)
             launch(app, root, token, run_dir / "probe")
             first = wait_for_phase(root, "hidden_idle")
+            if first.get("panel_visible") != 0:
+                raise RuntimeError(f"Panel was visible at hidden-idle marker: {first}")
             pid = first["pid"]
             print(f"run {run}: probing PID {pid}", flush=True)
             actual = output("/bin/ps", "-o", "command=", "-p", str(pid))
@@ -196,11 +199,24 @@ def measure(args, app, executable, bundle, helper):
                         marker = wait_for_phase(root, phase)
                         if marker["pid"] != pid:
                             raise RuntimeError("Preview process changed during probe")
+                        expected_visible = 0 if phase == "after_hide" else 1
+                        if marker.get("panel_visible") != expected_visible:
+                            raise RuntimeError(f"Panel visibility mismatch: {marker}")
                     phases.append(sample_phase(helper, pid, phase, args.window, run_dir))
             finally:
                 command("/bin/kill", "-TERM", str(pid))
+            timing_file = root / "timings.ndjson"
+            timings = [json.loads(line) for line in timing_file.read_text().splitlines()] \
+                if timing_file.exists() else []
+            names = [item["name"] for item in timings]
+            for required, minimum in (("AppLaunchToMenuReady", 1), ("StoreOpen", 1),
+                                      ("PanelRevealToInteractive", 2), ("PageSwitch", 1)):
+                if names.count(required) < minimum:
+                    raise RuntimeError(f"Missing {required} timing in run {run}: {names}")
+            (run_dir / "timings.ndjson").write_text(
+                "".join(json.dumps(item) + "\n" for item in timings))
             results.append({"run": run, "pid": pid, "seed_pid": seed_pid,
-                            "phases": phases})
+                            "phases": phases, "timings": timings})
             print(f"run {run}/{args.runs} complete", flush=True)
     return results
 
@@ -221,6 +237,13 @@ def summarize(doc):
                      f"{span('cpu_percent_one_core')} | {span('package_idle_wakeups_per_s')} |")
     lines += ["", "CPU and wake-ups are process-counter deltas over each fixed window; "
               "footprint is Apple's physical footprint. Transition/settling time is excluded.", ""]
+    for name in ("AppLaunchToMenuReady", "StoreOpen", "PanelRevealToInteractive", "PageSwitch"):
+        values = [entry["milliseconds"] for run in doc["runs"]
+                  for entry in run.get("timings", []) if entry["name"] == name]
+        if values:
+            lines.append(f"{name}: {min(values):.2f}–{max(values):.2f} ms "
+                         f"({len(values)} observations).")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -255,7 +278,8 @@ def main():
         "branch": output("/usr/bin/git", "-C", str(ROOT), "branch", "--show-current"),
         "machine": output("/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"),
         "os": output("/usr/bin/sw_vers", "-productVersion"),
-        "xcode": plistlib.loads((Path(output("/usr/bin/xcode-select", "-p")).parent
+        "xcode": plistlib.loads((Path(os.environ.get("DEVELOPER_DIR")
+                                      or output("/usr/bin/xcode-select", "-p")).parent
                                   / "Info.plist").read_bytes()).get("CFBundleShortVersionString", "unknown"),
         "bundle_id": bundle, "executable": str(executable),
         "seed_version": 1, "seed_counts": {"tasks": 500, "notes": 200, "canvases": 20,

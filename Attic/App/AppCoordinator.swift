@@ -432,7 +432,10 @@ final class AppCoordinator: ObservableObject {
             if let performanceRoot,
                ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
                 hoverMonitor.start()
-                PerformanceProbe.writePhase("hidden_idle", root: performanceRoot)
+                PerformanceProbe.writePhase(
+                    "hidden_idle", root: performanceRoot,
+                    details: ["panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0]
+                )
                 let stages: [(Double, String, () -> Void)] = [
                     (20, "tasks_open", { [weak self] in self?.showPanel() }),
                     (40, "canvas_open", { [weak self] in
@@ -443,7 +446,8 @@ final class AppCoordinator: ObservableObject {
                         _ = self.panelController.requestHide { outcome in
                             PerformanceProbe.writePhase(
                                 outcome == .hidden ? "after_hide" : "hide_failed",
-                                root: performanceRoot
+                                root: performanceRoot,
+                                details: ["panel_visible": self.panelController.isVisibleForPerformanceProbe ? 1 : 0]
                             )
                         }
                     })
@@ -459,7 +463,10 @@ final class AppCoordinator: ObservableObject {
                                         && strokeCount == 1_700)
                                 PerformanceProbe.writePhase(
                                     valid ? phase : "canvas_failed", root: performanceRoot,
-                                    details: ["visible_strokes": strokeCount]
+                                    details: [
+                                        "visible_strokes": strokeCount,
+                                        "panel_visible": self.panelController.isVisibleForPerformanceProbe ? 1 : 0
+                                    ]
                                 )
                             }
                         }

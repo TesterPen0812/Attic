@@ -33,4 +33,21 @@ enum PerformanceProbe {
         guard let data = try? JSONSerialization.data(withJSONObject: record) else { return }
         try? data.write(to: root.appendingPathComponent("phase.json"), options: .atomic)
     }
+
+    static func writeTiming(_ name: String, milliseconds: Double, root: URL) {
+        let record: [String: Any] = [
+            "name": name, "milliseconds": milliseconds,
+            "timestamp": Date().timeIntervalSince1970
+        ]
+        guard var data = try? JSONSerialization.data(withJSONObject: record) else { return }
+        data.append(0x0A)
+        let url = root.appendingPathComponent("timings.ndjson")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            _ = FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: data)
+    }
 }

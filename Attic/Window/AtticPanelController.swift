@@ -153,6 +153,7 @@ enum PanelHideRequestResult: Equatable {
 @MainActor
 final class AtticPanelController: NSObject, NSWindowDelegate {
     private let panel: AtticPanel
+    var isVisibleForPerformanceProbe: Bool { panel.isVisible }
     private let hostingView: AtticPanelHostingView
     private let store: TaskStore
     private let noteStore: NoteStore
