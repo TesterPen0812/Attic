@@ -96,7 +96,7 @@ struct AtticGalleryView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 210)
         } detail: {
             VStack(spacing: 0) {
-                AtticGalleryControls(context: $context, pinnedState: $pinnedState)
+                AtticGalleryControls(context: $context, pinnedState: $pinnedState, demo: demo)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                 Divider()
@@ -117,6 +117,7 @@ struct AtticGalleryView: View {
 private struct AtticGalleryControls: View {
     @Binding var context: AtticDesignContext
     @Binding var pinnedState: AtticControlState?
+    let demo: AtticGalleryDemo
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -158,6 +159,10 @@ private struct AtticGalleryControls: View {
                 Toggle("Reduce motion", isOn: $context.reduceMotion)
                 Toggle("Differentiate without colour", isOn: $context.differentiateWithoutColor)
                 Spacer()
+                Text(verbatim: "Last action: \(demo.lastAction)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 let panel = context.tokens.panel
                 Text(panel.kind == .solid ? "Solid" : "Coverage \(Int((panel.foundationOpacity * 100).rounded())) %")
                     .font(.caption)
