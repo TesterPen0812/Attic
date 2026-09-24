@@ -1,20 +1,21 @@
 # Attic performance probe
 
-Date: 2026-09-24T17:30:13Z  
-Commit: `635fdf5ac2f50329e75ae83b098eeaf7dbf2cc59`  
-Preview: `com.taha.Attic.perf.250539c622`  
+Date: 2026-09-24T19:56:47Z
+Commit: `66298945ac71e86f3bfa9b5f3976f1f41e25bd8b`
+Preview: `com.taha.Attic.perf.9fd44b290a`
 Fixture: A, no extra Done history
 
-| Phase | Footprint end, MiB range | CPU, one-core % range | Idle wakeups/s range | Interrupt wakeups/s range |
-| --- | ---: | ---: | ---: | ---: |
-| hidden_idle | 159.66–163.13 | 0.04–0.05 | 0.00–0.00 | 1.68–1.98 |
-| tasks_open | 163.09–200.03 | 0.67–58.22 | 0.00–0.00 | 8.22–42.32 |
-| canvas_open | 91.24–116.95 | 0.01–26.89 | 0.00–0.00 | 0.59–110.63 |
-| after_hide | 91.70–105.03 | 0.02–2.21 | 0.00–0.00 | 0.99–46.40 |
+| Phase | Footprint end, MiB range | CPU, one-core % range | Interrupt wakeups/s range |
+| --- | ---: | ---: | ---: |
+| hidden_idle | 159.99–163.33 | 0.02–2.95 | 0.99–62.17 |
+| tasks_open | 164.42–235.14 | 0.02–2.38 | 0.79–41.60 |
+| canvas_open | 113.52–123.92 | 0.27–4.11 | 5.23–27.65 |
+| after_hide | 112.91–122.97 | 0.03–1.57 | 1.09–27.64 |
+| hidden_idle_final | 112.92–122.97 | 0.99–2.37 | 24.38–51.93 |
 
-CPU and wake-ups are process-counter deltas over each fixed window; footprint is Apple's physical footprint. Transition/settling time is excluded.
+CPU and interrupt wake-ups are process-counter deltas over each fixed window; footprint is Apple's physical footprint. Transition/settling time is excluded.
 
-AppLaunchToMenuReady: 706.50–884.23 ms (3 observations).
-StoreOpen: 7.48–12.50 ms (3 observations).
-PanelRevealToInteractive: 0.42–78.84 ms (8 observations).
-PageSwitch: 277.23–352.36 ms (3 observations).
+CoordinatorInitToMenuStarted: 955.72–1208.84 ms (3 observations).
+StoreOpen: 8.69–12.57 ms (3 observations).
+PanelRevealToOrderedFront: 1.20–261.75 ms (6 observations).
+PageSwitch: 312.33–540.11 ms (3 observations).

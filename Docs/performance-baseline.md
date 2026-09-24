@@ -1,193 +1,207 @@
 # Attic performance harness and Baseline A
 
-Recorded 2026-09-24 on the local-only macOS app. The machine-readable samples
-are in [performance-baseline-A.json](performance-baseline-A.json). Baseline B is
-reserved for the data-foundation merge and its 5,000 extra Done tasks.
+This is the Phase 0 measurement contract for the local-only macOS app. The
+machine-readable Baseline A is [performance-baseline-A.json](performance-baseline-A.json).
+The first Baseline A in commit `9e0f99a` is superseded: its Tasks and Canvas
+windows could auto-hide. No memory or CPU number here is a pass/fail target.
+The gate remains a clear regression against a comparable baseline plus a
+profile free of avoidable work.
 
-## Reproduce
+## Fixture and safe launch
 
-Run from the repository root. The probe builds an ad-hoc signed preview with a
-unique `com.taha.Attic.perf.*` bundle identifier and a local-only entitlement
-set. It first launches the preview with an in-memory test store to let macOS
-create the sandbox, then seeds a fresh owned directory below that preview's
-`AtticPerformanceStores` directory. The owner token, bundle identity, and
-`ATTIC_UI_TESTING`/`ATTIC_UI_TEST_CANVAS_PERSISTENCE` flags are all required by
-the app. The probe deletes only the directory it created; it never opens the
-official Attic store. Its build uses `xcodebuild-locked.sh` on this Mac; the
-entire measurement phase holds `/tmp/attic-xcodebuild.lock`.
+The SplitMix64 fixture has deterministic identifiers and 500 tasks with mixed
+state/priority, subtasks, and 22 materialized PNGs; 200 varied-length notes,
+12 with attachments; and 20 canvases with 2,000 objects each (1,700 strokes,
+100 text objects, 100 shapes, and 100 images). Image payloads reuse one small
+gradient PNG, so this does not simulate a collection of large photographs.
+The seeder verifies persisted row counts before declaring the fixture ready.
+
+The probe builds an ad-hoc signed `ATTIC_LOCAL_ONLY` preview with a fresh
+`com.taha.Attic.perf.<random>` identity. It checks for CloudKit and APNs
+entitlements, creates a disposable owned store inside that preview's sandbox,
+and removes the owned store after the run. It also attempts to remove the
+uniquely named container. macOS protects container-manager metadata and can
+retain preferences, so a system-managed shell can remain; the script reports
+that residue. The normal `com.taha.Attic` store is never opened. The UI metric
+lane uses the separate `com.taha.Attic.perf.ui` identity and app-owned UUID
+store roots; its cleanup launch uses an in-memory store.
 
 ```zsh
 python3 Scripts/performance_probe.py --runs 3 --window 10 --output Docs/performance-baseline-A.json
+```
+
+`--done-history` currently adds 5,000 finished `TaskItem` rows with today's
+`completedAt` so daily cleanup cannot remove them. Once data foundation adds
+`doneLoggedAt`, these rows would still be visible tasks, not genuine Done-log
+history. On the integration branch, seed past completions plus `doneLoggedAt`,
+bump the seed version, then record Baseline B in one command:
+
+```zsh
 python3 Scripts/performance_probe.py --runs 3 --window 10 --done-history --output Docs/performance-baseline-B.json
 ```
 
-The second command is the one-command Baseline B rerun **after** data
-foundation lands. The flag adds 5,000 done `TaskItem` rows whose `completedAt`
-is today, so daily cleanup cannot remove them during the run. Baseline A omits
-those extra rows. The ordinary 500-task mix includes some done tasks in both
-fixtures. Do not compare A and B as if they had the same workload.
+Do not compare A and B as if they were the same workload.
 
-The flag was smoke-tested locally with one run and a two-second window; seeding
-and all four phases completed. That one-run output is intentionally not a
-recorded Baseline B.
+## How the process probe measures
 
-The fixture uses a fixed SplitMix64 seed and deterministic UUIDs. It contains
-500 tasks with varied status/priority, every fifth item a subtask, and 22
-materialized 128-pixel PNG attachments; 200 varied-length notes, 12 with PNG
-attachments; and 20 canvases with 2,000 objects each (1,700 strokes, 100
-editable text objects, 100 shapes, and 100 images per board). Relative dates
-are anchored to the run's local day so completed tasks remain in today's data.
-The seeder checks stored row counts before marking the fixture ready. Image
-payloads reuse one gradient PNG; this stresses object count and decoding paths
-without pretending to represent a library of large photographs.
+One run observes `hidden_idle`, `tasks_open`, `canvas_open`, `after_hide`, then
+`hidden_idle_final`. The first idle window starts after 30 seconds hidden since
+launch; `after_hide` starts after 30 seconds hidden since AppKit confirms the
+hide; the final idle window follows after two seconds. Open phases also wait
+two seconds. The panel is held visible during Tasks and Canvas, and the Canvas
+selection must expose
+1,700 seeded strokes. Tasks-to-Canvas page timing begins while the panel is
+already visible. The app writes a separate end marker for every window with
+visibility, hover-monitor state, and transition count; the probe fails if any
+changed during the window. The scripted hide returns the hover state machine
+to its real hidden cadence. Its end-window timer starts only after AppKit
+confirms the hide. The post-hide sample is followed by a second hidden window.
+For the process probe, a `SIGUSR1` sent after each sampled window triggers its
+end marker and the next phase. This event-driven handoff avoids overlap when a
+large Canvas reveal or AppKit hide takes longer than expected. XCTest uses a
+separate timed UI-test path because XCTest owns its measurements.
 
-The four phase markers are `hidden_idle`, `tasks_open`, `canvas_open`, and
-`after_hide`. The app's corner monitor runs during the probe, including its
-existing hidden cadence. The canvas phase verifies 1,700 selected strokes.
-The hide marker is emitted only after AppKit orders the panel out. Each phase
-settles for two seconds, then records ten seconds of process CPU and kernel
-package idle wake-up counter deltas, with `footprint -p PID` at both ends.
-`footprint` is the physical footprint shown as Memory in Activity Monitor.
-The JSON preserves raw samples and Apple's per-phase footprint JSON files
-remain under `.build/performance/run-N/` until that build folder is removed.
-On this Apple M4/macOS 27 run, the package idle wake-up counter returned zero
-for every phase. The separate interrupt wake-up counter moved and is reported
-as an additional rate; it is not relabeled as idle wake-ups.
+Each window records two `footprint -j` physical footprint readings, process
+CPU time, and process interrupt wake-ups. Rates use the actual elapsed window
+length. The raw package idle wake-up counter remains in JSON for inspection,
+but it returned zero throughout the earlier Apple Silicon runs and is not a
+gate or a summary measure. The probe holds `/tmp/attic-xcodebuild.lock` from
+seeding through the end of all measured runs. Its preview build uses
+`xcodebuild-locked.sh` on this Mac. Xcode build products and raw footprint
+reports remain under `.build/performance/`; probe-owned store data is removed
+after each invocation. A protected container shell may remain as noted above.
 
 ## XCTest and signposts
 
 ```zsh
 export PATH=/opt/homebrew/opt/ruby/bin:$PATH
-bundle exec ruby Scripts/generate_project.rb
-bundle exec ruby Scripts/verify_project_generation.rb
+bundle exec ruby Scripts/generate_project.rb && bundle exec ruby Scripts/verify_project_generation.rb
 F=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=)
 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh build-for-testing -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' -derivedDataPath .build/dd "${F[@]}"
 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh test-without-building -project Attic.xcodeproj -scheme Attic -configuration Local -destination 'platform=macOS' -derivedDataPath .build/dd "${F[@]}"
+F+=(ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.perf.ui)
 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh build-for-testing -project Attic.xcodeproj -scheme AtticUI -configuration Local -destination 'platform=macOS' -derivedDataPath .build/dd-ui "${F[@]}"
 /Users/taha/Developer/attic-redesign-assets/xcodebuild-locked.sh test-without-building -project Attic.xcodeproj -scheme AtticUI -configuration Local -destination 'platform=macOS' -derivedDataPath .build/dd-ui -only-testing:AtticUITests/PerformanceUITests "${F[@]}"
 ```
 
-Five UI test methods record `XCTApplicationLaunchMetric` on the seeded store
-and `XCTMemoryMetric(application:)` plus `XCTCPUMetric(application:)` in all
-four states. XCTest permits one metric set per method. The test also exercises
-actual panel navigation on the seed. The UI runner cannot write the app's
-sandbox, so each test gives the app a UUID; the app creates and removes its
-own disposable `AtticPerformanceStores/attic-perf-ui-*` root under
-`ATTIC_UI_TESTING`. The test app never opens the normal store. The
-existing `TaskPerformanceGateTests` and `CanvasPerformanceGateTests` remain in
-the full unit suite; no duplicate scaling benchmark was added.
+The five performance UI tests record `XCTApplicationLaunchMetric`,
+`XCTMemoryMetric`, and `XCTCPUMetric` on seeded states. These are recorded
+metrics, with no accepted XCTest baseline and no CI threshold. The CPU metric
+around a two-second sleep can read near zero; the process probe is the CPU
+and wake-up comparison. The existing Task and Canvas unit performance gates
+remain in the full unit suite.
 
-All `OSSignposter` events use subsystem `com.taha.Attic`, category
-`Performance`. A disabled signposter performs no signpost operation. The
-probe's owned root also enables a small event-time recording file, read into
-the run JSON. `AppLaunchToMenuReady` starts in `AppCoordinator.init` and ends
-after `AppDelegate` starts the menu shell; it is an app-initialization proxy,
-while `XCTApplicationLaunchMetric` measures first responsive frame.
-`StoreOpen` wraps `ModelContainer` construction; `StoreSave` wraps task, note,
-and canvas context saves. `PanelRevealToInteractive` starts at the corner or
-programmatic reveal decision and ends after AppKit orders the panel front.
-`PageSwitch` begins at section selection and ends on the next main turn after
-SwiftUI observes the new section. `NoteKeystrokeToDraw` runs from the native
-text view's key-down to its draw call; `CanvasDragToDraw` runs from a drawing
-drag event to the canvas view's draw call. These are useful render-path
-proxies, not proof of physical screen scan-out or a 120 fps trace. Use
-Instruments Points of Interest plus Core Animation for the perceptual budgets.
+All `OSSignposter` intervals use subsystem `com.taha.Attic`, category
+`Performance`. The small timing file is written only for a validated external
+probe root. Names describe the actual endpoint:
 
-The only fixed speed budgets are the spec's 100 ms reveal, 50 ms page switch,
-and 16 ms note keystroke-to-screen. Neither XCTest automation-click duration
-nor CI wall-clock timing is substituted for them. Ink latency still needs a
-real ten-second scribble and frame trace on a ProMotion display.
+| Interval | Boundaries |
+| --- | --- |
+| `CoordinatorInitToMenuStarted` | `AppCoordinator.init` to completion of `AppDelegate` shell start; not process launch or first frame. |
+| `PanelRevealToOrderedFront` | corner/programmatic decision to AppKit order-front, before animation and screen scan-out. |
+| `PageSwitch` | section selection to the next main turn after SwiftUI observes it, not a pixel-visible frame. |
+| `StoreOpen`, `StoreSave` | SwiftData container construction and task/note/canvas context save. |
+| `NoteKeystrokeToDraw`, `CanvasDragToDraw` | native input event to view draw callback. |
+
+The automated harness records the first three intervals and `StoreOpen`.
+It does not drive note typing, canvas drawing, or a store save, so those three
+intervals require a separate interactive Instruments trace. None of these
+signposts proves scan-out latency. The spec's only fixed perception budgets
+remain reveal ≤100 ms, page switch ≤50 ms, and note keystroke to screen ≤16 ms;
+use a frame trace to judge those endpoints.
 
 ## CI comparison
 
-The `macos-26` job runs the seeded UI metrics and builds both the pinned Phase
-0 reference and the candidate preview on **the same runner**. Each is probed
-three times. `Scripts/compare_performance.py` rejects mismatched hardware, OS,
-Xcode, fixture, and window length. It compares each phase's footprint, CPU,
-idle and interrupt wake-ups, and each run's event timings (the slowest reveal
-and median of other same-name events). It fails only if every candidate
-observation is beyond the reference's maximum plus one additional
-reference run-to-run spread. This detects a clear repeated regression without
-claiming a universal memory or CPU budget. Ambiguous changes stay review
-items; the JSON and XCTest result bundles are uploaded. The reference SHA must
-be advanced deliberately, and both CI probe commands must add
-`--done-history`, when Baseline B replaces A.
+The `macos-26` lane builds the pinned reference and candidate on one runner,
+then alternates five runs per side in AB/BA order. A candidate observation is
+a *clear regression* only if every candidate run exceeds the reference
+maximum plus its observed spread. Flat reference series are reported, never
+gated. Primary comparison series are settled hidden footprint, hidden CPU,
+hidden interrupt wake-ups, after-hide footprint, final hidden footprint, and
+order-front reveal timing. Every other phase and timing is printed for review;
+package idle wake-ups are excluded. A suspected regression triggers a fresh
+five-pair confirmation run. The comparison remains **non-blocking** until
+several `macos-26` jobs demonstrate stable variance. A probe failure or a
+performance UI test failure still fails CI. This avoids treating runner-to-
+runner hardware variation as a budget, and does not invent a memory or CPU
+target.
 
-Local baseline comparison, with matching machine, OS, Xcode, fixture, and window:
+The `PERF_REFERENCE_COMMIT` SHA in the workflow must remain reachable after
+merge: merge commits, not squash. Advance it deliberately with a new baseline
+and compatible fixture/schema when the implementation or data model changes.
+
+For a local same-machine comparison with five comparable runs per side:
 
 ```zsh
-python3 Scripts/compare_performance.py Docs/performance-baseline-A.json path/to/new-run.json
+python3 Scripts/compare_performance.py path/to/reference.json path/to/candidate.json
 ```
 
 ## Baseline A results
 
-Recorded 2026-09-24 17:30:13 UTC at app commit
-`635fdf5ac2f50329e75ae83b098eeaf7dbf2cc59` on an Apple M4, macOS 27.0,
-Xcode 27.0. The local-only preview was `com.taha.Attic.perf.250539c622`, at
-`.build/performance/dd/Build/Products/Local/AtticPerf250539c622.app/Contents/MacOS/AtticPerf250539c622`.
-Three fresh stores were seeded and probed for ten seconds per phase under the
-machine-wide build lock. No extra 5,000 Done tasks were included.
+Recorded 2026-09-24 19:56:47 UTC on an Apple M4, macOS 27.0, Xcode 27.0,
+branch `redesign/p0-perf`, commit `66298945ac71e86f3bfa9b5f3976f1f41e25bd8b`.
+The ad-hoc local-only executable was
+`.build/performance/dd/Build/Products/Local/AtticPerf9fd44b290a.app/Contents/MacOS/AtticPerf9fd44b290a`
+with bundle ID `com.taha.Attic.perf.9fd44b290a`. Three fresh stores used seed
+version 1 with 500 tasks, 200 notes, and 20 × 2,000 canvas objects; no extra
+Done tasks. Each sampled window lasted approximately 10.1 seconds. The build
+lock covered all seeding and samples. This is a local development Mac baseline,
+not a `macos-26` runner baseline.
 
-| Phase | Physical footprint, MiB | CPU, one-core % | Package idle wake-ups/s | Interrupt wake-ups/s |
-| --- | ---: | ---: | ---: | ---: |
-| Hidden idle | 159.66–163.13 | 0.04–0.05 | 0.00–0.00 | 1.68–1.98 |
-| Tasks open | 163.09–200.03 | 0.67–58.22 | 0.00–0.00 | 8.22–42.32 |
-| 2,000-object canvas open | 91.24–116.95 | 0.01–26.89 | 0.00–0.00 | 0.59–110.63 |
-| After hiding canvas | 91.70–105.03 | 0.02–2.21 | 0.00–0.00 | 0.99–46.40 |
+Each cell shows the three run values followed by the run-to-run spread
+(maximum minus minimum). Physical footprint is the end reading in MiB; CPU is
+percent of one core, and wake-ups are process interrupt wake-ups per second.
 
-Ranges are minimum to maximum of three runs. Footprint is the end of each
-window; rates use counter deltas over the actual window duration. The Tasks
-and Canvas CPU ranges are wide, so a single local observation is not a
-credible regression verdict. The machine also had substantial unrelated
-load during this session, despite the build lock; the JSON keeps all three
-runs, including the high ones. Interrupt rates were derived afterward from
-the original per-window counter and duration in the JSON; no app or window
-was rerun for that extra column.
+| Phase | Footprint MiB, runs 1/2/3; spread | CPU %, runs 1/2/3; spread | Wake-ups/s, runs 1/2/3; spread |
+| --- | ---: | ---: | ---: |
+| Hidden idle, settled | 160.27 / 163.33 / 159.99; 3.34 | 0.02 / 0.83 / 2.95; 2.93 | 0.99 / 20.10 / 62.17; 61.18 |
+| Tasks open | 170.53 / 235.14 / 164.42; 70.72 | 0.02 / 2.38 / 2.18; 2.36 | 0.79 / 15.50 / 41.60; 40.81 |
+| Large canvas open | 113.92 / 113.52 / 123.92; 10.41 | 4.11 / 0.27 / 1.06; 3.84 | 27.65 / 5.23 / 10.36; 22.42 |
+| After hide, settled | 112.91 / 113.63 / 122.97; 10.06 | 0.03 / 0.65 / 1.57; 1.54 | 1.09 / 17.32 / 27.64; 26.55 |
+| Final hidden idle | 112.92 / 113.63 / 122.97; 10.05 | 1.53 / 0.99 / 2.37; 1.38 | 33.97 / 24.38 / 51.93; 27.55 |
 
-In-process event ranges: `AppLaunchToMenuReady` 706.50–884.23 ms (3),
-`StoreOpen` 7.48–12.50 ms (3), `PanelRevealToInteractive` 0.42–78.84 ms
-(8, including later warm reveals), and `PageSwitch` 277.23–352.36 ms (3).
-The initial reveal in each run was 62.42–78.84 ms. These endpoints precede
-physical scan-out; the canvas page-switch proxy is nevertheless far above the
-spec's 50 ms perception budget and needs a real frame trace before any claim
-of compliance. No note typing or drawing drag was generated by this probe.
+All 15 end markers agreed with their start visibility and hover state: Tasks
+and Canvas remained visible, and all hidden windows remained hidden. Each
+Canvas marker confirmed 1,700 seeded strokes. The Tasks footprint rose to
+235.14 MiB in run 2 and fell by the Canvas window; this is observed
+within-run movement, not a new budget.
 
-For each later phase, save its same-run comparison JSON and an Instruments
-trace of hidden idle, Tasks, the large canvas, and hide. Inspect Points of
-Interest, Time Profiler, SwiftUI, and Core Animation for repeated offscreen
-work or a blocked main thread. A passing numeric comparison alone does not
-establish the separate “no waste found in profiling” condition. The hidden
-corner timer below is already a finding to resolve and reprofile.
+| Event | Run values, ms | Run-to-run spread, ms |
+| --- | ---: | ---: |
+| Coordinator init to menu shell started | 955.72 / 1117.09 / 1208.84 | 253.12 |
+| Store open | 10.01 / 12.57 / 8.69 | 3.88 |
+| First reveal to order-front | 261.75 / 225.33 / 230.61 | 36.43 |
+| Later in-panel order-front | 1.20 / 4.43 / 16.96 | 15.76 |
+| Tasks-to-Canvas page switch proxy | 312.33 / 352.86 / 540.11 | 227.78 |
 
-## Limits and waste observed
+The first reveal and page-switch proxies exceed the spec's perception budgets
+in these runs. Their signpost endpoints are order-front and a SwiftUI layout
+turn, so a frame trace is needed to determine pixel-visible latency. This is a
+profiling lead for a later optimization phase, not a harness failure.
 
-- Hosted runner measurements are comparable only within one runner job.
-  Physical footprint can move under macOS memory pressure; CPU and package
-  idle wake-up counters are deltas, not an Energy Impact score. The zero
-  package idle wake-up series on this machine cannot establish zero wake-ups;
-  the nonzero interrupt series is kept separately and compared in CI.
-- The preview records no note keystrokes or pen drags by itself. Those
-  signposts require an interactive trace, and the pixel-visible endpoints
-  remain unmeasured until that trace is run.
-- The final local `AtticUI` performance class passed all five tests. Earlier
-  attempts exposed a runner automation timeout and a sandbox boundary; a
-  further attempt exposed XCTest's one-metric-set-per-method rule. The final
-  result bundle is under `.build/dd-ui/Logs/Test/`. These local Xcode 27
-  results do not substitute for the Xcode 26.6 CI lane.
-- The first full unit rerun after the UI seam change had five
-  `PanelGeometryTests` gesture assertion failures. The focused class then
-  passed 74 tests, and the repeated full suite passed 918 with four skipped.
-  No cause was established for the one failing run; retain the logs under
-  `.build/` and watch this class in CI.
-- In two exploratory UI runs, a synthesized click on the Tasks dock button
-  after visiting Canvas did not change selection. The existing Command-1
-  shortcut did, and the final navigation test uses it. The click outcome may
-  be an automation/hover issue or an app issue; it needs separate native UAT.
-- `CornerHoverMonitor` currently runs a repeating hidden timer: its idle
-  cadence is 1,000 ms, with a 250 ms leeway, and its near-corner cadence is
-  50 ms. This conflicts with the redesign's no-polling-while-hidden goal.
-  Phase 0 measures and reports it; optimization belongs to a later stream.
-- One after-hide run had 2.21% of one core and 46.40 interrupt wake-ups/s,
-  versus 0.02–0.04% and 0.99–1.09/s in the other two. The probe did not
-  identify the cause. The separate one-run Done-flag smoke also reached 2.73%
-  and 51.81/s after hide; inspect a trace before assigning cause.
+The ranges show run-to-run spread across fresh seeded stores. The JSON retains
+all individual samples and start/end footprint values. CPU and interrupt
+wake-ups can vary with unrelated Mac activity despite the build lock; a single
+run is not a regression verdict.
+
+## Limits and observed waste
+
+- The corner monitor still polls on a one-second hidden cadence, with a
+  250 ms leeway, and switches to 50 ms near the corner. This conflicts with
+  the redesign's no-polling-while-hidden goal. Phase 0 reports it for later
+  optimization and profiling.
+- Hidden interrupt wake-ups ranged from 0.99 to 62.17 per second in the first
+  settled window and 24.38 to 51.93 per second in the final hidden window.
+  Background Mac activity and app activity are not separated by this counter;
+  profile the monitor and other hidden work before assigning cause.
+- The signpost endpoints precede physical display scan-out. Ink latency and
+  note keystroke-to-screen remain unmeasured until an interactive frame trace.
+  `StoreSave` also has no automated driving workload yet.
+- Same-run CI comparison controls runner type, fixture, and order, but memory
+  pressure and background load can still move footprint and wake-ups. The
+  non-blocking CI period is needed to learn that variance.
+- For later phases, retain the same-run comparison JSON and an Instruments
+  trace of hidden idle, Tasks, large Canvas, and hide. Inspect Points of
+  Interest, Time Profiler, SwiftUI, and Core Animation for offscreen work or a
+  blocked main thread. A numeric pass alone cannot satisfy the separate
+  no-waste-in-profiling gate; the hidden corner timer is already a finding.
