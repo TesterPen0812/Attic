@@ -110,6 +110,10 @@ struct AtticColorTokens: Equatable, Sendable {
 
     // MARK: Materials
 
+    /// The opaque neutral base every raised control is drawn on, so content
+    /// never shows through a floating control and controls never pick up a
+    /// palette (they always stay in the base style).
+    let controlBase: AtticRGBA
     let raised: AtticRaisedRecipe
     let raisedHover: AtticRaisedRecipe
     let raisedPressed: AtticRaisedRecipe
@@ -173,20 +177,33 @@ struct AtticColorTokens: Equatable, Sendable {
         let contentCard = dark ? AtticRGBA(0x2E2E2E) : AtticRGBA(0xFBFBFB)
         let groupCard = dark ? AtticRGBA(0x333333) : AtticRGBA(0xF2F2F2)
 
-        /// Every background a role is drawn on, over a given surface.
-        func backgrounds(on surface: AtticRGBA) -> [AtticRGBA] {
-            let face = recipes.rest.face.over(surface)
+        /// The backgrounds each role is actually drawn on, over a surface.
+        /// Tuning a role against backgrounds it never sits on would flatten
+        /// the ladder (helper would climb to the label's grey).
+        func backgrounds(for ink: AtticInk, on surface: AtticRGBA) -> [AtticRGBA] {
+            let face = recipes.rest.face.over(basePanel)
             let card = recessed.over(surface)
-            return [
-                surface, hover.over(surface), selected.over(surface), pressed.over(surface),
-                card, hover.over(card), face, chipHover.over(face), chipSelected.over(face)
-            ]
+            let rows = [surface, hover.over(surface), selected.over(surface), pressed.over(surface), card, hover.over(card)]
+            let menus = [popoverFill, selected.over(popoverFill), pressed.over(popoverFill), chipHover.over(popoverFill)]
+            let settings = [contentCard, recessed.over(contentCard), groupCard, hover.over(groupCard), selected.over(groupCard)]
+            switch ink {
+            case .heading, .body, .glyph:
+                return rows + menus + settings + [face, chipHover.over(face), chipSelected.over(face)]
+            case .label:
+                // Grouped-row labels and quick-look actions.
+                return rows + settings
+            case .helper:
+                // Row meta, hints, Settings helper, and menu shortcuts on the
+                // highlighted row.
+                return rows + settings + [popoverFill, selected.over(popoverFill)]
+            case .placeholder:
+                return [face]
+            case .icon, .chevron:
+                return rows + menus + [face, chipHover.over(face), chipSelected.over(face)]
+            default:
+                return rows + menus + settings
+            }
         }
-        // Opaque raised and Settings backgrounds, the same in every palette.
-        let fixedBackgrounds = [
-            popoverFill, selected.over(popoverFill), pressed.over(popoverFill), chipHover.over(popoverFill),
-            contentCard, recessed.over(contentCard), groupCard, hover.over(groupCard), selected.over(groupCard)
-        ]
         // Small safety margins over the floors, so 8-bit rendering never
         // rounds a pass into a miss.
         let textTarget = 4.58
@@ -197,12 +214,16 @@ struct AtticColorTokens: Equatable, Sendable {
         // base style. Palette surfaces keep the neutral base's luminance
         // (`AtticSurfaceModel.hued`), so the same text passes on them.
         var inks = Ladder.neutral(dark: dark, ic: ic)
-        let neutral = backgrounds(on: basePanel) + fixedBackgrounds
         for ink in [AtticInk.helper, .label, .placeholder, .body, .heading] {
-            inks[ink] = inks[ink]!.tuned(toContrast: textTarget, against: neutral, lighten: dark)
+            inks[ink] = inks[ink]!.tuned(toContrast: textTarget, against: backgrounds(for: ink, on: basePanel), lighten: dark)
         }
         for ink in [AtticInk.icon, .chevron, .glyph] {
-            inks[ink] = inks[ink]!.tuned(toContrast: nonTextTarget, against: neutral, lighten: dark)
+            inks[ink] = inks[ink]!.tuned(toContrast: nonTextTarget, against: backgrounds(for: ink, on: basePanel), lighten: dark)
+        }
+        // Keep the ladder in order: a label is never quieter than helper text.
+        let helperOnBase = inks[.helper]!.contrast(on: basePanel)
+        if inks[.label]!.contrast(on: basePanel) < helperOnBase * 1.06 {
+            inks[.label] = inks[.helper]!.tuned(toContrast: helperOnBase * 1.06, against: [basePanel], lighten: dark)
         }
         inks[.priorityNone] = inks[.icon]!
         let chromeBackgrounds = [baseChrome, selected.over(baseChrome), hover.over(baseChrome)]
@@ -215,7 +236,7 @@ struct AtticColorTokens: Equatable, Sendable {
         let accentBase: AtticRGBA = key.palette == .original
             ? (dark ? AtticRGBA(0x9FA0A7) : AtticRGBA(0x8A8A8F))
             : AtticRGBA(themePalette.accent)
-        let meaning = backgrounds(on: panelBase) + fixedBackgrounds
+        let meaning = backgrounds(for: .accent, on: panelBase)
         inks[.accent] = accentBase.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
         let tagFill = inks[.accent]!.withAlpha(dark ? 0.16 : 0.10)
         let tagFillSelected = inks[.accent]!.withAlpha(dark ? 0.26 : 0.18)
@@ -235,7 +256,7 @@ struct AtticColorTokens: Equatable, Sendable {
 
         let pairs = AtticSurfaceModel.readabilityPairs(
             inks: inks, hover: hover, selected: selected, pressed: pressed,
-            controlFace: recipes.rest.face, chipSelected: chipSelected, chipHover: chipHover,
+            controlFace: recipes.rest.face.over(basePanel), chipSelected: chipSelected, chipHover: chipHover,
             recessed: recessed, tagFill: tagFill, tagFillSelected: tagFillSelected
         )
         let chromePairs: [AtticSurfaceModel.Pair] = [
@@ -248,14 +269,14 @@ struct AtticColorTokens: Equatable, Sendable {
         let panel = AtticSurfaceModel.solve(
             base: panelBase, kind: key.surface, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
-            tint: key.tint, tintLength: key.tintLength, pairs: pairs
+            tint: key.tint, tintLength: key.tintLength, policy: key.policy, pairs: pairs
         )
         // The chrome is a sidebar material: modelled as Frosted when the
         // panel surface is translucent, and never tinted.
         let chrome = AtticSurfaceModel.solve(
             base: chromeBase, kind: key.surface == .solid ? .solid : .frosted, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
-            tint: .off, tintLength: 1, pairs: chromePairs
+            tint: .off, tintLength: 1, policy: key.policy, pairs: chromePairs
         )
 
         return AtticColorTokens(
@@ -275,6 +296,7 @@ struct AtticColorTokens: Equatable, Sendable {
             chipSelected: chipSelected,
             chipHover: chipHover,
             skeleton: dark ? .white(0.08) : .black(0.06),
+            controlBase: basePanel,
             raised: recipes.rest,
             raisedHover: recipes.hover,
             raisedPressed: recipes.pressed,

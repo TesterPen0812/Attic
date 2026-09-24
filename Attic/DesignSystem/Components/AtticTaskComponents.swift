@@ -159,15 +159,25 @@ struct AtticStatusTabs<Tab: Hashable>: View {
 
     let items: [Item]
     @Binding var selection: Tab
+    /// The gallery pins a state on one tab only; nil pins it on all.
+    var statePinnedTab: Tab?
+    /// A task dragged over a tab moves it there: that tab outlines, with no
+    /// words (the result is obvious).
+    var dropTargetTab: Tab?
 
     @Environment(\.atticDesign) private var design
 
     var body: some View {
         HStack(spacing: AtticLayout.statusTabsGap) {
             ForEach(items) { item in
-                AtticStatusTab(item: item, isSelected: item.tab == selection) {
+                AtticStatusTab(item: item, isSelected: item.tab == selection, takesPinnedState: statePinnedTab.map { $0 == item.tab } ?? true) {
                     withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
                         selection = item.tab
+                    }
+                }
+                .background {
+                    if item.tab == dropTargetTab {
+                        AtticDropOutline(cornerRadius: AtticRadius.control(height: 26)).padding(.horizontal, -7).frame(height: 26)
                     }
                 }
             }
@@ -179,6 +189,7 @@ struct AtticStatusTabs<Tab: Hashable>: View {
 private struct AtticStatusTab<Tab: Hashable>: View {
     let item: AtticStatusTabs<Tab>.Item
     let isSelected: Bool
+    let takesPinnedState: Bool
     let action: () -> Void
 
     @Environment(\.atticForcedState) private var forced
@@ -186,7 +197,7 @@ private struct AtticStatusTab<Tab: Hashable>: View {
     @State private var hovered = false
 
     var body: some View {
-        let state = AtticStateResolver(forced: forced, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: isFocused).state
+        let state = AtticStateResolver(forced: takesPinnedState ? forced : nil, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: isFocused).state
         Button(action: action) {
             HStack(spacing: 4) {
                 AtticText(

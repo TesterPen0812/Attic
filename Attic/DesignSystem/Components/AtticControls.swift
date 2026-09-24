@@ -139,6 +139,8 @@ struct AtticPageSwitch<Page: Hashable>: View {
 
     let items: [Item]
     @Binding var selection: Page
+    /// The gallery pins a state on one chip only; nil pins it on all.
+    var statePinnedPage: Page?
 
     @Environment(\.atticDesign) private var design
     @State private var probeID = UUID()
@@ -146,7 +148,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
     var body: some View {
         HStack(spacing: 2) {
             ForEach(items) { item in
-                AtticPageChip(item: item, isSelected: item.page == selection) {
+                AtticPageChip(item: item, isSelected: item.page == selection, takesPinnedState: statePinnedPage.map { $0 == item.page } ?? true) {
                     withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: design.reduceMotion)) {
                         selection = item.page
                     }
@@ -169,6 +171,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
 private struct AtticPageChip<Page: Hashable>: View {
     let item: AtticPageSwitch<Page>.Item
     let isSelected: Bool
+    let takesPinnedState: Bool
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -179,7 +182,7 @@ private struct AtticPageChip<Page: Hashable>: View {
 
     var body: some View {
         let tokens = design.tokens
-        let state = AtticStateResolver(forced: forced, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: isFocused).state
+        let state = AtticStateResolver(forced: takesPinnedState ? forced : nil, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: isFocused).state
         let shape = RoundedRectangle(cornerRadius: AtticRadius.nestedChip, style: .continuous)
         let fill: AtticRGBA = isSelected ? tokens.chipSelected : (state == .hover ? tokens.chipHover : .clear)
         Button(action: action) {
@@ -332,7 +335,6 @@ struct AtticSmallButton: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Button(action: action) {
             AtticSmallButtonFace(systemName: systemName, title: title, radius: radius, hovered: hovered)
-                .frame(minWidth: AtticControlSize.smallMinWidth, minHeight: height, maxHeight: height)
                 .contentShape(shape)
         }
         .buttonStyle(AtticFlatPressStyle())
@@ -392,6 +394,7 @@ private struct AtticSmallButtonFace: View {
             }
         }
         .padding(.horizontal, title == nil ? 0 : 9)
+        .frame(minWidth: AtticControlSize.smallMinWidth, minHeight: AtticControlSize.smallHeight, maxHeight: AtticControlSize.smallHeight)
         .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
         .atticFocusRing(state == .focused, cornerRadius: radius)
     }

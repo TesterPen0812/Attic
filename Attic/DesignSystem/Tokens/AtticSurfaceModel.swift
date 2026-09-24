@@ -33,6 +33,26 @@ struct AtticSurfaceModel: Equatable, Sendable {
     let tintStops: [PanelTintStop]
     /// The factor the readability floors applied to the Tint (1 = as designed).
     let tintScale: Double
+    /// Which desktops this surface is solved and judged over.
+    let policy: Policy
+
+    /// How Glass and Frosted trade transparency for contrast.
+    enum Policy: String, CaseIterable, Hashable, Sendable {
+        /// The quality bar: full floors (4.5 : 1 text, helper included) over
+        /// a 50 % grey desktop, and the PR #5 floor over the worst desktop.
+        case fullContrast
+        /// The owner's PR #5 decision only: 3 : 1 (Glass) or 3.5 : 1
+        /// (Frosted) over the worst desktop. More see-through; shown in the
+        /// gallery so the trade-off can be judged.
+        case transparencyFirst
+
+        var title: String {
+            switch self {
+            case .fullContrast: "Full contrast"
+            case .transparencyFirst: "Transparency first (PR #5 floor)"
+            }
+        }
+    }
 
     var isTintClamped: Bool { !tintStops.isEmpty && tintScale < 0.999 }
 
@@ -72,14 +92,24 @@ struct AtticSurfaceModel: Equatable, Sendable {
     }
 
     /// The desktops this surface is judged over (Solid transmits nothing).
-    var desktops: [Desktop] { kind == .solid ? [.typical] : Desktop.allCases }
+    var desktops: [Desktop] {
+        if kind == .solid { return [.typical] }
+        return policy == .fullContrast ? Desktop.allCases : [.worst]
+    }
 
-    /// The least contrast a role must keep over `desktop`.
+    /// The least contrast a role must keep over `desktop`. Over the worst
+    /// desktop the owner's PR #5 floor applies: text keeps 3 : 1 on Glass and
+    /// 3.5 : 1 on Frosted (instead of 4.5), and non-text UI is relaxed by the
+    /// same factor (3 × 3/4.5 = 2 on Glass, 3 × 3.5/4.5 ≈ 2.33 on Frosted).
     func floor(for ink: AtticInk, desktop: Desktop) -> Double {
-        let roleFloor = ink.floor.ratio
-        guard kind != .solid, desktop == .worst else { return roleFloor }
-        let surfaceFloor = kind == .glass ? 3.0 : 3.5
-        return min(roleFloor, surfaceFloor)
+        Self.floor(for: ink.floor, kind: kind, desktop: desktop)
+    }
+
+    static func floor(for role: AtticInk.Floor, kind: AtticPanelSurfaceTreatment.Kind, desktop: Desktop) -> Double {
+        let roleFloor = role.ratio
+        guard kind != .solid, desktop == .worst, role != .exempt else { return roleFloor }
+        let textFloor = kind == .glass ? 3.0 : 3.5
+        return roleFloor * textFloor / AtticInk.Floor.text.ratio
     }
 
     func tintOpacity(at location: Double) -> Double {
@@ -124,18 +154,18 @@ struct AtticSurfaceModel: Equatable, Sendable {
         themePalette: AtticPanelThemePalette,
         tint: PanelTintLevel,
         tintLength: Double,
+        policy: Policy = .fullContrast,
         pairs: [Pair]
     ) -> AtticSurfaceModel {
-        let wash: AtticRGBA = palette.usesNeutralTint
-            ? AtticRGBA(PanelNeutralShade.color(for: appearance))
-            : AtticRGBA(PanelTintCalibration.washColor(for: themePalette, appearance: appearance))
+        let wash = washColor(palette: palette, themePalette: themePalette, appearance: appearance)
 
         func model(foundation: Double, stops: [PanelTintStop], scale: Double) -> AtticSurfaceModel {
             AtticSurfaceModel(
                 kind: kind, appearance: appearance, base: base, foundationOpacity: foundation,
                 washColor: wash,
                 tintStops: stops.map { PanelTintStop(opacity: $0.opacity * scale, location: $0.location) },
-                tintScale: scale
+                tintScale: scale,
+                policy: policy
             )
         }
 
@@ -151,45 +181,88 @@ struct AtticSurfaceModel: Equatable, Sendable {
             }
         }
 
-        // 2. The Tint as designed.
+        // 2. The Tint as designed, for this step and for Bold.
         let length = PanelTintLength.clamped(tintLength)
-        var stops: [PanelTintStop] = []
-        if tint != .off {
+        func designedStops(_ level: PanelTintLevel) -> [PanelTintStop] {
+            guard level != .off else { return [] }
             if palette.usesNeutralTint {
-                stops = PanelNeutralShade.stops(level: tint, length: length)
-            } else if let target = tint.targetColorDifference {
-                let plain = model(foundation: foundation, stops: [], scale: 1).composite(.typical)
-                var lower = 0.0
-                var upper = 1.0
-                for _ in 0..<32 {
-                    let middle = (lower + upper) / 2
-                    let tinted = wash.withAlpha(middle).over(plain)
-                    if ColorDifference.deltaE76(plain.themeColor, tinted.themeColor) < target {
-                        lower = middle
-                    } else {
-                        upper = middle
-                    }
-                }
-                stops = [PanelTintStop(opacity: upper, location: 0), PanelTintStop(opacity: 0, location: length)]
+                return PanelNeutralShade.stops(level: level, length: length)
             }
-        }
-
-        // 3. Scale the Tint down only as far as readability needs.
-        var scale = 1.0
-        if !stops.isEmpty, model(foundation: foundation, stops: stops, scale: 1).worstMargin(pairs) < Self.solverMargin {
+            guard let target = level.targetColorDifference else { return [] }
+            let plain = model(foundation: foundation, stops: [], scale: 1).composite(.typical)
             var lower = 0.0
             var upper = 1.0
-            for _ in 0..<24 {
+            for _ in 0..<32 {
                 let middle = (lower + upper) / 2
-                if model(foundation: foundation, stops: stops, scale: middle).worstMargin(pairs) >= Self.solverMargin {
+                let tinted = wash.withAlpha(middle).over(plain)
+                if ColorDifference.deltaE76(plain.themeColor, tinted.themeColor) < target {
                     lower = middle
                 } else {
                     upper = middle
                 }
             }
-            scale = (lower * 1000).rounded(.down) / 1000
+            return [PanelTintStop(opacity: upper, location: 0), PanelTintStop(opacity: 0, location: length)]
+        }
+        let stops = designedStops(tint)
+
+        // 3. "Bold is the strongest tint that still fits the calm base": Bold
+        // is held to the most the readability floors allow, and the lighter
+        // steps to 70 % (Vivid) and 40 % (Subtle) of that, so the three steps
+        // stay distinct even where the base cannot afford the designed ones.
+        var scale = 1.0
+        if let top = stops.first?.opacity, top > 0 {
+            let bold = designedStops(.bold)
+            var boldScale = 1.0
+            if model(foundation: foundation, stops: bold, scale: 1).worstMargin(pairs) < Self.solverMargin {
+                var lower = 0.0
+                var upper = 1.0
+                for _ in 0..<24 {
+                    let middle = (lower + upper) / 2
+                    if model(foundation: foundation, stops: bold, scale: middle).worstMargin(pairs) >= Self.solverMargin {
+                        lower = middle
+                    } else {
+                        upper = middle
+                    }
+                }
+                boldScale = lower
+            }
+            let fraction: Double = switch tint {
+            case .bold: 1
+            case .vivid: 0.7
+            default: 0.4
+            }
+            let allowedTop = (bold.first?.opacity ?? top) * boldScale * fraction
+            scale = min(1, allowedTop / top)
+            scale = (scale * 1000).rounded(.down) / 1000
         }
         return model(foundation: foundation, stops: stops, scale: scale)
+    }
+
+    /// The Tint's colour. Original keeps its neutral shade. A palette washes
+    /// in its accent's hue: bright in Light, but deep in Dark, so the wash
+    /// colours and darkens the charcoal (light text gains contrast) instead
+    /// of lightening it (which the soft grey ladder cannot afford).
+    static func washColor(palette: AtticPanelTheme, themePalette: AtticPanelThemePalette, appearance: AtticPanelThemeAppearance) -> AtticRGBA {
+        if palette.usesNeutralTint { return AtticRGBA(PanelNeutralShade.color(for: appearance)) }
+        guard appearance == .dark else {
+            return AtticRGBA(PanelTintCalibration.washColor(for: themePalette, appearance: appearance))
+        }
+        // The palette's hue at the luminance of a slightly deeper charcoal:
+        // every hue then darkens the surface by the same amount, whatever its
+        // natural brightness (a green is far brighter than a blue at one value).
+        let hue = PanelTintCalibration.hue(of: themePalette.accent)
+        let target = AtticRGBA(0x2C2C2D).relativeLuminance * 0.7
+        var lower = 0.0
+        var upper = 1.0
+        for _ in 0..<30 {
+            let middle = (lower + upper) / 2
+            if AtticRGBA(PanelTintCalibration.color(hue: hue, saturation: 0.85, value: middle)).relativeLuminance < target {
+                lower = middle
+            } else {
+                upper = middle
+            }
+        }
+        return AtticRGBA(PanelTintCalibration.color(hue: hue, saturation: 0.85, value: lower))
     }
 
     /// The pairs every panel surface must keep readable: each text and icon
@@ -216,8 +289,10 @@ struct AtticSurfaceModel: Equatable, Sendable {
             p(.icon, [selected]), p(.icon, [controlFace, chipHover]), p(.chevron, [selected]),
             p(.accent, [selected]), p(.accentText, [tagFill]), p(.accentText, [recessed, tagFillSelected]),
             p(.dueText, [selected]), p(.warningText, []),
-            p(.priorityHigh, [selected]), p(.priorityMedium, [selected]),
-            p(.priorityLow, [selected]), p(.priorityNone, [selected]), p(.doneFill, [selected])
+            p(.priorityHigh, [pressed]), p(.priorityMedium, [pressed]),
+            p(.priorityLow, [pressed]), p(.priorityNone, [pressed]), p(.doneFill, [pressed]),
+            p(.priorityHigh, [recessed, hover]), p(.priorityMedium, [recessed, hover]),
+            p(.priorityLow, [recessed, hover]), p(.priorityNone, [recessed, hover])
         ]
     }
 

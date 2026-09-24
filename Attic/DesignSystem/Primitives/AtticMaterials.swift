@@ -57,6 +57,7 @@ struct AtticStateResolver {
 // MARK: - Raised (rim-lit) material
 
 /// The rim-lit raised material every control uses (spec § Raised controls):
+/// an opaque neutral base (content scrolling underneath never shows through),
 /// a faint vertical sheen, a 1 pt inner rim lit from above, a hairline that
 /// is slightly darker at the bottom, and a tiny shadow drawn outside the
 /// shape only (so a translucent face never darkens itself). Softly raised,
@@ -80,6 +81,7 @@ struct AtticRaisedBackground: View {
             if recipe.shadow.alpha > 0 {
                 AtticOutsideShadow(shape: shape, color: recipe.shadow, radius: recipe.shadowRadius, y: recipe.shadowY)
             }
+            shape.fill(tokens.controlBase.color)
             shape.fill(LinearGradient(stops: [
                 .init(color: recipe.sheenTop.color, location: 0),
                 .init(color: recipe.face.color, location: 0.45),

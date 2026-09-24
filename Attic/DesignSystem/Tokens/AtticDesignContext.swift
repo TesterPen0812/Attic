@@ -26,6 +26,9 @@ struct AtticDesignContext: Hashable, Sendable {
     var reduceMotion = false
     var differentiateWithoutColor = false
     var hapticsEnabled = true
+    /// How Glass and Frosted trade transparency for contrast. The quality
+    /// bar's is the default; the gallery can show the alternative.
+    var translucencyPolicy: AtticSurfaceModel.Policy = .fullContrast
 
     /// Reduce Transparency makes glass and blur solid.
     var effectiveSurface: AtticPanelSurfaceTreatment.Kind {
@@ -45,7 +48,8 @@ struct AtticDesignContext: Hashable, Sendable {
             surface: effectiveSurface,
             tint: tint,
             tintLength: PanelTintLength.clamped(tintLength),
-            increaseContrast: increaseContrast
+            increaseContrast: increaseContrast,
+            policy: translucencyPolicy
         )
     }
 
@@ -56,6 +60,7 @@ struct AtticDesignContext: Hashable, Sendable {
         let tint: PanelTintLevel
         let tintLength: Double
         let increaseContrast: Bool
+        let policy: AtticSurfaceModel.Policy
     }
 
     /// The resolved tokens for this context (cached).
