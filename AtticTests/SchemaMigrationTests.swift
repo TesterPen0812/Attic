@@ -1,3 +1,4 @@
+import CoreData
 import SwiftData
 import UniformTypeIdentifiers
 import XCTest
@@ -65,7 +66,6 @@ final class SchemaMigrationTests: XCTestCase {
     func testCopiedPrePhase0StoreMigratesInPlaceWithoutLosingOrDeletingAnything() async throws {
         let fixture = try await makePrePhase0Fixture()
         // Only copies are ever opened; the fixture itself stays untouched.
-        let fixtureBytes = try Data(contentsOf: fixture.storeURL)
 
         // 1. The UI-test container, through PersistenceController's own path.
         let uiTestBase = root.appendingPathComponent("ui-test-copy", isDirectory: true)
@@ -87,7 +87,15 @@ final class SchemaMigrationTests: XCTestCase {
         )
         try await assertNothingLost(in: plain, fixture: fixture)
 
-        XCTAssertEqual(try Data(contentsOf: fixture.storeURL), fixtureBytes, "the original fixture was not modified")
+        // The fixture keeps the pre-Phase 0 model: it was never migrated. (Its
+        // bytes are not compared: SQLite may checkpoint the writer's WAL into
+        // the main file whenever that container is released.)
+        let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(
+            type: .sqlite, at: fixture.storeURL
+        )
+        let entityHashes = try XCTUnwrap(metadata[NSStoreModelVersionHashesKey] as? [String: Any])
+        XCTAssertNil(entityHashes["ItemLink"], "the original fixture was not migrated")
+        XCTAssertNotNil(entityHashes["TaskItem"])
     }
 
     func testMigratedStoreSurvivesPhase0CleanupAndDeletesWithoutLosingRows() async throws {
