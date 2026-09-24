@@ -888,7 +888,7 @@ private struct SavedNoteRow: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes the local note and its attachments.")
+            Text("The note and its attachments move to Recently Deleted for 30 days.")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(displayTitle), \(preview)")
@@ -991,7 +991,7 @@ struct NoteRowView: View {
             Button("Delete", role: .destructive, action: deleteNote)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes the local note and its attachments.")
+            Text("The note and its attachments move to Recently Deleted for 30 days.")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("note-row-\(note.id.uuidString)")
