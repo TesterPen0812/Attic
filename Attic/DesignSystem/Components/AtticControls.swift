@@ -466,8 +466,9 @@ struct AtticAddBar: View {
                 .background(shape.fill(design.tokens.color(.inverseFill)))
                 .contentShape(shape)
         }
-        .buttonStyle(AtticShapeFocusStyle(cornerRadius: inner))
+        .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: inner))
         .help(String(localized: "Add (Return)"))
         .accessibilityLabel(String(localized: "Add"))
     }

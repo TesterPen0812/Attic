@@ -251,10 +251,15 @@ private struct AtticPriorityMark: View {
 /// The circle as a button with its hit area and VoiceOver name. Its
 /// keyboard focus (with Full Keyboard Access) draws Attic's 2 pt ring
 /// around the circle in place of the system focus effect.
+///
+/// Inside a task row or card the circle is not a Tab stop of its own: the
+/// row is, and Space does what a click on the circle does, so Tab moves
+/// row to row instead of stopping twice per task.
 struct AtticStatusButton: View {
     let state: AtticTaskState
     let priority: AtticPriority
     var isDisabled = false
+    var isTabStop = true
     let onAdvance: () -> Void
 
     var body: some View {
@@ -263,56 +268,77 @@ struct AtticStatusButton: View {
                 .frame(width: AtticControlSize.minimumHitTarget, height: AtticControlSize.minimumHitTarget)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(AtticCircleFocusStyle(diameter: AtticControlSize.statusCircle))
+        .buttonStyle(.plain)
+        .focusable(isTabStop)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle))
         .disabled(isDisabled)
         .accessibilityLabel(String(localized: "Status"))
         .accessibilityValue([state.spokenName, priority.spokenName].compactMap { $0 }.joined(separator: ", "))
     }
 }
 
-/// A plain button whose keyboard focus is Attic's ring around a circle of
-/// `diameter` at the label's centre (radius = diameter / 2 + the ring's offset).
-private struct AtticCircleFocusStyle: ButtonStyle {
-    let diameter: CGFloat
-
-    func makeBody(configuration: Configuration) -> some View {
-        AtticCircleFocusBody(label: configuration.label, diameter: diameter)
+/// Keyboard focus on a button (with Full Keyboard Access) drawn as Attic's
+/// 2 pt ring in place of the system focus effect. The ring follows the
+/// button's *own* focus: `Environment.isFocused` is also true inside a
+/// focused ancestor (a focused task row), which drew a second ring around
+/// the status circle whenever its row had focus. Captures have no focus
+/// system; there only the gallery's pinned state draws it.
+struct AtticOwnFocusRing: ViewModifier {
+    enum Outline {
+        /// A circle of this diameter at the centre (radius = d / 2).
+        case circle(diameter: CGFloat)
+        /// A rounded rectangle of this radius; `height` limits it to the
+        /// visible chip inside a taller hit area.
+        case rounded(radius: CGFloat, height: CGFloat? = nil)
     }
-}
 
-private struct AtticCircleFocusBody<Label: View>: View {
-    let label: Label
-    let diameter: CGFloat
-    @Environment(\.isFocused) private var isFocused
+    let outline: Outline
+
+    @Environment(\.atticCapture) private var capture
     @Environment(\.atticForcedState) private var forced
 
-    var body: some View {
-        label.overlay {
-            if isFocused || forced == .focused {
-                AtticFocusRing(cornerRadius: diameter / 2).frame(width: diameter, height: diameter)
-            }
+    func body(content: Content) -> some View {
+        if capture == nil {
+            content.modifier(AtticLiveOwnFocusRing(outline: outline, pinned: forced == .focused))
+        } else {
+            content.overlay { if forced == .focused { ring } }
+        }
+    }
+
+    @ViewBuilder
+    fileprivate var ring: some View {
+        AtticOwnFocusRing.ring(outline)
+    }
+
+    @ViewBuilder
+    fileprivate static func ring(_ outline: Outline) -> some View {
+        switch outline {
+        case let .circle(diameter):
+            AtticFocusRing(cornerRadius: diameter / 2).frame(width: diameter, height: diameter)
+        case let .rounded(radius, height):
+            AtticFocusRing(cornerRadius: radius).frame(height: height)
         }
     }
 }
 
-/// A plain button whose keyboard focus is Attic's ring around the label's
-/// own rounded shape (replaces the system focus effect).
-struct AtticShapeFocusStyle: ButtonStyle {
-    let cornerRadius: CGFloat
+private struct AtticLiveOwnFocusRing: ViewModifier {
+    let outline: AtticOwnFocusRing.Outline
+    let pinned: Bool
+    @FocusState private var focused: Bool
 
-    func makeBody(configuration: Configuration) -> some View {
-        AtticShapeFocusBody(label: configuration.label, cornerRadius: cornerRadius)
+    func body(content: Content) -> some View {
+        let shows = pinned || focused
+        content
+            .focused($focused)
+            .overlay { if shows { AtticOwnFocusRing.ring(outline) } }
     }
 }
 
-private struct AtticShapeFocusBody<Label: View>: View {
-    let label: Label
-    let cornerRadius: CGFloat
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        label.atticFocusRing(isFocused, cornerRadius: cornerRadius)
+extension View {
+    /// Attic's focus ring for this button's own keyboard focus.
+    func atticOwnFocusRing(_ outline: AtticOwnFocusRing.Outline) -> some View {
+        modifier(AtticOwnFocusRing(outline: outline))
     }
 }
 
@@ -499,7 +525,7 @@ struct AtticTaskRow: View {
             .padding(.horizontal, AtticLayout.rowHighlightInset)
 
             HStack(alignment: .top, spacing: 0) {
-                AtticStatusButton(state: model.state, priority: model.priority, isDisabled: disabled, onAdvance: actions.advance)
+                AtticStatusButton(state: model.state, priority: model.priority, isDisabled: disabled, isTabStop: false, onAdvance: actions.advance)
                     .atticForcedState(nil)
                     .padding(.leading, AtticLayout.circleX - hitInset)
                     .padding(.top, (AtticLayout.rowHighlightHeight - AtticControlSize.minimumHitTarget) / 2 - (twoLine ? m.twoLineCircleLift : 0))
@@ -653,8 +679,9 @@ private struct AtticSubtaskCountButton: View {
             .frame(height: AtticLayout.rowHighlightHeight)
             .contentShape(Rectangle())
         }
-        .buttonStyle(AtticShapeFocusStyle(cornerRadius: radius))
+        .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.rounded(radius: radius, height: m.height))
         .disabled(disabled)
         .onHover { hovered = $0 }
         .help(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"))
@@ -845,7 +872,7 @@ struct AtticTaskCard: View {
         let hitInset = (AtticControlSize.minimumHitTarget - AtticControlSize.statusCircle) / 2
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
-                AtticStatusButton(state: model.state, priority: model.priority, onAdvance: actions.advance)
+                AtticStatusButton(state: model.state, priority: model.priority, isTabStop: false, onAdvance: actions.advance)
                     .atticForcedState(nil)
                     .padding(.leading, m.leadingInset - hitInset)
                     .padding(.top, m.circleTop)
