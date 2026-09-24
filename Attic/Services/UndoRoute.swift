@@ -34,14 +34,41 @@ final class UndoRoute: ObservableObject {
     }
 
     nonisolated static let defaultLimit = 100
+    /// Steps kept across every history together.
+    nonisolated static let defaultTotalLimit = 400
+    /// Histories kept at once (the Tasks list plus recently used notes and
+    /// canvases).
+    nonisolated static let defaultHistoryLimit = 24
 
     /// Bumped whenever any history changes, for menus that show names.
     @Published private(set) var revision: UInt64 = 0
     private var histories: [UndoHistoryID: History] = [:]
+    /// Least recently used first; the last one is the page in use.
+    private var recency: [UndoHistoryID] = []
     private let limit: Int
+    private let totalLimit: Int
+    private let historyLimit: Int
 
-    init(limit: Int = UndoRoute.defaultLimit) {
+    /// Memory stays bounded across the session: each history keeps at most
+    /// `limit` steps, and when all histories together exceed `totalLimit`
+    /// steps or `historyLimit` histories, whole histories of the pages used
+    /// least recently are dropped. The page in use always keeps its complete
+    /// sequence, so undo there never skips a step.
+    init(
+        limit: Int = UndoRoute.defaultLimit,
+        totalLimit: Int = UndoRoute.defaultTotalLimit,
+        historyLimit: Int = UndoRoute.defaultHistoryLimit
+    ) {
         self.limit = max(1, limit)
+        self.totalLimit = max(self.limit, totalLimit)
+        self.historyLimit = max(1, historyLimit)
+    }
+
+    /// Histories currently kept, least recently used first.
+    var retainedHistories: [UndoHistoryID] { recency }
+
+    var totalStepCount: Int {
+        histories.values.reduce(0) { $0 + $1.undo.count + $1.redo.count }
     }
 
     /// Runs `change` and, only when it returns a step (the store saved),
@@ -61,6 +88,8 @@ final class UndoRoute: ObservableObject {
         if entry.undo.count > limit { entry.undo.removeFirst(entry.undo.count - limit) }
         entry.redo.removeAll()
         histories[history] = entry
+        touch(history)
+        evictInactiveHistories()
         revision &+= 1
     }
 
@@ -71,6 +100,7 @@ final class UndoRoute: ObservableObject {
         entry.undo.removeLast()
         entry.redo.append(step)
         histories[history] = entry
+        touch(history)
         revision &+= 1
         return true
     }
@@ -82,6 +112,7 @@ final class UndoRoute: ObservableObject {
         entry.redo.removeLast()
         entry.undo.append(step)
         histories[history] = entry
+        touch(history)
         revision &+= 1
         return true
     }
@@ -109,6 +140,19 @@ final class UndoRoute: ObservableObject {
 
     func clear(_ history: UndoHistoryID) {
         guard histories.removeValue(forKey: history) != nil else { return }
+        recency.removeAll { $0 == history }
         revision &+= 1
+    }
+
+    private func touch(_ history: UndoHistoryID) {
+        recency.removeAll { $0 == history }
+        recency.append(history)
+    }
+
+    private func evictInactiveHistories() {
+        while recency.count > 1,
+              recency.count > historyLimit || totalStepCount > totalLimit {
+            histories.removeValue(forKey: recency.removeFirst())
+        }
     }
 }

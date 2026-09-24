@@ -229,4 +229,27 @@ final class UndoRouteTests: XCTestCase {
         XCTAssertTrue(library.undo.undo(in: .tasks))
         XCTAssertNotNil(library.tasks.task(withID: task.id))
     }
+
+    // MARK: - Memory (data review finding 8)
+
+
+    func testUndoKeepsATotalBudgetAndTheActivePageWhole() {
+        let route = UndoRoute(limit: 10, totalLimit: 25, historyLimit: 4)
+        var counter = 0
+        func step() -> UndoStep { UndoStep(name: "Edit", undo: { true }, redo: { true }) }
+        for _ in 0..<10 {
+            let note = UndoHistoryID.note(UUID())
+            for _ in 0..<5 { route.perform(in: note) { counter += 1; return step() } }
+        }
+        XCTAssertLessThanOrEqual(route.totalStepCount, 25)
+        XCTAssertLessThanOrEqual(route.retainedHistories.count, 4)
+
+        let active = UndoHistoryID.tasks
+        for _ in 0..<10 { route.perform(in: active) { step() } }
+        XCTAssertEqual(route.undoCount(in: active), 10, "the page in use keeps its whole sequence")
+        XCTAssertEqual(route.retainedHistories.last, active)
+        XCTAssertLessThanOrEqual(route.totalStepCount, 25)
+        for _ in 0..<10 { XCTAssertTrue(route.undo(in: active)) }
+        XCTAssertEqual(route.undoCount(in: active), 0)
+    }
 }
