@@ -382,6 +382,10 @@ final class NoteStore: ObservableObject {
             return false
         }
         guard save() else { return false }
+#if os(macOS)
+        // Reconcile the returning attachments' files in full on the reload.
+        reconciledAttachmentSignature = nil
+#endif
         do {
             try reloadModels()
         } catch {
@@ -734,6 +738,10 @@ final class NoteStore: ObservableObject {
         guard save() else { return false }
         attachmentFailures[attachment.id] = nil
         attachmentRetryVersions[attachment.id] = nil
+        // What is shown changed without a reload; the next presentation
+        // (a restore, a refresh) must reconcile files again, not match the
+        // signature from before the removal and skip its repair.
+        reconciledAttachmentSignature = nil
         return true
     }
 
@@ -791,6 +799,9 @@ final class NoteStore: ObservableObject {
             return false
         }
         guard save() else { return false }
+        // The reload below reconciles files in full, so a restored
+        // attachment whose file went missing is materialised again.
+        reconciledAttachmentSignature = nil
         do {
             try reloadModels()
         } catch {
@@ -861,7 +872,14 @@ final class NoteStore: ObservableObject {
                 }
             }
             guard stillVisible else {
-                try? await attachmentFileStore.removeMaterializations([metadata])
+                // The request is refused either way. The file goes only when
+                // no stored row still holds this attachment: one removed into
+                // Recently Deleted, or in a deleted note, may have no bytes in
+                // its row (`payload` is optional), so its file can be the
+                // only copy a restore brings back.
+                if !storedRowsReference(metadata) {
+                    try? await attachmentFileStore.removeMaterializations([metadata])
+                }
                 return nil
             }
             if attachmentFailures[metadata.id] != nil { attachmentFailures[metadata.id] = nil }
@@ -869,6 +887,21 @@ final class NoteStore: ObservableObject {
         } catch {
             reportAttachmentFailure(metadata.id, message: error.localizedDescription)
             return nil
+        }
+    }
+
+    /// True when any stored attachment row, shown, removed or in a deleted
+    /// note, has this identity and content. A failed read counts as
+    /// referenced, so a file is never removed on a guess.
+    private func storedRowsReference(_ reference: AttachmentFileReference) -> Bool {
+        let targetID = reference.id
+        let digest = reference.digest.lowercased()
+        do {
+            return try context.fetch(FetchDescriptor<NoteAttachment>(
+                predicate: #Predicate { $0.id == targetID }
+            )).contains { $0.contentDigest.lowercased() == digest }
+        } catch {
+            return true
         }
     }
 
