@@ -74,6 +74,13 @@ extension CanvasStore {
             }) else {
                 throw CanvasRecentlyDeletedError.replicasDisagree(id)
             }
+            // Every replica of each object this restore brings back must hold
+            // the same content: restoring copies the winner over its peers,
+            // which would erase a copy that differs. Checked before anything
+            // is written.
+            guard try restoredContentAgrees(canvasID: id, deletedAt: deletedAt) else {
+                throw CanvasRecentlyDeletedError.replicasDisagree(id)
+            }
             // Read before the loop below clears it on every replica.
             let recordedContent = winner.deletedContentCount
             let timestamp = now()
@@ -104,6 +111,72 @@ extension CanvasStore {
             return false
         }
         return save().succeeded
+    }
+
+    /// True when, for every stroke, image and object the delete at
+    /// `deletedAt` hid, all replicas hold the same content (image bytes are
+    /// read and compared, not their stored digest).
+    private func restoredContentAgrees(canvasID: UUID, deletedAt: Date) throws -> Bool {
+        func agree<Row>(_ groups: [[Row]], restored: (Row) -> Bool, content: (Row) -> [AnyHashable]) -> Bool {
+            groups.allSatisfy { group in
+                guard group.count > 1, group.contains(where: restored) else { return true }
+                let first = content(group[0])
+                return group.dropFirst().allSatisfy { content($0) == first }
+            }
+        }
+        let strokes = Dictionary(grouping: try context.fetchCanvasReplicas(FetchDescriptor<CanvasStrokeItem>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        )), by: \.id).values
+        let strokeWinners = try Set(strokes.map { try Self.winningStrokeReplica(in: $0) }.filter {
+            $0.tombstoned && $0.deletedAt == deletedAt
+        }.map(\.id))
+        guard agree(Array(strokes), restored: { strokeWinners.contains($0.id) }, content: Self.strokeContent) else {
+            return false
+        }
+        let images = Dictionary(grouping: try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        )), by: \.id).values
+        let imageWinners = try Set(images.map { try Self.winningImageReplica(in: $0) }.filter {
+            $0.tombstoned && $0.deletedAt == deletedAt
+        }.map(\.id))
+        guard agree(Array(images), restored: { imageWinners.contains($0.id) }, content: Self.imageContent) else {
+            return false
+        }
+        #if os(macOS)
+        let objects = Dictionary(grouping: try storedSemanticReplicas(canvasID: canvasID), by: \.id).values
+        let objectWinners = Set(objects.compactMap { Self.winningSemanticReplica($0) }.filter {
+            $0.tombstoned && $0.deletedAt == deletedAt
+        }.map(\.id))
+        guard agree(Array(objects), restored: { objectWinners.contains($0.id) }, content: Self.semanticContent) else {
+            return false
+        }
+        #endif
+        return true
+    }
+
+    /// What a stroke replica holds, apart from versioning and deletion.
+    private static func strokeContent(_ row: CanvasStrokeItem) -> [AnyHashable] {
+        [row.payloadVersion, row.payload, row.boardGeneration]
+    }
+
+    /// What an image replica holds. The bytes themselves are read, so a
+    /// stored size or digest that no longer matches them can't hide a
+    /// difference.
+    private static func imageContent(_ row: CanvasImageItem) -> [AnyHashable] {
+        [row.materialisedPayload, row.contentType, row.pixelWidth, row.pixelHeight, row.centerX, row.centerY,
+         row.width, row.height, row.zIndex, row.boardGeneration]
+    }
+
+    private static func semanticContent(_ row: CanvasSemanticObjectItem) -> [AnyHashable] {
+        [row.kind, row.payloadVersion, row.payload, row.centerX, row.centerY, row.width, row.height,
+         row.rotation, row.zIndex, row.boardGeneration]
+    }
+
+    /// Content plus versioning and deletion: two replicas a purge may remove
+    /// together are identical in all of it.
+    private static func versioned(_ content: [AnyHashable], _ version: Int64, _ tombstoned: Bool,
+                                  _ createdAt: Date, _ updatedAt: Date, _ deletedAt: Date?) -> [AnyHashable] {
+        content + [version, tombstoned, createdAt, updatedAt, deletedAt]
     }
 
     /// Returns how many objects it brought back.
@@ -242,7 +315,7 @@ extension CanvasStore {
 
     /// Every content row of the canvas is deleted, and the replicas of each
     /// object are identical: same deletion, same version and the same
-    /// content. Two copies that agree on version and deletion time but hold
+    /// content, image bytes included. Two copies that agree on version and deletion time but hold
     /// different strokes, image bytes or object payloads are a conflict no
     /// one has seen yet, so the whole canvas waits.
     private func contentIsSafeToPurge(canvasID: UUID) throws -> Bool {
@@ -250,6 +323,9 @@ extension CanvasStore {
                         snapshot: (Row) -> [AnyHashable]) -> Bool {
             guard rows.allSatisfy(tombstoned) else { return false }
             return Dictionary(grouping: rows, by: id).values.allSatisfy { group in
+                // A lone replica has nothing to disagree with (and its image
+                // bytes need not be read).
+                guard group.count > 1 else { return true }
                 let first = snapshot(group[0])
                 return group.dropFirst().allSatisfy { snapshot($0) == first }
             }
@@ -258,30 +334,27 @@ extension CanvasStore {
             predicate: #Predicate { $0.canvasID == canvasID }
         ))
         guard agree(strokes, id: \.id, tombstoned: \.tombstoned, snapshot: {
-            [$0.payloadVersion, $0.payload, $0.boardGeneration, $0.mutationVersion, $0.tombstoned,
-             $0.createdAt, $0.updatedAt, $0.deletedAt]
+            Self.versioned(Self.strokeContent($0), $0.mutationVersion, $0.tombstoned, $0.createdAt, $0.updatedAt,
+                           $0.deletedAt)
         }) else {
             return false
         }
         let images = try context.fetchCanvasReplicas(FetchDescriptor<CanvasImageItem>(
             predicate: #Predicate { $0.canvasID == canvasID }
         ))
-        // The bytes are compared through their scalar digest and size; only
-        // a legacy row without them is read to compute them.
+        // The bytes are read and compared: a stored size or digest can be
+        // stale, and trusting it could purge two different images.
         guard agree(images, id: \.id, tombstoned: \.tombstoned, snapshot: {
-            let payload = $0.payloadMetadata
-            return [payload.byteCount, payload.digest, $0.contentType, $0.pixelWidth, $0.pixelHeight,
-                    $0.centerX, $0.centerY, $0.width, $0.height, $0.zIndex, $0.boardGeneration,
-                    $0.mutationVersion, $0.tombstoned, $0.createdAt, $0.updatedAt, $0.deletedAt]
+            Self.versioned(Self.imageContent($0), $0.mutationVersion, $0.tombstoned, $0.createdAt, $0.updatedAt,
+                           $0.deletedAt)
         }) else {
             return false
         }
         #if os(macOS)
         let objects = try storedSemanticReplicas(canvasID: canvasID)
         guard agree(objects, id: \.id, tombstoned: \.tombstoned, snapshot: {
-            [$0.kind, $0.payloadVersion, $0.payload, $0.centerX, $0.centerY, $0.width, $0.height,
-             $0.rotation, $0.zIndex, $0.boardGeneration, $0.mutationVersion, $0.tombstoned,
-             $0.createdAt, $0.updatedAt, $0.deletedAt]
+            Self.versioned(Self.semanticContent($0), $0.mutationVersion, $0.tombstoned, $0.createdAt, $0.updatedAt,
+                           $0.deletedAt)
         }) else {
             return false
         }
