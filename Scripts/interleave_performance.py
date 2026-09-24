@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record five paired reference/candidate preview runs in alternating order.
+"""Record six paired reference/candidate preview runs in alternating order.
 
 Run this on one macOS runner. The preview owns and removes each unique sandbox;
 the machine-wide lock covers every individual measurement. Exit status from
@@ -26,11 +26,11 @@ def main():
     parser.add_argument("reference", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("output_prefix", type=Path)
-    parser.add_argument("--pairs", type=int, default=5)
+    parser.add_argument("--pairs", type=int, default=6)
     parser.add_argument("--window", type=int, default=10)
     args = parser.parse_args()
-    if args.pairs < 5 or not 0 < args.window <= 12:
-        parser.error("At least five pairs and a window in (0, 12] are required")
+    if args.pairs < 6 or args.pairs % 2 or not 0 < args.window <= 12:
+        parser.error("An even number of at least six pairs and a window in (0, 12] are required")
 
     specs = {}
     for side, tree in (("reference", args.reference), ("candidate", args.candidate)):
@@ -42,7 +42,7 @@ def main():
     accumulated = {}
     args.output_prefix.parent.mkdir(parents=True, exist_ok=True)
     for pair in range(1, args.pairs + 1):
-        # AB, BA, AB... balances warm-up and runner drift.
+        # Equal numbers of AB and BA pairs balance warm-up and runner drift.
         order = ("reference", "candidate") if pair % 2 else ("candidate", "reference")
         for side in order:
             script, identity = specs[side]

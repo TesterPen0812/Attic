@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Fail only when repeated same-run measurements clearly exceed the reference.
+"""Find completely separated same-run performance series.
 
-The comparison uses measured spread rather than an invented memory/CPU target.
 Both JSON files must be recorded on the same machine and OS with the same seed.
+A confirmation is actionable only when the same primary measure separates again.
 """
 
 import argparse
@@ -45,26 +45,21 @@ def timing_series(document, name):
         samples = [item["milliseconds"] for item in run["timings"] if item["name"] == name]
         if not samples:
             raise ValueError(f"Missing {name} timing in run {run['run']}")
-        # The initial reveal from hidden is slower than a later in-panel
-        # order-front. Keep it visible in the primary comparison.
-        result.append(max(samples) if name == "PanelRevealToOrderedFront"
+        # The first reveal starts with a hidden panel. Later order-front
+        # events occur while it is already visible and are separate work.
+        result.append(samples[0] if name == "PanelRevealToOrderedFront"
                       else statistics.median(samples))
     return result
 
 
 def compare(title, old, new):
-    old_spread = max(old) - min(old)
-    # Every candidate run must sit beyond the old range plus one more
-    # reference spread. A noisy candidate cannot mask a consistently higher
-    # floor, while an isolated slow run remains a review item.
-    # A flat reference cannot estimate variance, so its observation is
-    # reported without gating instead of treating any nonzero delta as proof.
-    clear = old_spread > 0 and min(new) > max(old) + old_spread
+    # Complete separation is a measured ordering, not a CPU or memory budget.
+    # Repeating the same measure on a fresh interleaved sample checks noise.
+    clear = min(new) > max(old)
     print(f"{title}: reference median {statistics.median(old):.4g} "
           f"[{min(old):.4g}, {max(old):.4g}], candidate median "
           f"{statistics.median(new):.4g} [{min(new):.4g}, {max(new):.4g}]"
-          + (" CLEAR REGRESSION" if clear else
-             " (flat reference; report only)" if old_spread == 0 else ""))
+          + (" COMPLETE SEPARATION" if clear else ""))
     return clear
 
 
@@ -72,6 +67,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("reference", type=Path)
     parser.add_argument("candidate", type=Path)
+    parser.add_argument("--regressions-json", type=Path,
+                        help="write the primary measures with complete separation")
+    parser.add_argument("--require-common-with", type=Path,
+                        help="only fail when a primary measure also separated in this earlier report")
     args = parser.parse_args()
     base = json.loads(args.reference.read_text())
     current = json.loads(args.candidate.read_text())
@@ -79,8 +78,8 @@ def main():
                 "done_history", "window_s"):
         if base[key] != current[key]:
             parser.error(f"Incomparable {key}: {base[key]!r} versus {current[key]!r}")
-    if len(base["runs"]) < 5 or len(current["runs"]) < 5:
-        parser.error("At least five runs are required on both sides")
+    if len(base["runs"]) < 6 or len(current["runs"]) < 6:
+        parser.error("At least six runs are required on both sides")
     failures = []
     for phase in PHASES:
         for key, title in MEASURES:
@@ -91,6 +90,16 @@ def main():
     for name in TIMINGS:
         if compare(f"{name} ms", timing_series(base, name), timing_series(current, name)) and name in PRIMARY_TIMINGS:
             failures.append(name)
+    if args.regressions_json:
+        args.regressions_json.write_text(json.dumps(failures, indent=2) + "\n")
+    if args.require_common_with:
+        earlier = json.loads(args.require_common_with.read_text())
+        repeated = sorted(set(failures) & set(earlier))
+        if repeated:
+            print("::warning::Confirmed performance separation in " + ", ".join(repeated))
+            raise SystemExit("Confirmed clear regressions: " + ", ".join(repeated))
+        print("No primary measure repeated its separation in the confirmation run")
+        return
     if failures:
         raise SystemExit("Clear regressions: " + ", ".join(failures))
 
