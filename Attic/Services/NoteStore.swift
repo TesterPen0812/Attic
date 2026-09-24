@@ -83,6 +83,41 @@ private enum NoteReplicaMutationError: LocalizedError {
 }
 
 #if os(macOS)
+/// Every stored field of an attachment row, bytes included.
+private struct NoteAttachmentReplicaSnapshot: Equatable {
+    let id: UUID
+    let noteID: UUID
+    let originalFilename: String
+    let contentTypeIdentifier: String
+    let byteCount: Int64
+    let sortIndex: Int64
+    let inlineOffset: Int?
+    let displayWidth: Double?
+    let displayHeight: Double?
+    let contentDigest: String
+    let createdAt: Date
+    let updatedAt: Date
+    let deletedAt: Date?
+    let payload: Data?
+
+    init(_ row: NoteAttachment) {
+        id = row.id
+        noteID = row.noteID
+        originalFilename = row.originalFilename
+        contentTypeIdentifier = row.contentTypeIdentifier
+        byteCount = row.byteCount
+        sortIndex = row.sortIndex
+        inlineOffset = row.inlineOffset
+        displayWidth = row.displayWidth
+        displayHeight = row.displayHeight
+        contentDigest = row.contentDigest
+        createdAt = row.createdAt
+        updatedAt = row.updatedAt
+        deletedAt = row.deletedAt
+        payload = row.payload
+    }
+}
+
 private struct NotePresentationSnapshot {
     let notes: [NoteItem]
     let attachments: [NoteAttachment]
@@ -396,7 +431,9 @@ final class NoteStore: ObservableObject {
 
     /// Removes for good the notes deleted before `cutoff`, with their
     /// attachment rows and private files. A note is purged only when every
-    /// replica agrees; a divergent copy keeps it. Returns the purged ids.
+    /// replica agrees and its attachments are exactly what the delete hid
+    /// (none added or changed after it, replicas identical); anything else
+    /// keeps it. Returns the purged ids.
     @discardableResult
     func purgeDeleted(before cutoff: Date) -> Set<UUID> {
         var purgedIDs = Set<UUID>()
@@ -427,6 +464,21 @@ final class NoteStore: ObservableObject {
                     }
                 }
                 guard !shared else { continue }
+                // The attachments must be exactly what the delete hid: every
+                // row already there when the note was deleted (nothing added
+                // or changed since, such as a late replica from another
+                // device), and the replicas of each attachment identical,
+                // bytes included. Anything else keeps the note for now.
+                guard let deletedAt = first.deletedAt,
+                      attachments.allSatisfy({ row in
+                          row.createdAt <= deletedAt && row.updatedAt <= deletedAt
+                              && (row.deletedAt.map { $0 <= deletedAt } ?? true)
+                      }),
+                      Dictionary(grouping: attachments, by: \.id).values.allSatisfy({ group in
+                          guard group.count > 1 else { return true }
+                          let snapshot = NoteAttachmentReplicaSnapshot(group[0])
+                          return group.dropFirst().allSatisfy { NoteAttachmentReplicaSnapshot($0) == snapshot }
+                      }) else { continue }
                 references += attachments.map { AttachmentFileReference($0, includePayload: false) }
                 attachments.forEach(context.delete)
 #endif

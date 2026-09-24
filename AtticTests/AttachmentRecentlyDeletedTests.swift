@@ -107,3 +107,60 @@ final class AttachmentRecentlyDeletedTests: XCTestCase {
         XCTAssertEqual(store.attachments(for: survivor.id).map(\.id), [sharedID])
     }
 }
+
+extension AttachmentRecentlyDeletedTests {
+    /// A note deleted at 1 000, with one attachment added before that.
+    private func deletedNote(_ container: ModelContainer) throws -> (NoteItem, NoteAttachment) {
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "Doomed")
+        note.updatedAt = Date(timeIntervalSince1970: 400)
+        note.deletedAt = Date(timeIntervalSince1970: 1_000)
+        let attachment = NoteAttachment(noteID: note.id, originalFilename: "a.txt", byteCount: 1, sortIndex: 0,
+                                        contentDigest: String(repeating: "c", count: 64),
+                                        createdAt: Date(timeIntervalSince1970: 500), payload: Data([1]))
+        seed.insert(note)
+        seed.insert(attachment)
+        try seed.save()
+        return (note, attachment)
+    }
+
+    func testNotePurgeWaitsForAnAttachmentThatArrivedAfterTheDelete() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let (note, _) = try deletedNote(container)
+        let context = ModelContext(container)
+        // A late row from another device, added after the note was deleted.
+        let late = NoteAttachment(noteID: note.id, originalFilename: "late.txt", byteCount: 1, sortIndex: 1,
+                                  contentDigest: String(repeating: "d", count: 64),
+                                  createdAt: Date(timeIntervalSince1970: 2_000), payload: Data([2]))
+        context.insert(late)
+        try context.save()
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 1)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 2)
+
+        // Without the late row, the delete is whole and the purge goes ahead.
+        context.delete(late)
+        try context.save()
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [note.id])
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 0)
+    }
+
+    func testNotePurgeWaitsWhileReplicasOfOneAttachmentDiffer() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let (note, attachment) = try deletedNote(container)
+        let context = ModelContext(container)
+        // Same identity, same note, same claimed digest, different bytes.
+        context.insert(NoteAttachment(id: attachment.id, noteID: note.id, originalFilename: "a.txt", byteCount: 1,
+                                      sortIndex: 0, contentDigest: attachment.contentDigest,
+                                      createdAt: attachment.createdAt, payload: Data([9])))
+        try context.save()
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertEqual(Set(rows.compactMap(\.payload)), [Data([1]), Data([9])], "both copies are kept")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 1)
+    }
+}
