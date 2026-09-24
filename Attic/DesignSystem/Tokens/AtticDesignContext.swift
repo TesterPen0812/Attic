@@ -44,9 +44,20 @@ struct AtticDesignContext: Hashable, Sendable {
             palette: palette,
             surface: effectiveSurface,
             tint: tint,
-            tintLength: PanelTintLength.clamped(tintLength),
+            tintLength: Self.quantisedTintLength(tintLength),
             increaseContrast: increaseContrast
         )
+    }
+
+    /// The Tint length's useful precision: the setting reads in whole
+    /// percent, and a 1 % step is below what the eye can tell apart on the
+    /// panel. Quantising the cache key means dragging the slider resolves
+    /// at most 71 distinct keys (30...100 %), not one per pixel of travel.
+    static let tintLengthStep = 0.01
+
+    static func quantisedTintLength(_ value: Double) -> Double {
+        let clamped = PanelTintLength.clamped(value)
+        return ((clamped / tintLengthStep).rounded() * tintLengthStep * 1000).rounded() / 1000
     }
 
     struct ColourKey: Hashable, Sendable {

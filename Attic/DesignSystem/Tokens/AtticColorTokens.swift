@@ -460,23 +460,63 @@ struct AtticColorTokens: Equatable, Sendable {
 }
 
 /// Resolved tokens are pure functions of their key; resolve each once.
+///
+/// Bounded: a least-recently-used cache of `capacity` keys. Live UI touches
+/// a handful (the current look, plus the palette tiles' swatches); the
+/// appearance check walks the combinations one after another, so a small
+/// window still hits on every render of the same combination. Tint lengths
+/// are quantised in the key (`AtticDesignContext.quantisedTintLength`), so
+/// a slider drag cannot grow it past the bound either.
 final class AtticColorTokenCache: @unchecked Sendable {
     static let shared = AtticColorTokenCache()
+    /// Enough for the live look, the 14 palette swatches and a slider drag's
+    /// recent steps; small enough to stay a few hundred kilobytes.
+    static let defaultCapacity = 48
+
+    let capacity: Int
     private var cache: [AtticDesignContext.ColourKey: AtticColorTokens] = [:]
+    /// Keys from least to most recently used.
+    private var recency: [AtticDesignContext.ColourKey] = []
     private let lock = NSLock()
+
+    init(capacity: Int = AtticColorTokenCache.defaultCapacity) {
+        self.capacity = max(capacity, 1)
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return cache.count
+    }
 
     func tokens(for key: AtticDesignContext.ColourKey) -> AtticColorTokens {
         lock.lock()
         if let hit = cache[key] {
+            touch(key)
             lock.unlock()
             return hit
         }
         lock.unlock()
         let built = AtticColorTokens.build(key)
         lock.lock()
-        cache[key] = built
-        lock.unlock()
+        defer { lock.unlock() }
+        if cache[key] == nil {
+            cache[key] = built
+            recency.append(key)
+            while cache.count > capacity, !recency.isEmpty {
+                cache[recency.removeFirst()] = nil
+            }
+        } else {
+            touch(key)
+        }
         return built
+    }
+
+    /// Moves `key` to the most recent end (the lock is held).
+    private func touch(_ key: AtticDesignContext.ColourKey) {
+        guard recency.last != key, let index = recency.lastIndex(of: key) else { return }
+        recency.remove(at: index)
+        recency.append(key)
     }
 }
 
