@@ -142,14 +142,23 @@ private struct TaskReplicaSnapshot: Equatable {
     let completedAt: Date?
     let manualOrder: Int64?
     let parentID: UUID?
-    let imageReferencesData: Data?
+    private(set) var imageReferencesData: Data?
     let deletedAt: Date?
     let deletionRootID: UUID?
     let deletionMembersRaw: String
-    let removedAttachmentsData: Data?
+    private(set) var removedAttachmentsData: Data?
     let doneLoggedAt: Date?
     let tagsRaw: String
     let dueDayRaw: String?
+
+    /// The same snapshot without the attachment lists, which each replica
+    /// keeps as its own (they are never copied between replicas).
+    var ignoringAttachmentLists: TaskReplicaSnapshot {
+        var copy = self
+        copy.imageReferencesData = nil
+        copy.removedAttachmentsData = nil
+        return copy
+    }
 
     init(_ task: TaskItem) {
         id = task.id
@@ -700,9 +709,11 @@ final class TaskStore: ObservableObject {
         let statusChanged = destinationStatus != task.status
         let tagsChanged = destinationTagsRaw != task.tagsRaw
         let dueChanged = destinationDueDayRaw != task.dueDayRaw
-        let visibleSnapshot = TaskReplicaSnapshot(task)
+        // Attachment lists are not the edit's concern and are never copied
+        // between replicas, so copies that differ only there need no repair.
+        let visibleSnapshot = TaskReplicaSnapshot(task).ignoringAttachmentLists
         let replicasNeedRepair = replicas.contains {
-            TaskReplicaSnapshot($0) != visibleSnapshot
+            TaskReplicaSnapshot($0).ignoringAttachmentLists != visibleSnapshot
         }
         guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged
             || replicasNeedRepair else {
@@ -734,13 +745,18 @@ final class TaskStore: ObservableObject {
             destinationCompletedAt = task.completedAt
         }
 
+        // Each replica keeps its own attachment lists (shown and removed):
+        // writing the visible copy's lists over a duplicate would drop a
+        // reference only the duplicate holds, and the launch sweep would
+        // then delete its file. A duplicate whose lists differ keeps its
+        // time, so the shown copy stays the one shown.
+        let visibleLists = (task.imageReferencesData, task.removedAttachmentsData)
         for replica in replicas {
             replica.title = destinationTitle
             replica.priority = destinationPriority
             replica.status = destinationStatus
             replica.createdAt = task.createdAt
             replica.parentID = task.parentID
-            replica.imageReferencesData = task.imageReferencesData
             replica.manualOrder = destinationManualOrder
             replica.completedAt = destinationCompletedAt
             replica.tagsRaw = destinationTagsRaw
@@ -750,9 +766,11 @@ final class TaskStore: ObservableObject {
             replica.deletedAt = task.deletedAt
             replica.deletionRootID = task.deletionRootID
             replica.deletionMembersRaw = task.deletionMembersRaw
-            replica.removedAttachmentsData = task.removedAttachmentsData
             replica.doneLoggedAt = task.doneLoggedAt
-            replica.updatedAt = timestamp
+            if replica === task
+                || (replica.imageReferencesData, replica.removedAttachmentsData) == visibleLists {
+                replica.updatedAt = timestamp
+            }
         }
         return save(owner: owner)
     }
@@ -916,10 +934,16 @@ final class TaskStore: ObservableObject {
                 report("Couldn’t attach files. The task was deleted while they were copied.", owner: errorOwner)
                 return nil
             }
-            let data = try JSONEncoder().encode(current.attachments + imported)
+            // Each replica gains the new files on top of its own list, never
+            // the visible copy's, so a reference only a duplicate holds is
+            // kept (see `removeAttachment`).
+            let timestamp = now()
+            let shownCopy = TaskReplicaSnapshot(current)
             for replica in try storedTasks(matching: ownerID) {
-                replica.imageReferencesData = data
-                replica.updatedAt = now()
+                let stamp = replica === current || TaskReplicaSnapshot(replica) == shownCopy
+                let shown = try Self.attachmentLists(of: replica).shown
+                replica.imageReferencesData = try JSONEncoder().encode(shown + imported)
+                if stamp { replica.updatedAt = timestamp }
             }
             guard save(owner: errorOwner) else {
                 await taskImageFiles.remove(imported); return nil

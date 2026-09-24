@@ -654,6 +654,58 @@ final class TaskAttachmentDropTests: XCTestCase {
         }
     }
 
+    func testRenamingAndAttachingKeepWhatOnlyADuplicateHoldsThroughTheLaunchSweep() async throws {
+        let (store, container, files) = try makeStore()
+        let day: TimeInterval = 24 * 60 * 60
+        let trip = try XCTUnwrap(store.create(title: "Trip"))
+        _ = await store.attachStagedFiles(to: trip.id) { [self] in TaskAttachmentStaging(urls: [try pngFile()]) }
+        let bound = try XCTUnwrap(store.tasks.first { $0.id == trip.id }?.attachments.first)
+
+        // A physical duplicate that holds an attachment only it knows about.
+        let replicaImport = try await files.importAttachments([try textFile(named: "Replica.txt")], existing: [])
+        let replicaOnly = try XCTUnwrap(replicaImport.first)
+        let other = ModelContext(container)
+        let duplicate = TaskItem(title: "Trip", createdAt: trip.createdAt)
+        duplicate.id = trip.id
+        duplicate.updatedAt = trip.updatedAt.addingTimeInterval(-60)
+        duplicate.imageReferencesData = try JSONEncoder().encode([replicaOnly])
+        other.insert(duplicate)
+        try other.save()
+        store.refresh()
+        XCTAssertEqual(store.tasks.first { $0.id == trip.id }?.attachments, [bound], "the visible replica differs")
+
+        let visible = try XCTUnwrap(store.tasks.first { $0.id == trip.id })
+        XCTAssertTrue(store.rename(visible, to: "Trip to Rome"))
+        let attached = await store.attachStagedFiles(to: trip.id) { [self] in
+            TaskAttachmentStaging(urls: [try textFile(named: "Tickets.txt")])
+        }
+        XCTAssertEqual(attached?.count, 1)
+        store.refresh()
+        let shown = try XCTUnwrap(store.tasks.first { $0.id == trip.id })
+        XCTAssertEqual(shown.title, "Trip to Rome")
+        XCTAssertEqual(shown.attachments.count, 2)
+        XCTAssertEqual(shown.attachments.first, bound, "the shown copy is still the one shown")
+        let tickets = try XCTUnwrap(shown.attachments.last)
+
+        let tripID = trip.id
+        let rows = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == tripID }))
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.title == "Trip to Rome" }, "the rename reaches every replica")
+        XCTAssertTrue(rows.contains { $0.attachments == [replicaOnly, tickets] },
+                      "the duplicate keeps its own reference and gains the new file")
+
+        // The next launch's sweep, with every copy old enough to judge.
+        for reference in [bound, replicaOnly, tickets] {
+            try backdate(privateDirectory(reference), by: 3 * day)
+        }
+        let removed = await store.sweepUnreferencedAttachmentStorage(dropStagingRoot: root.appendingPathComponent("drops"))
+        XCTAssertEqual(removed, 0, "no file is lost")
+        for reference in [bound, replicaOnly, tickets] {
+            let kept = try await files.verifiedURL(for: reference)
+            XCTAssertNotNil(kept, "\(reference.filename) is still referenced by a replica")
+        }
+    }
+
     func testLaunchSweepDoesNothingWhenAReplicaIsUnreadableOrAnImportIsRunning() async throws {
         let (store, container, files) = try makeStore()
         let orphans = try await files.importAttachments([try textFile(named: "Draft.txt")], existing: [])
