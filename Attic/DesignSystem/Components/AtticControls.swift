@@ -151,6 +151,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticCapture) private var capture
     @FocusState private var focusedPage: Page?
     @State private var hoveredPage: Page?
     @State private var probeID = UUID()
@@ -207,8 +208,9 @@ struct AtticPageSwitch<Page: Hashable>: View {
         let selected = items.firstIndex { $0.page == selection } ?? 0
         let chipHeight = AtticControlSize.chipHeight
         ZStack(alignment: .topLeading) {
-            // FocusState is read here, in the body, not in the ForEach below.
-            decorations(geometry: geometry, selected: selected, focused: focusedPage, hovered: hoveredPage)
+            // FocusState is read here, in the body (and only live: captures
+            // have no focus system), not in the ForEach below.
+            decorations(geometry: geometry, selected: selected, focused: capture == nil ? focusedPage : nil, hovered: hoveredPage)
                 .transaction { $0.animation = nil }
             RoundedRectangle(cornerRadius: AtticRadius.nestedChip, style: .continuous)
                 .fill(design.tokens.chipSelected.color)
@@ -224,8 +226,13 @@ struct AtticPageSwitch<Page: Hashable>: View {
                     .transformEnvironment(\.atticProbesDisabled) { if index != selected { $0 = true } }
                     .offset(x: geometry.labelX(of: index))
             }
-            hitLayer(geometry: geometry, selected: selected)
-                .transaction { $0.animation = nil }
+            if capture == nil {
+                hitLayer(geometry: geometry, selected: selected)
+                    .transaction { $0.animation = nil }
+            } else {
+                // Captures draw the chips' frames without the live buttons.
+                captureProbes(geometry: geometry, selected: selected)
+            }
         }
         .frame(width: geometry.innerWidth, height: chipHeight, alignment: .topLeading)
         .padding(AtticControlSize.capsuleInset)
@@ -259,6 +266,15 @@ struct AtticPageSwitch<Page: Hashable>: View {
                     .atticFocusRing(focused, cornerRadius: AtticRadius.nestedChip)
                     .frame(width: geometry.width(of: index, selected: selected), height: AtticControlSize.chipHeight)
                     .offset(x: geometry.x(of: index, selected: selected))
+            }
+        }
+    }
+
+    /// In captures: the chips' frames, reported to the check.
+    private func captureProbes(geometry: Geometry, selected: Int) -> some View {
+        HStack(spacing: geometry.spacing) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                AtticPageChipFrame(isSelected: index == selected, size: CGSize(width: geometry.width(of: index, selected: selected), height: AtticControlSize.chipHeight))
             }
         }
     }
@@ -302,6 +318,30 @@ private struct AtticPageChipFace<Page: Hashable>: View {
     }
 }
 
+/// A chip's frame as the check sees it (size and nested radius).
+private struct AtticPageChipFrame: View {
+    let isSelected: Bool
+    let size: CGSize
+    @State private var probeID = UUID()
+
+    var body: some View {
+        Color.clear
+            .frame(width: size.width, height: size.height)
+            .atticPageChipProbe(id: probeID, isSelected: isSelected)
+    }
+}
+
+private extension View {
+    func atticPageChipProbe(id: UUID, isSelected: Bool) -> some View {
+        atticControlProbe(
+            "Page chip", id: id,
+            expectedSize: isSelected ? nil : CGSize(width: AtticControlSize.chipIconWidth, height: AtticControlSize.chipHeight),
+            radius: AtticRadius.nestedChip,
+            expectedRadius: AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.capsuleHeight), gap: AtticControlSize.capsuleInset) ?? 0
+        )
+    }
+}
+
 private struct AtticPageChipButton<Page: Hashable>: View {
     let item: AtticPageSwitch<Page>.Item
     let isSelected: Bool
@@ -329,12 +369,7 @@ private struct AtticPageChipButton<Page: Hashable>: View {
         .help("\(item.title) (\(item.shortcut))")
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        .atticControlProbe(
-            "Page chip", id: probeID,
-            expectedSize: isSelected ? nil : CGSize(width: AtticControlSize.chipIconWidth, height: AtticControlSize.chipHeight),
-            radius: AtticRadius.nestedChip,
-            expectedRadius: AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.capsuleHeight), gap: AtticControlSize.capsuleInset) ?? 0
-        )
+        .atticPageChipProbe(id: probeID, isSelected: isSelected)
     }
 }
 

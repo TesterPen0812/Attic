@@ -70,19 +70,16 @@ enum AtticTaskKeys {
 
 private extension View {
     /// Keyboard focus for a task row or card: focusable, the system focus
-    /// effect replaced by Attic's 2 pt ring (drawn by the caller), and the
-    /// task keys.
-    func atticTaskFocus(_ focused: FocusState<Bool>.Binding, enabled: Bool, actions: AtticTaskActions, listCommands: Bool) -> some View {
-        focusable(enabled)
-            .focused(focused)
-            .focusEffectDisabled()
-            .onKeyPress(phases: .down) { press in
-                guard enabled, let command = AtticTaskKeys.command(
-                    key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
-                ) else { return .ignored }
-                AtticTaskKeys.perform(command, actions)
-                return .handled
-            }
+    /// effect replaced by Attic's 2 pt ring (drawn by the caller from
+    /// `isFocused`), and the task keys. Captures (`ImageRenderer`) have no
+    /// focus system, so they get none of it.
+    @ViewBuilder
+    func atticTaskFocus(_ isFocused: Binding<Bool>, enabled: Bool, actions: AtticTaskActions, listCommands: Bool, live: Bool) -> some View {
+        if live {
+            modifier(AtticTaskFocusModifier(isFocused: isFocused, enabled: enabled, actions: actions, listCommands: listCommands))
+        } else {
+            self
+        }
     }
 
     /// The task's VoiceOver actions.
@@ -92,6 +89,33 @@ private extension View {
                 Button(action.name, action: action.handler)
             }
         }
+    }
+}
+
+/// The live focus machinery for a task row or card. It owns the
+/// `FocusState` and mirrors it into the component's own state, so the
+/// component never touches `FocusState` (captures have no focus system).
+private struct AtticTaskFocusModifier: ViewModifier {
+    @Binding var isFocused: Bool
+    let enabled: Bool
+    let actions: AtticTaskActions
+    let listCommands: Bool
+
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focusable(enabled)
+            .focused($focused)
+            .focusEffectDisabled()
+            .onChange(of: focused) { _, now in isFocused = now }
+            .onKeyPress(phases: .down) { press in
+                guard enabled, let command = AtticTaskKeys.command(
+                    key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
+                ) else { return .ignored }
+                AtticTaskKeys.perform(command, actions)
+                return .handled
+            }
     }
 }
 
@@ -435,7 +459,8 @@ struct AtticTaskRow: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isEnabled) private var isEnabled
-    @FocusState private var focused: Bool
+    @Environment(\.atticCapture) private var capture
+    @State private var focused = false
     @State private var hovered = false
     @State private var probeID = UUID()
 
@@ -443,6 +468,7 @@ struct AtticTaskRow: View {
         let tokens = design.tokens
         let m = AtticTaskRowMetrics.self
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: false).state
+        // Captures have no focus system: FocusState is read only when live.
         let showsFocusRing = forced == .focused || (forced == nil && isEnabled && focused)
         let twoLine = model.hasDetails
         let highlightHeight = twoLine ? AtticLayout.detailRowHighlightHeight : AtticLayout.rowHighlightHeight
@@ -512,7 +538,7 @@ struct AtticTaskRow: View {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .onTapGesture { if isEnabled { actions.openPage() } }
-        .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true)
+        .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true, live: capture == nil)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(model.accessibilityDescription)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -804,7 +830,8 @@ struct AtticTaskCard: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isEnabled) private var isEnabled
-    @FocusState private var focused: Bool
+    @Environment(\.atticCapture) private var capture
+    @State private var focused = false
     @State private var hovered = false
     @State private var probeID = UUID()
 
@@ -877,7 +904,7 @@ struct AtticTaskCard: View {
         .atticFocusRing(showsFocusRing, cornerRadius: AtticRadius.tile)
         .contentShape(shape)
         .onHover { hovered = $0 }
-        .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: false)
+        .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: false, live: capture == nil)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityActions {
