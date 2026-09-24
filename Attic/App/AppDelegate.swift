@@ -2,6 +2,11 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        // Preview builds only: `--attic-gallery` opens the design-system
+        // gallery instead of starting the panel (Release has no gallery).
+        if AtticGalleryLaunch.startIfRequested() { return }
+        #endif
         #if !ATTIC_LOCAL_ONLY
         NSApplication.shared.registerForRemoteNotifications()
         #endif
