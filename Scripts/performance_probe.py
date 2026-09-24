@@ -204,15 +204,17 @@ def measure(args, app, executable, bundle, helper):
             phases = []
             try:
                 for phase in ("hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"):
+                    expected_visible = 0 if phase in ("hidden_idle", "after_hide", "hidden_idle_final") else 1
                     if phase != "hidden_idle":
                         marker = wait_for_phase(root, phase)
                         if marker["pid"] != pid:
                             raise RuntimeError("Preview process changed during probe")
-                        expected_visible = 0 if phase in ("after_hide", "hidden_idle_final") else 1
                         if marker.get("panel_visible") != expected_visible:
                             raise RuntimeError(f"Panel visibility mismatch: {marker}")
                     else:
                         marker = first
+                    if marker.get("hover_hidden") != 1 - expected_visible:
+                        raise RuntimeError(f"Hover monitor state mismatch: {marker}")
                     if phase == "tasks_open" and marker.get("section_canvas") != 0:
                         raise RuntimeError(f"Tasks was not selected: {marker}")
                     if phase == "canvas_open" and (marker.get("section_canvas") != 1
@@ -221,7 +223,8 @@ def measure(args, app, executable, bundle, helper):
                     sample = sample_phase(helper, pid, phase, args.window, run_dir)
                     end = wait_for_phase(root, phase + "_end", timeout=30, pid=pid)
                     if end.get("panel_visible") != marker.get("panel_visible") or \
-                       end.get("visibility_changes") != marker.get("visibility_changes"):
+                       end.get("visibility_changes") != marker.get("visibility_changes") or \
+                       end.get("hover_hidden") != marker.get("hover_hidden"):
                         raise RuntimeError(f"Panel visibility changed during {phase}: {marker} -> {end}")
                     sample["end_marker"] = end
                     phases.append(sample)

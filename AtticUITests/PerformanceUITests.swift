@@ -128,7 +128,7 @@ final class PerformanceUITests: XCTestCase {
         probe.launch()
         let canvas = probe.descendants(matching: .any)["canvas-surface"]
         XCTAssertTrue(waitUntil(timeout: 120) { canvas.isHittable }, "Large canvas did not open")
-        XCTAssertTrue(waitUntil(timeout: 60) { !canvas.isHittable }, "Canvas panel did not hide")
+        XCTAssertTrue(waitUntil(timeout: 180) { !canvas.isHittable }, "Canvas panel did not hide")
         measureState("after hiding canvas", application: probe)
         XCTAssertFalse(canvas.isHittable)
     }

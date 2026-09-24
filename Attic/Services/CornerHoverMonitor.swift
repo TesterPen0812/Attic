@@ -77,6 +77,7 @@ final class CornerHoverMonitor {
     private static let eventSampleInterval: TimeInterval = 1.0 / 30
     /// Test seam: how many full pointer samples ran.
     private(set) var sampleCount = 0
+    var isHiddenForPerformanceProbe: Bool { !stateMachine.isVisible }
 
     init(
         settings: AppSettings,
@@ -191,6 +192,19 @@ final class CornerHoverMonitor {
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
         panelController.show(on: screen, corner: settings.corner, makeKey: true)
+    }
+
+    @discardableResult
+    func hideForPerformanceProbe(
+        completion: @escaping (PanelHideCompletion) -> Void
+    ) -> PanelHideRequestResult {
+        panelController.requestHide { [weak self] outcome in
+            if outcome == .hidden {
+                self?.stateMachine.forceHidden(untilHotspotExit: true)
+                self?.refreshSamplingCadence(at: NSEvent.mouseLocation)
+            }
+            completion(outcome)
+        }
     }
 
     func keepVisibleForUITesting(openComposer: Bool = false) {

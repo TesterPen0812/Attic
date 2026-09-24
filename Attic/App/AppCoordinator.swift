@@ -452,6 +452,7 @@ final class AppCoordinator: ObservableObject {
                 func write(_ phase: String) {
                     PerformanceProbe.writePhase(phase, root: performanceRoot, details: [
                         "panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0,
+                        "hover_hidden": hoverMonitor.isHiddenForPerformanceProbe ? 1 : 0,
                         "visibility_changes": panelController.performanceVisibilityChanges,
                         "visible_strokes": canvasSession.strokes.count,
                         "section_canvas": uiState.selectedSection == .canvas ? 1 : 0
@@ -473,15 +474,16 @@ final class AppCoordinator: ObservableObject {
                     later(window + 8) { write("canvas_open_end") }
                 }
                 later(hideAt) {
-                    let result = self.panelController.requestHide { outcome in
+                    let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
                         write(outcome == .hidden ? "after_hide" : "hide_failed")
+                        guard outcome == .hidden else { return }
+                        later(30 + window + 8) {
+                            write("after_hide_end")
+                            later(1) { write("hidden_idle_final") }
+                            later(window + 16) { write("hidden_idle_final_end") }
+                        }
                     }
                     if !result.isAccepted { write("hide_failed") }
-                    later(30 + window + 8) {
-                        write("after_hide_end")
-                        later(1) { write("hidden_idle_final") }
-                        later(window + 16) { write("hidden_idle_final_end") }
-                    }
                 }
                 return
             }
