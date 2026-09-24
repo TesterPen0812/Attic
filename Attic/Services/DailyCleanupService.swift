@@ -4,6 +4,9 @@ import Foundation
 @MainActor
 final class DailyCleanupService {
     private let store: TaskStore
+    /// Removes what has been in Recently Deleted for 30 days. Runs at the
+    /// same event-driven moments as the Done-log move, never on a poll.
+    private let purgeRecentlyDeleted: (@MainActor (_ now: Date, _ calendar: Calendar) -> Void)?
     private let now: () -> Date
     private let calendar: () -> Calendar
     private var timer: Timer?
@@ -13,9 +16,11 @@ final class DailyCleanupService {
     init(
         store: TaskStore,
         now: @escaping () -> Date = Date.init,
-        calendar: @escaping () -> Calendar = { .autoupdatingCurrent }
+        calendar: @escaping () -> Calendar = { .autoupdatingCurrent },
+        purgeRecentlyDeleted: (@MainActor (_ now: Date, _ calendar: Calendar) -> Void)? = nil
     ) {
         self.store = store
+        self.purgeRecentlyDeleted = purgeRecentlyDeleted
         self.now = now
         self.calendar = calendar
     }
@@ -59,11 +64,20 @@ final class DailyCleanupService {
         workspaceTokens.removeAll()
     }
 
+    /// Moves tasks finished before the start of the current local day into
+    /// the Done log (nothing is deleted) and returns how many moved, then
+    /// removes Recently Deleted items older than 30 days. Both steps are
+    /// idempotent, so running at every wake, day change and time-zone change
+    /// can neither skip a day (everything older is caught up at once) nor
+    /// repeat one (already-moved tasks are not candidates).
     @discardableResult
     func performCleanup(at date: Date? = nil) -> Int {
         let timestamp = date ?? now()
-        let startOfToday = calendar().startOfDay(for: timestamp)
-        return store.purgeCompleted(before: startOfToday)
+        let activeCalendar = calendar()
+        let startOfToday = activeCalendar.startOfDay(for: timestamp)
+        let moved = store.moveCompletedToDoneLog(before: startOfToday)
+        purgeRecentlyDeleted?(timestamp, activeCalendar)
+        return moved
     }
 
     private func cleanupAndReschedule() {

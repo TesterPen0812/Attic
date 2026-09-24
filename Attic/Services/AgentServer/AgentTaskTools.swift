@@ -23,10 +23,22 @@ final class AgentTaskTools {
     private let store: TaskStore
 
     private let noteStore: NoteStore?
+    /// The command layer every change goes through, so agent edits are
+    /// undoable and deletes land in Recently Deleted like a person's.
+    private let library: AtticLibrary
+    /// Understands `due` ("tomorrow", "fri", "sep 30", ISO dates).
+    private let parser: TaskTextParser
 
-    init(store: TaskStore, noteStore: NoteStore? = nil) {
+    init(
+        store: TaskStore,
+        noteStore: NoteStore? = nil,
+        library: AtticLibrary? = nil,
+        parser: TaskTextParser = TaskTextParser()
+    ) {
         self.store = store
         self.noteStore = noteStore
+        self.library = library ?? AtticLibrary(tasks: store, notes: noteStore)
+        self.parser = parser
     }
 
     static let taskDefinitions: [[String: Any]] = [
@@ -59,7 +71,7 @@ final class AgentTaskTools {
         [
             "name": "create_task",
             "title": "Create Attic Task",
-            "description": "Create a task directly in Attic. Supply parent_id to create a subtask of an unfinished main task. One level only. Completing all subtasks does not automatically complete the parent. Use backlog for ideas.",
+            "description": "Create a task directly in Attic. Supply parent_id to create a subtask of an unfinished main task. One level only. Completing all subtasks does not automatically complete the parent. Use backlog for ideas. Optional tags, due date and priority. The title is used as given.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -86,6 +98,11 @@ final class AgentTaskTools {
                     "parent_id": [
                         "type": "string",
                         "description": "Optional unfinished main task UUID. Creates an indented subtask."
+                    ],
+                    "tags": tagsSchema,
+                    "due": [
+                        "type": "string",
+                        "description": dueDescription
                     ]
                 ],
                 "required": ["title"],
@@ -95,7 +112,7 @@ final class AgentTaskTools {
         [
             "name": "update_task",
             "title": "Update Attic Task",
-            "description": "Update a main task or subtask. Change title, status, or priority. Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual.",
+            "description": "Update a main task or subtask. Change title, status, priority, tags (replaces the list) or due date (null or an empty string clears it). Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -117,6 +134,11 @@ final class AgentTaskTools {
                     "priority": [
                         "type": "string",
                         "enum": TaskPriority.allCases.map(\.rawValue)
+                    ],
+                    "tags": tagsSchema,
+                    "due": [
+                        "type": ["string", "null"],
+                        "description": dueDescription + " Null or an empty string clears it."
                     ]
                 ],
                 "required": ["id"],
@@ -126,7 +148,7 @@ final class AgentTaskTools {
         [
             "name": "delete_task",
             "title": "Delete Attic Task",
-            "description": "Permanently delete a task AND all its subtasks. Deleting a subtask leaves the parent intact. Prefer update_task with status done for finished work.",
+            "description": "Move a task AND all its subtasks to Recently Deleted, where they can be restored for 30 days (restore_item). Deleting a subtask leaves the parent intact. Prefer update_task with status done for finished work.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": true,
@@ -216,7 +238,7 @@ final class AgentTaskTools {
         [
             "name": "delete_note",
             "title": "Delete Attic Note",
-            "description": "Permanently delete a note directly from Attic.",
+            "description": "Move a note (with its attachments) to Recently Deleted, where it can be restored for 30 days (restore_item).",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": true,
@@ -237,8 +259,153 @@ final class AgentTaskTools {
         ]
     ]
 
+    static let tagsSchema: [String: Any] = [
+        "type": "array",
+        "items": ["type": "string"],
+        "description": "Tags: lowercase letters, numbers and hyphens. A leading # is ignored; other text is normalised (\"Big Idea\" becomes big-idea)."
+    ]
+
+    static let dueDescription = "Due date: an ISO day (2026-09-30) or English such as today, tomorrow, fri, next week, sep 30, 30/9, in 3 days."
+
+    static let itemSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "kind": ["type": "string", "enum": AtticItemKind.allCases.map(\.rawValue)],
+            "id": ["type": "string", "description": "The item's UUID."]
+        ],
+        "required": ["kind", "id"],
+        "additionalProperties": false
+    ]
+
+    static let libraryDefinitions: [[String: Any]] = [
+        [
+            "name": "delete_item",
+            "title": "Delete Attic Item",
+            "description": "Move a task (with its subtasks), note or canvas to Recently Deleted. It stays restorable for 30 days with restore_item. Agents cannot delete anything permanently.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "kind": ["type": "string", "enum": AtticItemKind.allCases.map(\.rawValue)],
+                    "id": ["type": "string", "description": "The item's UUID."]
+                ],
+                "required": ["kind", "id"],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "restore_item",
+            "title": "Restore Attic Item",
+            "description": "Bring an item back from Recently Deleted to where it was, with its subtasks, attachments and links.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "kind": ["type": "string", "enum": AtticItemKind.allCases.map(\.rawValue)],
+                    "id": ["type": "string", "description": "The item's UUID, from list_deleted."]
+                ],
+                "required": ["kind", "id"],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "list_deleted",
+            "title": "List Recently Deleted",
+            "description": "List what is in Recently Deleted, newest first, with when each item will be removed for good.",
+            "annotations": [
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [:] as [String: Any],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "list_tags",
+            "title": "List Attic Tags",
+            "description": "List every tag in use on tasks, notes and canvases, with how many items carry it. Reuse existing spellings.",
+            "annotations": [
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [:] as [String: Any],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "update_tags",
+            "title": "Rename or Merge Attic Tags",
+            "description": "Rename a tag on every item (action rename, from a tag), or merge several tags into one (action merge, from a list). Renaming onto an existing tag merges them.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "action": ["type": "string", "enum": ["rename", "merge"]],
+                    "from": [
+                        "description": "rename: the tag to rename. merge: the tags to merge.",
+                        "oneOf": [
+                            ["type": "string"],
+                            ["type": "array", "items": ["type": "string"]]
+                        ]
+                    ],
+                    "to": ["type": "string", "description": "The resulting tag."]
+                ],
+                "required": ["action", "from", "to"],
+                "additionalProperties": false
+            ]
+        ],
+        [
+            "name": "link",
+            "title": "Link Attic Items",
+            "description": "With target: link item to target (a card in a note, a canvas attached to a task, or a reference), then list item's links. Without target: list item's links and backlinks (what links to it).",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "item": itemSchema,
+                    "target": itemSchema,
+                    "link_kind": [
+                        "type": "string",
+                        "enum": ItemLinkKind.allCases.map(\.rawValue),
+                        "description": "card, attachment or reference. Defaults to reference."
+                    ]
+                ],
+                "required": ["item"],
+                "additionalProperties": false
+            ]
+        ]
+    ]
+
     var definitions: [[String: Any]] {
-        Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : [])
+        Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : []) + Self.libraryDefinitions
     }
 
     func call(name: String, arguments: [String: Any]) throws -> String {
@@ -251,6 +418,12 @@ final class AgentTaskTools {
         case "create_note": try createNote(arguments)
         case "update_note": try updateNote(arguments)
         case "delete_note": try deleteNote(arguments)
+        case "delete_item": try deleteItem(arguments)
+        case "restore_item": try restoreItem(arguments)
+        case "list_deleted": try listDeleted(arguments)
+        case "list_tags": try listTags(arguments)
+        case "update_tags": try updateTags(arguments)
+        case "link": try link(arguments)
         default: throw AgentToolError.unknownTool(name)
         }
     }
@@ -278,7 +451,19 @@ final class AgentTaskTools {
             : try status(from: arguments, allowed: [.todo, .inProgress, .backlog])
         let priority = try priority(from: arguments)
         let parentID = try parentID(from: arguments)
-        guard let task = store.create(title: title, priority: priority, status: status, parentID: parentID) else {
+        let tags = try tags(from: arguments) ?? []
+        let due = try dueDay(from: arguments, allowingClear: false) ?? nil
+        // The title is kept literally (agents' titles are not shorthand); the
+        // draft step applies the same creation rules as every other path.
+        let draft = TaskDraft(
+            title: title,
+            tags: tags,
+            dueDay: due,
+            priority: priority,
+            status: status,
+            parentID: parentID
+        )
+        guard let task = library.createTasks([draft])?.first else {
             throw AgentToolError.storeFailure(store.lastErrorMessage ?? "Unknown error.")
         }
         return try encode(["task": serialize(task)])
@@ -300,13 +485,17 @@ final class AgentTaskTools {
         let newStatus = arguments["status"] == nil
             ? nil
             : try status(from: arguments, allowed: TaskStatus.allCases)
+        let newTags = try tags(from: arguments)
+        let newDue = try dueDay(from: arguments, allowingClear: true)
 
         try perform {
-            store.update(
-                task,
+            library.updateTask(
+                task.id,
                 title: newTitle,
                 priority: newPriority,
-                status: newStatus
+                status: newStatus,
+                tags: newTags,
+                dueDay: newDue
             )
         }
         return try encode(["task": serialize(task)])
@@ -315,7 +504,7 @@ final class AgentTaskTools {
     private func deleteTask(_ arguments: [String: Any]) throws -> String {
         let task = try findTask(arguments)
         let id = task.id.uuidString
-        try perform { store.delete(task) }
+        try performLibrary { library.delete(AtticItemRef(.task, task.id)) }
         return try encode(["deleted": id])
     }
 
@@ -420,10 +609,10 @@ final class AgentTaskTools {
     }
 
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
-        guard let noteStore else { throw AgentToolError.unknownTool("delete_note") }
+        guard noteStore != nil else { throw AgentToolError.unknownTool("delete_note") }
         let note = try findNote(arguments)
         let id = note.id.uuidString
-        try performNote { noteStore.delete(note) }
+        try performLibrary { library.delete(AtticItemRef(.note, note.id)) }
         return try encode(["deleted": id])
     }
 
@@ -449,7 +638,8 @@ final class AgentTaskTools {
             "title": note.title,
             "body": note.body,
             "createdAt": Self.dateFormatter.string(from: note.createdAt),
-            "updatedAt": Self.dateFormatter.string(from: note.updatedAt)
+            "updatedAt": Self.dateFormatter.string(from: note.updatedAt),
+            "tags": note.tags
         ]
     }
 
@@ -466,7 +656,189 @@ final class AgentTaskTools {
             payload["completedAt"] = Self.dateFormatter.string(from: completedAt)
         }
         if let parentID = task.parentID { payload["parent_id"] = parentID.uuidString }
+        payload["tags"] = task.tags
+        if let due = task.dueDay { payload["due"] = due.rawValue }
         return payload
+    }
+
+    // MARK: - Tags and dates
+
+    /// nil when absent; every entry must be a string that normalises to a tag.
+    private func tags(from arguments: [String: Any]) throws -> [String]? {
+        guard let raw = arguments["tags"] else { return nil }
+        guard let list = raw as? [Any] else {
+            throw AgentToolError.invalidArguments("tags must be an array of strings.")
+        }
+        return try list.map { entry in
+            guard let string = entry as? String, let tag = AtticTag.normalize(string) else {
+                throw AgentToolError.invalidArguments("Invalid tag \(entry). Use letters, numbers and hyphens.")
+            }
+            return tag
+        }
+    }
+
+    /// nil when absent; `.some(nil)` clears (update only).
+    private func dueDay(from arguments: [String: Any], allowingClear: Bool) throws -> DueDay?? {
+        guard let raw = arguments["due"] else { return nil }
+        if raw is NSNull || (raw as? String)?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+            guard allowingClear else {
+                throw AgentToolError.invalidArguments("due must be a date such as 2026-09-30 or tomorrow.")
+            }
+            return .some(nil)
+        }
+        guard let phrase = raw as? String, let day = parser.parseDueDay(phrase) else {
+            throw AgentToolError.invalidArguments("Couldn’t understand the due date. Use an ISO day such as 2026-09-30, or today, tomorrow, fri, next week, sep 30, in 3 days.")
+        }
+        return .some(day)
+    }
+
+    // MARK: - Recently Deleted, tags and links
+
+    private func itemRef(from object: Any?, field: String) throws -> AtticItemRef {
+        guard let object = object as? [String: Any],
+              let rawKind = object["kind"] as? String, let kind = AtticItemKind(rawValue: rawKind),
+              let rawID = object["id"] as? String, let id = UUID(uuidString: rawID) else {
+            let kinds = AtticItemKind.allCases.map(\.rawValue).joined(separator: ", ")
+            throw AgentToolError.invalidArguments("\(field) needs a kind (\(kinds)) and an id (UUID).")
+        }
+        return AtticItemRef(kind, id)
+    }
+
+    private func deleteItem(_ arguments: [String: Any]) throws -> String {
+        let ref = try itemRef(from: arguments, field: "The item")
+        guard library.state(of: ref) == .live else {
+            throw AgentToolError.invalidArguments("No \(ref.kind.rawValue) exists with id \(ref.id.uuidString).")
+        }
+        try performLibrary { library.delete(ref) }
+        let restorableUntil = RecentlyDeletedPolicy.expiry(deletedAt: Date(), calendar: .autoupdatingCurrent)
+        return try encode([
+            "deleted": ref.id.uuidString,
+            "kind": ref.kind.rawValue,
+            "restorable_until": Self.dateFormatter.string(from: restorableUntil)
+        ])
+    }
+
+    private func restoreItem(_ arguments: [String: Any]) throws -> String {
+        let ref = try itemRef(from: arguments, field: "The item")
+        guard library.state(of: ref) == .deleted else {
+            throw AgentToolError.invalidArguments("No \(ref.kind.rawValue) with id \(ref.id.uuidString) is in Recently Deleted.")
+        }
+        try performLibrary { library.restore(ref) }
+        return try encode(["restored": ref.id.uuidString, "kind": ref.kind.rawValue])
+    }
+
+    private func listDeleted(_ arguments: [String: Any]) throws -> String {
+        let items = library.recentlyDeleted()
+        return try encode([
+            "count": items.count,
+            "items": items.map { item -> [String: Any] in
+                [
+                    "kind": item.ref.kind.rawValue,
+                    "id": item.ref.id.uuidString,
+                    "title": item.title,
+                    "deletedAt": Self.dateFormatter.string(from: item.deletedAt),
+                    // null: kept until removed by hand (a canvas deleted
+                    // before Recently Deleted existed).
+                    "expiresAt": item.expiresAt(calendar: .autoupdatingCurrent)
+                        .map { Self.dateFormatter.string(from: $0) as Any } ?? NSNull(),
+                    "included": item.includedCount
+                ]
+            }
+        ])
+    }
+
+    private func listTags(_ arguments: [String: Any]) throws -> String {
+        let counts = library.tags.counts()
+        return try encode([
+            "count": counts.count,
+            "tags": counts.map { ["name": $0.name, "count": $0.count] as [String: Any] }
+        ])
+    }
+
+    private func updateTags(_ arguments: [String: Any]) throws -> String {
+        guard let action = arguments["action"] as? String, ["rename", "merge"].contains(action) else {
+            throw AgentToolError.invalidArguments("action must be rename or merge.")
+        }
+        guard let rawTarget = arguments["to"] as? String, let target = AtticTag.normalize(rawTarget) else {
+            throw AgentToolError.invalidArguments("to must be a tag (letters, numbers and hyphens).")
+        }
+        let sources: [String]
+        switch (action, arguments["from"]) {
+        case let ("rename", source as String):
+            sources = [source]
+        case let ("merge", list as [Any]) where !list.isEmpty:
+            sources = try list.map { entry in
+                guard let string = entry as? String else {
+                    throw AgentToolError.invalidArguments("from must list tags as strings.")
+                }
+                return string
+            }
+        default:
+            throw AgentToolError.invalidArguments(action == "rename"
+                ? "rename needs from: the tag to rename."
+                : "merge needs from: a non-empty list of tags.")
+        }
+        guard sources.allSatisfy({ AtticTag.normalize($0) != nil }) else {
+            throw AgentToolError.invalidArguments("Every tag in from must use letters, numbers and hyphens.")
+        }
+        try performLibrary { library.mergeTags(sources, into: target) }
+        let counts = library.tags.counts()
+        return try encode([
+            "action": action,
+            "tag": target,
+            "tags": counts.map { ["name": $0.name, "count": $0.count] as [String: Any] }
+        ])
+    }
+
+    private func link(_ arguments: [String: Any]) throws -> String {
+        let item = try itemRef(from: arguments["item"], field: "item")
+        guard library.state(of: item) == .live else {
+            throw AgentToolError.invalidArguments("No \(item.kind.rawValue) exists with id \(item.id.uuidString).")
+        }
+        var payload: [String: Any] = [:]
+        if arguments["target"] != nil {
+            let target = try itemRef(from: arguments["target"], field: "target")
+            let kind: ItemLinkKind
+            if let raw = arguments["link_kind"] {
+                guard let string = raw as? String, let parsed = ItemLinkKind(rawValue: string) else {
+                    let kinds = ItemLinkKind.allCases.map(\.rawValue).joined(separator: ", ")
+                    throw AgentToolError.invalidArguments("link_kind must be one of: \(kinds).")
+                }
+                kind = parsed
+            } else {
+                kind = .reference
+            }
+            guard let created = library.link(item, to: target, kind: kind) else {
+                throw AgentToolError.invalidArguments(library.links.lastErrorMessage ?? "The items could not be linked.")
+            }
+            payload["link"] = serializeLink(created)
+        } else if arguments["link_kind"] != nil {
+            throw AgentToolError.invalidArguments("link_kind needs a target.")
+        }
+        payload["links"] = library.links.links(from: item).map(serializeLink)
+        payload["backlinks"] = library.links.backlinks(to: item).map(serializeLink)
+        return try encode(payload)
+    }
+
+    private func serializeLink(_ link: ItemLinkRecord) -> [String: Any] {
+        func endpoint(_ ref: AtticItemRef) -> [String: Any] {
+            var value: [String: Any] = ["kind": ref.kind.rawValue, "id": ref.id.uuidString]
+            if let title = library.title(of: ref) { value["title"] = title }
+            return value
+        }
+        return [
+            "id": link.id.uuidString,
+            "kind": link.kind.rawValue,
+            "source": endpoint(link.source),
+            "target": endpoint(link.target),
+            "createdAt": Self.dateFormatter.string(from: link.createdAt)
+        ]
+    }
+
+    private func performLibrary(_ change: () -> Bool) throws {
+        guard change() else {
+            throw AgentToolError.storeFailure(library.lastErrorMessage ?? store.lastErrorMessage ?? "Unknown error.")
+        }
     }
 
     private func encode(_ payload: [String: Any]) throws -> String {

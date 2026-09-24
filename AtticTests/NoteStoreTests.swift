@@ -257,9 +257,16 @@ final class NoteStoreTests: XCTestCase {
         XCTAssertEqual(replicas.count, 2)
         XCTAssertTrue(replicas.allSatisfy { $0.title == "Unified" && $0.body == "z" })
 
+        // Phase 0: the delete is soft and marks every replica; the purge
+        // after 30 days removes every replica.
         XCTAssertTrue(store.delete(try XCTUnwrap(store.notes.first)))
         verificationContext = ModelContext(container)
         replicas = try verificationContext.fetch(FetchDescriptor<NoteItem>())
+        XCTAssertEqual(replicas.count, 2)
+        XCTAssertTrue(replicas.allSatisfy { $0.deletedAt != nil })
+        XCTAssertTrue(store.notes.isEmpty)
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [sharedID])
+        replicas = try ModelContext(container).fetch(FetchDescriptor<NoteItem>())
         XCTAssertTrue(replicas.isEmpty)
     }
 

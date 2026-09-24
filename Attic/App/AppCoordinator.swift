@@ -171,6 +171,9 @@ final class AppCoordinator: ObservableObject {
     let store: TaskStore
     let noteStore: NoteStore
     let canvasStore: CanvasStore
+    /// The store-level command layer (undo route, Recently Deleted, tags,
+    /// links) shared by agents and, from phase 1, the UI.
+    let library: AtticLibrary
     let canvasSession: CanvasSession
     let noteDraft: NoteDraftController
     let loginItemService: LoginItemService
@@ -365,7 +368,8 @@ final class AppCoordinator: ObservableObject {
         // Each bundle identity owns its credential; previews never reuse Daily's.
         // Both kinds of test host avoid Keychain. In normal use, credential
         // loading starts only after opt-in and runs away from the main thread.
-        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore))
+        let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
+        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore, library: library))
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
             agentServer = AgentServer(port: settings.agentServerPort,
@@ -397,6 +401,7 @@ final class AppCoordinator: ObservableObject {
         self.store = store
         self.noteStore = noteStore
         self.canvasStore = canvasStore
+        self.library = library
         self.canvasSession = canvasSession
         self.noteDraft = noteDraft
         self.uiState = uiState
@@ -405,7 +410,12 @@ final class AppCoordinator: ObservableObject {
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
         self.newTaskHotKey = newTaskHotKey
-        cleanupService = DailyCleanupService(store: store)
+        cleanupService = DailyCleanupService(
+            store: store,
+            purgeRecentlyDeleted: { now, calendar in
+                library.purgeExpired(now: now, calendar: calendar)
+            }
+        )
         hoverMonitor = CornerHoverMonitor(
             settings: settings,
             panelController: panelController,

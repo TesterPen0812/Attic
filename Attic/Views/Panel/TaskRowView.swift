@@ -162,7 +162,7 @@ struct TaskRowView: View, Equatable {
             Button("Delete all", role: .destructive) { store.delete(task) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently deletes “\(task.title)” and its \(store.subtasks(of: task.id).count) subtasks.")
+            Text("“\(task.title)” and its \(store.subtasks(of: task.id).count) subtasks move to Recently Deleted for 30 days.")
         }
         .draggable(TaskDragPayload(taskID: task.id, title: task.title, imageReferences: task.attachments)) {
             dragPreview

@@ -259,7 +259,7 @@ private struct NoteImageAttachmentCard: View {
             Button("Remove Attachment", role: .destructive, action: remove)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The app-owned copy will be permanently removed from this local note.")
+            Text("The attachment moves to Recently Deleted for 30 days.")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(attachment.originalFilename), image, \(fileSize)")
@@ -371,7 +371,7 @@ struct NoteFileAttachmentCard: View {
             Button("Remove Attachment", role: .destructive, action: remove)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The app-owned copy will be permanently removed from this local note.")
+            Text("The attachment moves to Recently Deleted for 30 days.")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)

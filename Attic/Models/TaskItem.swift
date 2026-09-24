@@ -20,6 +20,30 @@ final class TaskItem {
     /// local attachment directory and are never decoded by task-list queries.
     /// The stored name predates general files and stays for compatibility.
     var imageReferencesData: Data? = nil
+    /// Soft deletion (Recently Deleted). A deleted task keeps every field,
+    /// its subtasks and its files; it is only hidden until it is restored or
+    /// purged 30 days later.
+    var deletedAt: Date? = nil
+    /// The task whose deletion hid this row: its own id, or its parent's when
+    /// the whole family was deleted together. Restoring that id brings back
+    /// exactly the rows one delete hid, never a subtask deleted on its own.
+    var deletionRootID: UUID? = nil
+    /// Every task id one delete hid, recorded on each of its rows (sorted,
+    /// space-separated), so a restore can prove it brings the whole set back.
+    var deletionMembersRaw: String = ""
+    /// Attachments removed one at a time: the references (with when they were
+    /// removed) wait here for 30 days, their files kept, so each can be
+    /// restored. JSON of `[RemovedTaskAttachment]`.
+    var removedAttachmentsData: Data? = nil
+    /// Set when the daily cleanup moves a finished task into the Done log.
+    /// The row is kept indefinitely; today's list simply no longer shows it.
+    var doneLoggedAt: Date? = nil
+    /// Normalised tags (see `AtticTag`), space-separated and sorted. A plain
+    /// string keeps the model CloudKit-compatible and duplicate-safe.
+    var tagsRaw: String = ""
+    /// A floating calendar day (`yyyy-MM-dd`, see `DueDay`), so a due date
+    /// never moves when the Mac changes time zone.
+    var dueDayRaw: String? = nil
 
     /// Images and general files in one ordered list, parent-owned. Decoded
     /// once per stored payload: SwiftUI reads this several times per row body,
@@ -74,4 +98,34 @@ final class TaskItem {
         get { TaskPriority(rawValue: priorityRaw) ?? .none }
         set { priorityRaw = newValue.rawValue }
     }
+
+    var tags: [String] {
+        get { AtticTag.decode(tagsRaw) }
+        set { tagsRaw = AtticTag.encode(newValue) }
+    }
+
+    var dueDay: DueDay? {
+        get { dueDayRaw.flatMap(DueDay.init(rawValue:)) }
+        set { dueDayRaw = newValue?.rawValue }
+    }
+
+    var isSoftDeleted: Bool { deletedAt != nil }
+
+    /// Attachments in Recently Deleted. Unreadable data reads as empty here;
+    /// file cleanup decodes strictly and keeps files when it cannot read.
+    var removedAttachments: [RemovedTaskAttachment] {
+        guard let removedAttachmentsData, !removedAttachmentsData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([RemovedTaskAttachment].self, from: removedAttachmentsData)) ?? []
+    }
+
+    var deletionMembers: Set<UUID> {
+        Set(deletionMembersRaw.split(separator: " ").compactMap { UUID(uuidString: String($0)) })
+    }
+    var isInDoneLog: Bool { doneLoggedAt != nil }
+}
+
+/// A task attachment removed on its own, kept restorable for 30 days.
+struct RemovedTaskAttachment: Codable, Equatable, Sendable {
+    let reference: TaskImageReference
+    let removedAt: Date
 }

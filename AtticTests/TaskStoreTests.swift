@@ -605,9 +605,17 @@ final class TaskStoreTests: XCTestCase {
                 && $0.completedAt != nil
         })
 
+        // Phase 0: the delete is soft and marks every replica; the purge
+        // after 30 days removes every replica.
+        let id = try XCTUnwrap(store.tasks.first).id
         XCTAssertTrue(store.delete(try XCTUnwrap(store.tasks.first)))
         verificationContext = ModelContext(container)
         replicas = try verificationContext.fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(replicas.count, 2)
+        XCTAssertTrue(replicas.allSatisfy { $0.deletedAt != nil && $0.deletionRootID == id })
+        XCTAssertTrue(store.tasks.isEmpty)
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [id])
+        replicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
         XCTAssertTrue(replicas.isEmpty)
     }
 

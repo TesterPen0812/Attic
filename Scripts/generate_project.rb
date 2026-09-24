@@ -94,6 +94,10 @@ shared_mobile_sources = [
   'Models/CanvasBoardItem.swift',
   'Models/CanvasImageItem.swift',
   'Models/CanvasStrokeItem.swift',
+  'Models/AtticItem.swift',
+  'Models/AtticTag.swift',
+  'Models/DueDay.swift',
+  'Models/ItemLink.swift',
   'Models/TaskItem.swift',
   'Models/TaskTypes.swift',
   'Models/NoteItem.swift',
@@ -107,7 +111,9 @@ shared_mobile_sources = [
   'Services/CanvasStoreStrokes.swift',
   'Services/PersistenceController.swift',
   'Services/NoteStore.swift',
-  'Services/TaskStore.swift'
+  'Services/TaskDrafts.swift',
+  'Services/TaskStore.swift',
+  'Services/TaskTextParser.swift'
 ]
 shared_mobile_sources.each do |path|
   reference = app_group.files.find { |file| file.path == path }

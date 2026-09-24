@@ -1559,13 +1559,19 @@ final class NoteAttachmentTests: XCTestCase {
         )
         let visible = try XCTUnwrap(store.attachments(for: noteID).first)
 
+        // Removal is soft: every replica is marked, and the purge after 30
+        // days removes every replica.
         XCTAssertTrue(store.removeAttachment(visible))
         let remaining = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
-        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertEqual(remaining.count, 2)
+        XCTAssertTrue(remaining.allSatisfy { $0.deletedAt != nil })
+        XCTAssertTrue(store.attachments(for: noteID).isEmpty)
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
     }
 
     @MainActor
-    func testRemovedAttachmentCannotBeRematerializedThroughStaleReference() async throws {
+    func testStaleRequestForARemovedAttachmentIsRefusedWithoutDeletingItsFile() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let source = try write(Data("removed".utf8), named: "removed.txt", in: directory)
@@ -1583,12 +1589,78 @@ final class NoteAttachmentTests: XCTestCase {
 
         XCTAssertTrue(store.removeAttachment(attachment))
         let rematerializedValue = await store.materializedURL(for: attachment)
-        XCTAssertNil(rematerializedValue)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: materialized.path))
+        XCTAssertNil(rematerializedValue, "a removed attachment is not handed out")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: materialized.path),
+                      "its file stays while a stored row still holds it")
+    }
+
+    /// Re-review item 3: a row may keep no bytes of its own (`payload` is
+    /// nil), so the file is the only copy. A stale request after removal must
+    /// not delete it, and a restore must show it again.
+    @MainActor
+    func testRemovedAttachmentWithoutStoredBytesSurvivesAStaleRequestAndComesBackDisplayable() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
+        let bytes = Data("the only copy".utf8)
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let noteID = UUID()
+        let attachmentID = UUID()
+        let seeded = try await fileStore.ensureMaterialized(AttachmentFileReference(
+            id: attachmentID, digest: digest, filename: "only.txt", byteCount: Int64(bytes.count), payload: bytes
+        ))
+        let file = try XCTUnwrap(seeded)
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        seed.insert(NoteItem(id: noteID, body: "Note"))
+        seed.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "only.txt",
+                                   byteCount: Int64(bytes.count), sortIndex: 0, contentDigest: digest, payload: nil))
+        try seed.save()
+        let store = NoteStore(container: container, attachmentFileStore: fileStore)
+        let attachment = try XCTUnwrap(store.attachments(for: noteID).first)
+        let shown = await store.materializedURL(for: attachment)
+        XCTAssertEqual(shown, file)
+
+        XCTAssertTrue(store.removeAttachment(attachment))
+        let stale = await store.materializedURL(for: attachment)
+        XCTAssertNil(stale, "a removed attachment is not handed out")
+        XCTAssertEqual(try Data(contentsOf: file), bytes, "its only copy stays")
+
+        XCTAssertTrue(store.restoreAttachment(attachmentID))
+        let restored = try XCTUnwrap(store.attachments(for: noteID).first)
+        let restoredURLValue = await store.materializedURL(for: restored)
+        let restoredURL = try XCTUnwrap(restoredURLValue, "the restored attachment opens again")
+        XCTAssertEqual(try Data(contentsOf: restoredURL), bytes)
+    }
+
+    /// Removal and restore change what is shown, so the restore reconciles
+    /// files in full and puts back a file that went missing meanwhile.
+    @MainActor
+    func testRestoringARemovedAttachmentReconcilesItsFileAgain() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try write(Data("restore me".utf8), named: "restore.txt", in: directory)
+        let fileStore = AttachmentFileStore(rootURL: directory.appendingPathComponent("owned"))
+        let store = try makeTestNoteStore(attachmentFileStore: fileStore)
+        let outcome = await store.importAttachments(makeStoreImportRequest(from: [source]))
+        let noteID = try XCTUnwrap(importedNoteID(from: outcome))
+        let attachment = try XCTUnwrap(store.attachments(for: noteID).first)
+        let materializedValue = await store.materializedURL(for: attachment)
+        let materialized = try XCTUnwrap(materializedValue)
+
+        XCTAssertTrue(store.removeAttachment(attachment))
+        try FileManager.default.removeItem(at: materialized.deletingLastPathComponent())
+        let passes = store.attachmentReconciliationPasses
+        XCTAssertTrue(store.restoreAttachment(attachment.id))
+        XCTAssertEqual(store.attachmentReconciliationPasses, passes + 1, "the restore reconciles files")
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: materialized.path) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(try Data(contentsOf: materialized), Data("restore me".utf8))
     }
 
     @MainActor
-    func testRemovingAttachmentClearsEveryVisibleNoteMapForDivergentReplicas() throws {
+    func testRemovingAnAttachmentWhoseCopiesClaimDifferentNotesIsRefused() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
         let firstNoteID = UUID()
@@ -1623,13 +1695,21 @@ final class NoteAttachmentTests: XCTestCase {
             store.attachmentsByNoteID.values.flatMap { $0 }.first
         )
 
-        XCTAssertTrue(store.removeAttachment(visible))
-        XCTAssertTrue(store.attachmentsByNoteID.values.allSatisfy(\.isEmpty))
-        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
+        // Which note owns it is unresolved: removing it from one must not
+        // hide it from the other, so nothing changes.
+        XCTAssertFalse(store.removeAttachment(visible))
+        XCTAssertEqual(store.lastErrorMessage,
+                       "Copies of this attachment belong to different notes, so it can’t be removed safely. Refresh and try again.")
+        XCTAssertEqual(store.attachmentsByNoteID.values.flatMap { $0 }.map(\.id), [attachmentID], "still shown")
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertEqual(Set(rows.map(\.noteID)), [firstNoteID, secondNoteID])
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil }, "both copies stay live")
     }
 
     @MainActor
-    func testDeletingNoteDeletesAllAttachmentReplicas() throws {
+    // Phase 0: deleting a note is soft. Its attachment replicas stay until
+    // the note is purged from Recently Deleted, which removes them all.
+    func testDeletingNoteKeepsAllAttachmentReplicasUntilItIsPurged() throws {
         let container = try PersistenceController.makeContainer(inMemory: true)
         let context = ModelContext(container)
         let noteID = UUID()
@@ -1644,6 +1724,12 @@ final class NoteAttachmentTests: XCTestCase {
         let note = try XCTUnwrap(store.notes.first)
 
         XCTAssertTrue(store.delete(note))
+        XCTAssertTrue(store.notes.isEmpty)
+        XCTAssertTrue(store.attachments(for: noteID).isEmpty)
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).map(\.deletedAt).count, 1)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 2)
+
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [noteID])
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).isEmpty)
         XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
     }
