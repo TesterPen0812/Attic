@@ -263,8 +263,69 @@ final class AtticDesignSystemTests: XCTestCase {
         add(attachment)
         print(summary)
         XCTAssertGreaterThan(report.glyphsMeasured, 1_000)
+        XCTAssertEqual(report.contrastPairsChecked, report.eligibleProbes, "Every eligible probe's background was measured")
+        XCTAssertEqual(report.glyphsMeasured, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
+        XCTAssertEqual(report.eligibleGlyphs, report.eligibleProbes, "At 2× every eligible probe is a glyph check")
         XCTAssertGreaterThanOrEqual(report.geometryMeasured, 15)
         XCTAssertTrue(report.failures.isEmpty, report.summary)
+    }
+
+    /// Renders `view` in capture mode at 2× on a flat panel background and
+    /// runs the pixel contrast check on whatever it reported.
+    private func pixelReport<V: View>(_ view: V, context: AtticDesignContext = .default) throws -> AtticAppearanceCheck.Report {
+        let collector = AtticProbeCollector()
+        let content = view
+            .padding(20)
+            .background(context.tokens.panel.base.color)
+            .atticDesign(context)
+            .environment(\.atticCapture, AtticCaptureContext(collector: collector, backdrop: .desktop(.midGrey)))
+            .coordinateSpace(.named(AtticCaptureContext.coordinateSpace))
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.cgImage)
+        let bitmap = try XCTUnwrap(AtticBitmap(image: image))
+        let visual = collector.all.filter {
+            switch $0.kind {
+            case .text, .icon: true
+            default: false
+            }
+        }
+        var report = AtticAppearanceCheck.Report()
+        AtticAppearanceCheck.checkContrast(visual, bitmap: bitmap, scale: 2, context: context, family: "Test", combination: "test", report: &report)
+        return report
+    }
+
+    func testAProbeWhoseGlyphDrewNothingFails() throws {
+        // A visible run passes and is counted.
+        let visible = try pixelReport(AtticText(verbatim: "Book dentist", style: .rowTitle, ink: .body))
+        XCTAssertEqual(visible.eligibleGlyphs, 1)
+        XCTAssertEqual(visible.glyphsMeasured, 1)
+        XCTAssertTrue(visible.failures.isEmpty, visible.summary)
+
+        // The same run, reported but not drawn (faded to nothing), fails:
+        // a missing glyph is never a silent pass.
+        let missing = try pixelReport(AtticText(verbatim: "Book dentist", style: .rowTitle, ink: .body).opacity(0))
+        XCTAssertEqual(missing.eligibleGlyphs, 1)
+        XCTAssertEqual(missing.glyphsMeasured, 0)
+        XCTAssertTrue(missing.failures.keys.contains { $0.kind == .unmeasured }, missing.summary)
+
+        // An icon that draws nothing fails the same way.
+        let blankIcon = try pixelReport(AtticIcon(systemName: "flag", ink: .icon).opacity(0))
+        XCTAssertEqual(blankIcon.eligibleGlyphs, 1)
+        XCTAssertTrue(blankIcon.failures.keys.contains { $0.kind == .unmeasured }, blankIcon.summary)
+    }
+
+    func testAProbeWithNoBackgroundToSampleFails() throws {
+        // The probe's frame lies outside the rendered image: nothing to sample.
+        var report = AtticAppearanceCheck.Report()
+        let image = try XCTUnwrap(ImageRenderer(content: Color.white.frame(width: 20, height: 20)).cgImage)
+        let bitmap = try XCTUnwrap(AtticBitmap(image: image))
+        var probe = AtticProbe(id: UUID(), kind: .text(style: .body, string: "Off the canvas"), ink: .body, foreground: AtticRGBA(0x494B4A), specimen: "Test / off")
+        probe.frame = CGRect(x: 200, y: 200, width: 60, height: 16)
+        AtticAppearanceCheck.checkContrast([probe], bitmap: bitmap, scale: 2, context: .default, family: "Test", combination: "test", report: &report)
+        XCTAssertEqual(report.eligibleProbes, 1)
+        XCTAssertEqual(report.contrastPairsChecked, 0)
+        XCTAssertTrue(report.failures.keys.contains { $0.kind == .unmeasured }, report.summary)
     }
 
     func testGeometryIsFittedFromPixels() {

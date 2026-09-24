@@ -44,6 +44,8 @@ final class AtticAppearanceMatrixTests: XCTestCase {
         XCTAssertGreaterThan(report.combinations, 400)
         XCTAssertEqual(sheets.count, AtticGalleryFamily.allCases.count, "Every family gets a contact sheet")
         XCTAssertGreaterThan(report.glyphsMeasured, 0)
+        XCTAssertEqual(report.contrastPairsChecked, report.eligibleProbes, "Every eligible probe's background was measured")
+        XCTAssertEqual(report.glyphsMeasured, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
         XCTAssertTrue(report.failures.isEmpty, report.summary)
     }
 }

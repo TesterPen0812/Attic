@@ -29,7 +29,7 @@ import UniformTypeIdentifiers
 @MainActor
 enum AtticAppearanceCheck {
     struct Failure: Hashable {
-        enum Kind: String { case contrast, glyphContrast, clipped, overlap, outOfBounds, size, radius, geometry, model, render, native }
+        enum Kind: String { case contrast, glyphContrast, unmeasured, clipped, overlap, outOfBounds, size, radius, geometry, model, render, native }
         let kind: Kind
         let family: String
         let specimen: String
@@ -43,6 +43,11 @@ enum AtticAppearanceCheck {
         var contrastPairsChecked = 0
         /// Glyphs whose contrast was read from their own pixels.
         var glyphsMeasured = 0
+        /// Text runs and icons with an ink and a real frame: each must be
+        /// measured, or it fails as unmeasured.
+        var eligibleProbes = 0
+        /// Eligible probes in 2× renders, whose glyph pixels must be read.
+        var eligibleGlyphs = 0
         /// Controls whose corner radius and size were fitted from pixels.
         var geometryMeasured = 0
         /// Unique failures, each with the combinations it happened in.
@@ -61,7 +66,7 @@ enum AtticAppearanceCheck {
         }
 
         var headline: String {
-            "\(combinations) combinations, \(renders) renders, \(probesChecked) probes, \(contrastPairsChecked) contrast checks, \(glyphsMeasured) glyphs measured from pixels, \(geometryMeasured) corners and sizes fitted from pixels, \(failures.count) distinct failures"
+            "\(combinations) combinations, \(renders) renders, \(probesChecked) probes, \(contrastPairsChecked) contrast checks, \(glyphsMeasured) of \(eligibleGlyphs) glyphs measured from pixels, \(geometryMeasured) corners and sizes fitted from pixels, \(failures.count) distinct failures"
         }
 
         var summary: String {
@@ -292,49 +297,7 @@ enum AtticAppearanceCheck {
         }
 
         // Contrast against the rendered pixels.
-        for probe in visual {
-            guard let ink = probe.ink, let foreground = probe.foreground,
-                  !probe.frame.isNull, probe.frame.width > 1, probe.frame.height > 1 else { continue }
-            let isIcon: Bool = if case .icon = probe.kind { true } else { false }
-            guard let background = bitmap.background(around: probe.frame, outside: isIcon, foreground: foreground, scale: scale) else { continue }
-            let ratio = foreground.contrast(on: background)
-            let floor = AtticSurfaceModel.floor(for: ink, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
-            report.contrastPairsChecked += 1
-            let role = "\(ink.rawValue) (\(ink.floor == .text ? "text" : "non-text"))"
-            let slack = ratio / floor
-            if let current = report.worstContrast[role] {
-                if slack < current.ratio / current.floor {
-                    report.worstContrast[role] = (ratio, floor, "\(family.title) › \(label(probe)) · \(combination)")
-                }
-            } else {
-                report.worstContrast[role] = (ratio, floor, "\(family.title) › \(label(probe)) · \(combination)")
-            }
-            if ratio + 0.005 < floor {
-                report.fail(.init(
-                    kind: .contrast, family: family.title,
-                    specimen: displayName(probe.specimen),
-                    detail: "\(label(probe)) \(ink.rawValue) below \(floor == 4.5 ? "4.5" : String(format: "%.1f", floor)) : 1"
-                ), in: combination + String(format: " (%.2f on %@)", ratio, background.hexString))
-            }
-            // Independently, the glyph's own pixels (needs 2× to resolve
-            // a glyph's core from its antialiased edge).
-            if scale >= 2, let glyph = bitmap.glyphContrast(in: probe.frame, background: background, scale: scale) {
-                report.glyphsMeasured += 1
-                let place = "\(family.title) › \(label(probe)) · \(combination)"
-                if let current = report.worstGlyph[role] {
-                    if glyph.ratio / floor < current.ratio / current.floor { report.worstGlyph[role] = (glyph.ratio, floor, place) }
-                } else {
-                    report.worstGlyph[role] = (glyph.ratio, floor, place)
-                }
-                if glyph.ratio + glyphTolerance < floor {
-                    report.fail(.init(
-                        kind: .glyphContrast, family: family.title,
-                        specimen: displayName(probe.specimen),
-                        detail: "\(label(probe)) \(ink.rawValue) glyph pixels below \(floor == 4.5 ? "4.5" : String(format: "%.1f", floor)) : 1"
-                    ), in: combination + String(format: " (%.2f: %@ on %@)", glyph.ratio, glyph.ink.hexString, background.hexString))
-                }
-            }
-        }
+        checkContrast(visual, bitmap: bitmap, scale: scale, context: context, family: family.title, combination: combination, report: &report)
 
         // Overlap and bounds, within each specimen.
         let bySpecimen = Dictionary(grouping: visual, by: \.specimen)
@@ -360,6 +323,73 @@ enum AtticAppearanceCheck {
         }
     }
 
+    /// Every eligible text run and icon (one with an ink and a real frame)
+    /// is judged against the rendered pixels. Nothing is skipped silently:
+    /// a probe whose background cannot be sampled fails, and at 2× (where a
+    /// glyph's core resolves) so does a probe whose glyph drew no pixels —
+    /// a missing or invisible glyph is a failure, not a pass.
+    static func checkContrast(
+        _ visual: [AtticProbe],
+        bitmap: AtticBitmap,
+        scale: CGFloat,
+        context: AtticDesignContext,
+        family: String,
+        combination: String,
+        report: inout Report
+    ) {
+        let measuresGlyphs = scale >= 2
+        for probe in visual {
+            guard let ink = probe.ink, let foreground = probe.foreground,
+                  !probe.frame.isNull, probe.frame.width > 1, probe.frame.height > 1 else { continue }
+            report.eligibleProbes += 1
+            let isIcon: Bool = if case .icon = probe.kind { true } else { false }
+            let specimen = displayName(probe.specimen)
+            let floor = AtticSurfaceModel.floor(for: ink, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
+            let floorText = floor == 4.5 ? "4.5" : String(format: "%.1f", floor)
+            guard let background = bitmap.background(around: probe.frame, outside: isIcon, foreground: foreground, scale: scale) else {
+                report.fail(.init(kind: .unmeasured, family: family, specimen: specimen,
+                                  detail: "\(label(probe)) \(ink.rawValue): no background pixels to measure against"), in: combination)
+                continue
+            }
+            let ratio = foreground.contrast(on: background)
+            report.contrastPairsChecked += 1
+            let role = "\(ink.rawValue) (\(ink.floor == .text ? "text" : "non-text"))"
+            let place = "\(family) › \(label(probe)) · \(combination)"
+            if let current = report.worstContrast[role] {
+                if ratio / floor < current.ratio / current.floor { report.worstContrast[role] = (ratio, floor, place) }
+            } else {
+                report.worstContrast[role] = (ratio, floor, place)
+            }
+            if ratio + 0.005 < floor {
+                report.fail(.init(
+                    kind: .contrast, family: family, specimen: specimen,
+                    detail: "\(label(probe)) \(ink.rawValue) below \(floorText) : 1"
+                ), in: combination + String(format: " (%.2f on %@)", ratio, background.hexString))
+            }
+            // Independently, the glyph's own pixels (needs 2× to resolve a
+            // glyph's core from its antialiased edge).
+            guard measuresGlyphs else { continue }
+            report.eligibleGlyphs += 1
+            guard let glyph = bitmap.glyphContrast(in: probe.frame, background: background, scale: scale) else {
+                report.fail(.init(kind: .unmeasured, family: family, specimen: specimen,
+                                  detail: "\(label(probe)) \(ink.rawValue): no glyph pixels were drawn"), in: combination)
+                continue
+            }
+            report.glyphsMeasured += 1
+            if let current = report.worstGlyph[role] {
+                if glyph.ratio / floor < current.ratio / current.floor { report.worstGlyph[role] = (glyph.ratio, floor, place) }
+            } else {
+                report.worstGlyph[role] = (glyph.ratio, floor, place)
+            }
+            if glyph.ratio + glyphTolerance < floor {
+                report.fail(.init(
+                    kind: .glyphContrast, family: family, specimen: specimen,
+                    detail: "\(label(probe)) \(ink.rawValue) glyph pixels below \(floorText) : 1"
+                ), in: combination + String(format: " (%.2f: %@ on %@)", glyph.ratio, glyph.ink.hexString, background.hexString))
+            }
+        }
+    }
+
     /// Rendering (8-bit, antialiased, the core percentile) can read a glyph
     /// a touch lighter than its ink; a glyph fails only below this slack.
     static let glyphTolerance = 0.12
@@ -376,7 +406,7 @@ enum AtticAppearanceCheck {
         return caption.components(separatedBy: "#").first ?? caption
     }
 
-    private static func label(_ probe: AtticProbe) -> String {
+    static func label(_ probe: AtticProbe) -> String {
         switch probe.kind {
         case let .text(_, string): "“\(string)”"
         case let .icon(name): name
