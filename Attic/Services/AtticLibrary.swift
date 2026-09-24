@@ -232,7 +232,9 @@ final class AtticLibrary {
         report.taskIDs = tasks.purgeDeleted(before: cutoff)
         report.noteIDs = notes?.purgeDeleted(before: cutoff) ?? []
         report.canvasIDs = canvases?.purgeDeletedCanvases(before: cutoff) ?? []
-        let purged = report.taskIDs.union(report.noteIDs).union(report.canvasIDs)
+        let purged = Set(report.taskIDs.map { AtticItemRef(.task, $0) })
+            .union(report.noteIDs.map { AtticItemRef(.note, $0) })
+            .union(report.canvasIDs.map { AtticItemRef(.canvas, $0) })
         report.removedLinks = links.purgeLinks(touching: purged) + links.purgeRemovedLinks(before: cutoff)
         return report
     }

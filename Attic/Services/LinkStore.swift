@@ -115,21 +115,36 @@ final class LinkStore {
         }), otherEnd: \.source, includingUnavailable: includingUnavailableEndpoints)
     }
 
-    /// Hard-deletes every link that touches one of `itemIDs` (items purged
-    /// for good), on every replica. Returns how many link ids were removed.
+    /// Hard-deletes every link that touches one of `items` (items purged for
+    /// good). An item is its kind and its id: a note that happens to share a
+    /// purged task's UUID keeps its links. All replicas of a link id go
+    /// together, and a link whose replicas disagree about its ends or kind is
+    /// kept. Returns how many link ids were removed.
     @discardableResult
-    func purgeLinks(touching itemIDs: Set<UUID>) -> Int {
-        guard !itemIDs.isEmpty else { return 0 }
+    func purgeLinks(touching items: Set<AtticItemRef>) -> Int {
+        guard !items.isEmpty else { return 0 }
         let context = ModelContext(container)
-        let ids = Array(itemIDs)
+        let ids = Array(Set(items.map(\.id)))
         do {
-            let rows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
+            let candidates = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
                 ids.contains($0.sourceID) || ids.contains($0.targetID)
             }))
-            guard !rows.isEmpty else { return 0 }
-            let removed = Set(rows.map(\.id))
-            rows.forEach(context.delete)
-            return save(context) ? removed.count : 0
+            let linkIDs = Array(Set(candidates.filter { row in
+                (row.source.map(items.contains) ?? false) || (row.target.map(items.contains) ?? false)
+            }.map(\.id)))
+            guard !linkIDs.isEmpty else { return 0 }
+            let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
+                linkIDs.contains($0.id)
+            }))
+            var removed = 0
+            for group in Dictionary(grouping: replicas, by: \.id).values {
+                let ends = Self.ends(of: group[0])
+                guard group.allSatisfy({ Self.ends(of: $0) == ends }) else { continue }
+                group.forEach(context.delete)
+                removed += 1
+            }
+            guard removed > 0 else { return 0 }
+            return save(context) ? removed : 0
         } catch {
             lastErrorMessage = error.localizedDescription
             return 0
@@ -137,7 +152,7 @@ final class LinkStore {
     }
 
     /// Hard-deletes links removed softly before `cutoff`, when every replica
-    /// of the link agrees it is removed.
+    /// of the link is identical (same ends, kind and removal).
     @discardableResult
     func purgeRemovedLinks(before cutoff: Date) -> Int {
         let context = ModelContext(container)
@@ -152,7 +167,10 @@ final class LinkStore {
             }))
             var removed = 0
             for replicas in Dictionary(grouping: all, by: \.id).values {
-                guard replicas.allSatisfy({ ($0.deletedAt ?? .distantFuture) < cutoff }) else { continue }
+                let snapshot = Self.snapshot(of: replicas[0])
+                guard replicas.allSatisfy({ ($0.deletedAt ?? .distantFuture) < cutoff && Self.snapshot(of: $0) == snapshot }) else {
+                    continue
+                }
                 replicas.forEach(context.delete)
                 removed += 1
             }
@@ -162,6 +180,30 @@ final class LinkStore {
             lastErrorMessage = error.localizedDescription
             return 0
         }
+    }
+
+    private struct LinkEnds: Equatable {
+        let sourceKind: String
+        let sourceID: UUID
+        let targetKind: String
+        let targetID: UUID
+        let kind: String
+    }
+
+    private static func ends(of link: ItemLink) -> LinkEnds {
+        LinkEnds(sourceKind: link.sourceKindRaw, sourceID: link.sourceID,
+                 targetKind: link.targetKindRaw, targetID: link.targetID, kind: link.kindRaw)
+    }
+
+    private struct LinkSnapshot: Equatable {
+        let ends: LinkEnds
+        let createdAt: Date
+        let updatedAt: Date
+        let deletedAt: Date?
+    }
+
+    private static func snapshot(of link: ItemLink) -> LinkSnapshot {
+        LinkSnapshot(ends: ends(of: link), createdAt: link.createdAt, updatedAt: link.updatedAt, deletedAt: link.deletedAt)
     }
 
     // MARK: - Private
