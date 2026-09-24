@@ -46,6 +46,7 @@ private struct NoteReplicaSnapshot: Equatable {
     let createdAt: Date
     let updatedAt: Date
     let deletedAt: Date?
+    let deletedAttachmentIDsRaw: String?
     let tagsRaw: String
 
     init(_ note: NoteItem) {
@@ -55,6 +56,7 @@ private struct NoteReplicaSnapshot: Equatable {
         createdAt = note.createdAt
         updatedAt = note.updatedAt
         deletedAt = note.deletedAt
+        deletedAttachmentIDsRaw = note.deletedAttachmentIDsRaw
         tagsRaw = note.tagsRaw
     }
 }
@@ -303,6 +305,7 @@ final class NoteStore: ObservableObject {
             replica.createdAt = note.createdAt
             replica.tagsRaw = note.tagsRaw
             replica.deletedAt = nil
+            replica.deletedAttachmentIDsRaw = nil
             replica.updatedAt = timestamp
         }
         return save()
@@ -334,8 +337,17 @@ final class NoteStore: ObservableObject {
     func delete(_ note: NoteItem) -> Bool {
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
         let replicas: [NoteItem]
+        let attachmentFamily: String
         do {
             replicas = try storedNotes(matching: note.id)
+#if os(macOS)
+            // Every attachment row the note holds now, shown or removed:
+            // exactly what a purge 30 days later may remove with it.
+            attachmentFamily = Set(try storedAttachments(forNoteID: note.id).map(\.id))
+                .map(\.uuidString).sorted().joined(separator: " ")
+#else
+            attachmentFamily = ""
+#endif
         } catch {
             lastErrorMessage = error.localizedDescription
             return false
@@ -349,7 +361,10 @@ final class NoteStore: ObservableObject {
         // `updatedAt` is kept, so a restored note returns to its place in
         // the newest-first list.
         let timestamp = now()
-        for replica in replicas { replica.deletedAt = timestamp }
+        for replica in replicas {
+            replica.deletedAt = timestamp
+            replica.deletedAttachmentIDsRaw = attachmentFamily
+        }
         notes.removeAll { $0.id == note.id }
 #if os(macOS)
         attachmentsByNoteID[note.id] = nil
@@ -410,7 +425,10 @@ final class NoteStore: ObservableObject {
             guard replicas.contains(where: { $0.deletedAt != nil }) else {
                 throw NoteReplicaMutationError.notRecentlyDeleted(noteID)
             }
-            for replica in replicas { replica.deletedAt = nil }
+            for replica in replicas {
+                replica.deletedAt = nil
+                replica.deletedAttachmentIDsRaw = nil
+            }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription
@@ -450,6 +468,9 @@ final class NoteStore: ObservableObject {
                 guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
                 let snapshot = NoteReplicaSnapshot(first)
                 guard replicas.allSatisfy({ NoteReplicaSnapshot($0) == snapshot }) else { continue }
+                // The delete must have recorded its attachment family; a note
+                // deleted before that was recorded is kept, not guessed at.
+                guard let recordedFamily = first.deletedAttachmentIDs else { continue }
 #if os(macOS)
                 let attachments = try storedAttachments(forNoteID: id)
                 // A file is removed only when no surviving row anywhere holds
@@ -464,12 +485,14 @@ final class NoteStore: ObservableObject {
                     }
                 }
                 guard !shared else { continue }
-                // The attachments must be exactly what the delete hid: every
-                // row already there when the note was deleted (nothing added
-                // or changed since, such as a late replica from another
-                // device), and the replicas of each attachment identical,
-                // bytes included. Anything else keeps the note for now.
-                guard let deletedAt = first.deletedAt,
+                // The attachments must be exactly what the delete hid: the
+                // same ids it recorded (a row that arrived later, whatever
+                // its timestamps, has an id outside the record), no row
+                // changed after the delete, and the replicas of each
+                // attachment identical, bytes included. Anything else keeps
+                // the note for now.
+                guard Set(attachments.map(\.id)) == recordedFamily,
+                      let deletedAt = first.deletedAt,
                       attachments.allSatisfy({ row in
                           row.createdAt <= deletedAt && row.updatedAt <= deletedAt
                               && (row.deletedAt.map { $0 <= deletedAt } ?? true)
@@ -481,6 +504,8 @@ final class NoteStore: ObservableObject {
                       }) else { continue }
                 references += attachments.map { AttachmentFileReference($0, includePayload: false) }
                 attachments.forEach(context.delete)
+#else
+                _ = recordedFamily
 #endif
                 replicas.forEach(context.delete)
                 purgedIDs.insert(id)

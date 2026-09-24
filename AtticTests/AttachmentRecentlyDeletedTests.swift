@@ -118,10 +118,65 @@ extension AttachmentRecentlyDeletedTests {
         let attachment = NoteAttachment(noteID: note.id, originalFilename: "a.txt", byteCount: 1, sortIndex: 0,
                                         contentDigest: String(repeating: "c", count: 64),
                                         createdAt: Date(timeIntervalSince1970: 500), payload: Data([1]))
+        note.deletedAttachmentIDsRaw = attachment.id.uuidString
         seed.insert(note)
         seed.insert(attachment)
         try seed.save()
         return (note, attachment)
+    }
+
+    func testNotePurgeWaitsForALateAttachmentWithANewIDAndEarlierTimestamps() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "Doomed")
+        let kept = NoteAttachment(noteID: note.id, originalFilename: "a.txt", byteCount: 1, sortIndex: 0,
+                                  contentDigest: String(repeating: "c", count: 64),
+                                  createdAt: Date(timeIntervalSince1970: 500), payload: Data([1]))
+        seed.insert(note)
+        seed.insert(kept)
+        try seed.save()
+        let clock = MutableNow(Date(timeIntervalSince1970: 1_000))
+        let store = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: note.id))))
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<NoteItem>()).first?.deletedAttachmentIDsRaw,
+                       kept.id.uuidString, "the delete records its attachment family")
+
+        // A row from another device that arrived after the delete, with a
+        // new id and timestamps from before it: nothing but the record
+        // shows it was never part of the delete.
+        let context = ModelContext(container)
+        let late = NoteAttachment(noteID: note.id, originalFilename: "late.txt", byteCount: 1, sortIndex: 1,
+                                  contentDigest: String(repeating: "d", count: 64),
+                                  createdAt: Date(timeIntervalSince1970: 600), payload: Data([2]))
+        context.insert(late)
+        try context.save()
+
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 1)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 2)
+
+        // The family the delete recorded, and nothing more, is purged.
+        context.delete(late)
+        try context.save()
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [note.id])
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 0)
+    }
+
+    func testNoteDeletedWithoutARecordedAttachmentFamilyIsKept() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let (note, _) = try deletedNote(container)
+        let context = ModelContext(container)
+        try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>()).first).deletedAttachmentIDsRaw = nil
+        try context.save()
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 1)
+
+        // Restoring it and deleting it again records the family.
+        XCTAssertTrue(store.restoreDeleted(noteID: note.id))
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: note.id))))
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [note.id])
     }
 
     func testNotePurgeWaitsForAnAttachmentThatArrivedAfterTheDelete() throws {

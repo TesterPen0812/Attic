@@ -44,7 +44,7 @@ final class SchemaMigrationTests: XCTestCase {
             let attachmentAttributes = Set(entities["NoteAttachment"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(attachmentAttributes.contains("deletedAt"))
             let noteAttributes = Set(entities["NoteItem"]?.attributes.map(\.name) ?? [])
-            XCTAssertTrue(noteAttributes.isSuperset(of: ["deletedAt", "tagsRaw"]))
+            XCTAssertTrue(noteAttributes.isSuperset(of: ["deletedAt", "deletedAttachmentIDsRaw", "tagsRaw"]))
             let boardAttributes = Set(entities["CanvasBoardItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(boardAttributes.isSuperset(of: ["tagsRaw", "purgedAt", "recentlyDeletedAt", "deletedContentCount"]))
         }
@@ -330,7 +330,10 @@ final class SchemaMigrationTests: XCTestCase {
 
         let noteRows = try context.fetch(FetchDescriptor<NoteItem>())
         XCTAssertEqual(noteRows.count, 2)
-        XCTAssertTrue(noteRows.allSatisfy { $0.id == fixture.noteID && $0.body == "Bring the passport." && $0.deletedAt == nil })
+        XCTAssertTrue(noteRows.allSatisfy {
+            $0.id == fixture.noteID && $0.body == "Bring the passport." && $0.deletedAt == nil
+                && $0.deletedAttachmentIDsRaw == nil
+        }, "new note fields take their defaults")
         let attachments = try context.fetch(FetchDescriptor<NoteAttachment>())
         XCTAssertTrue(attachments.allSatisfy { $0.deletedAt == nil })
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: attachments.map { ($0.id, $0.payload) }),
