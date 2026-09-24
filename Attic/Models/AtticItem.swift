@@ -62,3 +62,13 @@ struct DeletedItemSummary: Equatable, Sendable {
         retentionStart.map { RecentlyDeletedPolicy.expiry(deletedAt: $0, calendar: calendar) }
     }
 }
+
+/// One attachment removed on its own (a task file or a note attachment),
+/// restorable from Recently Deleted for 30 days.
+struct DeletedAttachmentSummary: Equatable, Sendable {
+    let attachmentID: UUID
+    /// The task or note it belongs to.
+    let owner: AtticItemRef
+    let filename: String
+    let deletedAt: Date
+}

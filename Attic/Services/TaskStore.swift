@@ -145,6 +145,8 @@ private struct TaskReplicaSnapshot: Equatable {
     let imageReferencesData: Data?
     let deletedAt: Date?
     let deletionRootID: UUID?
+    let deletionMembersRaw: String
+    let removedAttachmentsData: Data?
     let doneLoggedAt: Date?
     let tagsRaw: String
     let dueDayRaw: String?
@@ -162,6 +164,8 @@ private struct TaskReplicaSnapshot: Equatable {
         imageReferencesData = task.imageReferencesData
         deletedAt = task.deletedAt
         deletionRootID = task.deletionRootID
+        deletionMembersRaw = task.deletionMembersRaw
+        removedAttachmentsData = task.removedAttachmentsData
         doneLoggedAt = task.doneLoggedAt
         tagsRaw = task.tagsRaw
         dueDayRaw = task.dueDayRaw
@@ -195,6 +199,9 @@ struct TaskEditableState: Equatable {
 private enum TaskReplicaMutationError: LocalizedError {
     case missingReplica(UUID)
     case notRecentlyDeleted(UUID)
+    case incompleteRestore(UUID)
+    case parentNotLive(UUID)
+    case attachmentNotRemoved(UUID)
 
     var errorDescription: String? {
         switch self {
@@ -202,6 +209,12 @@ private enum TaskReplicaMutationError: LocalizedError {
             "The task replicas for \(id.uuidString) could not be loaded safely."
         case let .notRecentlyDeleted(id):
             "The task \(id.uuidString) is not in Recently Deleted."
+        case .incompleteRestore:
+            "Part of this deleted task is missing or its copies disagree, so it can’t be restored safely."
+        case .parentNotLive:
+            "Restore its main task first; this subtask returns to it."
+        case .attachmentNotRemoved:
+            "That attachment is not in Recently Deleted."
         }
     }
 }
@@ -701,6 +714,8 @@ final class TaskStore: ObservableObject {
             // another device hid: the list only ever shows live tasks.
             replica.deletedAt = task.deletedAt
             replica.deletionRootID = task.deletionRootID
+            replica.deletionMembersRaw = task.deletionMembersRaw
+            replica.removedAttachmentsData = task.removedAttachmentsData
             replica.doneLoggedAt = task.doneLoggedAt
             replica.updatedAt = timestamp
         }
@@ -938,6 +953,9 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    /// Removes one attachment from a task into Recently Deleted: the
+    /// reference moves to the task's removed list on every replica, and its
+    /// file stays until the removal is purged 30 days later.
     @discardableResult
     func removeAttachment(_ attachmentID: UUID, from taskID: UUID) -> Bool {
         guard let task = tasks.first(where: { $0.id == taskID }),
@@ -947,17 +965,103 @@ final class TaskStore: ObservableObject {
         // removal has to be visible there rather than behind a closed panel.
         let owner = familyOwner(of: task)
         do {
-            let data = try JSONEncoder().encode(task.attachments.filter { $0.id != attachmentID })
+            let timestamp = now()
+            let kept = try JSONEncoder().encode(task.attachments.filter { $0.id != attachmentID })
+            let removedList = try JSONEncoder().encode(
+                task.removedAttachments + [RemovedTaskAttachment(reference: removed, removedAt: timestamp)]
+            )
             for replica in try storedTasks(matching: taskID) {
-                replica.imageReferencesData = data; replica.updatedAt = now()
+                replica.imageReferencesData = kept
+                replica.removedAttachmentsData = removedList
+                replica.updatedAt = timestamp
             }
-            guard save(owner: owner) else { return false }
-            removeAttachmentFiles([removed], excludingTaskIDs: [])
-            return true
         } catch {
+            context.rollback()
             report(error.localizedDescription, owner: owner)
             return false
         }
+        return save(owner: owner)
+    }
+
+    /// Attachments removed from tasks that are still shown, newest first.
+    func recentlyDeletedAttachments() -> [DeletedAttachmentSummary] {
+        tasks.flatMap { task in
+            task.removedAttachments.map {
+                DeletedAttachmentSummary(
+                    attachmentID: $0.reference.id,
+                    owner: AtticItemRef(.task, task.id),
+                    filename: $0.reference.filename,
+                    deletedAt: $0.removedAt
+                )
+            }
+        }
+        .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
+    }
+
+    /// Puts a removed attachment back at the end of its task's attachments,
+    /// on every replica, in one save.
+    @discardableResult
+    func restoreAttachment(_ attachmentID: UUID) -> Bool {
+        guard let task = tasks.first(where: { $0.removedAttachments.contains { $0.reference.id == attachmentID } }),
+              let entry = task.removedAttachments.first(where: { $0.reference.id == attachmentID }) else {
+            report(TaskReplicaMutationError.attachmentNotRemoved(attachmentID).localizedDescription, owner: nil)
+            return false
+        }
+        let owner = familyOwner(of: task)
+        guard task.attachments.count < AttachmentLimits.maxAttachmentsPerNote else {
+            report("A task can hold at most \(AttachmentLimits.maxAttachmentsPerNote) attachments.", owner: owner)
+            return false
+        }
+        do {
+            let restored = try JSONEncoder().encode(task.attachments + [entry.reference])
+            let remaining = task.removedAttachments.filter { $0.reference.id != attachmentID }
+            let remainingData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
+            let timestamp = now()
+            for replica in try storedTasks(matching: task.id) {
+                replica.imageReferencesData = restored
+                replica.removedAttachmentsData = remainingData
+                replica.updatedAt = timestamp
+            }
+        } catch {
+            context.rollback()
+            report(error.localizedDescription, owner: owner)
+            return false
+        }
+        return save(owner: owner)
+    }
+
+    /// Drops removals older than `cutoff` from every task whose replicas
+    /// agree, then releases files no surviving replica (shown, removed or
+    /// deleted) still references. Returns how many attachments were purged.
+    @discardableResult
+    func purgeRemovedAttachments(before cutoff: Date) -> Int {
+        var expired: [TaskImageReference] = []
+        do {
+            let rows = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.removedAttachmentsData != nil }
+            ))
+            let ids = Array(Set(rows.map(\.id)))
+            let all = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+            for replicas in Dictionary(grouping: all, by: \.id).values {
+                guard let first = replicas.first, let data = first.removedAttachmentsData else { continue }
+                let snapshot = TaskReplicaSnapshot(first)
+                guard replicas.allSatisfy({ TaskReplicaSnapshot($0) == snapshot }) else { continue }
+                let entries = try JSONDecoder().decode([RemovedTaskAttachment].self, from: data)
+                let old = entries.filter { $0.removedAt < cutoff }
+                guard !old.isEmpty else { continue }
+                let remaining = entries.filter { $0.removedAt >= cutoff }
+                let remainingData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
+                for replica in replicas { replica.removedAttachmentsData = remainingData }
+                expired += old.map(\.reference)
+            }
+        } catch {
+            context.rollback()
+            report(error.localizedDescription, owner: nil)
+            return 0
+        }
+        guard !expired.isEmpty, save() else { return 0 }
+        removeAttachmentFiles(expired, excludingTaskIDs: [])
+        return expired.count
     }
 
     /// Removes private files only for references no surviving replica still
@@ -984,13 +1088,19 @@ final class TaskStore: ObservableObject {
     /// files rather than guess.
     private func storedAttachmentIDs(excludingTaskIDs deleted: Set<UUID>) throws -> Set<UUID> {
         let withAttachments = FetchDescriptor<TaskItem>(
-            predicate: #Predicate { $0.imageReferencesData != nil }
+            predicate: #Predicate { $0.imageReferencesData != nil || $0.removedAttachmentsData != nil }
         )
         var referencedIDs = Set<UUID>()
         for replica in try context.fetch(withAttachments) where !deleted.contains(replica.id) {
-            guard let data = replica.imageReferencesData, !data.isEmpty else { continue }
-            let references = try JSONDecoder().decode([TaskImageReference].self, from: data)
-            referencedIDs.formUnion(references.map(\.id))
+            if let data = replica.imageReferencesData, !data.isEmpty {
+                let references = try JSONDecoder().decode([TaskImageReference].self, from: data)
+                referencedIDs.formUnion(references.map(\.id))
+            }
+            // Removed attachments keep their files while they are restorable.
+            if let data = replica.removedAttachmentsData, !data.isEmpty {
+                let removed = try JSONDecoder().decode([RemovedTaskAttachment].self, from: data)
+                referencedIDs.formUnion(removed.map(\.reference.id))
+            }
         }
         return referencedIDs
     }
@@ -1051,9 +1161,11 @@ final class TaskStore: ObservableObject {
         let timestamp = now()
         var deletedIDs = Set<UUID>()
         for (root, rows) in staged {
+            let members = Set(rows.map(\.id)).map(\.uuidString).sorted().joined(separator: " ")
             for replica in rows {
                 replica.deletedAt = timestamp
                 replica.deletionRootID = root
+                replica.deletionMembersRaw = members
                 deletedIDs.insert(replica.id)
             }
         }
@@ -1159,26 +1271,70 @@ final class TaskStore: ObservableObject {
         restoreDeleted(taskIDs: [taskID])
     }
 
-    /// Several restores in one save (redoing a batch creation).
+    /// Several restores in one save (redoing a batch creation). Before
+    /// anything is written, every physical replica of every task the delete
+    /// recorded is inspected, live duplicates included: each member must still
+    /// have its deleted rows, no replica may belong to a different delete, and
+    /// the copies must agree on who was deleted together. A subtask deleted on
+    /// its own comes back only while its main task is live (restore the main
+    /// task first), so it always returns to its family, never as a stray row.
     @discardableResult
     func restoreDeleted(taskIDs: [UUID]) -> Bool {
         guard !taskIDs.isEmpty else { return false }
         do {
+            var batches: [UUID: [TaskItem]] = [:]
             for taskID in Set(taskIDs) {
-                let batch = try context.fetch(FetchDescriptor<TaskItem>(
+                batches[taskID] = try context.fetch(FetchDescriptor<TaskItem>(
                     predicate: #Predicate { $0.deletionRootID == taskID && $0.deletedAt != nil }
                 ))
-                guard batch.contains(where: { $0.id == taskID }) else {
-                    throw TaskReplicaMutationError.notRecentlyDeleted(taskID)
+            }
+            // A subtask created with its parent in one batch was deleted with
+            // it and comes back with it.
+            let covered = Set(batches.values.flatMap { $0.map(\.id) })
+            var restoring = Set<UUID>()
+            for (rootID, batch) in batches {
+                if batch.isEmpty {
+                    guard covered.contains(rootID) else { throw TaskReplicaMutationError.notRecentlyDeleted(rootID) }
+                    continue
                 }
-                // Every deleted replica of those ids, so copies agree afterwards.
-                let ids = Array(Set(batch.map(\.id)))
+                guard batch.contains(where: { $0.id == rootID }) else {
+                    throw TaskReplicaMutationError.notRecentlyDeleted(rootID)
+                }
+                let recorded = batch[0].deletionMembersRaw
+                let members = batch[0].deletionMembers
+                guard !members.isEmpty, members.contains(rootID),
+                      batch.allSatisfy({ $0.deletionMembersRaw == recorded }),
+                      members.allSatisfy({ id in batch.contains { $0.id == id } }),
+                      Set(batch.map(\.id)).isSubset(of: members) else {
+                    throw TaskReplicaMutationError.incompleteRestore(rootID)
+                }
+                let ids = Array(members)
                 let replicas = try context.fetch(FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { ids.contains($0.id) && $0.deletedAt != nil }
+                    predicate: #Predicate { ids.contains($0.id) }
                 ))
-                for replica in replicas {
+                guard replicas.allSatisfy({ $0.deletedAt == nil || $0.deletionRootID == rootID }) else {
+                    throw TaskReplicaMutationError.incompleteRestore(rootID)
+                }
+                restoring.formUnion(members)
+            }
+            // A root that is a subtask returns only under a live main task.
+            for (rootID, batch) in batches where !batch.isEmpty {
+                guard let parentID = batch.first(where: { $0.id == rootID })?.parentID,
+                      parentID != rootID, !restoring.contains(parentID) else { continue }
+                let parentRows = try context.fetch(FetchDescriptor<TaskItem>(
+                    predicate: #Predicate { $0.id == parentID }
+                ))
+                // A parent that no longer exists at all leaves the subtask
+                // visible as a root, as for any orphaned link.
+                if !parentRows.isEmpty, task(withID: parentID) == nil {
+                    throw TaskReplicaMutationError.parentNotLive(rootID)
+                }
+            }
+            for batch in batches.values {
+                for replica in batch {
                     replica.deletedAt = nil
                     replica.deletionRootID = nil
+                    replica.deletionMembersRaw = ""
                 }
             }
         } catch {
@@ -1241,7 +1397,7 @@ final class TaskStore: ObservableObject {
             removed += ids.flatMap { storedByID[$0] ?? [] }
         }
         guard !removed.isEmpty else { return [] }
-        let removedFiles = removed.flatMap(\.attachments)
+        let removedFiles = removed.flatMap { $0.attachments + $0.removedAttachments.map(\.reference) }
         removed.forEach(context.delete)
         guard save() else { return [] }
         removeAttachmentFiles(removedFiles, excludingTaskIDs: purgedIDs)
@@ -1880,6 +2036,8 @@ final class TaskStore: ObservableObject {
             task.imageReferencesData?.base64EncodedString() ?? "",
             task.deletedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
             task.deletionRootID?.uuidString ?? "",
+            task.deletionMembersRaw,
+            task.removedAttachmentsData?.base64EncodedString() ?? "",
             task.doneLoggedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
             task.tagsRaw,
             task.dueDayRaw ?? "",

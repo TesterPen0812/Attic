@@ -28,6 +28,13 @@ final class TaskItem {
     /// the whole family was deleted together. Restoring that id brings back
     /// exactly the rows one delete hid, never a subtask deleted on its own.
     var deletionRootID: UUID? = nil
+    /// Every task id one delete hid, recorded on each of its rows (sorted,
+    /// space-separated), so a restore can prove it brings the whole set back.
+    var deletionMembersRaw: String = ""
+    /// Attachments removed one at a time: the references (with when they were
+    /// removed) wait here for 30 days, their files kept, so each can be
+    /// restored. JSON of `[RemovedTaskAttachment]`.
+    var removedAttachmentsData: Data? = nil
     /// Set when the daily cleanup moves a finished task into the Done log.
     /// The row is kept indefinitely; today's list simply no longer shows it.
     var doneLoggedAt: Date? = nil
@@ -103,5 +110,22 @@ final class TaskItem {
     }
 
     var isSoftDeleted: Bool { deletedAt != nil }
+
+    /// Attachments in Recently Deleted. Unreadable data reads as empty here;
+    /// file cleanup decodes strictly and keeps files when it cannot read.
+    var removedAttachments: [RemovedTaskAttachment] {
+        guard let removedAttachmentsData, !removedAttachmentsData.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([RemovedTaskAttachment].self, from: removedAttachmentsData)) ?? []
+    }
+
+    var deletionMembers: Set<UUID> {
+        Set(deletionMembersRaw.split(separator: " ").compactMap { UUID(uuidString: String($0)) })
+    }
     var isInDoneLog: Bool { doneLoggedAt != nil }
+}
+
+/// A task attachment removed on its own, kept restorable for 30 days.
+struct RemovedTaskAttachment: Codable, Equatable, Sendable {
+    let reference: TaskImageReference
+    let removedAt: Date
 }

@@ -6,6 +6,7 @@ struct RecentlyDeletedPurgeReport: Equatable {
     var taskIDs: Set<UUID> = []
     var noteIDs: Set<UUID> = []
     var canvasIDs: Set<UUID> = []
+    var attachmentCount = 0
     var removedLinks = 0
 
     var itemCount: Int { taskIDs.count + noteIDs.count + canvasIDs.count }
@@ -210,6 +211,26 @@ final class AtticLibrary {
         }
     }
 
+    /// Attachments removed on their own from live tasks and notes.
+    func recentlyDeletedAttachments() -> [DeletedAttachmentSummary] {
+        (tasks.recentlyDeletedAttachments() + (notes?.recentlyDeletedAttachments() ?? []))
+            .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
+    }
+
+    /// Puts a removed attachment back on its task or note.
+    @discardableResult
+    func restoreAttachment(_ summary: DeletedAttachmentSummary) -> Bool {
+        switch summary.owner.kind {
+        case .task:
+            return tasks.restoreAttachment(summary.attachmentID) || fail(tasks.lastErrorMessage)
+        case .note:
+            guard let notes else { return fail("Notes are unavailable.") }
+            return notes.restoreAttachment(summary.attachmentID) || fail(notes.lastErrorMessage)
+        case .canvas:
+            return fail("Canvas images are restored with the canvas's own undo.")
+        }
+    }
+
     /// Everything in Recently Deleted, newest deletion first.
     func recentlyDeleted() -> [DeletedItemSummary] {
         (tasks.recentlyDeletedTasks()
@@ -232,6 +253,8 @@ final class AtticLibrary {
         report.taskIDs = tasks.purgeDeleted(before: cutoff)
         report.noteIDs = notes?.purgeDeleted(before: cutoff) ?? []
         report.canvasIDs = canvases?.purgeDeletedCanvases(before: cutoff) ?? []
+        report.attachmentCount = tasks.purgeRemovedAttachments(before: cutoff)
+            + (notes?.purgeRemovedAttachments(before: cutoff) ?? 0)
         let purged = Set(report.taskIDs.map { AtticItemRef(.task, $0) })
             .union(report.noteIDs.map { AtticItemRef(.note, $0) })
             .union(report.canvasIDs.map { AtticItemRef(.canvas, $0) })

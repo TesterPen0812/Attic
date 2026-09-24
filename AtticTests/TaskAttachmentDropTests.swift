@@ -392,7 +392,9 @@ final class TaskAttachmentDropTests: XCTestCase {
         XCTAssertEqual(relaunched.tasks.first { $0.id == other.id }?.attachments, [copy])
 
         // Removing the copy never touches the source's bytes.
+        // (Removal is soft until the purge; the purge releases the copy.)
         XCTAssertTrue(store.removeAttachment(copy.id, from: other.id))
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
         await eventually { privateDirectories() == [source.id.uuidString] }
         let sourceStillVerified = try await files.verifiedURL(for: source)
         XCTAssertNotNil(sourceStillVerified)

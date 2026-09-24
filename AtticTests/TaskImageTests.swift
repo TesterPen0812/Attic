@@ -278,6 +278,9 @@ final class TaskImageTests: XCTestCase {
         XCTAssertEqual(storedAttachmentDirectories(storage).count, 1, "a soft-deleted task keeps its file")
         XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [twin.id])
         try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(storedAttachmentDirectories(storage).count, 1, "the owner's removal is still restorable")
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
+        try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(storedAttachmentDirectories(storage).count, 0, "the last reference releases the file")
     }
 

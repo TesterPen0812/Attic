@@ -1559,9 +1559,15 @@ final class NoteAttachmentTests: XCTestCase {
         )
         let visible = try XCTUnwrap(store.attachments(for: noteID).first)
 
+        // Removal is soft: every replica is marked, and the purge after 30
+        // days removes every replica.
         XCTAssertTrue(store.removeAttachment(visible))
         let remaining = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
-        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertEqual(remaining.count, 2)
+        XCTAssertTrue(remaining.allSatisfy { $0.deletedAt != nil })
+        XCTAssertTrue(store.attachments(for: noteID).isEmpty)
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
+        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
     }
 
     @MainActor
@@ -1625,7 +1631,10 @@ final class NoteAttachmentTests: XCTestCase {
 
         XCTAssertTrue(store.removeAttachment(visible))
         XCTAssertTrue(store.attachmentsByNoteID.values.allSatisfy(\.isEmpty))
-        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>()).isEmpty)
+        // Removal is soft on every replica, whichever note it claims.
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt != nil })
     }
 
     @MainActor
