@@ -590,7 +590,7 @@ private struct StatusCircleBoard: View {
             }
             .padding(.horizontal, 10)
         }
-        AtticSpecimen("Keyboard focus (Full Keyboard Access): Attic's ring, not the system's", fullWidth: true) {
+        AtticSpecimen("Keyboard focus (Full Keyboard Access)", fullWidth: true) {
             HStack(spacing: 22) {
                 AtticStatusButton(state: .todo, priority: .high, onAdvance: demo.record("Advance")).atticForcedState(.focused)
                 AtticStatusButton(state: .done, priority: .none, onAdvance: demo.record("Advance")).atticForcedState(.focused)
