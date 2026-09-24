@@ -49,9 +49,8 @@ One run observes `hidden_idle`, `tasks_open`, `canvas_open`, `after_hide`, then
 launch; `after_hide` starts after 30 seconds hidden since AppKit confirms the
 hide; the final idle window follows after two seconds. Open phases also wait
 two seconds. The panel is held visible during Tasks and Canvas, and the Canvas
-selection must expose
-1,700 seeded strokes. Tasks-to-Canvas page timing begins while the panel is
-already visible. The app writes a separate end marker for every window with
+selection must expose 1,700 seeded strokes. Tasks-to-Canvas page timing begins
+while the panel is already visible. The app writes a separate end marker with
 visibility, hover-monitor state, and transition count; the probe fails if any
 changed during the window. The scripted hide returns the hover state machine
 to its real hidden cadence. Its end-window timer starts only after AppKit
@@ -60,6 +59,10 @@ For the process probe, a `SIGUSR1` sent after each sampled window triggers its
 end marker and the next phase. This event-driven handoff avoids overlap when a
 large Canvas reveal or AppKit hide takes longer than expected. XCTest uses a
 separate timed UI-test path because XCTest owns its measurements.
+New phase markers also record the pointer's global AppKit coordinates. The
+recorded Baseline A predates that metadata; its sampling method is unchanged.
+For future local baselines, park the pointer away from the configured corner
+and keep it still throughout the locked run.
 
 Each window records two `footprint -j` physical footprint readings, process
 CPU time, and process interrupt wake-ups. Rates use the actual elapsed window
@@ -89,7 +92,9 @@ The five performance UI tests record `XCTApplicationLaunchMetric`,
 metrics, with no accepted XCTest baseline and no CI threshold. The CPU metric
 around a two-second sleep can read near zero; the process probe is the CPU
 and wake-up comparison. The existing Task and Canvas unit performance gates
-remain in the full unit suite.
+remain in the full unit suite. The after-hide UI metric waits 30 seconds after
+the panel disappears, matching the process probe's settled after-hide state;
+the Tasks and Canvas tests assert their selected section after measurement.
 
 All `OSSignposter` intervals use subsystem `com.taha.Attic`, category
 `Performance`. The small timing file is written only for a validated external
@@ -112,25 +117,33 @@ use a frame trace to judge those endpoints.
 
 ## CI comparison
 
-The `macos-26` lane builds the pinned reference and candidate on one runner,
-then alternates five runs per side in AB/BA order. A candidate observation is
-a *clear regression* only if every candidate run exceeds the reference
-maximum plus its observed spread. Flat reference series are reported, never
-gated. Primary comparison series are settled hidden footprint, hidden CPU,
-hidden interrupt wake-ups, after-hide footprint, final hidden footprint, and
-order-front reveal timing. Every other phase and timing is printed for review;
-package idle wake-ups are excluded. A suspected regression triggers a fresh
-five-pair confirmation run. The comparison remains **non-blocking** until
-several `macos-26` jobs demonstrate stable variance. A probe failure or a
-performance UI test failure still fails CI. This avoids treating runner-to-
-runner hardware variation as a budget, and does not invent a memory or CPU
-target.
+The performance comparison runs in its own `macos-26` job on a fresh runner,
+apart from the build, unit, UI, and analyzer job. It builds the pinned
+reference and candidate there, then alternates six runs per side in balanced
+AB/BA order. A primary series separates only if **every** candidate run is
+above **every** reference run. Primary series are settled hidden footprint,
+hidden CPU, hidden interrupt wake-ups, after-hide footprint, final hidden
+footprint, and the **first** reveal-to-order-front timing in each run. Every
+other phase and timing is printed for review; package idle wake-ups are
+excluded. A suspected regression triggers six fresh pairs. Only a primary
+measure that separates again in the confirmation is reported with a GitHub
+`::warning::` annotation. This is a same-run ordering comparison, not a
+universal memory or CPU target.
+
+The performance UI lane uses the same ad-hoc signed sandbox configuration as
+local verification. Both new performance lanes remain **non-blocking** until
+they pass at least once on `macos-26` with Xcode 26.6; signed UI automation,
+`open --env`, and `footprint` have not been verified on that runner. Their
+outcomes and artifacts are reported without skipping the analyzer or final
+worktree checks. The comparison job records actual sampling and confirmation
+durations in its artifact. Those CI durations are pending the first run;
+later promotion to a blocking gate should use observed durations and variance.
 
 The `PERF_REFERENCE_COMMIT` SHA in the workflow must remain reachable after
 merge: merge commits, not squash. Advance it deliberately with a new baseline
 and compatible fixture/schema when the implementation or data model changes.
 
-For a local same-machine comparison with five comparable runs per side:
+For a local same-machine comparison with at least six comparable runs per side:
 
 ```zsh
 python3 Scripts/compare_performance.py path/to/reference.json path/to/candidate.json
@@ -192,8 +205,18 @@ run is not a regression verdict.
   optimization and profiling.
 - Hidden interrupt wake-ups ranged from 0.99 to 62.17 per second in the first
   settled window and 24.38 to 51.93 per second in the final hidden window.
-  Background Mac activity and app activity are not separated by this counter;
-  profile the monitor and other hidden work before assigning cause.
+  The first run measured 0.02% hidden CPU and about one wake-up per second,
+  while other runs reached 2.95% and 62.17 wake-ups per second. Pointer motion
+  may contribute: mouse events can sample the corner monitor at 30 Hz. The
+  old baseline has no pointer coordinates, so attribution needs a parked,
+  still-pointer trace as well as profiling of other hidden work.
+- Footprint started at 160–163 MiB hidden. In runs 1–2 the first visible
+  Tasks-to-Canvas sequence ended at 113–114 MiB and stayed there, roughly
+  47–50 MiB below launch idle; run 3 settled at 123 MiB. This retained launch
+  footprint is observed waste to profile, with its owner still unknown.
+  Canvas was not settled either: run 2 fell from 172.36 to 113.52 MiB during
+  the Canvas window.
+  End readings alone do not describe its peak or steady state.
 - The signpost endpoints precede physical display scan-out. Ink latency and
   note keystroke-to-screen remain unmeasured until an interactive frame trace.
   `StoreSave` also has no automated driving workload yet.
