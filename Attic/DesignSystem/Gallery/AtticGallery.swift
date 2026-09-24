@@ -29,20 +29,6 @@ enum AtticGalleryLaunch {
     @discardableResult
     static func startIfRequested() -> Bool {
         guard isRequested else { return false }
-        let arguments = ProcessInfo.processInfo.arguments
-        if let index = arguments.firstIndex(of: "--decision-sheet"), index + 1 < arguments.count {
-            let directory = URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let result = AtticDecisionSheet.write(to: directory)
-            let lines = result.measurements.keys.sorted().map { key -> String in
-                let m = result.measurements[key]!
-                func f(_ v: Double?) -> String { v.map { String(format: "%.2f", $0) } ?? "-" }
-                return "\(key): body \(f(m.body)) label \(f(m.label)) helper \(f(m.helper))" + (m.tintDifference.map { String(format: " tintΔE %.1f", $0) } ?? "")
-            }
-            try? lines.joined(separator: "\n").write(to: directory.appendingPathComponent("decisions-glass-and-tint.txt"), atomically: true, encoding: .utf8)
-            print("Decision sheet: \(result.url?.path ?? "not written")")
-            exit(result.url == nil ? 1 : 0)
-        }
         if let directory = captureDirectory {
             runCapture(into: directory)
             return true
@@ -171,18 +157,9 @@ private struct AtticGalleryControls: View {
                 Toggle("Reduce transparency", isOn: $context.reduceTransparency)
                 Toggle("Reduce motion", isOn: $context.reduceMotion)
                 Toggle("Differentiate without colour", isOn: $context.differentiateWithoutColor)
-                Toggle("Stronger text (option)", isOn: $context.variant.strongerTextOnTranslucentOrTint)
-                    .help("On translucent or tinted panels, helper text uses the label colour and labels use body")
-                Toggle("PR #5 tint strengths (option)", isOn: $context.variant.designedTintStrength)
-                Picker("Glass readability", selection: $context.translucencyPolicy) {
-                    ForEach(AtticSurfaceModel.Policy.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                .frame(width: 300)
                 Spacer()
                 let panel = context.tokens.panel
-                Text(panel.kind == .solid
-                     ? "Solid"
-                     : "Foundation \(Int((panel.foundationOpacity * 100).rounded())) %" + (panel.isTintClamped ? " · tint held to \(Int((panel.tintScale * 100).rounded())) % for readability" : ""))
+                Text(panel.kind == .solid ? "Solid" : "Coverage \(Int((panel.foundationOpacity * 100).rounded())) %")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -209,7 +186,7 @@ struct AtticGalleryStage: View {
             AtticGalleryBoard(family: family, demo: demo)
         case .panel:
             AtticGalleryBoard(family: family, demo: demo)
-                .background(AtticSurfaceBackground(model: design.tokens.panel, shape: RoundedRectangle(cornerRadius: 20, style: .continuous)))
+                .background(AtticSurfaceBackground(model: design.tokens.panel, shape: RoundedRectangle(cornerRadius: 20, style: .continuous), tintHeight: AtticLayout.panelSize.height))
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.black.opacity(design.mode == .dark ? 0.5 : 0.10), lineWidth: 0.5))
         }

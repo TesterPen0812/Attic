@@ -458,3 +458,105 @@ struct AtticPaletteTile: View {
             .accessibilityHidden(true)
     }
 }
+
+// MARK: - Slider row and live preview
+
+/// A label-over-value row with a system slider (Tint length). The slider is
+/// the system's own; captures draw a faithful stand-in.
+struct AtticSliderRow: View {
+    let label: String
+    let valueText: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+    @State private var probeID = UUID()
+
+    var body: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                AtticText(verbatim: label, style: .groupLabel, ink: .label)
+                AtticText(verbatim: valueText, style: .groupValue, ink: .body)
+            }
+            Spacer(minLength: 8)
+            Group {
+                if capture != nil {
+                    AtticSliderDrawing(fraction: (value - range.lowerBound) / (range.upperBound - range.lowerBound))
+                } else {
+                    Slider(value: $value, in: range)
+                        .controlSize(.small)
+                        .tint(design.tokens.color(.accent))
+                        .labelsHidden()
+                        .accessibilityLabel(label)
+                        .accessibilityValue(valueText)
+                }
+            }
+            .frame(width: 180)
+        }
+        .padding(.leading, AtticLayout.groupedRowTextInset)
+        .padding(.trailing, 16)
+        .frame(height: AtticLayout.groupedRowTall)
+        .atticControlProbe(
+            "Grouped row", id: probeID,
+            expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowTall),
+            radius: 0, expectedRadius: 0
+        )
+    }
+}
+
+/// A capture-only drawing of the small system slider.
+private struct AtticSliderDrawing: View {
+    let fraction: Double
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let tokens = design.tokens
+        GeometryReader { proxy in
+            let x = proxy.size.width * min(max(fraction, 0), 1)
+            ZStack(alignment: .leading) {
+                Capsule().fill(tokens.selected.over(tokens.groupCard).color).frame(height: 4)
+                Capsule().fill(tokens.color(.accent)).frame(width: x, height: 4)
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.22), radius: 1, y: 0.5)
+                    .frame(width: 14, height: 14)
+                    .offset(x: x - 7)
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .frame(height: 18)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The small live preview at the top of Appearance: the panel as it will
+/// look, over a stand-in desktop, cropped to the part worth showing (the
+/// header, the tabs and the first rows). A picture: it is not interactive,
+/// and the appearance check judges the panel itself, not this copy.
+struct AtticAppearancePreview<Panel: View>: View {
+    var height: CGFloat = 156
+    var scale: CGFloat = 0.62
+    @ViewBuilder let panel: Panel
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: AtticRadius.groupCard, style: .continuous)
+        ZStack(alignment: .top) {
+            AtticStandInWallpaper(dark: design.mode == .dark)
+            panel
+                .scaleEffect(scale, anchor: .top)
+                .frame(width: AtticLayout.panelSize.width * scale, height: AtticLayout.panelSize.height * scale, alignment: .top)
+                .shadow(color: .black.opacity(design.mode == .dark ? 0.35 : 0.14), radius: 8, y: 3)
+                .padding(.top, 18)
+                .environment(\.atticProbesDisabled, true)
+                .allowsHitTesting(false)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: height, alignment: .top)
+        .clipShape(shape)
+        .accessibilityElement()
+        .accessibilityLabel(String(localized: "Preview of the panel"))
+    }
+}

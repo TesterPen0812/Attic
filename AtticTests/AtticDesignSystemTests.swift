@@ -81,11 +81,33 @@ final class AtticDesignSystemTests: XCTestCase {
             for surface in PanelSurfaceStyle.allCases {
                 let tokens = AtticDesignContext(mode: .light, palette: palette, surface: surface, tint: .bold).tokens
                 XCTAssertEqual(tokens.raised, base.raised, "\(palette) changed the controls")
+                XCTAssertEqual(tokens.controlBase, base.controlBase, "\(palette) tinted the controls")
                 XCTAssertEqual(tokens.contentCard, base.contentCard)
                 XCTAssertEqual(tokens.groupCard, base.groupCard)
-                for ink in [AtticInk.heading, .body, .label, .helper, .glyph] {
-                    XCTAssertEqual(tokens.ink(ink), base.ink(ink), "\(palette) changed \(ink)")
-                }
+            }
+            // On the plain Solid look a palette changes no text at all.
+            let solid = AtticDesignContext(mode: .light, palette: palette).tokens
+            for ink in [AtticInk.heading, .body, .label, .helper, .glyph] {
+                XCTAssertEqual(solid.ink(ink), base.ink(ink), "\(palette) changed \(ink)")
+            }
+        }
+    }
+
+    func testTranslucentAndTintedPanelsStepTheTextOneShadeStronger() {
+        let solid = AtticDesignContext(mode: .light).tokens
+        for context in [AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, tint: .bold)] {
+            let tokens = context.tokens
+            XCTAssertGreaterThanOrEqual(tokens.ink(.helper).contrast(on: solid.panel.base), solid.ink(.label).contrast(on: solid.panel.base) - 0.01, context.caption)
+            XCTAssertGreaterThanOrEqual(tokens.ink(.label).contrast(on: solid.panel.base), solid.ink(.body).contrast(on: solid.panel.base) - 0.01, context.caption)
+        }
+    }
+
+    func testTintsKeepTheirDesignedStrength() {
+        for mode in AtticDesignContext.Mode.allCases {
+            for palette in AtticPanelTheme.allCases where !palette.usesNeutralTint {
+                let plain = AtticDesignContext(mode: mode, palette: palette).tokens.panel.composite(.midGrey)
+                let bold = AtticDesignContext(mode: mode, palette: palette, tint: .bold).tokens.panel.composite(.midGrey)
+                XCTAssertEqual(ColorDifference.deltaE76(plain.themeColor, bold.themeColor), 12, accuracy: 0.2, "\(mode) \(palette)")
             }
         }
     }
@@ -100,52 +122,16 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertTrue(report.failures.isEmpty, report.summary)
     }
 
-    func testGlassAndFrostedStaySeeThrough() {
+    func testGlassAndFrostedKeepThePR5Coverage() {
         for mode in AtticDesignContext.Mode.allCases {
             for surface in [PanelSurfaceStyle.glass, .frosted] {
                 let panel = AtticDesignContext(mode: mode, surface: surface).tokens.panel
-                XCTAssertLessThan(panel.foundationOpacity, 1, "\(mode) \(surface) became opaque")
+                XCTAssertLessThan(panel.foundationOpacity, 0.9, "\(mode) \(surface) lost its transparency")
+                let increased = AtticDesignContext(mode: mode, surface: surface, increaseContrast: true).tokens.panel
+                XCTAssertGreaterThanOrEqual(increased.foundationOpacity, panel.foundationOpacity)
             }
         }
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
-    }
-
-    func testDecisionOptionsLeaveTheDefaultsUntouched() {
-        // A3 changes only the text: its coverage is A2's.
-        var a2 = AtticDesignContext(mode: .light, palette: .amethyst, surface: .glass)
-        a2.translucencyPolicy = .transparencyFirst
-        var a3 = a2
-        a3.variant.strongerTextOnTranslucentOrTint = true
-        XCTAssertEqual(a3.tokens.panel.foundationOpacity, a2.tokens.panel.foundationOpacity)
-        XCTAssertEqual(a3.tokens.ink(.helper), a2.tokens.ink(.label))
-        XCTAssertEqual(a3.tokens.ink(.label), a2.tokens.ink(.body))
-        // On an untinted Solid panel the stronger ladder does nothing.
-        var solid = AtticDesignContext(mode: .light)
-        solid.variant.strongerTextOnTranslucentOrTint = true
-        XCTAssertEqual(solid.tokens.ink(.helper), AtticDesignContext(mode: .light).tokens.ink(.helper))
-        // B2 draws the designed tint; B1 (the default) holds it back.
-        var b2 = AtticDesignContext(mode: .light, palette: .amethyst, tint: .bold)
-        b2.variant.designedTintStrength = true
-        XCTAssertEqual(b2.tokens.panel.tintScale, 1)
-        XCTAssertLessThan(AtticDesignContext(mode: .light, palette: .amethyst, tint: .bold).tokens.panel.tintScale, 1)
-    }
-
-    /// Renders the glass-and-tint decision sheet and pins what it shows:
-    /// the current rules (A1, B1) keep every text role at 4.5 : 1.
-    func testDecisionSheet() throws {
-        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let directory = support.appendingPathComponent("AtticDecisions", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let result = AtticDecisionSheet.write(to: directory)
-        XCTAssertNotNil(result.url)
-        print("ATTIC_DECISION_SHEET=\(result.url?.path ?? "")")
-        XCTAssertFalse(result.measurements.isEmpty)
-        for (key, measured) in result.measurements where key.hasPrefix("A1") || key.hasPrefix("B1") {
-            for value in [measured.body, measured.helper].compactMap({ $0 }) {
-                XCTAssertGreaterThanOrEqual(value, 4.49, key)
-            }
-            XCTAssertNotNil(measured.label, "\(key) has no label text to measure")
-        }
     }
 
     // MARK: The appearance check
@@ -156,7 +142,7 @@ final class AtticDesignSystemTests: XCTestCase {
     func testAppearanceCheckAndContactSheets() throws {
         let quick = ProcessInfo.processInfo.environment["ATTIC_APPEARANCE_QUICK"] == "1"
         let contexts = quick
-            ? AtticAppearanceCheck.sheetContexts().map(\.context).filter { $0.translucencyPolicy == .fullContrast }
+            ? AtticAppearanceCheck.sheetContexts().map(\.context)
             : AtticAppearanceCheck.allContexts()
         let started = Date()
         let report = AtticAppearanceCheck.run(contexts: contexts)

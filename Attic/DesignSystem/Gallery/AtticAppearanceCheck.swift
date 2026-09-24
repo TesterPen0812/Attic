@@ -12,12 +12,12 @@ import UniformTypeIdentifiers
 /// code, on the rendered pixels and the reported layout:
 ///
 /// - **contrast**: every text run and icon against the pixels actually
-///   behind it (4.5 : 1 text, helper and inactive text included; 3 : 1
-///   icons, circles, rings and priority colours). Glass and Frosted are
-///   rendered over two flat desktops, drawn as their measured native renders
-///   (see `AtticSurfaceModel`): a 50 % grey desktop, judged at the full
-///   floors, and the desktop that fights the text, judged at the owner's
-///   Glass 3 : 1 / Frosted 3.5 : 1 transparency floor.
+///   behind it, to the rule in `AtticSurfaceModel`: all text 4.5 : 1 on
+///   Solid (tinted or not) and under Increase Contrast or Reduce
+///   Transparency; on Glass and Frosted body text and labels 4.5 : 1 and
+///   helper text at least 3 : 1; icons, circles, rings and priority colours
+///   3 : 1 everywhere. Glass and Frosted are rendered over a black, a
+///   mid-grey and a white desktop, each drawn as its measured native render.
 /// - **nothing clipped**: interface text is never shorter than its natural
 ///   size (user content may truncate, and says so).
 /// - **nothing overlapping**: no two text runs or icons in a specimen
@@ -43,7 +43,6 @@ enum AtticAppearanceCheck {
         var contrastPairsChecked = 0
         /// Unique failures, each with the combinations it happened in.
         var failures: [Failure: [String]] = [:]
-        var clampedTints: [String] = []
         /// Foundation and Tint strength per palette, mode and surface, under
         /// both translucency policies: the numbers behind the look.
         var surfaceTable: [String] = []
@@ -68,10 +67,7 @@ enum AtticAppearanceCheck {
                 }
             }
             lines.append("")
-            lines.append("Tints held back for readability (\(clampedTints.count)):")
-            lines.append(contentsOf: clampedTints.map { "  " + $0 })
-            lines.append("")
-            lines.append("Surfaces: foundation over the desktop, and each Tint step's colour difference at the top edge (ΔE76; designed 3 / 7 / 12):")
+            lines.append("Surfaces: coverage over the desktop, and each Tint step's colour difference at the top edge (ΔE76; designed 3 / 7 / 12):")
             lines.append(contentsOf: surfaceTable.map { "  " + $0 })
             lines.append("")
             lines.append("Lowest contrast per role (ratio / floor):")
@@ -120,12 +116,7 @@ enum AtticAppearanceCheck {
             ("Stress · Midnight Cobalt, Dark, Glass, Bold tint", AtticDesignContext(mode: .dark, palette: .midnightCobalt, surface: .glass, tint: .bold)),
             ("Stress · \(lightest.title) (lightest), Light, Frosted", AtticDesignContext(mode: .light, palette: lightest, surface: .frosted)),
             ("Stress · Increase Contrast + Reduce Transparency, Light", AtticDesignContext(mode: .light, increaseContrast: true, reduceTransparency: true)),
-            ("Stress · Increase Contrast + Reduce Transparency, Dark", AtticDesignContext(mode: .dark, increaseContrast: true, reduceTransparency: true)),
-            ("Compare · stress 1 on the PR #5 glass floor", {
-                var context = AtticDesignContext(mode: .dark, palette: .midnightCobalt, surface: .glass, tint: .bold)
-                context.translucencyPolicy = .transparencyFirst
-                return context
-            }())
+            ("Stress · Increase Contrast + Reduce Transparency, Dark", AtticDesignContext(mode: .dark, increaseContrast: true, reduceTransparency: true))
         ]
     }
 
@@ -140,7 +131,7 @@ enum AtticAppearanceCheck {
         report.combinations = contexts.count
         checkModel(contexts: contexts, report: &report)
         for context in contexts {
-            let desktops: [AtticSurfaceModel.Desktop] = context.isTranslucent ? AtticSurfaceModel.Desktop.allCases : [.typical]
+            let desktops: [AtticSurfaceModel.Desktop] = context.isTranslucent ? AtticSurfaceModel.Desktop.allCases : [.midGrey]
             for desktop in desktops {
                 for family in families {
                     check(family: family, context: context, desktop: desktop, scale: scale, report: &report)
@@ -153,12 +144,8 @@ enum AtticAppearanceCheck {
     /// The colour model on its own: every role on every background it is
     /// drawn on, for every combination (fast, no rendering).
     static func checkModel(contexts: [AtticDesignContext], report: inout Report) {
-        var clamped = Set<String>()
         for context in contexts {
             let tokens = context.tokens
-            if tokens.panel.isTintClamped {
-                clamped.insert("\(context.mode.title) · \(context.palette.title) · \(PanelSurfaceStyle(tokens.panel.kind).title) · \(context.tint.title): tint held to \(Int((tokens.panel.tintScale * 100).rounded())) %")
-            }
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
                 controlFace: tokens.raised.face.over(tokens.controlBase), chipSelected: tokens.chipSelected, chipHover: tokens.chipHover,
@@ -171,36 +158,29 @@ enum AtticAppearanceCheck {
             for (card, name) in [(tokens.contentCard, "content card"), (tokens.groupCard, "group card")] {
                 for ink in [AtticInk.heading, .body, .label, .helper] {
                     let ratio = tokens.ink(ink).contrast(on: card)
-                    if ratio < ink.floor.ratio {
-                        report.fail(.init(kind: .model, family: "Model", specimen: name, detail: String(format: "%@ %.2f < %.1f", ink.rawValue, ratio, ink.floor.ratio)), in: context.caption)
+                    let floor = AtticSurfaceModel.floor(for: ink, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
+                    if ratio < floor {
+                        report.fail(.init(kind: .model, family: "Model", specimen: name, detail: String(format: "%@ %.2f < %.1f", ink.rawValue, ratio, floor)), in: context.caption)
                     }
                 }
             }
         }
-        report.clampedTints = clamped.sorted()
         report.surfaceTable = surfaceTable()
     }
 
     static func surfaceTable() -> [String] {
         var lines: [String] = []
-        for policy in AtticSurfaceModel.Policy.allCases {
-            lines.append("[\(policy.title)]")
-            for mode in AtticDesignContext.Mode.allCases {
-                for palette in AtticPanelTheme.allCases {
-                    for surface in PanelSurfaceStyle.allCases where !(policy == .transparencyFirst && surface == .solid) {
-                        var plainContext = AtticDesignContext(mode: mode, palette: palette, surface: surface)
-                        plainContext.translucencyPolicy = policy
-                        let plain = plainContext.tokens.panel
-                        var line = "\(mode.title) · \(palette.title) · \(surface.title): foundation \(Int((plain.foundationOpacity * 100).rounded())) %, tint ΔE"
-                        for tint in [PanelTintLevel.subtle, .vivid, .bold] {
-                            var context = plainContext
-                            context.tint = tint
-                            let tinted = context.tokens.panel
-                            let difference = ColorDifference.deltaE76(tinted.composite(.typical).themeColor, plain.composite(.typical).themeColor)
-                            line += String(format: " %.1f", difference)
-                        }
-                        lines.append(line)
+        for mode in AtticDesignContext.Mode.allCases {
+            for palette in AtticPanelTheme.allCases {
+                for surface in PanelSurfaceStyle.allCases {
+                    let plain = AtticDesignContext(mode: mode, palette: palette, surface: surface).tokens.panel
+                    var line = "\(mode.title) · \(palette.title) · \(surface.title): coverage \(Int((plain.foundationOpacity * 100).rounded())) %, tint ΔE"
+                    for tint in [PanelTintLevel.subtle, .vivid, .bold] {
+                        let tinted = AtticDesignContext(mode: mode, palette: palette, surface: surface, tint: tint).tokens.panel
+                        let difference = ColorDifference.deltaE76(tinted.composite(.midGrey).themeColor, plain.composite(.midGrey).themeColor)
+                        line += String(format: " %.1f", difference)
                     }
+                    lines.append(line)
                 }
             }
         }
@@ -228,7 +208,9 @@ enum AtticAppearanceCheck {
         }, uniquingKeysWith: { first, _ in first })
         // The kind whose floors apply: the Settings chrome is a sidebar
         // (Frosted) material; everything else sits on the panel surface.
-        let judgedKind: AtticPanelSurfaceTreatment.Kind = family.stage == .settingsWindow && context.isTranslucent ? .frosted : context.effectiveSurface
+        // The rule (see `AtticSurfaceModel`): all text 4.5 : 1 on Solid and
+        // under Increase Contrast; on Glass and Frosted helper text keeps
+        // 3 : 1 and everything else 4.5 : 1; icons 3 : 1 everywhere.
 
         var visual: [AtticProbe] = []
         for probe in probes {
@@ -282,7 +264,7 @@ enum AtticAppearanceCheck {
             let isIcon: Bool = if case .icon = probe.kind { true } else { false }
             guard let background = bitmap.background(around: probe.frame, outside: isIcon, foreground: foreground, scale: scale) else { continue }
             let ratio = foreground.contrast(on: background)
-            let floor = AtticSurfaceModel.floor(for: ink.floor, kind: judgedKind, desktop: desktop)
+            let floor = AtticSurfaceModel.floor(for: ink, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
             report.contrastPairsChecked += 1
             let role = "\(ink.rawValue) (\(ink.floor == .text ? "text" : "non-text"))"
             let slack = ratio / floor

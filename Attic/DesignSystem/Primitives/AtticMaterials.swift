@@ -223,6 +223,10 @@ struct AtticSurfaceBackground<S: Shape>: View {
     let shape: S
     /// Settings chrome uses the sidebar material instead of glass.
     var isChrome = false
+    /// The height the Tint spans (the panel's height). Nil spans the whole
+    /// surface; gallery boards taller than a panel pass the panel's height,
+    /// so text sits in the Tint exactly as it would in the panel.
+    var tintHeight: CGFloat?
 
     @Environment(\.atticCapture) private var capture
 
@@ -235,7 +239,16 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 shape.fill(model.base.color)
             }
             if !model.tintStops.isEmpty {
-                shape.fill(LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom))
+                if let tintHeight {
+                    ZStack(alignment: .top) {
+                        model.washColor.withAlpha(model.tintOpacity(at: 1)).color
+                        LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom)
+                            .frame(height: tintHeight)
+                    }
+                    .clipShape(shape)
+                } else {
+                    shape.fill(LinearGradient(stops: model.tintGradientStops, startPoint: .top, endPoint: .bottom))
+                }
             }
         }
         .allowsHitTesting(false)

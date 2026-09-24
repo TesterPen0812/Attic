@@ -204,10 +204,10 @@ struct AtticColorTokens: Equatable, Sendable {
                 return rows + menus + settings
             }
         }
-        // Small safety margins over the floors, so 8-bit rendering never
-        // rounds a pass into a miss.
-        let textTarget = 4.58
-        let nonTextTarget = 3.06
+        // Safety margins over the floors, so 8-bit rendering and the blur
+        // of the rendered glass never round a pass into a miss.
+        let textTarget = 4.66
+        let nonTextTarget = 3.12
 
         // The text ladder and the neutral icons are tuned once per mode and
         // contrast setting, on the neutral base: text always stays in the
@@ -254,40 +254,63 @@ struct AtticColorTokens: Equatable, Sendable {
         inks[.doneFill] = (dark ? AtticRGBA(0x7A7B7E) : AtticRGBA(0x9A9B9D)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
         inks[.onDone] = dark ? AtticRGBA(0x1E1E1F) : AtticRGBA(0xFFFFFF)
 
-        let pairs = AtticSurfaceModel.readabilityPairs(
-            inks: inks, hover: hover, selected: selected, pressed: pressed,
-            controlFace: recipes.rest.face.over(basePanel), chipSelected: chipSelected, chipHover: chipHover,
-            recessed: recessed, tagFill: tagFill, tagFillSelected: tagFillSelected
-        )
-        let chromePairs: [AtticSurfaceModel.Pair] = [
-            .init(ink: .chromeHeading, foreground: inks[.chromeHeading]!, overlays: []),
-            .init(ink: .chromeBody, foreground: inks[.chromeBody]!, overlays: [selected]),
-            .init(ink: .chromeHint, foreground: inks[.chromeHint]!, overlays: []),
-            .init(ink: .chromeIcon, foreground: inks[.chromeIcon]!, overlays: [selected])
-        ]
+        func panelPairs() -> [AtticSurfaceModel.Pair] {
+            // Tag fills follow the accent as it is now (it may be retuned).
+            AtticSurfaceModel.readabilityPairs(
+                inks: inks, hover: hover, selected: selected, pressed: pressed,
+                controlFace: recipes.rest.face.over(basePanel), chipSelected: chipSelected, chipHover: chipHover,
+                recessed: recessed,
+                tagFill: inks[.accent]!.withAlpha(dark ? 0.16 : 0.10),
+                tagFillSelected: inks[.accent]!.withAlpha(dark ? 0.26 : 0.18)
+            )
+        }
+        func chromePairs() -> [AtticSurfaceModel.Pair] {
+            [
+                .init(ink: .chromeHeading, foreground: inks[.chromeHeading]!, overlays: []),
+                .init(ink: .chromeBody, foreground: inks[.chromeBody]!, overlays: [selected]),
+                .init(ink: .chromeHint, foreground: inks[.chromeHint]!, overlays: []),
+                .init(ink: .chromeIcon, foreground: inks[.chromeIcon]!, overlays: [selected])
+            ]
+        }
 
+        // The surfaces: the PR #5 coverage (set by the base ladder) and the
+        // designed tint. The chrome is a sidebar material, modelled as
+        // Frosted when the panel is translucent, and never tinted.
         let panel = AtticSurfaceModel.solve(
             base: panelBase, kind: key.surface, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
-            tint: key.tint, tintLength: key.tintLength, policy: key.policy,
-            designedTintStrength: key.variant.designedTintStrength, pairs: pairs
+            tint: key.tint, tintLength: key.tintLength, increaseContrast: ic, lookPairs: panelPairs()
         )
-        // Option under review: one rung stronger text where the surface is
-        // translucent or tinted. Applied after solving, so the foundation
-        // and Tint are exactly those of the unchanged ladder.
-        if key.variant.strongerTextOnTranslucentOrTint, key.surface != .solid || key.tint != .off {
-            inks[.helper] = inks[.label]
-            inks[.placeholder] = inks[.label]
-            inks[.chromeHint] = inks[.label]
-            inks[.label] = inks[.body]
-        }
-        // The chrome is a sidebar material: modelled as Frosted when the
-        // panel surface is translucent, and never tinted.
         let chrome = AtticSurfaceModel.solve(
             base: chromeBase, kind: key.surface == .solid ? .solid : .frosted, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
-            tint: .off, tintLength: 1, policy: key.policy, pairs: chromePairs
+            tint: .off, tintLength: 1, increaseContrast: ic, lookPairs: chromePairs()
         )
+
+        // Where the surface is translucent or tinted, the text steps one
+        // shade stronger (owner's decision, 2026-09-24): helper text takes
+        // the label colour, labels take the body colour. Increase Contrast
+        // already has its own stronger ladder and a more opaque surface.
+        let translucentOrTinted = key.surface != .solid || key.tint != .off
+        if translucentOrTinted, !ic {
+            inks[.helper] = inks[.label]
+            inks[.placeholder] = inks[.label]
+            inks[.chromeHint] = inks[.chromeBody]
+            inks[.label] = inks[.body]
+        }
+        // Then every role is tuned against the surface as drawn, over every
+        // desktop, to the readability rule (`AtticSurfaceModel.floor`). A
+        // role already passing is left exactly as it is.
+        // Twice: the second pass sees the tag fills of a retuned accent.
+        for _ in 0..<(translucentOrTinted ? 2 : 0) {
+            for (model, pairs) in [(panel, panelPairs()), (chrome, chromePairs())] {
+                for (ink, group) in Dictionary(grouping: pairs, by: \.ink) where ink.floor != .exempt {
+                    let backgrounds = group.flatMap { model.backgrounds(for: $0) }
+                    let target = model.floor(for: ink) * (ink.floor == .text ? textTarget / 4.5 : nonTextTarget / 3)
+                    inks[ink] = inks[ink]!.tuned(toContrast: target, against: backgrounds, lighten: dark)
+                }
+            }
+        }
 
         return AtticColorTokens(
             context: key,

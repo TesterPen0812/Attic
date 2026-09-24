@@ -26,12 +26,6 @@ struct AtticDesignContext: Hashable, Sendable {
     var reduceMotion = false
     var differentiateWithoutColor = false
     var hapticsEnabled = true
-    /// How Glass and Frosted trade transparency for contrast. The quality
-    /// bar's is the default; the gallery can show the alternative.
-    var translucencyPolicy: AtticSurfaceModel.Policy = .fullContrast
-    /// Options under review (the glass-and-tint decision sheet). Off by
-    /// default: with the default variant every token is as committed.
-    var variant = AtticDesignVariant()
 
     /// Reduce Transparency makes glass and blur solid.
     var effectiveSurface: AtticPanelSurfaceTreatment.Kind {
@@ -51,9 +45,7 @@ struct AtticDesignContext: Hashable, Sendable {
             surface: effectiveSurface,
             tint: tint,
             tintLength: PanelTintLength.clamped(tintLength),
-            increaseContrast: increaseContrast,
-            policy: translucencyPolicy,
-            variant: variant
+            increaseContrast: increaseContrast
         )
     }
 
@@ -64,8 +56,6 @@ struct AtticDesignContext: Hashable, Sendable {
         let tint: PanelTintLevel
         let tintLength: Double
         let increaseContrast: Bool
-        let policy: AtticSurfaceModel.Policy
-        let variant: AtticDesignVariant
     }
 
     /// The resolved tokens for this context (cached).
@@ -154,13 +144,3 @@ private struct AtticSystemDesignModifier: ViewModifier {
     }
 }
 
-/// Design options the owner is choosing between. Neither is on by default.
-struct AtticDesignVariant: Hashable, Sendable {
-    /// On translucent or tinted surfaces only, text steps up one rung:
-    /// helper (and placeholder) text takes the label colour, labels take
-    /// the body colour. The surface's foundation is unchanged.
-    var strongerTextOnTranslucentOrTint = false
-    /// Draw the Tint at the strengths PR #5 designed (ΔE 3 / 7 / 12, or
-    /// Original's neutral shade as drawn), not held back for readability.
-    var designedTintStrength = false
-}

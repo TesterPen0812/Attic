@@ -190,7 +190,10 @@ struct AtticGalleryBoard: View {
             case .tokens: TokensBoard()
             }
         }
-        .padding(.vertical, family == .panel || family == .settings ? 0 : 16)
+        // Boards start below the panel's header zone (`AtticSurfaceModel.contentTop`),
+        // where panel content starts, so tinted boards judge text where it sits.
+        .padding(.top, family == .panel || family == .settings ? 0 : 44)
+        .padding(.bottom, family == .panel || family == .settings ? 0 : 16)
         .frame(width: family.width, alignment: .topLeading)
         .environment(\.atticSpecimen, family.title)
     }
@@ -873,14 +876,28 @@ private struct SettingsBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
     var body: some View {
-        AtticSpecimen("Settings · Appearance", fullWidth: true) {
+        AtticSpecimen("Settings · Appearance, at rest", fullWidth: true) {
             AtticGallerySettingsWindow(demo: demo)
+        }
+        AtticSpecimen("General · behaviour group (Haptics lives here)", fullWidth: true) {
+            AtticGroupCard {
+                AtticPopUpRow(label: String(localized: "Open Attic on"), choices: [("last", String(localized: "Last page")), ("tasks", String(localized: "Tasks"))], selection: .constant("last"))
+                AtticGroupDivider()
+                AtticSwitchRow(title: String(localized: "Haptics"), isOn: $demo.haptics)
+            }
+            .frame(width: 480)
+            .padding(16)
+            .background(AtticContentCard { Color.clear })
+            .padding(.horizontal, 16)
         }
     }
 }
 
+/// The Appearance page at rest: only the current page selected, the
+/// current choices showing the design context the sheet is drawn in.
 struct AtticGallerySettingsWindow: View {
     @Bindable var demo: AtticGalleryDemo
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -898,7 +915,7 @@ struct AtticGallerySettingsWindow: View {
             // (its rows are inset 8) makes the gap to the sidebar.
             .padding([.top, .bottom, .trailing], AtticSpacing.settingsCardInset)
         }
-        .frame(width: 760, height: 790)
+        .frame(width: 760, height: 1010)
         .background(AtticSidebarBackground())
     }
 
@@ -907,12 +924,12 @@ struct AtticGallerySettingsWindow: View {
             Color.clear.frame(height: 44)
             AtticSidebarHeading(title: String(localized: "App"))
             AtticSidebarRow(systemName: "gearshape", title: String(localized: "General"))
-            AtticSidebarRow(systemName: "sidebar.left", title: String(localized: "Panel")).atticForcedState(.hover)
+            AtticSidebarRow(systemName: "sidebar.left", title: String(localized: "Panel"))
             AtticSidebarRow(systemName: "circle.lefthalf.filled", title: String(localized: "Appearance"), isSelected: true)
             AtticSidebarRow(systemName: "trash", title: String(localized: "Recently Deleted"))
             Color.clear.frame(height: 16)
             AtticSidebarHeading(title: String(localized: "Connections"))
-            AtticSidebarRow(systemName: "sparkles", title: String(localized: "Agent Access")).atticForcedState(.focused)
+            AtticSidebarRow(systemName: "sparkles", title: String(localized: "Agent Access"))
             AtticSidebarHint(text: String(localized: "Let agents read and add tasks"))
             Spacer(minLength: 0)
             AtticSidebarRow(systemName: "info.circle", title: String(localized: "About"))
@@ -922,11 +939,15 @@ struct AtticGallerySettingsWindow: View {
 
     @ViewBuilder
     private var content: some View {
+        AtticAppearancePreview {
+            AtticGalleryPanelComposition(demo: demo, selectedIndex: nil)
+        }
+        Color.clear.frame(height: AtticSpacing.s12)
         AtticGroupCard {
             HStack(spacing: 16) {
                 AtticModeTile(choice: .system)
-                AtticModeTile(choice: .light, isSelected: true)
-                AtticModeTile(choice: .dark)
+                AtticModeTile(choice: .light, isSelected: design.mode == .light)
+                AtticModeTile(choice: .dark, isSelected: design.mode == .dark)
             }
             .padding(.vertical, 16)
             .frame(maxWidth: .infinity)
@@ -939,7 +960,7 @@ struct AtticGallerySettingsWindow: View {
             ForEach(0..<3, id: \.self) { row in
                 HStack(spacing: 12) {
                     ForEach(palettes.dropFirst(row * 3).prefix(3), id: \.self) { palette in
-                        AtticPaletteTile(palette: palette, isSelected: palette == .original)
+                        AtticPaletteTile(palette: palette, isSelected: palette == design.palette)
                     }
                 }
             }
@@ -949,12 +970,20 @@ struct AtticGallerySettingsWindow: View {
         AtticSectionHeading(title: String(localized: "Surface and tint"))
         Color.clear.frame(height: AtticSpacing.settingsHeadingToCard)
         AtticGroupCard {
-            AtticPopUpRow(label: String(localized: "Surface"), choices: PanelSurfaceStyle.allCases.map { ($0.rawValue, $0.title) }, selection: .constant("solid"))
+            AtticPopUpRow(label: String(localized: "Surface"), choices: PanelSurfaceStyle.allCases.map { ($0.rawValue, $0.title) }, selection: .constant(design.reduceTransparency ? PanelSurfaceStyle.solid.rawValue : design.surface.rawValue))
             AtticGroupDivider()
-            AtticPopUpRow(label: String(localized: "Tint"), choices: PanelTintLevel.allCases.map { ($0.rawValue, $0.title) }, selection: .constant("vivid"))
-                .atticForcedState(.hover)
-            AtticGroupDivider()
-            AtticSwitchRow(title: String(localized: "Haptics"), isOn: $demo.haptics)
+            AtticPopUpRow(label: String(localized: "Tint"), choices: PanelTintLevel.allCases.map { ($0.rawValue, $0.title) }, selection: .constant(design.tint.rawValue))
+        }
+        Color.clear.frame(height: AtticSpacing.settingsBetweenSections)
+        AtticSectionHeading(title: String(localized: "Advanced"))
+        Color.clear.frame(height: AtticSpacing.settingsHeadingToCard)
+        AtticGroupCard {
+            AtticSliderRow(
+                label: String(localized: "Tint length"),
+                valueText: design.tintLength >= 0.995 ? String(localized: "Full height") : String(localized: "\(Int((design.tintLength * 100).rounded())) % of the panel"),
+                value: .constant(design.tintLength),
+                range: PanelTintLength.range
+            )
         }
     }
 }
@@ -966,7 +995,7 @@ private struct TokensBoard: View {
 
     var body: some View {
         let tokens = design.tokens
-        let surface = tokens.panel.composite(.typical)
+        let surface = tokens.panel.composite(.midGrey, at: AtticSurfaceModel.contentTop)
         BoardHeading(title: "Text ladder · contrast on this surface")
         VStack(alignment: .leading, spacing: 4) {
             ForEach([AtticInk.heading, .body, .label, .helper, .placeholder, .accentText, .dueText, .warningText], id: \.self) { ink in
