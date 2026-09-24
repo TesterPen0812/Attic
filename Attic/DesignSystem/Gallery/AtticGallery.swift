@@ -11,6 +11,9 @@ import SwiftUI
 enum AtticGalleryLaunch {
     static let argument = "--attic-gallery"
     static let captureArgument = "--capture"
+    /// Opens the keyboard lab instead of the full gallery: a few live task
+    /// rows for keyboard UI tests (Tab, Shift-Tab, the task keys).
+    static let keyboardLabArgument = "--attic-gallery-keyboard"
 
     static var isRequested: Bool {
         ProcessInfo.processInfo.arguments.contains(argument)
@@ -31,6 +34,10 @@ enum AtticGalleryLaunch {
         guard isRequested else { return false }
         if let directory = captureDirectory {
             runCapture(into: directory)
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains(keyboardLabArgument) {
+            openKeyboardLab()
             return true
         }
         open()
@@ -61,6 +68,34 @@ enum AtticGalleryLaunch {
         NSApp.activate()
     }
 
+    static func openKeyboardLab() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 240),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Attic Keyboard Lab"
+        window.identifier = NSUserInterfaceItemIdentifier("AtticKeyboardLab")
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: AtticGalleryKeyboardLab())
+        window.center()
+        self.window = window
+        NSApp.setActivationPolicy(.regular)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        // Switching a menu-bar (accessory) app to a regular app during
+        // launch can drop the first order-front: bring the window up again
+        // once the policy change has landed.
+        for delay in [0.1, 0.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard !window.isVisible || !window.isKeyWindow else { return }
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate()
+            }
+        }
+    }
+
     private static func runCapture(into directory: URL) {
         let target: URL
         do {
@@ -77,6 +112,50 @@ enum AtticGalleryLaunch {
         print("Attic appearance check: \(report.failures.isEmpty ? "PASS" : "FAIL") — \(report.headline)")
         print("Contact sheets:\n" + sheets.map(\.path).joined(separator: "\n"))
         exit(report.failures.isEmpty ? 0 : 1)
+    }
+}
+
+/// Live task rows on the panel surface, for keyboard UI tests: a palette
+/// with a coloured accent (Electric Blue) so the focus ring is unmistakable
+/// in screenshots, and the last action the keys fired, shown as text.
+struct AtticGalleryKeyboardLab: View {
+    @State private var demo = AtticGalleryDemo()
+
+    static let context = AtticDesignContext(mode: .light, palette: .electricBlue)
+    static let rows: [AtticTaskRowModel] = [
+        .init(title: "Email beta testers", priority: .medium),
+        .init(title: "Book dentist"),
+        .init(title: "Renew domain", priority: .high)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(Self.rows.enumerated()), id: \.element.id) { index, row in
+                AtticTaskRow(model: row, actions: demo.taskActions(row.title), onToggleExpanded: demo.record("Toggle subtasks", row.title))
+                    .accessibilityIdentifier("keyboard-lab-row-\(index)")
+            }
+            // Controls after the rows: a standalone status circle (its own
+            // Tab stop, with Attic's ring) and a raised button.
+            HStack(spacing: AtticSpacing.betweenControls) {
+                AtticStatusButton(state: .todo, priority: .high, onAdvance: demo.record("Advance", "standalone circle"))
+                    .accessibilityIdentifier("keyboard-lab-status")
+                AtticRaisedButton(systemName: "pin", label: "Pin", action: demo.record("Pin"))
+                    .accessibilityIdentifier("keyboard-lab-pin")
+            }
+            .padding(.leading, AtticLayout.circleX - (AtticControlSize.minimumHitTarget - AtticControlSize.statusCircle) / 2)
+            .padding(.top, AtticSpacing.s8)
+            Text(verbatim: demo.lastAction)
+                .font(.caption)
+                .foregroundStyle(Self.context.tokens.color(.helper))
+                .padding(.leading, AtticLayout.textX)
+                .padding(.top, AtticSpacing.s8)
+                .accessibilityIdentifier("keyboard-lab-last-action")
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, AtticSpacing.s12)
+        .frame(width: 360, height: 240, alignment: .topLeading)
+        .background(Self.context.tokens.panel.base.color)
+        .atticDesign(Self.context)
     }
 }
 
