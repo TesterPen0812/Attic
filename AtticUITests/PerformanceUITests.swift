@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 
@@ -12,7 +13,16 @@ final class PerformanceUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        let home = URL(fileURLWithPath: NSHomeDirectoryForUser(NSUserName()) ?? NSHomeDirectory())
+        // Launch once with an in-memory store so macOS creates the sandbox
+        // before this test writes its disposable root inside that container.
+        let initializer = XCUIApplication()
+        initializer.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        initializer.launchEnvironment["ATTIC_PERF_SEED_ONLY"] = "1"
+        initializer.launch()
+        initializer.terminate()
+        XCTAssertTrue(initializer.wait(for: .notRunning, timeout: 15))
+        let account = try XCTUnwrap(getpwuid(getuid()))
+        let home = URL(fileURLWithPath: String(cString: account.pointee.pw_dir))
         root = home.appendingPathComponent(
             "Library/Containers/com.taha.Attic/Data/Library/Application Support/AtticPerformanceStores",
             isDirectory: true
@@ -25,7 +35,9 @@ final class PerformanceUITests: XCTestCase {
 
     override func tearDownWithError() throws {
         app?.terminate()
-        try FileManager.default.removeItem(at: root)
+        if let root, FileManager.default.fileExists(atPath: root.path) {
+            try FileManager.default.removeItem(at: root)
+        }
     }
 
     private func makeApp(seedOnly: Bool = false, probe: Bool = false) -> XCUIApplication {

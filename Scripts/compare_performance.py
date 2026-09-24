@@ -16,17 +16,49 @@ MEASURES = (
     ("physical_footprint_bytes_end", "footprint"),
     ("cpu_percent_one_core", "CPU"),
     ("package_idle_wakeups_per_s", "idle wake-ups"),
+    ("interrupt_wakeups_per_s", "interrupt wake-ups"),
 )
+TIMINGS = ("AppLaunchToMenuReady", "StoreOpen", "PanelRevealToInteractive", "PageSwitch")
 
 
 def series(document, phase, key):
     result = []
     for run in document["runs"]:
-        matching = [item[key] for item in run["phases"] if item["phase"] == phase]
+        matching = [item for item in run["phases"] if item["phase"] == phase]
         if len(matching) != 1:
             raise ValueError(f"Missing or duplicate {phase} in run {run['run']}")
-        result.append(matching[0])
+        item = matching[0]
+        # The pinned Phase 0 reference has the raw counter and duration;
+        # compute its rate here so later probe versions remain comparable.
+        value = (item["interrupt_wakeups"] / item["duration_s"]
+                 if key == "interrupt_wakeups_per_s" else item[key])
+        result.append(value)
     return result
+
+
+def timing_series(document, name):
+    result = []
+    for run in document["runs"]:
+        samples = [item["milliseconds"] for item in run["timings"] if item["name"] == name]
+        if not samples:
+            raise ValueError(f"Missing {name} timing in run {run['run']}")
+        # A slow first reveal must not disappear behind later warm reveals.
+        result.append(max(samples) if name == "PanelRevealToInteractive"
+                      else statistics.median(samples))
+    return result
+
+
+def compare(title, old, new):
+    old_spread = max(old) - min(old)
+    # Every candidate run must sit beyond the old range plus one more
+    # reference spread. A noisy candidate cannot mask a consistently higher
+    # floor, while an isolated slow run remains a review item.
+    clear = min(new) > max(old) + old_spread
+    print(f"{title}: reference median {statistics.median(old):.4g} "
+          f"[{min(old):.4g}, {max(old):.4g}], candidate median "
+          f"{statistics.median(new):.4g} [{min(new):.4g}, {max(new):.4g}]"
+          + (" CLEAR REGRESSION" if clear else ""))
+    return clear
 
 
 def main():
@@ -47,18 +79,11 @@ def main():
         for key, title in MEASURES:
             old = series(base, phase, key)
             new = series(current, phase, key)
-            old_spread = max(old) - min(old)
-            new_spread = max(new) - min(new)
-            # Every candidate run must sit beyond the old range plus the
-            # larger observed spread. This deliberately ignores ambiguous
-            # movements on noisy hosted hardware.
-            clear = min(new) > max(old) + max(old_spread, new_spread)
-            print(f"{phase} {title}: reference median {statistics.median(old):.4g} "
-                  f"[{min(old):.4g}, {max(old):.4g}], candidate median "
-                  f"{statistics.median(new):.4g} [{min(new):.4g}, {max(new):.4g}]"
-                  + (" CLEAR REGRESSION" if clear else ""))
-            if clear:
+            if compare(f"{phase} {title}", old, new):
                 failures.append(f"{phase} {title}")
+    for name in TIMINGS:
+        if compare(f"{name} ms", timing_series(base, name), timing_series(current, name)):
+            failures.append(name)
     if failures:
         raise SystemExit("Clear regressions: " + ", ".join(failures))
 

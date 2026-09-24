@@ -85,6 +85,7 @@ def sample_phase(helper, pid, phase, seconds, run_dir):
         "package_idle_wakeups": wakeups,
         "package_idle_wakeups_per_s": wakeups / elapsed,
         "interrupt_wakeups": after["interrupt_wakeups"] - before["interrupt_wakeups"],
+        "interrupt_wakeups_per_s": (after["interrupt_wakeups"] - before["interrupt_wakeups"]) / elapsed,
         "ps_time_end": output("/bin/ps", "-o", "time=", "-p", str(pid)),
     }
 
@@ -226,15 +227,16 @@ def summarize(doc):
              f"Date: {doc['date']}  ", f"Commit: `{doc['commit']}`  ",
              f"Preview: `{doc['bundle_id']}`  ",
              f"Fixture: {'B, 5,000 Done tasks included' if doc['done_history'] else 'A, no extra Done history'}",
-             "", "| Phase | Footprint end, MiB range | CPU, one-core % range | Idle wakeups/s range |",
-             "| --- | ---: | ---: | ---: |"]
+             "", "| Phase | Footprint end, MiB range | CPU, one-core % range | Idle wakeups/s range | Interrupt wakeups/s range |",
+             "| --- | ---: | ---: | ---: | ---: |"]
     for index, phase in enumerate(("hidden_idle", "tasks_open", "canvas_open", "after_hide")):
         values = [run["phases"][index] for run in doc["runs"]]
         def span(key, divisor=1):
             samples = [v[key] / divisor for v in values]
             return f"{min(samples):.2f}–{max(samples):.2f}"
         lines.append(f"| {phase} | {span('physical_footprint_bytes_end', 2**20)} | "
-                     f"{span('cpu_percent_one_core')} | {span('package_idle_wakeups_per_s')} |")
+                     f"{span('cpu_percent_one_core')} | {span('package_idle_wakeups_per_s')} | "
+                     f"{span('interrupt_wakeups_per_s')} |")
     lines += ["", "CPU and wake-ups are process-counter deltas over each fixed window; "
               "footprint is Apple's physical footprint. Transition/settling time is excluded.", ""]
     for name in ("AppLaunchToMenuReady", "StoreOpen", "PanelRevealToInteractive", "PageSwitch"):
