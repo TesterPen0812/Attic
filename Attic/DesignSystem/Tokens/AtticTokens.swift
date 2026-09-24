@@ -85,10 +85,17 @@ enum AtticControlSize {
     /// An icon-only chip, 24 tall and 1.15 × as wide.
     static let chipIconWidth: CGFloat = 28
     static let addBarHeight: CGFloat = 36
-    /// The send button sits inside the add bar, nested 4 pt from its edge,
-    /// so it is 28 × 28 with radius 11.5 − 4 = 7.5 (see the report: the
-    /// spec's 36 × 36 came from mockups where it sat outside the bar).
-    static let sendButton = CGSize(width: 28, height: 28)
+    /// The send button: 28 × 28, radius 7.5, **inside** the add bar.
+    ///
+    /// The spec's Raised controls table says "send 36 × 36"; that size came
+    /// from mockups where the button sat beside the bar. The owner's polish
+    /// rule outranks it: "the send button lives inside the add bar and
+    /// appears only when there is text". Inside the 36 pt bar it is nested
+    /// `sendInset` (4 pt) from the top, bottom and trailing edges, so it is
+    /// 36 − 2 × 4 = 28 pt square, with the nested radius 11.5 − 4 = 7.5
+    /// (corner rule 3: nesting for gaps of 6 pt or less). Kept at 28 × 28
+    /// by the owner on 2026-09-24; a test holds the arithmetic.
+    static let sendButton = CGSize(width: addBarHeight - 2 * sendInset, height: addBarHeight - 2 * sendInset)
     static let sendInset: CGFloat = 4
     static let smallHeight: CGFloat = 28
     static let smallMinWidth: CGFloat = 32
@@ -200,6 +207,27 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         if spec.italic { font = font.italic() }
         if spec.monospacedDigits { font = font.monospacedDigit() }
         return font
+    }
+
+    /// The AppKit font this style draws with (for measuring text).
+    var nsFont: NSFont {
+        let weight: NSFont.Weight = switch spec.weight {
+        case .medium: .medium
+        case .semibold: .semibold
+        case .bold: .bold
+        default: .regular
+        }
+        var font = NSFont.systemFont(ofSize: spec.size, weight: weight)
+        if spec.italic {
+            font = NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(.italic), size: spec.size) ?? font
+        }
+        return font
+    }
+
+    /// The width a single line of `string` takes in this style, rounded up
+    /// to the whole point (layout that reserves room for text uses it).
+    func measuredWidth(_ string: String) -> CGFloat {
+        (string as NSString).size(withAttributes: [.font: nsFont]).width.rounded(.up)
     }
 
     /// Text on the rows of this style is a label, which never wraps. Only

@@ -8,18 +8,18 @@ import SwiftUI
 struct AtticUndoToast: View {
     let message: String
     var actionTitle: String = String(localized: "Undo")
-    var onUndo: () -> Void = {}
+    let onUndo: () -> Void
 
     @State private var probeID = UUID()
 
     var body: some View {
         let height = AtticControlSize.toastHeight
         let radius = AtticRadius.control(height: height)
-        HStack(spacing: 10) {
+        HStack(spacing: AtticToastMetrics.gap) {
             AtticText(verbatim: message, style: .toast, ink: .body)
             AtticToastButton(title: actionTitle, outerRadius: radius, action: onUndo)
         }
-        .padding(.leading, 14)
+        .padding(.leading, AtticToastMetrics.leadingPadding)
         .padding(.trailing, AtticControlSize.capsuleInset)
         .frame(height: height)
         .background(AtticPopoverBackground(cornerRadius: radius))
@@ -43,7 +43,7 @@ private struct AtticToastButton: View {
         let hover = forced == .hover || hovered
         Button(action: action) {
             AtticText(verbatim: title, style: .controlLabel, ink: .heading)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, AtticToastMetrics.buttonPadding)
                 .frame(height: AtticControlSize.smallHeight)
                 .background(RoundedRectangle(cornerRadius: inner, style: .continuous).fill((hover ? design.tokens.chipSelected : design.tokens.chipHover).color))
                 .contentShape(RoundedRectangle(cornerRadius: inner, style: .continuous))
@@ -74,7 +74,7 @@ struct AtticEmptyLine: View {
 struct AtticErrorLine: View {
     let message: String
     var actionTitle: String = String(localized: "Retry")
-    var onRetry: () -> Void = {}
+    let onRetry: () -> Void
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
@@ -82,8 +82,8 @@ struct AtticErrorLine: View {
 
     var body: some View {
         let hover = forced == .hover || hovered
-        HStack(spacing: 5) {
-            AtticIcon(systemName: "exclamationmark.circle", size: 12, weight: .medium, ink: .warningText)
+        HStack(spacing: AtticErrorLineMetrics.gap) {
+            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium, ink: .warningText)
             AtticText(verbatim: message, style: .controlLabel, ink: .warningText)
             AtticText(verbatim: "·", style: .controlLabel, ink: .warningText)
             Button(action: onRetry) {
@@ -94,7 +94,7 @@ struct AtticErrorLine: View {
             .buttonStyle(.plain)
             .onHover { hovered = $0 }
         }
-        .frame(height: 22)
+        .frame(height: AtticErrorLineMetrics.height)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message)
         .accessibilityAction(named: Text(actionTitle), onRetry)
@@ -112,13 +112,15 @@ struct AtticLoadingRows: View {
         let fill = design.tokens.skeleton.color
         VStack(alignment: .leading, spacing: 0) {
             ForEach(0..<count, id: \.self) { index in
+                let m = AtticSkeletonMetrics.self
+                let circleLeading = AtticLayout.circleX + (AtticControlSize.statusCircle - m.circle) / 2
                 HStack(spacing: 0) {
-                    Circle().fill(fill).frame(width: 14, height: 14)
-                        .padding(.leading, AtticLayout.circleX + 1)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    Circle().fill(fill).frame(width: m.circle, height: m.circle)
+                        .padding(.leading, circleLeading)
+                    RoundedRectangle(cornerRadius: m.barRadius, style: .continuous)
                         .fill(fill)
-                        .frame(width: [148, 112, 176, 132][index % 4], height: 10)
-                        .padding(.leading, AtticLayout.textX - AtticLayout.circleX - 15)
+                        .frame(width: m.barWidths[index % m.barWidths.count], height: m.barHeight)
+                        .padding(.leading, AtticLayout.textX - circleLeading - m.circle)
                     Spacer(minLength: 0)
                 }
                 .frame(height: AtticLayout.rowPitch)
@@ -139,12 +141,12 @@ struct AtticSpinner: View {
     var body: some View {
         if capture != nil {
             Circle()
-                .trim(from: 0, to: 0.72)
-                .stroke(design.tokens.color(.icon), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-                .frame(width: 12, height: 12)
+                .trim(from: 0, to: AtticSpinnerMetrics.arc)
+                .stroke(design.tokens.color(.icon), style: StrokeStyle(lineWidth: AtticSpinnerMetrics.lineWidth, lineCap: .round))
+                .frame(width: AtticSpinnerMetrics.size, height: AtticSpinnerMetrics.size)
                 .rotationEffect(.degrees(-90))
         } else {
-            ProgressView().controlSize(.small).scaleEffect(0.8)
+            ProgressView().controlSize(.small).scaleEffect(AtticSpinnerMetrics.systemScale)
         }
     }
 }
@@ -164,7 +166,7 @@ struct AtticDropOutline: View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         ZStack {
             shape.fill(tokens.hover.color)
-            shape.strokeBorder(tokens.focusRing.color, lineWidth: 1.5)
+            shape.strokeBorder(tokens.focusRing.color, lineWidth: AtticRingMetrics.dropOutlineWidth)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -187,18 +189,21 @@ struct AtticCarryPreview: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
+        let m = AtticDragMetrics.self
         ZStack(alignment: .topTrailing) {
             ZStack {
-                if count > 2 { card.rotationEffect(.degrees(3.5)).offset(x: 5, y: 3).opacity(0.9) }
-                if count > 1 { card.rotationEffect(.degrees(0.5)).offset(x: 2.5, y: 1.5) }
-                card.rotationEffect(.degrees(-3))
+                if count > 2 {
+                    card.rotationEffect(.degrees(m.stackTilts[1])).offset(m.stackOffsets[1]).opacity(m.stackBackOpacity)
+                }
+                if count > 1 { card.rotationEffect(.degrees(m.stackTilts[0])).offset(m.stackOffsets[0]) }
+                card.rotationEffect(.degrees(m.tilt))
             }
             if count > 1 {
                 AtticText(verbatim: "\(count)", style: .tag, ink: .onInverse, allowsOverlap: true)
-                    .padding(.horizontal, 6)
-                    .frame(minWidth: 18, minHeight: 18)
+                    .padding(.horizontal, m.badgePadding)
+                    .frame(minWidth: m.badgeSize, minHeight: m.badgeSize)
                     .background(Capsule().fill(design.tokens.color(.inverseFill)))
-                    .offset(x: 8, y: -8)
+                    .offset(x: m.badgeOffset, y: -m.badgeOffset)
                     .accessibilityLabel(String(localized: "\(count) items"))
             }
         }
@@ -208,34 +213,35 @@ struct AtticCarryPreview: View {
     @ViewBuilder
     private var card: some View {
         let tokens = design.tokens
+        let m = AtticDragMetrics.self
         let shape = RoundedRectangle(cornerRadius: AtticRadius.tile, style: .continuous)
         Group {
             switch item {
             case let .task(title, state, priority):
-                HStack(spacing: 8) {
+                HStack(spacing: m.taskCardGap) {
                     AtticStatusCircle(state: state, priority: priority)
                     AtticText(verbatim: title, style: .rowTitle, ink: .body, allowsOverlap: true)
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 32)
-                .frame(maxWidth: 200, alignment: .leading)
+                .padding(.horizontal, m.taskCardPadding)
+                .frame(height: m.taskCardHeight)
+                .frame(maxWidth: m.taskCardMaxWidth, alignment: .leading)
                 .fixedSize()
             case let .file(name):
-                VStack(spacing: 5) {
+                VStack(spacing: m.fileCardGap) {
                     AtticThumbnailPlaceholder()
-                        .frame(width: 72, height: 50)
+                        .frame(width: m.thumbnailSize.width, height: m.thumbnailSize.height)
                     AtticText(verbatim: name, style: .rowMeta, ink: .helper, allowsOverlap: true)
-                        .frame(maxWidth: 88)
+                        .frame(maxWidth: m.fileNameMaxWidth)
                 }
-                .padding(8)
+                .padding(m.fileCardPadding)
             }
         }
         .background {
             ZStack {
-                AtticOutsideShadow(shape: shape, color: tokens.dragShadow, radius: 10, y: 6)
+                AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.carry)
                 shape.fill(tokens.popoverFill.color)
-                shape.inset(by: 0.5).stroke(tokens.popoverInnerRim.color, lineWidth: 1)
-                shape.stroke(tokens.popoverOuterRim.color, lineWidth: 0.5)
+                shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
+                shape.stroke(tokens.popoverOuterRim.color, lineWidth: AtticHairline.width)
             }
         }
     }
@@ -246,19 +252,16 @@ struct AtticThumbnailPlaceholder: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
+        let t = AtticThumbnailTokens.self
         let dark = design.mode == .dark
+        let gradient = dark ? t.darkGradient : t.lightGradient
         RoundedRectangle(cornerRadius: AtticRadius.image, style: .continuous)
-            .fill(LinearGradient(
-                colors: dark
-                    ? [Color(.sRGB, red: 0.30, green: 0.34, blue: 0.42), Color(.sRGB, red: 0.22, green: 0.24, blue: 0.30)]
-                    : [Color(.sRGB, red: 0.80, green: 0.85, blue: 0.93), Color(.sRGB, red: 0.90, green: 0.92, blue: 0.96)],
-                startPoint: .top, endPoint: .bottom
-            ))
+            .fill(LinearGradient(colors: [gradient.top.color, gradient.bottom.color], startPoint: .top, endPoint: .bottom))
             .overlay(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(Color.white.opacity(dark ? 0.25 : 0.8))
-                    .frame(width: 38, height: 5)
-                    .padding(7)
+                RoundedRectangle(cornerRadius: t.barRadius, style: .continuous)
+                    .fill((dark ? t.barDark : t.barLight).color)
+                    .frame(width: t.barSize.width, height: t.barSize.height)
+                    .padding(t.barInset)
             }
             .accessibilityHidden(true)
     }
@@ -277,13 +280,13 @@ struct AtticReorderLift<Content: View>: View {
         content
             .background {
                 ZStack {
-                    AtticOutsideShadow(shape: shape, color: tokens.dragShadow.withAlpha(tokens.dragShadow.alpha * 0.8), radius: 8, y: 3)
+                    AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
                     shape.fill(tokens.popoverFill.color)
-                    shape.inset(by: 0.5).stroke(tokens.popoverInnerRim.color, lineWidth: 1)
-                    shape.stroke(tokens.popoverOuterRim.color, lineWidth: 0.5)
+                    shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
+                    shape.stroke(tokens.popoverOuterRim.color, lineWidth: AtticHairline.width)
                 }
                 .padding(.horizontal, AtticLayout.rowHighlightInset)
-                .padding(.vertical, 1)
+                .padding(.vertical, AtticTaskRowMetrics.pitchTopInset)
             }
     }
 }

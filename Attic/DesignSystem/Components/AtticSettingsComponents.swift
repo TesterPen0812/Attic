@@ -37,7 +37,7 @@ struct AtticSidebarHint: View {
     var body: some View {
         AtticText(verbatim: text, style: .settingsHint, ink: .chromeHint)
             .padding(.leading, AtticLayout.sidebarIconX)
-            .frame(height: 24, alignment: .leading)
+            .frame(height: AtticSettingsMetrics.sidebarHintHeight, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -48,7 +48,7 @@ struct AtticSidebarRow: View {
     let systemName: String
     let title: String
     var isSelected = false
-    var action: () -> Void = {}
+    let action: () -> Void
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
@@ -62,12 +62,15 @@ struct AtticSidebarRow: View {
         let fill: AtticRGBA? = isSelected ? tokens.selected : (state == .hover ? tokens.hover : nil)
         Button(action: action) {
             HStack(spacing: 0) {
-                AtticIcon(systemName: systemName, size: 13.5, weight: .regular, ink: .chromeIcon)
-                    .frame(width: 16)
-                    .padding(.leading, AtticLayout.sidebarIconX - 1)
+                let m = AtticSettingsMetrics.self
+                // The 16 pt icon slot is centred on the icon column.
+                let iconLeading = AtticLayout.sidebarIconX - (m.sidebarIconSlot - AtticControlSize.glyph) / 2
+                AtticIcon(systemName: systemName, size: m.sidebarIconSize, weight: .regular, ink: .chromeIcon)
+                    .frame(width: m.sidebarIconSlot)
+                    .padding(.leading, iconLeading)
                 AtticText(verbatim: title, style: .sidebarRow, ink: .chromeBody)
-                    .padding(.leading, AtticLayout.sidebarTextX - AtticLayout.sidebarIconX - 15)
-                Spacer(minLength: 8)
+                    .padding(.leading, AtticLayout.sidebarTextX - iconLeading - m.sidebarIconSlot)
+                Spacer(minLength: m.rowTrailingMinGap)
             }
             .frame(height: AtticLayout.sidebarHighlightHeight)
             .background {
@@ -126,7 +129,7 @@ struct AtticContentCard<Content: View>: View {
 struct AtticSettingsHeader: View {
     let title: String
     var showsBack = true
-    var onBack: () -> Void = {}
+    let onBack: () -> Void
 
     var body: some View {
         HStack(spacing: AtticSpacing.s12) {
@@ -172,7 +175,7 @@ struct AtticGroupCard<Content: View>: View {
             .background(shape.fill(tokens.groupCard.color))
             .clipShape(shape)
             .overlay {
-                if let border = tokens.groupCardBorder { shape.strokeBorder(border.color, lineWidth: 1) }
+                if let border = tokens.groupCardBorder { shape.strokeBorder(border.color, lineWidth: AtticHairline.contrastBorder) }
             }
             .atticControlProbe("Group card", id: probeID, expectedSize: nil, radius: AtticRadius.groupCard, expectedRadius: 17)
     }
@@ -239,15 +242,16 @@ struct AtticPopUpRowFace: View {
 
     var body: some View {
         let pressed = forced == .pressed || isPressed
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+        let m = AtticSettingsMetrics.self
+        HStack(spacing: m.rowTrailingMinGap) {
+            VStack(alignment: .leading, spacing: m.labelValueGap) {
                 AtticText(verbatim: label, style: .groupLabel, ink: .label)
                 AtticText(verbatim: value, style: .groupValue, ink: .body)
             }
-            Spacer(minLength: 8)
-            AtticIcon(systemName: "chevron.up.chevron.down", size: 10.5, weight: .medium, ink: .chevron)
-                .frame(width: 16)
-                .padding(.trailing, AtticLayout.chevronTrailingCentre - 8)
+            Spacer(minLength: m.rowTrailingMinGap)
+            AtticIcon(systemName: "chevron.up.chevron.down", size: m.popUpChevronSize, weight: .medium, ink: .chevron)
+                .frame(width: m.popUpChevronSlot)
+                .padding(.trailing, AtticLayout.chevronTrailingCentre - m.popUpChevronSlot / 2)
         }
         .padding(.leading, AtticLayout.groupedRowTextInset)
         .frame(height: AtticLayout.groupedRowTall)
@@ -280,7 +284,7 @@ struct AtticSwitchRow: View {
     var body: some View {
         HStack {
             AtticText(verbatim: title, style: .rowSingle, ink: .body)
-            Spacer(minLength: 8)
+            Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
             if capture != nil {
                 AtticSwitchDrawing(isOn: isOn)
             } else {
@@ -292,7 +296,7 @@ struct AtticSwitchRow: View {
             }
         }
         .padding(.leading, AtticLayout.groupedRowTextInset)
-        .padding(.trailing, 14)
+        .padding(.trailing, AtticSettingsMetrics.switchTrailing)
         .frame(height: AtticLayout.groupedRowSingle)
         .atticControlProbe(
             "Grouped row (single)", id: probeID,
@@ -312,9 +316,9 @@ private struct AtticSwitchDrawing: View {
         let tokens = design.tokens
         ZStack(alignment: isOn ? .trailing : .leading) {
             Capsule().fill((isOn ? tokens.ink(.accent) : tokens.selected.over(tokens.groupCard)).color)
-            Circle().fill(Color.white).shadow(color: .black.opacity(0.18), radius: 0.5, y: 0.5).padding(1.5)
+            Circle().fill(Color.white).shadow(color: .black.opacity(AtticSettingsMetrics.switchKnobShadowAlpha), radius: AtticSettingsMetrics.switchKnobShadow.radius, y: AtticSettingsMetrics.switchKnobShadow.y).padding(AtticSettingsMetrics.switchKnobInset)
         }
-        .frame(width: 32, height: 18)
+        .frame(width: AtticSettingsMetrics.switchDrawingSize.width, height: AtticSettingsMetrics.switchDrawingSize.height)
         .accessibilityHidden(true)
     }
 }
@@ -339,18 +343,19 @@ struct AtticModeTile: View {
 
     let choice: Choice
     var isSelected = false
-    var action: () -> Void = {}
+    let action: () -> Void
 
     @State private var probeID = UUID()
 
     var body: some View {
+        let m = AtticModeTileMetrics.self
         Button(action: action) {
-            VStack(spacing: 8) {
+            VStack(spacing: m.labelGap) {
                 AtticModePreview(choice: choice)
-                    .frame(width: 112, height: 70)
+                    .frame(width: m.previewSize.width, height: m.previewSize.height)
                     .clipShape(RoundedRectangle(cornerRadius: AtticRadius.tile, style: .continuous))
                     .modifier(AtticTileRing(isSelected: isSelected, radius: AtticRadius.tile))
-                    .atticControlProbe("Mode tile", id: probeID, expectedSize: CGSize(width: 112, height: 70), radius: AtticRadius.tile, expectedRadius: 10)
+                    .atticControlProbe("Mode tile", id: probeID, expectedSize: m.previewSize, radius: AtticRadius.tile, expectedRadius: 10)
                 AtticText(
                     verbatim: title,
                     style: isSelected ? .tileLabelSelected : .tileLabel,
@@ -377,35 +382,42 @@ private struct AtticModePreview: View {
     let choice: AtticModeTile.Choice
 
     var body: some View {
+        let size = AtticModeTileMetrics.previewSize
         switch choice {
         case .light: half(dark: false)
         case .dark: half(dark: true)
         case .system:
             HStack(spacing: 0) {
-                half(dark: false).frame(width: 56, alignment: .leading).clipped()
-                half(dark: true).frame(width: 56, alignment: .trailing).clipped()
+                half(dark: false).frame(width: size.width / 2, alignment: .leading).clipped()
+                half(dark: true).frame(width: size.width / 2, alignment: .trailing).clipped()
             }
         }
     }
 
+    /// A small picture of the mode: a desktop and a window with two lines.
     private func half(dark: Bool) -> some View {
-        ZStack(alignment: .topLeading) {
-            (dark ? Color(.sRGB, red: 0.27, green: 0.31, blue: 0.38) : Color(.sRGB, red: 0.90, green: 0.86, blue: 0.80))
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(dark ? Color(.sRGB, red: 0.17, green: 0.17, blue: 0.18) : Color(.sRGB, red: 0.98, green: 0.98, blue: 0.98))
+        let m = AtticModeTileMetrics.self
+        let alphas = dark ? m.lineAlphasDark : m.lineAlphasLight
+        return ZStack(alignment: .topLeading) {
+            (dark ? m.desktopDark : m.desktopLight).color
+            RoundedRectangle(cornerRadius: m.windowRadius, style: .continuous)
+                .fill((dark ? m.windowDark : m.windowLight).color)
                 .overlay(alignment: .topLeading) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Capsule().fill(dark ? Color.white.opacity(0.35) : Color.black.opacity(0.22)).frame(width: 40, height: 3)
-                        Capsule().fill(dark ? Color.white.opacity(0.2) : Color.black.opacity(0.12)).frame(width: 28, height: 3)
+                    VStack(alignment: .leading, spacing: m.lineSpacing) {
+                        ForEach(Array(zip(m.lineWidths, alphas).enumerated()), id: \.offset) { _, line in
+                            Capsule()
+                                .fill((dark ? AtticRGBA.white(line.1) : AtticRGBA.black(line.1)).color)
+                                .frame(width: line.0, height: m.lineHeight)
+                        }
                     }
-                    .padding(9)
+                    .padding(m.lineInset)
                 }
-                .padding(.top, 12)
-                .padding(.leading, 12)
-                .padding(.trailing, -20)
-                .padding(.bottom, -20)
+                .padding(.top, m.windowInset)
+                .padding(.leading, m.windowInset)
+                .padding(.trailing, -m.windowOverhang)
+                .padding(.bottom, -m.windowOverhang)
         }
-        .frame(width: 112, height: 70)
+        .frame(width: m.previewSize.width, height: m.previewSize.height)
         .accessibilityHidden(true)
     }
 }
@@ -415,7 +427,7 @@ private struct AtticModePreview: View {
 struct AtticPaletteTile: View {
     let palette: AtticPanelTheme
     var isSelected = false
-    var action: () -> Void = {}
+    let action: () -> Void
 
     @Environment(\.atticDesign) private var design
     @State private var probeID = UUID()
@@ -423,19 +435,20 @@ struct AtticPaletteTile: View {
     var body: some View {
         let tokens = design.tokens
         let shape = RoundedRectangle(cornerRadius: AtticRadius.tile, style: .continuous)
+        let m = AtticPaletteTileMetrics.self
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: m.nameGap) {
+                HStack(spacing: m.swatchGap) {
                     swatch(.light)
                     swatch(.dark)
                 }
                 AtticText(verbatim: palette.title, style: .settingsHelper, ink: isSelected ? .heading : .body)
             }
-            .padding(8)
-            .frame(width: 132, alignment: .leading)
+            .padding(m.padding)
+            .frame(width: m.width, alignment: .leading)
             .background(shape.fill(tokens.recessed.over(tokens.contentCard).color))
             .overlay {
-                if let border = tokens.recessedBorder { shape.strokeBorder(border.color, lineWidth: 1) }
+                if let border = tokens.recessedBorder { shape.strokeBorder(border.color, lineWidth: AtticHairline.contrastBorder) }
             }
             .modifier(AtticTileRing(isSelected: isSelected, radius: AtticRadius.tile))
             .contentShape(shape)
@@ -447,14 +460,16 @@ struct AtticPaletteTile: View {
     }
 
     private func swatch(_ mode: AtticDesignContext.Mode) -> some View {
+        let m = AtticPaletteTileMetrics.self
         let tokens = AtticDesignContext(mode: mode, palette: palette).tokens
-        return RoundedRectangle(cornerRadius: 5, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: m.swatchRadius, style: .continuous)
+        return shape
             .fill(tokens.panel.base.color)
-            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.black.opacity(mode == .light ? 0.08 : 0.25), lineWidth: 0.5))
+            .overlay(shape.strokeBorder((mode == .light ? m.swatchRimLight : m.swatchRimDark).color, lineWidth: m.swatchRimWidth))
             .overlay(alignment: .trailing) {
-                Circle().fill(tokens.color(.accent)).frame(width: 5, height: 5).padding(.trailing, 6)
+                Circle().fill(tokens.color(.accent)).frame(width: m.accentDot, height: m.accentDot).padding(.trailing, m.accentDotInset)
             }
-            .frame(width: 54, height: 22)
+            .frame(width: m.swatchSize.width, height: m.swatchSize.height)
             .accessibilityHidden(true)
     }
 }
@@ -474,12 +489,13 @@ struct AtticSliderRow: View {
     @State private var probeID = UUID()
 
     var body: some View {
-        HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
+        let m = AtticSettingsMetrics.self
+        HStack(spacing: m.sliderGap) {
+            VStack(alignment: .leading, spacing: m.labelValueGap) {
                 AtticText(verbatim: label, style: .groupLabel, ink: .label)
                 AtticText(verbatim: valueText, style: .groupValue, ink: .body)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: m.rowTrailingMinGap)
             Group {
                 if capture != nil {
                     AtticSliderDrawing(fraction: (value - range.lowerBound) / (range.upperBound - range.lowerBound))
@@ -492,10 +508,10 @@ struct AtticSliderRow: View {
                         .accessibilityValue(valueText)
                 }
             }
-            .frame(width: 180)
+            .frame(width: m.sliderWidth)
         }
         .padding(.leading, AtticLayout.groupedRowTextInset)
-        .padding(.trailing, 16)
+        .padding(.trailing, m.sliderTrailing)
         .frame(height: AtticLayout.groupedRowTall)
         .atticControlProbe(
             "Grouped row", id: probeID,
@@ -515,17 +531,18 @@ private struct AtticSliderDrawing: View {
         GeometryReader { proxy in
             let x = proxy.size.width * min(max(fraction, 0), 1)
             ZStack(alignment: .leading) {
-                Capsule().fill(tokens.selected.over(tokens.groupCard).color).frame(height: 4)
-                Capsule().fill(tokens.color(.accent)).frame(width: x, height: 4)
+                let m = AtticSettingsMetrics.self
+                Capsule().fill(tokens.selected.over(tokens.groupCard).color).frame(height: m.sliderTrackHeight)
+                Capsule().fill(tokens.color(.accent)).frame(width: x, height: m.sliderTrackHeight)
                 Circle()
                     .fill(Color.white)
-                    .shadow(color: .black.opacity(0.22), radius: 1, y: 0.5)
-                    .frame(width: 14, height: 14)
-                    .offset(x: x - 7)
+                    .shadow(color: .black.opacity(AtticSettingsMetrics.sliderKnobShadowAlpha), radius: AtticSettingsMetrics.sliderKnobShadow.radius, y: AtticSettingsMetrics.sliderKnobShadow.y)
+                    .frame(width: m.sliderKnob, height: m.sliderKnob)
+                    .offset(x: x - m.sliderKnob / 2)
             }
             .frame(maxHeight: .infinity)
         }
-        .frame(height: 18)
+        .frame(height: AtticSettingsMetrics.sliderDrawingHeight)
         .accessibilityHidden(true)
     }
 }
@@ -535,8 +552,8 @@ private struct AtticSliderDrawing: View {
 /// header, the tabs and the first rows). A picture: it is not interactive,
 /// and the appearance check judges the panel itself, not this copy.
 struct AtticAppearancePreview<Panel: View>: View {
-    var height: CGFloat = 156
-    var scale: CGFloat = 0.62
+    var height: CGFloat = AtticSettingsMetrics.previewHeight
+    var scale: CGFloat = AtticSettingsMetrics.previewScale
     @ViewBuilder let panel: Panel
 
     @Environment(\.atticDesign) private var design
@@ -548,8 +565,11 @@ struct AtticAppearancePreview<Panel: View>: View {
             panel
                 .scaleEffect(scale, anchor: .top)
                 .frame(width: AtticLayout.panelSize.width * scale, height: AtticLayout.panelSize.height * scale, alignment: .top)
-                .shadow(color: .black.opacity(design.mode == .dark ? 0.35 : 0.14), radius: 8, y: 3)
-                .padding(.top, 18)
+                .shadow(
+                    color: .black.opacity(design.mode == .dark ? AtticSettingsMetrics.previewShadowAlphaDark : AtticSettingsMetrics.previewShadowAlphaLight),
+                    radius: AtticSettingsMetrics.previewShadow.radius, y: AtticSettingsMetrics.previewShadow.y
+                )
+                .padding(.top, AtticSettingsMetrics.previewTop)
                 .environment(\.atticProbesDisabled, true)
                 .allowsHitTesting(false)
         }

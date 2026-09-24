@@ -89,9 +89,9 @@ struct AtticRaisedBackground: View {
                 .init(color: recipe.sheenBottom.color, location: 1)
             ], startPoint: .top, endPoint: .bottom))
             if recipe.innerRimTop.alpha > 0 {
-                shape.inset(by: 0.5).stroke(
+                shape.inset(by: AtticHairline.innerRim / 2).stroke(
                     LinearGradient(colors: [recipe.innerRimTop.color, recipe.innerRimBottom.color], startPoint: .top, endPoint: .bottom),
-                    lineWidth: 1
+                    lineWidth: AtticHairline.innerRim
                 )
             }
             shape.inset(by: recipe.outerRimWidth / 2).stroke(
@@ -110,6 +110,18 @@ struct AtticOutsideShadow<S: Shape>: View {
     let color: AtticRGBA
     let radius: CGFloat
     let y: CGFloat
+
+    init(shape: S, color: AtticRGBA, radius: CGFloat, y: CGFloat) {
+        self.shape = shape
+        self.color = color
+        self.radius = radius
+        self.y = y
+    }
+
+    /// A shadow from the shadow tokens, in the look's colour.
+    init(shape: S, color: AtticRGBA, spec: AtticShadowSpec) {
+        self.init(shape: shape, color: color.withAlpha(color.alpha * spec.alphaScale), radius: spec.radius, y: spec.y)
+    }
 
     var body: some View {
         ZStack {
@@ -138,11 +150,11 @@ struct AtticPopoverBackground: View {
         let tokens = design.tokens
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         ZStack {
-            AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, radius: 12, y: 6)
-            AtticOutsideShadow(shape: shape, color: tokens.popoverShadow.withAlpha(tokens.popoverShadow.alpha * 0.5), radius: 1, y: 0.5)
+            AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popover)
+            AtticOutsideShadow(shape: shape, color: tokens.popoverShadow, spec: AtticShadows.popoverContact)
             shape.fill(tokens.popoverFill.color)
-            shape.inset(by: 0.5).stroke(tokens.popoverInnerRim.color, lineWidth: 1)
-            shape.stroke(tokens.popoverOuterRim.color, lineWidth: design.increaseContrast ? 1 : 0.5)
+            shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
+            shape.stroke(tokens.popoverOuterRim.color, lineWidth: design.increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -167,7 +179,7 @@ struct AtticHighlight: View {
     var cornerRadius: CGFloat = AtticRadius.highlight
     var run: AtticSelectionRun = .single
     /// Half the gap between rows, covered where the run continues.
-    var joinOverlap: CGFloat = 1
+    var joinOverlap: CGFloat = (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2
 
     var body: some View {
         let top = run.roundsTop ? cornerRadius : 0
@@ -188,8 +200,8 @@ struct AtticHighlight: View {
 /// shape (its radius is the shape's plus the ring's offset).
 struct AtticFocusRing: View {
     let cornerRadius: CGFloat
-    var gap: CGFloat = 2
-    var width: CGFloat = 2
+    var gap: CGFloat = AtticRingMetrics.gap
+    var width: CGFloat = AtticRingMetrics.width
 
     @Environment(\.atticDesign) private var design
 
