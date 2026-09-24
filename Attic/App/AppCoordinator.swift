@@ -316,7 +316,7 @@ final class AppCoordinator: ObservableObject {
         // Both kinds of test host avoid Keychain. In normal use, credential
         // loading starts only after opt-in and runs away from the main thread.
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
-        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore))
+        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore, library: library))
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
             agentServer = AgentServer(port: settings.agentServerPort,
