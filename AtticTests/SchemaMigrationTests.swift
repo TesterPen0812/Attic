@@ -37,11 +37,16 @@ final class SchemaMigrationTests: XCTestCase {
                 "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink"
             ])
             let taskAttributes = Set(entities["TaskItem"]?.attributes.map(\.name) ?? [])
-            XCTAssertTrue(taskAttributes.isSuperset(of: ["deletedAt", "deletionRootID", "doneLoggedAt", "tagsRaw", "dueDayRaw"]))
+            XCTAssertTrue(taskAttributes.isSuperset(of: [
+                "deletedAt", "deletionRootID", "deletionMembersRaw", "removedAttachmentsData",
+                "doneLoggedAt", "tagsRaw", "dueDayRaw"
+            ]))
+            let attachmentAttributes = Set(entities["NoteAttachment"]?.attributes.map(\.name) ?? [])
+            XCTAssertTrue(attachmentAttributes.contains("deletedAt"))
             let noteAttributes = Set(entities["NoteItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(noteAttributes.isSuperset(of: ["deletedAt", "tagsRaw"]))
             let boardAttributes = Set(entities["CanvasBoardItem"]?.attributes.map(\.name) ?? [])
-            XCTAssertTrue(boardAttributes.isSuperset(of: ["tagsRaw", "purgedAt", "recentlyDeletedAt"]))
+            XCTAssertTrue(boardAttributes.isSuperset(of: ["tagsRaw", "purgedAt", "recentlyDeletedAt", "deletedContentCount"]))
         }
     }
 
@@ -77,35 +82,76 @@ final class SchemaMigrationTests: XCTestCase {
         let migratedUITest = try PersistenceController.makeCanvasUITestContainer(reset: false, baseDirectory: uiTestBase)
         try await assertNothingLost(in: migratedUITest, fixture: fixture)
 
-        // 2. A plain local configuration with the app's schema, as the normal
-        // container opens its default store.
-        let plainURL = root.appendingPathComponent("plain-copy/default.store")
-        try copyStoreFamily(from: fixture.storeURL, to: plainURL)
-        let plain = try ModelContainer(
-            for: Schema(PersistenceController.appModelTypes),
-            configurations: ModelConfiguration(url: plainURL, cloudKitDatabase: .none)
+        // 2. The normal app container, through PersistenceController's real
+        // configuration code (local-only, as this build runs), relocated to a
+        // copy of the fixture.
+        let normal = try openThroughAppContainer(copyOf: fixture, in: "app-copy")
+        try await assertNothingLost(in: normal, fixture: fixture)
+        XCTAssertEqual(
+            try storedEntityHashes(at: PersistenceController.makeConfiguration(
+                cloudSyncEnabled: false, storeDirectory: root.appendingPathComponent("app-copy")
+            ).url),
+            Self.currentEntityHashes(),
+            "the copy was migrated to the current schema"
         )
-        try await assertNothingLost(in: plain, fixture: fixture)
 
-        // The fixture keeps the pre-Phase 0 model: it was never migrated. (Its
-        // bytes are not compared: SQLite may checkpoint the writer's WAL into
-        // the main file whenever that container is released.)
-        let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(
-            type: .sqlite, at: fixture.storeURL
-        )
-        let entityHashes = try XCTUnwrap(metadata[NSStoreModelVersionHashesKey] as? [String: Any])
-        XCTAssertNil(entityHashes["ItemLink"], "the original fixture was not migrated")
-        XCTAssertNotNil(entityHashes["TaskItem"])
+        // The fixture keeps the pre-Phase 0 schema: it was never migrated.
+        // (Its bytes are not compared: SQLite may checkpoint the writer's WAL
+        // into the main file whenever that container is released.)
+        XCTAssertEqual(try storedEntityHashes(at: fixture.storeURL), Self.baseRevisionEntityHashes)
+    }
+
+    /// The fixture is written by the exact models of revision f2c737a: their
+    /// entity hashes match the ones `Scripts/print_model_hashes.sh f2c737a`
+    /// prints by compiling those classes straight from git.
+    func testFixtureModelsAreExactlyThoseOfTheBaseRevision() throws {
+        let model = try XCTUnwrap(NSManagedObjectModel.makeManagedObjectModel(for: Self.prePhase0Types))
+        XCTAssertEqual(model.entityVersionHashesByName.mapValues { $0.base64EncodedString() }, Self.baseRevisionEntityHashes)
+        XCTAssertNotEqual(Self.currentEntityHashes()["TaskItem"], Self.baseRevisionEntityHashes["TaskItem"],
+                          "the current schema did change, so the migration is exercised")
+    }
+
+    /// Output of `Scripts/print_model_hashes.sh f2c737a`.
+    static let baseRevisionEntityHashes: [String: String] = [
+        "CanvasBoardItem": "RQCdMDqmwSALjM3eesGzde95LGxgsjDp4Nz2b0M4f6U=",
+        "CanvasImageItem": "v573ynq4BZiJW+mB2ROgcZY5PlW8EVoMMWULY4LXa+4=",
+        "CanvasSemanticObjectItem": "JB95MNP0sEl8rziTevhdFLpkqJbzdnJ0lihVtKDUdDo=",
+        "CanvasStrokeItem": "IuDxJ8Sb5cHNWGoGnLPfATf7Wn7SWYURafOn0STTY+k=",
+        "NoteAttachment": "BXA9vdPGdxKTk58FvBDdb6685ZBKbVvvU8IxUL6CSSQ=",
+        "NoteItem": "+HOd7ZYY6fFtZ5nNQvDL9AQfw0R0PxWLHtLhmzK57rI=",
+        "TaskItem": "HWgF0cQXDAHDo8a3u6iOcFPvwPCHFl9ys8bODKqiLV0="
+    ]
+
+    static let prePhase0Types: [any PersistentModel.Type] = [
+        PrePhase0.TaskItem.self, PrePhase0.NoteItem.self, PrePhase0.NoteAttachment.self,
+        PrePhase0.CanvasBoardItem.self, PrePhase0.CanvasStrokeItem.self, PrePhase0.CanvasImageItem.self,
+        PrePhase0.CanvasSemanticObjectItem.self
+    ]
+
+    static func currentEntityHashes() -> [String: String] {
+        NSManagedObjectModel.makeManagedObjectModel(for: PersistenceController.appModelTypes)?
+            .entityVersionHashesByName.mapValues { $0.base64EncodedString() } ?? [:]
+    }
+
+    private func storedEntityHashes(at url: URL) throws -> [String: String] {
+        let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
+        let hashes = try XCTUnwrap(metadata[NSStoreModelVersionHashesKey] as? [String: Data])
+        return hashes.mapValues { $0.base64EncodedString() }
+    }
+
+    /// Copies the fixture to where the app's own configuration puts its store
+    /// (in `directory`) and opens it with `PersistenceController.makeContainer`.
+    private func openThroughAppContainer(copyOf fixture: Fixture, in directory: String) throws -> ModelContainer {
+        let storeDirectory = root.appendingPathComponent(directory, isDirectory: true)
+        let url = PersistenceController.makeConfiguration(cloudSyncEnabled: false, storeDirectory: storeDirectory).url
+        XCTAssertEqual(url.deletingLastPathComponent().standardizedFileURL, storeDirectory.standardizedFileURL)
+        try copyStoreFamily(from: fixture.storeURL, to: url)
+        return try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: storeDirectory)
     }
 
     func testMigratedStoreSurvivesPhase0CleanupAndDeletesWithoutLosingRows() async throws {
         let fixture = try await makePrePhase0Fixture()
-        let url = root.appendingPathComponent("cleanup-copy/default.store")
-        try copyStoreFamily(from: fixture.storeURL, to: url)
-        let container = try ModelContainer(
-            for: Schema(PersistenceController.appModelTypes),
-            configurations: ModelConfiguration(url: url, cloudKitDatabase: .none)
-        )
+        let container = try openThroughAppContainer(copyOf: fixture, in: "cleanup-copy")
         let rowsBefore = try rowCounts(in: container)
         let tasks = TaskStore(container: container, taskImageFiles: TaskImageFiles(rootURL: fixture.taskFilesRoot))
         let notes = NoteStore(container: container, attachmentFileStore: AttachmentFileStore(rootURL: fixture.noteFilesRoot))
@@ -119,12 +165,13 @@ final class SchemaMigrationTests: XCTestCase {
         )
 
         // The long-finished task moves to the Done log; nothing is deleted.
+        // The canvas deleted before Phase 0 gets its 30 days from now: the
+        // first cleanup stamps it and removes nothing.
         XCTAssertEqual(cleanup.performCleanup(), 1)
         XCTAssertEqual(cleanup.performCleanup(), 0)
         XCTAssertEqual(try rowCounts(in: container), rowsBefore)
         XCTAssertEqual(tasks.doneLog().map(\.id), [fixture.oldDoneTaskID])
         XCTAssertTrue(library.recentlyDeleted().contains { $0.ref == AtticItemRef(.canvas, fixture.legacyDeletedCanvasID) })
-        // The first cleanup gives it its 30 days (it removes nothing yet).
         XCTAssertNotNil(library.recentlyDeleted().first { $0.ref.id == fixture.legacyDeletedCanvasID }?.retentionStart)
 
         // Deleting and restoring migrated items keeps every row too.
@@ -185,10 +232,7 @@ final class SchemaMigrationTests: XCTestCase {
         let importedNoteFiles = try await AttachmentFileStore(rootURL: noteFilesRoot)
             .importFiles(noteSources, baseSortIndex: 0, existingCount: 0, existingBytes: 0)
 
-        let schema = Schema([
-            PrePhase0.TaskItem.self, PrePhase0.NoteItem.self, NoteAttachment.self, PrePhase0.CanvasBoardItem.self,
-            CanvasStrokeItem.self, CanvasImageItem.self, CanvasSemanticObjectItem.self
-        ])
+        let schema = Schema(Self.prePhase0Types)
         let duplicateTaskID = UUID(), parentTaskID = UUID(), oldDoneTaskID = UUID(), taskWithFileID = UUID()
         let childTaskIDs = [UUID(), UUID()]
         let noteID = UUID(), canvasID = UUID(), legacyDeletedCanvasID = UUID()
@@ -203,45 +247,27 @@ final class SchemaMigrationTests: XCTestCase {
             )
             let context = ModelContext(container)
             context.autosaveEnabled = false
-            func task(_ id: UUID, _ title: String, status: String = "todo", parent: UUID? = nil,
+            func task(_ id: UUID, _ title: String, status: TaskStatus = .todo, parent: UUID? = nil,
                       updatedAt: Date = old, completedAt: Date? = nil) -> PrePhase0.TaskItem {
-                let task = PrePhase0.TaskItem()
-                task.id = id
-                task.title = title
-                task.statusRaw = status
-                task.createdAt = old
-                task.updatedAt = updatedAt
-                task.completedAt = completedAt
-                task.parentID = parent
-                task.manualOrder = 1_024
-                return task
+                PrePhase0.TaskItem(id: id, title: title, status: status, createdAt: old, updatedAt: updatedAt,
+                                   completedAt: completedAt, manualOrder: 1_024, parentID: parent)
             }
             context.insert(task(duplicateTaskID, "Replica A"))
             context.insert(task(duplicateTaskID, "Replica B", updatedAt: old.addingTimeInterval(60)))
-            context.insert(task(parentTaskID, "Plan the trip", status: "inProgress"))
+            context.insert(task(parentTaskID, "Plan the trip", status: .inProgress))
             context.insert(task(childTaskIDs[0], "Book flights", parent: parentTaskID))
-            context.insert(task(childTaskIDs[1], "Pack", status: "done", parent: parentTaskID, completedAt: old))
-            context.insert(task(oldDoneTaskID, "Finished long ago", status: "done", completedAt: old))
+            context.insert(task(childTaskIDs[1], "Pack", status: .done, parent: parentTaskID, completedAt: old))
+            context.insert(task(oldDoneTaskID, "Finished long ago", status: .done, completedAt: old))
             let withFile = task(taskWithFileID, "Read the plan")
             withFile.imageReferencesData = try JSONEncoder().encode([taskFile])
             context.insert(withFile)
 
-            let note = PrePhase0.NoteItem()
-            note.id = noteID
-            note.title = "Trip notes"
-            note.body = "Bring the passport."
-            note.createdAt = old
-            note.updatedAt = old
-            context.insert(note)
-            let olderReplica = PrePhase0.NoteItem()
-            olderReplica.id = noteID
-            olderReplica.title = "Trip notes"
-            olderReplica.body = "Bring the passport."
-            olderReplica.createdAt = old
-            olderReplica.updatedAt = old
-            context.insert(olderReplica)
+            for _ in 0..<2 {
+                context.insert(PrePhase0.NoteItem(id: noteID, title: "Trip notes", body: "Bring the passport.",
+                                                  createdAt: old, updatedAt: old))
+            }
             for (index, imported) in importedNoteFiles.enumerated() {
-                context.insert(NoteAttachment(
+                context.insert(PrePhase0.NoteAttachment(
                     id: imported.id, noteID: noteID, originalFilename: imported.filename,
                     contentTypeIdentifier: imported.contentTypeIdentifier, byteCount: imported.byteCount,
                     sortIndex: Int64(index), contentDigest: imported.digest, createdAt: old,
@@ -250,26 +276,21 @@ final class SchemaMigrationTests: XCTestCase {
                 notePayloads[imported.id] = imported.payload
             }
 
-            let board = PrePhase0.CanvasBoardItem()
-            board.id = canvasID
-            board.name = "Sketches"
-            board.sortIndex = 1
-            context.insert(board)
-            let deletedBoard = PrePhase0.CanvasBoardItem()
-            deletedBoard.id = legacyDeletedCanvasID
-            deletedBoard.name = "Old board"
-            deletedBoard.sortIndex = 2
-            deletedBoard.tombstoned = true
-            deletedBoard.deletedAt = old
-            context.insert(deletedBoard)
+            // The default canvas keeps the old default identity.
+            context.insert(PrePhase0.CanvasBoardItem(createdAt: old))
+            context.insert(PrePhase0.CanvasBoardItem(id: canvasID, name: "Sketches", sortIndex: 1, createdAt: old))
+            context.insert(PrePhase0.CanvasBoardItem(id: legacyDeletedCanvasID, name: "Old board", sortIndex: 2,
+                                                     tombstoned: true, createdAt: old, deletedAt: old))
             let ink = try CanvasStrokeCodec.encode(color: .red, width: 3, points: [.zero, CanvasPoint(x: 4, y: 8)])
-            context.insert(CanvasStrokeItem(id: strokeIDs[0], canvasID: canvasID, payload: ink))
-            context.insert(CanvasStrokeItem(id: strokeIDs[0], canvasID: canvasID, payload: ink))
-            context.insert(CanvasStrokeItem(id: strokeIDs[1], canvasID: canvasID, payload: ink, tombstoned: true, deletedAt: old))
-            context.insert(CanvasStrokeItem(canvasID: legacyDeletedCanvasID, payload: ink, tombstoned: true, deletedAt: old))
-            context.insert(CanvasImageItem(id: imageID, canvasID: canvasID, encodedData: Data([1, 2, 3, 4]),
-                                           pixelWidth: 2, pixelHeight: 2, width: 48, height: 48))
-            let object = CanvasSemanticObjectItem(id: semanticID, canvasID: canvasID)
+            context.insert(PrePhase0.CanvasStrokeItem(id: strokeIDs[0], canvasID: canvasID, payload: ink))
+            context.insert(PrePhase0.CanvasStrokeItem(id: strokeIDs[0], canvasID: canvasID, payload: ink))
+            context.insert(PrePhase0.CanvasStrokeItem(id: strokeIDs[1], canvasID: canvasID, payload: ink,
+                                                      tombstoned: true, deletedAt: old))
+            context.insert(PrePhase0.CanvasStrokeItem(canvasID: legacyDeletedCanvasID, payload: ink,
+                                                      tombstoned: true, deletedAt: old))
+            context.insert(PrePhase0.CanvasImageItem(id: imageID, canvasID: canvasID, encodedData: Data([1, 2, 3, 4]),
+                                                     pixelWidth: 2, pixelHeight: 2, width: 48, height: 48))
+            let object = PrePhase0.CanvasSemanticObjectItem(id: semanticID, canvasID: canvasID)
             object.payload = try JSONEncoder().encode(CanvasSemanticContent(text: "Label", color: .ink, strokeWidth: 3))
             context.insert(object)
             try context.save()
@@ -285,7 +306,7 @@ final class SchemaMigrationTests: XCTestCase {
             taskTitlesByRow: ["Replica A", "Replica B", "Plan the trip", "Book flights", "Pack",
                               "Finished long ago", "Read the plan"].sorted(),
             rowCounts: [
-                "TaskItem": 7, "NoteItem": 2, "NoteAttachment": 2, "CanvasBoardItem": 2,
+                "TaskItem": 7, "NoteItem": 2, "NoteAttachment": 2, "CanvasBoardItem": 3,
                 "CanvasStrokeItem": 4, "CanvasImageItem": 1, "CanvasSemanticObjectItem": 1, "ItemLink": 0
             ]
         )
@@ -299,7 +320,8 @@ final class SchemaMigrationTests: XCTestCase {
         let taskRows = try context.fetch(FetchDescriptor<TaskItem>())
         XCTAssertEqual(taskRows.map(\.title).sorted(), fixture.taskTitlesByRow)
         XCTAssertTrue(taskRows.allSatisfy {
-            $0.deletedAt == nil && $0.deletionRootID == nil && $0.doneLoggedAt == nil && $0.tagsRaw.isEmpty && $0.dueDayRaw == nil
+            $0.deletedAt == nil && $0.deletionRootID == nil && $0.deletionMembersRaw.isEmpty
+                && $0.removedAttachmentsData == nil && $0.doneLoggedAt == nil && $0.tagsRaw.isEmpty && $0.dueDayRaw == nil
         }, "new fields take their defaults")
         XCTAssertEqual(taskRows.filter { $0.id == fixture.duplicateTaskID }.count, 2)
         XCTAssertEqual(Set(taskRows.filter { $0.parentID == fixture.parentTaskID }.map(\.id)), Set(fixture.childTaskIDs))
@@ -310,12 +332,16 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(noteRows.count, 2)
         XCTAssertTrue(noteRows.allSatisfy { $0.id == fixture.noteID && $0.body == "Bring the passport." && $0.deletedAt == nil })
         let attachments = try context.fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertTrue(attachments.allSatisfy { $0.deletedAt == nil })
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: attachments.map { ($0.id, $0.payload) }),
                        fixture.notePayloads.mapValues { Optional($0) })
 
         let boards = try context.fetch(FetchDescriptor<CanvasBoardItem>())
-        XCTAssertEqual(Set(boards.map(\.name)), ["Sketches", "Old board"])
-        XCTAssertTrue(boards.allSatisfy { $0.tagsRaw.isEmpty && $0.purgedAt == nil && $0.recentlyDeletedAt == nil })
+        XCTAssertEqual(Set(boards.map(\.name)), ["Canvas", "Sketches", "Old board"])
+        XCTAssertTrue(boards.contains { $0.id == CanvasBoardItem.logicalBoardID && $0.name == "Canvas" })
+        XCTAssertTrue(boards.allSatisfy {
+            $0.tagsRaw.isEmpty && $0.purgedAt == nil && $0.recentlyDeletedAt == nil && $0.deletedContentCount == nil
+        })
         let strokes = try context.fetch(FetchDescriptor<CanvasStrokeItem>())
         XCTAssertEqual(strokes.filter { $0.id == fixture.strokeIDs[0] }.count, 2)
         XCTAssertEqual(try context.fetch(FetchDescriptor<CanvasImageItem>()).first?.encodedData, Data([1, 2, 3, 4]))
@@ -334,7 +360,7 @@ final class SchemaMigrationTests: XCTestCase {
         XCTAssertEqual(notes.attachments(for: fixture.noteID).count, 2)
 
         let canvases = CanvasStore(container: container)
-        XCTAssertTrue(canvases.canvases.contains { $0.id == fixture.canvasID })
+        XCTAssertEqual(Set(canvases.canvases.map(\.id)), [CanvasBoardItem.logicalBoardID, fixture.canvasID])
         XCTAssertFalse(canvases.canvases.contains { $0.id == fixture.legacyDeletedCanvasID })
         XCTAssertTrue(canvases.selectCanvas(fixture.canvasID))
         XCTAssertEqual(canvases.strokes.map(\.id), [fixture.strokeIDs[0]])
@@ -374,46 +400,5 @@ final class SchemaMigrationTests: XCTestCase {
                     .appendingPathComponent(".\(destination.deletingPathExtension().lastPathComponent)_SUPPORT", isDirectory: true)
             )
         }
-    }
-}
-
-/// The three models Phase 0 changes, exactly as they were stored before it
-/// (stored attributes only). Everything else is unchanged and used as is.
-private enum PrePhase0 {
-    @Model final class TaskItem {
-        var id: UUID = UUID()
-        var title: String = ""
-        var statusRaw: String = "todo"
-        var priorityRaw: String = "none"
-        var createdAt: Date = Date()
-        var updatedAt: Date = Date()
-        var completedAt: Date? = nil
-        var manualOrder: Int64? = nil
-        var parentID: UUID? = nil
-        var imageReferencesData: Data? = nil
-        init() {}
-    }
-
-    @Model final class NoteItem {
-        var id: UUID = UUID()
-        var title: String = ""
-        var body: String = ""
-        var createdAt: Date = Date()
-        var updatedAt: Date = Date()
-        init() {}
-    }
-
-    @Model final class CanvasBoardItem {
-        var id: UUID = UUID()
-        var name: String = "Canvas"
-        var sortIndex: Int64 = 0
-        var formatVersion: Int = 1
-        var clearGeneration: Int64 = 0
-        var mutationVersion: Int64 = 1
-        var tombstoned: Bool = false
-        var createdAt: Date = Date()
-        var updatedAt: Date = Date()
-        var deletedAt: Date? = nil
-        init() {}
     }
 }

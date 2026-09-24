@@ -49,17 +49,28 @@ enum PersistenceController {
     static func makeConfiguration(
         inMemory: Bool = false,
         cloudSyncEnabled: Bool = true,
-        environment: AtticCloudKitEnvironment? = nil
+        environment: AtticCloudKitEnvironment? = nil,
+        storeDirectory: URL? = nil
     ) -> ModelConfiguration {
         let cloudDatabase: ModelConfiguration.CloudKitDatabase =
             inMemory || !cloudSyncEnabled
                 ? .none
                 : .private(cloudKitContainerIdentifier)
 
-        let defaultConfiguration = ModelConfiguration(
-            isStoredInMemoryOnly: inMemory,
-            cloudKitDatabase: cloudDatabase
-        )
+        // `storeDirectory` relocates the store (tests open copies of
+        // fixture stores through this exact path); nil is the app's default
+        // Application Support location.
+        let defaultConfiguration = if let storeDirectory, !inMemory {
+            ModelConfiguration(
+                url: storeDirectory.appendingPathComponent("default.store"),
+                cloudKitDatabase: cloudDatabase
+            )
+        } else {
+            ModelConfiguration(
+                isStoredInMemoryOnly: inMemory,
+                cloudKitDatabase: cloudDatabase
+            )
+        }
         let resolvedEnvironment = environment ?? currentCloudKitEnvironment
         guard !inMemory,
               resolvedEnvironment == .development else {
@@ -82,11 +93,13 @@ enum PersistenceController {
 
     static func makeContainer(
         inMemory: Bool = false,
-        cloudSyncEnabled: Bool = true
+        cloudSyncEnabled: Bool = true,
+        storeDirectory: URL? = nil
     ) throws -> ModelContainer {
         let configuration = makeConfiguration(
             inMemory: inMemory,
-            cloudSyncEnabled: cloudSyncEnabled
+            cloudSyncEnabled: cloudSyncEnabled,
+            storeDirectory: storeDirectory
         )
         if !inMemory && cloudSyncEnabled {
             try createPreCloudKitBackupIfNeeded(for: configuration)
