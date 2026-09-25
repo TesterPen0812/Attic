@@ -218,7 +218,12 @@ struct AtticPopUpRow<Choice: Hashable>: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
             } label: {
+                // One element: the row is a single pop-up for VoiceOver
+                // (label "Surface", value "Solid"), not one per text line.
                 AtticPopUpRowFace(label: label, value: title)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(label)
+                    .accessibilityValue(title)
             }
             .menuStyle(.button)
             .buttonStyle(AtticRowPressStyle())
