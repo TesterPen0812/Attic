@@ -806,9 +806,12 @@ final class TaskStore: ObservableObject {
     /// A target is resolved over all of its replicas, so a task the daily
     /// cleanup moved to the Done log is still found. When the restored status
     /// is no longer done, the task's family (its main task and subtasks) comes
-    /// back from the Done log with it, exactly as it left. Every replica takes
-    /// the written fields; only the replicas that agreed with the shown one
-    /// take the new time, so the shown copy stays the one shown.
+    /// back from the Done log with it, exactly as it left. Each physical
+    /// replica moves by itself: a field is written only on replicas that
+    /// still hold the value the step left, and tags move by the step's
+    /// difference on each replica's own tags, so a divergent copy keeps what
+    /// only it holds. Only the replicas that agreed with the shown one take
+    /// the new time, so the shown copy stays the one shown.
     ///
     /// `.obsolete` when a target is gone for good or in Recently Deleted, or
     /// when every field it would write was changed since.
@@ -852,36 +855,51 @@ final class TaskStore: ObservableObject {
         for state in target {
             guard let from = expectedByID[state.id], let winner = winners[state.id],
                   let replicas = groups[state.id] else { continue }
+            // Whether a field moves is decided on the shown copy; each
+            // physical replica then moves by itself: a scalar field is
+            // written only on replicas still holding the value the step
+            // left, and tags move by the step's difference applied to each
+            // replica's own tags. A divergent replica keeps whatever only it
+            // holds.
             var edits: [(TaskItem) -> Void] = []
             func field<Value: Equatable>(
-                _ current: Value, _ was: Value, _ becomes: Value, _ write: @escaping (TaskItem) -> Void
+                _ value: @escaping (TaskItem) -> Value, _ was: Value, _ becomes: Value,
+                _ write: @escaping (TaskItem) -> Void
             ) {
                 guard was != becomes else { return }
+                let current = value(winner)
                 if current == was {
-                    edits.append(write)
+                    edits.append { replica in
+                        if value(replica) == was { write(replica) }
+                    }
                 } else if current != becomes {
                     conflicted = true
                 }
             }
-            field(winner.title, from.title, state.title) { $0.title = state.title }
-            field(winner.priorityRaw, from.priorityRaw, state.priorityRaw) { $0.priorityRaw = state.priorityRaw }
-            field(Completion(statusRaw: winner.statusRaw, completedAt: winner.completedAt),
+            field({ $0.title }, from.title, state.title) { $0.title = state.title }
+            field({ $0.priorityRaw }, from.priorityRaw, state.priorityRaw) { $0.priorityRaw = state.priorityRaw }
+            field({ Completion(statusRaw: $0.statusRaw, completedAt: $0.completedAt) },
                   Completion(statusRaw: from.statusRaw, completedAt: from.completedAt),
                   Completion(statusRaw: state.statusRaw, completedAt: state.completedAt)) {
                 $0.statusRaw = state.statusRaw
                 $0.completedAt = state.completedAt
             }
-            field(winner.manualOrder, from.manualOrder, state.manualOrder) { $0.manualOrder = state.manualOrder }
-            field(winner.dueDayRaw, from.dueDayRaw, state.dueDayRaw) { $0.dueDayRaw = state.dueDayRaw }
+            field({ $0.manualOrder }, from.manualOrder, state.manualOrder) { $0.manualOrder = state.manualOrder }
+            field({ $0.dueDayRaw }, from.dueDayRaw, state.dueDayRaw) { $0.dueDayRaw = state.dueDayRaw }
             let fromTags = Set(AtticTag.decode(from.tagsRaw))
             let toTags = Set(AtticTag.decode(state.tagsRaw))
             if fromTags != toTags {
-                let tagsRaw = AtticTag.encode(
-                    Set(AtticTag.decode(winner.tagsRaw))
-                        .subtracting(fromTags.subtracting(toTags))
-                        .union(toTags.subtracting(fromTags))
-                )
-                if tagsRaw != winner.tagsRaw { edits.append { $0.tagsRaw = tagsRaw } }
+                let removing = fromTags.subtracting(toTags)
+                let adding = toTags.subtracting(fromTags)
+                func moved(_ raw: String) -> String {
+                    AtticTag.encode(Set(AtticTag.decode(raw)).subtracting(removing).union(adding))
+                }
+                if replicas.contains(where: { moved($0.tagsRaw) != $0.tagsRaw }) {
+                    edits.append { replica in
+                        let tagsRaw = moved(replica.tagsRaw)
+                        if tagsRaw != replica.tagsRaw { replica.tagsRaw = tagsRaw }
+                    }
+                }
             }
             guard !edits.isEmpty else { continue }
             wroteAny = true

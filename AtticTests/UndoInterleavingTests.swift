@@ -149,6 +149,74 @@ final class UndoInterleavingTests: XCTestCase {
         XCTAssertEqual(library.state(of: AtticItemRef(.task, second.id)), .deleted, "the deleted task is untouched")
     }
 
+    // MARK: - Divergent replicas (astra re-check of finding 2)
+
+    private func replicas(_ library: AtticLibrary, _ id: UUID) throws -> [TaskItem] {
+        try ModelContext(library.tasks.container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+    }
+
+    /// An older copy of `task` holding its own title and tags, as a
+    /// divergent replica from another device would.
+    private func insertDivergentCopy(of task: TaskItem, title: String, tags: [String], in library: AtticLibrary) throws {
+        let context = ModelContext(library.tasks.container)
+        let copy = TaskItem(id: task.id, title: title, status: task.status, priority: task.priority,
+                            createdAt: task.createdAt, updatedAt: task.updatedAt.addingTimeInterval(-3_600),
+                            completedAt: task.completedAt, manualOrder: task.manualOrder, parentID: task.parentID)
+        copy.tagsRaw = AtticTag.encode(tags)
+        context.insert(copy)
+        try context.save()
+        library.tasks.refresh()
+    }
+
+    func testTagUndoAndRedoMoveEachReplicaByItsOwnDifference() throws {
+        let library = try makeLibrary()
+        let task = try XCTUnwrap(library.tasks.create(title: "Task"))
+        XCTAssertTrue(library.setTags(["x"], on: AtticItemRef(.task, task.id)))
+        XCTAssertTrue(library.setTags(["x", "z"], on: AtticItemRef(.task, task.id)), "the step: add z")
+        let shown = try XCTUnwrap(library.tasks.task(withID: task.id))
+        try insertDivergentCopy(of: shown, title: "Task", tags: ["x", "z", "q"], in: library)
+        XCTAssertEqual(tags(library, task.id), ["x", "z"], "the newer copy is shown")
+
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertEqual(Set(try replicas(library, task.id).map(\.tags)), [["x"], ["q", "x"]],
+                       "z is removed from each copy; q, held only by the divergent one, stays")
+        XCTAssertTrue(library.undo.redo(in: .tasks))
+        XCTAssertEqual(Set(try replicas(library, task.id).map(\.tags)), [["x", "z"], ["q", "x", "z"]])
+    }
+
+    func testAnEditUndoLeavesADivergentReplicasOwnValueAlone() throws {
+        let library = try makeLibrary()
+        let task = try XCTUnwrap(library.tasks.create(title: "Draft"))
+        XCTAssertTrue(library.updateTask(task.id, title: "Final"))
+        let shown = try XCTUnwrap(library.tasks.task(withID: task.id))
+        try insertDivergentCopy(of: shown, title: "Renamed elsewhere", tags: [], in: library)
+
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertEqual(Set(try replicas(library, task.id).map(\.title)), ["Draft", "Renamed elsewhere"])
+        XCTAssertEqual(library.tasks.task(withID: task.id)?.title, "Draft")
+        XCTAssertTrue(library.undo.redo(in: .tasks))
+        XCTAssertEqual(Set(try replicas(library, task.id).map(\.title)), ["Final", "Renamed elsewhere"])
+    }
+
+    func testAMoveUndoLeavesADivergentReplicasOwnOrderAlone() throws {
+        let library = try makeLibrary()
+        let created = try XCTUnwrap(library.tasks.commit([TaskDraft(title: "A"), TaskDraft(title: "B"), TaskDraft(title: "C")]))
+        XCTAssertTrue(library.moveTask(created[2].id, relativeTo: created[0].id))
+        let shown = try XCTUnwrap(library.tasks.task(withID: created[2].id))
+        let movedOrder = shown.manualOrder
+        let context = ModelContext(library.tasks.container)
+        let copy = TaskItem(id: shown.id, title: shown.title, createdAt: shown.createdAt,
+                            updatedAt: shown.updatedAt.addingTimeInterval(-3_600), manualOrder: 999_999)
+        context.insert(copy)
+        try context.save()
+        library.tasks.refresh()
+
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        let orders = Set(try replicas(library, created[2].id).map(\.manualOrder))
+        XCTAssertTrue(orders.contains(999_999), "the divergent copy keeps its own order")
+        XCTAssertFalse(orders.contains(movedOrder), "the shown copy's move was undone")
+    }
+
     // MARK: - Across the daily cleanup (finding 7)
 
     private func cleanup(_ library: AtticLibrary, at date: Date) -> Int {
