@@ -35,10 +35,10 @@ project.root_object.attributes['LastSwiftUpdateCheck'] = '2660'
 project.root_object.attributes['LastUpgradeCheck'] = '2660'
 project.add_build_configuration('Local', :debug)
 
-app = project.new_target(:application, 'Attic', :osx, '14.0')
-unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '14.0')
-unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '14.0')
-ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '14.0')
+app = project.new_target(:application, 'Attic', :osx, '26.0')
+unit_host = project.new_target(:application, 'AtticUnitTestHost', :osx, '26.0')
+unit_tests = project.new_target(:unit_test_bundle, 'AtticTests', :osx, '26.0')
+ui_tests = project.new_target(:ui_test_bundle, 'AtticUITests', :osx, '26.0')
 mobile_app = project.new_target(:application, 'AtticMobile', :ios, '17.0')
 mobile_tests = project.new_target(:unit_test_bundle, 'AtticMobileTests', :ios, '17.0')
 mobile_ui_tests = project.new_target(:ui_test_bundle, 'AtticMobileUITests', :ios, '17.0')
@@ -94,6 +94,10 @@ shared_mobile_sources = [
   'Models/CanvasBoardItem.swift',
   'Models/CanvasImageItem.swift',
   'Models/CanvasStrokeItem.swift',
+  'Models/AtticItem.swift',
+  'Models/AtticTag.swift',
+  'Models/DueDay.swift',
+  'Models/ItemLink.swift',
   'Models/TaskItem.swift',
   'Models/TaskTypes.swift',
   'Models/NoteItem.swift',
@@ -107,7 +111,9 @@ shared_mobile_sources = [
   'Services/CanvasStoreStrokes.swift',
   'Services/PersistenceController.swift',
   'Services/NoteStore.swift',
-  'Services/TaskStore.swift'
+  'Services/TaskDrafts.swift',
+  'Services/TaskStore.swift',
+  'Services/TaskTextParser.swift'
 ]
 shared_mobile_sources.each do |path|
   reference = app_group.files.find { |file| file.path == path }
@@ -131,7 +137,7 @@ mobile_group.new_file('AtticMobile.entitlements')
 mobile_group.new_file('Info.plist')
 
 project.build_configurations.each do |config|
-  config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '14.0'
+  config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '26.0'
   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '17.0'
 end
 

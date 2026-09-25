@@ -1,3 +1,4 @@
+import SwiftData
 import XCTest
 @testable import Attic
 
@@ -133,7 +134,10 @@ final class MCPRequestHandlerTests: XCTestCase {
         let tools = try XCTUnwrap(result["tools"] as? [[String: Any]])
         XCTAssertEqual(
             tools.compactMap { $0["name"] as? String }.sorted(),
-            ["create_task", "delete_task", "list_tasks", "update_task"]
+            // Phase 0 adds Recently Deleted, tag and link tools; the original
+            // four keep their names.
+            ["create_task", "delete_item", "delete_task", "link", "list_deleted", "list_tags",
+             "list_tasks", "restore_item", "update_tags", "update_task"]
         )
         let listTool = try XCTUnwrap(tools.first { $0["name"] as? String == "list_tasks" })
         let annotations = try XCTUnwrap(listTool["annotations"] as? [String: Any])
@@ -280,7 +284,8 @@ final class MCPRequestHandlerTests: XCTestCase {
         let names = try XCTUnwrap(tools).compactMap { $0["name"] as? String }
         XCTAssertEqual(
             names.sorted(),
-            ["create_note", "create_task", "delete_note", "delete_task", "list_notes", "list_tasks", "update_note", "update_task"]
+            ["create_note", "create_task", "delete_item", "delete_note", "delete_task", "link", "list_deleted",
+             "list_notes", "list_tags", "list_tasks", "restore_item", "update_note", "update_tags", "update_task"]
         )
     }
 
@@ -368,6 +373,300 @@ final class MCPRequestHandlerTests: XCTestCase {
         let response = try send(method: "tools/call", params: ["name": "list_notes"])
         let error = try XCTUnwrap(response["error"] as? [String: Any])
         XCTAssertEqual(error["code"] as? Int, -32602)
+    }
+
+    // MARK: - Phase 0: Recently Deleted, tags, dates and links
+
+    private func makeLibraryHandler() throws -> (AtticLibrary, MCPRequestHandler) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 24, hour: 10))!
+        // Every store shares the task store's container, as in the app.
+        let noteStore = NoteStore(container: store.container, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: store, notes: noteStore, canvases: CanvasStore(container: store.container))
+        let handler = MCPRequestHandler(
+            tools: AgentTaskTools(
+                store: store,
+                noteStore: noteStore,
+                library: library,
+                parser: TaskTextParser(calendar: calendar, locale: Locale(identifier: "en_US"), now: { now })
+            ),
+            serverVersion: "test"
+        )
+        return (library, handler)
+    }
+
+    private func toolError(_ handler: MCPRequestHandler, _ name: String, _ arguments: [String: Any]) throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": name, "arguments": arguments]
+        ])
+        let response = try decode(handler.handle(body: body))
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        return try XCTUnwrap(content.first?["text"] as? String)
+    }
+
+    func testDeleteTaskNowMovesTheFamilyToRecentlyDeletedAndRestoreItemBringsItBack() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let parent = try XCTUnwrap(store.create(title: "Parent"))
+        let child = try XCTUnwrap(store.create(title: "Child", parentID: parent.id))
+        let payload = try callNoteTool(handler, "delete_task", ["id": parent.id.uuidString])
+        XCTAssertEqual(payload["deleted"] as? String, parent.id.uuidString, "response shape unchanged")
+        XCTAssertTrue(store.tasks.isEmpty)
+        XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<TaskItem>()), 2, "nothing removed")
+
+        let deleted = try callNoteTool(handler, "list_deleted", [:])
+        XCTAssertEqual(deleted["count"] as? Int, 1)
+        let item = try XCTUnwrap((deleted["items"] as? [[String: Any]])?.first)
+        XCTAssertEqual(item["kind"] as? String, "task")
+        XCTAssertEqual(item["title"] as? String, "Parent")
+        XCTAssertEqual(item["included"] as? Int, 1)
+        XCTAssertNotNil(item["expiresAt"] as? String)
+
+        let restored = try callNoteTool(handler, "restore_item", ["kind": "task", "id": parent.id.uuidString])
+        XCTAssertEqual(restored["restored"] as? String, parent.id.uuidString)
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.id), [child.id])
+        XCTAssertTrue(library.undo.canUndo(in: .library), "agent changes are undoable")
+    }
+
+    /// Final review finding 4: what `list_deleted` shows, `restore_item`
+    /// accepts. A newer deleted copy beside an older live one is resolved
+    /// exactly as presentation resolves it, and the store's replica checks
+    /// still decide the restore.
+    func testAnItemListedAsDeletedBesideAnOlderLiveCopyCanBeRestoredThroughMCP() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        XCTAssertTrue(store.setTags(["home"], for: task))
+        XCTAssertTrue(store.delete(task))
+        let note = try XCTUnwrap(library.notes?.create(title: "Note"))
+        XCTAssertTrue(try XCTUnwrap(library.notes).delete(note))
+
+        let context = ModelContext(store.container)
+        let taskID = task.id
+        let deletedTask = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })).first)
+        // An older copy the delete never reached, with the same content.
+        let liveTask = TaskItem(id: task.id, title: deletedTask.title, status: deletedTask.status,
+                                priority: deletedTask.priority, createdAt: deletedTask.createdAt,
+                                updatedAt: deletedTask.updatedAt.addingTimeInterval(-60),
+                                completedAt: deletedTask.completedAt, manualOrder: deletedTask.manualOrder,
+                                parentID: deletedTask.parentID)
+        liveTask.tagsRaw = deletedTask.tagsRaw
+        liveTask.dueDayRaw = deletedTask.dueDayRaw
+        liveTask.imageReferencesData = deletedTask.imageReferencesData
+        liveTask.removedAttachmentsData = deletedTask.removedAttachmentsData
+        liveTask.doneLoggedAt = deletedTask.doneLoggedAt
+        context.insert(liveTask)
+        let noteID = note.id
+        let deletedNote = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first)
+        context.insert(NoteItem(id: note.id, title: deletedNote.title, body: deletedNote.body,
+                                createdAt: deletedNote.createdAt, updatedAt: deletedNote.updatedAt.addingTimeInterval(-60)))
+        try context.save()
+        store.refresh()
+        library.notes?.refresh()
+        XCTAssertNil(store.task(withID: task.id), "presentation shows the newer, deleted copy")
+        XCTAssertNil(library.notes?.note(withID: note.id))
+
+        let listed = try callNoteTool(handler, "list_deleted", [:])
+        let ids = Set(((listed["items"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String })
+        XCTAssertEqual(ids, [task.id.uuidString, note.id.uuidString])
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, task.id)), .deleted)
+        XCTAssertEqual(library.state(of: AtticItemRef(.note, note.id)), .deleted)
+
+        let restoredTask = try callNoteTool(handler, "restore_item", ["kind": "task", "id": task.id.uuidString])
+        XCTAssertEqual(restoredTask["restored"] as? String, task.id.uuidString)
+        let restoredNote = try callNoteTool(handler, "restore_item", ["kind": "note", "id": note.id.uuidString])
+        XCTAssertEqual(restoredNote["restored"] as? String, note.id.uuidString)
+        XCTAssertEqual(store.task(withID: task.id)?.title, "Task")
+        XCTAssertEqual(store.task(withID: task.id)?.tags, ["home"])
+        XCTAssertNotNil(library.notes?.note(withID: note.id))
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, 2, "both replicas kept")
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil })
+        XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 0)
+    }
+
+    /// The restore still applies its own replica checks: an older live copy
+    /// that changed after the delete refuses it, through MCP as elsewhere.
+    func testMCPRestoreStillRefusesWhenTheOlderLiveCopyDiverges() throws {
+        let (_, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        XCTAssertTrue(store.delete(task))
+        let context = ModelContext(store.container)
+        let taskID = task.id
+        let deleted = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })).first)
+        context.insert(TaskItem(id: task.id, title: "Renamed elsewhere", status: deleted.status,
+                                priority: deleted.priority, createdAt: deleted.createdAt,
+                                updatedAt: deleted.updatedAt.addingTimeInterval(-60),
+                                completedAt: deleted.completedAt, manualOrder: deleted.manualOrder,
+                                parentID: deleted.parentID))
+        try context.save()
+        store.refresh()
+
+        XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 1)
+        XCTAssertTrue(try toolError(handler, "restore_item", ["kind": "task", "id": task.id.uuidString])
+            .contains("Another copy"))
+        XCTAssertNil(store.task(withID: task.id))
+        XCTAssertEqual(try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+            .filter { $0.deletedAt != nil }.count, 1, "nothing changed")
+    }
+
+    /// The reverse: a newer live copy beside an older deleted one is live,
+    /// so it is neither listed as deleted nor restorable.
+    func testANewerLiveCopyKeepsAnItemOutOfRecentlyDeleted() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        let context = ModelContext(store.container)
+        let stale = TaskItem(id: task.id, title: "Task", createdAt: task.createdAt,
+                             updatedAt: task.updatedAt.addingTimeInterval(-60))
+        stale.deletedAt = task.updatedAt.addingTimeInterval(-30)
+        stale.deletionRootID = task.id
+        stale.deletionMembersRaw = task.id.uuidString
+        context.insert(stale)
+        try context.save()
+        store.refresh()
+
+        XCTAssertNotNil(store.task(withID: task.id))
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, task.id)), .live)
+        XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 0)
+        XCTAssertTrue(try toolError(handler, "restore_item", ["kind": "task", "id": task.id.uuidString])
+            .contains("Recently Deleted"))
+    }
+
+    func testDeleteNoteNowMovesTheNoteToRecentlyDeleted() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let note = try XCTUnwrap(library.notes?.create(title: "Keep safe"))
+        let payload = try callNoteTool(handler, "delete_note", ["id": note.id.uuidString])
+        XCTAssertEqual(payload["deleted"] as? String, note.id.uuidString)
+        XCTAssertTrue(try XCTUnwrap(library.notes).notes.isEmpty)
+        XCTAssertEqual(library.state(of: AtticItemRef(.note, note.id)), .deleted)
+        XCTAssertEqual(try ModelContext(store.container).fetchCount(FetchDescriptor<NoteItem>()), 1)
+    }
+
+    func testDeleteItemWorksForEveryKindAndAgentsCannotDeletePermanently() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        let note = try XCTUnwrap(library.notes?.create(title: "Note"))
+        XCTAssertNotNil(library.canvases?.createCanvas(name: "Keep"))
+        let board = try XCTUnwrap(library.canvases?.createCanvas(name: "Board"))
+        for (kind, id) in [("task", task.id), ("note", note.id), ("canvas", board.id)] {
+            let payload = try callNoteTool(handler, "delete_item", ["kind": kind, "id": id.uuidString])
+            XCTAssertEqual(payload["kind"] as? String, kind)
+            XCTAssertNotNil(payload["restorable_until"] as? String)
+        }
+        XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 3)
+        let context = ModelContext(store.container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskItem>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<NoteItem>()), 1)
+
+        let names = AgentTaskTools(store: store).definitions.compactMap { $0["name"] as? String }
+        XCTAssertFalse(names.contains { $0.contains("purge") || $0.contains("empty") || $0.contains("permanent") })
+        XCTAssertTrue(try toolError(handler, "delete_item", ["kind": "task", "id": task.id.uuidString]).contains("No task"))
+        XCTAssertTrue(try toolError(handler, "delete_item", ["kind": "folder", "id": task.id.uuidString]).contains("kind"))
+        XCTAssertTrue(try toolError(handler, "restore_item", ["kind": "note", "id": UUID().uuidString]).contains("Recently Deleted"))
+    }
+
+    func testCreateTaskAcceptsTagsDueAndPriorityThroughTheDraftStep() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let payload = try callNoteTool(handler, "create_task", [
+            "title": "Call mom tomorrow !",
+            "tags": ["#Family", "calls"],
+            "due": "sep 30",
+            "priority": "high"
+        ])
+        let task = try XCTUnwrap(payload["task"] as? [String: Any])
+        XCTAssertEqual(task["title"] as? String, "Call mom tomorrow !", "an agent's title is used as given")
+        XCTAssertEqual(task["tags"] as? [String], ["calls", "family"])
+        XCTAssertEqual(task["due"] as? String, "2026-09-30")
+        XCTAssertEqual(task["priority"] as? String, "high")
+        XCTAssertEqual(library.undo.undoName(in: .tasks), "Add Task")
+
+        let iso = try callNoteTool(handler, "create_task", ["title": "ISO", "due": "2027-01-15"])
+        XCTAssertEqual((iso["task"] as? [String: Any])?["due"] as? String, "2027-01-15")
+        let plain = try callNoteTool(handler, "create_task", ["title": "Plain"])
+        XCTAssertEqual((plain["task"] as? [String: Any])?["tags"] as? [String], [])
+        XCTAssertNil((plain["task"] as? [String: Any])?["due"])
+
+        XCTAssertTrue(try toolError(handler, "create_task", ["title": "Bad", "due": "someday"]).contains("due date"))
+        XCTAssertTrue(try toolError(handler, "create_task", ["title": "Bad", "tags": ["!!!"]]).contains("Invalid tag"))
+        XCTAssertTrue(try toolError(handler, "create_task", ["title": "Bad", "tags": "home"]).contains("array"))
+        XCTAssertTrue(try toolError(handler, "create_task", ["title": "Bad", "due": NSNull()]).contains("due"))
+        XCTAssertEqual(store.tasks.count, 3, "invalid arguments create nothing")
+    }
+
+    func testUpdateTaskSetsReplacesAndClearsTagsAndDue() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        var updated = try callNoteTool(handler, "update_task", [
+            "id": task.id.uuidString, "tags": ["a", "b"], "due": "fri"
+        ])
+        var payload = try XCTUnwrap(updated["task"] as? [String: Any])
+        XCTAssertEqual(payload["tags"] as? [String], ["a", "b"])
+        XCTAssertEqual(payload["due"] as? String, "2026-09-25")
+        updated = try callNoteTool(handler, "update_task", ["id": task.id.uuidString, "tags": ["c"], "due": NSNull()])
+        payload = try XCTUnwrap(updated["task"] as? [String: Any])
+        XCTAssertEqual(payload["tags"] as? [String], ["c"])
+        XCTAssertNil(payload["due"])
+        XCTAssertEqual(library.undo.undoCount(in: .tasks), 2)
+        XCTAssertTrue(library.undo.undo(in: .tasks))
+        XCTAssertEqual(task.tags, ["a", "b"])
+        XCTAssertTrue(try toolError(handler, "update_task", ["id": task.id.uuidString, "due": "soonish"]).contains("due date"))
+    }
+
+    func testListTagsAndUpdateTagsRenameAndMerge() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let first = try XCTUnwrap(store.create(title: "One"))
+        let second = try XCTUnwrap(store.create(title: "Two"))
+        let note = try XCTUnwrap(library.notes?.create(title: "Note"))
+        XCTAssertTrue(library.setTags(["work", "urgent"], on: AtticItemRef(.task, first.id)))
+        XCTAssertTrue(library.setTags(["job"], on: AtticItemRef(.task, second.id)))
+        XCTAssertTrue(library.setTags(["work"], on: AtticItemRef(.note, note.id)))
+
+        let listed = try callNoteTool(handler, "list_tags", [:])
+        XCTAssertEqual(listed["count"] as? Int, 3)
+        let tags = try XCTUnwrap(listed["tags"] as? [[String: Any]])
+        XCTAssertEqual(tags.first?["name"] as? String, "work")
+        XCTAssertEqual(tags.first?["count"] as? Int, 2)
+
+        let renamed = try callNoteTool(handler, "update_tags", ["action": "rename", "from": "urgent", "to": "Now"])
+        XCTAssertEqual(renamed["tag"] as? String, "now")
+        XCTAssertEqual(store.task(withID: first.id)?.tags, ["now", "work"])
+        _ = try callNoteTool(handler, "update_tags", ["action": "merge", "from": ["job", "work"], "to": "work"])
+        XCTAssertEqual(store.task(withID: second.id)?.tags, ["work"])
+        XCTAssertEqual(library.tags.counts().first, TagCount(name: "work", count: 3))
+
+        XCTAssertTrue(try toolError(handler, "update_tags", ["action": "delete", "from": "work", "to": "x"]).contains("rename or merge"))
+        XCTAssertTrue(try toolError(handler, "update_tags", ["action": "merge", "from": "work", "to": "x"]).contains("list"))
+        XCTAssertTrue(try toolError(handler, "update_tags", ["action": "rename", "from": "work", "to": "#"]).contains("tag"))
+    }
+
+    func testLinkCreatesAndListsLinksAndBacklinks() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Email testers"))
+        let note = try XCTUnwrap(library.notes?.create(title: "Beta plan"))
+        let created = try callNoteTool(handler, "link", [
+            "item": ["kind": "note", "id": note.id.uuidString],
+            "target": ["kind": "task", "id": task.id.uuidString],
+            "link_kind": "card"
+        ])
+        let link = try XCTUnwrap(created["link"] as? [String: Any])
+        XCTAssertEqual(link["kind"] as? String, "card")
+        XCTAssertEqual((link["target"] as? [String: Any])?["title"] as? String, "Email testers")
+        XCTAssertEqual((created["links"] as? [[String: Any]])?.count, 1)
+
+        let listed = try callNoteTool(handler, "link", ["item": ["kind": "task", "id": task.id.uuidString]])
+        XCTAssertEqual((listed["links"] as? [[String: Any]])?.count, 0)
+        let backlinks = try XCTUnwrap(listed["backlinks"] as? [[String: Any]])
+        XCTAssertEqual((backlinks.first?["source"] as? [String: Any])?["id"] as? String, note.id.uuidString)
+
+        XCTAssertTrue(try toolError(handler, "link", [
+            "item": ["kind": "task", "id": task.id.uuidString],
+            "target": ["kind": "note", "id": UUID().uuidString]
+        ]).contains("No note"))
+        XCTAssertTrue(try toolError(handler, "link", [
+            "item": ["kind": "task", "id": task.id.uuidString], "link_kind": "card"
+        ]).contains("target"))
     }
 
     private func makeNoteHandler() throws -> (NoteStore, MCPRequestHandler) {

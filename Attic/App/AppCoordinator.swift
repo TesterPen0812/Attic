@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import SwiftData
 
 struct AppRuntimeEnvironment {
@@ -8,19 +9,102 @@ struct AppRuntimeEnvironment {
     let environment: [String: String]
     let processIdentifier: Int32
     let testRunIdentifier: String
+    let arguments: [String]
+    let bundleIdentifier: String?
+    /// The Application Support directory the app's files live under; nil is
+    /// this process's own (the sandbox container's). Injected by tests so a
+    /// launch's file services can be checked against sentinel files.
+    let applicationSupportURL: URL?
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
-        testRunIdentifier: String = UUID().uuidString
+        testRunIdentifier: String = UUID().uuidString,
+        arguments: [String] = ProcessInfo.processInfo.arguments,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier,
+        applicationSupportURL: URL? = nil
     ) {
         self.environment = environment
         self.processIdentifier = processIdentifier
         self.testRunIdentifier = testRunIdentifier
+        self.arguments = arguments
+        self.bundleIdentifier = bundleIdentifier
+        self.applicationSupportURL = applicationSupportURL
     }
 
     var isUITesting: Bool {
         environment["ATTIC_UI_TESTING"] == "1"
+    }
+
+    // MARK: Design-system gallery
+
+    static let galleryArgument = "--attic-gallery"
+    static let officialBundleIdentifier = "com.taha.Attic"
+
+    /// What a launch with `--attic-gallery` (preview builds only) may do.
+    enum GalleryLaunch: Equatable {
+        /// No gallery requested: the app starts normally.
+        case none
+        /// The gallery opens; the persistent store is never opened.
+        case allowed
+        /// Requested under an identity that could hold real data (the
+        /// official bundle): refused, and still no store is opened.
+        case refused
+    }
+
+    /// The gallery is allowed only under a preview identity
+    /// (`com.taha.Attic.<preview>`) or in UI testing, never under the
+    /// official `com.taha.Attic` identity that holds the owner's data.
+    var galleryLaunch: GalleryLaunch {
+        #if DEBUG
+        guard arguments.contains(Self.galleryArgument) else { return .none }
+        if isUITesting { return .allowed }
+        if let bundleIdentifier, bundleIdentifier.hasPrefix(Self.officialBundleIdentifier + "."),
+           bundleIdentifier.count > Self.officialBundleIdentifier.count + 1 {
+            return .allowed
+        }
+        return .refused
+        #else
+        return .none
+        #endif
+    }
+
+    /// Whether the app's SwiftData store lives in memory only: tests, and
+    /// every gallery launch (allowed or refused), so the gallery never
+    /// opens, migrates or writes a persistent store.
+    var usesInMemoryStore: Bool {
+        isUITesting || isRunningTests || galleryLaunch != .none
+    }
+
+    /// Any `--attic-gallery` launch, allowed or refused. The app's
+    /// coordinator is still built (the SwiftUI scene holds it), so every
+    /// service it builds that owns files is pointed away from the identity's
+    /// real data: the store is in memory, attachment and task-file stores
+    /// live under `galleryScratchRoot` (their launch reconciliation deletes
+    /// files the empty store doesn't reference), note draft recovery is off,
+    /// settings go to a scratch defaults suite, and the agent credential is
+    /// ephemeral.
+    var isGalleryLaunch: Bool { galleryLaunch != .none }
+
+    /// A temporary directory this process owns, for the file services of a
+    /// gallery launch. Nothing in it is ever the owner's data.
+    var galleryScratchRoot: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticGallery", isDirectory: true)
+            .appendingPathComponent("\(processIdentifier)-\(testRunIdentifier)", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    static let galleryDefaultsSuiteName = "com.taha.Attic.gallery-scratch"
+
+    private var resolvedApplicationSupportURL: URL? {
+        applicationSupportURL
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    }
+
+    /// The menu-bar item appears only when the real app runs.
+    var showsMenuBarItem: Bool {
+        galleryLaunch == .none
     }
 
     var isRunningTests: Bool {
@@ -33,7 +117,7 @@ struct AppRuntimeEnvironment {
         isRunningTests && !isUITesting
     }
 
-    var usesEphemeralAgentCredential: Bool { isUITesting || isRunningTests }
+    var usesEphemeralAgentCredential: Bool { isUITesting || isRunningTests || isGalleryLaunch }
 
     var shouldStartInteractiveShellServices: Bool {
         !isUnitTestHost
@@ -42,14 +126,21 @@ struct AppRuntimeEnvironment {
     var noteRecoveryURL: URL? {
         // The sandbox resolves this inside the running preview's own bundle
         // container. Test controllers inject their own temporary file instead.
-        guard !isRunningTests else { return nil }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("Attic/Notes/draft-recovery.json")
+        guard !isRunningTests, !isGalleryLaunch else { return nil }
+        return resolvedApplicationSupportURL?.appendingPathComponent("Attic/Notes/draft-recovery.json")
     }
 
     func makeSettingsDefaults(
         standard: UserDefaults = .standard
     ) -> UserDefaults {
+        if isGalleryLaunch {
+            // Settings migrations write on launch; a gallery launch keeps
+            // them away from the identity's real preferences.
+            guard let scratch = UserDefaults(suiteName: Self.galleryDefaultsSuiteName) else {
+                preconditionFailure("Unable to create the gallery's scratch defaults")
+            }
+            return scratch
+        }
         guard isUnitTestHost else { return standard }
         let suiteName = environment["ATTIC_TEST_DEFAULTS_SUITE"]
             ?? "com.taha.Attic.unit-tests.\(processIdentifier)"
@@ -114,10 +205,27 @@ struct AppRuntimeEnvironment {
         return candidate
     }
 
+    /// The notes' attachment file store: a gallery launch's scratch root,
+    /// a test host's owned temporary root, or the app's own directory
+    /// (nil: `AttachmentFileStore`'s default, unless Application Support was
+    /// injected).
     func makeAttachmentFileStore(
         fileManager: FileManager = .default
     ) -> AttachmentFileStore? {
-        guard isRunningTests else { return nil }
+        if isGalleryLaunch {
+            return AttachmentFileStore(
+                rootURL: galleryScratchRoot.appendingPathComponent("Attachments/v1", isDirectory: true),
+                fileManager: fileManager
+            )
+        }
+        guard isRunningTests else {
+            return applicationSupportURL.map {
+                AttachmentFileStore(
+                    rootURL: $0.appendingPathComponent("Attic/Attachments/v1", isDirectory: true),
+                    fileManager: fileManager
+                )
+            }
+        }
         guard let rootURL = attachmentRootURL(fileManager: fileManager) else {
             preconditionFailure(
                 "ATTIC_TEST_ATTACHMENT_ROOT was supplied without valid "
@@ -125,6 +233,41 @@ struct AppRuntimeEnvironment {
             )
         }
         return AttachmentFileStore(rootURL: rootURL, fileManager: fileManager)
+    }
+
+    /// Task attachment files: a gallery launch's scratch root, or the app's
+    /// own directory (`TaskImageFiles.shared` unless Application Support was
+    /// injected).
+    func makeTaskImageFiles() -> TaskImageFiles {
+        if isGalleryLaunch {
+            return TaskImageFiles(rootURL: galleryScratchRoot.appendingPathComponent("TaskImages", isDirectory: true))
+        }
+        if let applicationSupportURL {
+            return TaskImageFiles(rootURL: applicationSupportURL.appendingPathComponent("Attic/TaskImages", isDirectory: true))
+        }
+        return .shared
+    }
+
+    /// The task and note stores, with the file services this launch may use
+    /// (`makeTaskImageFiles`, `makeAttachmentFileStore`; a performance run
+    /// uses its own root). Both reconcile their files against the store they
+    /// are given, so a launch's store and its file roots must belong
+    /// together: an in-memory gallery store never meets the real files.
+    @MainActor
+    func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) -> (tasks: TaskStore, notes: NoteStore) {
+        let tasks = TaskStore(
+            container: container,
+            taskImageFiles: performanceRoot.map {
+                TaskImageFiles(rootURL: $0.appendingPathComponent("TaskImages", isDirectory: true))
+            } ?? makeTaskImageFiles()
+        )
+        let notes = NoteStore(
+            container: container,
+            attachmentFileStore: performanceRoot.map {
+                AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
+            } ?? makeAttachmentFileStore()
+        )
+        return (tasks, notes)
     }
 }
 
@@ -170,6 +313,9 @@ final class AppCoordinator: ObservableObject {
     let store: TaskStore
     let noteStore: NoteStore
     let canvasStore: CanvasStore
+    /// The store-level command layer (undo route, Recently Deleted, tags,
+    /// links) shared by agents and, from phase 1, the UI.
+    let library: AtticLibrary
     let canvasSession: CanvasSession
     let noteDraft: NoteDraftController
     let loginItemService: LoginItemService
@@ -220,19 +366,50 @@ final class AppCoordinator: ObservableObject {
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private let newTaskHotKey: GlobalHotKey
+    private let performanceRoot: URL?
+    private let isPerformanceSeedOnly: Bool
+    private var performanceSignalSource: (any DispatchSourceSignal)?
+    private var performancePhaseIndex = 0
 
     private init() {
+        PerformanceSignposts.beginLaunch()
         let environment = ProcessInfo.processInfo.environment
         let runtime = AppRuntimeEnvironment(environment: environment)
-        isUITesting = runtime.isUITesting
-        isRunningTests = runtime.isRunningTests
+        let isUITesting = runtime.isUITesting
+        let isRunningTests = runtime.isRunningTests
+        let externalPerformanceRoot = PerformanceProbe.validatedRoot(environment: environment)
+        if environment["ATTIC_PERF_STORE_ROOT"] != nil && externalPerformanceRoot == nil {
+            fatalError("Performance store root is not an owned temporary directory")
+        }
+        let uiPerformanceRoot: URL?
+        do {
+            uiPerformanceRoot = try PerformanceProbe.uiTestRoot(environment: environment)
+        } catch {
+            fatalError("Unable to create the isolated performance UI test root: \(error)")
+        }
+        let performanceUICleanup = environment["ATTIC_PERF_UI_CLEANUP"] == "1"
+        if environment["ATTIC_PERF_UI_TEST"] == "1",
+           uiPerformanceRoot == nil, !performanceUICleanup {
+            fatalError("Performance UI tests require their isolated preview bundle")
+        }
+        let performanceRoot = externalPerformanceRoot ?? uiPerformanceRoot
+        let performanceSeedOnly = environment["ATTIC_PERF_SEED_ONLY"] == "1"
+        self.isUITesting = isUITesting
+        self.isRunningTests = isRunningTests
         shouldStartInteractiveShellServices = runtime.shouldStartInteractiveShellServices
+        // A performance run must opt into the UI-test identity and prove it
+        // owns a temporary root. It can never fall through to the normal store.
+        self.performanceRoot = performanceRoot
+        isPerformanceSeedOnly = performanceSeedOnly
         let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
             && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
+            && !performanceUICleanup
+            && runtime.galleryLaunch == .none
+        let inMemoryStore = runtime.usesInMemoryStore
 
         let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
         #if DEBUG && !ATTIC_LOCAL_ONLY
-        if !isUITesting && !isRunningTests {
+        if !inMemoryStore {
             do {
                 try PersistenceController.initializeCloudKitDevelopmentSchemaIfNeeded()
             } catch {
@@ -244,35 +421,51 @@ final class AppCoordinator: ObservableObject {
         }
         #endif
         let container: ModelContainer
-        if usesCanvasUITestPersistence {
+        if let performanceRoot {
             do {
-                container = try PersistenceController.makeCanvasUITestContainer(
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
+                    reset: performanceSeedOnly, baseDirectory: performanceRoot
+                ) }
+                if performanceSeedOnly {
+                    PerformanceProbe.writePhase("seeding", root: performanceRoot)
+                    try PerformanceSeed.generate(
+                        in: container, root: performanceRoot,
+                        includeDoneHistory: environment["ATTIC_PERF_DONE_HISTORY"] == "1"
+                    )
+                    PerformanceProbe.writePhase("seed_complete", root: performanceRoot)
+                }
+            } catch {
+                fatalError("Unable to create the isolated performance store: \(error)")
+            }
+        } else if usesCanvasUITestPersistence {
+            do {
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeCanvasUITestContainer(
                     reset: environment["ATTIC_UI_TEST_CANVAS_RESET"] == "1"
-                )
+                ) }
             } catch {
                 fatalError("Unable to create the isolated Canvas UI test store: \(error)")
             }
         } else {
             #if ATTIC_LOCAL_ONLY
             do {
-                container = try PersistenceController.makeContainer(
-                    inMemory: isUITesting || isRunningTests,
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
+                    inMemory: inMemoryStore,
                     cloudSyncEnabled: false
-                )
+                ) }
             } catch {
                 fatalError("Unable to create the local-only SwiftData container: \(error)")
             }
             #else
             do {
-                container = try PersistenceController.makeContainer(
-                    inMemory: isUITesting || isRunningTests
-                )
+                container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
+                    inMemory: inMemoryStore
+                ) }
             } catch let cloudError {
                 do {
-                    container = try PersistenceController.makeContainer(
-                        inMemory: isUITesting || isRunningTests,
+                    container = try PerformanceSignposts.storeOpen { try PersistenceController.makeContainer(
+                        inMemory: inMemoryStore,
                         cloudSyncEnabled: false
-                    )
+                    ) }
                     settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
                 } catch {
                     fatalError(
@@ -284,11 +477,7 @@ final class AppCoordinator: ObservableObject {
             #endif
         }
 
-        let store = TaskStore(container: container)
-        let noteStore = NoteStore(
-            container: container,
-            attachmentFileStore: runtime.makeAttachmentFileStore()
-        )
+        let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
         if isUITesting,
@@ -312,7 +501,8 @@ final class AppCoordinator: ObservableObject {
         // Each bundle identity owns its credential; previews never reuse Daily's.
         // Both kinds of test host avoid Keychain. In normal use, credential
         // loading starts only after opt-in and runs away from the main thread.
-        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore))
+        let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
+        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore, library: library))
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
             agentServer = AgentServer(port: settings.agentServerPort,
@@ -344,6 +534,7 @@ final class AppCoordinator: ObservableObject {
         self.store = store
         self.noteStore = noteStore
         self.canvasStore = canvasStore
+        self.library = library
         self.canvasSession = canvasSession
         self.noteDraft = noteDraft
         self.uiState = uiState
@@ -352,7 +543,12 @@ final class AppCoordinator: ObservableObject {
         self.settingsWindowController = settingsWindowController
         self.agentServer = agentServer
         self.newTaskHotKey = newTaskHotKey
-        cleanupService = DailyCleanupService(store: store)
+        cleanupService = DailyCleanupService(
+            store: store,
+            purgeRecentlyDeleted: { now, calendar in
+                library.purgeExpired(now: now, calendar: calendar)
+            }
+        )
         hoverMonitor = CornerHoverMonitor(
             settings: settings,
             panelController: panelController,
@@ -373,6 +569,9 @@ final class AppCoordinator: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
         guard shouldStartInteractiveShellServices else { return }
+        if isPerformanceSeedOnly {
+            return
+        }
         NSApp.appearance = settings.appearance.nsAppearance
         appearanceObservation = settings.$appearance
             .removeDuplicates()
@@ -389,6 +588,85 @@ final class AppCoordinator: ObservableObject {
             // key panel so AppKit, not a test-only model shortcut, owns mouse
             // and keyboard delivery through the installed UI hierarchy.
             NSApp.activate()
+            if let performanceRoot,
+               ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
+                hoverMonitor.start()
+                let window = Double(ProcessInfo.processInfo.environment["ATTIC_PERF_WINDOW_SECONDS"] ?? "10") ?? 10
+                func write(_ phase: String) {
+                    let pointer = NSEvent.mouseLocation
+                    PerformanceProbe.writePhase(phase, root: performanceRoot, details: [
+                        "panel_visible": panelController.isVisibleForPerformanceProbe ? 1 : 0,
+                        "hover_hidden": hoverMonitor.isHiddenForPerformanceProbe ? 1 : 0,
+                        "visibility_changes": panelController.performanceVisibilityChanges,
+                        "visible_strokes": canvasSession.strokes.count,
+                        "section_canvas": uiState.selectedSection == .canvas ? 1 : 0,
+                        "pointer_x": Int(pointer.x.rounded()),
+                        "pointer_y": Int(pointer.y.rounded())
+                    ])
+                }
+                func later(_ seconds: Double, _ action: @escaping () -> Void) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: action)
+                }
+                if ProcessInfo.processInfo.environment["ATTIC_PERF_EXTERNAL_CONTROL"] == "1" {
+                    // A signal arrives only after the sampler finishes its
+                    // window. End markers and the next phase cannot race a
+                    // slow reveal, footprint call, or AppKit hide completion.
+                    signal(SIGUSR1, SIG_IGN)
+                    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+                    source.setEventHandler { [weak self] in
+                        guard let self, self.performancePhaseIndex < 5 else { return }
+                        let phases = ["hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"]
+                        write(phases[self.performancePhaseIndex] + "_end")
+                        self.performancePhaseIndex += 1
+                        switch self.performancePhaseIndex {
+                        case 1:
+                            self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
+                            later(1) { write("tasks_open") }
+                        case 2:
+                            self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
+                            later(1) { write("canvas_open") }
+                        case 3:
+                            let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
+                                write(outcome == .hidden ? "after_hide" : "hide_failed")
+                            }
+                            if !result.isAccepted { write("hide_failed") }
+                        case 4:
+                            write("hidden_idle_final")
+                        default:
+                            break
+                        }
+                    }
+                    performanceSignalSource = source
+                    source.resume()
+                    write("hidden_idle")
+                    return
+                }
+                write("hidden_idle")
+                later(30 + window + 8) { write("hidden_idle_end") }
+                later(30 + window + 18) {
+                    self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
+                    later(1) { write("tasks_open") }
+                    later(window + 8) { write("tasks_open_end") }
+                    later(window + 18) {
+                        self.hoverMonitor.revealForPerformanceProbe(section: .canvas)
+                        later(1) { write("canvas_open") }
+                        later(window + 8) { write("canvas_open_end") }
+                        later(window + 18) {
+                            let result = self.hoverMonitor.hideForPerformanceProbe { outcome in
+                                write(outcome == .hidden ? "after_hide" : "hide_failed")
+                                guard outcome == .hidden else { return }
+                                later(30 + window + 8) {
+                                    write("after_hide_end")
+                                    later(1) { write("hidden_idle_final") }
+                                    later(window + 16) { write("hidden_idle_final_end") }
+                                }
+                            }
+                            if !result.isAccepted { write("hide_failed") }
+                        }
+                    }
+                }
+                return
+            }
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_HOVER_MONITOR"] == "1" {
                 hoverMonitor.start()
                 hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
@@ -432,6 +710,8 @@ final class AppCoordinator: ObservableObject {
     }
 
     func stop() {
+        performanceSignalSource?.cancel()
+        performanceSignalSource = nil
         if isRunningTests && !isUITesting {
             hasStarted = false
             return

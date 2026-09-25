@@ -24,12 +24,13 @@ concurrency:
 env:
   LUNA_REPAIRED_COMMIT: 8063d92c995015b77a0493723270b6c183adb784
   BUNDLE_FROZEN: "true"
+  PERF_REFERENCE_COMMIT: 33aace64a96f656e04a39d75183f968a4b850ef6
 
 jobs:
   macos:
     name: Build, test, and analyze Attic for macOS
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 180
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
@@ -154,7 +155,7 @@ jobs:
       - name: Run macOS UI tests
         id: ui_tests
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 40
         run: |
           rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
           rm -rf "$RUNNER_TEMP/attic-visual-uat"
@@ -169,6 +170,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/AtticUITests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:AtticUITests \
+            -skip-testing:AtticUITests/PerformanceUITests \
             test
 
       - name: Print macOS UI-test summary
@@ -197,6 +199,37 @@ jobs:
           path: ${{ runner.temp }}/attic-visual-uat
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Run seeded macOS performance UI tests
+        id: perf_ui_tests
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          rm -rf "$RUNNER_TEMP/AtticPerformanceUITests.xcresult"
+          xcodebuild \
+            -project Attic.xcodeproj \
+            -scheme AtticUI \
+            -configuration Local \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/AtticPerformanceUITests" \
+            -resultBundlePath "$RUNNER_TEMP/AtticPerformanceUITests.xcresult" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= \
+            ATTIC_MACOS_BUNDLE_IDENTIFIER=com.taha.Attic.perf.ui \
+            -only-testing:AtticUITests/PerformanceUITests \
+            test
+
+      - name: Upload performance UI-test metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-performance-ui-results-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticPerformanceUITests.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Run macOS static analyzer
         id: analyzer
@@ -228,7 +261,7 @@ jobs:
             exit 1
           fi
 
-      - name: Require every macOS verification
+      - name: Require established macOS verifications
         if: always()
         env:
           PROJECT_VERIFY: ${{ steps.project_verify.outcome }}
@@ -236,6 +269,7 @@ jobs:
           STRICT_BUILD: ${{ steps.strict_build.outcome }}
           UNIT_TESTS: ${{ steps.unit_tests.outcome }}
           UI_TESTS: ${{ steps.ui_tests.outcome }}
+          PERF_UI_TESTS: ${{ steps.perf_ui_tests.outcome }}
           ANALYZER: ${{ steps.analyzer.outcome }}
           FINAL_STATE: ${{ steps.final_state.outcome }}
         run: |
@@ -245,8 +279,12 @@ jobs:
             strict-concurrency "$STRICT_BUILD" \
             unit-tests "$UNIT_TESTS" \
             ui-tests "$UI_TESTS" \
+            performance-ui-tests "$PERF_UI_TESTS" \
             analyzer "$ANALYZER" \
             final-worktree "$FINAL_STATE"
+          if [ "$PERF_UI_TESTS" != success ]; then
+            echo "::warning::Performance UI metrics are observational until the signed lane passes on macos-26"
+          fi
           test "$PROJECT_VERIFY" = success
           test "$MAC_BUILD" = success
           test "$STRICT_BUILD" = success
@@ -254,6 +292,139 @@ jobs:
           test "$UI_TESTS" = success
           test "$ANALYZER" = success
           test "$FINAL_STATE" = success
+
+  performance:
+    name: Observe seeded performance on a fresh macOS runner
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - name: Check out candidate and reference history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify Xcode 26 toolchain
+        id: perf_xcode
+        continue-on-error: true
+        run: |
+          xcodebuild -version
+          xcodebuild -version | head -n 1 | grep -Eq '^Xcode 26\.'
+
+      - name: Record interleaved reference and candidate samples
+        id: perf_probe
+        if: steps.perf_xcode.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 90
+        run: |
+          started=$(date +%s)
+          trap 'echo "first_samples_seconds=$(($(date +%s) - started))" >> "$RUNNER_TEMP/AtticPerfDurations.txt"' EXIT
+          git merge-base --is-ancestor "$PERF_REFERENCE_COMMIT" HEAD
+          git worktree add --detach "$RUNNER_TEMP/AtticPerfReference" "$PERF_REFERENCE_COMMIT"
+          python3 Scripts/interleave_performance.py \
+            "$RUNNER_TEMP/AtticPerfReference" . "$RUNNER_TEMP/AtticPerfFirst" --pairs 6
+
+      # Runner variance needs observed macos-26 jobs before comparison can
+      # block. Confirmation must repeat the same primary measure.
+      - name: Report and confirm seeded preview comparison
+        id: perf_compare
+        if: steps.perf_probe.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 90
+        run: |
+          started=$(date +%s)
+          trap 'echo "comparison_and_confirmation_seconds=$(($(date +%s) - started))" >> "$RUNNER_TEMP/AtticPerfDurations.txt"' EXIT
+          if python3 Scripts/compare_performance.py \
+              "$RUNNER_TEMP/AtticPerfFirst-reference.json" \
+              "$RUNNER_TEMP/AtticPerfFirst-candidate.json" \
+              --regressions-json "$RUNNER_TEMP/AtticPerfFirst-regressions.json"; then
+            echo "No primary measure showed complete separation"
+          else
+            test -f "$RUNNER_TEMP/AtticPerfFirst-regressions.json"
+            python3 Scripts/interleave_performance.py \
+              "$RUNNER_TEMP/AtticPerfReference" . "$RUNNER_TEMP/AtticPerfConfirm" --pairs 6
+            python3 Scripts/compare_performance.py \
+              "$RUNNER_TEMP/AtticPerfConfirm-reference.json" \
+              "$RUNNER_TEMP/AtticPerfConfirm-candidate.json" \
+              --regressions-json "$RUNNER_TEMP/AtticPerfConfirm-regressions.json" \
+              --require-common-with "$RUNNER_TEMP/AtticPerfFirst-regressions.json"
+          fi
+
+      - name: Upload same-run performance comparison and durations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-performance-comparison-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/AtticPerfFirst-*.json
+            ${{ runner.temp }}/AtticPerfConfirm-*.json
+            ${{ runner.temp }}/AtticPerfDurations.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Report observational lane outcome
+        if: always()
+        env:
+          PERF_XCODE: ${{ steps.perf_xcode.outcome }}
+          PERF_PROBE: ${{ steps.perf_probe.outcome }}
+          PERF_COMPARE: ${{ steps.perf_compare.outcome }}
+        run: |
+          echo "Xcode 26 toolchain: $PERF_XCODE"
+          echo "Seeded probe: $PERF_PROBE"
+          echo "Comparison and confirmation: $PERF_COMPARE"
+          if [ "$PERF_XCODE" != success ] || [ "$PERF_PROBE" != success ] || [ "$PERF_COMPARE" = failure ]; then
+            echo "::warning::Performance lane requires macos-26 investigation before promotion to a blocking gate"
+          fi
+
+  appearance:
+    name: Design system appearance matrix
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install Ruby dependencies outside the checkout
+        run: |
+          echo "BUNDLE_PATH=$RUNNER_TEMP/AtticBundle" >> "$GITHUB_ENV"
+          echo "BUNDLE_USER_CONFIG=$RUNNER_TEMP/AtticBundleConfig" >> "$GITHUB_ENV"
+          export BUNDLE_PATH="$RUNNER_TEMP/AtticBundle"
+          export BUNDLE_USER_CONFIG="$RUNNER_TEMP/AtticBundleConfig"
+          bundle install --jobs 4 --retry 3
+
+      - name: Regenerate checked-in Xcode project
+        run: bundle exec ruby Scripts/generate_project.rb
+
+      # Every family in every combination, checked by code, plus the 15
+      # contact sheets. The ordinary unit tests run only a representative
+      # subset; this job is the full gate.
+      - name: Run the full appearance matrix
+        run: |
+          Scripts/run_appearance_matrix.zsh \
+            --output "$RUNNER_TEMP/AtticAppearance" \
+            --derived-data "$RUNNER_TEMP/AtticAppearanceBuild" \
+            -- CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload contact sheets and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appearance-matrix-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticAppearance
+          if-no-files-found: ignore
+          retention-days: 14
 
   iphone:
     name: Build Attic for iPhone Simulator

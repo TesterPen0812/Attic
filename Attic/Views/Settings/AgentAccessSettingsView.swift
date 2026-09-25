@@ -17,7 +17,7 @@ struct AgentAccessSettingsView: View {
             Section {
                 SettingsRow(
                     title: "Allow agent access",
-                    description: "Local agents can read, create, update and permanently delete items.",
+                    description: "Local agents can read, create and update items. Their deletes go to Recently Deleted, never permanently.",
                     systemImage: "sparkles",
                     tint: .orange
                 ) {

@@ -1,0 +1,254 @@
+import Foundation
+import SwiftData
+
+struct TagCount: Equatable, Sendable {
+    let name: String
+    /// Live items (tasks, including the Done log; notes; canvases) carrying
+    /// the tag, each logical item counted once.
+    let count: Int
+}
+
+/// What a tag operation did to every physical row it changed: the tags it
+/// removed and the tags it added, replica by replica. Undo reverses exactly
+/// that difference, so tags a row gained or lost since (through any history)
+/// are kept.
+struct TagChangeSnapshot {
+    fileprivate struct Change {
+        let removed: Set<String>
+        let added: Set<String>
+    }
+
+    fileprivate let changesByRow: [PersistentIdentifier: Change]
+    var isEmpty: Bool { changesByRow.isEmpty }
+    /// How many physical rows the operation changed.
+    var rowCount: Int { changesByRow.count }
+}
+
+enum TagServiceError: LocalizedError {
+    case invalidTag(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .invalidTag(raw):
+            "“\(raw)” is not a valid tag. Use letters, numbers and hyphens."
+        }
+    }
+}
+
+/// Tag management across tasks, notes and canvases: counts, rename, merge
+/// and delete. Each operation rewrites every physical row that carries the
+/// tag (live, in the Done log or in Recently Deleted, so a restored item
+/// comes back with current names) in one save of its own context: it applies
+/// everywhere or nowhere. The item stores are refreshed afterwards.
+@MainActor
+final class TagService {
+    private let container: ModelContainer
+    private let persist: (ModelContext) throws -> Void
+    /// Replaces the item stores' contexts after a successful change.
+    var afterChange: () -> Void
+    private(set) var lastErrorMessage: String?
+
+    init(
+        container: ModelContainer,
+        persist: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        afterChange: @escaping () -> Void = {}
+    ) {
+        self.container = container
+        self.persist = persist
+        self.afterChange = afterChange
+    }
+
+    /// Every tag in use on a live item, with how many items carry it, most
+    /// used first.
+    func counts() -> [TagCount] {
+        do {
+            var itemsByTag: [String: Set<AtticItemRef>] = [:]
+            for (ref, tags) in try liveTags() {
+                for tag in tags { itemsByTag[tag, default: []].insert(ref) }
+            }
+            return itemsByTag
+                .map { TagCount(name: $0.key, count: $0.value.count) }
+                .sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    /// Live items carrying `tag`.
+    func items(taggedWith tag: String) -> Set<AtticItemRef> {
+        guard let tag = AtticTag.normalize(tag) else { return [] }
+        do {
+            return Set(try liveTags().filter { $0.value.contains(tag) }.map(\.key))
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    /// Renames a tag everywhere. Renaming onto an existing tag merges them.
+    func rename(_ tag: String, to newName: String) -> TagChangeSnapshot? {
+        merge([tag], into: newName)
+    }
+
+    /// Replaces every source tag by `target` on every item that has one.
+    func merge(_ sources: [String], into target: String) -> TagChangeSnapshot? {
+        guard let target = AtticTag.normalize(target) else {
+            lastErrorMessage = TagServiceError.invalidTag(target).localizedDescription
+            return nil
+        }
+        var normalizedSources = Set<String>()
+        for source in sources {
+            guard let normalized = AtticTag.normalize(source) else {
+                lastErrorMessage = TagServiceError.invalidTag(source).localizedDescription
+                return nil
+            }
+            normalizedSources.insert(normalized)
+        }
+        normalizedSources.remove(target)
+        guard !normalizedSources.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
+        return rewrite { tags in
+            guard !tags.isDisjoint(with: normalizedSources) else { return nil }
+            return tags.subtracting(normalizedSources).union([target])
+        }
+    }
+
+    /// Removes a tag from every item. The items themselves are untouched.
+    func delete(_ tag: String) -> TagChangeSnapshot? {
+        guard let tag = AtticTag.normalize(tag) else {
+            lastErrorMessage = TagServiceError.invalidTag(tag).localizedDescription
+            return nil
+        }
+        return rewrite { tags in
+            tags.contains(tag) ? tags.subtracting([tag]) : nil
+        }
+    }
+
+    /// Reverses a change (undo): on each row it changed, the tags it added
+    /// are removed and the tags it removed come back; every other tag the
+    /// row holds now stays. Rows that no longer exist are skipped. Returns
+    /// false, changing nothing, if the save fails.
+    @discardableResult
+    func revert(_ snapshot: TagChangeSnapshot) -> Bool {
+        guard !snapshot.isEmpty else { return true }
+        let context = ModelContext(container)
+        var changed = false
+        func reverted(_ raw: String, _ change: TagChangeSnapshot.Change) -> String? {
+            let tags = Set(AtticTag.decode(raw)).subtracting(change.added).union(change.removed)
+            let encoded = AtticTag.encode(tags)
+            guard encoded != raw else { return nil }
+            changed = true
+            return encoded
+        }
+        for (identifier, change) in snapshot.changesByRow {
+            switch context.model(for: identifier) {
+            case let task as TaskItem:
+                if let raw = reverted(task.tagsRaw, change) { task.tagsRaw = raw }
+            case let note as NoteItem:
+                if let raw = reverted(note.tagsRaw, change) { note.tagsRaw = raw }
+            case let board as CanvasBoardItem:
+                if let raw = reverted(board.tagsRaw, change) { board.tagsRaw = raw }
+            default: continue
+            }
+        }
+        guard changed else { return true }
+        return save(context)
+    }
+
+    // MARK: - Private
+
+    /// Applies `transform` to every row's tag set; nil leaves a row alone.
+    /// Returns what it removed and added on each row it changed.
+    private func rewrite(_ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
+        let context = ModelContext(container)
+        var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
+        func apply(_ raw: String, _ identifier: PersistentIdentifier) -> String? {
+            let before = Set(AtticTag.decode(raw))
+            guard let changed = transform(before) else { return nil }
+            let encoded = AtticTag.encode(changed)
+            guard encoded != raw else { return nil }
+            let after = Set(AtticTag.decode(encoded))
+            previous[identifier] = .init(removed: before.subtracting(after), added: after.subtracting(before))
+            return encoded
+        }
+        do {
+            for task in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
+                if let updated = apply(task.tagsRaw, task.persistentModelID) { task.tagsRaw = updated }
+            }
+            for note in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
+                if let updated = apply(note.tagsRaw, note.persistentModelID) { note.tagsRaw = updated }
+            }
+            for board in try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
+                if let updated = apply(board.tagsRaw, board.persistentModelID) { board.tagsRaw = updated }
+            }
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return nil
+        }
+        guard !previous.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
+        guard save(context) else { return nil }
+        return TagChangeSnapshot(changesByRow: previous)
+    }
+
+    /// Tags of every live logical item, from the replica presentation shows.
+    /// Candidates are the ids with any tagged row; every replica of each is
+    /// then resolved (`canonicalReplicas`, the canvas winner) before the
+    /// live and tag filters, so an older tagged copy never answers for a
+    /// newer one that has no tags or is deleted.
+    private func liveTags() throws -> [AtticItemRef: Set<String>] {
+        let context = ModelContext(container)
+        var result: [AtticItemRef: Set<String>] = [:]
+        func record(_ ref: AtticItemRef, _ raw: String) {
+            let tags = Set(AtticTag.decode(raw))
+            if !tags.isEmpty { result[ref] = tags }
+        }
+
+        let taskIDs = Array(Set(try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.tagsRaw != "" }
+        )).map(\.id)))
+        if !taskIDs.isEmpty {
+            let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { taskIDs.contains($0.id) }))
+            for task in TaskStore.canonicalReplicas(from: rows) where task.deletedAt == nil {
+                record(AtticItemRef(.task, task.id), task.tagsRaw)
+            }
+        }
+
+        let noteIDs = Array(Set(try context.fetch(FetchDescriptor<NoteItem>(
+            predicate: #Predicate { $0.tagsRaw != "" }
+        )).map(\.id)))
+        if !noteIDs.isEmpty {
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { noteIDs.contains($0.id) }))
+            for note in NoteStore.canonicalReplicas(from: rows) where note.deletedAt == nil {
+                record(AtticItemRef(.note, note.id), note.tagsRaw)
+            }
+        }
+
+        let boardIDs = Array(Set(try context.fetch(FetchDescriptor<CanvasBoardItem>(
+            predicate: #Predicate { $0.tagsRaw != "" }
+        )).map(\.id)))
+        if !boardIDs.isEmpty {
+            let rows = try context.fetch(FetchDescriptor<CanvasBoardItem>(
+                predicate: #Predicate { boardIDs.contains($0.id) }
+            ))
+            for replicas in Dictionary(grouping: rows, by: \.id).values {
+                let board = CanvasStore.winningBoardReplica(in: replicas)
+                guard !board.tombstoned, board.purgedAt == nil else { continue }
+                record(AtticItemRef(.canvas, board.id), board.tagsRaw)
+            }
+        }
+        return result
+    }
+
+    private func save(_ context: ModelContext) -> Bool {
+        do {
+            try persist(context)
+            lastErrorMessage = nil
+        } catch {
+            context.rollback()
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+        afterChange()
+        return true
+    }
+}

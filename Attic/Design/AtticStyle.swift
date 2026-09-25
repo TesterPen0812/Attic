@@ -143,27 +143,16 @@ struct AtticPanelSurface: ViewModifier {
             shape.fill(treatment.palette.opaqueSurfaceColor)
         case .frosted:
             ZStack {
-                if #available(macOS 26.0, *) {
-                    shape.fill(.ultraThinMaterial)
-                        .environment(\.colorScheme, nativeSurfaceColorScheme)
-                } else {
-                    shape.fill(.thinMaterial)
-                }
+                shape.fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, nativeSurfaceColorScheme)
                 shape.fill(themedSurfaceTint)
             }
         case .glass:
-            if #available(macOS 26.0, *) {
-                nativeGlassBackground(shape: shape)
-                    .environment(\.colorScheme, nativeSurfaceColorScheme)
-            } else {
-                // The foundation carries the colour here too; Glass has no
-                // material wash of its own.
-                shape.fill(.regularMaterial)
-            }
+            nativeGlassBackground(shape: shape)
+                .environment(\.colorScheme, nativeSurfaceColorScheme)
         }
     }
 
-    @available(macOS 26.0, *)
     private func nativeGlassBackground(shape: Squircle) -> some View {
         // The calibrated foundation already carries the palette colour. A
         // second tint inside native glass only adds opacity. Keep regular
@@ -261,21 +250,15 @@ extension EnvironmentValues {
 /// How floating interactive controls (pin, mode dock, composers, view
 /// switches) are backed. Translucency and the glass style change the panel
 /// SURFACE only: every surface keeps its controls on Liquid Glass. Reduce
-/// Transparency is the accessibility override that makes controls opaque, and
-/// systems without native glass fall back to material.
+/// Transparency is the accessibility override that makes controls opaque.
 enum AtticGlassControlTreatment: Equatable {
     case opaque
-    case material
     case nativeGlass
 
-    static var systemSupportsNativeGlass: Bool {
-        if #available(macOS 26.0, *) { return true }
-        return false
-    }
+    static let systemSupportsNativeGlass = true
 
-    static func resolve(reduceTransparency: Bool, supportsNativeGlass: Bool) -> Self {
-        if reduceTransparency { return .opaque }
-        return supportsNativeGlass ? .nativeGlass : .material
+    static func resolve(reduceTransparency: Bool) -> Self {
+        reduceTransparency ? .opaque : .nativeGlass
     }
 
     /// Native Liquid Glass takes its tone from whatever is behind it, so on a
@@ -306,8 +289,7 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         switch AtticGlassControlTreatment.resolve(
-            reduceTransparency: reduceTransparency,
-            supportsNativeGlass: AtticGlassControlTreatment.systemSupportsNativeGlass
+            reduceTransparency: reduceTransparency
         ) {
         case .opaque:
             content
@@ -318,33 +300,15 @@ private struct AtticGlassControlModifier<S: Shape>: ViewModifier {
                         lineWidth: colorSchemeContrast == .increased ? 1 : 0.75
                     )
                 }
-        case .material:
-            materialControl(content: content)
         case .nativeGlass:
-            if #available(macOS 26.0, *) {
-                if interactive {
-                    nativeGlassControl(content: content, glass: .regular.interactive())
-                } else {
-                    nativeGlassControl(content: content, glass: .regular)
-                }
+            if interactive {
+                nativeGlassControl(content: content, glass: .regular.interactive())
             } else {
-                materialControl(content: content)
+                nativeGlassControl(content: content, glass: .regular)
             }
         }
     }
 
-    private func materialControl(content: Content) -> some View {
-        content
-            .background(.thinMaterial, in: shape)
-            .overlay {
-                shape.stroke(
-                    Color.primary.opacity(colorSchemeContrast == .increased ? 0.23 : 0.13),
-                    lineWidth: colorSchemeContrast == .increased ? 1 : 0.75
-                )
-            }
-    }
-
-    @available(macOS 26.0, *)
     private func nativeGlassControl(content: Content, glass: Glass) -> some View {
         content
             .glassEffect(glass, in: shape)
@@ -381,11 +345,7 @@ private struct AtticGlassEffectContainerModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *),
-           AtticGlassControlTreatment.resolve(
-               reduceTransparency: reduceTransparency,
-               supportsNativeGlass: true
-           ) == .nativeGlass {
+        if AtticGlassControlTreatment.resolve(reduceTransparency: reduceTransparency) == .nativeGlass {
             GlassEffectContainer(spacing: spacing) {
                 content
             }

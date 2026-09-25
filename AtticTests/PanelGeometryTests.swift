@@ -288,8 +288,12 @@ final class PanelGeometryTests: XCTestCase {
         for distance in [0, 45, 90, 150] {
             panel.onTrackpadDismissProgress?(CGFloat(distance))
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            let image = try XCTUnwrap(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber), [.boundsIgnoreFraming, .bestResolution]))
-            try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+            // Diagnostic frames only. CGWindowListCreateImage is unavailable
+            // from macOS 15, so render the panel's own view hierarchy.
+            let captureView = try XCTUnwrap(panel.contentView)
+            let capture = try XCTUnwrap(captureView.bitmapImageRepForCachingDisplay(in: captureView.bounds))
+            captureView.cacheDisplay(in: captureView.bounds, to: capture)
+            try XCTUnwrap(capture.representation(using: .png, properties: [:]))
                 .write(to: directory.appendingPathComponent("swipe-\(distance).png"))
             XCTAssertEqual(panel.frame, nativeFrame)
             XCTAssertEqual(content.hostingView.bounds, hostBounds)

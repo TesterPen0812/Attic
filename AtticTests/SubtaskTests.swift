@@ -84,7 +84,7 @@ final class SubtaskTests: XCTestCase {
         XCTAssertEqual(child.status, .todo)
         XCTAssertTrue(store.rename(parent, to: "Travel"))
         XCTAssertTrue(store.rename(child, to: "Book hotel"))
-        XCTAssertEqual(store.purgeCompleted(before: .distantFuture), 0)
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: .distantFuture), 0)
         XCTAssertTrue(store.markDone(child))
     }
 
@@ -177,14 +177,16 @@ final class SubtaskTests: XCTestCase {
         let child = try XCTUnwrap(store.create(title: "Child", parentID: parent.id))
         XCTAssertTrue(store.markDone(child))
         let cutoff = Date(timeIntervalSince1970: 2_000)
-        XCTAssertEqual(store.purgeCompleted(before: cutoff), 0)
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: cutoff), 0)
         time = Date(timeIntervalSince1970: 3_000)
         XCTAssertTrue(store.markDone(parent))
-        XCTAssertEqual(store.purgeCompleted(before: cutoff), 0)
-        let deleted = store.purgeCompleted(before: Date(timeIntervalSince1970: 4_000))
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: cutoff), 0)
+        let moved = store.moveCompletedToDoneLog(before: Date(timeIntervalSince1970: 4_000))
         XCTAssertNil(store.lastErrorMessage, store.lastErrorMessage ?? "")
-        XCTAssertEqual(deleted, 2)
+        XCTAssertEqual(moved, 2)
         XCTAssertTrue(store.tasks.isEmpty)
+        // The family moved together into the Done log; nothing was deleted.
+        XCTAssertEqual(Set(store.doneLog().map(\.id)), [parent.id, child.id])
     }
 
     func testDivergentChildPreventsParentCompletionAndCleanup() throws {
@@ -196,7 +198,7 @@ final class SubtaskTests: XCTestCase {
         [parent, child, duplicate].forEach(context.insert)
         try context.save()
         let store = TaskStore(container: container)
-        XCTAssertEqual(store.purgeCompleted(before: .now), 0)
+        XCTAssertEqual(store.moveCompletedToDoneLog(before: .now), 0)
         XCTAssertTrue(store.setStatus(.todo, for: parent))
         XCTAssertFalse(store.setStatus(.done, for: parent))
         XCTAssertEqual(store.tasks.count, 2)
@@ -216,7 +218,12 @@ final class SubtaskTests: XCTestCase {
         XCTAssertEqual(stored.count, 2)
         XCTAssertTrue(stored.allSatisfy { $0.title == "New title" && $0.parentID == parent.id })
         XCTAssertTrue(store.delete(parent))
-        XCTAssertTrue(try ModelContext(container).fetch(FetchDescriptor<TaskItem>()).isEmpty)
+        // Phase 0: deletes are soft. Every physical replica is kept and
+        // marked as part of the parent's delete, so a restore brings all back.
+        let afterDelete = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(afterDelete.count, 3)
+        XCTAssertTrue(afterDelete.allSatisfy { $0.deletedAt != nil && $0.deletionRootID == parent.id })
+        XCTAssertTrue(store.tasks.isEmpty)
     }
 
     func testConflictingParentLinksBlockFamilyDeletion() throws {

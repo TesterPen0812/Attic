@@ -238,6 +238,29 @@ final class TaskImageTests: XCTestCase {
         XCTAssertTrue(store.removeAttachment(removed.id, from: sharedID))
         replicas = try ModelContext(container).fetch(FetchDescriptor<TaskItem>())
         XCTAssertTrue(replicas.allSatisfy { $0.attachments.map(\.filename) == ["Picture.png"] })
+        // Each replica is written separately; equal lists must still be
+        // byte-identical, or every replica comparison sees a divergence.
+        XCTAssertEqual(Set(replicas.map(\.imageReferencesData)).count, 1)
+        XCTAssertEqual(Set(replicas.map(\.removedAttachmentsData)).count, 1)
+    }
+
+    /// Plain `JSONEncoder` key order can differ between two encodes of one
+    /// value depending on allocation; the replica encoder must not.
+    func testReplicaAttachmentEncodingIsByteStableForEqualLists() throws {
+        let references = (0..<3).map {
+            TaskImageReference(id: UUID(), filename: "File \($0).txt", digest: String(repeating: "a", count: 64),
+                               contentTypeIdentifier: "public.plain-text", byteCount: Int64($0 + 1))
+        }
+        var encodings = Set<Data>()
+        var churn: [Any] = []
+        for index in 0..<400 {
+            // Vary what is allocated between encodes, as a real save does.
+            churn.append([String: Int](uniqueKeysWithValues: (0..<(index % 37)).map { ("k\($0)", $0) }))
+            churn.append([UInt8](repeating: UInt8(index % 255), count: index * 13 % 997))
+            encodings.insert(try TaskStore.encodedAttachments(references))
+        }
+        XCTAssertEqual(encodings.count, 1)
+        XCTAssertEqual(try JSONDecoder().decode([TaskImageReference].self, from: try XCTUnwrap(encodings.first)), references)
     }
 
     /// A crafted store where two logical tasks share one attachment identity:
@@ -271,7 +294,15 @@ final class TaskImageTests: XCTestCase {
         let survivingURL = try await files.verifiedURL(for: reference)
         XCTAssertNotNil(survivingURL)
 
+        // Phase 0: a deleted task keeps its files in Recently Deleted; the
+        // purge after 30 days releases the last reference.
         XCTAssertTrue(store.delete(store.task(withID: twin.id)!))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(storedAttachmentDirectories(storage).count, 1, "a soft-deleted task keeps its file")
+        XCTAssertEqual(store.purgeDeleted(before: .distantFuture), [twin.id])
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(storedAttachmentDirectories(storage).count, 1, "the owner's removal is still restorable")
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(storedAttachmentDirectories(storage).count, 0, "the last reference releases the file")
     }

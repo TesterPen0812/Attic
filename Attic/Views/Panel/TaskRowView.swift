@@ -162,7 +162,7 @@ struct TaskRowView: View, Equatable {
             Button("Delete all", role: .destructive) { store.delete(task) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently deletes “\(task.title)” and its \(store.subtasks(of: task.id).count) subtasks.")
+            Text("“\(task.title)” and its \(store.subtasks(of: task.id).count) subtasks move to Recently Deleted for 30 days.")
         }
         .draggable(TaskDragPayload(taskID: task.id, title: task.title, imageReferences: task.attachments)) {
             dragPreview
@@ -378,7 +378,7 @@ struct TaskRowView: View, Equatable {
             .help("Save title")
             .accessibilityLabel("Save title")
             .transition(.scale(scale: 0.8).combined(with: .opacity))
-        } else if #available(macOS 14.4, *) {
+        } else {
             // A plain button that pops the same actions as a native menu.
             // SwiftUI's borderless `Menu` renders its label through an AppKit
             // pop-up button, which paints the symbol as an accent-tinted
@@ -391,23 +391,6 @@ struct TaskRowView: View, Equatable {
             }
             .buttonStyle(.plain)
             .background(TaskRowMenuAnchor(anchor: menuAnchor))
-            .modifier(RowActionsAffordance(isShown: showsRowAffordances, taskID: task.id))
-            .focused($focusedControl, equals: .actions)
-        } else {
-            // Older systems have no NSHostingMenu; the SwiftUI menu keeps the
-            // same actions and the same at-rest gating.
-            Menu {
-                taskActions
-            } label: {
-                actionsGlyph
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            // The same pop-up button the newer path exists to avoid: it paints
-            // the label as a tinted template and ignores its foregroundStyle,
-            // so without this the fallback row rested on the panel accent.
-            .atticQuietMenuGlyph(palette.secondaryForegroundColor)
             .modifier(RowActionsAffordance(isShown: showsRowAffordances, taskID: task.id))
             .focused($focusedControl, equals: .actions)
         }
@@ -491,7 +474,6 @@ struct TaskRowView: View, Equatable {
     /// built from the same SwiftUI actions the context menu uses, so both
     /// paths stay identical; NSMenu tracking raises the shared
     /// `.menuTracking` lock like every other menu.
-    @available(macOS 14.4, *)
     private func presentActionsMenu() {
         let menu = NSHostingMenu(rootView: taskActions)
         guard let view = menuAnchor.view else {

@@ -251,7 +251,8 @@ extension CanvasStore {
             clearGeneration: item.clearGeneration,
             mutationVersion: item.mutationVersion,
             createdAt: item.createdAt,
-            updatedAt: item.updatedAt
+            updatedAt: item.updatedAt,
+            tags: item.tags
         )
     }
 

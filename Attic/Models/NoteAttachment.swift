@@ -17,6 +17,9 @@ final class NoteAttachment {
     var contentDigest: String = ""
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
+    /// Removed on its own and kept in Recently Deleted for 30 days (its bytes
+    /// and file stay). nil while the attachment is shown.
+    var deletedAt: Date? = nil
     @Attribute(.externalStorage) var payload: Data? = nil
 
     init(

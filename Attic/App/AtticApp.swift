@@ -5,9 +5,12 @@ struct AtticApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     private let coordinator = AppCoordinator.shared
+    /// A gallery launch shows no menu-bar item (and never opens the store:
+    /// `AppRuntimeEnvironment.usesInMemoryStore`).
+    private let showsMenuBarItem = AppRuntimeEnvironment().showsMenuBarItem
 
     var body: some Scene {
-        MenuBarExtra(menuBarTitle, systemImage: menuBarSystemImage) {
+        MenuBarExtra(menuBarTitle, systemImage: menuBarSystemImage, isInserted: .constant(showsMenuBarItem)) {
             MenuBarView(store: coordinator.store, coordinator: coordinator)
         }
         .menuBarExtraStyle(.menu)
