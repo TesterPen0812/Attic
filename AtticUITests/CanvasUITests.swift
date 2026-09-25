@@ -169,7 +169,7 @@ final class CanvasUITests: XCTestCase {
         assertStrokeCount(1)
 
         app.typeKey("1", modifierFlags: .command)
-        app.typeKey("4", modifierFlags: .command)
+        app.typeKey("3", modifierFlags: .command)
         assertStrokeCount(1)
 
         app.typeKey(",", modifierFlags: .command)
@@ -247,75 +247,78 @@ final class CanvasUITests: XCTestCase {
         try saveVisualEvidence(named: "canvas-second-document")
     }
 
-    func testModeDockExpandsOnHoverAndCollapsesAfterPointerLeaves() {
-        let dock = app.descendants(matching: .any)
+    /// The header's page switch always shows all three pages (no hover
+    /// dock) and always says which one is open; clicks and ⌘1/⌘2/⌘3 select.
+    func testPageSwitchShowsEveryPageAndExactlyOneSelection() {
+        let picker = app.descendants(matching: .any)
             .matching(identifier: "panel-section-picker")
             .firstMatch
         let tasks = app.buttons["panel-section-tasks"]
-        let backlog = app.buttons["panel-section-backlog"]
         let notes = app.buttons["panel-section-notes"]
         let canvas = app.buttons["panel-section-canvas"]
         let pin = app.buttons["panel-pin-button"]
+        let pages = [tasks, notes, canvas]
 
-        XCTAssertTrue(dock.waitForExistence(timeout: 3))
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
         XCTAssertTrue(pin.waitForExistence(timeout: 3))
         pin.hover()
-        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(tasks.exists)
-        XCTAssertFalse(backlog.exists)
-        XCTAssertFalse(notes.exists)
-        XCTAssertFalse(canvas.exists)
+        XCTAssertTrue(tasks.exists && notes.exists && canvas.exists, "every page stays visible away from the switch")
+        XCTAssertFalse(app.buttons["panel-section-backlog"].exists, "Backlog lives inside the Tasks page")
+        assertExactlyOneSelected(in: pages, expected: tasks)
+        let width = picker.frame.width
 
-        tasks.hover()
-        XCTAssertTrue(backlog.waitForExistence(timeout: 2))
-        XCTAssertTrue(notes.exists)
-        XCTAssertTrue(canvas.exists)
-
-        pin.hover()
-        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
-        XCTAssertFalse(notes.exists)
-        XCTAssertFalse(canvas.exists)
-        XCTAssertTrue(tasks.exists)
+        notes.click()
+        assertExactlyOneSelected(in: pages, expected: notes)
+        app.typeKey("3", modifierFlags: .command)
+        assertExactlyOneSelected(in: pages, expected: canvas)
+        XCTAssertEqual(picker.frame.width, width, accuracy: 0.5, "the switch keeps its width")
+        app.typeKey("1", modifierFlags: .command)
+        assertExactlyOneSelected(in: pages, expected: tasks)
     }
 
-    func testModeDockExposesExactlyOneAccessibilitySelectionAcrossTransitions() {
-        let dock = app.descendants(matching: .any)
+    /// Focus rings are for keyboard navigation only: clicking a page and
+    /// coming back leaves the switch looking exactly as it did.
+    func testClickingTheSwitchShowsNoFocusRing() throws {
+        let picker = app.descendants(matching: .any)
             .matching(identifier: "panel-section-picker")
             .firstMatch
         let tasks = app.buttons["panel-section-tasks"]
-        let backlog = app.buttons["panel-section-backlog"]
         let notes = app.buttons["panel-section-notes"]
-        let canvas = app.buttons["panel-section-canvas"]
-        let pin = app.buttons["panel-pin-button"]
-        let modes = [tasks, backlog, notes, canvas]
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        let away = app.buttons["panel-pin-button"]
+        away.hover()
+        Thread.sleep(forTimeInterval: 0.5)
+        let before = picker.screenshot()
+        notes.click()
+        tasks.click()
+        away.hover()
+        Thread.sleep(forTimeInterval: 0.6)
+        let after = picker.screenshot()
+        let changed = try differingPixelFraction(before.image, after.image)
+        let attachment = XCTAttachment(image: after.image)
+        attachment.name = "page-switch-after-clicks"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertLessThan(changed, 0.01, "a mouse click must not leave a focus ring (\(changed) of pixels changed)")
+    }
 
-        XCTAssertTrue(dock.waitForExistence(timeout: 3))
-        tasks.hover()
-        XCTAssertTrue(canvas.waitForExistence(timeout: 2))
-        assertExactlyOneSelected(in: modes, expected: tasks)
-
-        backlog.hover()
-        backlog.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        ).click()
-        assertExactlyOneSelected(in: modes, expected: backlog)
-
-        app.typeKey("3", modifierFlags: .command)
-        assertExactlyOneSelected(in: modes, expected: notes)
-
-        app.typeKey("4", modifierFlags: .command)
-        assertExactlyOneSelected(in: modes, expected: canvas)
-
-        pin.hover()
-        XCTAssertTrue(tasks.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(backlog.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(notes.waitForNonExistence(timeout: 2))
-        XCTAssertTrue(canvas.exists)
-        XCTAssertTrue(canvas.isSelected)
-
-        canvas.hover()
-        XCTAssertTrue(tasks.waitForExistence(timeout: 2))
-        assertExactlyOneSelected(in: modes, expected: canvas)
+    private func differingPixelFraction(_ lhs: NSImage, _ rhs: NSImage) throws -> Double {
+        let a = try XCTUnwrap(lhs.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let b = try XCTUnwrap(rhs.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let width = min(a.pixelsWide, b.pixelsWide)
+        let height = min(a.pixelsHigh, b.pixelsHigh)
+        var differing = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let delta = max(abs(p.redComponent - q.redComponent),
+                                abs(p.greenComponent - q.greenComponent),
+                                abs(p.blueComponent - q.blueComponent))
+                if delta > 0.06 { differing += 1 }
+            }
+        }
+        return Double(differing) / Double(max(1, width * height))
     }
 
     private func launch(resetCanvasStore: Bool) {
@@ -352,7 +355,7 @@ final class CanvasUITests: XCTestCase {
     }
 
     private func openCanvas() {
-        app.typeKey("4", modifierFlags: .command)
+        app.typeKey("3", modifierFlags: .command)
         XCTAssertTrue(
             canvasSurface.waitForExistence(timeout: 3)
         )
