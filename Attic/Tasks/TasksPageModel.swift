@@ -184,6 +184,24 @@ final class TasksPageModel: ObservableObject {
     /// cleanup) and the Done log, grouped by the day they were finished,
     /// newest first; filtered by the search.
     func doneDays() -> [TasksDoneDay] {
+        let key = DoneKey(revision: store.revision, loaded: doneLogTasks.map(\.id), search: doneSearch,
+                          today: DueDay(date: services.now(), calendar: services.calendar()))
+        if let doneCache, doneCache.key == key { return doneCache.days }
+        let days = buildDoneDays()
+        doneCache = (key, days)
+        return days
+    }
+
+    private struct DoneKey: Equatable {
+        let revision: UInt64
+        let loaded: [UUID]
+        let search: String
+        let today: DueDay
+    }
+
+    private var doneCache: (key: DoneKey, days: [TasksDoneDay])?
+
+    private func buildDoneDays() -> [TasksDoneDay] {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let today = store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks ?? []
         let finished = (today.filter { query.isEmpty || $0.title.localizedStandardContains(query) } + doneLogTasks)

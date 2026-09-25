@@ -497,6 +497,11 @@ struct AtticAddBar: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        } else if capture != nil, let tokens, !text.isEmpty {
+            // Captures draw the chips as SwiftUI (the native field can't
+            // render in a capture).
+            AtticChipText(text: text, chips: tokens.chips, disabled: disabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else if capture != nil {
             Group {
                 if text.isEmpty {

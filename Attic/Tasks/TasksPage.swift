@@ -27,7 +27,6 @@ struct TasksPage: View {
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
     @FocusState private var focusedRow: UUID?
     @State private var drag: TasksDrag?
-    @State private var rowHeights: [UUID: CGFloat] = [:]
     @State private var fileDropRow: UUID?
     @State private var tabsOrigin: CGPoint = .zero
 
@@ -54,6 +53,7 @@ struct TasksPage: View {
             bottomControls
         }
         .coordinateSpace(Self.space)
+        .background(TasksWindowReveal { model.resetForReveal() }.frame(width: 0, height: 0).accessibilityHidden(true))
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear {
@@ -207,10 +207,9 @@ struct TasksPage: View {
             }
         }
         .modifier(AtticScrollEdgeFade(space: space, top: Self.listTopFade, bottom: AtticEdgeBlur.panelBottom))
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeights[id] = $0 }
         .modifier(TasksDragModifier(
             id: id, tab: tab, group: group, drag: $drag, enabled: tab != .done && model.editingTitleID == nil,
-            offset: dragOffset(for: id), heights: { rowHeights[$0] ?? AtticLayout.rowPitch },
+            offset: dragOffset(for: id), heights: { rowHeight($0, in: tab) },
             overTab: { location in
                 for candidate in [TasksTab.now, .backlog] where candidate != tab && tabFrame(candidate).contains(location) {
                     return candidate
@@ -258,7 +257,16 @@ struct TasksPage: View {
 
     private func actions(for id: UUID) -> AtticTaskActions {
         AtticTaskActions(
-            advance: { model.advance(id) },
+            advance: {
+                // Option-click on the circle completes (spec § The status
+                // circle); a plain click, or Space, advances.
+                if let event = NSApp.currentEvent, [.leftMouseUp, .leftMouseDown].contains(event.type),
+                   event.modifierFlags.contains(.option) {
+                    model.complete(id)
+                } else {
+                    model.advance(id)
+                }
+            },
             start: { model.setStatus(.inProgress, for: [id]) },
             complete: { model.targets(for: id).forEach(model.complete) },
             openPage: { model.openPage(id) },
@@ -410,10 +418,20 @@ struct TasksPage: View {
         guard let drag else { return 0 }
         if drag.id == id { return drag.translation }
         guard let index = drag.group.firstIndex(of: id) else { return 0 }
-        let height = rowHeights[drag.id] ?? AtticLayout.rowPitch
+        let height = rowHeight(drag.id, in: drag.tab)
         if drag.startIndex < drag.targetIndex, index > drag.startIndex, index <= drag.targetIndex { return -height }
         if drag.targetIndex < drag.startIndex, index >= drag.targetIndex, index < drag.startIndex { return height }
         return 0
+    }
+
+    /// A row's height, from what it shows (no measuring, so scrolling never
+    /// writes view state): 32 pt, 44 with a details line, plus the quick
+    /// look's lines when it is open.
+    private func rowHeight(_ id: UUID, in tab: TasksTab) -> CGFloat {
+        guard let row = model.rows(for: tab).first(where: { $0.id == id }) else { return AtticLayout.rowPitch }
+        let pitch = row.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
+        guard model.expanded.contains(id), row.status != .done else { return pitch }
+        return pitch + CGFloat(row.subtasks.count + 2) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
     }
 
     private func finishDrag(_ finished: TasksDrag) {

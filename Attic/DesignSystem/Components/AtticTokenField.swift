@@ -67,7 +67,9 @@ struct AtticTokenField: NSViewRepresentable {
         view.apply(style: AtticTokenFieldView.Style(
             font: AtticTextStyle.body.nsFont,
             text: NSColor(tokens.color(isEnabled ? .body : .disabledText)),
-            chipText: NSColor(tokens.color(.accentText)),
+            // The heading ink: the pill sits on the raised bar, where the
+            // tag's accent grey falls below 3 : 1 in Dark.
+            chipText: NSColor(tokens.color(.heading)),
             chipFill: NSColor(tokens.tagFill.color),
             caret: NSColor(tokens.color(.heading))
         ))
@@ -342,6 +344,54 @@ final class AtticTokenTextView: NSTextView {
             return
         }
         super.paste(sender)
+    }
+}
+
+/// The add bar's text with its chips, drawn by SwiftUI (captures and the
+/// gallery): the same pill and colours `AtticChipLayoutManager` draws.
+struct AtticChipText: View {
+    let text: String
+    let chips: [NSRange]
+    var disabled = false
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                if segment.isChip {
+                    let height = AtticControlSize.tagHeight
+                    AtticText(verbatim: segment.text, style: .body, ink: .heading, allowsOverlap: true)
+                        .background(
+                            RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
+                                .fill(design.tokens.tagFill.color)
+                                .frame(height: height)
+                                .padding(.horizontal, -AtticTokenFieldMetrics.chipOutset)
+                        )
+                } else if segment.text.allSatisfy(\.isWhitespace) {
+                    // Only space: nothing to read, so nothing to check.
+                    Text(verbatim: segment.text).font(AtticTextStyle.body.font).accessibilityHidden(true)
+                } else {
+                    AtticText(verbatim: segment.text, style: .body, ink: disabled ? .disabledText : .body, allowsOverlap: true)
+                }
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private var segments: [(text: String, isChip: Bool)] {
+        let string = text as NSString
+        var result: [(String, Bool)] = []
+        var location = 0
+        for chip in chips.sorted(by: { $0.location < $1.location }) where chip.location >= location && NSMaxRange(chip) <= string.length {
+            if chip.location > location {
+                result.append((string.substring(with: NSRange(location: location, length: chip.location - location)), false))
+            }
+            result.append((string.substring(with: chip), true))
+            location = NSMaxRange(chip)
+        }
+        if location < string.length { result.append((string.substring(from: location), false)) }
+        return result
     }
 }
 

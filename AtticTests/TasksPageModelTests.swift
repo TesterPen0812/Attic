@@ -279,6 +279,25 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(due(5, month: 1, year: 2027).text, "5 Jan 2027")
     }
 
+    func testKeyboardFocusRingsShowOnlyWhileTheKeyboardDrives() {
+        let tracker = AtticKeyboardFocusTracker()
+        tracker.observe(.keyDown, keyCode: 0) // typing "a"
+        XCTAssertFalse(tracker.isKeyboardDriving, "typing is not navigating")
+        tracker.observe(.keyDown, keyCode: 48) // Tab
+        XCTAssertTrue(tracker.isKeyboardDriving)
+        tracker.observe(.leftMouseDown, keyCode: nil)
+        XCTAssertFalse(tracker.isKeyboardDriving, "a click hides the rings")
+        tracker.observe(.keyDown, keyCode: 125) // ↓
+        XCTAssertTrue(tracker.isKeyboardDriving)
+    }
+
+    func testThePanelKeepsOnePageModelOverTheAppsCommandLayer() {
+        let state = TasksPageState()
+        let first = state.model(for: store)
+        XCTAssertTrue(first.library === library, "the page records its steps in the app's undo history")
+        XCTAssertTrue(state.model(for: store) === first, "the page's state survives page switches")
+    }
+
     func testTabsResetToNowWhenThePageOpens() {
         model.select(tab: .done)
         model.resetForReveal()
