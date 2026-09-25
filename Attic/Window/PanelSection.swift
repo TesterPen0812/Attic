@@ -21,6 +21,8 @@ enum PanelSection: String, CaseIterable, Hashable, Identifiable {
     }
 
     var isNotes: Bool { self == .notes }
+    /// Tasks and Backlog share the Tasks page.
+    var isTaskBased: Bool { taskScope != nil }
     var isCanvas: Bool { self == .canvas }
 
     var taskScope: TaskScope? {
