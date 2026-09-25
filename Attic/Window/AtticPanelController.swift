@@ -366,7 +366,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
         cancelPageRelease()
-        uiState.loadPageContent()
+        if !uiState.isPageContentLoaded {
+            // Build the pages now, before the first frame is shown, so the
+            // panel never slides in empty; the reveal signpost includes it.
+            uiState.loadPageContent()
+            hostingView.layoutSubtreeIfNeeded()
+        }
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
         // out a panel the user has just asked to see again.
