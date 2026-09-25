@@ -146,7 +146,7 @@ struct TasksPage: View {
                             ? String(localized: "Nothing here yet. Add a task below.")
                             : String(localized: "Nothing in the backlog. Park ideas here for later."))
                     } else if tab == .now, model.hasDoneToday {
-                        AtticEmptyLine(text: String(localized: "Done tasks move to Done tomorrow"))
+                        AtticEmptyLine(text: String(localized: "Done tasks move to Done tomorrow"), isFootnote: true)
                             .modifier(AtticScrollEdgeFade(space: listSpace(tab), top: Self.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                     }
                 }

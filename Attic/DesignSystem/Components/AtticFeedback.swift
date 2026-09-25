@@ -133,9 +133,12 @@ private struct AtticNoticeButton: View {
 /// row's text column. No illustrations, no big buttons.
 struct AtticEmptyLine: View {
     let text: String
+    /// A footnote under a list ("Done tasks move to Done tomorrow") is
+    /// quieter still: the row meta size, upright (v9).
+    var isFootnote = false
 
     var body: some View {
-        AtticText(verbatim: text, style: .hint, ink: .helper)
+        AtticText(verbatim: text, style: isFootnote ? .rowMeta : .hint, ink: .helper)
             .frame(height: AtticLayout.rowPitch)
             .padding(.leading, AtticLayout.textX)
             .frame(maxWidth: .infinity, alignment: .leading)
