@@ -276,9 +276,13 @@ extension CanvasStore {
     /// first saw it. Returns the purged canvas ids. `alongside` stages
     /// dependent removals (their links) in the same context, so they are
     /// saved with the purge or not at all; if it throws, nothing is purged.
+    ///
+    /// `purgingUnstamped` (emptying Recently Deleted by hand) removes such a
+    /// canvas too, judged by its deletion date, instead of stamping it.
     @discardableResult
     func purgeDeletedCanvases(
         before cutoff: Date,
+        purgingUnstamped: Bool = false,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
         var purged = Set<UUID>()
@@ -291,12 +295,13 @@ extension CanvasStore {
             for id in Set(boards.map(\.id)) {
                 let replicas = try storedBoardReplicas(matching: id)
                 guard let first = replicas.first else { continue }
-                if replicas.allSatisfy({ $0.tombstoned && $0.purgedAt == nil && $0.recentlyDeletedAt == nil }) {
+                let unstamped = replicas.allSatisfy { $0.tombstoned && $0.purgedAt == nil && $0.recentlyDeletedAt == nil }
+                if unstamped, !purgingUnstamped {
                     for replica in replicas { replica.recentlyDeletedAt = timestamp }
                     stamped = true
                     continue
                 }
-                guard let started = first.recentlyDeletedAt, started < cutoff,
+                guard let started = unstamped ? first.deletedAt : first.recentlyDeletedAt, started < cutoff,
                       replicas.allSatisfy({ Self.boardDeletionSnapshot($0) == Self.boardDeletionSnapshot(first) }),
                       try contentIsSafeToPurge(canvasID: id) else { continue }
                 let canvasID = id

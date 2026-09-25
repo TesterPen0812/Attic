@@ -257,7 +257,22 @@ final class AtticLibrary {
     /// cleanup; never by agents.
     @discardableResult
     func purgeExpired(now: Date, calendar: Calendar) -> RecentlyDeletedPurgeReport {
-        let cutoff = RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar)
+        purgeDeleted(before: RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar), emptying: false)
+    }
+
+    /// Empties Recently Deleted: removes for good everything deleted before
+    /// `cutoff` (the moment the person confirmed, so nothing deleted after
+    /// they looked is taken), including canvases deleted before Recently
+    /// Deleted existed. The same replica rules as the daily cleanup apply:
+    /// anything whose copies disagree, or whose delete is incomplete, is
+    /// kept and stays listed. Called only from Settings, after the person
+    /// confirmed; agents can never empty Recently Deleted.
+    @discardableResult
+    func emptyRecentlyDeleted(deletedBefore cutoff: Date) -> RecentlyDeletedPurgeReport {
+        purgeDeleted(before: cutoff, emptying: true)
+    }
+
+    private func purgeDeleted(before cutoff: Date, emptying: Bool) -> RecentlyDeletedPurgeReport {
         var report = RecentlyDeletedPurgeReport()
         var staged = 0
         func stageLinks(_ kind: AtticItemKind) -> (ModelContext, Set<UUID>) throws -> Void {
@@ -276,11 +291,17 @@ final class AtticLibrary {
         report.taskIDs = committed(tasks.purgeDeleted(before: cutoff, alongside: stageLinks(.task)))
         report.noteIDs = committed(notes?.purgeDeleted(before: cutoff, alongside: stageLinks(.note)) ?? [])
         report.canvasIDs = committed(
-            canvases?.purgeDeletedCanvases(before: cutoff, alongside: stageLinks(.canvas)) ?? []
+            canvases?.purgeDeletedCanvases(
+                before: cutoff, purgingUnstamped: emptying, alongside: stageLinks(.canvas)
+            ) ?? []
         )
         report.attachmentCount = tasks.purgeRemovedAttachments(before: cutoff)
             + (notes?.purgeRemovedAttachments(before: cutoff) ?? 0)
-        report.removedLinks += links.purgeRemovedLinks(before: cutoff)
+        // Links removed on their own are not listed in Recently Deleted, so
+        // emptying it leaves them to the daily cleanup's 30 days.
+        if !emptying {
+            report.removedLinks += links.purgeRemovedLinks(before: cutoff)
+        }
         return report
     }
 
