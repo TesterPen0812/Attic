@@ -56,7 +56,8 @@ struct TasksPage: View {
             bottomControls
         }
         .coordinateSpace(Self.space)
-        .background(TasksWindowReveal { model.resetForReveal() }.frame(width: 0, height: 0).accessibilityHidden(true))
+        .background(TasksWindowReveal(action: { model.resetForReveal() }, hidden: { model.pageDidHide() })
+            .frame(width: 0, height: 0).accessibilityHidden(true))
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear {
@@ -167,6 +168,13 @@ struct TasksPage: View {
             .onChange(of: focusedRow) { _, id in
                 guard let id, rows.contains(where: { $0.id == id }), focusTracker.isKeyboardDriving else { return }
                 withAnimation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion)) { proxy.scrollTo(id) }
+            }
+            // An agent's `show`: the row comes into view.
+            .onChange(of: model.scrollRequest) { _, request in
+                guard let request, rows.contains(where: { $0.id == request.id }) else { return }
+                withAnimation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion)) {
+                    proxy.scrollTo(request.id, anchor: .center)
+                }
             }
         }
     }
@@ -565,7 +573,7 @@ struct TasksPage: View {
                         },
                         escape: {
                             if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
-                            return false
+                            return leaveAddBar()
                         },
                         undoFallback: { model.undo() },
                         redoFallback: { model.redo() },
@@ -576,6 +584,15 @@ struct TasksPage: View {
                 onSubmit: { model.submitAddBar() }
             )
         }
+    }
+
+    /// Esc in the add bar (or the Done search) with nothing of its own to
+    /// close: the keyboard leaves the field. The next Esc reaches the panel,
+    /// which hides (spec § Keyboard map).
+    private func leaveAddBar() -> Bool {
+        guard addBarFocused else { return false }
+        addBarFocused = false
+        return true
     }
 
     private func pasteOfferBar(_ offer: TaskPasteOffer) -> some View {

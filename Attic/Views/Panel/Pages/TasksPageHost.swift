@@ -63,11 +63,30 @@ struct TasksPageHost: View {
                 subtaskPanels.showPanelView(.attachments, for: id)
             }
             if primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
+            handleSearchRequest(model)
+            showItemIfNeeded(model)
         }
+        // Search (the menu-bar item): the Done page's search, focused.
+        .onChange(of: uiState.searchRequest) { _, _ in handleSearchRequest(model) }
+        // An agent's `show` of a task: its tab, the row selected in view.
+        .onChange(of: uiState.shownItem) { _, _ in showItemIfNeeded(model) }
         // Quick capture (the global shortcut) and the shell's own focus
         // requests put the insertion point in the add bar.
         .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused { addBarFocused = true } }
         .onChange(of: uiState.isComposerPresented) { _, presented in if presented { addBarFocused = true } }
         .onChange(of: addBarFocused) { _, focused in if !focused, uiState.isComposerPresented { uiState.endAdding() } }
+    }
+
+    private func handleSearchRequest(_ model: TasksPageModel) {
+        guard uiState.searchRequest != state.handledSearchRequest else { return }
+        state.handledSearchRequest = uiState.searchRequest
+        model.beginSearch()
+        addBarFocused = true
+    }
+
+    private func showItemIfNeeded(_ model: TasksPageModel) {
+        guard let ref = uiState.shownItem, ref.kind == .task else { return }
+        uiState.showItem(nil)
+        model.show(ref.id)
     }
 }

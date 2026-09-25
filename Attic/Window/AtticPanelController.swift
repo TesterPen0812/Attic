@@ -568,6 +568,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         panel.onTrackpadDismissCancelled = { [weak self] in
             self?.cancelInteractiveDismissal()
         }
+        // Esc with nothing left to close hides the panel, as a swipe does;
+        // the corner then needs the pointer to leave before it reveals again.
+        panel.onUnhandledEscape = { [weak self] in
+            guard let self, self.panel.isVisible else { return }
+            self.requestInteractiveHide()
+        }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
             self.clearInteractiveDismissal()
@@ -920,6 +926,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         )
     }
 
+    @discardableResult
     private func requestInteractiveHide() -> PanelHideRequestResult {
         requestHide { [weak self] completion in
             guard completion == .hidden else { return }

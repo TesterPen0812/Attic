@@ -328,4 +328,45 @@ final class TasksPageModelTests: XCTestCase {
         model.resetForReveal()
         XCTAssertEqual(model.tab, .now)
     }
+
+    /// Search (the menu-bar item) opens the Done page's search; the reveal
+    /// that follows keeps it there until the panel hides, and the next
+    /// reveal opens on Now again.
+    func testSearchOpensTheDonePageUntilThePanelHides() {
+        model.beginSearch()
+        XCTAssertEqual(model.tab, .done)
+        XCTAssertEqual(model.addPlaceholder, "Search done tasks…")
+        model.resetForReveal()
+        XCTAssertEqual(model.tab, .done, "the reveal that Search caused keeps the search")
+        model.pageDidHide()
+        model.resetForReveal()
+        XCTAssertEqual(model.tab, .now)
+
+        model.beginSearch()
+        model.select(tab: .backlog)
+        model.resetForReveal()
+        XCTAssertEqual(model.tab, .now, "moving away ends the search")
+    }
+
+    /// An agent's `show` of a task: the tab that lists it, the row alone
+    /// selected and scrolled into view; a subtask shows in its parent's
+    /// quick look.
+    func testShowingATaskSelectsItOnItsTab() throws {
+        let parked = try XCTUnwrap(add("Parked", tab: .backlog))
+        XCTAssertTrue(model.show(parked))
+        XCTAssertEqual(model.tab, .backlog)
+        XCTAssertEqual(model.selection, [parked])
+        XCTAssertEqual(model.scrollRequest?.id, parked)
+        model.resetForReveal()
+        XCTAssertEqual(model.tab, .backlog)
+        XCTAssertEqual(model.selection, [parked], "the reveal keeps what show selected")
+
+        let parent = try XCTUnwrap(add("Plan"))
+        let child = try XCTUnwrap(store.create(title: "Step", parentID: parent)?.id)
+        XCTAssertTrue(model.show(child))
+        XCTAssertEqual(model.tab, .now)
+        XCTAssertEqual(model.selection, [parent])
+        XCTAssertTrue(model.expanded.contains(parent))
+        XCTAssertFalse(model.show(UUID()))
+    }
 }

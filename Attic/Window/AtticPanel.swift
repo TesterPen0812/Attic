@@ -16,6 +16,9 @@ final class AtticPanel: NSPanel {
     var onTrackpadDismissProgress: ((CGFloat) -> Void)?
     var onTrackpadDismissCancelled: (() -> Void)?
     var onDirectContentInteraction: (() -> Void)?
+    /// Esc that nothing inside the panel used (a menu, a field, the list's
+    /// own Esc all come first): the panel hides.
+    var onUnhandledEscape: (() -> Void)?
     var trackpadDismissCorner: ScreenCorner = .topRight {
         didSet {
             if trackpadDismissCorner != oldValue { cancelTrackpadSwipe() }
@@ -59,6 +62,29 @@ final class AtticPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// Esc reaches the window only when no responder in it handled the key:
+    /// a text field or editor, the page's own Esc (closing a quick look,
+    /// clearing a selection) and an open menu all see it first. A text view
+    /// never passes Esc on here (it has its own completion behaviour), so
+    /// the field's owner decides whether Esc leaves it.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           !(firstResponder is NSTextView) {
+            onUnhandledEscape?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard !(firstResponder is NSTextView) else {
+            super.cancelOperation(sender)
+            return
+        }
+        onUnhandledEscape?()
+    }
 
     override func resignKey() {
         cancelTrackpadSwipe()

@@ -260,19 +260,67 @@ final class TasksPageModel: ObservableObject {
 
     // MARK: - Tabs
 
-    /// Tasks always opens on Now (spec § The shell).
+    /// Tasks always opens on Now (spec § The shell), except when it was
+    /// opened to search or to show a task: then it stays where that put it
+    /// until the panel hides.
     func resetForReveal() {
-        tab = .now
-        selection = []
+        tab = revealTab ?? .now
+        if revealTab == nil { selection = [] }
         cancelEditing()
+    }
+
+    /// Where the current reveal opened the page (Search, an agent's `show`);
+    /// nil opens on Now. Cleared when the panel hides or the person moves.
+    private var revealTab: TasksTab?
+
+    /// The panel hid: the next reveal opens on Now again.
+    func pageDidHide() {
+        revealTab = nil
     }
 
     func select(tab: TasksTab) {
         guard tab != self.tab else { return }
+        revealTab = nil
         cancelEditing()
         selection = []
         self.tab = tab
     }
+
+    /// Search (the menu-bar item): the Done page, whose bottom bar searches
+    /// the Done log. The caller puts the keyboard in that bar.
+    func beginSearch() {
+        cancelEditing()
+        selection = []
+        tab = .done
+        revealTab = .done
+    }
+
+    /// An agent's `show` of a task: the tab that lists it, the row selected
+    /// and scrolled into view. Returns false when no list shows it.
+    @discardableResult
+    func show(_ id: UUID) -> Bool {
+        guard let found = store.listedTask(withID: id) else { return false }
+        // A subtask shows in its parent's quick look.
+        let parent = store.task(withID: id).flatMap { store.parent(of: $0) }
+        let task = parent ?? found
+        let target: TasksTab = task.status == .backlog ? .backlog
+            : (store.task(withID: task.id) == nil ? .done : .now)
+        cancelEditing()
+        tab = target
+        revealTab = target
+        if parent != nil { expanded.insert(task.id) }
+        selectOnly(task.id)
+        scrollRequest = ScrollRequest(id: task.id)
+        return true
+    }
+
+    /// A row to bring into view (an agent's `show`); each request is new.
+    struct ScrollRequest: Equatable {
+        let id: UUID
+        let token = UUID()
+    }
+
+    @Published private(set) var scrollRequest: ScrollRequest?
 
     // MARK: - Selection
 

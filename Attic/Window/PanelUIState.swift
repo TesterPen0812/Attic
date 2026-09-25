@@ -146,7 +146,9 @@ final class PanelUIState: ObservableObject {
     /// highlight. Pages clear it once shown.
     @Published var shownItem: AtticItemRef?
 
-    func showItem(_ ref: AtticItemRef) {
+    /// An agent's `show` of an item; the page that lists it consumes it
+    /// (nil once handled).
+    func showItem(_ ref: AtticItemRef?) {
         shownItem = ref
     }
 
@@ -157,6 +159,15 @@ final class PanelUIState: ObservableObject {
 
     func requestPrimaryInputFocus() {
         primaryInputFocusRequest &+= 1
+    }
+
+    /// Search (the menu-bar item): the Tasks page opens its Done search
+    /// with the keyboard in the field. A counter, so each request is seen
+    /// once, whether or not the page is built yet.
+    @Published private(set) var searchRequest: UInt64 = 0
+
+    func requestSearch() {
+        searchRequest &+= 1
     }
 
     func updatePanelSize(_ size: CGSize) {

@@ -121,19 +121,19 @@ final class PanelShellTests: XCTestCase {
     func testMenuBarMenuMatchesTheSpecWithShortcutsShown() {
         let commands = MenuBarCommands.commands(
             advertisedNewTaskShortcut: KeyboardShortcut("t", modifiers: [.command, .option]),
-            showPanel: {}, newTask: {}, newNote: {}, openSettings: {}, quit: {}
+            showPanel: {}, newTask: {}, newNote: {}, search: {}, openSettings: {}, quit: {}
         )
-        XCTAssertEqual(commands.map(\.title), ["Show Attic", "New task", "New note", "Settings…", "Quit Attic"])
+        XCTAssertEqual(commands.map(\.title), ["Show Attic", "New task", "New note", "Search", "Settings…", "Quit Attic"])
         XCTAssertEqual(commands[1].shortcut, KeyboardShortcut("t", modifiers: [.command, .option]))
-        XCTAssertEqual(commands[3].shortcut, KeyboardShortcut(",", modifiers: .command))
-        XCTAssertEqual(commands[4].shortcut, KeyboardShortcut("q", modifiers: .command))
-        XCTAssertEqual(commands.map(\.startsSection), [false, true, false, true, true])
+        XCTAssertEqual(commands[4].shortcut, KeyboardShortcut(",", modifiers: .command))
+        XCTAssertEqual(commands[5].shortcut, KeyboardShortcut("q", modifiers: .command))
+        XCTAssertEqual(commands.map(\.startsSection), [false, true, false, false, true, true])
     }
 
     func testMenuBarMenuDoesNotAdvertiseARefusedGlobalShortcut() {
         let commands = MenuBarCommands.commands(
             advertisedNewTaskShortcut: nil,
-            showPanel: {}, newTask: {}, newNote: {}, openSettings: {}, quit: {}
+            showPanel: {}, newTask: {}, newNote: {}, search: {}, openSettings: {}, quit: {}
         )
         XCTAssertNil(commands[1].shortcut)
     }
