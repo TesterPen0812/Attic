@@ -141,7 +141,7 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertNil(model.message)
     }
 
-    func testEmptyRemovesWhatWasListedForGoodAndKeepsLaterDeletes() throws {
+    func testEmptyRemovesExactlyWhatTheConfirmationListed() throws {
         let fixture = try makeFixture()
         let task = try XCTUnwrap(fixture.tasks.create(title: "Old task"))
         let note = try XCTUnwrap(fixture.notes.create(title: "Old note"))
@@ -162,23 +162,71 @@ final class SettingsPhase1Tests: XCTestCase {
         model.reload()
         XCTAssertEqual(model.entries.count, 4)
 
-        // The person confirms; something is deleted after that moment.
-        fixture.clock.value += 10
-        let confirmedAt = fixture.clock.value
-        fixture.clock.value += 10
-        let late = try XCTUnwrap(fixture.tasks.create(title: "Deleted after confirming"))
+        // An agent deletes something while the page is up but before its
+        // list refreshed (the page reloads after a short debounce): the
+        // person never sees it, so Empty must never take it.
+        fixture.clock.value += 5
+        let unseen = try XCTUnwrap(fixture.tasks.create(title: "Deleted before the list refreshed"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.task, unseen.id)))
+
+        model.requestEmpty()
+        let request = try XCTUnwrap(model.emptyRequest)
+        XCTAssertEqual(request.count, 4, "the confirmation counts what the page shows")
+        XCTAssertEqual(request.confirmationText, "4 items will be removed for good. You can’t undo this.")
+
+        // …and another agent deletion arrives while the confirmation is up.
+        fixture.clock.value += 5
+        let late = try XCTUnwrap(fixture.tasks.create(title: "Deleted while confirming"))
         XCTAssertTrue(fixture.library.delete(AtticItemRef(.task, late.id)))
 
-        model.empty(confirmedAt: confirmedAt)
+        model.confirmEmpty()
 
+        XCTAssertNil(model.emptyRequest)
         XCTAssertNil(model.message, "everything listed went")
-        XCTAssertEqual(model.entries.map(\.title), ["Deleted after confirming"], "a later delete is never taken")
+        XCTAssertEqual(Set(model.entries.map(\.title)), ["Deleted before the list refreshed", "Deleted while confirming"],
+                       "nothing the person was not shown is removed")
         XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, task.id)), .missing)
         XCTAssertEqual(fixture.library.state(of: AtticItemRef(.note, note.id)), .missing)
         XCTAssertEqual(fixture.library.state(of: AtticItemRef(.canvas, board.id)), .missing)
         XCTAssertEqual(fixture.library.state(of: AtticItemRef(.canvas, legacyID)), .missing)
         XCTAssertFalse(fixture.library.restore(AtticItemRef(.task, task.id)), "gone for good")
+        XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, unseen.id)), .deleted)
         XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, late.id)), .deleted)
+    }
+
+    func testEmptySparesAnItemRestoredAndDeletedAgainAfterTheConfirmationWasShown() throws {
+        let fixture = try makeFixture()
+        let task = try XCTUnwrap(fixture.tasks.create(title: "Back and forth"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.task, task.id)))
+        let model = RecentlyDeletedModel(library: fixture.library, now: { fixture.clock.value }, calendar: calendar)
+        model.reload()
+        model.requestEmpty()
+        // While the confirmation is up, an agent restores it and deletes it
+        // again: a new deletion the person has not confirmed.
+        XCTAssertTrue(fixture.library.restore(AtticItemRef(.task, task.id)))
+        fixture.clock.value += 1
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.task, task.id)))
+        model.confirmEmpty()
+        XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, task.id)), .deleted)
+    }
+
+    func testCancellingEmptyRemovesNothing() throws {
+        let fixture = try makeFixture()
+        let task = try XCTUnwrap(fixture.tasks.create(title: "Keep me"))
+        XCTAssertTrue(fixture.library.delete(AtticItemRef(.task, task.id)))
+        let model = RecentlyDeletedModel(library: fixture.library, now: { fixture.clock.value }, calendar: calendar)
+        model.reload()
+        model.requestEmpty()
+        XCTAssertNotNil(model.emptyRequest)
+        model.cancelEmpty()
+        model.confirmEmpty()
+        XCTAssertEqual(fixture.library.state(of: AtticItemRef(.task, task.id)), .deleted)
+        XCTAssertEqual(model.entries.count, 1)
+        // An empty page asks nothing.
+        let emptyModel = RecentlyDeletedModel(library: try makeFixture().library)
+        emptyModel.reload()
+        emptyModel.requestEmpty()
+        XCTAssertNil(emptyModel.emptyRequest)
     }
 
     func testEmptyKeepsItemsWhoseCopiesDisagreeAndSaysSo() throws {
@@ -204,8 +252,8 @@ final class SettingsPhase1Tests: XCTestCase {
         let model = RecentlyDeletedModel(library: fixture.library, now: { fixture.clock.value }, calendar: calendar)
         model.reload()
         XCTAssertEqual(model.entries.count, 1)
-        fixture.clock.value += 5
-        model.empty(confirmedAt: fixture.clock.value)
+        model.requestEmpty()
+        model.confirmEmpty()
 
         XCTAssertEqual(model.entries.count, 1, "kept")
         XCTAssertEqual(model.message?.tone, .warning)
@@ -238,6 +286,44 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertNil(model.message)
         XCTAssertTrue(model.entries.isEmpty)
         XCTAssertEqual(tasks.task(withID: task.id)?.attachments.map(\.id), [file.id])
+
+        // ⌘Z on the page puts the file back in Recently Deleted; redo
+        // restores it again.
+        XCTAssertTrue(model.canUndo)
+        model.undo()
+        XCTAssertTrue(tasks.task(withID: task.id)?.attachments.isEmpty == true)
+        XCTAssertEqual(library.recentlyDeletedAttachments().map(\.attachmentID), [file.id])
+        XCTAssertTrue(library.undo.redo(in: .library))
+        XCTAssertEqual(tasks.task(withID: task.id)?.attachments.map(\.id), [file.id])
+    }
+
+    func testRestoringANoteAttachmentIsOneUndoableStep() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "Plan", body: "Body")
+        seed.insert(note)
+        let attachment = NoteAttachment(noteID: note.id, originalFilename: "a.txt", byteCount: 1, sortIndex: 0,
+                                        contentDigest: String(repeating: "a", count: 64), payload: Data([1]))
+        seed.insert(attachment)
+        try seed.save()
+        let tasks = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes)
+        XCTAssertTrue(notes.removeAttachment(try XCTUnwrap(notes.attachments(for: note.id).first)))
+
+        let model = RecentlyDeletedModel(library: library, calendar: calendar)
+        model.reload()
+        let entry = try XCTUnwrap(model.entries.first { $0.kind == .attachment })
+        XCTAssertTrue(entry.detail.hasPrefix("From “Plan”"))
+        model.restore(entry)
+        XCTAssertEqual(notes.attachments(for: note.id).map(\.id), [attachment.id])
+
+        XCTAssertEqual(library.undo.undoName(in: .library), "Restore Attachment")
+        model.undo()
+        XCTAssertTrue(notes.attachments(for: note.id).isEmpty, "⌘Z removes it again")
+        XCTAssertEqual(model.entries.map(\.kind), [.attachment], "back in Recently Deleted")
+        XCTAssertTrue(library.undo.redo(in: .library))
+        XCTAssertEqual(notes.attachments(for: note.id).map(\.id), [attachment.id])
     }
 
     func testTheModelReadsNothingWithoutALibrary() {
@@ -245,7 +331,8 @@ final class SettingsPhase1Tests: XCTestCase {
         model.start()
         XCTAssertTrue(model.entries.isEmpty)
         XCTAssertFalse(model.canUndo)
-        model.empty(confirmedAt: Date())
+        model.requestEmpty()
+        model.confirmEmpty()
         XCTAssertNil(model.message)
     }
 
@@ -263,11 +350,12 @@ final class SettingsPhase1Tests: XCTestCase {
 
     // MARK: - Agent tools
 
-    private func makeSettingsTools(loginItem: AgentSettingsTools.LoginItem? = nil) throws -> (AgentSettingsTools, AppSettings, () -> Void) {
+    private func makeSettingsTools(launchAtLogin: (() -> Bool)? = nil, undo: UndoRoute? = nil) throws -> (AgentSettingsTools, AppSettings, () -> Void) {
         let suite = "SettingsPhase1Tools-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let settings = AppSettings(defaults: defaults)
-        return (AgentSettingsTools(settings: settings, loginItem: loginItem), settings, { defaults.removePersistentDomain(forName: suite) })
+        return (AgentSettingsTools(settings: settings, launchAtLogin: launchAtLogin, undo: undo), settings,
+                { defaults.removePersistentDomain(forName: suite) })
     }
 
     private func object(_ text: String) throws -> [String: Any] {
@@ -275,10 +363,7 @@ final class SettingsPhase1Tests: XCTestCase {
     }
 
     func testGetSettingsReportsEverySettingButAgentAccess() throws {
-        var launchAtLogin = false
-        let (tools, settings, cleanUp) = try makeSettingsTools(loginItem: .init(
-            isEnabled: { launchAtLogin }, setEnabled: { launchAtLogin = $0 }
-        ))
+        let (tools, settings, cleanUp) = try makeSettingsTools(launchAtLogin: { true })
         defer { cleanUp() }
         settings.isAgentAccessEnabled = true
         let result = try object(tools.call(name: "get_settings", arguments: [:]))
@@ -288,20 +373,17 @@ final class SettingsPhase1Tests: XCTestCase {
         ])
         XCTAssertEqual(result["corner_size"] as? Double, 52)
         XCTAssertEqual(result["haptics"] as? Bool, true)
-        XCTAssertEqual(result["launch_at_login"] as? Bool, false)
+        XCTAssertEqual(result["launch_at_login"] as? Bool, true, "reported, read only")
         XCTAssertThrowsError(try tools.call(name: "get_settings", arguments: ["palette": "amethyst"]))
     }
 
     func testUpdateSettingsChangesWhatItIsGivenAndClampsLikeSettings() throws {
-        var launchAtLogin = false
-        let (tools, settings, cleanUp) = try makeSettingsTools(loginItem: .init(
-            isEnabled: { launchAtLogin }, setEnabled: { launchAtLogin = $0 }
-        ))
+        let (tools, settings, cleanUp) = try makeSettingsTools()
         defer { cleanUp() }
         let result = try object(tools.call(name: "update_settings", arguments: [
             "appearance": "dark", "palette": "seaGlass", "surface": "frosted", "tint": "vivid",
             "tint_length": 0.1, "reveal_corner": "bottomLeft", "reveal_delay": 9, "hide_delay": 0.5,
-            "corner_size": 28, "panel_width": 360, "haptics": false, "launch_at_login": true
+            "corner_size": 28, "panel_width": 360, "haptics": false
         ]))
         XCTAssertEqual(settings.appearance, .dark)
         XCTAssertEqual(settings.panelTheme, .seaGlass)
@@ -314,8 +396,22 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertEqual(settings.panelCornerSize, 28)
         XCTAssertEqual(settings.panelContentSize, 360)
         XCTAssertFalse(settings.hapticsEnabled)
-        XCTAssertTrue(launchAtLogin)
         XCTAssertEqual(result["palette"] as? String, "seaGlass", "the answer is the settings after the change")
+    }
+
+    /// Owner decision (orchestrator default 2026-09-25): agents may read
+    /// Launch at login but never change it; a request that includes it
+    /// changes nothing at all.
+    func testAgentsCannotChangeLaunchAtLoginAndTheWholeRequestIsRefused() throws {
+        let (tools, settings, cleanUp) = try makeSettingsTools(launchAtLogin: { false })
+        defer { cleanUp() }
+        XCTAssertThrowsError(try tools.call(name: "update_settings", arguments: ["launch_at_login": true, "palette": "amethyst"])) { error in
+            XCTAssertTrue((error as? AgentToolError)?.message.contains("Launch at login can only be changed by the person") == true)
+        }
+        XCTAssertEqual(settings.panelTheme, .defaultTheme, "nothing else was applied")
+        let schema = try XCTUnwrap(AgentSettingsTools.definitions.first { $0["name"] as? String == "update_settings" })
+        let properties = try XCTUnwrap((schema["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])
+        XCTAssertNil(properties["launch_at_login"])
     }
 
     func testUpdateSettingsRefusesAgentAccessAndBadValuesWithoutChangingAnything() throws {
@@ -328,7 +424,7 @@ final class SettingsPhase1Tests: XCTestCase {
             ["palette": "seaGlass", "haptics": "no"],
             ["palette": "seaGlass", "corner_size": true],
             ["palette": "seaGlass", "colour": "red"],
-            ["palette": "seaGlass", "launch_at_login": true],
+            ["palette": "seaGlass", "reveal_delay": Double.nan],
             [:]
         ] {
             XCTAssertThrowsError(try tools.call(name: "update_settings", arguments: bad), "\(bad)")
@@ -336,6 +432,36 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertTrue(settings.isAgentAccessEnabled)
         XCTAssertEqual(settings.panelTheme, .defaultTheme, "a refused call changes nothing")
         XCTAssertThrowsError(try tools.call(name: "delete_settings", arguments: [:]))
+    }
+
+    func testAnAgentSettingsChangeIsOneUndoableStep() throws {
+        let undo = UndoRoute()
+        let (tools, settings, cleanUp) = try makeSettingsTools(undo: undo)
+        defer { cleanUp() }
+        settings.panelCornerSize = 60
+        _ = try tools.call(name: "update_settings", arguments: ["palette": "amethyst", "corner_size": 30, "haptics": false])
+        XCTAssertEqual(undo.undoCount(in: .library), 1, "one step for the whole change")
+        XCTAssertEqual(undo.undoName(in: .library), "Change Settings")
+
+        XCTAssertTrue(undo.undo(in: .library))
+        XCTAssertEqual(settings.panelTheme, .defaultTheme)
+        XCTAssertEqual(settings.panelCornerSize, 60)
+        XCTAssertTrue(settings.hapticsEnabled)
+        XCTAssertTrue(undo.redo(in: .library))
+        XCTAssertEqual(settings.panelTheme, .amethyst)
+        XCTAssertEqual(settings.panelCornerSize, 30)
+        XCTAssertFalse(settings.hapticsEnabled)
+
+        // A setting the person changed since is left alone by undo.
+        settings.panelTheme = .seaGlass
+        XCTAssertTrue(undo.undo(in: .library))
+        XCTAssertEqual(settings.panelTheme, .seaGlass, "the person's later choice stays")
+        XCTAssertEqual(settings.panelCornerSize, 60)
+        XCTAssertTrue(settings.hapticsEnabled)
+
+        // A request that changes nothing records nothing.
+        _ = try tools.call(name: "update_settings", arguments: ["palette": "seaGlass"])
+        XCTAssertEqual(undo.undoCount(in: .library), 0)
     }
 
     func testMCPListsAndRoutesTheSettingsTools() throws {
@@ -351,6 +477,20 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertFalse(AgentTaskTools(store: store).definitions.contains { ($0["name"] as? String) == "get_settings" },
                        "without Settings the tools are not offered")
         XCTAssertThrowsError(try AgentTaskTools(store: store).call(name: "get_settings", arguments: [:]))
+    }
+
+    func testThePageUndoesOnlyItsOwnRestores() throws {
+        let fixture = try makeFixture()
+        let suite = "SettingsPhase1Undo-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        let tools = AgentSettingsTools(settings: settings, undo: fixture.library.undo)
+        let model = RecentlyDeletedModel(library: fixture.library, calendar: calendar)
+        _ = try tools.call(name: "update_settings", arguments: ["palette": "amethyst"])
+        XCTAssertFalse(model.canUndo, "an agent's settings change is not the page's to undo")
+        model.undo()
+        XCTAssertEqual(settings.panelTheme, .amethyst)
     }
 }
 

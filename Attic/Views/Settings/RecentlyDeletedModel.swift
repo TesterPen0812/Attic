@@ -184,9 +184,19 @@ final class RecentlyDeletedModel: ObservableObject {
         let tone: AtticGroupMessage.Tone
     }
 
+    /// What an Empty confirmation shows and, if confirmed, removes: exactly
+    /// the entries listed when it was asked for, never more.
+    struct EmptyRequest: Equatable {
+        let selection: RecentlyDeletedSelection
+        var count: Int { selection.count }
+        var confirmationText: String { RecentlyDeletedPresentation.emptyConfirmation(count: count) }
+    }
+
     @Published private(set) var entries: [RecentlyDeletedEntry] = []
     @Published var query = ""
     @Published private(set) var message: Message?
+    /// Set while the Empty confirmation is shown.
+    @Published private(set) var emptyRequest: EmptyRequest?
 
     let library: AtticLibrary?
     private let now: () -> Date
@@ -203,7 +213,12 @@ final class RecentlyDeletedModel: ObservableObject {
         RecentlyDeletedPresentation.sections(entries, query: query)
     }
 
-    var canUndo: Bool { library?.undo.canUndo(in: .library) ?? false }
+    /// ⌘Z on the page undoes only a restore made here (the library history
+    /// also holds other steps, such as an agent's settings change).
+    var canUndo: Bool {
+        guard let name = library?.undo.undoName(in: .library) else { return false }
+        return name.hasPrefix("Restore")
+    }
 
     /// Starts following the stores (the page appeared).
     func start() {
@@ -254,20 +269,42 @@ final class RecentlyDeletedModel: ObservableObject {
         reload()
     }
 
-    /// Removes for good everything that was listed when the person
-    /// confirmed (`cutoff`), then says what was kept, if anything.
-    func empty(confirmedAt cutoff: Date) {
+    /// Empty…: captures exactly what the page lists now, for the
+    /// confirmation to show and, if confirmed, to remove.
+    func requestEmpty() {
+        let selection = RecentlyDeletedSelection(
+            items: entries.compactMap { if case let .item(item) = $0.source { item } else { nil } },
+            attachments: entries.compactMap { if case let .attachment(attachment) = $0.source { attachment } else { nil } }
+        )
+        emptyRequest = selection.isEmpty ? nil : EmptyRequest(selection: selection)
+    }
+
+    func cancelEmpty() {
+        emptyRequest = nil
+    }
+
+    /// The person confirmed: removes for good exactly the deletions the
+    /// confirmation listed (anything deleted since stays), then says what
+    /// was kept, if anything.
+    func confirmEmpty() {
+        guard let request = emptyRequest else { return }
+        emptyRequest = nil
         guard let library else { return }
-        library.emptyRecentlyDeleted(deletedBefore: cutoff)
+        library.emptyRecentlyDeleted(request.selection)
         reload()
-        let kept = entries.filter { $0.deletedAt < cutoff }.count
+        let kept = entries.filter { entry in
+            switch entry.source {
+            case let .item(item): request.selection.contains(item: item.ref, deletedAt: item.deletedAt)
+            case let .attachment(attachment): request.selection.contains(attachment: attachment.attachmentID, removedAt: attachment.deletedAt)
+            }
+        }.count
         message = RecentlyDeletedPresentation.keptMessage(kept: kept).map { Message(text: $0, tone: .warning) }
     }
 
     /// ⌘Z on the page: undoes the last restore (it goes back to Recently
     /// Deleted).
     func undo() {
-        guard let library, library.undo.undo(in: .library) else { return }
+        guard let library, canUndo, library.undo.undo(in: .library) else { return }
         message = nil
         reload()
     }

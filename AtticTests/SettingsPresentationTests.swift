@@ -196,9 +196,9 @@ final class SettingsPresentationTests: XCTestCase {
         }
     }
 
-    /// The traffic lights sit on the page title's line: their centre is the
-    /// back button's centre (8 pt card inset + 12 pt header padding + half
-    /// of the 34 pt button), and they keep the system's spacing.
+    /// The traffic lights' target: the back button's centre (8 pt card inset
+    /// + 12 pt header padding + half of the 34 pt button). Real placement
+    /// is checked on a live window in `SettingsWindowHostedTests`.
     func testTrafficLightsShareThePageTitleLine() {
         XCTAssertEqual(SettingsChromeLayout.titleLineCenterY, 8 + 12 + 17)
         XCTAssertEqual(SettingsWindowLayout.trafficLightContainerHeight, SettingsChromeLayout.titleLineCenterY * 2)

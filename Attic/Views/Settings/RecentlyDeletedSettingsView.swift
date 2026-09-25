@@ -6,7 +6,6 @@ import SwiftUI
 /// everything here for good after a clear confirmation.
 struct RecentlyDeletedSettingsView: View {
     @StateObject private var model: RecentlyDeletedModel
-    @State private var emptyConfirmation: Date?
     @FocusState private var searchFocused: Bool
     @Environment(\.appearsActive) private var appearsActive
 
@@ -66,7 +65,7 @@ struct RecentlyDeletedSettingsView: View {
         // Follow the stores only while the page is on screen in the active
         // Settings window: a closed or background window reads nothing, and
         // catches up when it comes back.
-        .onAppear { if appearsActive { model.start() } else { model.reload() } }
+        .onAppear { if appearsActive { model.start() } }
         .onDisappear { model.stop() }
         .onChange(of: appearsActive) { _, active in
             if active { model.start() } else { model.stop() }
@@ -83,16 +82,17 @@ struct RecentlyDeletedSettingsView: View {
         }
         .alert(
             String(localized: "Empty Recently Deleted?"),
-            isPresented: Binding(get: { emptyConfirmation != nil }, set: { if !$0 { emptyConfirmation = nil } }),
-            presenting: emptyConfirmation
-        ) { cutoff in
+            isPresented: Binding(get: { model.emptyRequest != nil }, set: { if !$0 { model.cancelEmpty() } }),
+            presenting: model.emptyRequest
+        ) { _ in
+            // Removes exactly the items this confirmation counted.
             Button(String(localized: "Empty"), role: .destructive) {
-                model.empty(confirmedAt: cutoff)
+                model.confirmEmpty()
             }
             .accessibilityIdentifier("recently-deleted-confirm-empty")
-            Button(String(localized: "Cancel"), role: .cancel) {}
-        } message: { _ in
-            Text(RecentlyDeletedPresentation.emptyConfirmation(count: model.entries.count))
+            Button(String(localized: "Cancel"), role: .cancel) { model.cancelEmpty() }
+        } message: { request in
+            Text(request.confirmationText)
         }
     }
 
@@ -111,7 +111,7 @@ struct RecentlyDeletedSettingsView: View {
                     actionIdentifier: "recently-deleted-empty",
                     actionHelp: String(localized: "Remove everything in Recently Deleted for good")
                 ) {
-                    emptyConfirmation = Date()
+                    model.requestEmpty()
                 }
             }
         }

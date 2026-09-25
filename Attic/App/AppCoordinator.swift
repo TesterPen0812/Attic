@@ -504,7 +504,7 @@ final class AppCoordinator: ObservableObject {
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
         let agentHandler = MCPRequestHandler(tools: AgentTaskTools(
             store: store, noteStore: noteStore, library: library,
-            settingsTools: AgentSettingsTools(settings: settings, loginItemService: loginItemService)
+            settingsTools: AgentSettingsTools(settings: settings, loginItemService: loginItemService, undo: library.undo)
         ))
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {

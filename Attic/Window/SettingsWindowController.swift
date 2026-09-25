@@ -46,35 +46,49 @@ enum SettingsWindowLayout {
 /// otherwise: the content runs to the top, and the sidebar's top strip and
 /// the page header move the window.
 final class SettingsWindow: NSWindow {
-    private var buttonSpacing: CGFloat?
-
     override func layoutIfNeeded() {
         super.layoutIfNeeded()
         placeTrafficLights()
     }
 
+    /// Moves the traffic lights onto the title line. AppKit has no public
+    /// API to place them: the buttons are public (`standardWindowButton`),
+    /// but they sit in a title bar view inside a title bar container that
+    /// is only 32 pt tall, and a button moved below its container's bounds
+    /// would draw but not take clicks. So the container is made tall enough
+    /// too. It is reached as the close button's grandparent and used only
+    /// when that view is where AppKit has always put it: a direct subview of
+    /// the window's frame view, holding the button's parent. If a future
+    /// macOS lays the title bar out differently, the guard fails and the
+    /// traffic lights simply stay where AppKit puts them.
     func placeTrafficLights() {
         guard !styleMask.contains(.fullScreen),
               let close = standardWindowButton(.closeButton),
               let miniaturize = standardWindowButton(.miniaturizeButton),
               let zoom = standardWindowButton(.zoomButton),
-              let container = close.superview?.superview else { return }
-        // The system's own spacing, read once from its first layout.
-        let spacing = buttonSpacing ?? max(miniaturize.frame.minX - close.frame.minX, close.frame.width)
-        buttonSpacing = spacing
+              let titlebar = close.superview,
+              miniaturize.superview === titlebar, zoom.superview === titlebar,
+              let container = titlebar.superview,
+              let frameView = contentView?.superview,
+              container.superview === frameView else { return }
+        // The system's spacing, measured from the buttons as they are now
+        // (AppKit's own layout, or ours, which keeps it).
+        let spacing = max(miniaturize.frame.minX - close.frame.minX, close.frame.width)
         let height = SettingsWindowLayout.trafficLightContainerHeight
+        let frameHeight = frameView.bounds.height
         var frame = container.frame
-        if frame.height != height || frame.maxY != self.frame.height {
+        if frame.height != height || frame.maxY != frameHeight {
             frame.size.height = height
-            frame.origin.y = self.frame.height - height
+            frame.origin.y = frameHeight - height
             container.frame = frame
         }
-        // The buttons live in the title bar view, which fills the container.
+        if titlebar.frame.height != height {
+            titlebar.frame = NSRect(x: titlebar.frame.minX, y: 0, width: titlebar.frame.width, height: height)
+        }
         let origins = SettingsWindowLayout.trafficLightOrigins(buttonSize: close.frame.size, spacing: spacing)
-        let titlebarHeight = close.superview?.frame.height ?? height
         for (button, origin) in zip([close, miniaturize, zoom], origins) {
-            // AppKit's title bar is flipped the other way: y grows upward.
-            let target = NSPoint(x: origin.x, y: titlebarHeight - origin.y - button.frame.height)
+            // The title bar view is not flipped: y grows upward.
+            let target = NSPoint(x: origin.x, y: height - origin.y - button.frame.height)
             if button.frame.origin != target { button.setFrameOrigin(target) }
         }
     }

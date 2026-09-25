@@ -223,9 +223,47 @@ final class AtticLibrary {
             .sorted { $0.deletedAt != $1.deletedAt ? $0.deletedAt > $1.deletedAt : $0.attachmentID.uuidString < $1.attachmentID.uuidString }
     }
 
-    /// Puts a removed attachment back on its task or note.
+    /// Puts a removed attachment back on its task or note, as one step:
+    /// undo removes it again (back to Recently Deleted), redo restores it.
     @discardableResult
-    func restoreAttachment(_ summary: DeletedAttachmentSummary) -> Bool {
+    func restoreAttachment(_ summary: DeletedAttachmentSummary, in history: UndoHistoryID = .library) -> Bool {
+        undo.perform(in: history) {
+            guard performRestoreAttachment(summary) else { return nil }
+            return UndoStep(
+                name: "Restore Attachment",
+                undoOutcome: { [weak self] in self?.removeAttachmentOutcome(summary) ?? .obsolete },
+                redoOutcome: { [weak self] in self?.restoreAttachmentOutcome(summary) ?? .obsolete }
+            )
+        }
+    }
+
+    /// Undo of an attachment restore: remove it again, if it is still shown
+    /// on its live task or note.
+    private func removeAttachmentOutcome(_ summary: DeletedAttachmentSummary) -> UndoOutcome {
+        switch summary.owner.kind {
+        case .task:
+            guard tasks.task(withID: summary.owner.id)?.attachments.contains(where: { $0.id == summary.attachmentID }) == true else {
+                return .obsolete
+            }
+            return tasks.removeAttachment(summary.attachmentID, from: summary.owner.id) ? .applied : .failed
+        case .note:
+            guard let notes,
+                  let attachment = notes.attachments(for: summary.owner.id).first(where: { $0.id == summary.attachmentID }) else {
+                return .obsolete
+            }
+            return notes.removeAttachment(attachment) ? .applied : .failed
+        case .canvas:
+            return .obsolete
+        }
+    }
+
+    /// Redo of an attachment restore: only one still removed can come back.
+    private func restoreAttachmentOutcome(_ summary: DeletedAttachmentSummary) -> UndoOutcome {
+        if performRestoreAttachment(summary) { return .applied }
+        return recentlyDeletedAttachments().contains { $0.attachmentID == summary.attachmentID } ? .failed : .obsolete
+    }
+
+    private func performRestoreAttachment(_ summary: DeletedAttachmentSummary) -> Bool {
         switch summary.owner.kind {
         case .task:
             return tasks.restoreAttachment(summary.attachmentID) || fail(tasks.lastErrorMessage)
@@ -257,22 +295,25 @@ final class AtticLibrary {
     /// cleanup; never by agents.
     @discardableResult
     func purgeExpired(now: Date, calendar: Calendar) -> RecentlyDeletedPurgeReport {
-        purgeDeleted(before: RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar), emptying: false)
+        purgeDeleted(before: RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar))
     }
 
-    /// Empties Recently Deleted: removes for good everything deleted before
-    /// `cutoff` (the moment the person confirmed, so nothing deleted after
-    /// they looked is taken), including canvases deleted before Recently
-    /// Deleted existed. The same replica rules as the daily cleanup apply:
-    /// anything whose copies disagree, or whose delete is incomplete, is
-    /// kept and stays listed. Called only from Settings, after the person
-    /// confirmed; agents can never empty Recently Deleted.
+    /// Empties Recently Deleted: removes for good exactly the deletions the
+    /// person confirmed (`selection`, the entries the confirmation listed,
+    /// each with the deletion time it had then), including canvases deleted
+    /// before Recently Deleted existed. Anything deleted after the list was
+    /// shown, restored since, or deleted again, is not in the selection and
+    /// stays. The same replica rules as the daily cleanup apply: anything
+    /// whose copies disagree, or whose delete is incomplete, is kept and
+    /// stays listed. Called only from Settings, after the person confirmed;
+    /// agents can never empty Recently Deleted.
     @discardableResult
-    func emptyRecentlyDeleted(deletedBefore cutoff: Date) -> RecentlyDeletedPurgeReport {
-        purgeDeleted(before: cutoff, emptying: true)
+    func emptyRecentlyDeleted(_ selection: RecentlyDeletedSelection) -> RecentlyDeletedPurgeReport {
+        guard !selection.isEmpty else { return RecentlyDeletedPurgeReport() }
+        return purgeDeleted(before: .distantFuture, confirmed: selection)
     }
 
-    private func purgeDeleted(before cutoff: Date, emptying: Bool) -> RecentlyDeletedPurgeReport {
+    private func purgeDeleted(before cutoff: Date, confirmed: RecentlyDeletedSelection? = nil) -> RecentlyDeletedPurgeReport {
         var report = RecentlyDeletedPurgeReport()
         var staged = 0
         func stageLinks(_ kind: AtticItemKind) -> (ModelContext, Set<UUID>) throws -> Void {
@@ -288,18 +329,20 @@ final class AtticLibrary {
             staged = 0
             return ids
         }
-        report.taskIDs = committed(tasks.purgeDeleted(before: cutoff, alongside: stageLinks(.task)))
-        report.noteIDs = committed(notes?.purgeDeleted(before: cutoff, alongside: stageLinks(.note)) ?? [])
-        report.canvasIDs = committed(
-            canvases?.purgeDeletedCanvases(
-                before: cutoff, purgingUnstamped: emptying, alongside: stageLinks(.canvas)
-            ) ?? []
-        )
-        report.attachmentCount = tasks.purgeRemovedAttachments(before: cutoff)
-            + (notes?.purgeRemovedAttachments(before: cutoff) ?? 0)
+        report.taskIDs = committed(tasks.purgeDeleted(
+            before: cutoff, confirmed: confirmed?.items(.task), alongside: stageLinks(.task)
+        ))
+        report.noteIDs = committed(notes?.purgeDeleted(
+            before: cutoff, confirmed: confirmed?.items(.note), alongside: stageLinks(.note)
+        ) ?? [])
+        report.canvasIDs = committed(canvases?.purgeDeletedCanvases(
+            before: cutoff, confirmed: confirmed?.items(.canvas), alongside: stageLinks(.canvas)
+        ) ?? [])
+        report.attachmentCount = tasks.purgeRemovedAttachments(before: cutoff, confirmed: confirmed?.attachments(of: .task))
+            + (notes?.purgeRemovedAttachments(before: cutoff, confirmed: confirmed?.attachments(of: .note)) ?? 0)
         // Links removed on their own are not listed in Recently Deleted, so
         // emptying it leaves them to the daily cleanup's 30 days.
-        if !emptying {
+        if confirmed == nil {
             report.removedLinks += links.purgeRemovedLinks(before: cutoff)
         }
         return report
@@ -553,5 +596,41 @@ final class AtticLibrary {
         case .note: "Note"
         case .canvas: "Canvas"
         }
+    }
+}
+
+/// The deletions a person confirmed when emptying Recently Deleted: every
+/// entry the confirmation listed, by identity and the deletion time it had
+/// then (so the same item deleted again later is a different deletion).
+struct RecentlyDeletedSelection: Equatable {
+    var items: [AtticItemRef: Date] = [:]
+    /// Attachment id → its owner kind and removal time.
+    var attachments: [UUID: (kind: AtticItemKind, removedAt: Date)] = [:]
+
+    init(items: [DeletedItemSummary] = [], attachments: [DeletedAttachmentSummary] = []) {
+        for item in items { self.items[item.ref] = item.deletedAt }
+        for attachment in attachments {
+            self.attachments[attachment.attachmentID] = (attachment.owner.kind, attachment.deletedAt)
+        }
+    }
+
+    var count: Int { items.count + attachments.count }
+    var isEmpty: Bool { count == 0 }
+
+    func contains(item ref: AtticItemRef, deletedAt: Date) -> Bool { items[ref] == deletedAt }
+    func contains(attachment id: UUID, removedAt: Date) -> Bool { attachments[id]?.removedAt == removedAt }
+
+    func items(_ kind: AtticItemKind) -> [UUID: Date] {
+        Dictionary(uniqueKeysWithValues: items.filter { $0.key.kind == kind }.map { ($0.key.id, $0.value) })
+    }
+
+    func attachments(of kind: AtticItemKind) -> [UUID: Date] {
+        Dictionary(uniqueKeysWithValues: attachments.filter { $0.value.kind == kind }.map { ($0.key, $0.value.removedAt) })
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.items == rhs.items
+            && lhs.attachments.mapValues { "\($0.kind.rawValue)|\($0.removedAt.timeIntervalSinceReferenceDate)" }
+                == rhs.attachments.mapValues { "\($0.kind.rawValue)|\($0.removedAt.timeIntervalSinceReferenceDate)" }
     }
 }
