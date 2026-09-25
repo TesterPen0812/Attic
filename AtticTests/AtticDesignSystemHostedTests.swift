@@ -343,7 +343,10 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         XCTAssertGreaterThan(abs(icon - disabledIcon), 0.3, "The two greys differ enough to tell apart")
         XCTAssertEqual(disabledPlus < enabledPlus, disabledIcon < icon,
                        String(format: "The disabled plus is drawn in the disabled grey (plus %.2f vs %.2f)", disabledPlus, enabledPlus))
-        XCTAssertGreaterThan(abs(disabledPlus - enabledPlus), 0.2, "The plus changes colour when disabled")
+        // The direction check above proves the disabled grey is drawn; this
+        // only guards against no change at all. macOS 26 antialiases the
+        // small plus differently (0.18 there, above 0.2 on macOS 27).
+        XCTAssertGreaterThan(abs(disabledPlus - enabledPlus), 0.1, "The plus changes colour when disabled")
     }
 
     /// A Settings sidebar row takes its disabled look from the environment
