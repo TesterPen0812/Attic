@@ -1244,7 +1244,7 @@ private struct TokensBoard: View {
         .padding(.horizontal, 16)
         BoardHeading(title: "Non-text · 3 : 1")
         HStack(spacing: 12) {
-            ForEach([AtticInk.icon, .accent, .priorityHigh, .priorityMedium, .priorityLow, .priorityNone, .doneFill], id: \.self) { ink in
+            ForEach([AtticInk.icon, .accent, .priorityHigh, .priorityMedium, .priorityLow, .priorityNone], id: \.self) { ink in
                 VStack(spacing: 4) {
                     Circle().fill(tokens.color(ink)).frame(width: 16, height: 16)
                     AtticText(verbatim: String(format: "%.1f", tokens.ink(ink).contrast(on: surface)), style: .rowMeta, ink: .helper)

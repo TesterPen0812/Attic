@@ -815,7 +815,9 @@ private struct AtticSubtaskCountButton: View {
 // MARK: - Quick look and subtasks
 
 /// A subtask's rounded-square checkbox (tasks keep circles, so the two never
-/// look alike).
+/// look alike). Done matches a done task: the quiet grey (`doneDisc`) with
+/// a darker grey check (`doneCheck`, 3 : 1 on it); the fill is decoration,
+/// the check is what the appearance check judges.
 struct AtticSubtaskCheckbox: View {
     let isDone: Bool
 
@@ -831,23 +833,19 @@ struct AtticSubtaskCheckbox: View {
         let lineWidth = design.increaseContrast ? m.lineWidthIncreased : m.lineWidth
         ZStack {
             if isDone {
-                shape.fill(tokens.color(.doneFill))
+                shape.fill(tokens.doneDisc.color)
                 AtticCheckShape()
-                    .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
-                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
+                    .stroke(tokens.color(.doneCheck), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, ink: .doneCheck, foreground: tokens.ink(.doneCheck))
                     .padding(m.checkInset)
             } else {
                 shape.inset(by: lineWidth / 2).stroke(tokens.color(.priorityNone), lineWidth: lineWidth)
+                    .atticProbe { [probeID] specimen in
+                        AtticProbe(id: probeID, kind: .icon(name: "subtask checkbox"), ink: .priorityNone, foreground: tokens.ink(.priorityNone), specimen: specimen)
+                    }
             }
         }
         .frame(width: size, height: size)
-        .atticProbe { [probeID] specimen in
-            AtticProbe(
-                id: probeID, kind: .icon(name: "subtask checkbox"),
-                ink: isDone ? .doneFill : .priorityNone,
-                foreground: tokens.ink(isDone ? .doneFill : .priorityNone), specimen: specimen
-            )
-        }
         .accessibilityHidden(true)
     }
 }
