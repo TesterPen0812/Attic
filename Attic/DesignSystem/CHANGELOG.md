@@ -3,9 +3,13 @@
 The design system was frozen when the owner signed off the Phase 0 gallery.
 Every later change is recorded here: what changed, why, and who asked.
 
-## Phase 1 · Shell stream (redesign/p1-shell)
+## Phase 1
 
-All additive; no token, colour, radius or type style changed.
+Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
+on `redesign/phase-1`. Every change below is additive: no token, colour, radius
+or type style changed.
+
+### Shell (redesign/p1-shell)
 
 - **`AtticPageSwitch.Item` gains `keyEquivalent` and `accessibilityIdentifier`**
   (both optional; the identifier defaults to the title). The panel header needs
@@ -24,8 +28,7 @@ All additive; no token, colour, radius or type style changed.
   VoiceOver. The live panel draws the same surface and rim as the gallery.
   No visual change.
 
-
-## Phase 1 · Tasks stream (redesign/p1-tasks)
+### Tasks (redesign/p1-tasks)
 
 - **Task keys: ⇧Space completes** (`AtticTaskKeys`). ⌥Space still works, but
   launchers (Raycast, ChatGPT) take it on many Macs, so it never reaches Attic
@@ -56,10 +59,7 @@ All additive; no token, colour, radius or type style changed.
 - **Selection bar** (`AtticSelectionBar.Action.menu`): a button can open a
   native menu (state, priority, tag) instead of acting.
 
-
-## Phase 1 · Settings stream (redesign/p1-settings)
-
-All additive; no token, colour, radius or type style changed.
+### Settings (redesign/p1-settings)
 
 - **New `AtticSettingsPageComponents.swift`** for the rebuilt Settings pages:
   `AtticSettingsScrollPage` (a page's scrolling body under the fixed header:
