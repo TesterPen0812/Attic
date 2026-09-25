@@ -1335,18 +1335,32 @@ final class TaskStore: ObservableObject {
     /// Subtasks that went with their parent are counted, not listed.
     func recentlyDeletedTasks() -> [DeletedItemSummary] {
         let deleted: [TaskItem]
+        let rootWinners: [UUID: TaskItem]
         do {
-            deleted = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(
+            let freshContext = ModelContext(container)
+            deleted = try freshContext.fetch(FetchDescriptor<TaskItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
+            // Each delete's root is resolved over all of its replicas, live
+            // ones included: an entry is listed only when the replica the list
+            // would show is the deleted one (the same rule `AtticLibrary.state`
+            // and restore use), never because an older copy was deleted.
+            let rootIDs = Array(Set(deleted.map { $0.deletionRootID ?? $0.id }))
+            let rootReplicas = try freshContext.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { rootIDs.contains($0.id) }
+            ))
+            rootWinners = Dictionary(
+                Self.canonicalReplicas(from: rootReplicas).map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
         } catch {
             report(error.localizedDescription, owner: nil)
             return []
         }
         return Dictionary(grouping: deleted) { $0.deletionRootID ?? $0.id }
             .compactMap { rootID, rows -> DeletedItemSummary? in
-                let rootRows = rows.filter { $0.id == rootID }
-                guard let root = visibleUniqueTasks(from: rootRows).first,
+                guard let root = rootWinners[rootID],
+                      (root.deletionRootID ?? root.id) == rootID,
                       let deletedAt = root.deletedAt else { return nil }
                 return DeletedItemSummary(
                     ref: AtticItemRef(.task, rootID),
@@ -1633,10 +1647,21 @@ final class TaskStore: ObservableObject {
     /// completed first (the Done page arrives in phase 1).
     func doneLog() -> [TaskItem] {
         do {
-            let logged = try context.fetch(FetchDescriptor<TaskItem>(
-                predicate: #Predicate { $0.doneLoggedAt != nil && $0.deletedAt == nil }
+            // Candidates are ids with any logged row; every replica of each is
+            // then resolved before the Done-log filter, so a newer replica
+            // that is live or deleted wins over an older logged one.
+            let candidates = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.doneLoggedAt != nil }
             ))
-            return visibleUniqueTasks(from: logged).sorted { lhs, rhs in
+            let ids = Array(Set(candidates.map(\.id)))
+            guard !ids.isEmpty else { return [] }
+            let replicas = try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { ids.contains($0.id) }
+            ))
+            let logged = visibleUniqueTasks(from: replicas).filter {
+                $0.doneLoggedAt != nil && $0.deletedAt == nil
+            }
+            return logged.sorted { lhs, rhs in
                 let left = lhs.completedAt ?? lhs.updatedAt
                 let right = rhs.completedAt ?? rhs.updatedAt
                 return left != right ? left > right : lhs.id.uuidString < rhs.id.uuidString
@@ -1862,6 +1887,16 @@ final class TaskStore: ObservableObject {
     /// duplicates during refresh: device clocks aren't an ownership signal,
     /// and a cleanup save could destroy the valid peer copy across CloudKit.
     private func visibleUniqueTasks(from fetched: [TaskItem]) -> [TaskItem] {
+        Self.canonicalReplicas(from: fetched)
+    }
+
+    /// The one replica per id that presentation shows (newest `updatedAt`,
+    /// then a deterministic tie-break), in fetch order. Every question about
+    /// a logical task — shown, in the Done log, in Recently Deleted, tagged —
+    /// is answered from this replica, after all of the id's replicas were
+    /// read: filtering rows first would let an older copy answer for a newer
+    /// one.
+    static func canonicalReplicas(from fetched: [TaskItem]) -> [TaskItem] {
         var newestByID: [UUID: TaskItem] = [:]
 
         for task in fetched {
@@ -1873,7 +1908,7 @@ final class TaskStore: ObservableObject {
             if task.updatedAt > existing.updatedAt {
                 newestByID[task.id] = task
             } else if task.updatedAt == existing.updatedAt,
-                      Self.tieBreakKey(for: task) > Self.tieBreakKey(for: existing) {
+                      tieBreakKey(for: task) > tieBreakKey(for: existing) {
                 newestByID[task.id] = task
             }
         }

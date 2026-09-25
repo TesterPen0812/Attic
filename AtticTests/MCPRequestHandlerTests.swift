@@ -431,6 +431,109 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertTrue(library.undo.canUndo(in: .library), "agent changes are undoable")
     }
 
+    /// Final review finding 4: what `list_deleted` shows, `restore_item`
+    /// accepts. A newer deleted copy beside an older live one is resolved
+    /// exactly as presentation resolves it, and the store's replica checks
+    /// still decide the restore.
+    func testAnItemListedAsDeletedBesideAnOlderLiveCopyCanBeRestoredThroughMCP() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        XCTAssertTrue(store.setTags(["home"], for: task))
+        XCTAssertTrue(store.delete(task))
+        let note = try XCTUnwrap(library.notes?.create(title: "Note"))
+        XCTAssertTrue(try XCTUnwrap(library.notes).delete(note))
+
+        let context = ModelContext(store.container)
+        let taskID = task.id
+        let deletedTask = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })).first)
+        // An older copy the delete never reached, with the same content.
+        let liveTask = TaskItem(id: task.id, title: deletedTask.title, status: deletedTask.status,
+                                priority: deletedTask.priority, createdAt: deletedTask.createdAt,
+                                updatedAt: deletedTask.updatedAt.addingTimeInterval(-60),
+                                completedAt: deletedTask.completedAt, manualOrder: deletedTask.manualOrder,
+                                parentID: deletedTask.parentID)
+        liveTask.tagsRaw = deletedTask.tagsRaw
+        liveTask.dueDayRaw = deletedTask.dueDayRaw
+        liveTask.imageReferencesData = deletedTask.imageReferencesData
+        liveTask.removedAttachmentsData = deletedTask.removedAttachmentsData
+        liveTask.doneLoggedAt = deletedTask.doneLoggedAt
+        context.insert(liveTask)
+        let noteID = note.id
+        let deletedNote = try XCTUnwrap(context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == noteID })).first)
+        context.insert(NoteItem(id: note.id, title: deletedNote.title, body: deletedNote.body,
+                                createdAt: deletedNote.createdAt, updatedAt: deletedNote.updatedAt.addingTimeInterval(-60)))
+        try context.save()
+        store.refresh()
+        library.notes?.refresh()
+        XCTAssertNil(store.task(withID: task.id), "presentation shows the newer, deleted copy")
+        XCTAssertNil(library.notes?.note(withID: note.id))
+
+        let listed = try callNoteTool(handler, "list_deleted", [:])
+        let ids = Set(((listed["items"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String })
+        XCTAssertEqual(ids, [task.id.uuidString, note.id.uuidString])
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, task.id)), .deleted)
+        XCTAssertEqual(library.state(of: AtticItemRef(.note, note.id)), .deleted)
+
+        let restoredTask = try callNoteTool(handler, "restore_item", ["kind": "task", "id": task.id.uuidString])
+        XCTAssertEqual(restoredTask["restored"] as? String, task.id.uuidString)
+        let restoredNote = try callNoteTool(handler, "restore_item", ["kind": "note", "id": note.id.uuidString])
+        XCTAssertEqual(restoredNote["restored"] as? String, note.id.uuidString)
+        XCTAssertEqual(store.task(withID: task.id)?.title, "Task")
+        XCTAssertEqual(store.task(withID: task.id)?.tags, ["home"])
+        XCTAssertNotNil(library.notes?.note(withID: note.id))
+        let rows = try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+        XCTAssertEqual(rows.count, 2, "both replicas kept")
+        XCTAssertTrue(rows.allSatisfy { $0.deletedAt == nil })
+        XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 0)
+    }
+
+    /// The restore still applies its own replica checks: an older live copy
+    /// that changed after the delete refuses it, through MCP as elsewhere.
+    func testMCPRestoreStillRefusesWhenTheOlderLiveCopyDiverges() throws {
+        let (_, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        XCTAssertTrue(store.delete(task))
+        let context = ModelContext(store.container)
+        let taskID = task.id
+        let deleted = try XCTUnwrap(context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == taskID })).first)
+        context.insert(TaskItem(id: task.id, title: "Renamed elsewhere", status: deleted.status,
+                                priority: deleted.priority, createdAt: deleted.createdAt,
+                                updatedAt: deleted.updatedAt.addingTimeInterval(-60),
+                                completedAt: deleted.completedAt, manualOrder: deleted.manualOrder,
+                                parentID: deleted.parentID))
+        try context.save()
+        store.refresh()
+
+        XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 1)
+        XCTAssertTrue(try toolError(handler, "restore_item", ["kind": "task", "id": task.id.uuidString])
+            .contains("Another copy"))
+        XCTAssertNil(store.task(withID: task.id))
+        XCTAssertEqual(try ModelContext(store.container).fetch(FetchDescriptor<TaskItem>())
+            .filter { $0.deletedAt != nil }.count, 1, "nothing changed")
+    }
+
+    /// The reverse: a newer live copy beside an older deleted one is live,
+    /// so it is neither listed as deleted nor restorable.
+    func testANewerLiveCopyKeepsAnItemOutOfRecentlyDeleted() throws {
+        let (library, handler) = try makeLibraryHandler()
+        let task = try XCTUnwrap(store.create(title: "Task"))
+        let context = ModelContext(store.container)
+        let stale = TaskItem(id: task.id, title: "Task", createdAt: task.createdAt,
+                             updatedAt: task.updatedAt.addingTimeInterval(-60))
+        stale.deletedAt = task.updatedAt.addingTimeInterval(-30)
+        stale.deletionRootID = task.id
+        stale.deletionMembersRaw = task.id.uuidString
+        context.insert(stale)
+        try context.save()
+        store.refresh()
+
+        XCTAssertNotNil(store.task(withID: task.id))
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, task.id)), .live)
+        XCTAssertEqual(try callNoteTool(handler, "list_deleted", [:])["count"] as? Int, 0)
+        XCTAssertTrue(try toolError(handler, "restore_item", ["kind": "task", "id": task.id.uuidString])
+            .contains("Recently Deleted"))
+    }
+
     func testDeleteNoteNowMovesTheNoteToRecentlyDeleted() throws {
         let (library, handler) = try makeLibraryHandler()
         let note = try XCTUnwrap(library.notes?.create(title: "Keep safe"))

@@ -53,7 +53,11 @@ final class AtticLibrary {
     // MARK: - Item state
 
     /// Whether an item is live (shown somewhere, including the Done log), in
-    /// Recently Deleted, or unknown.
+    /// Recently Deleted, or unknown. Decided by the replica presentation
+    /// shows (`TaskStore/NoteStore.canonicalReplicas`, the canvas winner), so
+    /// an item listed in Recently Deleted is `.deleted` here even while an
+    /// older replica is still live; the restore then applies its own replica
+    /// safety checks.
     func state(of ref: AtticItemRef) -> LinkEndpointState {
         let context = ModelContext(container)
         let id = ref.id
@@ -62,12 +66,12 @@ final class AtticLibrary {
             case .task:
                 if tasks.task(withID: id) != nil { return .live }
                 let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
-                guard !rows.isEmpty else { return .missing }
-                return rows.allSatisfy { $0.deletedAt != nil } ? .deleted : .live
+                guard let winner = TaskStore.canonicalReplicas(from: rows).first else { return .missing }
+                return winner.deletedAt != nil ? .deleted : .live
             case .note:
                 let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id }))
-                guard !rows.isEmpty else { return .missing }
-                return rows.allSatisfy { $0.deletedAt != nil } ? .deleted : .live
+                guard let winner = NoteStore.canonicalReplicas(from: rows).first else { return .missing }
+                return winner.deletedAt != nil ? .deleted : .live
             case .canvas:
                 if canvases?.canvases.contains(where: { $0.id == id }) == true { return .live }
                 let rows = try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id }))
@@ -88,11 +92,11 @@ final class AtticLibrary {
         let id = ref.id
         switch ref.kind {
         case .task:
-            return (try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })))?
-                .max { $0.updatedAt < $1.updatedAt }?.title
+            return (try? context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id })))
+                .flatMap { TaskStore.canonicalReplicas(from: $0).first }?.title
         case .note:
-            guard let note = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })))?
-                .max(by: { $0.updatedAt < $1.updatedAt }) else { return nil }
+            guard let note = (try? context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })))
+                .flatMap({ NoteStore.canonicalReplicas(from: $0).first }) else { return nil }
             return note.title.isEmpty ? String(note.body.split(whereSeparator: \.isNewline).first ?? "") : note.title
         case .canvas:
             guard let rows = try? context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == id })),

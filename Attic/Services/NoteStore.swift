@@ -387,8 +387,15 @@ final class NoteStore: ObservableObject {
     func recentlyDeletedNotes() -> [DeletedItemSummary] {
         do {
             let freshContext = try makeFreshContext()
-            let deleted = try freshContext.fetch(FetchDescriptor<NoteItem>(
+            let deletedRows = try freshContext.fetch(FetchDescriptor<NoteItem>(
                 predicate: #Predicate { $0.deletedAt != nil }
+            ))
+            // Resolved over every replica of each id, live ones included: a
+            // note is listed only when the replica the list would show is the
+            // deleted one (the rule `AtticLibrary.state` and restore use).
+            let deletedIDs = Array(Set(deletedRows.map(\.id)))
+            let deleted = try freshContext.fetch(FetchDescriptor<NoteItem>(
+                predicate: #Predicate { deletedIDs.contains($0.id) }
             ))
 #if os(macOS)
             let attachmentNoteIDs = try freshContext.fetch(FetchDescriptor<NoteAttachment>()).map(\.noteID)
@@ -1269,6 +1276,13 @@ final class NoteStore: ObservableObject {
     /// duplicates during refresh: a cleanup save could destroy the valid peer
     /// copy across CloudKit.
     private func visibleUniqueNotes(from fetched: [NoteItem]) -> [NoteItem] {
+        Self.canonicalReplicas(from: fetched)
+    }
+
+    /// The one replica per id that presentation shows, in fetch order. Every
+    /// question about a logical note (shown, in Recently Deleted, tagged) is
+    /// answered from it after all of the id's replicas were read.
+    static func canonicalReplicas(from fetched: [NoteItem]) -> [NoteItem] {
         var newestByID: [UUID: NoteItem] = [:]
 
         for note in fetched {
@@ -1280,7 +1294,7 @@ final class NoteStore: ObservableObject {
             if note.updatedAt > existing.updatedAt {
                 newestByID[note.id] = note
             } else if note.updatedAt == existing.updatedAt,
-                      Self.tieBreakKey(for: note) > Self.tieBreakKey(for: existing) {
+                      tieBreakKey(for: note) > tieBreakKey(for: existing) {
                 newestByID[note.id] = note
             }
         }

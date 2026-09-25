@@ -160,30 +160,58 @@ final class TagService {
             lastErrorMessage = error.localizedDescription
             return nil
         }
-        guard !previous.isEmpty else { return TagChangeSnapshot(tagsByRow: [:]) }
+        guard !previous.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
         guard save(context) else { return nil }
-        return TagChangeSnapshot(tagsByRow: previous)
+        return TagChangeSnapshot(changesByRow: previous)
     }
 
-    /// Tags of every live logical item, from the replica presentation would
-    /// show (newest `updatedAt`).
+    /// Tags of every live logical item, from the replica presentation shows.
+    /// Candidates are the ids with any tagged row; every replica of each is
+    /// then resolved (`canonicalReplicas`, the canvas winner) before the
+    /// live and tag filters, so an older tagged copy never answers for a
+    /// newer one that has no tags or is deleted.
     private func liveTags() throws -> [AtticItemRef: Set<String>] {
         let context = ModelContext(container)
-        var result: [AtticItemRef: (updatedAt: Date, deleted: Bool, tags: Set<String>)] = [:]
-        func consider(_ ref: AtticItemRef, updatedAt: Date, deleted: Bool, raw: String) {
-            if let existing = result[ref], existing.updatedAt >= updatedAt { return }
-            result[ref] = (updatedAt, deleted, Set(AtticTag.decode(raw)))
+        var result: [AtticItemRef: Set<String>] = [:]
+        func record(_ ref: AtticItemRef, _ raw: String) {
+            let tags = Set(AtticTag.decode(raw))
+            if !tags.isEmpty { result[ref] = tags }
         }
-        for task in try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-            consider(AtticItemRef(.task, task.id), updatedAt: task.updatedAt, deleted: task.deletedAt != nil, raw: task.tagsRaw)
+
+        let taskIDs = Array(Set(try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { $0.tagsRaw != "" }
+        )).map(\.id)))
+        if !taskIDs.isEmpty {
+            let rows = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { taskIDs.contains($0.id) }))
+            for task in TaskStore.canonicalReplicas(from: rows) where task.deletedAt == nil {
+                record(AtticItemRef(.task, task.id), task.tagsRaw)
+            }
         }
-        for note in try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-            consider(AtticItemRef(.note, note.id), updatedAt: note.updatedAt, deleted: note.deletedAt != nil, raw: note.tagsRaw)
+
+        let noteIDs = Array(Set(try context.fetch(FetchDescriptor<NoteItem>(
+            predicate: #Predicate { $0.tagsRaw != "" }
+        )).map(\.id)))
+        if !noteIDs.isEmpty {
+            let rows = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { noteIDs.contains($0.id) }))
+            for note in NoteStore.canonicalReplicas(from: rows) where note.deletedAt == nil {
+                record(AtticItemRef(.note, note.id), note.tagsRaw)
+            }
         }
-        for board in try context.fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.tagsRaw != "" })) {
-            consider(AtticItemRef(.canvas, board.id), updatedAt: board.updatedAt, deleted: board.tombstoned, raw: board.tagsRaw)
+
+        let boardIDs = Array(Set(try context.fetch(FetchDescriptor<CanvasBoardItem>(
+            predicate: #Predicate { $0.tagsRaw != "" }
+        )).map(\.id)))
+        if !boardIDs.isEmpty {
+            let rows = try context.fetch(FetchDescriptor<CanvasBoardItem>(
+                predicate: #Predicate { boardIDs.contains($0.id) }
+            ))
+            for replicas in Dictionary(grouping: rows, by: \.id).values {
+                let board = CanvasStore.winningBoardReplica(in: replicas)
+                guard !board.tombstoned, board.purgedAt == nil else { continue }
+                record(AtticItemRef(.canvas, board.id), board.tagsRaw)
+            }
         }
-        return result.filter { !$0.value.deleted && !$0.value.tags.isEmpty }.mapValues(\.tags)
+        return result
     }
 
     private func save(_ context: ModelContext) -> Bool {

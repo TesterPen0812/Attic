@@ -102,8 +102,8 @@ final class LinkStore {
         let id = item.id
         let kindRaw = item.kind.rawValue
         return records(FetchDescriptor<ItemLink>(predicate: #Predicate {
-            $0.sourceID == id && $0.sourceKindRaw == kindRaw && $0.deletedAt == nil
-        }), otherEnd: \.target, includingUnavailable: includingUnavailableEndpoints)
+            $0.sourceID == id && $0.sourceKindRaw == kindRaw
+        }), anchoredAt: \.source, item: item, otherEnd: \.target, includingUnavailable: includingUnavailableEndpoints)
     }
 
     /// Backlinks: links that point at `item` ("Linked from").
@@ -111,8 +111,8 @@ final class LinkStore {
         let id = item.id
         let kindRaw = item.kind.rawValue
         return records(FetchDescriptor<ItemLink>(predicate: #Predicate {
-            $0.targetID == id && $0.targetKindRaw == kindRaw && $0.deletedAt == nil
-        }), otherEnd: \.source, includingUnavailable: includingUnavailableEndpoints)
+            $0.targetID == id && $0.targetKindRaw == kindRaw
+        }), anchoredAt: \.target, item: item, otherEnd: \.source, includingUnavailable: includingUnavailableEndpoints)
     }
 
     /// Hard-deletes every link that touches one of `items` (items purged for
@@ -225,28 +225,32 @@ final class LinkStore {
         return save(context)
     }
 
+    /// The links whose presented replica touches `item` at `anchor`.
+    /// `candidates` finds link ids with any replica there, removed or not;
+    /// every replica of those ids is then read and the newest one decides
+    /// (`winningReplica`) before the removal and endpoint filters, so an
+    /// older live copy never outlives a newer removal, and a copy that was
+    /// retargeted elsewhere answers for itself.
     private func records(
-        _ descriptor: FetchDescriptor<ItemLink>,
+        _ candidates: FetchDescriptor<ItemLink>,
+        anchoredAt anchor: KeyPath<ItemLinkRecord, AtticItemRef>,
+        item: AtticItemRef,
         otherEnd: KeyPath<ItemLinkRecord, AtticItemRef>,
         includingUnavailable: Bool
     ) -> [ItemLinkRecord] {
         do {
-            let rows = try ModelContext(container).fetch(descriptor)
-            var newestByID: [UUID: ItemLink] = [:]
-            for row in rows {
-                if let existing = newestByID[row.id],
-                   existing.updatedAt > row.updatedAt
-                    || (existing.updatedAt == row.updatedAt
-                        && String(reflecting: existing.persistentModelID) >= String(reflecting: row.persistentModelID)) {
-                    continue
-                }
-                newestByID[row.id] = row
-            }
-            return newestByID.values
-                .compactMap { row -> ItemLinkRecord? in
+            let context = ModelContext(container)
+            let ids = Array(Set(try context.fetch(candidates).map(\.id)))
+            guard !ids.isEmpty else { return [] }
+            let rows = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate { ids.contains($0.id) }))
+            return Dictionary(grouping: rows, by: \.id).values
+                .compactMap { replicas -> ItemLinkRecord? in
+                    let row = Self.winningReplica(in: replicas)
                     guard row.deletedAt == nil, let source = row.source, let target = row.target,
                           let kind = row.kind else { return nil }
-                    return ItemLinkRecord(id: row.id, source: source, target: target, kind: kind, createdAt: row.createdAt)
+                    let record = ItemLinkRecord(id: row.id, source: source, target: target, kind: kind,
+                                                createdAt: row.createdAt)
+                    return record[keyPath: anchor] == item ? record : nil
                 }
                 .filter { includingUnavailable || endpointState($0[keyPath: otherEnd]) == .live }
                 .sorted { lhs, rhs in
@@ -258,6 +262,20 @@ final class LinkStore {
             lastErrorMessage = error.localizedDescription
             return []
         }
+    }
+
+    /// The replica presentation shows: newest `updatedAt`, then the larger
+    /// persistent identifier, deterministically.
+    private static func winningReplica(in replicas: [ItemLink]) -> ItemLink {
+        var winner = replicas[0]
+        for row in replicas.dropFirst() {
+            if row.updatedAt > winner.updatedAt
+                || (row.updatedAt == winner.updatedAt
+                    && String(reflecting: row.persistentModelID) > String(reflecting: winner.persistentModelID)) {
+                winner = row
+            }
+        }
+        return winner
     }
 
     private func save(_ context: ModelContext) -> Bool {
