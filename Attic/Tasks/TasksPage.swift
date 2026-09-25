@@ -29,6 +29,9 @@ struct TasksPage: View {
     @State private var drag: TasksDrag?
     @State private var fileDropRow: UUID?
     @State private var tabsOrigin: CGPoint = .zero
+    /// The bottom stack's height: the add bar, plus the selection bar, a
+    /// paste offer or an error line while they show.
+    @State private var bottomControlsHeight: CGFloat = AtticControlSize.addBarHeight
 
     static let space = NamedCoordinateSpace.named("AtticTasksPage")
 
@@ -62,7 +65,10 @@ struct TasksPage: View {
         }
         .onChange(of: addBarFocused) { _, focused in chrome.typingLock(focused || model.editingTitleID != nil) }
         .onChange(of: model.editingTitleID) { _, id in chrome.typingLock(addBarFocused || id != nil) }
-        .preference(key: PanelPageNoticeClearancePreferenceKey.self, value: footerZone)
+        // The shell's toast and notices sit above everything in the bottom
+        // stack, so a selection bar or paste offer never hides under them.
+        .preference(key: PanelPageNoticeClearancePreferenceKey.self,
+                    value: footerZone + max(0, bottomControlsHeight - AtticControlSize.addBarHeight))
     }
 
     // MARK: - Tabs
@@ -498,11 +504,6 @@ struct TasksPage: View {
 
     private var bottomControls: some View {
         VStack(spacing: AtticSpacing.s8) {
-            if let toast = model.toast {
-                AtticUndoToast(message: toast.message) { model.undo() }
-                    .id(toast.id)
-                    .transition(AtticMotionPreset.toast.transition(reduceMotion: design.reduceMotion))
-            }
             if model.failedSave == .paste {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { model.retryPaste() })
             }
@@ -515,18 +516,38 @@ struct TasksPage: View {
             }
             addBar
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomControlsHeight = $0 }
         .padding(.horizontal, max(AtticSpacing.panelMargin, layout.chromeInsets.leading))
         .padding(.bottom, max(AtticSpacing.panelMargin, layout.chromeInsets.bottom))
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.selection.count > 1)
-        .animation(AtticMotionPreset.toast.animation(reduceMotion: design.reduceMotion), value: model.toast)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.pasteOffer)
     }
 
     @ViewBuilder
     private var addBar: some View {
         if model.tab == .done {
-            AtticAddBar(placeholder: model.addPlaceholder, text: $model.doneSearch, systemImage: "magnifyingglass",
-                        showsSend: false, tokens: nil, onSubmit: {})
+            // The Done log's search: the same native field (no chips), so
+            // Search from the menu bar can put the keyboard in it and Esc
+            // leaves it like the add bar.
+            AtticAddBar(
+                placeholder: model.addPlaceholder, text: $model.doneSearch, systemImage: "magnifyingglass",
+                showsSend: false,
+                tokens: AtticAddBar.Tokens(
+                    chips: [],
+                    isFocused: $addBarFocused,
+                    actions: AtticTokenFieldActions(
+                        submit: { _ in },
+                        dismissChip: { _ in },
+                        multilinePaste: { _ in false },
+                        escape: { leaveAddBar() },
+                        undoFallback: { model.undo() },
+                        redoFallback: { model.redo() },
+                        edited: { _, _ in },
+                        caretMoved: { _ in }
+                    )
+                ),
+                onSubmit: {}
+            )
         } else {
             AtticAddBar(
                 placeholder: model.addPlaceholder,

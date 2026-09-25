@@ -31,8 +31,6 @@ struct TasksPageServices {
     /// How long a finished row stays in place before it slides to the done
     /// group (spec: about a second).
     var doneHold: Duration = .seconds(AtticMotionPreset.doneHold)
-    /// How long the Undo toast stays (spec: 6 s).
-    var toastHold: Duration = .seconds(AtticMotionPreset.toastHold)
 }
 
 /// One row of a list: a main task with what its row and quick look show.
@@ -95,7 +93,6 @@ final class TasksPageModel: ObservableObject {
     /// Finished rows held where they were for about a second, with the
     /// index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: Int] = [:]
-    @Published private(set) var toast: Toast?
     @Published var addBar = TaskAddBarText()
     @Published var addBarCaret: Int?
     @Published var pasteOffer: TaskPasteOffer?
@@ -109,21 +106,19 @@ final class TasksPageModel: ObservableObject {
     /// The tab a dragged row is over (Now or Backlog): it outlines.
     @Published var dropTargetTab: TasksTab?
 
-    struct Toast: Equatable, Identifiable {
-        let id = UUID()
-        let message: String
-    }
-
     let parser: TaskTextParser
-    private var toastTask: Task<Void, Never>?
+    /// Where the page's Undo toast shows: the shell's one toast host (the
+    /// panel supplies its own; the page alone gets a private one).
+    let toasts: PanelToastCenter
     private var holdTasks: [UUID: Task<Void, Never>] = [:]
     private var cancellables: Set<AnyCancellable> = []
 
     static let doneLogPageSize = 80
 
-    init(library: AtticLibrary, services: TasksPageServices = TasksPageServices()) {
+    init(library: AtticLibrary, services: TasksPageServices = TasksPageServices(), toasts: PanelToastCenter? = nil) {
         self.library = library
         self.services = services
+        self.toasts = toasts ?? PanelToastCenter()
         parser = TaskTextParser(calendar: services.calendar(), locale: services.locale, now: services.now)
         // A task that left the list (deleted, cleaned up) leaves the
         // selection and the quick look too.
@@ -621,21 +616,22 @@ final class TasksPageModel: ObservableObject {
         _ = library.undo.redo(in: .tasks)
     }
 
+    /// Posts "… · Undo" to the shell's toast host (6 s, held while the
+    /// pointer rests on it); its button undoes the step, as ⌘Z does.
     func showToast(_ message: String) {
-        toast = Toast(message: message)
-        toastTask?.cancel()
-        let hold = services.toastHold
-        toastTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: hold)
-            guard !Task.isCancelled else { return }
-            self?.toast = nil
-        }
+        postedToastID = toasts.show(message) { [weak self] in
+            _ = self?.library.undo.undo(in: .tasks)
+        }.id
     }
 
+    /// Dismisses the toast only when it is this page's (another page's
+    /// toast is not the Tasks history's to take away).
     func dismissToast() {
-        toastTask?.cancel()
-        toast = nil
+        guard let current = toasts.current, current.id == postedToastID else { return }
+        toasts.dismiss()
     }
+
+    private var postedToastID: UUID?
 
     /// "Open page" (⌘Return, the menu, VoiceOver). A task in the lists goes
     /// to the host's detail route; a task in the Done log, which that route

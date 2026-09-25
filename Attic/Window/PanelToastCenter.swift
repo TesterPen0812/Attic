@@ -23,12 +23,14 @@ final class PanelToastCenter: ObservableObject {
     var holdDuration: TimeInterval = AtticMotionPreset.toastHold
 
     /// Shows `message` with its action, replacing any toast on screen.
-    func show(_ message: String, actionTitle: String = String(localized: "Undo"), action: @escaping () -> Void) {
+    @discardableResult
+    func show(_ message: String, actionTitle: String = String(localized: "Undo"), action: @escaping () -> Void) -> Toast {
         let toast = Toast(message: message, actionTitle: actionTitle)
         self.action = action
         current = toast
         scheduleDismissal(of: toast)
         AccessibilityNotification.Announcement("\(message). \(actionTitle) with Command-Z.").post()
+        return toast
     }
 
     /// The toast's button (or ⌘Z while it shows): runs the action once and

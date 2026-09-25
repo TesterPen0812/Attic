@@ -29,9 +29,9 @@ final class TasksPageModelTests: XCTestCase {
             now: { [clock] in clock.value },
             calendar: { calendar },
             locale: Locale(identifier: "en_GB"),
-            doneHold: .seconds(3_600),
-            toastHold: .seconds(3_600)
+            doneHold: .seconds(3_600)
         ))
+        model.toasts.holdDuration = 3_600
     }
 
     override func tearDown() {
@@ -90,10 +90,10 @@ final class TasksPageModelTests: XCTestCase {
         let a = try XCTUnwrap(add("A"))
         let b = try XCTUnwrap(add("B"))
         model.moveToBacklog([a])
-        XCTAssertEqual(model.toast?.message, "Moved to Backlog")
+        XCTAssertEqual(model.toasts.current?.message, "Moved to Backlog")
         XCTAssertEqual(titles(.backlog), ["A"])
         model.undo()
-        XCTAssertNil(model.toast)
+        XCTAssertNil(model.toasts.current)
         XCTAssertEqual(store.task(withID: a)?.status, .todo)
 
         model.click(a, modifiers: [], visible: [b, a])
@@ -101,7 +101,7 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.selection, [a, b])
         XCTAssertEqual(Set(model.targets(for: a)), [a, b])
         model.delete(model.targets(for: a))
-        XCTAssertEqual(model.toast?.message, "Deleted 2 tasks")
+        XCTAssertEqual(model.toasts.current?.message, "Deleted 2 tasks")
         XCTAssertTrue(store.tasks.isEmpty)
         XCTAssertTrue(model.selection.isEmpty)
         model.undo()
@@ -254,7 +254,7 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.doneDays().flatMap { $0.rows.map(\.model.title) }, ["Invoice"])
 
         model.restoreToNow(old)
-        XCTAssertEqual(model.toast?.message, "Restored to Now")
+        XCTAssertEqual(model.toasts.current?.message, "Restored to Now")
         XCTAssertEqual(store.task(withID: old)?.status, .todo)
         XCTAssertTrue(model.doneDays().isEmpty)
         model.undo()
@@ -297,9 +297,30 @@ final class TasksPageModelTests: XCTestCase {
 
     func testThePanelKeepsOnePageModelOverTheAppsCommandLayer() {
         let state = TasksPageState()
-        let first = state.model(for: store)
+        let toasts = PanelToastCenter()
+        let first = state.model(for: store, toasts: toasts)
         XCTAssertTrue(first.library === library, "the page records its steps in the app's undo history")
-        XCTAssertTrue(state.model(for: store) === first, "the page's state survives page switches")
+        XCTAssertTrue(state.model(for: store, toasts: toasts) === first, "the page's state survives page switches")
+        XCTAssertTrue(first.toasts === toasts, "the page posts to the shell's one toast host")
+    }
+
+    /// One Undo toast: the page posts to the shell's host, whose button
+    /// undoes the step; ⌘Z (the page's undo) takes the page's own toast
+    /// away but never another page's.
+    func testThePagesUndoToastIsTheShellsToast() throws {
+        let toasts = PanelToastCenter()
+        let page = TasksPageModel(library: library, toasts: toasts)
+        let a = try XCTUnwrap(add("A"))
+        page.moveToBacklog([a])
+        XCTAssertEqual(toasts.current?.message, "Moved to Backlog")
+        XCTAssertEqual(toasts.current?.actionTitle, "Undo")
+        toasts.performAction()
+        XCTAssertNil(toasts.current)
+        XCTAssertEqual(store.task(withID: a)?.status, .todo, "the toast's Undo puts the task back")
+
+        toasts.show("Note deleted") {}
+        page.undo()
+        XCTAssertEqual(toasts.current?.message, "Note deleted", "⌘Z on Tasks leaves another page's toast")
     }
 
     func testTabsResetToNowWhenThePageOpens() {

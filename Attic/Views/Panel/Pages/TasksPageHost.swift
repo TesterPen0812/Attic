@@ -6,14 +6,16 @@ import SwiftUI
 @MainActor
 final class TasksPageState: ObservableObject {
     private var model: TasksPageModel?
+    /// The last Search request the page acted on (`PanelUIState.searchRequest`).
+    var handledSearchRequest: UInt64 = 0
 
     /// The page model, made once over the app's command layer (the same
     /// undo history agents use), or over a library of its own when the
     /// store has none (tests that host the panel alone).
-    func model(for store: TaskStore) -> TasksPageModel {
-        if let model, model.store === store { return model }
+    func model(for store: TaskStore, toasts: PanelToastCenter?) -> TasksPageModel {
+        if let model, model.store === store, toasts == nil || model.toasts === toasts { return model }
         let library = store.commandLibrary ?? AtticLibrary(tasks: store)
-        let made = TasksPageModel(library: library)
+        let made = TasksPageModel(library: library, toasts: toasts)
         model = made
         return made
     }
@@ -35,9 +37,11 @@ struct TasksPageHost: View {
     let primaryInputFocus: FocusState<Bool>.Binding
 
     @State private var addBarFocused = false
+    /// The shell's one toast host: the page's Undo toasts show there.
+    @Environment(\.atticPanelToasts) private var toasts
 
     var body: some View {
-        let model = state.model(for: store)
+        let model = state.model(for: store, toasts: toasts)
         TasksPage(
             model: model,
             store: store,

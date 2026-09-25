@@ -115,16 +115,26 @@ private struct TasksPagePreviewRoot: View {
     @ObservedObject var store: TaskStore
     let mode: AtticDesignContext.Mode
     @State private var addBarFocused = true
+    @State private var noticeClearance = PanelPageNoticeClearancePreferenceKey.defaultValue
 
     var body: some View {
         GeometryReader { proxy in
+            let layout = PanelPageLayout(cornerSize: 52, panelSize: proxy.size)
             TasksPage(
                 model: model,
                 store: store,
-                layout: PanelPageLayout(cornerSize: 52, panelSize: proxy.size),
+                layout: layout,
                 addBarFocused: $addBarFocused
             )
             .background(AtticPanelStageSurface(cornerSize: 0))
+            // The shell's notice stack, as in the panel: the page posts its
+            // Undo toast there and reports how much room its controls take.
+            .overlay(alignment: .bottom) {
+                PanelNoticeStack(toasts: model.toasts, notice: nil, onRetry: {}, onDismissNotice: {})
+                    .padding(.horizontal, layout.chromeInsets.leading)
+                    .padding(.bottom, layout.contentInsets.bottom + noticeClearance)
+            }
+            .onPreferenceChange(PanelPageNoticeClearancePreferenceKey.self) { noticeClearance = $0 }
         }
         .atticDesign(AtticDesignContext(mode: mode))
         .atticWindowAppearance(mode)
