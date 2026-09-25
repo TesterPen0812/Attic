@@ -118,8 +118,18 @@ final class AtticLibrary {
             let ids = tasks.map(\.id)
             return UndoStep(
                 name: ids.count == 1 ? "Add Task" : "Add \(ids.count) Tasks",
-                undo: { [tasks = self.tasks] in tasks.delete(taskIDs: ids) },
-                redo: { [tasks = self.tasks] in tasks.restoreDeleted(taskIDs: ids) }
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.delete(taskIDs: ids) { return .applied }
+                    // Tasks that left the list since (deleted, or moved to the
+                    // Done log) can't be taken back by this step any more.
+                    return ids.allSatisfy { self.tasks.task(withID: $0) != nil } ? .failed : .obsolete
+                },
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.restoreDeleted(taskIDs: ids) { return .applied }
+                    return ids.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                }
             )
         }
         return created
@@ -153,11 +163,7 @@ final class AtticLibrary {
             succeeded = true
             guard before != after else { return nil }
             let name = status != nil && status?.rawValue != before.statusRaw ? "Change Task State" : "Edit Task"
-            return UndoStep(
-                name: name,
-                undo: { [tasks = self.tasks] in tasks.restoreEditableStates([before]) },
-                redo: { [tasks = self.tasks] in tasks.restoreEditableStates([after]) }
-            )
+            return editStep(name, before: [before], after: [after])
         }
         return succeeded
     }
@@ -176,11 +182,7 @@ final class AtticLibrary {
             succeeded = true
             let after = group.compactMap(tasks.editableState(of:))
             guard before != after else { return nil }
-            return UndoStep(
-                name: "Move Task",
-                undo: { [tasks = self.tasks] in tasks.restoreEditableStates(before) },
-                redo: { [tasks = self.tasks] in tasks.restoreEditableStates(after) }
-            )
+            return editStep("Move Task", before: before, after: after)
         }
         return succeeded
     }
@@ -195,8 +197,8 @@ final class AtticLibrary {
             guard performDelete(ref) else { return nil }
             return UndoStep(
                 name: "Delete \(Self.noun(for: ref.kind))",
-                undo: { [weak self] in self?.performRestore(ref) ?? false },
-                redo: { [weak self] in self?.performDelete(ref) ?? false }
+                undoOutcome: { [weak self] in self?.restoreOutcome(ref) ?? .obsolete },
+                redoOutcome: { [weak self] in self?.deleteOutcome(ref) ?? .obsolete }
             )
         }
     }
@@ -209,8 +211,8 @@ final class AtticLibrary {
             guard performRestore(ref) else { return nil }
             return UndoStep(
                 name: "Restore \(Self.noun(for: ref.kind))",
-                undo: { [weak self] in self?.performDelete(ref) ?? false },
-                redo: { [weak self] in self?.performRestore(ref) ?? false }
+                undoOutcome: { [weak self] in self?.deleteOutcome(ref) ?? .obsolete },
+                redoOutcome: { [weak self] in self?.restoreOutcome(ref) ?? .obsolete }
             )
         }
     }
@@ -300,12 +302,18 @@ final class AtticLibrary {
                 succeeded = true
                 return nil
             }
+            // A task's tags go through its editable-state step, which finds
+            // it in the Done log too.
+            let taskBefore = ref.kind == .task ? tasks.editableState(of: ref.id) : nil
             guard applyTags(after, to: ref) else { return nil }
             succeeded = true
+            if let taskBefore, let taskAfter = tasks.editableState(of: ref.id) {
+                return editStep("Change Tags", before: [taskBefore], after: [taskAfter])
+            }
             return UndoStep(
                 name: "Change Tags",
-                undo: { [weak self] in self?.applyTags(before, to: ref) ?? false },
-                redo: { [weak self] in self?.applyTags(after, to: ref) ?? false }
+                undoOutcome: { [weak self] in self?.moveTags(of: ref, from: after, to: before) ?? .obsolete },
+                redoOutcome: { [weak self] in self?.moveTags(of: ref, from: before, to: after) ?? .obsolete }
             )
         }
         return succeeded
@@ -393,6 +401,53 @@ final class AtticLibrary {
         }
     }
 
+    /// Undo/redo of a delete: moving an item that is no longer shown (gone,
+    /// already in Recently Deleted, or a task the daily cleanup moved to the
+    /// Done log) can never apply again.
+    private func deleteOutcome(_ ref: AtticItemRef) -> UndoOutcome {
+        if performDelete(ref) { return .applied }
+        let shown: Bool = switch ref.kind {
+        case .task: tasks.task(withID: ref.id) != nil
+        case .note: notes?.note(withID: ref.id) != nil
+        case .canvas: canvases?.canvases.contains(where: { $0.id == ref.id }) == true
+        }
+        return shown ? .failed : .obsolete
+    }
+
+    /// Undo/redo of a restore: only an item still in Recently Deleted can be
+    /// restored; a refusal of one that is (a replica conflict) is kept.
+    private func restoreOutcome(_ ref: AtticItemRef) -> UndoOutcome {
+        if performRestore(ref) { return .applied }
+        return state(of: ref) == .deleted ? .failed : .obsolete
+    }
+
+    /// One task edit step: undo and redo write only the fields it changed,
+    /// and only where nothing changed them since
+    /// (`TaskStore.applyEditableTransition`).
+    private func editStep(_ name: String, before: [TaskEditableState], after: [TaskEditableState]) -> UndoStep {
+        UndoStep(
+            name: name,
+            undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
+            redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
+        )
+    }
+
+    /// Moves an item's tags by the difference between `from` and `to`: the
+    /// tags `to` lacks are removed, the ones it adds come back, and anything
+    /// else on the item now stays.
+    private func moveTags(of ref: AtticItemRef, from: [String], to: [String]) -> UndoOutcome {
+        guard let current = currentTags(of: ref) else { return .obsolete }
+        let target = Self.tagDelta(current: current, from: from, to: to)
+        guard target != AtticTag.normalizedSet(current) else { return .applied }
+        return applyTags(target, to: ref) ? .applied : .failed
+    }
+
+    static func tagDelta(current: [String], from: [String], to: [String]) -> [String] {
+        let from = Set(from)
+        let to = Set(to)
+        return AtticTag.normalizedSet(Set(current).subtracting(from.subtracting(to)).union(to.subtracting(from)))
+    }
+
     private func currentTags(of ref: AtticItemRef) -> [String]? {
         switch ref.kind {
         case .task: tasks.task(withID: ref.id)?.tags
@@ -422,6 +477,13 @@ final class AtticLibrary {
         in history: UndoHistoryID,
         _ operation: @escaping (TagService) -> TagChangeSnapshot?
     ) -> Bool {
+        /// The rows the latest run of the operation changed: each redo runs the
+        /// operation again and records what that run changed, so the next
+        /// undo also covers rows that gained the tag in between.
+        final class Changes {
+            var snapshot: TagChangeSnapshot
+            init(_ snapshot: TagChangeSnapshot) { self.snapshot = snapshot }
+        }
         var succeeded = false
         undo.perform(in: history) {
             guard let snapshot = operation(tags) else {
@@ -430,10 +492,15 @@ final class AtticLibrary {
             }
             succeeded = true
             guard !snapshot.isEmpty else { return nil }
+            let changes = Changes(snapshot)
             return UndoStep(
                 name: name,
-                undo: { [tags = self.tags] in tags.restore(snapshot) },
-                redo: { [tags = self.tags] in operation(tags) != nil }
+                undo: { [tags = self.tags] in tags.revert(changes.snapshot) },
+                redo: { [tags = self.tags] in
+                    guard let rerun = operation(tags) else { return false }
+                    changes.snapshot = rerun
+                    return true
+                }
             )
         }
         return succeeded

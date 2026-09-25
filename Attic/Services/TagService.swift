@@ -8,11 +8,20 @@ struct TagCount: Equatable, Sendable {
     let count: Int
 }
 
-/// The stored tags of every physical row a tag operation changed, so undo
-/// can put back exactly what was there, replica by replica.
+/// What a tag operation did to every physical row it changed: the tags it
+/// removed and the tags it added, replica by replica. Undo reverses exactly
+/// that difference, so tags a row gained or lost since (through any history)
+/// are kept.
 struct TagChangeSnapshot {
-    fileprivate let tagsByRow: [PersistentIdentifier: String]
-    var isEmpty: Bool { tagsByRow.isEmpty }
+    fileprivate struct Change {
+        let removed: Set<String>
+        let added: Set<String>
+    }
+
+    fileprivate let changesByRow: [PersistentIdentifier: Change]
+    var isEmpty: Bool { changesByRow.isEmpty }
+    /// How many physical rows the operation changed.
+    var rowCount: Int { changesByRow.count }
 }
 
 enum TagServiceError: LocalizedError {
@@ -97,7 +106,7 @@ final class TagService {
             normalizedSources.insert(normalized)
         }
         normalizedSources.remove(target)
-        guard !normalizedSources.isEmpty else { return TagChangeSnapshot(tagsByRow: [:]) }
+        guard !normalizedSources.isEmpty else { return TagChangeSnapshot(changesByRow: [:]) }
         return rewrite { tags in
             guard !tags.isDisjoint(with: normalizedSources) else { return nil }
             return tags.subtracting(normalizedSources).union([target])
@@ -115,35 +124,51 @@ final class TagService {
         }
     }
 
-    /// Puts back the tags a change replaced (undo). Rows that no longer
-    /// exist are skipped. Returns false, changing nothing, if the save fails.
+    /// Reverses a change (undo): on each row it changed, the tags it added
+    /// are removed and the tags it removed come back; every other tag the
+    /// row holds now stays. Rows that no longer exist are skipped. Returns
+    /// false, changing nothing, if the save fails.
     @discardableResult
-    func restore(_ snapshot: TagChangeSnapshot) -> Bool {
+    func revert(_ snapshot: TagChangeSnapshot) -> Bool {
         guard !snapshot.isEmpty else { return true }
         let context = ModelContext(container)
-        for (identifier, raw) in snapshot.tagsByRow {
+        var changed = false
+        func reverted(_ raw: String, _ change: TagChangeSnapshot.Change) -> String? {
+            let tags = Set(AtticTag.decode(raw)).subtracting(change.added).union(change.removed)
+            let encoded = AtticTag.encode(tags)
+            guard encoded != raw else { return nil }
+            changed = true
+            return encoded
+        }
+        for (identifier, change) in snapshot.changesByRow {
             switch context.model(for: identifier) {
-            case let task as TaskItem: task.tagsRaw = raw
-            case let note as NoteItem: note.tagsRaw = raw
-            case let board as CanvasBoardItem: board.tagsRaw = raw
+            case let task as TaskItem:
+                if let raw = reverted(task.tagsRaw, change) { task.tagsRaw = raw }
+            case let note as NoteItem:
+                if let raw = reverted(note.tagsRaw, change) { note.tagsRaw = raw }
+            case let board as CanvasBoardItem:
+                if let raw = reverted(board.tagsRaw, change) { board.tagsRaw = raw }
             default: continue
             }
         }
+        guard changed else { return true }
         return save(context)
     }
 
     // MARK: - Private
 
     /// Applies `transform` to every row's tag set; nil leaves a row alone.
-    /// Returns the previous values of the rows it changed.
+    /// Returns what it removed and added on each row it changed.
     private func rewrite(_ transform: (Set<String>) -> Set<String>?) -> TagChangeSnapshot? {
         let context = ModelContext(container)
-        var previous: [PersistentIdentifier: String] = [:]
+        var previous: [PersistentIdentifier: TagChangeSnapshot.Change] = [:]
         func apply(_ raw: String, _ identifier: PersistentIdentifier) -> String? {
-            guard let changed = transform(Set(AtticTag.decode(raw))) else { return nil }
+            let before = Set(AtticTag.decode(raw))
+            guard let changed = transform(before) else { return nil }
             let encoded = AtticTag.encode(changed)
             guard encoded != raw else { return nil }
-            previous[identifier] = raw
+            let after = Set(AtticTag.decode(encoded))
+            previous[identifier] = .init(removed: before.subtracting(after), added: after.subtracting(before))
             return encoded
         }
         do {

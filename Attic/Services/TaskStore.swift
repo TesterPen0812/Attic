@@ -790,39 +790,156 @@ final class TaskStore: ObservableObject {
         task(withID: id).map(TaskEditableState.init)
     }
 
-    /// Puts earlier editable fields back on visible tasks, every replica, in
-    /// one save. Used only by undo and redo, which restore a state the store
-    /// itself produced, so the status rules are not re-applied: undoing a
-    /// completion brings back the exact earlier completion time and order.
-    @discardableResult
-    func restoreEditableStates(_ states: [TaskEditableState]) -> Bool {
-        guard !states.isEmpty else { return true }
-        guard states.allSatisfy({ task(withID: $0.id) != nil }) else {
-            report("The task is no longer available.", owner: nil)
-            return false
-        }
-        let owner = states.count == 1 ? familyOwner(forTaskID: states[0].id) : nil
-        let timestamp = now()
+    /// Moves tasks from the editable state an undo step recorded (`expected`)
+    /// to the one it restores (`target`), in one save. Used only by undo and
+    /// redo, which restore a state the store itself produced, so the status
+    /// rules are not re-applied: undoing a completion brings back the exact
+    /// earlier completion time and order.
+    ///
+    /// Only the fields the step changed are written, and each only while it
+    /// still holds the value the step left: a field changed since, through
+    /// another history or another path, keeps its newer value. Tags move as a
+    /// difference (the tags the step added are removed, the ones it removed
+    /// come back), so a tag added or renamed since survives. Status and its
+    /// completion time count as one field.
+    ///
+    /// A target is resolved over all of its replicas, so a task the daily
+    /// cleanup moved to the Done log is still found. When the restored status
+    /// is no longer done, the task's family (its main task and subtasks) comes
+    /// back from the Done log with it, exactly as it left. Every replica takes
+    /// the written fields; only the replicas that agreed with the shown one
+    /// take the new time, so the shown copy stays the one shown.
+    ///
+    /// `.obsolete` when a target is gone for good or in Recently Deleted, or
+    /// when every field it would write was changed since.
+    func applyEditableTransition(
+        from expected: [TaskEditableState],
+        to target: [TaskEditableState]
+    ) -> UndoOutcome {
+        guard !target.isEmpty else { return .applied }
+        let expectedByID = Dictionary(expected.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let owner = target.count == 1 ? familyOwner(forTaskID: target[0].id) : nil
+        let groups: [UUID: [TaskItem]]
         do {
-            let groups = try storedTaskGroups(matching: Set(states.map(\.id)))
-            for state in states {
-                for replica in groups[state.id] ?? [] {
-                    replica.title = state.title
-                    replica.statusRaw = state.statusRaw
-                    replica.priorityRaw = state.priorityRaw
-                    replica.completedAt = state.completedAt
-                    replica.manualOrder = state.manualOrder
-                    replica.tagsRaw = state.tagsRaw
-                    replica.dueDayRaw = state.dueDayRaw
-                    replica.updatedAt = timestamp
+            let ids = Array(Set(target.map(\.id)))
+            groups = Dictionary(grouping: try context.fetch(FetchDescriptor<TaskItem>(
+                predicate: #Predicate { ids.contains($0.id) }
+            )), by: \.id)
+        } catch {
+            report(error.localizedDescription, owner: owner)
+            return .failed
+        }
+        var winners: [UUID: TaskItem] = [:]
+        for state in target {
+            guard let replicas = groups[state.id],
+                  let winner = Self.canonicalReplicas(from: replicas).first,
+                  winner.deletedAt == nil else {
+                report("The task is no longer available.", owner: owner)
+                return .obsolete
+            }
+            winners[state.id] = winner
+        }
+
+        struct Completion: Equatable {
+            let statusRaw: String
+            let completedAt: Date?
+        }
+        let doneRaw = TaskStatus.done.rawValue
+        let timestamp = now()
+        var wroteAny = false
+        var conflicted = false
+        var returningFamilies = Set<UUID>()
+        for state in target {
+            guard let from = expectedByID[state.id], let winner = winners[state.id],
+                  let replicas = groups[state.id] else { continue }
+            var edits: [(TaskItem) -> Void] = []
+            func field<Value: Equatable>(
+                _ current: Value, _ was: Value, _ becomes: Value, _ write: @escaping (TaskItem) -> Void
+            ) {
+                guard was != becomes else { return }
+                if current == was {
+                    edits.append(write)
+                } else if current != becomes {
+                    conflicted = true
                 }
             }
+            field(winner.title, from.title, state.title) { $0.title = state.title }
+            field(winner.priorityRaw, from.priorityRaw, state.priorityRaw) { $0.priorityRaw = state.priorityRaw }
+            field(Completion(statusRaw: winner.statusRaw, completedAt: winner.completedAt),
+                  Completion(statusRaw: from.statusRaw, completedAt: from.completedAt),
+                  Completion(statusRaw: state.statusRaw, completedAt: state.completedAt)) {
+                $0.statusRaw = state.statusRaw
+                $0.completedAt = state.completedAt
+            }
+            field(winner.manualOrder, from.manualOrder, state.manualOrder) { $0.manualOrder = state.manualOrder }
+            field(winner.dueDayRaw, from.dueDayRaw, state.dueDayRaw) { $0.dueDayRaw = state.dueDayRaw }
+            let fromTags = Set(AtticTag.decode(from.tagsRaw))
+            let toTags = Set(AtticTag.decode(state.tagsRaw))
+            if fromTags != toTags {
+                let tagsRaw = AtticTag.encode(
+                    Set(AtticTag.decode(winner.tagsRaw))
+                        .subtracting(fromTags.subtracting(toTags))
+                        .union(toTags.subtracting(fromTags))
+                )
+                if tagsRaw != winner.tagsRaw { edits.append { $0.tagsRaw = tagsRaw } }
+            }
+            guard !edits.isEmpty else { continue }
+            wroteAny = true
+            let shown = TaskContentSnapshot(winner)
+            let agreeing = Set(replicas.filter { $0 === winner || TaskContentSnapshot($0) == shown }
+                .map(\.persistentModelID))
+            for replica in replicas {
+                edits.forEach { $0(replica) }
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+            }
+            if winner.doneLoggedAt != nil, winner.statusRaw != doneRaw {
+                returningFamilies.insert(winner.parentID ?? winner.id)
+            }
+        }
+        guard wroteAny else {
+            if conflicted {
+                report("The task changed since, so this step can no longer be undone.", owner: owner)
+                return .obsolete
+            }
+            return .applied
+        }
+        do {
+            try returnFamiliesFromDoneLog(returningFamilies)
         } catch {
             context.rollback()
             report(error.localizedDescription, owner: owner)
-            return false
+            return .failed
         }
-        return save(owner: owner)
+        guard save(owner: owner) else { return .failed }
+        if !returningFamilies.isEmpty {
+            do {
+                try reloadTasks()
+            } catch {
+                report("Undone, but the list could not be refreshed: \(error.localizedDescription)", owner: owner)
+            }
+        }
+        return .applied
+    }
+
+    /// Brings each family (a main task and its subtasks, every replica) the
+    /// daily cleanup moved to the Done log back to the list. Rows in
+    /// Recently Deleted stay there. Not saved here.
+    private func returnFamiliesFromDoneLog(_ rootIDs: Set<UUID>) throws {
+        guard !rootIDs.isEmpty else { return }
+        let roots = Array(rootIDs)
+        let linked = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { roots.contains($0.id) }))
+        // Children are matched on the value: predicates that unwrap the
+        // optional parent link are rejected on hosted macOS 26.6 (see
+        // `moveCompletedToDoneLog`).
+        let children = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID != nil }))
+            .filter { $0.parentID.map(rootIDs.contains) == true }
+        let childIDs = Array(Set(children.map(\.id)))
+        let childReplicas = childIDs.isEmpty ? [] : try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { childIDs.contains($0.id) }
+        ))
+        for row in linked + childReplicas where row.doneLoggedAt != nil && row.deletedAt == nil {
+            row.doneLoggedAt = nil
+        }
     }
 
     @discardableResult

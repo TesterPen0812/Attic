@@ -12,20 +12,53 @@ enum UndoHistoryID: Hashable {
     case library
 }
 
-/// One undoable step: how to reverse it and how to apply it again. Each
-/// closure returns whether the store confirmed its save.
+/// What happened when a step was undone or redone.
+enum UndoOutcome: Equatable {
+    /// The store confirmed the change.
+    case applied
+    /// The store refused or failed to save; nothing changed and the step can
+    /// be tried again (a full disk, a replica conflict someone can resolve).
+    case failed
+    /// The step can never apply again: what it changes is gone (removed for
+    /// good, in Recently Deleted, or changed since on every field it
+    /// touches). The route drops it so it cannot block the steps before it.
+    case obsolete
+}
+
+/// One undoable step: how to reverse it and how to apply it again.
 struct UndoStep {
     let name: String
-    let undo: @MainActor () -> Bool
-    let redo: @MainActor () -> Bool
+    let undo: @MainActor () -> UndoOutcome
+    let redo: @MainActor () -> UndoOutcome
+
+    /// A step whose closures only report whether the store confirmed its
+    /// save; a refusal keeps the step.
+    init(name: String, undo: @escaping @MainActor () -> Bool, redo: @escaping @MainActor () -> Bool) {
+        self.name = name
+        self.undo = { undo() ? .applied : .failed }
+        self.redo = { redo() ? .applied : .failed }
+    }
+
+    /// A step that can tell a failure worth retrying from one that can never
+    /// apply again.
+    init(
+        name: String,
+        undoOutcome: @escaping @MainActor () -> UndoOutcome,
+        redoOutcome: @escaping @MainActor () -> UndoOutcome
+    ) {
+        self.name = name
+        self.undo = undoOutcome
+        self.redo = redoOutcome
+    }
 }
 
 /// The single undo route. Keys, menus, toolbars and agents all call these
 /// methods, so there is one history per page and one way through it (audit
 /// CVD-06). A step is recorded only after the store confirmed the change;
 /// an undo or redo whose store call fails leaves the history exactly as it
-/// was (audit CVD-02). Histories live here, not in views, so releasing a view
-/// loses nothing.
+/// was (audit CVD-02). A step that can never apply again (`.obsolete`) is
+/// dropped instead, so it never blocks the steps before it. Histories live
+/// here, not in views, so releasing a view loses nothing.
 @MainActor
 final class UndoRoute: ObservableObject {
     private struct History {
@@ -93,28 +126,49 @@ final class UndoRoute: ObservableObject {
         revision &+= 1
     }
 
+    /// Undoes the history's last step. Returns whether it applied; a step
+    /// that failed stays, one that can never apply again is dropped (and the
+    /// next undo reaches the step before it).
     @discardableResult
     func undo(in history: UndoHistoryID) -> Bool {
         guard var entry = histories[history], let step = entry.undo.last else { return false }
-        guard step.undo() else { return false }
-        entry.undo.removeLast()
-        entry.redo.append(step)
-        histories[history] = entry
-        touch(history)
-        revision &+= 1
-        return true
+        switch step.undo() {
+        case .failed:
+            return false
+        case .obsolete:
+            entry.undo.removeLast()
+            histories[history] = entry
+            revision &+= 1
+            return false
+        case .applied:
+            entry.undo.removeLast()
+            entry.redo.append(step)
+            histories[history] = entry
+            touch(history)
+            revision &+= 1
+            return true
+        }
     }
 
     @discardableResult
     func redo(in history: UndoHistoryID) -> Bool {
         guard var entry = histories[history], let step = entry.redo.last else { return false }
-        guard step.redo() else { return false }
-        entry.redo.removeLast()
-        entry.undo.append(step)
-        histories[history] = entry
-        touch(history)
-        revision &+= 1
-        return true
+        switch step.redo() {
+        case .failed:
+            return false
+        case .obsolete:
+            entry.redo.removeLast()
+            histories[history] = entry
+            revision &+= 1
+            return false
+        case .applied:
+            entry.redo.removeLast()
+            entry.undo.append(step)
+            histories[history] = entry
+            touch(history)
+            revision &+= 1
+            return true
+        }
     }
 
     func canUndo(in history: UndoHistoryID) -> Bool {
