@@ -86,14 +86,14 @@ struct AtticSidebarRow: View {
             .frame(height: AtticLayout.sidebarHighlightHeight)
             .background {
                 if let fill {
-                    AtticHighlight(fill: fill).padding(.horizontal, AtticLayout.rowHighlightInset)
+                    AtticHighlight(fill: fill).padding(.horizontal, AtticLayout.sidebarHighlightInset)
                 }
             }
             .overlay {
                 if state == .focused {
                     Color.clear
                         .atticFocusRing(true, cornerRadius: AtticRadius.highlight)
-                        .padding(.horizontal, AtticLayout.rowHighlightInset)
+                        .padding(.horizontal, AtticLayout.sidebarHighlightInset)
                 }
             }
             .frame(height: AtticLayout.sidebarRowPitch)

@@ -65,7 +65,7 @@ enum AtticRadius {
     /// Hover, selection and pressed highlights on rows (always 10).
     static let highlight: CGFloat = 10
     /// A chip nested in a capsule: outer radius minus the inset
-    /// (13.5 − 4 = 9.5 on the 32 pt capsule).
+    /// (14.5 − 4 = 10.5 on the 34 pt capsule).
     static let nestedChip: CGFloat = control(height: AtticControlSize.capsuleHeight) - AtticControlSize.capsuleInset
     /// Rounded-square subtask checkbox: a fixed glyph radius (a glyph, not
     /// a control, so it keeps its square look beside the round circles).
@@ -83,13 +83,17 @@ enum AtticRadius {
 /// Control sizes (spec § Raised controls). Controls are slightly wider than
 /// tall (about 1.15 : 1).
 enum AtticControlSize {
-    static let panelButton = CGSize(width: 36, height: 32)
+    /// The panel's raised buttons (pin, All notes, New note): 38 × 34, the
+    /// header's height since the owner's round-2 panel redesign (v9), and
+    /// the same as Settings' back button.
+    static let panelButton = CGSize(width: 38, height: 34)
     static let settingsBackButton = CGSize(width: 38, height: 34)
-    static let capsuleHeight: CGFloat = 32
+    /// The page switch: 34 tall (v9), chips 26 inside a 4 pt inset.
+    static let capsuleHeight: CGFloat = 34
     static let capsuleInset: CGFloat = 4
-    static let chipHeight: CGFloat = 24
-    /// An icon-only chip, 24 tall and 1.15 × as wide.
-    static let chipIconWidth: CGFloat = 28
+    static let chipHeight: CGFloat = capsuleHeight - 2 * capsuleInset
+    /// An icon-only chip, 26 tall and 1.15 × as wide.
+    static let chipIconWidth: CGFloat = (chipHeight * 1.15).rounded()
     static let addBarHeight: CGFloat = 36
     /// The send button: 28 × 28, radius 11, **inside** the add bar.
     ///
@@ -112,21 +116,37 @@ enum AtticControlSize {
     static let statusCircle: CGFloat = 16
     static let subtaskCheckbox: CGFloat = 14
     static let glyph: CGFloat = 14
+    /// Icon-only raised buttons: the page switch's icon size (v9), so the
+    /// pin and the switch read as one row.
+    static let raisedGlyph: CGFloat = 13
 }
 
 /// Row and panel layout (spec § Proportions and spacing).
 enum AtticLayout {
     static let panelSize = CGSize(width: 320, height: 520)
-    static let rowPitch: CGFloat = 32
-    static let rowHighlightHeight: CGFloat = 30
-    static let detailRowPitch: CGFloat = 44
-    static let detailRowHighlightHeight: CGFloat = 42
-    static let rowHighlightInset: CGFloat = 8
-    static let circleX: CGFloat = 16
-    static let textX: CGFloat = 42
+    /// Rows are 34 pt, 48 with a details line (v9, owner 2026-09-26):
+    /// the highlight is 2 pt shorter than the pitch.
+    static let rowPitch: CGFloat = 34
+    static let rowHighlightHeight: CGFloat = 32
+    static let detailRowPitch: CGFloat = 48
+    static let detailRowHighlightHeight: CGFloat = 46
+    /// The panel's lines (v9): row highlights 12 from the panel's edges,
+    /// status circles (and the page title) at 20, task titles at 46, and
+    /// the right-hand meta 20 from the right edge.
+    static let rowHighlightInset: CGFloat = 12
+    static let circleX: CGFloat = 20
+    static let textX: CGFloat = 46
+    /// Settings' sidebar keeps its own highlight inset.
+    static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28
     /// Subtask text column: checkbox at the row's text column, text after it.
-    static let subtaskTextX: CGFloat = 42 + 14 + 8
+    static let subtaskTextX: CGFloat = textX + 14 + 8
+
+    /// The page's one title ("Tasks", "Backlog", "Done"): its line box
+    /// sits 16 below the header, and the list starts 14 below it (v9).
+    static let pageTitleTop: CGFloat = 16
+    static let pageTitleHeight: CGFloat = 20
+    static let pageTitleToList: CGFloat = 14
 
     static let statusTabsGap: CGFloat = 14
     static let statusTabsTop: CGFloat = 12
@@ -174,7 +194,7 @@ enum AtticEdgeBlur {
 /// colour more than size (spec § Proportions: two densities, one rhythm).
 enum AtticTextStyle: String, CaseIterable, Sendable {
     // Panel
-    case noteTitle, panelHeading, body, noteBody, rowTitle, rowMeta, helper, hint
+    case noteTitle, pageHeading, panelHeading, body, noteBody, rowTitle, rowMeta, helper, hint
     case statusTab, statusTabSelected, statusCount
     case controlLabel, chipLabel, menuRow, shortcut, toast, tag, count, dropLabel
     // Settings
@@ -191,6 +211,7 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     var spec: Spec {
         switch self {
         case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
+        case .pageHeading: Spec(size: 17, weight: .semibold, italic: false, monospacedDigits: false)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)

@@ -155,7 +155,7 @@ final class SettingsPresentationTests: XCTestCase {
         // Sentence case, and no label that could wrap in the 232 pt sidebar.
         for section in SettingsSection.allCases {
             let width = AtticTextStyle.sidebarRow.measuredWidth(section.title)
-            XCTAssertLessThan(AtticLayout.sidebarTextX + width, AtticLayout.settingsSidebarWidth - AtticLayout.rowHighlightInset * 2,
+            XCTAssertLessThan(AtticLayout.sidebarTextX + width, AtticLayout.settingsSidebarWidth - AtticLayout.sidebarHighlightInset * 2,
                               "\(section.title) must fit on one line")
         }
     }

@@ -42,6 +42,16 @@ struct AtticSurfaceModel: Equatable, Sendable {
     let tintStops: [PanelTintStop]
     /// Increase Contrast is on (all text keeps 4.5 : 1 on every surface).
     let increaseContrast: Bool
+    /// The default Solid surface (Original, no Tint, v9): in Light a warm
+    /// white that brightens slightly toward the top, and in both modes a
+    /// light top edge. Never darker than `base`, so every ink tuned on the
+    /// base keeps its contrast.
+    var porcelain = false
+
+    /// The porcelain face, top to bottom (Light only).
+    static let porcelainStops: [(colour: AtticRGBA, location: Double)] = [
+        (AtticRGBA(0xFFFFFE), 0), (AtticRGBA(0xFCFCFA), 0.42), (AtticRGBA(0xFBFBF9), 1)
+    ]
 
     struct Pair: Equatable, Sendable {
         let ink: AtticInk
@@ -138,7 +148,9 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// or a note's title), below the 12 + 32 + 12 pt header. Above it only
     /// the opaque header controls sit, and scrolled content fades under the
     /// edge veil. Text is judged here, where the Tint is strongest for it.
-    static let contentTop: Double = (AtticSpacing.panelMargin * 2 + AtticControlSize.capsuleHeight) / AtticLayout.panelSize.height
+    /// Kept at the 32 pt header the PR #5 Tint was measured with, so the
+    /// taller v9 header never changes the Tint.
+    static let contentTop: Double = (AtticSpacing.panelMargin * 2 + 32) / AtticLayout.panelSize.height
 
     /// Every background a pair is drawn on, over every desktop, from the
     /// first content line (strongest Tint) to the bottom edge (weakest):
@@ -187,7 +199,8 @@ struct AtticSurfaceModel: Equatable, Sendable {
         func model(foundation: Double, stops: [PanelTintStop]) -> AtticSurfaceModel {
             AtticSurfaceModel(
                 kind: kind, appearance: appearance, base: base, foundationOpacity: foundation,
-                washColor: wash, tintStops: stops, increaseContrast: increaseContrast
+                washColor: wash, tintStops: stops, increaseContrast: increaseContrast,
+                porcelain: kind == .solid && palette == .original && stops.isEmpty && !increaseContrast
             )
         }
 

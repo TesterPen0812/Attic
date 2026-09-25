@@ -248,13 +248,13 @@ enum AtticGeometryCheck {
         let row = CGSize(width: AtticLayout.panelSize.width - 2 * AtticLayout.rowHighlightInset, height: AtticLayout.rowHighlightHeight)
         return [
             Specimen(name: "Single button", view: AnyView(AtticRaisedButton(systemName: "pin", label: "Pin", action: noop)),
-                     expectedSize: panelButton, expectedRadius: 13.5),
+                     expectedSize: panelButton, expectedRadius: 14.5),
             Specimen(name: "Settings back button", view: AnyView(AtticRaisedButton(systemName: "chevron.left", label: "Back", size: back, action: noop)),
                      expectedSize: back, expectedRadius: 14.5),
             Specimen(name: "Label button", view: AnyView(AtticRaisedButton(systemName: "list.bullet", title: "All notes", action: noop)),
-                     expectedSize: CGSize(width: 0, height: 32), expectedRadius: 13.5),
+                     expectedSize: CGSize(width: 0, height: 34), expectedRadius: 14.5),
             Specimen(name: "Page switch", view: AnyView(AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(0))),
-                     expectedSize: CGSize(width: 0, height: AtticControlSize.capsuleHeight), expectedRadius: 13.5),
+                     expectedSize: CGSize(width: 0, height: AtticControlSize.capsuleHeight), expectedRadius: 14.5),
             Specimen(name: "Add bar", view: AnyView(AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: noop)),
                      layoutSize: CGSize(width: 296, height: AtticControlSize.addBarHeight),
                      expectedSize: CGSize(width: 296, height: 36), expectedRadius: 15),
