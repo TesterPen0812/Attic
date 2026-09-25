@@ -1229,6 +1229,35 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.releasePageContent()
     }
 
+    /// Performance probe (`--extra`): types `text` one key at a time into
+    /// whatever holds the panel's keyboard (the Tasks add bar after an
+    /// explicit open), through AppKit's own key path, and returns how long
+    /// each keystroke took until the panel had laid out and displayed it.
+    /// A proxy for "one frame per keystroke": it ends at the panel's
+    /// display pass, not at scan-out. The text is removed again afterwards.
+    func typeForPerformanceProbe(_ text: String) -> [Double] {
+        guard panel.isVisible, let field = panel.firstResponder as? NSTextView else { return [] }
+        var durations: [Double] = []
+        for character in text {
+            let characters = String(character)
+            guard let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: character == " " ? 49 : 0
+            ) else { continue }
+            let start = DispatchTime.now().uptimeNanoseconds
+            panel.sendEvent(event)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            durations.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        }
+        field.selectAll(nil)
+        field.insertText("", replacementRange: field.selectedRange())
+        return durations
+    }
+
     /// UI-test seam: the panel takes the keyboard as a click would.
     func makeKeyForUITesting() {
         panel.makeKey()

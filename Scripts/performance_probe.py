@@ -2,7 +2,10 @@
 """Build a unique local-only preview, seed owned temporary stores, then probe.
 
 The measured phase runs under the same machine-wide lock as xcodebuild. No
-production bundle or store is ever opened. Baseline B: add --done-history.
+production bundle or store is ever opened. Baseline B: add --done-history. `--extra` adds unsampled phases after the
+standard five (a warm reveal, page switches between built pages, add-bar
+typing, a warm Tasks reveal); their timings carry a label prefix, so the
+standard phases and timing names stay comparable with Baselines A and B.
 """
 
 import argparse
@@ -96,7 +99,10 @@ def sample_phase(helper, pid, phase, seconds, run_dir):
     }
 
 
-def launch(app, root, token, logs, seed=False, done=False):
+EXTRA_PHASES = ("warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open")
+
+
+def launch(app, root, token, logs, seed=False, done=False, extra=False):
     env = {
         "ATTIC_UI_TESTING": "1",
         "ATTIC_UI_TEST_CANVAS_PERSISTENCE": "1",
@@ -107,6 +113,7 @@ def launch(app, root, token, logs, seed=False, done=False):
         "ATTIC_PERF_PROBE": "0" if seed else "1",
         "ATTIC_PERF_EXTERNAL_CONTROL": "0" if seed else "1",
         "ATTIC_PERF_WINDOW_SECONDS": os.environ.get("ATTIC_PERF_WINDOW_SECONDS", "10"),
+        "ATTIC_PERF_EXTRA": "1" if extra and not seed else "0",
     }
     command("/usr/bin/open", "-n", "--stdout", str(logs.with_suffix(".stdout.log")),
             "--stderr", str(logs.with_suffix(".stderr.log")),
@@ -193,7 +200,7 @@ def measure(args, app, executable, bundle, helper):
             (root / "phase.json").unlink()
             shutil.rmtree(root / "phase-markers", ignore_errors=True)
             (root / "timings.ndjson").unlink(missing_ok=True)
-            launch(app, root, token, run_dir / "probe")
+            launch(app, root, token, run_dir / "probe", extra=args.extra)
             first = wait_for_phase(root, "hidden_idle")
             if first.get("panel_visible") != 0:
                 raise RuntimeError(f"Panel was visible at hidden-idle marker: {first}")
@@ -230,6 +237,14 @@ def measure(args, app, executable, bundle, helper):
                         raise RuntimeError(f"Panel visibility changed during {phase}: {marker} -> {end}")
                     sample["end_marker"] = end
                     phases.append(sample)
+                if args.extra:
+                    # The last standard USR1 already started the first extra
+                    # phase; each later USR1 ends one and starts the next.
+                    for index, phase in enumerate(EXTRA_PHASES):
+                        if index > 0:
+                            command("/bin/kill", "-USR1", str(pid))
+                        wait_for_phase(root, phase, timeout=60, pid=pid)
+                        time.sleep(1)
             finally:
                 command("/bin/kill", "-TERM", str(pid))
             timing_file = root / "timings.ndjson"
@@ -264,7 +279,10 @@ def summarize(doc):
                      f"{span('cpu_percent_one_core')} | {span('interrupt_wakeups_per_s')} |")
     lines += ["", "CPU and interrupt wake-ups are process-counter deltas over each fixed window; "
               "footprint is Apple's physical footprint. Transition/settling time is excluded.", ""]
-    for name in ("CoordinatorInitToMenuStarted", "StoreOpen", "PanelRevealToOrderedFront", "PageSwitch"):
+    standard = ("CoordinatorInitToMenuStarted", "StoreOpen", "PanelRevealToOrderedFront", "PageSwitch")
+    labelled = sorted({entry["name"] for run in doc["runs"] for entry in run.get("timings", [])
+                       if "." in entry["name"]})
+    for name in standard + tuple(labelled):
         values = [entry["milliseconds"] for run in doc["runs"]
                   for entry in run.get("timings", []) if entry["name"] == name]
         if values:
@@ -279,6 +297,7 @@ def main():
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--window", type=float, default=10)
     parser.add_argument("--done-history", action="store_true")
+    parser.add_argument("--extra", action="store_true")
     parser.add_argument("--output", type=Path, default=ROOT / "Docs" / "performance-baseline-A.json")
     parser.add_argument("--measure", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--build-only", action="store_true", help=argparse.SUPPRESS)
@@ -294,6 +313,7 @@ def main():
         return command("/usr/bin/lockf", "-k", LOCK, sys.executable, __file__,
                        "--measure", "--identity", identity, "--runs", str(args.runs),
                        "--window", str(args.window), *( ["--done-history"] if args.done_history else []),
+                       *(["--extra"] if args.extra else []),
                        "--output", str(args.output))
     app = BUILD / "dd" / "Build" / "Products" / "Local" / f"AtticPerf{identity}.app"
     executable = app / "Contents" / "MacOS" / f"AtticPerf{identity}"
@@ -332,7 +352,7 @@ def main():
         "seed_version": 2 if args.done_history else 1,
         "seed_counts": {"tasks": 500, "notes": 200, "canvases": 20,
                                       "objects_per_canvas": 2000, "extra_done_tasks": 5000 if args.done_history else 0},
-        "done_history": args.done_history, "window_s": args.window, "runs": runs,
+        "done_history": args.done_history, "extra_phases": args.extra, "window_s": args.window, "runs": runs,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(doc, indent=2) + "\n")

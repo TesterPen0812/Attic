@@ -21,6 +21,10 @@ enum PerformanceSignposts {
     private static var noteStart: UInt64?
     private static var canvasStart: UInt64?
     static var hasPendingPageSwitch: Bool { pageSwitch != nil || pageStart != nil }
+    /// The probe's optional extra phases (`--extra`) label the timings they
+    /// cause ("warm.PanelRevealToOrderedFront"), so the standard names keep
+    /// meaning exactly what Baselines A and B measured.
+    static var timingLabel: String?
 
     private static func started() -> UInt64? {
         captureRoot == nil ? nil : DispatchTime.now().uptimeNanoseconds
@@ -29,7 +33,13 @@ enum PerformanceSignposts {
     private static func record(_ name: String, from start: UInt64?) {
         guard let start, let captureRoot else { return }
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        PerformanceProbe.writeTiming(name, milliseconds: elapsed, root: captureRoot)
+        PerformanceProbe.writeTiming(timingLabel.map { "\($0).\(name)" } ?? name, milliseconds: elapsed, root: captureRoot)
+    }
+
+    /// A duration the probe measured itself (the extra phases' keystrokes).
+    static func recordProbeTiming(_ name: String, milliseconds: Double) {
+        guard let captureRoot else { return }
+        PerformanceProbe.writeTiming(timingLabel.map { "\($0).\(name)" } ?? name, milliseconds: milliseconds, root: captureRoot)
     }
 
     static func beginLaunch() {
