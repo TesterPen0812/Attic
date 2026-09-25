@@ -4,24 +4,27 @@ import SwiftUI
 /// How a background surface is composed: the palette-hued base colour, how
 /// much of it covers the desktop on Glass and Frosted (the foundation), and
 /// the Tint drawn over it. Customisation changes only the background and the
-/// accent; on translucent or tinted panels the text steps one shade stronger
-/// (`AtticColorTokens`) so the PR #5 look stays readable.
+/// accent; on translucent or tinted panels a text role steps stronger only
+/// where it would otherwise miss its floor (`AtticColorTokens`).
 ///
 /// The owner's decision (2026-09-24) keeps the PR #5 look:
 ///
 /// - **Glass and Frosted** keep the PR #5 coverage: the least foundation at
-///   which every base-ladder text role keeps 3 : 1 (Glass) or 3.5 : 1
-///   (Frosted) over the desktop that fights the text. Under Increase
+///   which the primary text roles and the grey the PR #5 look was measured
+///   with keep 3 : 1 (Glass) or 3.5 : 1 (Frosted) over the desktop that
+///   fights the text. Under Increase
 ///   Contrast the coverage rises until all text keeps 4.5 : 1.
 /// - **Tints** are drawn at the strengths PR #5 designed (ΔE 3 / 7 / 12, or
 ///   Original's neutral shade), never held back.
 ///
 /// The readability rule the tokens are tuned to and the appearance check
-/// enforces (`floor(for:)`): on Solid, tinted Solid, and whenever Increase
-/// Contrast or Reduce Transparency is on, all text keeps 4.5 : 1. On Glass
-/// and Frosted, body text and labels keep 4.5 : 1 and helper text at least
-/// 3 : 1 over any desktop (black, mid-grey, white). Icons and priority
-/// colours keep 3 : 1 everywhere.
+/// enforces (`floor(for:)`, spec rev 175): titles, body text and anything
+/// that matters (today, overdue, errors, the main action) keep 4.5 : 1;
+/// secondary text (inactive tabs, counts, non-urgent dates, placeholders,
+/// hints, helper text, done rows) stays soft, as in v4, at 3 : 1 at least;
+/// with Increase Contrast every text keeps 4.5 : 1. The same floors hold on
+/// Solid, tints, Glass and Frosted, over any desktop (black, mid-grey,
+/// white). Icons and priority colours keep 3 : 1 everywhere.
 ///
 /// Desktops are modelled from the measured PR #5 renders of a black and a
 /// white desktop under each native surface
@@ -95,11 +98,9 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// The desktops this surface is judged over (Solid transmits nothing).
     var desktops: [Desktop] { kind == .solid ? [.midGrey] : Desktop.allCases }
 
-    /// Helper-level text: helper, placeholder, the sidebar's hint, and
-    /// disabled text (the quiet end of the ladder, with the same floor).
-    static func isHelperText(_ ink: AtticInk) -> Bool {
-        ink == .helper || ink == .placeholder || ink == .chromeHint || ink == .disabledText
-    }
+    /// Secondary text (`AtticInk.isSecondaryText`): 3 : 1 unless Increase
+    /// Contrast is on.
+    static func isSecondaryText(_ ink: AtticInk) -> Bool { ink.isSecondaryText }
 
     /// The least contrast a role must keep on this surface (the rule above).
     func floor(for ink: AtticInk) -> Double {
@@ -110,7 +111,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
         switch ink.floor {
         case .nonText: return 3
         case .text:
-            if kind != .solid, !increaseContrast, isHelperText(ink) { return 3 }
+            if !increaseContrast, ink.isSecondaryText { return 3 }
             return 4.5
         }
     }
@@ -284,7 +285,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
         }
         return [
             p(.heading, []), p(.body, [pressed]), p(.body, [recessed, hover]), p(.label, [selected]),
-            p(.helper, [pressed]), p(.helper, [recessed, hover]),
+            p(.helper, [pressed]), p(.helper, [recessed, hover]), p(.muted, [hover]), p(.placeholder, []),
             p(.placeholder, [controlFace]), p(.glyph, [controlFace]), p(.heading, [controlFace, chipSelected]),
             p(.icon, [pressed]), p(.icon, [recessed, hover]), p(.icon, [controlFace, chipHover]),
             p(.chevron, [pressed]), p(.chevron, [recessed, hover]),

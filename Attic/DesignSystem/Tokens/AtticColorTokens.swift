@@ -4,8 +4,10 @@ import SwiftUI
 /// A colour role. Components ask for a role, never a hex value; the
 /// appearance check knows each role's contrast floor.
 enum AtticInk: String, CaseIterable, Sendable {
-    // Text ladder (spec § Colour: never pure black or white).
-    case heading, body, label, helper, placeholder
+    // Text ladder (spec § Colour: never pure black or white). `helper` is
+    // the secondary grey (dates, counts, hints, done rows); `muted` the
+    // quietest (inactive status tabs), as in the approved v4 mockup.
+    case heading, body, label, helper, muted, placeholder
     // Text on the Settings chrome (sidebar).
     case chromeHeading, chromeBody, chromeHint
     // Icons are lighter than text; glyphs inside controls are the primary colour.
@@ -18,16 +20,14 @@ enum AtticInk: String, CaseIterable, Sendable {
     /// button and the drag-stack count. Near-black is never used for chips.
     case inverseFill, onInverse
     /// Disabled controls are a ghost (a faint rim, a light glyph), but
-    /// nothing is exempt from the readability rule: disabled text keeps the
-    /// text floor at the helper level (4.5 : 1 on Solid, tinted Solid and
-    /// under Increase Contrast or Reduce Transparency; 3 : 1 on Glass and
-    /// Frosted), and disabled icons keep the icons' 3 : 1. The ghost comes
-    /// from the faint control material and the lighter weight of the ladder,
-    /// not from unreadable ink.
+    /// nothing is exempt from the readability rule: disabled text is
+    /// secondary text (3 : 1; 4.5 : 1 under Increase Contrast), and
+    /// disabled icons keep the icons' 3 : 1.
     case disabledText, disabledIcon
 
     enum Floor: Equatable, Sendable {
-        /// 4.5 : 1, including helper and inactive text.
+        /// Text: 4.5 : 1 for text that matters, 3 : 1 for secondary text
+        /// (`isSecondaryText`), 4.5 : 1 for all text under Increase Contrast.
         case text
         /// 3 : 1 for icons, rings, circles and other non-text UI.
         case nonText
@@ -42,7 +42,7 @@ enum AtticInk: String, CaseIterable, Sendable {
 
     var floor: Floor {
         switch self {
-        case .heading, .body, .label, .helper, .placeholder,
+        case .heading, .body, .label, .helper, .muted, .placeholder,
              .chromeHeading, .chromeBody, .chromeHint,
              .accentText, .dueText, .warningText, .onInverse, .disabledText:
             .text
@@ -50,6 +50,19 @@ enum AtticInk: String, CaseIterable, Sendable {
              .priorityNone, .priorityLow, .priorityMedium, .priorityHigh,
              .doneFill, .onDone, .inverseFill, .disabledIcon:
             .nonText
+        }
+    }
+
+    /// Secondary text (spec rev 175): inactive tabs, counts, non-urgent
+    /// dates, placeholders, hints, helper text, done rows, tags in a
+    /// details line, disabled text. It stays soft, as in v4, at 3 : 1 at
+    /// least; everything else that is text (titles, body, labels, today and
+    /// overdue, errors, the main action) keeps 4.5 : 1. Under Increase
+    /// Contrast every text keeps 4.5 : 1.
+    var isSecondaryText: Bool {
+        switch self {
+        case .helper, .muted, .placeholder, .chromeHint, .disabledText, .accentText: true
+        default: false
         }
     }
 }
@@ -195,11 +208,16 @@ struct AtticColorTokens: Equatable, Sendable {
                 // Grouped-row labels and quick-look actions.
                 return rows + settings
             case .helper:
-                // Row meta, hints, Settings helper, and menu shortcuts on the
-                // highlighted row.
+                // Row meta, done rows, hints, Settings helper, and menu
+                // shortcuts on the highlighted row.
                 return rows + settings + [popoverFill, selected.over(popoverFill)]
+            case .muted:
+                // Inactive status tabs: on the surface, and under a drop
+                // target's hover fill (hover itself turns them to body).
+                return [surface, hover.over(surface)]
             case .placeholder:
-                return [face]
+                // The add bar's field, and the surface.
+                return [face, surface]
             case .icon, .chevron:
                 return rows + menus + [face, chipHover.over(face), chipSelected.over(face)]
             case .disabledText, .disabledIcon:
@@ -214,21 +232,27 @@ struct AtticColorTokens: Equatable, Sendable {
         // of the rendered glass never round a pass into a miss.
         let textTarget = 4.66
         let nonTextTarget = 3.12
+        let secondaryTarget = 3.11
+        /// Each text role's target: secondary text 3 : 1 (4.5 : 1 under
+        /// Increase Contrast), every other text 4.5 : 1, with the margins.
+        func target(_ ink: AtticInk) -> Double {
+            ink.isSecondaryText && !ic ? secondaryTarget : textTarget
+        }
 
         // The text ladder and the neutral icons are tuned once per mode and
         // contrast setting, on the neutral base: text always stays in the
         // base style. Palette surfaces keep the neutral base's luminance
         // (`AtticSurfaceModel.hued`), so the same text passes on them.
         var inks = Ladder.neutral(dark: dark, ic: ic)
-        for ink in [AtticInk.helper, .label, .placeholder, .body, .heading] {
-            inks[ink] = inks[ink]!.tuned(toContrast: textTarget, against: backgrounds(for: ink, on: basePanel), lighten: dark)
+        for ink in [AtticInk.helper, .muted, .label, .placeholder, .body, .heading] {
+            inks[ink] = inks[ink]!.tuned(toContrast: target(ink), against: backgrounds(for: ink, on: basePanel), lighten: dark)
         }
         for ink in [AtticInk.icon, .chevron, .glyph, .disabledIcon] {
             inks[ink] = inks[ink]!.tuned(toContrast: nonTextTarget, against: backgrounds(for: ink, on: basePanel), lighten: dark)
         }
         // Disabled text sits at the text floor, and never louder than the
         // helper grey: it is the quiet end of the ladder.
-        inks[.disabledText] = inks[.disabledText]!.tuned(toContrast: textTarget, against: backgrounds(for: .disabledText, on: basePanel), lighten: dark)
+        inks[.disabledText] = inks[.disabledText]!.tuned(toContrast: target(.disabledText), against: backgrounds(for: .disabledText, on: basePanel), lighten: dark)
         if inks[.disabledText]!.contrast(on: basePanel) > inks[.helper]!.contrast(on: basePanel) {
             inks[.disabledText] = inks[.helper]!
         }
@@ -240,7 +264,7 @@ struct AtticColorTokens: Equatable, Sendable {
         inks[.priorityNone] = inks[.icon]!
         let chromeBackgrounds = [baseChrome, selected.over(baseChrome), hover.over(baseChrome)]
         for ink in [AtticInk.chromeHeading, .chromeBody, .chromeHint] {
-            inks[ink] = inks[ink]!.tuned(toContrast: textTarget, against: chromeBackgrounds, lighten: dark)
+            inks[ink] = inks[ink]!.tuned(toContrast: target(ink), against: chromeBackgrounds, lighten: dark)
         }
         inks[.chromeIcon] = inks[.chromeIcon]!.tuned(toContrast: nonTextTarget, against: chromeBackgrounds, lighten: dark)
 
@@ -256,14 +280,15 @@ struct AtticColorTokens: Equatable, Sendable {
             [tagFill.over(base), tagFillSelected.over(base), hover.over(tagFill.over(base))]
         }
         inks[.accentText] = (key.palette == .original ? inks[.helper]! : accentBase)
-            .tuned(toContrast: textTarget, against: meaning + tagBackgrounds, lighten: dark)
+            .tuned(toContrast: target(.accentText), against: meaning + tagBackgrounds, lighten: dark)
         let pri = Ladder.priorityHues(dark: dark)
         inks[.priorityHigh] = pri.high.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
         inks[.priorityMedium] = pri.medium.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
         inks[.priorityLow] = pri.low.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
-        inks[.doneFill] = (dark ? AtticRGBA(0x7A7B7E) : AtticRGBA(0x9A9B9D)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        // Done is faded as in v4 (#C9CBCE / a dim fill), held at 3 : 1.
+        inks[.doneFill] = (dark ? AtticRGBA(0x6E6F72) : AtticRGBA(0xC9CBCE)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
         inks[.onDone] = dark ? AtticRGBA(0x1E1E1F) : AtticRGBA(0xFFFFFF)
 
         func panelPairs() -> [AtticSurfaceModel.Pair] {
@@ -276,6 +301,27 @@ struct AtticColorTokens: Equatable, Sendable {
                 tagFillSelected: inks[.accent]!.withAlpha(dark ? 0.26 : 0.18)
             )
         }
+        /// The pairs that set the PR #5 Glass and Frosted coverage: every
+        /// pair as the PR #5 look was measured, with the secondary roles in
+        /// the greys they had then (4.5 : 1 on the base), so softening the
+        /// secondary text never changes how see-through the surfaces are.
+        var legacy: [AtticInk: AtticRGBA] = [:]
+        legacy[.helper] = Ladder.legacyHelper(dark: dark).tuned(toContrast: textTarget, against: backgrounds(for: .helper, on: basePanel), lighten: dark)
+        legacy[.placeholder] = Ladder.legacyPlaceholder(dark: dark).tuned(toContrast: textTarget, against: [recipes.rest.face.over(basePanel)], lighten: dark)
+        legacy[.chromeHint] = Ladder.legacyChromeHint(dark: dark).tuned(toContrast: textTarget, against: chromeBackgrounds, lighten: dark)
+        // Disabled text never set the look (PR #5 predates it), so it has
+        // no legacy grey and plays no part in the coverage.
+        legacy[.accentText] = (key.palette == .original ? legacy[.helper]! : accentBase)
+            .tuned(toContrast: textTarget, against: meaning + tagBackgrounds, lighten: dark)
+        func coveragePairs(_ pairs: [AtticSurfaceModel.Pair]) -> [AtticSurfaceModel.Pair] {
+            guard !ic else { return pairs }
+            return pairs.compactMap { pair in
+                guard pair.ink.isSecondaryText else { return pair }
+                guard let old = legacy[pair.ink] else { return nil }
+                return .init(ink: .body, foreground: old, overlays: pair.overlays)
+            }
+        }
+
         func chromePairs() -> [AtticSurfaceModel.Pair] {
             [
                 .init(ink: .chromeHeading, foreground: inks[.chromeHeading]!, overlays: []),
@@ -291,28 +337,22 @@ struct AtticColorTokens: Equatable, Sendable {
         let panel = AtticSurfaceModel.solve(
             base: panelBase, kind: key.surface, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
-            tint: key.tint, tintLength: key.tintLength, increaseContrast: ic, lookPairs: panelPairs()
+            tint: key.tint, tintLength: key.tintLength, increaseContrast: ic,
+            lookPairs: coveragePairs(panelPairs())
         )
         let chrome = AtticSurfaceModel.solve(
             base: chromeBase, kind: key.surface == .solid ? .solid : .frosted, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
-            tint: .off, tintLength: 1, increaseContrast: ic, lookPairs: chromePairs()
+            tint: .off, tintLength: 1, increaseContrast: ic,
+            lookPairs: coveragePairs(chromePairs())
         )
 
-        // Where the surface is translucent or tinted, the text steps one
-        // shade stronger (owner's decision, 2026-09-24): helper text takes
-        // the label colour, labels take the body colour. Increase Contrast
-        // already has its own stronger ladder and a more opaque surface.
+        // On translucent or tinted surfaces every role is tuned against the
+        // surface as drawn, over every desktop, to the same floors
+        // (`AtticSurfaceModel.floor`): the ladder steps stronger only where
+        // a role would otherwise miss its floor, and a role already passing
+        // is left exactly as it is.
         let translucentOrTinted = key.surface != .solid || key.tint != .off
-        if translucentOrTinted, !ic {
-            inks[.helper] = inks[.label]
-            inks[.placeholder] = inks[.label]
-            inks[.chromeHint] = inks[.chromeBody]
-            inks[.label] = inks[.body]
-        }
-        // Then every role is tuned against the surface as drawn, over every
-        // desktop, to the readability rule (`AtticSurfaceModel.floor`). A
-        // role already passing is left exactly as it is.
         // Twice: the second pass sees the tag fills of a retuned accent.
         for _ in 0..<(translucentOrTinted ? 2 : 0) {
             for (model, pairs) in [(panel, panelPairs()), (chrome, chromePairs())] {
@@ -408,21 +448,22 @@ struct AtticColorTokens: Equatable, Sendable {
         static func neutral(dark: Bool, ic: Bool) -> [AtticInk: AtticRGBA] {
             switch (dark, ic) {
             case (false, false):
-                // Spec text (#1E1F1F, #494B4A) kept; label and helper are
-                // darker than Craft's (#737473, #898A89 fail 4.5 : 1 on a
-                // selected row) and stay apart by weight and size.
+                // The approved v4 greys: body #494B4A, secondary #898A89,
+                // the quietest #A6A7A8, icons #888888; each is tuned only
+                // as far as its floor needs (secondary 3 : 1 on every row
+                // state it sits on, so it lands a touch darker than v4).
                 return [
                     .heading: AtticRGBA(0x1E1F1F), .body: AtticRGBA(0x494B4A),
-                    .label: AtticRGBA(0x5F605F), .helper: AtticRGBA(0x676867), .placeholder: AtticRGBA(0x676867),
-                    .chromeHeading: AtticRGBA(0x1E1F1F), .chromeBody: AtticRGBA(0x494B4A), .chromeHint: AtticRGBA(0x676867),
-                    .icon: AtticRGBA(0x7D7E7D), .chromeIcon: AtticRGBA(0x7A7B7A), .glyph: AtticRGBA(0x2F3130), .chevron: AtticRGBA(0x7D7E7D),
+                    .label: AtticRGBA(0x5F605F), .helper: AtticRGBA(0x898A89), .muted: AtticRGBA(0xA6A7A8), .placeholder: AtticRGBA(0xA6A7A8),
+                    .chromeHeading: AtticRGBA(0x1E1F1F), .chromeBody: AtticRGBA(0x494B4A), .chromeHint: AtticRGBA(0x898A89),
+                    .icon: AtticRGBA(0x888888), .chromeIcon: AtticRGBA(0x7A7B7A), .glyph: AtticRGBA(0x2F3130), .chevron: AtticRGBA(0x888888),
                     .inverseFill: AtticRGBA(0x2A2B2B), .onInverse: AtticRGBA(0xFAFAFA),
                     .disabledText: AtticRGBA(0x767776), .disabledIcon: AtticRGBA(0xA3A4A3)
                 ]
             case (false, true):
                 return [
                     .heading: AtticRGBA(0x111212), .body: AtticRGBA(0x2A2B2B),
-                    .label: AtticRGBA(0x454645), .helper: AtticRGBA(0x4B4C4B), .placeholder: AtticRGBA(0x4B4C4B),
+                    .label: AtticRGBA(0x454645), .helper: AtticRGBA(0x4B4C4B), .muted: AtticRGBA(0x4B4C4B), .placeholder: AtticRGBA(0x4B4C4B),
                     .chromeHeading: AtticRGBA(0x111212), .chromeBody: AtticRGBA(0x2A2B2B), .chromeHint: AtticRGBA(0x4B4C4B),
                     .icon: AtticRGBA(0x5B5C5B), .chromeIcon: AtticRGBA(0x5B5C5B), .glyph: AtticRGBA(0x161717), .chevron: AtticRGBA(0x5B5C5B),
                     .inverseFill: AtticRGBA(0x161717), .onInverse: AtticRGBA(0xFFFFFF),
@@ -431,16 +472,16 @@ struct AtticColorTokens: Equatable, Sendable {
             case (true, false):
                 return [
                     .heading: AtticRGBA(0xF5F5F5), .body: AtticRGBA(0xD5D5D5),
-                    .label: AtticRGBA(0xB0B0B0), .helper: AtticRGBA(0xA7A7A7), .placeholder: AtticRGBA(0xB0B0B0),
-                    .chromeHeading: AtticRGBA(0xF5F5F5), .chromeBody: AtticRGBA(0xE2E2E2), .chromeHint: AtticRGBA(0xC4C4C4),
-                    .icon: AtticRGBA(0x9A9A9A), .chromeIcon: AtticRGBA(0xB4B4B4), .glyph: AtticRGBA(0xEAEAEA), .chevron: AtticRGBA(0x9A9A9A),
+                    .label: AtticRGBA(0xB0B0B0), .helper: AtticRGBA(0x959595), .muted: AtticRGBA(0x7C7C7E), .placeholder: AtticRGBA(0x7C7C7E),
+                    .chromeHeading: AtticRGBA(0xF5F5F5), .chromeBody: AtticRGBA(0xE2E2E2), .chromeHint: AtticRGBA(0xA8A8A8),
+                    .icon: AtticRGBA(0x8E8E8E), .chromeIcon: AtticRGBA(0xB4B4B4), .glyph: AtticRGBA(0xEAEAEA), .chevron: AtticRGBA(0x8E8E8E),
                     .inverseFill: AtticRGBA(0xEDEDED), .onInverse: AtticRGBA(0x1E1E1F),
                     .disabledText: AtticRGBA(0x939394), .disabledIcon: AtticRGBA(0x6E6E6F)
                 ]
             case (true, true):
                 return [
                     .heading: AtticRGBA(0xFAFAFA), .body: AtticRGBA(0xE8E8E8),
-                    .label: AtticRGBA(0xCACACA), .helper: AtticRGBA(0xC2C2C2), .placeholder: AtticRGBA(0xC2C2C2),
+                    .label: AtticRGBA(0xCACACA), .helper: AtticRGBA(0xC2C2C2), .muted: AtticRGBA(0xC2C2C2), .placeholder: AtticRGBA(0xC2C2C2),
                     .chromeHeading: AtticRGBA(0xFAFAFA), .chromeBody: AtticRGBA(0xF0F0F0), .chromeHint: AtticRGBA(0xD8D8D8),
                     .icon: AtticRGBA(0xB4B4B4), .chromeIcon: AtticRGBA(0xC8C8C8), .glyph: AtticRGBA(0xF5F5F5), .chevron: AtticRGBA(0xB4B4B4),
                     .inverseFill: AtticRGBA(0xFAFAFA), .onInverse: AtticRGBA(0x161617),
@@ -448,6 +489,13 @@ struct AtticColorTokens: Equatable, Sendable {
                 ]
             }
         }
+
+        /// The helper grey the PR #5 Glass and Frosted coverage was measured
+        /// with (before rev 175 softened secondary text). It still sets the
+        /// coverage, so the surfaces look exactly as they did.
+        static func legacyHelper(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xA7A7A7) : AtticRGBA(0x676867) }
+        static func legacyChromeHint(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xC4C4C4) : AtticRGBA(0x676867) }
+        static func legacyPlaceholder(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xB0B0B0) : AtticRGBA(0x676867) }
 
         /// Starting hues for priority; each is tuned per palette and mode to
         /// 3 : 1 on the surface, its hover and its selection.
