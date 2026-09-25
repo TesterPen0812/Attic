@@ -73,7 +73,7 @@ final class PanelShellUITests: XCTestCase {
         search.click()
 
         let field = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier == %@ AND label == %@", "AtticTokenField", "Search done tasks…"))
+            .matching(NSPredicate(format: "identifier == %@ AND label == %@", "AtticTokenField", "Search done tasks"))
             .firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the Done page's search shows")
         XCTAssertTrue(app.buttons["panel-section-tasks"].isSelected)

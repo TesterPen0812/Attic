@@ -342,7 +342,7 @@ final class AtticDesignSystemTests: XCTestCase {
     func testAddBarFieldKeepsItsWidthWhenTheSendButtonAppears() throws {
         func fieldFrame(text: String) throws -> CGRect {
             let collector = AtticProbeCollector()
-            let view = AtticAddBar(placeholder: "Add a task…", text: .constant(text), onSubmit: {})
+            let view = AtticAddBar(placeholder: "Add a task", text: .constant(text), onSubmit: {})
                 .frame(width: 296)
                 .atticDesign(.default)
                 .environment(\.atticCapture, AtticCaptureContext(collector: collector, backdrop: .desktop(.midGrey)))

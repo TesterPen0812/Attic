@@ -548,32 +548,32 @@ private struct AddBarBoard: View {
         BoardHeading(title: "Add bar · 36 tall, radius 15; send appears with text")
         Group {
             AtticSpecimen("Empty", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
             AtticSpecimen("Hover: no fill; the cursor becomes the I-beam", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.hover)
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.hover)
             }
             AtticSpecimen("With text: send button inside", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(demo.addTextFilled), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+                AtticAddBar(placeholder: "Add a task", text: .constant(demo.addTextFilled), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
             AtticSpecimen("Backlog page", fullWidth: true) {
-                AtticAddBar(placeholder: "Add to backlog…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+                AtticAddBar(placeholder: "Add to backlog", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
             AtticSpecimen("Recognised pieces become chips (Phase 1)", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant("Call mom fri #family !!"),
+                AtticAddBar(placeholder: "Add a task", text: .constant("Call mom fri #family !!"),
                             tokens: AtticGallerySamples.chipTokens, onSubmit: demo.record("Add"))
                     .padding(.horizontal, 12)
             }
             AtticSpecimen("Done page: the bar searches (Phase 1)", fullWidth: true) {
-                AtticAddBar(placeholder: "Search done tasks…", text: .constant(""), systemImage: "magnifyingglass",
+                AtticAddBar(placeholder: "Search done tasks", text: .constant(""), systemImage: "magnifyingglass",
                             showsSend: false, tokens: nil, onSubmit: {})
                     .padding(.horizontal, 12)
             }
             AtticSpecimen("Keyboard focus", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.focused)
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.focused)
             }
             AtticSpecimen("Live (type to see the send button)", fullWidth: true) {
-                AtticAddBar(placeholder: "Add a task…", text: $demo.addText) { demo.addText = "" }.padding(.horizontal, 12)
+                AtticAddBar(placeholder: "Add a task", text: $demo.addText) { demo.addText = "" }.padding(.horizontal, 12)
             }
         }
     }
@@ -980,7 +980,7 @@ private struct EdgeBlurBoard: View {
                             Spacer()
                         }
                         Spacer()
-                        AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add"))
+                        AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: demo.record("Add"))
                     }
                     .padding(AtticSpacing.panelMargin)
                 }

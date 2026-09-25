@@ -135,7 +135,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             var tint = 0.6
             var surface = "solid"
             let view = VStack(alignment: .leading, spacing: 12) {
-                AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {})
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: {})
                 AtticGroupCard {
                     AtticSwitchRow(title: "Haptics", isOn: Binding(get: { isOn }, set: { isOn = $0 }))
                     AtticGroupDivider()
@@ -210,7 +210,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(glyph.ink.contrast(on: glass) + AtticAppearanceCheck.glyphTolerance, floor, "\(context.caption): hosted placeholder \(glyph.ink) on glass \(glass)")
 
             // The hosted add bar keeps its token height.
-            XCTAssertEqual(NSHostingView(rootView: AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {}).atticDesign(context)).fittingSize.height, AtticControlSize.addBarHeight, accuracy: 0.5)
+            XCTAssertEqual(NSHostingView(rootView: AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: {}).atticDesign(context)).fittingSize.height, AtticControlSize.addBarHeight, accuracy: 0.5)
 
             // One window at a time: the accessibility walk covers every window.
             for window in windows { window.orderOut(nil); window.close() }
@@ -290,7 +290,7 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         let pad: CGFloat = 12
         let size = CGSize(width: 320, height: AtticControlSize.addBarHeight + pad * 2)
         func bar(_ disabled: Bool) -> some View {
-            AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {}).padding(pad).disabled(disabled)
+            AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: {}).padding(pad).disabled(disabled)
         }
         /// Whether the ring shows (read on its stroke, left of the bar).
         func ringShown(_ hosting: NSView) throws -> Bool {

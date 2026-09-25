@@ -255,7 +255,7 @@ enum AtticGeometryCheck {
                      expectedSize: CGSize(width: 0, height: 34), expectedRadius: 14.5),
             Specimen(name: "Page switch", view: AnyView(AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(0))),
                      expectedSize: CGSize(width: 0, height: AtticControlSize.capsuleHeight), expectedRadius: 14.5),
-            Specimen(name: "Add bar", view: AnyView(AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: noop)),
+            Specimen(name: "Add bar", view: AnyView(AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: noop)),
                      layoutSize: CGSize(width: 296, height: AtticControlSize.addBarHeight),
                      expectedSize: CGSize(width: 296, height: 36), expectedRadius: 15),
             Specimen(name: "Small control (pressed)", view: AnyView(AtticSmallButton(systemName: "flag", label: "Priority", action: noop).atticForcedState(.pressed)),

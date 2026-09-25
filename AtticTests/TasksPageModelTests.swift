@@ -173,11 +173,11 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(task.priority, .high)
         XCTAssertEqual(task.dueDay, DueDay(year: 2026, month: 9, day: 25))
         XCTAssertEqual(model.addBar.text, "", "the bar clears and keeps focus for the next one")
-        XCTAssertEqual(model.addPlaceholder, "Add a task…")
+        XCTAssertEqual(model.addPlaceholder, "Add a task")
 
         let idea = try XCTUnwrap(add("Paint the fence", tab: .backlog))
         XCTAssertEqual(store.task(withID: idea)?.status, .backlog)
-        XCTAssertEqual(model.addPlaceholder, "Add to backlog…")
+        XCTAssertEqual(model.addPlaceholder, "Add to backlog")
         XCTAssertNil(add("   "), "blank text adds nothing")
 
         model.select(tab: .now)
@@ -335,7 +335,7 @@ final class TasksPageModelTests: XCTestCase {
     func testSearchOpensTheDonePageUntilThePanelHides() {
         model.beginSearch()
         XCTAssertEqual(model.tab, .done)
-        XCTAssertEqual(model.addPlaceholder, "Search done tasks…")
+        XCTAssertEqual(model.addPlaceholder, "Search done tasks")
         model.resetForReveal()
         XCTAssertEqual(model.tab, .done, "the reveal that Search caused keeps the search")
         model.pageDidHide()
