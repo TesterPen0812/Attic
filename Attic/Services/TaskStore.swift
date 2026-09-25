@@ -2147,23 +2147,30 @@ final class TaskStore: ObservableObject {
     }
 
     private static func tieBreakKey(for task: TaskItem) -> String {
-        [
-            task.title,
-            task.statusRaw,
-            task.priorityRaw,
-            String(task.createdAt.timeIntervalSinceReferenceDate.bitPattern),
-            task.completedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
-            task.manualOrder.map(String.init) ?? "",
-            task.parentID?.uuidString ?? "",
-            task.imageReferencesData?.base64EncodedString() ?? "",
-            task.deletedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
-            task.deletionRootID?.uuidString ?? "",
-            task.deletionMembersRaw,
-            task.removedAttachmentsData?.base64EncodedString() ?? "",
-            task.doneLoggedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
-            task.tagsRaw,
-            task.dueDayRaw ?? "",
-            String(reflecting: task.persistentModelID)
-        ].joined(separator: "\u{1F}")
+        // Built as separately typed statements: one 16-part literal was too
+        // slow for some compilers to type-check. Same parts, same order.
+        func bits(_ date: Date?) -> String {
+            guard let date else { return "" }
+            return String(date.timeIntervalSinceReferenceDate.bitPattern)
+        }
+        var parts: [String] = []
+        parts.reserveCapacity(16)
+        parts.append(task.title)
+        parts.append(task.statusRaw)
+        parts.append(task.priorityRaw)
+        parts.append(bits(task.createdAt))
+        parts.append(bits(task.completedAt))
+        parts.append(task.manualOrder.map { String($0) } ?? "")
+        parts.append(task.parentID?.uuidString ?? "")
+        parts.append(task.imageReferencesData?.base64EncodedString() ?? "")
+        parts.append(bits(task.deletedAt))
+        parts.append(task.deletionRootID?.uuidString ?? "")
+        parts.append(task.deletionMembersRaw)
+        parts.append(task.removedAttachmentsData?.base64EncodedString() ?? "")
+        parts.append(bits(task.doneLoggedAt))
+        parts.append(task.tagsRaw)
+        parts.append(task.dueDayRaw ?? "")
+        parts.append(String(reflecting: task.persistentModelID))
+        return parts.joined(separator: "\u{1F}")
     }
 }

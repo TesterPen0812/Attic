@@ -888,7 +888,8 @@ final class NoteStore: ObservableObject {
     }
 
     /// Removes for good the attachments removed before `cutoff`, when every
-    /// replica of the attachment agrees (removed, same note, same bytes).
+    /// replica of the attachment is identical (bytes included) and its note
+    /// is not itself in Recently Deleted.
     /// Returns how many attachments were purged.
     @discardableResult
     func purgeRemovedAttachments(before cutoff: Date) -> Int {
@@ -900,11 +901,21 @@ final class NoteStore: ObservableObject {
             let ids = Set(removed.filter { ($0.deletedAt ?? .distantFuture) < cutoff }.map(\.id))
             for id in ids {
                 let replicas = try storedAttachments(matching: id)
-                guard let first = replicas.first,
-                      replicas.allSatisfy({
-                          ($0.deletedAt ?? .distantFuture) < cutoff && $0.noteID == first.noteID
-                              && $0.contentDigest == first.contentDigest
-                      }) else { continue }
+                // Every replica identical (same note, same removal, same
+                // bytes, not just the same stored digest) and removed before
+                // the cutoff.
+                guard let first = replicas.first, (first.deletedAt ?? .distantFuture) < cutoff else { continue }
+                let snapshot = NoteAttachmentReplicaSnapshot(first)
+                guard replicas.dropFirst().allSatisfy({ NoteAttachmentReplicaSnapshot($0) == snapshot }) else {
+                    continue
+                }
+                // An attachment of a note in Recently Deleted belongs to that
+                // note's delete: it stays until the note is purged (which
+                // removes it with the rest of the family the delete recorded)
+                // or comes back with it on restore.
+                guard try storedNotesIncludingDeleted(matching: first.noteID).allSatisfy({ $0.deletedAt == nil }) else {
+                    continue
+                }
                 references.append(AttachmentFileReference(first, includePayload: false))
                 replicas.forEach(context.delete)
             }

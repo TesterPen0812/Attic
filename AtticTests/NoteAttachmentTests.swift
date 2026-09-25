@@ -1550,8 +1550,11 @@ final class NoteAttachmentTests: XCTestCase {
         let attachmentID = UUID()
         let payload = Data("replica".utf8)
         context.insert(NoteItem(id: noteID, body: "Note"))
-        context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), payload: payload))
-        context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), payload: payload))
+        // Two copies of one attachment, as sync would produce them: every
+        // stored field the same (the purge requires identical replicas).
+        let created = Date(timeIntervalSince1970: 1_000)
+        context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), createdAt: created, payload: payload))
+        context.insert(NoteAttachment(id: attachmentID, noteID: noteID, originalFilename: "r.txt", byteCount: Int64(payload.count), sortIndex: 0, contentDigest: "0".repeated(64), createdAt: created, payload: payload))
         try context.save()
         let store = NoteStore(
             container: container,

@@ -218,4 +218,66 @@ extension AttachmentRecentlyDeletedTests {
         XCTAssertEqual(Set(rows.compactMap(\.payload)), [Data([1]), Data([9])], "both copies are kept")
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 1)
     }
+
+    func testRemovedAttachmentPurgeWaitsWhileReplicasHoldDifferentBytesUnderOneDigest() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "Note")
+        seed.insert(note)
+        let attachmentID = UUID()
+        let removedAt = Date(timeIntervalSince1970: 1_000)
+        for bytes in [Data([1]), Data([9])] {
+            let row = NoteAttachment(id: attachmentID, noteID: note.id, originalFilename: "a.txt", byteCount: 1,
+                                     sortIndex: 0, contentDigest: String(repeating: "e", count: 64),
+                                     createdAt: Date(timeIntervalSince1970: 500), updatedAt: removedAt, payload: bytes)
+            row.deletedAt = removedAt
+            seed.insert(row)
+        }
+        try seed.save()
+        let store = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<NoteAttachment>())
+        XCTAssertEqual(Set(rows.compactMap(\.payload)), [Data([1]), Data([9])], "both copies are kept")
+    }
+
+    /// An attachment removed before its note was deleted reaches its own 30
+    /// days first. It stays with the deleted note, and both go together when
+    /// the note's 30 days end.
+    func testAnAttachmentRemovedBeforeItsNoteWasDeletedIsPurgedWithTheNote() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let note = NoteItem(title: "Note")
+        let removed = NoteAttachment(noteID: note.id, originalFilename: "removed.txt", byteCount: 1, sortIndex: 0,
+                                     contentDigest: String(repeating: "a", count: 64),
+                                     createdAt: Date(timeIntervalSince1970: 500), payload: Data([1]))
+        let shown = NoteAttachment(noteID: note.id, originalFilename: "shown.txt", byteCount: 1, sortIndex: 1,
+                                   contentDigest: String(repeating: "b", count: 64),
+                                   createdAt: Date(timeIntervalSince1970: 500), payload: Data([2]))
+        seed.insert(note)
+        seed.insert(removed)
+        seed.insert(shown)
+        try seed.save()
+        let start = Date(timeIntervalSince1970: 100_000)
+        let clock = MutableNow(start)
+        let store = NoteStore(container: container, now: { clock.value }, attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: TaskStore(container: container), notes: store)
+        let calendar = Calendar(identifier: .gregorian)
+
+        XCTAssertTrue(store.removeAttachment(try XCTUnwrap(store.attachments(for: note.id).first { $0.id == removed.id })))
+        clock.value = start + 10 * day
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: note.id))))
+
+        // The attachment's 30 days are over, the note's are not.
+        clock.value = start + 35 * day
+        XCTAssertEqual(library.purgeExpired(now: clock.value, calendar: calendar).attachmentCount, 0)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 2, "nothing goes early")
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 1)
+
+        // The note's 30 days are over: it goes with its whole family.
+        clock.value = start + 45 * day
+        _ = library.purgeExpired(now: clock.value, calendar: calendar)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteItem>()), 0)
+        XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<NoteAttachment>()), 0)
+    }
 }
