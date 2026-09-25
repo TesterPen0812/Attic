@@ -504,7 +504,10 @@ final class AppCoordinator: ObservableObject {
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
         let shellTools = AgentShellTools()
         let agentHandler = MCPRequestHandler(
-            tools: AgentTaskTools(store: store, noteStore: noteStore, library: library),
+            tools: AgentTaskTools(
+                store: store, noteStore: noteStore, library: library,
+                settingsTools: AgentSettingsTools(settings: settings, loginItemService: loginItemService, undo: library.undo)
+            ),
             shellTools: shellTools
         )
         let agentServer: AgentServer
@@ -523,7 +526,7 @@ final class AppCoordinator: ObservableObject {
             loginItemService: loginItemService,
             agentServer: agentServer,
             globalHotKey: newTaskHotKey,
-            store: store
+            library: library
         )
         let panelController = AtticPanelController(
             store: store,

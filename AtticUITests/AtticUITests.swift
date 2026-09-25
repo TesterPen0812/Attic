@@ -11,6 +11,11 @@ final class AtticUITests: XCTestCase {
         if name.contains("testMainPanelIdle") {
             app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
         }
+        if name.contains("RecentlyDeleted") {
+            // A deleted task (with a subtask) and a deleted note in the
+            // in-memory UI-test store.
+            app.launchEnvironment["ATTIC_UI_TEST_SEED_RECENTLY_DELETED"] = "1"
+        }
         forwardOwnedAttachmentRoot(to: app)
         app.launch()
         app.activate()
@@ -386,18 +391,17 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(settings.descendants(matching: .any)["settings-agent-disabled-message"].waitForExistence(timeout: 3))
     }
 
+    /// Phase 1 Settings: the Appearance page is built from the design
+    /// system. Mode is three tiles, palettes are tiles, and Surface and Tint
+    /// are native ⌃⌄ pop-ups (menu items), with Tint length under Advanced.
     func testAppearanceControlsCoverEveryPaletteSurfaceAndTint() throws {
         let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
-        let appearance = settings.descendants(matching: .any)["setting-appearance"]
         let surface = settings.descendants(matching: .any)["setting-panel-surface"]
         let tint = settings.descendants(matching: .any)["setting-panel-tint"]
         let preview = settings.descendants(matching: .any)["setting-appearance-preview"]
 
-        func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
-            picker.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
-        }
         func reveal(_ element: XCUIElement) {
             revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable, "Settings control must be reachable without resizing the window")
@@ -408,13 +412,20 @@ final class AtticUITests: XCTestCase {
         }
         func assertSelected(_ element: XCUIElement) {
             waitFor("Expected selection: \(element.label)") {
-                element.isSelected || (element.value as? String) == "1"
-                    || (element.value as? NSNumber)?.boolValue == true
+                element.isSelected || (element.value as? String) == "Selected"
             }
+        }
+        func choose(_ title: String, in popUp: XCUIElement) {
+            reveal(popUp)
+            popUp.click()
+            let item = app.menuItems[title]
+            XCTAssertTrue(item.waitForExistence(timeout: 3), "the pop-up offers \(title)")
+            item.click()
+            waitFor("\(popUp.label) shows \(title)") { (popUp.value as? String) == title }
         }
         func recordPanel(_ name: String) {
             // Evidence only: the live panel, and the Settings window as the
-            // user sees it at that moment (the redesigned controls).
+            // user sees it at that moment.
             let attachment = XCTAttachment(screenshot: app.dialogs.firstMatch.screenshot())
             attachment.name = name
             attachment.lifetime = .keepAlways
@@ -426,19 +437,19 @@ final class AtticUITests: XCTestCase {
         }
 
         XCTAssertTrue(preview.waitForExistence(timeout: 3), "the live preview is one element")
+        XCTAssertTrue((preview.label).hasPrefix("Panel preview:"), "the preview says what it shows")
         XCTAssertTrue(surface.exists)
         XCTAssertTrue(tint.exists)
         XCTAssertFalse(settings.descendants(matching: .any)["setting-translucency"].exists)
         XCTAssertFalse(settings.descendants(matching: .any)["setting-glass-style"].exists)
         XCTAssertFalse(settings.sliders["setting-panel-gradient-coverage"].exists)
 
-        // Every surface, on every palette, in both explicit appearances,
-        // with Tint exercised once: nothing is ever
-        // unavailable and no choice is erased by another.
+        // Every surface, on every palette, in both explicit appearances:
+        // nothing is ever unavailable and no choice is erased by another.
         let themes = ["original", "midnightCobalt", "porcelainVapor", "smokedUmber",
                       "electricBlue", "seaGlass", "amethyst"]
-        for scheme in ["Light", "Dark"] {
-            let schemeControl = segment(scheme, in: appearance)
+        for scheme in ["light", "dark"] {
+            let schemeControl = settings.buttons["setting-appearance-\(scheme)"]
             reveal(schemeControl)
             schemeControl.click()
             assertSelected(schemeControl)
@@ -447,12 +458,9 @@ final class AtticUITests: XCTestCase {
                 XCTAssertTrue(choice.waitForExistence(timeout: 3))
                 reveal(choice)
                 choice.click()
-                waitFor("Selected theme must update") { (choice.value as? String) == "Selected" }
+                assertSelected(choice)
                 for style in ["Solid", "Glass", "Frosted"] {
-                    let styleControl = segment(style, in: surface)
-                    reveal(styleControl)
-                    styleControl.click()
-                    assertSelected(styleControl)
+                    choose(style, in: surface)
                 }
                 // Evidence only: these screenshots do not assert contrast or
                 // physical desktop readability on their own.
@@ -461,21 +469,17 @@ final class AtticUITests: XCTestCase {
         }
 
         let tintLength = settings.sliders["setting-panel-tint-length"]
-        XCTAssertTrue(tintLength.waitForExistence(timeout: 3), "Tint has a Length slider")
+        XCTAssertTrue(tintLength.waitForExistence(timeout: 3), "Tint has a Length slider under Advanced")
         for level in ["Subtle", "Vivid", "Bold", "Off"] {
-            let levelControl = segment(level, in: tint)
-            reveal(levelControl)
-            levelControl.click()
-            assertSelected(levelControl)
+            choose(level, in: tint)
             if level == "Bold" {
                 reveal(tintLength)
                 waitFor("Length is adjustable while a Tint step is on") { tintLength.isEnabled }
                 // XCUITest reports a macOS slider's raw value (0.3...1), not
                 // the spoken description; accept either. The drag is
-                // pixel-positioned and lands differently from run to run
-                // (CI has read 0.33, 0.87 and 0.976 for the two ends), so
-                // check that each drag clearly moves the length, not where
-                // it lands exactly.
+                // pixel-positioned and lands differently from run to run, so
+                // check that each drag clearly moves the length, not where it
+                // lands exactly.
                 func length() -> Double? {
                     if let number = tintLength.value as? NSNumber { return number.doubleValue }
                     guard let text = tintLength.value as? String else { return nil }
@@ -498,13 +502,11 @@ final class AtticUITests: XCTestCase {
         }
         waitFor("Length is disabled while Tint is Off") { !tintLength.isEnabled }
 
-        let glass = segment("Glass", in: surface)
-        reveal(glass)
-        glass.click()
-        assertSelected(glass)
-        let systemAppearance = segment("System", in: appearance)
+        choose("Glass", in: surface)
+        let systemAppearance = settings.buttons["setting-appearance-system"]
         reveal(systemAppearance)
         systemAppearance.click()
+        assertSelected(systemAppearance)
         settings.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(app.descendants(matching: .any)["panel-section-picker"].exists)
     }
@@ -513,15 +515,10 @@ final class AtticUITests: XCTestCase {
         let settings = openSettings(section: "settings-nav-appearance")
         let page = settings.descendants(matching: .any)["settings-page-appearance"]
         XCTAssertTrue(page.waitForExistence(timeout: 3))
-        let appearance = settings.descendants(matching: .any)["setting-appearance"]
         let surface = settings.descendants(matching: .any)["setting-panel-surface"]
         func reveal(_ element: XCUIElement) {
             revealSettingsControl(element, in: settings, page: page)
             XCTAssertTrue(element.isHittable)
-        }
-        func segment(_ title: String, in picker: XCUIElement) -> XCUIElement {
-            picker.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", title)).firstMatch
         }
         func waitFor(_ message: @autoclosure () -> String, _ condition: @escaping () -> Bool) {
             let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
@@ -530,25 +527,103 @@ final class AtticUITests: XCTestCase {
         let original = settings.buttons["setting-panel-theme-original"]
         reveal(original)
         original.click()
-        // Surface never depends on the mode or the palette.
-        for scheme in ["Dark", "Light", "Dark"] {
-            let choice = segment(scheme, in: appearance)
+        // Surface never depends on the mode or the palette: its pop-up always
+        // offers all three.
+        for scheme in ["dark", "light", "dark"] {
+            let choice = settings.buttons["setting-appearance-\(scheme)"]
             reveal(choice)
             choice.click()
+            reveal(surface)
+            surface.click()
             waitFor("Every surface stays available in \(scheme)") {
-                ["Solid", "Glass", "Frosted"].allSatisfy { segment($0, in: surface).exists }
+                ["Solid", "Glass", "Frosted"].allSatisfy { self.app.menuItems[$0].exists }
             }
+            app.typeKey(.escape, modifierFlags: [])
         }
         for style in ["Frosted", "Solid", "Glass"] {
-            let choice = segment(style, in: surface)
-            reveal(choice)
-            choice.click()
-            waitFor("Surface selection must settle on \(style)") {
-                choice.isSelected || (choice.value as? String) == "1"
-                    || (choice.value as? NSNumber)?.boolValue == true
-            }
+            reveal(surface)
+            surface.click()
+            let item = app.menuItems[style]
+            XCTAssertTrue(item.waitForExistence(timeout: 3))
+            item.click()
+            waitFor("Surface selection must settle on \(style)") { (surface.value as? String) == style }
         }
         settings.buttons[XCUIIdentifierCloseWindow].click()
+    }
+
+    /// The sidebar lists every page (Recently Deleted included), each opens
+    /// its page in the content card, and the back button (⌘[) returns to the
+    /// page before; it is a disabled ghost with no history.
+    func testSettingsSidebarOpensEveryPageAndBackReturns() throws {
+        let settings = openSettings(section: "settings-nav-general")
+        let back = settings.buttons["settings-back"]
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-general"].waitForExistence(timeout: 3))
+        for section in ["panel", "appearance", "recentlyDeleted", "agentAccess", "about", "general"] {
+            let row = settings.descendants(matching: .any)["settings-nav-\(section)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 3))
+            row.click()
+            XCTAssertTrue(settings.descendants(matching: .any)["settings-page-\(section)"].waitForExistence(timeout: 3),
+                          "\(section) opens its page")
+        }
+        XCTAssertTrue(back.isEnabled)
+        back.click()
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-about"].waitForExistence(timeout: 3))
+        settings.typeKey("[", modifierFlags: .command)
+        XCTAssertTrue(settings.descendants(matching: .any)["settings-page-agentAccess"].waitForExistence(timeout: 3))
+
+        // General: Haptics is a switch that remembers its state.
+        settings.descendants(matching: .any)["settings-nav-general"].click()
+        let haptics = settings.descendants(matching: .any)["setting-haptics"]
+        XCTAssertTrue(haptics.waitForExistence(timeout: 3))
+        let before = String(describing: haptics.value)
+        haptics.click()
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in String(describing: haptics.value) != before }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, "Haptics toggles")
+        haptics.click()
+    }
+
+    /// Recently Deleted lists what was deleted (a task with its subtask, a
+    /// note; seeded in the UI-test store), searches it, restores an item,
+    /// and empties the rest after a clear confirmation.
+    func testRecentlyDeletedRestoresSearchesAndEmpties() throws {
+        let settings = openSettings(section: "settings-nav-recentlyDeleted")
+        let page = settings.descendants(matching: .any)["settings-page-recentlyDeleted"]
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        let restoreTask = settings.buttons["Restore Plan the launch"]
+        let restoreNote = settings.buttons["Restore Meeting notes"]
+        XCTAssertTrue(restoreTask.waitForExistence(timeout: 3), "the deleted task is listed")
+        XCTAssertTrue(restoreNote.exists, "the deleted note is listed")
+        XCTAssertTrue(settings.descendants(matching: .any)
+            .matching(NSPredicate(format: "value CONTAINS %@", "with 1 subtask")).firstMatch.exists)
+
+        let search = settings.textFields["recently-deleted-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        search.click()
+        search.typeText("meeting")
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: restoreTask)
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 3), .completed, "search narrows the list")
+        XCTAssertTrue(restoreNote.exists)
+        search.typeKey(.escape, modifierFlags: [])
+
+        XCTAssertTrue(restoreTask.waitForExistence(timeout: 3))
+        restoreTask.click()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: restoreTask)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 3), .completed, "a restored task leaves the list")
+
+        let empty = settings.buttons["recently-deleted-empty"]
+        XCTAssertTrue(empty.waitForExistence(timeout: 3))
+        empty.click()
+        // The native alert's destructive button (identified, or by its title
+        // where the alert does not carry the identifier through).
+        let confirm = app.descendants(matching: .button).matching(NSPredicate(
+            format: "identifier == %@ OR label == %@", "recently-deleted-confirm-empty", "Empty"
+        )).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 3), "emptying asks first")
+        confirm.click()
+        XCTAssertTrue(settings.descendants(matching: .any)["recently-deleted-empty-state"].waitForExistence(timeout: 3))
+        XCTAssertFalse(restoreNote.exists)
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {

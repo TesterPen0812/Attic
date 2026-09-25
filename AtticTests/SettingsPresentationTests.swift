@@ -37,51 +37,54 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertTrue(AtticPanelTheme.allCases.allSatisfy { !$0.detail.isEmpty })
     }
 
-    func testPanelThemeChooserReservesTwoLinesAndStrengthensHighContrastBoundaries() {
-        XCTAssertEqual(AppearanceSettingsPresentation.themeTitleLineLimit, 2)
-        XCTAssertGreaterThanOrEqual(AppearanceSettingsPresentation.themeChoiceHeight, 74)
-        XCTAssertGreaterThan(
-            AppearanceSettingsPresentation.nonselectedThemeBoundaryOpacity(for: .increased),
-            AppearanceSettingsPresentation.nonselectedThemeBoundaryOpacity(for: .standard)
-        )
-        XCTAssertGreaterThan(
-            AppearanceSettingsPresentation.nonselectedThemeBoundaryLineWidth(for: .increased),
-            AppearanceSettingsPresentation.nonselectedThemeBoundaryLineWidth(for: .standard)
-        )
-    }
-
-    func testAppearancePreviewIsARealMiniatureWithADescriptiveLabel() {
-        XCTAssertEqual(AppearancePreviewLayout.scale, 0.46)
-        XCTAssertEqual(AppearancePreviewLayout.panelSize.width,
-                       (PanelGeometry.defaultPanelSize.width * 0.46).rounded())
-        XCTAssertEqual(AppearancePreviewLayout.panelSize.height,
-                       (PanelGeometry.defaultPanelSize.height * 0.46).rounded())
-        // Room for the miniature and its outside shadow above and below.
-        XCTAssertGreaterThanOrEqual(
-            AppearancePreviewLayout.cardHeight,
-            AppearancePreviewLayout.panelSize.height + AtticPanelSurfaceElevation.dark.extent * 2
-        )
-        XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: 80), 80 * 0.46)
-        XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: 0), 4)
-        XCTAssertEqual(AppearancePreviewLayout.cornerRadius(forPanelCornerSize: .nan),
-                       AtticStyle.panelCornerRadius * 0.46)
+    /// Phase 1: the Appearance page opens with the panel in miniature, drawn
+    /// by the design system. VoiceOver reads it as one element that names the
+    /// look it shows. (Replaces the Phase 0 test of the old 0.46-scale
+    /// miniature's geometry: the preview is now the design system's
+    /// `AtticAppearancePreview`, whose scale and crop the design system owns.)
+    func testAppearancePreviewDescribesTheLookItShows() {
         XCTAssertEqual(
-            AppearancePreviewLayout.accessibilityLabel(
+            AppearancePreviewDescription.accessibilityLabel(
                 theme: .seaGlass, surface: .glass, tint: .vivid,
                 appearance: .dark, reduceTransparency: false),
             "Panel preview: Sea Glass palette, Glass surface, Tint Vivid (full height), Dark appearance."
         )
         XCTAssertEqual(
-            AppearancePreviewLayout.accessibilityLabel(
+            AppearancePreviewDescription.accessibilityLabel(
                 theme: .original, surface: .glass, tint: .bold, tintLength: 0.5,
                 appearance: .dark, reduceTransparency: false),
             "Panel preview: Original palette, Glass surface, Tint Bold (50 percent of the panel), Dark appearance."
         )
         XCTAssertEqual(
-            AppearancePreviewLayout.accessibilityLabel(
+            AppearancePreviewDescription.accessibilityLabel(
                 theme: .original, surface: .frosted, tint: .off,
                 appearance: .light, reduceTransparency: true),
             "Panel preview: Original palette, Solid (Reduce Transparency) surface, Tint Off, Light appearance."
+        )
+        // The miniature draws the chosen corner, and a corrupt stored value
+        // can never reach its squircle.
+        XCTAssertEqual(PanelGeometryCornerSize.sanitised(52), 52)
+        XCTAssertEqual(PanelGeometryCornerSize.sanitised(.nan), PanelCornerSize.defaultValue)
+        XCTAssertEqual(PanelGeometryCornerSize.sanitised(.infinity), PanelCornerSize.defaultValue)
+        XCTAssertEqual(PanelGeometryCornerSize.sanitised(1e9), PanelCornerSize.max)
+        XCTAssertEqual(PanelGeometryCornerSize.sanitised(-4), PanelCornerSize.min)
+    }
+
+    func testSurfaceFootnoteExplainsReduceTransparencyFirst() {
+        let treatment = AtticPanelTheme.original.surfaceTreatment(
+            appearance: .light, surface: .glass, tint: .off, reduceTransparency: true
+        )
+        XCTAssertEqual(
+            AppearanceSettingsPresentation.surfaceFootnote(reduceTransparency: true, treatment: treatment),
+            "Reduce Transparency is on, so the panel is drawn solid. Your surface choice is kept."
+        )
+        let plain = AtticPanelTheme.original.surfaceTreatment(
+            appearance: .light, surface: .solid, tint: .off, reduceTransparency: false
+        )
+        XCTAssertNil(AppearanceSettingsPresentation.surfaceFootnote(reduceTransparency: false, treatment: plain))
+        XCTAssertEqual(
+            AppearancePreference.allCases.map(AppearanceSettingsPresentation.modeAccessibilityIdentifier),
+            ["setting-appearance-system", "setting-appearance-light", "setting-appearance-dark"]
         )
     }
 
@@ -100,17 +103,16 @@ final class SettingsPresentationTests: XCTestCase {
         }
     }
 
-    func testSettingsDesignTokensStrengthenInIncreasedContrast() {
-        XCTAssertGreaterThan(SettingsDesign.selectionLineWidth(for: .increased), SettingsDesign.selectionLineWidth(for: .standard))
-        XCTAssertGreaterThan(SettingsDesign.tileBoundaryOpacity(for: .increased), SettingsDesign.tileBoundaryOpacity(for: .standard))
-        XCTAssertGreaterThan(SettingsDesign.tileBoundaryLineWidth(for: .increased), SettingsDesign.tileBoundaryLineWidth(for: .standard))
-        XCTAssertEqual(SettingsDesign.iconSize, 24)
-        XCTAssertEqual(SettingsDesign.titleSize, 22)
+    /// The Phase 0 `SettingsDesign` scale (22 pt titles, tinted 24 pt icon
+    /// tiles, tile boundaries) is gone: Settings is drawn by the design
+    /// system, whose tokens have their own tests. What stays are the
+    /// identifiers the UI tests and agents rely on.
+    func testSettingsControlIdentifiersStayStable() {
         for section in SettingsSection.allCases {
             XCTAssertFalse(section.systemImage.isEmpty)
-            XCTAssertNotEqual(section.tint, Color.clear)
+            XCTAssertFalse(section.systemImage.hasSuffix(".fill"), "sidebar icons are outlines, lighter than text")
+            XCTAssertEqual(section.pageIdentifier, "settings-page-\(section.rawValue)")
         }
-        // New control identifiers, on the elements that play those roles.
         XCTAssertEqual(PanelSurfaceStyle.allCases.map(\.accessibilityIdentifier),
                        ["setting-panel-surface-solid", "setting-panel-surface-glass", "setting-panel-surface-frosted"])
         XCTAssertEqual(PanelTintLevel.allCases.map(\.accessibilityIdentifier),
@@ -125,9 +127,10 @@ final class SettingsPresentationTests: XCTestCase {
     func testSettingsSectionsHaveStableLocalOnlyOrderAndIdentifiers() {
         XCTAssertEqual(
             SettingsSection.allCases,
-            [.general, .panel, .appearance, .agentAccess, .about]
+            [.general, .panel, .appearance, .recentlyDeleted, .agentAccess, .about]
         )
         XCTAssertEqual(SettingsSection.restored(from: "panel"), .panel)
+        XCTAssertEqual(SettingsSection.restored(from: "recentlyDeleted"), .recentlyDeleted)
         XCTAssertEqual(SettingsSection.restored(from: "sync"), .general)
         XCTAssertEqual(SettingsSection.restored(from: "unknown"), .general)
         XCTAssertEqual(
@@ -136,10 +139,74 @@ final class SettingsPresentationTests: XCTestCase {
                 "settings-nav-general",
                 "settings-nav-panel",
                 "settings-nav-appearance",
+                "settings-nav-recentlyDeleted",
                 "settings-nav-agentAccess",
                 "settings-nav-about"
             ]
         )
+        // Spec § Settings: App (General, Panel, Appearance, and Recently
+        // Deleted from Phase 1), Connections (Agent Access, with its hint),
+        // About alone at the bottom.
+        XCTAssertEqual(SettingsSection.Group.app.sections, [.general, .panel, .appearance, .recentlyDeleted])
+        XCTAssertEqual(SettingsSection.Group.connections.sections, [.agentAccess])
+        XCTAssertNil(SettingsSection.about.group)
+        XCTAssertNil(SettingsSection.Group.app.hint)
+        XCTAssertEqual(SettingsSection.Group.connections.hint, "Let agents read and add tasks")
+        // Sentence case, and no label that could wrap in the 232 pt sidebar.
+        for section in SettingsSection.allCases {
+            let width = AtticTextStyle.sidebarRow.measuredWidth(section.title)
+            XCTAssertLessThan(AtticLayout.sidebarTextX + width, AtticLayout.settingsSidebarWidth - AtticLayout.rowHighlightInset * 2,
+                              "\(section.title) must fit on one line")
+        }
+    }
+
+    @MainActor
+    func testNavigationRemembersThePageAndGoesBackThroughHistory() throws {
+        try withSettingsDefaults { defaults in
+            let navigation = SettingsNavigation(defaults: defaults)
+            XCTAssertEqual(navigation.selection, .general)
+            XCTAssertFalse(navigation.canGoBack)
+
+            navigation.select(.appearance)
+            navigation.select(.recentlyDeleted)
+            navigation.select(.recentlyDeleted)
+            XCTAssertEqual(navigation.history, [.general, .appearance], "selecting the current page adds nothing")
+            XCTAssertEqual(defaults.string(forKey: SettingsSection.selectionStorageKey), "recentlyDeleted")
+            XCTAssertEqual(SettingsNavigation(defaults: defaults).selection, .recentlyDeleted, "the page survives a relaunch")
+
+            navigation.goBack()
+            XCTAssertEqual(navigation.selection, .appearance)
+            navigation.goBack()
+            XCTAssertEqual(navigation.selection, .general)
+            XCTAssertFalse(navigation.canGoBack)
+            navigation.goBack()
+            XCTAssertEqual(navigation.selection, .general, "back with no history does nothing")
+
+            // ↑ ↓ follow sidebar order and stop at the ends.
+            XCTAssertNil(navigation.neighbour(offset: -1))
+            XCTAssertEqual(navigation.neighbour(offset: 1), .panel)
+            navigation.select(.about)
+            XCTAssertNil(navigation.neighbour(offset: 1))
+            XCTAssertEqual(navigation.neighbour(offset: -1), .agentAccess)
+
+            for _ in 0..<(SettingsNavigation.historyLimit + 10) {
+                navigation.select(navigation.selection == .panel ? .general : .panel)
+            }
+            XCTAssertEqual(navigation.history.count, SettingsNavigation.historyLimit)
+        }
+    }
+
+    /// The traffic lights' target: the back button's centre (8 pt card inset
+    /// + 12 pt header padding + half of the 34 pt button). Real placement
+    /// is checked on a live window in `SettingsWindowHostedTests`.
+    func testTrafficLightsShareThePageTitleLine() {
+        XCTAssertEqual(SettingsChromeLayout.titleLineCenterY, 8 + 12 + 17)
+        XCTAssertEqual(SettingsWindowLayout.trafficLightContainerHeight, SettingsChromeLayout.titleLineCenterY * 2)
+        let origins = SettingsWindowLayout.trafficLightOrigins(buttonSize: NSSize(width: 14, height: 16), spacing: 20)
+        XCTAssertEqual(origins.map(\.x), [20, 40, 60])
+        XCTAssertTrue(origins.allSatisfy { $0.y + 8 == SettingsChromeLayout.titleLineCenterY })
+        XCTAssertGreaterThan(SettingsChromeLayout.sidebarTop, SettingsChromeLayout.titleLineCenterY + 8,
+                             "the sidebar starts below the traffic lights")
     }
 
     func testAuthorizationSummaryNeverContainsSensitiveToken() {
@@ -306,6 +373,11 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertEqual(SettingsPointFormat.rounded(.infinity), 0)
         XCTAssertEqual(SettingsPointFormat.rounded(-.infinity), 0)
         XCTAssertEqual(SettingsPointFormat.rounded(.nan), 0)
+        XCTAssertEqual(SettingsPointFormat.points(52), "52 pt")
+        XCTAssertEqual(SettingsPointFormat.spokenPoints(52), "52 points")
+        XCTAssertEqual(SettingsPointFormat.points(.nan), "0 pt")
+        XCTAssertEqual(SettingsPointFormat.seconds(0.2), (0.2).formatted(.number.precision(.fractionLength(1))) + " s")
+        XCTAssertTrue(SettingsPointFormat.spokenSeconds(0.3).hasSuffix(" seconds"))
     }
 
     /// A width larger than the attached displays is a legitimate choice made on
@@ -356,6 +428,8 @@ final class SettingsPresentationTests: XCTestCase {
         XCTAssertEqual(AppearanceSettingsPresentation.tintLengthDescription(1), "Full height")
         XCTAssertEqual(AppearanceSettingsPresentation.tintLengthDescription(0.5), "50 percent of the panel")
         XCTAssertEqual(AppearanceSettingsPresentation.tintLengthDescription(0.01), "30 percent of the panel")
+        XCTAssertEqual(AppearanceSettingsPresentation.tintLengthValue(1), "Full height")
+        XCTAssertEqual(AppearanceSettingsPresentation.tintLengthValue(0.55), "55 % of the panel")
         for level in PanelTintLevel.allCases {
             let neutral = level.detail(neutral: true)
             let coloured = level.detail(neutral: false)

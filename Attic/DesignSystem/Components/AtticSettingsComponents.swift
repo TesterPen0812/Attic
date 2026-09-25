@@ -50,17 +50,24 @@ struct AtticSidebarRow: View {
     let systemName: String
     let title: String
     var isSelected = false
+    /// The UI-test identifier (Phase 1).
+    var identifier: String?
+    /// Phase 1: the sidebar that owns keyboard focus says when this row
+    /// shows it (the ring appears only while the keyboard drives, never
+    /// after a click). Nil reads the row's own focus.
+    var keyboardFocused: Bool?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
-    @Environment(\.isFocused) private var isFocused
+    @Environment(\.isFocused) private var environmentFocused
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
     @State private var probeID = UUID()
 
     var body: some View {
         let tokens = design.tokens
+        let isFocused = keyboardFocused ?? environmentFocused
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: isFocused).state
         let disabled = state == .disabled
         let fill: AtticRGBA? = isSelected ? tokens.selected : (state == .hover ? tokens.hover : nil)
@@ -99,6 +106,8 @@ struct AtticSidebarRow: View {
         .onHover { hovered = $0 }
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
+        .atticIdentifier(identifier)
         .atticControlProbe(
             "Sidebar row", id: probeID,
             expectedSize: CGSize(width: 0, height: AtticLayout.sidebarRowPitch),
@@ -189,6 +198,10 @@ struct AtticGroupCard<Content: View>: View {
 
 /// The divider inside a group card.
 struct AtticGroupDivider: View {
+    /// Where the divider starts: the rows' text column (14, or 40 for rows
+    /// with an icon, `AtticSettingsRowMetrics.iconTextInset`).
+    var leadingInset: CGFloat = AtticLayout.groupedRowTextInset
+
     @Environment(\.atticDesign) private var design
     @Environment(\.displayScale) private var displayScale
 
@@ -196,7 +209,7 @@ struct AtticGroupDivider: View {
         Rectangle()
             .fill(design.tokens.divider.color)
             .frame(height: max(1 / displayScale, 0.5))
-            .padding(.leading, AtticLayout.groupedRowTextInset)
+            .padding(.leading, leadingInset)
             .accessibilityHidden(true)
     }
 }
@@ -207,6 +220,8 @@ struct AtticPopUpRow<Choice: Hashable>: View {
     let label: String
     let choices: [(value: Choice, title: String)]
     @Binding var selection: Choice
+    /// The UI-test identifier of the pop-up (Phase 1).
+    var identifier: String?
 
     @Environment(\.atticCapture) private var capture
 
@@ -236,6 +251,7 @@ struct AtticPopUpRow<Choice: Hashable>: View {
             .menuIndicator(.hidden)
             .accessibilityLabel(label)
             .accessibilityValue(title)
+            .atticIdentifier(identifier)
         }
     }
 }
@@ -287,6 +303,8 @@ private struct AtticRowPressStyle: ButtonStyle {
 struct AtticSwitchRow: View {
     let title: String
     @Binding var isOn: Bool
+    /// The UI-test identifier of the switch (Phase 1).
+    var identifier: String?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -304,6 +322,7 @@ struct AtticSwitchRow: View {
                     .controlSize(.small)
                     .labelsHidden()
                     .tint(design.tokens.color(.accent))
+                    .atticIdentifier(identifier)
             }
         }
         .padding(.leading, AtticLayout.groupedRowTextInset)
@@ -354,6 +373,8 @@ struct AtticModeTile: View {
 
     let choice: Choice
     var isSelected = false
+    /// The UI-test identifier (Phase 1).
+    var identifier: String?
     let action: () -> Void
 
     @State private var probeID = UUID()
@@ -378,6 +399,8 @@ struct AtticModeTile: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
+        .atticIdentifier(identifier)
     }
 
     private var title: String {
@@ -438,6 +461,8 @@ private struct AtticModePreview: View {
 struct AtticPaletteTile: View {
     let palette: AtticPanelTheme
     var isSelected = false
+    /// The UI-test identifier (Phase 1).
+    var identifier: String?
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -466,7 +491,10 @@ struct AtticPaletteTile: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(palette.title)
+        .accessibilityValue(isSelected ? String(localized: "Selected") : String(localized: "Not selected"))
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
+        .atticIdentifier(identifier)
         .atticControlProbe("Palette tile", id: probeID, expectedSize: nil, radius: AtticRadius.tile, expectedRadius: 10)
     }
 
@@ -494,29 +522,38 @@ struct AtticSliderRow: View {
     let valueText: String
     @Binding var value: Double
     let range: ClosedRange<Double>
+    /// Phase 1: a step, what VoiceOver reads when it differs from the
+    /// visible value ("0.2 seconds" for "0.2 s"), and the UI-test identifier.
+    var step: Double?
+    var accessibilityValue: String?
+    var identifier: String?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
+    @Environment(\.isEnabled) private var isEnabled
     @State private var probeID = UUID()
 
     var body: some View {
         let m = AtticSettingsMetrics.self
         HStack(spacing: m.sliderGap) {
+            // Disabled (Tint length while Tint is Off), the label and value
+            // take the disabled ink, which keeps the secondary-text floor.
             VStack(alignment: .leading, spacing: m.labelValueGap) {
-                AtticText(verbatim: label, style: .groupLabel, ink: .label)
-                AtticText(verbatim: valueText, style: .groupValue, ink: .body)
+                AtticText(verbatim: label, style: .groupLabel, ink: isEnabled ? .label : .disabledText)
+                AtticText(verbatim: valueText, style: .groupValue, ink: isEnabled ? .body : .disabledText)
             }
             Spacer(minLength: m.rowTrailingMinGap)
             Group {
                 if capture != nil {
                     AtticSliderDrawing(fraction: (value - range.lowerBound) / (range.upperBound - range.lowerBound))
                 } else {
-                    Slider(value: $value, in: range)
+                    slider
                         .controlSize(.small)
                         .tint(design.tokens.color(.accent))
                         .labelsHidden()
                         .accessibilityLabel(label)
-                        .accessibilityValue(valueText)
+                        .accessibilityValue(accessibilityValue ?? valueText)
+                        .atticIdentifier(identifier)
                 }
             }
             .frame(width: m.sliderWidth)
@@ -529,6 +566,20 @@ struct AtticSliderRow: View {
             expectedSize: CGSize(width: 0, height: AtticLayout.groupedRowTall),
             radius: 0, expectedRadius: 0
         )
+    }
+
+    /// A step rounds the value as it moves; the slider itself stays
+    /// continuous, because a stepped macOS slider draws a tick mark per
+    /// step (a solid comb on the Width slider's hundreds of points).
+    private var slider: some View {
+        Slider(value: Binding(
+            get: { value },
+            set: { newValue in
+                guard let step, step > 0 else { value = newValue; return }
+                let stepped = range.lowerBound + ((newValue - range.lowerBound) / step).rounded() * step
+                value = min(max(stepped, range.lowerBound), range.upperBound)
+            }
+        ), in: range)
     }
 }
 
@@ -565,6 +616,8 @@ private struct AtticSliderDrawing: View {
 struct AtticAppearancePreview<Panel: View>: View {
     var height: CGFloat = AtticSettingsMetrics.previewHeight
     var scale: CGFloat = AtticSettingsMetrics.previewScale
+    /// What VoiceOver reads: the look the preview shows (Phase 1).
+    var accessibilityLabel: String = String(localized: "Preview of the panel")
     @ViewBuilder let panel: Panel
 
     @Environment(\.atticDesign) private var design
@@ -588,6 +641,6 @@ struct AtticAppearancePreview<Panel: View>: View {
         .frame(height: height, alignment: .top)
         .clipShape(shape)
         .accessibilityElement()
-        .accessibilityLabel(String(localized: "Preview of the panel"))
+        .accessibilityLabel(accessibilityLabel)
     }
 }

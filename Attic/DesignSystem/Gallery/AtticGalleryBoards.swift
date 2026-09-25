@@ -1116,6 +1116,51 @@ private struct SettingsBoard: View {
             .background(AtticContentCard { Color.clear })
             .padding(.horizontal, 16)
         }
+        AtticSpecimen("Phase 1 · rows with an action, messages, footnote", fullWidth: true) {
+            VStack(alignment: .leading, spacing: 0) {
+                AtticGroupCard {
+                    AtticActionRow(title: String(localized: "Endpoint"), value: "http://127.0.0.1:7335/mcp",
+                                   actionTitle: String(localized: "Copy"), action: demo.record("Copy"))
+                    AtticGroupDivider()
+                    AtticActionRow(title: String(localized: "2 items"), actionTitle: String(localized: "Empty…"),
+                                   action: demo.record("Empty"))
+                    AtticGroupDivider()
+                    AtticStatusRow(title: String(localized: "Listening on this Mac only"), systemName: "checkmark.circle")
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: String(localized: "Agent Access is off. Nothing is listening."))
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: String(localized: "1 item was kept: its copies don’t match yet."), tone: .warning)
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: String(localized: "Could not start the server."), tone: .error,
+                                      actionTitle: String(localized: "Retry"), action: demo.record("Retry"))
+                }
+                AtticGroupFootnote(String(localized: "Deleted tasks, notes, canvases and attachments stay here for 30 days, then are removed for good."))
+            }
+            .frame(width: 480)
+            .padding(16)
+            .background(AtticContentCard { Color.clear })
+            .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Phase 1 · Recently Deleted", fullWidth: true) {
+            VStack(alignment: .leading, spacing: AtticSpacing.s20) {
+                AtticSearchField(placeholder: String(localized: "Search Recently Deleted"), text: .constant(""))
+                AtticSearchField(placeholder: String(localized: "Search Recently Deleted"), text: .constant("launch"))
+                AtticGroupCard {
+                    AtticDeletedItemRow(systemName: "checkmark.circle", kind: String(localized: "Task"), title: "Plan the launch",
+                                        detail: String(localized: "Deleted 3 days ago · with 2 subtasks"), onRestore: demo.record("Restore", "Plan the launch"))
+                    AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
+                    AtticDeletedItemRow(systemName: "paperclip", kind: String(localized: "Attachment"), title: "brief.pdf",
+                                        detail: String(localized: "From “Launch plan” · Deleted today"), onRestore: demo.record("Restore", "brief.pdf"))
+                }
+                AtticGroupCard {
+                    AtticGroupEmptyRow(text: String(localized: "Nothing has been deleted."))
+                }
+            }
+            .frame(width: 480)
+            .padding(16)
+            .background(AtticContentCard { Color.clear })
+            .padding(.horizontal, 16)
+        }
     }
 }
 

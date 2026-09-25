@@ -28,13 +28,17 @@ final class AgentTaskTools {
     private let library: AtticLibrary
     /// Understands `due` ("tomorrow", "fri", "sep 30", ISO dates).
     private let parser: TaskTextParser
+    /// `get_settings` and `update_settings` (Phase 1 Settings).
+    private let settingsTools: AgentSettingsTools?
 
     init(
         store: TaskStore,
         noteStore: NoteStore? = nil,
         library: AtticLibrary? = nil,
-        parser: TaskTextParser = TaskTextParser()
+        parser: TaskTextParser = TaskTextParser(),
+        settingsTools: AgentSettingsTools? = nil
     ) {
+        self.settingsTools = settingsTools
         self.store = store
         self.noteStore = noteStore
         self.library = library ?? AtticLibrary(tasks: store, notes: noteStore)
@@ -441,6 +445,7 @@ final class AgentTaskTools {
 
     var definitions: [[String: Any]] {
         Self.taskDefinitions + (noteStore != nil ? Self.noteDefinitions : []) + Self.libraryDefinitions
+            + (settingsTools != nil ? AgentSettingsTools.definitions : [])
     }
 
     func call(name: String, arguments: [String: Any]) throws -> String {
@@ -459,8 +464,15 @@ final class AgentTaskTools {
         case "list_tags": try listTags(arguments)
         case "update_tags": try updateTags(arguments)
         case "link": try link(arguments)
-        default: throw AgentToolError.unknownTool(name)
+        default: try callSettingsTool(name, arguments)
         }
+    }
+
+    private func callSettingsTool(_ name: String, _ arguments: [String: Any]) throws -> String {
+        guard let settingsTools, AgentSettingsTools.toolNames.contains(name) else {
+            throw AgentToolError.unknownTool(name)
+        }
+        return try settingsTools.call(name: name, arguments: arguments)
     }
 
     private func listTasks(_ arguments: [String: Any]) throws -> String {

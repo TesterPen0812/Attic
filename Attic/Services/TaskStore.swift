@@ -1418,8 +1418,10 @@ final class TaskStore: ObservableObject {
     /// Drops removals older than `cutoff` from every task whose replicas
     /// agree, then releases files no surviving replica (shown, removed or
     /// deleted) still references. Returns how many attachments were purged.
+    /// `confirmed` limits it to the removals the person was shown
+    /// (attachment id and removal time), as for `purgeDeleted`.
     @discardableResult
-    func purgeRemovedAttachments(before cutoff: Date) -> Int {
+    func purgeRemovedAttachments(before cutoff: Date, confirmed: [UUID: Date]? = nil) -> Int {
         var expired: [TaskImageReference] = []
         do {
             let rows = try context.fetch(FetchDescriptor<TaskItem>(
@@ -1432,9 +1434,12 @@ final class TaskStore: ObservableObject {
                 let snapshot = TaskReplicaSnapshot(first)
                 guard replicas.allSatisfy({ TaskReplicaSnapshot($0) == snapshot }) else { continue }
                 let entries = try JSONDecoder().decode([RemovedTaskAttachment].self, from: data)
-                let old = entries.filter { $0.removedAt < cutoff }
+                let isExpired = { (entry: RemovedTaskAttachment) in
+                    entry.removedAt < cutoff && (confirmed.map { $0[entry.reference.id] == entry.removedAt } ?? true)
+                }
+                let old = entries.filter(isExpired)
                 guard !old.isEmpty else { continue }
-                let remaining = entries.filter { $0.removedAt >= cutoff }
+                let remaining = entries.filter { !isExpired($0) }
                 let remainingData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
                 for replica in replicas { replica.removedAttachmentsData = remainingData }
                 expired += old.map(\.reference)
@@ -1773,9 +1778,15 @@ final class TaskStore: ObservableObject {
     /// ids of the purged deletes' tasks. `alongside` stages dependent
     /// removals (their links) in the same context, so they are saved with
     /// the tasks or not at all; if it throws, nothing is purged.
+    ///
+    /// `confirmed` (emptying Recently Deleted by hand) limits the purge to
+    /// the deletes the person was shown: each root id with the deletion time
+    /// it had then. A delete made since, or the same task deleted again,
+    /// does not match and stays.
     @discardableResult
     func purgeDeleted(
         before cutoff: Date,
+        confirmed: [UUID: Date]? = nil,
         alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
     ) -> Set<UUID> {
         let rootsByID: [UUID: [TaskItem]]
@@ -1786,7 +1797,9 @@ final class TaskStore: ObservableObject {
             ))
             let expiredRoots = Set(deleted.compactMap { row -> UUID? in
                 guard let deletedAt = row.deletedAt, deletedAt < cutoff else { return nil }
-                return row.deletionRootID ?? row.id
+                let root = row.deletionRootID ?? row.id
+                if let confirmed, confirmed[root] != deletedAt { return nil }
+                return root
             })
             guard !expiredRoots.isEmpty else { return [] }
             rootsByID = Dictionary(grouping: deleted.filter { expiredRoots.contains($0.deletionRootID ?? $0.id) }) {

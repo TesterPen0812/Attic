@@ -106,6 +106,7 @@ final class AppSettings: ObservableObject {
         static let panelContentSize = "panelContentSize"
         static let panelHeight = "panelHeight"
         static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
+        static let hapticsEnabled = "hapticsEnabled"
     }
 
     @Published var corner: ScreenCorner {
@@ -145,6 +146,12 @@ final class AppSettings: ObservableObject {
 
     @Published var isAgentAccessEnabled: Bool {
         didSet { defaults.set(isAgentAccessEnabled, forKey: Key.isAgentAccessEnabled) }
+    }
+
+    /// The light haptic tick when a task is completed or a dragged item
+    /// snaps into place (spec § Touch and sound). On by default.
+    @Published var hapticsEnabled: Bool {
+        didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
     }
 
     @Published var panelCornerSize: Double {
@@ -294,6 +301,7 @@ final class AppSettings: ObservableObject {
             defaults.set(true, forKey: Key.hasAdoptedAgentAccessOptIn)
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
+        hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,

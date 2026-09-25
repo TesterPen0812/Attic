@@ -1,64 +1,60 @@
 import SwiftUI
 
 struct GeneralSettingsView: View {
+    @ObservedObject var settings: AppSettings
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var globalHotKey: GlobalHotKey
 
     var body: some View {
-        SettingsPage(
-            title: "General",
-            subtitle: "How Attic starts on this Mac.",
-            accessibilityIdentifier: "settings-page-general"
-        ) {
-            Section {
-                SettingsRow(
-                    title: "Launch at login",
-                    description: "Attic is ready as soon as you sign in.",
-                    systemImage: "power",
-                    tint: .green
-                ) {
-                    Toggle("Launch Attic at login", isOn: loginBinding)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .help("Open Attic automatically when you log in")
-                        .accessibilityLabel("Launch Attic at login")
-                        .accessibilityIdentifier("setting-launch-at-login")
-                }
+        SettingsPage(section: .general) {
+            SettingsGroup(
+                title: String(localized: "Startup"),
+                footnote: String(localized: "Attic lives in the corner of your screen and in the menu bar. It has no Dock icon.")
+            ) {
+                AtticSwitchRow(
+                    title: String(localized: "Launch at login"),
+                    isOn: loginBinding,
+                    identifier: "setting-launch-at-login"
+                )
+                .help(String(localized: "Open Attic automatically when you log in"))
 
-                if SettingsVisibility.showsLoginApproval(
-                    requiresApproval: loginItemService.requiresApproval
-                ) {
-                    SettingsRow(
-                        title: "Approval needed",
-                        description: "macOS asks you to allow Attic in Login Items.",
-                        systemImage: "exclamationmark.circle.fill",
-                        tint: .orange
+                if SettingsVisibility.showsLoginApproval(requiresApproval: loginItemService.requiresApproval) {
+                    AtticGroupDivider()
+                    AtticActionRow(
+                        title: String(localized: "Approval needed"),
+                        value: String(localized: "Allow Attic in Login Items"),
+                        actionTitle: String(localized: "Open Login Items"),
+                        actionIdentifier: "settings-open-login-items",
+                        actionHelp: String(localized: "Open Login Items in System Settings")
                     ) {
-                        Button("Open Login Items") {
-                            loginItemService.openSystemSettings()
-                        }
-                        .help("Open Login Items in System Settings")
-                        .accessibilityIdentifier("settings-open-login-items")
+                        loginItemService.openSystemSettings()
                     }
-                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("settings-login-approval")
                 }
 
                 if let error = loginItemService.errorMessage {
-                    SettingsMessage(text: error, tone: .error)
+                    AtticGroupDivider()
+                    AtticGroupMessage(text: error, tone: .error)
                         .accessibilityIdentifier("settings-login-error")
                 }
-            } header: {
-                Text("Startup")
-            } footer: {
-                SettingsFootnote("Attic lives in the corner of your screen and in the menu bar. It has no Dock icon.")
+            }
+
+            SettingsGroup(
+                title: String(localized: "Behaviour"),
+                footnote: String(localized: "A light tap on the trackpad when you complete a task or drop something into place.")
+            ) {
+                AtticSwitchRow(
+                    title: String(localized: "Haptics"),
+                    isOn: $settings.hapticsEnabled,
+                    identifier: "setting-haptics"
+                )
             }
 
             // Nothing is shown while the shortcut works: the menu already
             // advertises it. Only a refusal needs explaining.
             if let failure = SettingsVisibility.globalShortcutFailure(globalHotKey.registration) {
-                Section("Shortcut") {
-                    SettingsMessage(text: failure.settingsMessage, tone: .warning)
+                SettingsGroup(title: String(localized: "Shortcut")) {
+                    AtticGroupMessage(text: failure.settingsMessage, tone: .warning)
                         .accessibilityIdentifier("settings-global-shortcut-unavailable")
                 }
             }
