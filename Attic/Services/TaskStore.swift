@@ -942,7 +942,7 @@ final class TaskStore: ObservableObject {
             for replica in try storedTasks(matching: ownerID) {
                 let stamp = replica === current || TaskReplicaSnapshot(replica) == shownCopy
                 let shown = try Self.attachmentLists(of: replica).shown
-                replica.imageReferencesData = try JSONEncoder().encode(shown + imported)
+                replica.imageReferencesData = try Self.encodedAttachments(shown + imported)
                 if stamp { replica.updatedAt = timestamp }
             }
             guard save(owner: errorOwner) else {
@@ -1045,8 +1045,8 @@ final class TaskStore: ObservableObject {
                 let removedList = lists.removed.filter { $0.reference.id != attachmentID }
                     + [RemovedTaskAttachment(reference: reference, removedAt: timestamp)]
                 replica.imageReferencesData = kept.isEmpty && replica.imageReferencesData == nil
-                    ? nil : try JSONEncoder().encode(kept)
-                replica.removedAttachmentsData = try JSONEncoder().encode(removedList)
+                    ? nil : try Self.encodedAttachments(kept)
+                replica.removedAttachmentsData = try Self.encodedAttachments(removedList)
                 if stamp { replica.updatedAt = timestamp }
             }
         } catch {
@@ -1055,6 +1055,17 @@ final class TaskStore: ObservableObject {
             return false
         }
         return save(owner: owner)
+    }
+
+    /// Attachment lists written one replica at a time are encoded here, with
+    /// sorted keys. Plain `JSONEncoder` key order follows an internal
+    /// dictionary whose order can change between two encodes of the same
+    /// value, so replicas holding equal lists could get different bytes and
+    /// look divergent to every replica comparison (and so block cleanup).
+    nonisolated static func encodedAttachments<Value: Encodable>(_ value: Value) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
     }
 
     /// A replica's shown and removed attachments, decoded strictly: callers
@@ -1108,8 +1119,8 @@ final class TaskStore: ObservableObject {
                 let reference = lists.removed.first { $0.reference.id == attachmentID }?.reference ?? entry.reference
                 let shown = lists.shown.contains { $0.id == attachmentID } ? lists.shown : lists.shown + [reference]
                 let remaining = lists.removed.filter { $0.reference.id != attachmentID }
-                replica.imageReferencesData = try JSONEncoder().encode(shown)
-                replica.removedAttachmentsData = remaining.isEmpty ? nil : try JSONEncoder().encode(remaining)
+                replica.imageReferencesData = try Self.encodedAttachments(shown)
+                replica.removedAttachmentsData = remaining.isEmpty ? nil : try Self.encodedAttachments(remaining)
                 if stamp { replica.updatedAt = timestamp }
             }
         } catch {
