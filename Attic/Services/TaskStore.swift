@@ -2047,9 +2047,12 @@ final class TaskStore: ObservableObject {
 
     /// How many main tasks the Done log holds (one count query).
     func doneLogCount() -> Int {
-        // Typed and on its own: Xcode 26.6 times out type-checking this inline.
+        // Xcode 26 times out type-checking three `nil` literals in one
+        // predicate; typed nil constants keep it fast.
+        let noDate: Date? = nil
+        let noParent: UUID? = nil
         let predicate = #Predicate<TaskItem> { item in
-            item.doneLoggedAt != nil && item.parentID == nil && item.deletedAt == nil
+            item.doneLoggedAt != noDate && item.parentID == noParent && item.deletedAt == noDate
         }
         return (try? context.fetchCount(FetchDescriptor(predicate: predicate))) ?? 0
     }
