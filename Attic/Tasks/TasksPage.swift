@@ -40,9 +40,8 @@ struct TasksPage: View {
     }
 
     /// Room under the list for the add bar and its margins.
-    private var footerZone: CGFloat {
-        AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
-    }
+    static let footerZone: CGFloat = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
+    private var footerZone: CGFloat { Self.footerZone }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -64,6 +63,7 @@ struct TasksPage: View {
             model.resetForReveal()
             chrome.bottomControlsHeight(footerZone)
         }
+
         .onChange(of: addBarFocused) { _, focused in chrome.typingLock(focused || model.editingTitleID != nil) }
         .onChange(of: model.editingTitleID) { _, id in chrome.typingLock(addBarFocused || id != nil) }
         // The shell's toast and notices sit above everything in the bottom
@@ -557,32 +557,7 @@ struct TasksPage: View {
                 onSubmit: {}
             )
         } else {
-            AtticAddBar(
-                placeholder: model.addPlaceholder,
-                text: $model.addBar.text,
-                tokens: AtticAddBar.Tokens(
-                    chips: model.addBarChips,
-                    isFocused: $addBarFocused,
-                    actions: AtticTokenFieldActions(
-                        submit: { command in model.submitAddBar(openingPage: command) },
-                        dismissChip: { model.addBar.dismiss($0) },
-                        multilinePaste: { text in
-                            guard let offer = TaskPasteOffer(text) else { return false }
-                            model.pasteOffer = offer
-                            return true
-                        },
-                        escape: {
-                            if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
-                            return leaveAddBar()
-                        },
-                        undoFallback: { model.undo() },
-                        redoFallback: { model.redo() },
-                        edited: { range, replacement in model.addBar.edited(range, replacement: replacement) },
-                        caretMoved: { model.addBarCaret = $0 }
-                    )
-                ),
-                onSubmit: { model.submitAddBar() }
-            )
+            TasksAddBar(model: model, text: model.addBarState, isFocused: $addBarFocused, leave: leaveAddBar)
         }
     }
 
@@ -629,6 +604,61 @@ struct TasksPage: View {
                 : .init(systemName: "tray.and.arrow.down", label: "Move to Backlog", handler: { model.moveToBacklog(ids) }),
             .init(systemName: "trash", label: "Delete", handler: { deleteAndMoveFocus(ids) })
         ])
+    }
+}
+
+// MARK: - Redraws
+
+/// The page redraws from its own observed state (the model, the store); a
+/// parent redrawing (a lock, the panel's key state, another page showing)
+/// passes the same inputs and does not redraw the list. The chrome's
+/// callbacks are the shell's and do not change what the page shows.
+extension TasksPage: Equatable {
+    nonisolated static func == (lhs: TasksPage, rhs: TasksPage) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.model === rhs.model && lhs.store === rhs.store && lhs.layout == rhs.layout
+                && lhs.addBarFocused == rhs.addBarFocused
+        }
+    }
+}
+
+// MARK: - Add bar
+
+/// The add bar, observing its own text: a keystroke redraws the bar, never
+/// the list above it (spec: one frame per keystroke).
+private struct TasksAddBar: View {
+    @ObservedObject var model: TasksPageModel
+    @ObservedObject var text: TasksAddBarState
+    @Binding var isFocused: Bool
+    let leave: () -> Bool
+
+    var body: some View {
+        AtticAddBar(
+            placeholder: model.addPlaceholder,
+            text: $text.text.text,
+            tokens: AtticAddBar.Tokens(
+                chips: text.text.chips(parser: model.parser, caret: text.caret),
+                isFocused: $isFocused,
+                actions: AtticTokenFieldActions(
+                    submit: { command in model.submitAddBar(openingPage: command) },
+                    dismissChip: { text.text.dismiss($0) },
+                    multilinePaste: { pasted in
+                        guard let offer = TaskPasteOffer(pasted) else { return false }
+                        model.pasteOffer = offer
+                        return true
+                    },
+                    escape: {
+                        if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
+                        return leave()
+                    },
+                    undoFallback: { model.undo() },
+                    redoFallback: { model.redo() },
+                    edited: { range, replacement in text.text.edited(range, replacement: replacement) },
+                    caretMoved: { text.caret = $0 }
+                )
+            ),
+            onSubmit: { model.submitAddBar() }
+        )
     }
 }
 

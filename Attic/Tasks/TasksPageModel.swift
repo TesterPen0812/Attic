@@ -61,6 +61,13 @@ struct TasksDoneDay: Identifiable, Equatable {
     let rows: [TasksListRow]
 }
 
+/// The add bar's text and insertion point. Only the add bar observes it.
+@MainActor
+final class TasksAddBarState: ObservableObject {
+    @Published var text = TaskAddBarText()
+    @Published var caret: Int?
+}
+
 /// The Tasks page's state and every action it takes. All changes go through
 /// `AtticLibrary`, so each is one undoable step in the Tasks history (the
 /// same route ⌘Z, the toast and agents use). Lives as long as the panel
@@ -93,8 +100,17 @@ final class TasksPageModel: ObservableObject {
     /// Finished rows held where they were for about a second, with the
     /// index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: Int] = [:]
-    @Published var addBar = TaskAddBarText()
-    @Published var addBarCaret: Int?
+    /// What is typed in the add bar, kept apart from the page's published
+    /// state: typing redraws the bar, not the list.
+    let addBarState = TasksAddBarState()
+    var addBar: TaskAddBarText {
+        get { addBarState.text }
+        set { addBarState.text = newValue }
+    }
+    var addBarCaret: Int? {
+        get { addBarState.caret }
+        set { addBarState.caret = newValue }
+    }
     @Published var pasteOffer: TaskPasteOffer?
     @Published var doneSearch = ""
     /// Loaded pages of the Done log (lazily, a page at a time).
@@ -264,9 +280,11 @@ final class TasksPageModel: ObservableObject {
     /// opened to search or to show a task: then it stays where that put it
     /// until the panel hides.
     func resetForReveal() {
-        tab = revealTab ?? .now
-        if revealTab == nil { selection = [] }
-        cancelEditing()
+        // Assign only what changes: every assignment redraws the page.
+        let target = revealTab ?? .now
+        if tab != target { tab = target }
+        if revealTab == nil, !selection.isEmpty { selection = [] }
+        if editingTitleID != nil || newSubtaskParentID != nil || failedSave != nil { cancelEditing() }
     }
 
     /// Where the current reveal opened the page (Search, an agent's `show`);

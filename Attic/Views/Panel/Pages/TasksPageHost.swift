@@ -35,6 +35,8 @@ struct TasksPageHost: View {
     /// The add bar's focus. The shell owns it so quick capture and page
     /// switches can move focus into or out of the page.
     let primaryInputFocus: FocusState<Bool>.Binding
+    /// False while another page shows and this one is kept built behind it.
+    var isCurrent = true
 
     @State private var addBarFocused = false
     /// The shell's one toast host: the page's Undo toasts show there.
@@ -52,6 +54,13 @@ struct TasksPageHost: View {
                 typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) }
             )
         )
+        .equatable()
+        // Kept built behind another page, it is opened again when it shows.
+        .onChange(of: isCurrent) { _, current in
+            guard current else { return }
+            model.resetForReveal()
+            chromeInteractionState.bottomControlsHeight = TasksPage.footerZone
+        }
         .onAppear {
             // Task pages arrive in Phase 3; until then "Open page" opens the
             // task's detail panel on its files (the old subpanel stays only
