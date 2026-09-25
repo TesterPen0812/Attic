@@ -250,6 +250,9 @@ struct AtticGalleryView: View {
             }
             .navigationTitle(family.title)
         }
+        // Native menus (Settings pop-ups, context menus) follow the chosen
+        // mode, not the Mac's.
+        .atticWindowAppearance(context.mode, appWide: true)
     }
 }
 

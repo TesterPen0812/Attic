@@ -78,6 +78,49 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         spin(0.1)
     }
 
+    // MARK: Window appearance
+
+    /// Native menus follow the appearance chosen in Attic, not the Mac's:
+    /// with the system in Dark, a Light Attic window (and its pop-up
+    /// buttons) is aqua, and app-wide, a menu is aqua too.
+    func testNativeMenusFollowTheChosenAppearance() throws {
+        for (mode, expected) in [(AtticDesignContext.Mode?.some(.light), NSAppearance.Name.aqua), (.dark, .darkAqua), (nil, .darkAqua)] {
+            let hosting = NSHostingView(rootView: AnyView(Color.clear.frame(width: 200, height: 60).atticWindowAppearance(mode)))
+            hosting.frame = CGRect(x: 0, y: 0, width: 200, height: 60)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            // Stand in for a Mac in Dark mode (without touching the whole
+            // app's appearance, which other hosted tests share): the window
+            // starts dark, as it would inherit from a Dark system.
+            window.appearance = NSAppearance(named: .darkAqua)
+            let popUp = NSPopUpButton(frame: CGRect(x: 10, y: 10, width: 120, height: 24), pullsDown: false)
+            popUp.addItems(withTitles: ["Solid", "Glass"])
+            window.contentView = hosting
+            hosting.addSubview(popUp)
+            windows.append(window)
+            hosting.layoutSubtreeIfNeeded()
+            spin()
+            let caption = mode?.rawValue ?? "system"
+            if let mode {
+                XCTAssertEqual(window.appearance?.name, expected, caption)
+                XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), expected, caption)
+                XCTAssertEqual(popUp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), expected, "A pop-up's menu draws in its control's appearance · \(mode)")
+            } else {
+                XCTAssertNil(window.appearance, "nil follows the system")
+            }
+        }
+        // App-wide (the gallery): a menu with no window of its own follows
+        // too. Restored at once.
+        let previous = NSApp.appearance
+        AtticWindowAppearance.applyToApp(.light)
+        let menuAppearance = NSMenu(title: "Context").effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+        let appAppearance = NSApp.appearance?.name
+        NSApp.appearance = previous
+        spin()
+        XCTAssertEqual(appAppearance, .aqua)
+        XCTAssertEqual(menuAppearance, .aqua)
+    }
+
     // MARK: Native controls
 
     /// The pieces the spec keeps native (text field, switch, slider, pop-up

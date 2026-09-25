@@ -14,8 +14,14 @@ enum AtticInk: String, CaseIterable, Sendable {
     case icon, chromeIcon, glyph, chevron
     // Meaning.
     case accent, accentText, dueText, warningText
+    /// Priority is the status ring's weight and a grey that deepens with
+    /// it (None the faintest, Medium the darkest); only High is red.
     case priorityNone, priorityLow, priorityMedium, priorityHigh
+    /// The subtask checkbox's done fill and its check.
     case doneFill, onDone
+    /// The check on a done task's quiet grey disc (`doneDisc`): the disc is
+    /// decoration, the check carries the state and keeps 3 : 1 on it.
+    case doneCheck
     /// The one near-black (Light) / near-white (Dark) primary fill: the send
     /// button and the drag-stack count. Near-black is never used for chips.
     case inverseFill, onInverse
@@ -48,7 +54,7 @@ enum AtticInk: String, CaseIterable, Sendable {
             .text
         case .icon, .chromeIcon, .glyph, .chevron, .accent,
              .priorityNone, .priorityLow, .priorityMedium, .priorityHigh,
-             .doneFill, .onDone, .inverseFill, .disabledIcon:
+             .doneFill, .onDone, .doneCheck, .inverseFill, .disabledIcon:
             .nonText
         }
     }
@@ -219,6 +225,9 @@ struct AtticColorTokens: Equatable, Sendable {
     let chipSelected: AtticRGBA
     let chipHover: AtticRGBA
     let skeleton: AtticRGBA
+    /// A done task's quiet disc: opaque, a step off the surface, not a
+    /// colour of meaning (the `doneCheck` on it is what must read).
+    let doneDisc: AtticRGBA
 
     // MARK: Materials
 
@@ -395,7 +404,6 @@ struct AtticColorTokens: Equatable, Sendable {
         if inks[.label]!.contrast(on: basePanel) < helperOnBase * 1.06 {
             inks[.label] = inks[.helper]!.tuned(toContrast: helperOnBase * 1.06, against: [basePanel], lighten: dark)
         }
-        inks[.priorityNone] = inks[.icon]!
         let chromeBackgrounds = [baseChrome, selected.over(baseChrome), hover.over(baseChrome)]
         for ink in [AtticInk.chromeHeading, .chromeBody, .chromeHint] {
             inks[ink] = inks[ink]!.tuned(toContrast: target(ink), against: chromeBackgrounds, lighten: dark)
@@ -417,8 +425,14 @@ struct AtticColorTokens: Equatable, Sendable {
             .tuned(toContrast: target(.accentText), against: meaning + tagBackgrounds, lighten: dark)
         let pri = Ladder.priorityHues(dark: dark)
         inks[.priorityHigh] = pri.high.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
-        inks[.priorityMedium] = pri.medium.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
-        inks[.priorityLow] = pri.low.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        // Priority greys, on the rows the ring sits on (as High's red): None
+        // the faintest grey at the non-text floor, Low and Medium a step and
+        // two beyond it, as in the approved status sheet.
+        inks[.priorityNone] = (dark ? AtticRGBA(0x6C6C6F) : AtticRGBA(0xA2A2A4)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        let noneOnBase = inks[.priorityNone]!.contrast(on: basePanel)
+        for (ink, step) in Self.priorityGreySteps(dark: dark) {
+            inks[ink] = inks[.priorityNone]!.tuned(toContrast: noneOnBase * step, against: [basePanel], lighten: dark)
+        }
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
         // Done is faded as in v4 (#C9CBCE / a dim fill), held at 3 : 1.
@@ -430,13 +444,18 @@ struct AtticColorTokens: Equatable, Sendable {
         for fill in [AtticInk.doneFill, .disabledIcon] {
             inks[fill] = inks[fill]!.tuned(toContrast: nonTextTarget, against: [inks[.onDone]!], lighten: dark)
         }
+        // A done task: a quiet grey disc (about 0.88 white in Light, 0.32 in
+        // Dark) with a darker (Light) or lighter (Dark) grey check at 3 : 1.
+        let doneDisc: AtticRGBA = dark ? AtticRGBA(ic ? 0x5A5A5D : 0x525254) : AtticRGBA(ic ? 0xD8D8DA : 0xE1E1E3)
+        inks[.doneCheck] = (dark ? AtticRGBA(0xA9A9AC) : AtticRGBA(0x737376))
+            .tuned(toContrast: ic ? 4.5 : nonTextTarget, against: [doneDisc], lighten: dark)
 
         func panelPairs() -> [AtticSurfaceModel.Pair] {
             // Tag fills follow the accent as it is now (it may be retuned).
             AtticSurfaceModel.readabilityPairs(
                 inks: inks, hover: hover, selected: selected, pressed: pressed,
                 controlFace: recipes.rest.face.over(basePanel), glassFace: glassFace, glassDisabled: glassDisabled, glassPressed: glassPressed,
-                chipSelected: chipSelected, chipHover: chipHover,
+                chipSelected: chipSelected, chipHover: chipHover, doneDisc: doneDisc,
                 recessed: recessed,
                 tagFill: inks[.accent]!.withAlpha(dark ? 0.16 : 0.10),
                 tagFillSelected: inks[.accent]!.withAlpha(dark ? 0.26 : 0.18)
@@ -454,11 +473,21 @@ struct AtticColorTokens: Equatable, Sendable {
         // no legacy grey and plays no part in the coverage.
         legacy[.accentText] = (key.palette == .original ? legacy[.helper]! : accentBase)
             .tuned(toContrast: textTarget, against: meaning + tagBackgrounds, lighten: dark)
+        // Low and Medium were blue and orange at the floor when PR #5 was
+        // measured; the greys that replaced them are never harder, and the
+        // coverage keeps the colours it was set with.
+        let legacyPriority: [AtticInk: AtticRGBA] = [
+            .priorityNone: inks[.icon]!,
+            .priorityLow: pri.low.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark),
+            .priorityMedium: pri.medium.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        ]
         func coveragePairs(_ pairs: [AtticSurfaceModel.Pair]) -> [AtticSurfaceModel.Pair] {
             // Labels on Liquid Glass are kept readable by their inks (tuned
             // against the worst glass face), never by making the surface
             // less see-through: the coverage stays the PR #5 look.
-            let pairs = pairs.filter { !$0.onGlass }
+            let pairs = pairs.filter { !$0.onGlass && $0.ink != .doneCheck }.map { pair in
+                legacyPriority[pair.ink].map { AtticSurfaceModel.Pair(ink: pair.ink, foreground: $0, overlays: pair.overlays, onGlass: pair.onGlass) } ?? pair
+            }
             guard !ic else { return pairs }
             return pairs.compactMap { pair in
                 guard pair.ink.isSecondaryText else { return pair }
@@ -508,6 +537,12 @@ struct AtticColorTokens: Equatable, Sendable {
                 }
             }
         }
+        // The surface tuning can bring the priority greys together (each
+        // stops at the floor): keep Low and Medium a step beyond None.
+        let noneOnPanel = inks[.priorityNone]!.contrast(on: basePanel)
+        for (ink, step) in Self.priorityGreySteps(dark: dark) where inks[ink]!.contrast(on: basePanel) < noneOnPanel * step {
+            inks[ink] = inks[ink]!.tuned(toContrast: noneOnPanel * step, against: [basePanel], lighten: dark)
+        }
 
         return AtticColorTokens(
             context: key,
@@ -526,6 +561,7 @@ struct AtticColorTokens: Equatable, Sendable {
             chipSelected: chipSelected,
             chipHover: chipHover,
             skeleton: dark ? .white(0.08) : .black(0.06),
+            doneDisc: doneDisc,
             controlBase: basePanel,
             raised: recipes.rest,
             raisedHover: recipes.hover,
@@ -542,6 +578,13 @@ struct AtticColorTokens: Equatable, Sendable {
             dragShadow: .black(dark ? 0.45 : 0.16),
             inks: inks
         )
+    }
+
+    /// Low and Medium's contrast on the panel as multiples of None's: wider
+    /// steps in Light (the reference sheet's greys), gentler in Dark, where
+    /// the same multiples would reach almost white.
+    private static func priorityGreySteps(dark: Bool) -> [(AtticInk, Double)] {
+        dark ? [(.priorityLow, 1.2), (.priorityMedium, 1.5)] : [(.priorityLow, 1.35), (.priorityMedium, 1.85)]
     }
 
     /// The Craft-style recipe, matched to Craft's controls by their measured

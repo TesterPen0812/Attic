@@ -137,7 +137,7 @@ final class AtticDesignSystemTests: XCTestCase {
             let tokens = context.tokens
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
-                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover,
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, doneDisc: tokens.doneDisc,
                 recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
             )
             let onControls = pairs.filter { $0.overlays.first == tokens.controlFace || $0.onGlass }
@@ -435,21 +435,98 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testCheckMarksAreMeasuredAgainstTheirFill() throws {
         for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark), AtticDesignContext(mode: .light, surface: .glass, tint: .bold)] {
-            // The model: the check keeps 3 : 1 on the done fill and on the
-            // disabled fill.
+            // The model: the subtask check keeps 3 : 1 on the done fill and
+            // on the disabled fill, and a done task's check on its disc.
             let tokens = context.tokens
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.doneFill)), 3, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.disabledIcon)), 3, context.caption)
-            // The pixels: a drawn check is measured and passes.
+            XCTAssertGreaterThanOrEqual(tokens.ink(.doneCheck).contrast(on: tokens.doneDisc), 3, context.caption)
+            // The pixels: a drawn check is measured and passes. The done
+            // task's disc is decoration (its check is judged); the subtask
+            // checkbox's fill is judged as well as its check.
             let drawn = try pixelReport(HStack { AtticStatusCircle(state: .done, priority: .high); AtticSubtaskCheckbox(isDone: true) }, context: context)
-            XCTAssertEqual(drawn.eligibleGlyphs, 4, "Two fills and two check marks")
-            XCTAssertEqual(drawn.glyphsMeasured, 4)
+            XCTAssertEqual(drawn.eligibleGlyphs, 3, "Two check marks and the checkbox's fill")
+            XCTAssertEqual(drawn.glyphsMeasured, 3)
             XCTAssertTrue(drawn.failures.isEmpty, drawn.summary)
         }
         // A deliberately absent check (not yet drawn) fails: its probe finds
         // no glyph pixels on the fill.
         let absent = try pixelReport(AtticStatusCircle(state: .done, priority: .high, checkProgress: 0))
         XCTAssertTrue(absent.failures.keys.contains { $0.kind == .unmeasured && $0.detail.contains("check mark") }, absent.summary)
+    }
+
+    // MARK: Status circle
+
+    /// Priority is the ring's weight and a grey that deepens with it; only
+    /// High is red, and under Differentiate Without Colour High is heavier
+    /// than Medium, so it never relies on the red.
+    func testStatusRingShowsPriorityByWeightAndGrey() {
+        let m = AtticStatusCircleMetrics.self
+        for ic in [false, true] {
+            let widths = AtticPriority.allCases.map { m.ringWidth($0, increaseContrast: ic, differentiateWithoutColor: false) }
+            XCTAssertEqual(widths, widths.sorted(), "Weight never falls as priority rises")
+            XCTAssertLessThan(widths[0], widths[1])
+            XCTAssertLessThan(widths[1], widths[2])
+            XCTAssertGreaterThan(
+                m.ringWidth(.high, increaseContrast: ic, differentiateWithoutColor: true),
+                m.ringWidth(.medium, increaseContrast: ic, differentiateWithoutColor: true) + 0.5,
+                "Without colour, High is clearly heavier than Medium"
+            )
+        }
+        for context in AtticAppearanceCheck.allContexts() {
+            let tokens = context.tokens
+            let base = tokens.panel.base
+            let none = tokens.ink(.priorityNone).contrast(on: base)
+            let low = tokens.ink(.priorityLow).contrast(on: base)
+            let medium = tokens.ink(.priorityMedium).contrast(on: base)
+            XCTAssertGreaterThanOrEqual(none, 3, context.caption)
+            XCTAssertLessThan(none, low, context.caption)
+            XCTAssertLessThan(low, medium, context.caption)
+            for ink in [AtticInk.priorityNone, .priorityLow, .priorityMedium] {
+                XCTAssertLessThan(tokens.ink(ink).saturation, 0.12, "\(ink) is a grey · \(context.caption)")
+            }
+            XCTAssertGreaterThan(tokens.ink(.priorityHigh).saturation, 0.4, "High is red · \(context.caption)")
+        }
+    }
+
+    /// In progress is a wedge of the share of subtasks ticked, at least a
+    /// quarter, and a quarter ("started") with no subtasks; VoiceOver says
+    /// how many are ticked.
+    func testInProgressWedgeFollowsTheSubtasks() {
+        let m = AtticStatusCircleMetrics.self
+        XCTAssertEqual(m.wedgeSweep(nil), 0.25)
+        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((0, 3))), 0.25)
+        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((1, 3))), 1.0 / 3, accuracy: 1e-9)
+        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((2, 3))), 2.0 / 3, accuracy: 1e-9)
+        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((3, 3))), 1)
+        XCTAssertNil(AtticStatusCircle.progress((0, 0)))
+        XCTAssertNil(AtticStatusCircle.progress(nil))
+        XCTAssertEqual(AtticStatusCircle.spokenState(.inProgress, subtasks: (1, 3)), "in progress, 1 of 3 subtasks")
+        XCTAssertEqual(AtticStatusCircle.spokenState(.inProgress, subtasks: nil), "in progress")
+        XCTAssertEqual(AtticStatusCircle.spokenState(.todo, subtasks: (1, 3)), "to do")
+        // The wedge keeps clear of the heaviest ring.
+        let heaviest = m.ringWidth(.high, increaseContrast: true, differentiateWithoutColor: true)
+        XCTAssertGreaterThanOrEqual(m.wedgeInset(ringWidth: heaviest), m.edgeInset + heaviest + m.wedgeGap)
+        // The wedge's path grows with the sweep and is a full disc at 1.
+        let rect = CGRect(x: 0, y: 0, width: 16, height: 16)
+        /// The drawn area, in 4× pixels.
+        func area(_ sweep: Double) -> CGFloat {
+            let context = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 64,
+                                    space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+            context.scaleBy(x: 4, y: 4)
+            context.addPath(AtticWedge(sweep: sweep, inset: 3.2).path(in: rect).cgPath)
+            context.setFillColor(gray: 1, alpha: 1)
+            context.fillPath()
+            let pixels = context.data!.assumingMemoryBound(to: UInt8.self)
+            return (0..<(64 * 64)).reduce(0) { $0 + CGFloat(pixels[$1]) / 255 }
+        }
+        XCTAssertEqual(area(0.25) / area(1), 0.25, accuracy: 0.01)
+        XCTAssertEqual(area(2.0 / 3) / area(1), 2.0 / 3, accuracy: 0.01)
+        XCTAssertEqual(area(0.999_999), area(1), accuracy: 2, "No jump as the sweep reaches the full disc")
+        // Clockwise from 12 o'clock: a quarter covers the upper right.
+        let quarter = AtticWedge(sweep: 0.25, inset: 3.2).path(in: rect)
+        XCTAssertTrue(quarter.contains(CGPoint(x: 10, y: 6)))
+        XCTAssertFalse(quarter.contains(CGPoint(x: 6, y: 6)))
     }
 
     func testCapturePassesOnlyWhenEveryGlyphWasMeasured() {
@@ -494,5 +571,14 @@ final class AtticDesignSystemTests: XCTestCase {
             layoutSize: CGSize(width: 36, height: 32), context: .default
         )
         XCTAssertGreaterThan(abs((wrong?.radius ?? 10) - 10), 1)
+    }
+}
+
+private extension AtticRGBA {
+    /// HSV saturation: 0 for a grey.
+    var saturation: Double {
+        let high = max(red, green, blue)
+        let low = min(red, green, blue)
+        return high == 0 ? 0 : (high - low) / high
     }
 }

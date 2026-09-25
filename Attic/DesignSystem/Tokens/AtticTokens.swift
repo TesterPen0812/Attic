@@ -262,7 +262,8 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
     case pageSwitch
     /// Now, Backlog and Done; note and All notes: 250 ms slide. RM: crossfade.
     case slide
-    /// Task done: the circle fills and the check draws (200 ms). RM: fade.
+    /// Task done: the wedge sweeps to a full disc, then the check draws
+    /// (200 ms each, springs, so they reverse smoothly). RM: fade.
     case complete
     /// The done row slides to the done group after about a second (250 ms).
     case doneSlide
@@ -365,8 +366,9 @@ enum AtticTaskState: String, CaseIterable, Sendable {
     }
 }
 
-/// Priority is shown only by the circle's colour (plus a small mark under
-/// Differentiate Without Colour).
+/// Priority is shown only by the status ring: its weight and a grey that
+/// deepens with it, with High alone in red (and heavier still under
+/// Differentiate Without Colour, so it never relies on the red).
 enum AtticPriority: String, CaseIterable, Sendable {
     case none, low, medium, high
 
@@ -376,16 +378,6 @@ enum AtticPriority: String, CaseIterable, Sendable {
         case .low: String(localized: "low priority")
         case .medium: String(localized: "medium priority")
         case .high: String(localized: "high priority")
-        }
-    }
-
-    /// Dots in the Differentiate Without Colour mark.
-    var markCount: Int {
-        switch self {
-        case .none: 0
-        case .low: 1
-        case .medium: 2
-        case .high: 3
         }
     }
 }

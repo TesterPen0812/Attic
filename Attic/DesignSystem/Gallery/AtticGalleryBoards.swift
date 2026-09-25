@@ -640,39 +640,43 @@ private struct SmallControlsBoard: View {
 private struct StatusCircleBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
+    /// Ticked of three subtasks, and none at all.
+    private static let fractions: [(title: String, subtasks: (done: Int, total: Int)?)] = [
+        ("0 of 3", (0, 3)), ("1 of 3", (1, 3)), ("2 of 3", (2, 3)), ("No subtasks", nil)
+    ]
+
     var body: some View {
-        BoardHeading(title: "States × priorities · 16 pt")
+        BoardHeading(title: "States × priorities · 16 pt · weight shows priority, only High is red")
         VStack(alignment: .leading, spacing: 10) {
             ForEach(AtticTaskState.allCases, id: \.self) { state in
                 AtticSpecimen(stateTitle(state), fullWidth: true) {
-                    HStack(spacing: 22) {
-                        ForEach(AtticPriority.allCases, id: \.self) { priority in
-                            VStack(spacing: 4) {
-                                AtticStatusCircle(state: state, priority: priority)
-                                AtticText(verbatim: priority.rawValue.capitalized, style: .rowMeta, ink: .helper)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
+                    priorities { AtticStatusCircle(state: state, priority: $0) }
                 }
             }
         }
-        BoardHeading(title: "Completion · fill fades in, check draws (200 ms)")
-        AtticSpecimen("Frames: 0, 35, 70, 100 %", fullWidth: true) {
+        BoardHeading(title: "In progress · the wedge is the share of subtasks ticked (at least a quarter)")
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Self.fractions, id: \.title) { fraction in
+                AtticSpecimen(fraction.title, fullWidth: true) {
+                    priorities { AtticStatusCircle(state: .inProgress, priority: $0, progress: AtticStatusCircle.progress(fraction.subtasks)) }
+                }
+            }
+        }
+        BoardHeading(title: "Completion · the wedge sweeps to a full disc, then the check draws")
+        AtticSpecimen("Frames from 1 of 3: sweep 0, 50, 100 %, then check 50, 100 %", fullWidth: true) {
             HStack(spacing: 22) {
-                ForEach([0.0, 0.35, 0.7, 1.0], id: \.self) { progress in
-                    // Frames of a 200 ms animation: the in-between frames are
+                ForEach(Array([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.0, 0.5), (1.0, 1.0)].enumerated()), id: \.offset) { _, frame in
+                    // Frames of the animation: the in-between frames are
                     // transient, so only the settled frame is judged.
-                    AtticStatusCircle(state: .done, priority: .high, checkProgress: progress)
-                        .opacity(progress == 0 ? 0.25 : min(1, 0.4 + progress))
-                        .transformEnvironment(\.atticProbesDisabled) { if progress < 1 { $0 = true } }
+                    AtticStatusCircle(state: .done, priority: .high, progress: 1.0 / 3, checkProgress: frame.1, completionProgress: frame.0)
+                        .transformEnvironment(\.atticProbesDisabled) { if frame.1 < 1 { $0 = true } }
                 }
             }
             .padding(.horizontal, 16)
         }
-        AtticSpecimen("Live: click the circle to advance", fullWidth: true) {
+        AtticSpecimen("Live: click the circle to advance (1 of 3 subtasks)", fullWidth: true) {
             HStack(spacing: 10) {
-                AtticStatusButton(state: demo.liveState, priority: .medium) {
+                AtticStatusButton(state: demo.liveState, priority: .medium, subtasks: (1, 3)) {
                     demo.liveState = switch demo.liveState {
                     case .todo: .inProgress
                     case .inProgress: .done
@@ -691,23 +695,34 @@ private struct StatusCircleBoard: View {
             }
             .padding(.horizontal, 10)
         }
-        AtticSpecimen("Differentiate Without Colour mark", fullWidth: true) {
-            HStack(spacing: 22) {
-                ForEach(AtticPriority.allCases, id: \.self) { priority in
-                    AtticStatusCircle(state: .todo, priority: priority)
-                }
+        AtticSpecimen("Differentiate Without Colour: High is heavier than Medium", fullWidth: true) {
+            VStack(alignment: .leading, spacing: 8) {
+                priorities { AtticStatusCircle(state: .todo, priority: $0) }
+                priorities { AtticStatusCircle(state: .inProgress, priority: $0, progress: 1.0 / 3) }
             }
-            .padding(.horizontal, 16)
             .transformEnvironment(\.atticDesign) { $0.differentiateWithoutColor = true }
         }
     }
 
+    /// One circle per priority, labelled.
+    private func priorities(@ViewBuilder _ circle: @escaping (AtticPriority) -> some View) -> some View {
+        HStack(spacing: 22) {
+            ForEach(AtticPriority.allCases, id: \.self) { priority in
+                VStack(spacing: 4) {
+                    circle(priority)
+                    AtticText(verbatim: priority.rawValue.capitalized, style: .rowMeta, ink: .helper)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
     private func stateTitle(_ state: AtticTaskState) -> String {
         switch state {
-        case .todo: "To do: ring in the priority colour"
-        case .inProgress: "In progress: half filled"
-        case .done: "Done: filled, with a check"
-        case .backlog: "Backlog: dashed ring"
+        case .todo: "To do: a grey ring, heavier and darker with priority; High is red"
+        case .inProgress: "In progress, no subtasks: a quarter wedge (started)"
+        case .done: "Done: a quiet grey disc with a darker check"
+        case .backlog: "Backlog: a dashed grey ring"
         }
     }
 }

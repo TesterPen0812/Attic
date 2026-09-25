@@ -64,21 +64,45 @@ enum AtticHairline {
 
 /// The status circle (spec § The status circle): 16 pt.
 enum AtticStatusCircleMetrics {
-    static let lineWidth: CGFloat = 1.5
-    static let lineWidthIncreased: CGFloat = 2
     /// Keeps the ring's outer edge half a point inside the 16 pt frame.
     static let edgeInset: CGFloat = 0.5
-    /// Gap between the ring and the in-progress half disc.
-    static let halfDiscGap: CGFloat = 1.75
+    /// Priority is the ring's weight (only High is also red): None 1.2 pt,
+    /// Low 1.5, Medium and High 1.9. Under Differentiate Without Colour High
+    /// is heavier still (2.6 pt), so it never relies on its red; Increase
+    /// Contrast adds 0.4 pt to every ring.
+    static func ringWidth(_ priority: AtticPriority, increaseContrast: Bool, differentiateWithoutColor: Bool) -> CGFloat {
+        let width: CGFloat = switch priority {
+        case .none: 1.2
+        case .low: 1.5
+        case .medium: 1.9
+        case .high: differentiateWithoutColor ? 2.6 : 1.9
+        }
+        return width + (increaseContrast ? 0.4 : 0)
+    }
+    /// In progress: the wedge's inset from the frame, and the least gap it
+    /// keeps inside a heavy ring.
+    static let wedgeInset: CGFloat = 3.2
+    static let wedgeGap: CGFloat = 0.7
+    /// The least wedge: a quarter, meaning "started" (no subtasks, or none
+    /// ticked yet).
+    static let minimumWedge = 0.25
     static let checkLineWidth: CGFloat = 1.6
-    /// Inset of the check inside the filled circle.
+    /// Inset of the check inside the done disc.
     static let checkInset: CGFloat = 4.25
-    /// Backlog's dashed ring: dash and gap.
-    static let backlogDash: [CGFloat] = [2.1, 2.3]
-    /// Differentiate Without Colour: 1–3 dots beside the circle.
-    static let priorityDot: CGFloat = 2.5
-    static let priorityDotSpacing: CGFloat = 1.5
-    static let priorityMarkOffset: CGFloat = 5
+    /// Backlog's dashed ring: weight and dash / gap.
+    static let backlogLineWidth: CGFloat = 1.4
+    static let backlogLineWidthIncreased: CGFloat = 1.8
+    static let backlogDash: [CGFloat] = [2.2, 2.2]
+
+    static func wedgeInset(ringWidth: CGFloat) -> CGFloat {
+        max(wedgeInset, edgeInset + ringWidth + wedgeGap)
+    }
+
+    /// The wedge's share of the disc: the share of subtasks ticked, at
+    /// least a quarter; a quarter when the task has no subtasks.
+    static func wedgeSweep(_ progress: Double?) -> Double {
+        min(1, max(minimumWedge, progress ?? 0))
+    }
 }
 
 /// The rounded-square subtask checkbox and its row.
