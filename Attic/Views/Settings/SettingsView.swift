@@ -26,35 +26,67 @@ enum AgentSetupPrompt {
     }
 }
 
+/// Where the Settings window's pieces sit (spec § Settings). The window's
+/// traffic lights are moved onto the page title's line
+/// (`SettingsWindowController`), so these also place them.
+enum SettingsChromeLayout {
+    /// The back button's centre, from the window's top edge: the content
+    /// card's 8 pt inset, the header's 12 pt padding, half the 34 pt button.
+    static let titleLineCenterY: CGFloat = AtticSpacing.settingsCardInset + AtticSpacing.s12
+        + AtticControlSize.settingsBackButton.height / 2
+    /// The close button's leading edge.
+    static let trafficLightsLeading: CGFloat = 20
+    /// The sidebar's first heading starts below the traffic lights.
+    static let sidebarTop: CGFloat = titleLineCenterY + 22
+    /// About sits at the bottom, apart from the groups by space alone.
+    static let sidebarBottom: CGFloat = AtticSpacing.s12
+    /// Space between the sidebar's groups.
+    static let sidebarGroupGap: CGFloat = AtticSpacing.s16
+}
+
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var loginItemService: LoginItemService
     @ObservedObject var agentServer: AgentServer
     @ObservedObject var globalHotKey: GlobalHotKey
+    let library: AtticLibrary?
 
-    @AppStorage(SettingsSection.selectionStorageKey)
-    private var selectedSectionRawValue = SettingsSection.general.rawValue
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @StateObject private var navigation = SettingsNavigation()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        NavigationSplitView {
-            SettingsSidebar(selection: sidebarSelection)
-                .navigationSplitViewColumnWidth(min: 172, ideal: 196, max: 230)
-        } detail: {
-            detail
+        HStack(spacing: 0) {
+            SettingsSidebar()
+                .frame(width: AtticLayout.settingsSidebarWidth)
+            AtticContentCard {
+                page
+                    .id(navigation.selection)
+                    .transition(.opacity)
+            }
+            // 8 pt from the window's edges; the sidebar rows' own 8 pt inset
+            // makes the gap to the sidebar.
+            .padding([.top, .bottom, .trailing], AtticSpacing.settingsCardInset)
+            .animation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion), value: navigation.selection)
         }
-        .navigationSplitViewStyle(.balanced)
+        .background(AtticSidebarBackground())
+        .ignoresSafeArea()
         .frame(
             minWidth: SettingsWindowLayout.minimumContentSize.width,
             minHeight: SettingsWindowLayout.minimumContentSize.height
         )
-        .tint(settingsAccentColor)
-        .accentColor(settingsAccentColor)
-        .environment(
-            \.atticPanelUsesSystemAccent,
-            settings.panelTheme.usesSystemAccent
+        .environmentObject(navigation)
+        // Customisation changes only the background and the accent; the
+        // window follows the chosen Light, Dark or System, and so do its
+        // native menus (the pop-up rows), set on the window itself.
+        .atticDesignFromSystem(
+            palette: settings.panelTheme,
+            surface: settings.panelSurfaceStyle,
+            tint: settings.panelTint,
+            tintLength: settings.panelTintLength,
+            hapticsEnabled: settings.hapticsEnabled
         )
+        .atticWindowAppearance(SettingsAppearance.mode(for: settings.appearance))
+        .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
         .onAppear {
             loginItemService.refresh()
         }
@@ -63,94 +95,105 @@ struct SettingsView: View {
         }
     }
 
-    private var sidebarSelection: Binding<SettingsSection?> {
-        Binding(
-            get: { selectedSection },
-            set: { newValue in
-                guard let newValue else { return }
-                selectedSectionRawValue = newValue.rawValue
-            }
-        )
-    }
-
-    private var selectedSection: SettingsSection {
-        SettingsSection.restored(from: selectedSectionRawValue)
-    }
-
-    /// Settings follow the panel's palette accent, as they always have.
-    private var settingsAccentColor: Color {
-        settings.panelTheme.usesSystemAccent
-            ? Color.accentColor
-            : settings.panelTheme.palette(
-                for: colorScheme,
-                contrast: colorSchemeContrast
-            ).accentColor
-    }
-
     @ViewBuilder
-    private var detail: some View {
-        switch selectedSection {
+    private var page: some View {
+        switch navigation.selection {
         case .general:
-            GeneralSettingsView(
-                loginItemService: loginItemService,
-                globalHotKey: globalHotKey
-            )
+            GeneralSettingsView(settings: settings, loginItemService: loginItemService, globalHotKey: globalHotKey)
         case .panel:
             PanelSettingsView(settings: settings)
         case .appearance:
             AppearanceSettingsView(settings: settings)
+        case .recentlyDeleted:
+            RecentlyDeletedSettingsView(library: library)
         case .agentAccess:
-            AgentAccessSettingsView(
-                settings: settings,
-                agentServer: agentServer
-            )
+            AgentAccessSettingsView(settings: settings, agentServer: agentServer)
         case .about:
             AboutSettingsView()
         }
     }
 }
 
-/// The sidebar: Attic's identity at the top, then one tinted row per pane.
+/// Attic's Light, Dark or System as a design mode (nil follows the Mac).
+enum SettingsAppearance {
+    static func mode(for preference: AppearancePreference) -> AtticDesignContext.Mode? {
+        switch preference {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+/// The translucent sidebar: App (General, Panel, Appearance, Recently
+/// Deleted), Connections (Agent Access, with its quiet hint), and About at
+/// the bottom. ↑ ↓ move between pages once the sidebar has keyboard focus;
+/// its ring shows only when the keyboard put it there.
 private struct SettingsSidebar: View {
-    @Binding var selection: SettingsSection?
+    @EnvironmentObject private var navigation: SettingsNavigation
+    @FocusState private var isFocused: Bool
+    /// True while the keyboard drives the sidebar (Tab, ↑ ↓); a click
+    /// clears it, so a mouse selection never draws a ring.
+    @State private var keyboardDriven = false
 
     var body: some View {
-        List(SettingsSection.allCases, selection: $selection) { section in
-            Label {
-                Text(section.title)
-            } icon: {
-                SettingsIcon(systemImage: section.systemImage, tint: section.tint)
-            }
-            .tag(section)
-            .help(section.title)
-            .accessibilityIdentifier(section.accessibilityIdentifier)
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            HStack(spacing: 10) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 40, height: 40)
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Attic")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text("Settings")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear
+                .frame(height: SettingsChromeLayout.sidebarTop)
+                .contentShape(Rectangle())
+                .gesture(WindowDragGesture())
+            ForEach(Array(SettingsSection.Group.allCases.enumerated()), id: \.offset) { index, group in
+                if index > 0 {
+                    Color.clear.frame(height: SettingsChromeLayout.sidebarGroupGap)
                 }
-
-                Spacer(minLength: 0)
+                AtticSidebarHeading(title: group.title)
+                ForEach(group.sections) { section in
+                    row(section)
+                }
+                if let hint = group.hint {
+                    AtticSidebarHint(text: hint)
+                }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 10)
-            .padding(.bottom, 12)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Attic Settings")
+            Spacer(minLength: AtticSpacing.s16)
+            row(.about)
+                .padding(.bottom, SettingsChromeLayout.sidebarBottom)
         }
-        .accessibilityLabel("Settings sections")
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isFocused)
+        .onChange(of: isFocused) { _, focused in
+            // Tab (a key press) shows the ring; the window's first focus on
+            // opening, or a click, does not.
+            keyboardDriven = focused && NSApp.currentEvent?.type == .keyDown
+        }
+        .onKeyPress(.upArrow) { move(-1) }
+        .onKeyPress(.downArrow) { move(1) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Settings sections"))
         .accessibilityIdentifier("settings-sidebar")
+    }
+
+    private func row(_ section: SettingsSection) -> some View {
+        let isSelected = navigation.selection == section
+        return AtticSidebarRow(
+            systemName: section.systemImage,
+            title: section.title,
+            isSelected: isSelected,
+            identifier: section.accessibilityIdentifier,
+            keyboardFocused: isSelected && isFocused && keyboardDriven
+        ) {
+            keyboardDriven = false
+            isFocused = true
+            navigation.select(section)
+        }
+        .focusable(false)
+        .help(section.title)
+    }
+
+    private func move(_ offset: Int) -> KeyPress.Result {
+        guard let target = navigation.neighbour(offset: offset) else { return .handled }
+        keyboardDriven = true
+        navigation.select(target)
+        return .handled
     }
 }

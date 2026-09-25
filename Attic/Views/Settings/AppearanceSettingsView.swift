@@ -1,31 +1,26 @@
-import AppKit
 import SwiftUI
 
 enum AppearanceSettingsPresentation {
     static let themeChooserAccessibilityIdentifier = "setting-panel-theme"
-    static let themeChoiceHeight: CGFloat = 74
-    static let themeTitleLineLimit = 2
 
     static var orderedThemeAccessibilityIdentifiers: [String] {
         AtticPanelTheme.allCases.map(\.accessibilityIdentifier)
     }
 
-    static func nonselectedThemeBoundaryOpacity(
-        for contrast: ColorSchemeContrast
-    ) -> Double {
-        SettingsDesign.tileBoundaryOpacity(for: contrast)
+    static func modeAccessibilityIdentifier(_ preference: AppearancePreference) -> String {
+        "setting-appearance-\(preference.rawValue)"
     }
 
-    static func nonselectedThemeBoundaryLineWidth(
-        for contrast: ColorSchemeContrast
-    ) -> CGFloat {
-        SettingsDesign.tileBoundaryLineWidth(for: contrast)
-    }
-
-    /// What VoiceOver reads for the Tint length slider.
+    /// What the Tint length row shows and VoiceOver reads.
     static func tintLengthDescription(_ length: Double) -> String {
         let percent = Int((PanelTintLength.clamped(length) * 100).rounded())
         return percent >= 100 ? "Full height" : "\(percent) percent of the panel"
+    }
+
+    /// The Tint length value as the row shows it ("Full height", "60 %").
+    static func tintLengthValue(_ length: Double) -> String {
+        let percent = Int((PanelTintLength.clamped(length) * 100).rounded())
+        return percent >= 100 ? String(localized: "Full height") : String(localized: "\(percent) % of the panel")
     }
 
     /// The one line the pane shows when the readability floor, not the
@@ -35,89 +30,128 @@ enum AppearanceSettingsPresentation {
         guard treatment.tint != .off, treatment.isTintClamped else { return nil }
         return "Tint is kept faint here so text stays readable."
     }
+
+    /// The footnote under Surface and tint: why the surface looks solid,
+    /// or why the tint is fainter than chosen, or nothing.
+    static func surfaceFootnote(reduceTransparency: Bool, treatment: AtticPanelSurfaceTreatment) -> String? {
+        if reduceTransparency {
+            return String(localized: "Reduce Transparency is on, so the panel is drawn solid. Your surface choice is kept.")
+        }
+        return tintFloorNote(for: treatment)
+    }
 }
 
 struct AppearanceSettingsView: View {
     @ObservedObject var settings: AppSettings
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    var body: some View {
-        SettingsPage(
-            title: "Appearance",
-            subtitle: "How the panel looks on your desktop.",
-            accessibilityIdentifier: "settings-page-appearance"
-        ) {
-            Section {
-                AppearancePreviewCard(settings: settings)
-                    .listRowInsets(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
+    /// Palette tiles keep their size and wrap, 12 pt apart.
+    private let paletteColumns = [
+        GridItem(
+            .adaptive(minimum: AtticPaletteTileMetrics.width, maximum: AtticPaletteTileMetrics.width),
+            spacing: AtticPaletteTileMetrics.spacing,
+            alignment: .leading
+        )
+    ]
 
-                SettingsRow(
-                    title: "Mode",
-                    description: "Follow your Mac, or keep Attic in Light or Dark.",
-                    systemImage: "circle.lefthalf.filled",
-                    tint: .purple
-                ) {
-                    Picker("Appearance", selection: appearanceSelection) {
-                        ForEach(AppearancePreference.allCases) { preference in
-                            Text(preference.title).tag(preference)
+    var body: some View {
+        SettingsPage(section: .appearance) {
+            AtticAppearancePreview(accessibilityLabel: previewDescription) {
+                SettingsPanelMiniature(cornerSize: CGFloat(PanelGeometryCornerSize.sanitised(settings.panelCornerSize)))
+            }
+            .accessibilityIdentifier("setting-appearance-preview")
+            Color.clear.frame(height: AtticSpacing.s12)
+
+            AtticGroupCard {
+                HStack(spacing: AtticModeTileMetrics.tileSpacing) {
+                    ForEach(AppearancePreference.allCases) { preference in
+                        AtticModeTile(
+                            choice: modeChoice(preference),
+                            isSelected: settings.appearance == preference,
+                            identifier: AppearanceSettingsPresentation.modeAccessibilityIdentifier(preference)
+                        ) {
+                            guard settings.appearance != preference else { return }
+                            settings.appearance = preference
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 190)
-                    .help("Choose Attic's appearance")
-                    .accessibilityLabel("Attic appearance")
-                    .accessibilityIdentifier("setting-appearance")
                 }
-            } footer: {
-                if reduceTransparency {
-                    SettingsFootnote("Reduce Transparency is on, so the panel is drawn solid. Your Surface choice is kept.")
-                }
+                .padding(.vertical, AtticSpacing.s16)
+                .frame(maxWidth: .infinity)
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Appearance"))
+            .accessibilityValue(settings.appearance.title)
+            .accessibilityIdentifier("setting-appearance")
+            .padding(.bottom, AtticSpacing.settingsBetweenSections)
 
-            Section {
-                PaletteChooser(selection: $settings.panelTheme)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier)
-            } header: {
-                Text("Palette")
-            } footer: {
-                SettingsFootnote("Each palette has a Light and a Dark pair. Original is Attic's neutral look.")
-            }
-
-            Section {
-                SurfaceChooser(
-                    selection: $settings.panelSurfaceStyle,
-                    palette: palette,
-                    appearance: appearance,
-                    accent: accent,
-                    treatment: { [theme = settings.panelTheme, appearance, colorSchemeContrast] style in
-                        theme.surfaceTreatment(
-                            appearance: appearance, contrast: colorSchemeContrast, surface: style, tint: .off,
-                            reduceTransparency: false
-                        )
+            SettingsTileSection(title: String(localized: "Palette")) {
+                LazyVGrid(columns: paletteColumns, alignment: .leading, spacing: AtticPaletteTileMetrics.spacing) {
+                    ForEach(AtticPanelTheme.allCases) { theme in
+                        AtticPaletteTile(
+                            palette: theme,
+                            isSelected: settings.panelTheme == theme,
+                            identifier: theme.accessibilityIdentifier
+                        ) {
+                            settings.panelTheme = theme
+                        }
+                        .help(theme.detail)
                     }
-                )
-
-                VStack(alignment: .leading, spacing: 10) {
-                    SettingsRowLabel(
-                        title: "Tint",
-                        description: settings.panelTint.detail(neutral: settings.panelTheme.usesNeutralTint),
-                        systemImage: "paintbrush.pointed.fill",
-                        tint: .pink
-                    )
-                    TintChooser(selection: $settings.panelTint, treatment: treatment, accent: accent)
-                    TintLengthSlider(length: $settings.panelTintLength, isEnabled: settings.panelTint != .off)
                 }
-            } header: {
-                Text("Surface")
-            } footer: {
-                if let note = AppearanceSettingsPresentation.tintFloorNote(for: treatment) {
-                    SettingsFootnote(note)
-                }
+                // The tiles' selection ring sits 4 pt outside them.
+                .padding(.horizontal, AtticRingMetrics.outset)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(String(localized: "Palette"))
+                .accessibilityIdentifier(AppearanceSettingsPresentation.themeChooserAccessibilityIdentifier)
             }
+
+            SettingsGroup(
+                title: String(localized: "Surface and tint"),
+                footnote: AppearanceSettingsPresentation.surfaceFootnote(
+                    reduceTransparency: reduceTransparency, treatment: treatment
+                )
+            ) {
+                AtticPopUpRow(
+                    label: String(localized: "Surface"),
+                    choices: PanelSurfaceStyle.allCases.map { ($0, $0.title) },
+                    selection: $settings.panelSurfaceStyle,
+                    identifier: "setting-panel-surface"
+                )
+                .help(settings.panelSurfaceStyle.detail)
+                AtticGroupDivider()
+                AtticPopUpRow(
+                    label: String(localized: "Tint"),
+                    choices: PanelTintLevel.allCases.map { ($0, $0.title) },
+                    selection: $settings.panelTint,
+                    identifier: "setting-panel-tint"
+                )
+                .help(settings.panelTint.detail(neutral: settings.panelTheme.usesNeutralTint))
+            }
+
+            SettingsGroup(
+                title: String(localized: "Advanced"),
+                footnote: settings.panelTint == .off ? String(localized: "Choose a tint to set how far down the panel it reaches.") : nil
+            ) {
+                AtticSliderRow(
+                    label: String(localized: "Tint length"),
+                    valueText: AppearanceSettingsPresentation.tintLengthValue(settings.panelTintLength),
+                    value: $settings.panelTintLength,
+                    range: PanelTintLength.range,
+                    accessibilityValue: AppearanceSettingsPresentation.tintLengthDescription(settings.panelTintLength),
+                    identifier: "setting-panel-tint-length"
+                )
+                .disabled(settings.panelTint == .off)
+            }
+        }
+    }
+
+    private func modeChoice(_ preference: AppearancePreference) -> AtticModeTile.Choice {
+        switch preference {
+        case .system: .system
+        case .light: .light
+        case .dark: .dark
         }
     }
 
@@ -129,14 +163,6 @@ struct AppearanceSettingsView: View {
         }
     }
 
-    private var appearance: AtticPanelThemeAppearance {
-        effectiveColorScheme == .dark ? .dark : .light
-    }
-
-    private var palette: AtticPanelThemePalette {
-        settings.panelTheme.palette(for: effectiveColorScheme, contrast: colorSchemeContrast)
-    }
-
     private var treatment: AtticPanelSurfaceTreatment {
         settings.panelSurfaceTreatment(
             colorScheme: effectiveColorScheme,
@@ -145,22 +171,23 @@ struct AppearanceSettingsView: View {
         )
     }
 
-    private var accent: Color {
-        settings.panelTheme.usesSystemAccent
-            ? Color.accentColor
-            : settings.panelTheme.palette(for: colorScheme, contrast: colorSchemeContrast).accentColor
+    private var previewDescription: String {
+        AppearancePreviewDescription.accessibilityLabel(
+            theme: settings.panelTheme,
+            surface: settings.panelSurfaceStyle,
+            tint: settings.panelTint,
+            tintLength: settings.panelTintLength,
+            appearance: effectiveColorScheme == .dark ? .dark : .light,
+            reduceTransparency: reduceTransparency
+        )
     }
+}
 
-    private var appearanceSelection: Binding<AppearancePreference> {
-        Binding {
-            settings.appearance
-        } set: { preference in
-            // Native segmented Picker can deliver its binding callback
-            // during a SwiftUI view update. Publish after that callback.
-            DispatchQueue.main.async {
-                guard settings.appearance != preference else { return }
-                settings.appearance = preference
-            }
-        }
+/// A corner size the miniature can draw: the stored value, or the default
+/// when it is not a usable number.
+enum PanelGeometryCornerSize {
+    static func sanitised(_ value: Double) -> Double {
+        guard value.isFinite else { return PanelCornerSize.defaultValue }
+        return min(max(value, PanelCornerSize.min), PanelCornerSize.max)
     }
 }
