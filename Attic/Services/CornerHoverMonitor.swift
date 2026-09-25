@@ -51,8 +51,6 @@ final class CornerHoverMonitor {
 
     private var stateMachine = CornerHoverStateMachine()
     private var samplingState = CornerHoverSamplingState()
-    private var pollingTimer: DispatchSourceTimer?
-    private var pollingTimerEpoch = CornerHoverTimerEpoch()
     private var scheduledCadence: CornerHoverSamplingCadence?
     private var cachedScreenFrames: [CGRect] = []
     private var localPointerMonitor: Any?
@@ -64,13 +62,15 @@ final class CornerHoverMonitor {
     private var dragReleaseTask: Task<Void, Never>?
     private var isRunning = false
     private var lastKeyboardInputAt: TimeInterval = -.infinity
-    /// Visible-panel sampling is event-driven: bursts of pointer events are
-    /// coalesced to one sample per `eventSampleInterval`, with a trailing
-    /// sample so the last position is never missed.
+    /// Sampling is event-driven: bursts of pointer events near the corner or
+    /// over the visible panel are coalesced to one sample per
+    /// `eventSampleInterval`, with a trailing sample so the last position is
+    /// never missed.
     private var lastEventSampleAt: TimeInterval = -.infinity
     private var trailingSampleWork: DispatchWorkItem?
-    /// One-shot follow-up for the hide delay while visible; see
-    /// `CornerHoverStateMachine.nextTimedDecision`.
+    /// The only timed work: one follow-up at the next decision deadline (the
+    /// reveal delay while hidden, the hide delay while visible); see
+    /// `scheduleFollowUp`.
     private var followUpWork: DispatchWorkItem?
     private var lockObservation: AnyCancellable?
     private var lockSampleScheduled = false
@@ -141,9 +141,6 @@ final class CornerHoverMonitor {
 
     func stop() {
         isRunning = false
-        pollingTimer?.cancel()
-        pollingTimer = nil
-        pollingTimerEpoch.invalidate()
         scheduledCadence = nil
         stopPointerActivityMonitoring()
         revealRefreshTask?.cancel()
@@ -371,19 +368,27 @@ final class CornerHoverMonitor {
         }
     }
 
-    /// The only timed work while visible: a single follow-up at the next
-    /// decision deadline. This is normally the hide delay or reveal grace;
-    /// clean editor focus also gets one deadline because keyboard-idle time
-    /// can expire that lock without another event. Persistent locks and pins
-    /// remain event-driven (see `scheduleLockSample`), and a pressed button is
-    /// followed by its mouse-up event.
+    /// The only timed work: a single follow-up at the next decision
+    /// deadline. Hidden, that is the reveal delay of a pointer resting in the
+    /// hotspot (it sends no more events). Visible, it is normally the hide
+    /// delay or reveal grace; clean editor focus also gets one deadline
+    /// because keyboard-idle time can expire that lock without another event.
+    /// Persistent locks and pins remain event-driven (see
+    /// `scheduleLockSample`), and a pressed button is followed by its
+    /// mouse-up event.
     private func scheduleFollowUp(
         at uptime: TimeInterval, isInPanel: Bool, isInteractionLocked: Bool, isMouseButtonPressed: Bool
     ) {
         followUpWork?.cancel()
         followUpWork = nil
+        guard stateMachine.isVisible else {
+            if let deadline = stateMachine.nextRevealDeadline(revealDelay: settings.revealDelay) {
+                scheduleFollowUp(after: deadline - uptime)
+            }
+            return
+        }
         let isPinned = uiState.isPanelPinned
-        guard stateMachine.isVisible, !stateMachine.isHidePending,
+        guard !stateMachine.isHidePending,
               !isMouseButtonPressed, !isPinned else { return }
         let stateDeadline = stateMachine.nextTimedDecision(
             at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
@@ -396,13 +401,18 @@ final class CornerHoverMonitor {
             timestamp: uptime
         )
         guard let deadline = [stateDeadline, focusDeadline].compactMap({ $0 }).min() else { return }
+        scheduleFollowUp(after: deadline - uptime)
+    }
+
+    private func scheduleFollowUp(after delay: TimeInterval) {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isRunning else { return }
             self.followUpWork = nil
             self.samplePointer()
         }
         followUpWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, deadline - uptime) + 0.02, execute: work)
+        followUpCountForTesting += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.01, delay) + 0.02, execute: work)
     }
 
     private func refreshSamplingCadence(at location: CGPoint) {
@@ -416,42 +426,19 @@ final class CornerHoverMonitor {
         applySamplingCadence(decision.cadence)
     }
 
+    /// Records the cadence and holds the App Nap exemption only near the
+    /// corner. No cadence starts a timer.
     private func applySamplingCadence(_ cadence: CornerHoverSamplingCadence) {
         guard isRunning, cadence != scheduledCadence else { return }
-        pollingTimer?.cancel()
-        pollingTimer = nil
-        let timerEpoch = pollingTimerEpoch.beginTimer()
         scheduledCadence = cadence
         updateResponsivenessActivity(for: cadence)
-        guard let interval = cadence.intervalMilliseconds else {
-            // Visible: no repeating timer at all.
-            return
-        }
-
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(
-            deadline: .now() + .milliseconds(interval),
-            repeating: .milliseconds(interval),
-            leeway: .milliseconds(cadence.leewayMilliseconds)
-        )
-        timer.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self,
-                      self.pollingTimerEpoch.permits(
-                        timerEpoch,
-                        whileRunning: self.isRunning
-                      ) else { return }
-                self.samplePointer()
-            }
-        }
-        pollingTimer = timer
-        timer.resume()
     }
 
-    /// Test seam: whether a repeating sampling timer exists right now.
-    var hasPollingTimerForTesting: Bool { pollingTimer != nil }
     var scheduledCadenceForTesting: CornerHoverSamplingCadence? { scheduledCadence }
     var holdsResponsivenessActivityForTesting: Bool { responsivenessActivity != nil }
+    var hasPendingFollowUpForTesting: Bool { followUpWork != nil }
+    /// Test seam: how many one-shot follow-ups were scheduled.
+    private(set) var followUpCountForTesting = 0
 
     private func updateResponsivenessActivity(for cadence: CornerHoverSamplingCadence) {
         if cadence.holdsResponsivenessActivity {

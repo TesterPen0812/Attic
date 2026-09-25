@@ -46,64 +46,33 @@ struct CornerHoverPointerMonitorDomains: OptionSet, Equatable {
     static let required: Self = [.local, .global]
 }
 
-/// How the corner monitor samples the pointer.
+/// How the corner monitor samples the pointer. No cadence runs a repeating
+/// timer: every sample comes from a pointer event, a lock change, a screen
+/// change or a one-shot deadline (the reveal delay while hidden, the hide
+/// delay while visible), so a hidden panel does no periodic work.
 ///
-/// - `idle`: hidden and far from the corner — a slow safety-net timer.
-/// - `responsive`: hidden and near the corner — the reveal decision window,
-///   the only time a fast timer and an App Nap exemption are justified.
-/// - `eventDriven`: the panel is visible — no timer at all. Pointer events,
-///   lock changes and a one-shot follow-up for the hide delay drive every
-///   sample, so an idle visible panel does no periodic work.
+/// - `idle`: hidden and far from the corner. Pointer events only update
+///   this cheap cadence state; a full sample runs on a boundary crossing.
+/// - `responsive`: hidden and near the corner. Every pointer event samples
+///   (coalesced), and entering the hotspot schedules one follow-up at the
+///   reveal deadline, because a pointer resting in the corner sends no
+///   further events. The only time an App Nap exemption is held.
+/// - `eventDriven`: the panel is visible. Pointer events, lock changes and a
+///   one-shot follow-up for the hide delay drive every sample.
 enum CornerHoverSamplingCadence: Equatable {
     case idle
     case responsive
     case eventDriven
 
-    /// nil means no repeating timer.
-    var intervalMilliseconds: Int? {
-        switch self {
-        case .idle: 1_000
-        case .responsive: 50
-        case .eventDriven: nil
-        }
-    }
-
-    var leewayMilliseconds: Int {
-        switch self {
-        case .idle: 250
-        case .responsive: 15
-        case .eventDriven: 0
-        }
-    }
+    /// Whether every pointer event runs a (coalesced) full sample.
+    var samplesEveryEvent: Bool { self != .idle }
 
     var holdsResponsivenessActivity: Bool { self == .responsive }
-
-    var nominalSamplesPerMinute: Int {
-        guard let intervalMilliseconds else { return 0 }
-        return 60_000 / intervalMilliseconds
-    }
 }
 
 struct CornerHoverSamplingDecision: Equatable {
     let cadence: CornerHoverSamplingCadence
     let shouldSampleImmediately: Bool
-}
-
-struct CornerHoverTimerEpoch {
-    private(set) var current: UInt64 = 0
-
-    mutating func beginTimer() -> UInt64 {
-        current &+= 1
-        return current
-    }
-
-    mutating func invalidate() {
-        current &+= 1
-    }
-
-    func permits(_ candidate: UInt64, whileRunning: Bool) -> Bool {
-        whileRunning && candidate == current
-    }
 }
 
 struct CornerHoverSamplingState {
@@ -139,12 +108,12 @@ struct CornerHoverSamplingState {
         } else {
             cadence = isNearConfiguredCorner ? .responsive : .idle
         }
-        // A visible panel samples on every pointer event (the monitor
-        // coalesces bursts); hidden cadences sample only on a boundary
-        // crossing and otherwise leave the work to their timer.
+        // Near the corner or visible, every pointer event samples (the
+        // monitor coalesces bursts); far and hidden, only a boundary
+        // crossing does.
         return CornerHoverSamplingDecision(
             cadence: cadence,
-            shouldSampleImmediately: cadence != previousCadence || cadence == .eventDriven
+            shouldSampleImmediately: cadence != previousCadence || cadence.samplesEveryEvent
         )
     }
 
@@ -229,6 +198,16 @@ struct CornerHoverStateMachine {
         }
         guard let leaveBeganAt else { return timestamp }
         return leaveBeganAt + max(0, hideDelay)
+    }
+
+    /// While hidden, the moment the pointer resting in the hotspot will have
+    /// stayed long enough to reveal the panel. A resting pointer sends no
+    /// events, so the monitor schedules one sample for then. nil when no
+    /// reveal is pending.
+    func nextRevealDeadline(revealDelay: TimeInterval) -> TimeInterval? {
+        guard !isVisible, !requiresHotspotExitBeforeReveal,
+              let hotspotEnteredAt else { return nil }
+        return hotspotEnteredAt + max(0, revealDelay)
     }
 
     mutating func update(
