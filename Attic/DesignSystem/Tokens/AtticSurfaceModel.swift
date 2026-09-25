@@ -48,6 +48,10 @@ struct AtticSurfaceModel: Equatable, Sendable {
         let foreground: AtticRGBA
         /// State fills drawn between the surface and the foreground, bottom first.
         let overlays: [AtticRGBA]
+        /// A label on a Liquid Glass control (the first overlay is the
+        /// glass face). Controls float at the panel's top and bottom edges,
+        /// so these are judged there too, where the Tint starts.
+        var onGlass = false
     }
 
     /// A flat grey desktop behind a translucent surface.
@@ -141,7 +145,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// a Light tint darkens the surface, a Dark tint deepens it, so either
     /// end can be the hard one.
     func backgrounds(for pair: Pair) -> [AtticRGBA] {
-        let heights = tintStops.isEmpty ? [Self.contentTop] : [Self.contentTop, 1]
+        let heights = tintStops.isEmpty ? [Self.contentTop] : (pair.onGlass ? [0, Self.contentTop, 1] : [Self.contentTop, 1])
         return desktops.flatMap { desktop in
             heights.map { height in pair.overlays.reduce(composite(desktop, at: height)) { $1.over($0) } }
         }
@@ -274,8 +278,12 @@ struct AtticSurfaceModel: Equatable, Sendable {
         selected: AtticRGBA,
         pressed: AtticRGBA,
         controlFace: AtticRGBA,
+        glassFace: AtticRGBA,
+        glassDisabled: AtticRGBA,
+        glassPressed: AtticRGBA,
         chipSelected: AtticRGBA,
         chipHover: AtticRGBA,
+        doneDisc: AtticRGBA,
         recessed: AtticRGBA,
         tagFill: AtticRGBA,
         tagFillSelected: AtticRGBA
@@ -283,11 +291,20 @@ struct AtticSurfaceModel: Equatable, Sendable {
         func p(_ ink: AtticInk, _ overlays: [AtticRGBA]) -> Pair {
             Pair(ink: ink, foreground: inks[ink] ?? .black(1), overlays: overlays)
         }
-        return [
+        /// Labels on a control: on the Craft-style face (opaque) and on
+        /// the worst face Liquid Glass leaves over the surface.
+        func control(_ ink: AtticInk, _ fills: [AtticRGBA] = [], glassFills: [AtticRGBA]? = nil) -> [Pair] {
+            [
+                Pair(ink: ink, foreground: inks[ink] ?? .black(1), overlays: [controlFace] + fills),
+                Pair(ink: ink, foreground: inks[ink] ?? .black(1), overlays: [glassFace] + (glassFills ?? fills), onGlass: true)
+            ]
+        }
+        return control(.placeholder) + control(.body) + control(.heading) + control(.heading, [chipSelected])
+            + control(.glyph) + control(.glyph, [chipSelected]) + control(.icon) + control(.icon, [chipHover]) + control(.glyph, [chipSelected], glassFills: [glassPressed])
+            + control(.disabledText, glassFills: [glassDisabled]) + control(.disabledIcon, glassFills: [glassDisabled]) + [
             p(.heading, []), p(.body, [pressed]), p(.body, [recessed, hover]), p(.label, [selected]),
             p(.helper, [pressed]), p(.helper, [recessed, hover]), p(.muted, [hover]), p(.placeholder, []),
-            p(.placeholder, [controlFace]), p(.glyph, [controlFace]), p(.heading, [controlFace, chipSelected]),
-            p(.icon, [pressed]), p(.icon, [recessed, hover]), p(.icon, [controlFace, chipHover]),
+            p(.icon, [pressed]), p(.icon, [recessed, hover]),
             p(.chevron, [pressed]), p(.chevron, [recessed, hover]),
             p(.accent, [selected]), p(.accentText, [tagFill]), p(.accentText, [recessed, tagFillSelected]),
             p(.dueText, [selected]), p(.warningText, []),
@@ -297,11 +314,13 @@ struct AtticSurfaceModel: Equatable, Sendable {
             p(.priorityLow, [recessed, hover]), p(.priorityNone, [recessed, hover]),
             // Disabled rows and the ghost of a raised control (no hover or
             // press while disabled).
-            p(.disabledText, []), p(.disabledText, [recessed]), p(.disabledText, [controlFace]),
-            p(.disabledIcon, []), p(.disabledIcon, [recessed]), p(.disabledIcon, [controlFace]),
+            p(.disabledText, []), p(.disabledText, [recessed]),
+            p(.disabledIcon, []), p(.disabledIcon, [recessed]),
             // The check mark on its fill (opaque, so the surface below
             // does not matter): done, and done while disabled.
-            p(.onDone, [inks[.doneFill] ?? .black(1)]), p(.onDone, [inks[.disabledIcon] ?? .black(1)])
+            p(.onDone, [inks[.doneFill] ?? .black(1)]), p(.onDone, [inks[.disabledIcon] ?? .black(1)]),
+            // A done task's check on its quiet disc (opaque).
+            p(.doneCheck, [doneDisc])
         ]
     }
 

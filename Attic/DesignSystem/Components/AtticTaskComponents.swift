@@ -122,21 +122,39 @@ private struct AtticTaskFocusModifier: ViewModifier {
 // MARK: - Status circle
 
 /// The status circle shows and changes a task's state (spec § The status
-/// circle): to do is an empty ring in the priority colour, in progress is
-/// half filled, done is filled with a check that draws itself, backlog is a
-/// dashed ring. Completing is one moment: the fill fades in, the check
-/// draws and the haptic tick lands together. Disabled, it is drawn in the
-/// disabled icon colour (3 : 1), never faded below it.
+/// circle, owner-approved hybrid 2026-09-25):
+///
+/// - **To do:** a grey ring whose weight shows priority (None the lightest
+///   and faintest, Medium the heaviest and darkest); only High is red.
+/// - **In progress:** the same ring and a wedge from 12 o'clock, clockwise:
+///   the share of subtasks ticked, at least a quarter (a quarter when the
+///   task has none, meaning "started").
+/// - **Done:** a quiet grey disc with a darker grey check, whatever the
+///   priority.
+/// - **Backlog:** a dashed grey ring.
+///
+/// Completing: the wedge sweeps to a full disc, then the check draws and
+/// the haptic tick lands (springs, so a change of mind mid-way reverses
+/// smoothly); Reduce Motion fades the done disc in. Disabled, the ring and
+/// wedge take the disabled icon colour (3 : 1), never faded below it.
 struct AtticStatusCircle: View {
     let state: AtticTaskState
     let priority: AtticPriority
+    /// In progress: the share of subtasks ticked (0…1), or nil when the
+    /// task has none. Also where completing sweeps from.
+    var progress: Double?
     /// Pin the check's drawing progress (gallery); nil animates live.
     var checkProgress: Double?
+    /// Pin the completion sweep, 0 (the wedge) to 1 (the full disc)
+    /// (gallery); nil animates live.
+    var completionProgress: Double?
     var isDisabled = false
 
     @Environment(\.atticDesign) private var design
+    @State private var completion: Double = 1
+    @State private var completionStart: Double = 0
     @State private var drawnCheck: Double = 1
-    @State private var fillOpacity: Double = 1
+    @State private var discOpacity: Double = 1
     @State private var probeID = UUID()
     @State private var checkProbeID = UUID()
 
@@ -144,59 +162,68 @@ struct AtticStatusCircle: View {
         let tokens = design.tokens
         let m = AtticStatusCircleMetrics.self
         let ringInk: AtticInk = isDisabled ? .disabledIcon : Self.ink(for: priority)
-        let fillInk: AtticInk = isDisabled ? .disabledIcon : .doneFill
-        let colour = tokens.ink(ringInk)
-        let lineWidth = design.increaseContrast ? m.lineWidthIncreased : m.lineWidth
+        let colour = tokens.color(ringInk)
+        let width = m.ringWidth(priority, increaseContrast: design.increaseContrast, differentiateWithoutColor: design.differentiateWithoutColor)
         let size = AtticControlSize.statusCircle
+        let sweep = m.wedgeSweep(progress)
+        let motion = AtticMotionPreset.complete.animation(reduceMotion: design.reduceMotion)
         ZStack {
             switch state {
             case .todo:
-                Circle().inset(by: m.edgeInset + lineWidth / 2).stroke(colour.color, lineWidth: lineWidth)
+                Circle().inset(by: m.edgeInset + width / 2).stroke(colour, lineWidth: width)
+                    .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
             case .inProgress:
-                Circle().inset(by: m.edgeInset + lineWidth / 2).stroke(colour.color, lineWidth: lineWidth)
-                AtticHalfDisc().fill(colour.color).padding(m.edgeInset + lineWidth + m.halfDiscGap)
+                Circle().inset(by: m.edgeInset + width / 2).stroke(colour, lineWidth: width)
+                    .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
+                AtticWedge(sweep: sweep, inset: m.wedgeInset(ringWidth: width))
+                    .fill(colour)
+                    .animation(motion, value: sweep)
             case .done:
-                Circle().inset(by: m.edgeInset).fill(tokens.color(fillInk)).opacity(fillOpacity)
+                AtticCompletionMark(
+                    completion: completionProgress ?? completion,
+                    start: completionProgress == nil ? completionStart : (progress == nil ? 0 : sweep),
+                    ring: colour, ringWidth: width, disc: tokens.doneDisc.color
+                )
+                .opacity(discOpacity)
                 AtticCheckShape()
                     .trim(from: 0, to: checkProgress ?? drawnCheck)
-                    .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
-                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
+                    .stroke(tokens.color(.doneCheck), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, ink: .doneCheck, foreground: tokens.ink(.doneCheck))
                     .padding(m.checkInset)
+                    .opacity(discOpacity)
             case .backlog:
-                Circle().inset(by: m.edgeInset + lineWidth / 2)
-                    .stroke(colour.color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, dash: m.backlogDash))
+                let dashed = design.increaseContrast ? m.backlogLineWidthIncreased : m.backlogLineWidth
+                let backlogInk: AtticInk = isDisabled ? .disabledIcon : .priorityNone
+                Circle().inset(by: m.edgeInset + dashed / 2)
+                    .stroke(tokens.color(backlogInk), style: StrokeStyle(lineWidth: dashed, dash: m.backlogDash))
+                    .atticRingProbe(id: probeID, ink: backlogInk, tokens: tokens)
             }
         }
         .frame(width: size, height: size)
-        .overlay(alignment: .trailing) {
-            if design.differentiateWithoutColor, priority.markCount > 0, state != .done {
-                AtticPriorityMark(count: priority.markCount, colour: colour).offset(x: m.priorityMarkOffset)
-            }
-        }
         .onChange(of: state) { old, new in
             guard new == .done, old != .done else { return }
-            AtticHaptics.tick(enabled: design.hapticsEnabled)
-            guard checkProgress == nil else { return }
+            guard checkProgress == nil, completionProgress == nil else {
+                AtticHaptics.tick(enabled: design.hapticsEnabled)
+                return
+            }
+            completionStart = old == .inProgress ? sweep : 0
             if design.reduceMotion {
-                fillOpacity = 0
+                completion = 1
                 drawnCheck = 1
-                withAnimation(AtticMotionPreset.complete.animation(reduceMotion: true)) { fillOpacity = 1 }
+                discOpacity = 0
+                withAnimation(motion) { discOpacity = 1 }
+                AtticHaptics.tick(enabled: design.hapticsEnabled)
             } else {
+                completion = 0
                 drawnCheck = 0
-                fillOpacity = 0
-                withAnimation(AtticMotionPreset.complete.animation(reduceMotion: false)) {
-                    drawnCheck = 1
-                    fillOpacity = 1
+                discOpacity = 1
+                withAnimation(motion) {
+                    completion = 1
+                } completion: {
+                    AtticHaptics.tick(enabled: design.hapticsEnabled)
+                    withAnimation(motion) { drawnCheck = 1 }
                 }
             }
-        }
-        .atticProbe { [probeID] specimen in
-            AtticProbe(
-                id: probeID, kind: .icon(name: "status circle"),
-                ink: state == .done ? fillInk : ringInk,
-                foreground: tokens.ink(state == .done ? fillInk : ringInk),
-                specimen: specimen
-            )
         }
         .accessibilityHidden(true)
     }
@@ -209,16 +236,68 @@ struct AtticStatusCircle: View {
         case .high: .priorityHigh
         }
     }
+
+    /// The spoken state: "in progress, 1 of 3 subtasks".
+    static func spokenState(_ state: AtticTaskState, subtasks: (done: Int, total: Int)?) -> String {
+        guard state == .inProgress, let subtasks, subtasks.total > 0 else { return state.spokenName }
+        return state.spokenName + ", " + String(localized: "\(subtasks.done) of \(subtasks.total) subtasks")
+    }
+
+    /// The share of subtasks ticked, or nil when there are none.
+    static func progress(_ subtasks: (done: Int, total: Int)?) -> Double? {
+        guard let subtasks, subtasks.total > 0 else { return nil }
+        return Double(subtasks.done) / Double(subtasks.total)
+    }
+}
+
+/// Completing: the wedge (in the ring's colour) sweeps from where it was to
+/// the full disc while the ring fades and the quiet done grey takes over.
+/// At 1 it is the done disc alone.
+private struct AtticCompletionMark: View, Animatable {
+    var completion: Double
+    let start: Double
+    let ring: Color
+    let ringWidth: CGFloat
+    let disc: Color
+
+    var animatableData: Double {
+        get { completion }
+        set { completion = newValue }
+    }
+
+    var body: some View {
+        let m = AtticStatusCircleMetrics.self
+        let c = min(1, max(0, completion))
+        let sweep = start + (1 - start) * c
+        let inset = m.wedgeInset(ringWidth: ringWidth) * (1 - c) + m.edgeInset * c
+        ZStack {
+            if c < 1 {
+                Circle().inset(by: m.edgeInset + ringWidth / 2).stroke(ring, lineWidth: ringWidth).opacity(1 - c)
+                AtticWedge(sweep: sweep, inset: inset).fill(ring).opacity(1 - c)
+            }
+            AtticWedge(sweep: sweep, inset: inset).fill(disc).opacity(c)
+        }
+    }
+}
+
+private extension View {
+    /// Reports the ring to the appearance check. Done has no ring probe: it
+    /// is judged by its check, and its disc is decoration.
+    func atticRingProbe(id: UUID, ink: AtticInk, tokens: AtticColorTokens) -> some View {
+        atticProbe { specimen in
+            AtticProbe(id: id, kind: .icon(name: "status circle"), ink: ink, foreground: tokens.ink(ink), specimen: specimen)
+        }
+    }
 }
 
 extension View {
-    /// Reports a check mark to the appearance check: the `onDone` ink on
-    /// the fill it is drawn on (read inside the fill, where the stroke never
-    /// passes), so a check that is missing or too faint fails.
-    func atticCheckProbe(id: UUID, foreground: AtticRGBA) -> some View {
+    /// Reports a check mark to the appearance check: its ink on the fill it
+    /// is drawn on (read inside the fill, where the stroke never passes),
+    /// so a check that is missing or too faint fails.
+    func atticCheckProbe(id: UUID, ink: AtticInk = .onDone, foreground: AtticRGBA) -> some View {
         atticProbe { specimen in
             AtticProbe(
-                id: id, kind: .icon(name: "check mark"), ink: .onDone, foreground: foreground,
+                id: id, kind: .icon(name: "check mark"), ink: ink, foreground: foreground,
                 specimen: specimen, allowsOverlap: true,
                 backgroundSamples: AtticCheckShape.fillOnlyPoints
             )
@@ -226,13 +305,25 @@ extension View {
     }
 }
 
-/// The left half of a disc (in progress).
-struct AtticHalfDisc: Shape {
+/// A wedge of a disc from 12 o'clock, clockwise (in progress), inset from
+/// its frame; a full disc at 1.
+struct AtticWedge: Shape {
+    var sweep: Double
+    var inset: CGFloat
+
+    var animatableData: AnimatablePair<Double, CGFloat> {
+        get { AnimatablePair(sweep, inset) }
+        set { sweep = newValue.first; inset = newValue.second }
+    }
+
     func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: inset, dy: inset)
+        guard r.width > 0, sweep > 0 else { return Path() }
+        if sweep >= 1 { return Path(ellipseIn: r) }
         var path = Path()
-        let centre = CGPoint(x: rect.midX, y: rect.midY)
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addArc(center: centre, radius: min(rect.width, rect.height) / 2, startAngle: .degrees(-90), endAngle: .degrees(90), clockwise: true)
+        let centre = CGPoint(x: r.midX, y: r.midY)
+        path.move(to: centre)
+        path.addArc(center: centre, radius: r.width / 2, startAngle: .degrees(-90), endAngle: .degrees(-90 + 360 * sweep), clockwise: false)
         path.closeSubpath()
         return path
     }
@@ -253,22 +344,6 @@ struct AtticCheckShape: Shape {
     }
 }
 
-/// Differentiate Without Colour: one to three dots beside the circle.
-private struct AtticPriorityMark: View {
-    let count: Int
-    let colour: AtticRGBA
-
-    var body: some View {
-        let m = AtticStatusCircleMetrics.self
-        VStack(spacing: m.priorityDotSpacing) {
-            ForEach(0..<count, id: \.self) { _ in
-                Circle().fill(colour.color).frame(width: m.priorityDot, height: m.priorityDot)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
 /// The circle as a button with its hit area and VoiceOver name. Its
 /// keyboard focus (with Full Keyboard Access) draws Attic's 2 pt ring
 /// around the circle in place of the system focus effect.
@@ -279,13 +354,15 @@ private struct AtticPriorityMark: View {
 struct AtticStatusButton: View {
     let state: AtticTaskState
     let priority: AtticPriority
+    /// Ticked and total subtasks: the in-progress wedge and "1 of 3 subtasks".
+    var subtasks: (done: Int, total: Int)?
     var isDisabled = false
     var isTabStop = true
     let onAdvance: () -> Void
 
     var body: some View {
         Button(action: onAdvance) {
-            AtticStatusCircle(state: state, priority: priority, isDisabled: isDisabled)
+            AtticStatusCircle(state: state, priority: priority, progress: AtticStatusCircle.progress(subtasks), isDisabled: isDisabled)
                 .frame(width: AtticControlSize.minimumHitTarget, height: AtticControlSize.minimumHitTarget)
                 .contentShape(Rectangle())
         }
@@ -295,7 +372,7 @@ struct AtticStatusButton: View {
         .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle))
         .disabled(isDisabled)
         .accessibilityLabel(String(localized: "Status"))
-        .accessibilityValue([state.spokenName, priority.spokenName].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue([AtticStatusCircle.spokenState(state, subtasks: subtasks), priority.spokenName].compactMap { $0 }.joined(separator: ", "))
     }
 }
 
@@ -564,7 +641,7 @@ struct AtticTaskRow: View {
             .padding(.horizontal, AtticLayout.rowHighlightInset)
 
             HStack(alignment: .top, spacing: 0) {
-                AtticStatusButton(state: model.state, priority: model.priority, isDisabled: disabled, isTabStop: false, onAdvance: actions.advance)
+                AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false, onAdvance: actions.advance)
                     .atticForcedState(nil)
                     .padding(.leading, AtticLayout.circleX - hitInset)
                     .padding(.top, (AtticLayout.rowHighlightHeight - AtticControlSize.minimumHitTarget) / 2 - (twoLine ? m.twoLineCircleLift : 0))
@@ -919,7 +996,7 @@ struct AtticTaskCard: View {
         let hitInset = (AtticControlSize.minimumHitTarget - AtticControlSize.statusCircle) / 2
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
-                AtticStatusButton(state: model.state, priority: model.priority, isTabStop: false, onAdvance: actions.advance)
+                AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isTabStop: false, onAdvance: actions.advance)
                     .atticForcedState(nil)
                     .padding(.leading, m.leadingInset - hitInset)
                     .padding(.top, m.circleTop)

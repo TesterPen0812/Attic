@@ -183,7 +183,7 @@ enum AtticAppearanceCheck {
             let tokens = context.tokens
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
-                controlFace: tokens.raised.face.over(tokens.controlBase), chipSelected: tokens.chipSelected, chipHover: tokens.chipHover,
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, doneDisc: tokens.doneDisc,
                 recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
             )
             if tokens.panel.worstMargin(pairs) < 0.999 {

@@ -14,8 +14,14 @@ enum AtticInk: String, CaseIterable, Sendable {
     case icon, chromeIcon, glyph, chevron
     // Meaning.
     case accent, accentText, dueText, warningText
+    /// Priority is the status ring's weight and a grey that deepens with
+    /// it (None the faintest, Medium the darkest); only High is red.
     case priorityNone, priorityLow, priorityMedium, priorityHigh
+    /// The subtask checkbox's done fill and its check.
     case doneFill, onDone
+    /// The check on a done task's quiet grey disc (`doneDisc`): the disc is
+    /// decoration, the check carries the state and keeps 3 : 1 on it.
+    case doneCheck
     /// The one near-black (Light) / near-white (Dark) primary fill: the send
     /// button and the drag-stack count. Near-black is never used for chips.
     case inverseFill, onInverse
@@ -48,7 +54,7 @@ enum AtticInk: String, CaseIterable, Sendable {
             .text
         case .icon, .chromeIcon, .glyph, .chevron, .accent,
              .priorityNone, .priorityLow, .priorityMedium, .priorityHigh,
-             .doneFill, .onDone, .inverseFill, .disabledIcon:
+             .doneFill, .onDone, .doneCheck, .inverseFill, .disabledIcon:
             .nonText
         }
     }
@@ -67,25 +73,123 @@ enum AtticInk: String, CaseIterable, Sendable {
     }
 }
 
-/// The recipe numbers for the rim-lit raised material (spec § Raised
-/// controls, Material). Light layers faint overlays on whatever surface is
-/// below (so a palette, glass or tint shows through, as it does in Craft);
-/// Dark is a white overlay about 11 % strong.
+/// What raised controls are made of (the gallery's "Controls" switch).
+/// Liquid Glass is the default in Light and Dark; the Craft style is the
+/// drawn recipe matched to Craft's controls, and what Reduce Transparency
+/// always gets.
+enum AtticControlMaterial: String, CaseIterable, Hashable, Sendable {
+    case liquidGlass
+    case craft
+
+    var title: String {
+        switch self {
+        case .liquidGlass: "Liquid Glass"
+        case .craft: "Craft style"
+        }
+    }
+}
+
+/// A drawn raised material: the Craft-style recipe (opaque, over the neutral
+/// control base) or, in captures, the stand-in for Liquid Glass (a
+/// translucent fill over whatever is behind, as the glass takes the
+/// surface's colour). Drawn bottom to top: shadow outside the shape, base,
+/// fill, a vertical sheen, a 1 pt inner rim, and the edge.
 struct AtticRaisedRecipe: Equatable, Sendable {
-    /// Vertical sheen: top, middle band (45–70 %), bottom. Overlays.
-    let sheenTop: AtticRGBA
-    let face: AtticRGBA
-    let sheenBottom: AtticRGBA
-    /// 1 pt inner rim, top and bottom of its vertical gradient.
-    let innerRimTop: AtticRGBA
-    let innerRimBottom: AtticRGBA
-    /// Outer hairline, top and bottom (slightly darker at the bottom).
-    let outerRimTop: AtticRGBA
-    let outerRimBottom: AtticRGBA
-    let outerRimWidth: CGFloat
-    let shadow: AtticRGBA
-    let shadowRadius: CGFloat
-    let shadowY: CGFloat
+    /// The opaque base, or nil when the fill is laid over what is behind.
+    var base: AtticRGBA?
+    /// The face in the middle of the control, where its label sits.
+    var fill: AtticRGBA
+    /// Sheen overlays at the top and bottom, fading out over `sheenReach`
+    /// of the height (never over the middle, where the label sits).
+    var sheenTop: AtticRGBA = .clear
+    var sheenBottom: AtticRGBA = .clear
+    var sheenReach: Double = 0.35
+    /// 1 pt rim just inside the edge: top, sides and bottom.
+    var innerRimTop: AtticRGBA = .clear
+    var innerRimMiddle: AtticRGBA = .clear
+    var innerRimBottom: AtticRGBA = .clear
+    /// The edge: top, sides and bottom of a vertical gradient.
+    var edgeTop: AtticRGBA
+    var edgeMiddle: AtticRGBA
+    var edgeBottom: AtticRGBA
+    var edgeWidth: CGFloat = 1
+    var shadow: AtticRGBA = .clear
+    var shadowRadius: CGFloat = 0.5
+    var shadowY: CGFloat = 0.5
+
+    /// The face (fill over base): opaque for the Craft style, an overlay
+    /// on the surface for the glass stand-in.
+    var face: AtticRGBA { base.map { fill.over($0) } ?? fill }
+}
+
+/// What real Liquid Glass (`.regular`, macOS 26, key window) does to the
+/// surface it sits on, measured with the gallery's `--glass-lab` on every
+/// flat colour the panel can draw under a control (the neutral ladder and
+/// each palette's surface over the black, mid-grey and white desktops, with
+/// and without the Bold tint at its strongest), sampled in the middle of
+/// the control where its label sits (2026-09-25):
+///
+/// - **Light:** the face follows the surface, a little darker on near-white
+///   (#FAFAFA → 246–251, #FFFFFF → 248–254) and lighter on greyer surfaces
+///   (#C8C8C8 → 218–223): per channel about 0.55 × surface + 108. The
+///   darkest face measured on every swatch is at or above
+///   `worstFace(dark: false).over(surface)` (0.54 × surface + 0.46 × 236).
+/// - **Dark:** a white veil of 0.12–0.15 over the surface (#2C2C2D →
+///   71–74, +28); `worstFace(dark: true)` is white at 0.16.
+///
+/// The worst face is what the label's contrast must survive: the darkest
+/// in Light (dark text), the lightest in Dark (light text). On all 206
+/// swatches the model is no kinder to the label than the real glass (in
+/// relative luminance, which is what contrast reads), so a label that
+/// passes on the worst face passes on the real glass. The inks are tuned
+/// against it over every surface, and captures (which cannot render glass)
+/// draw a stand-in whose middle is exactly that worst face.
+enum AtticGlassModel {
+    static func worstFace(dark: Bool) -> AtticRGBA {
+        dark ? .white(0.16) : AtticRGBA.grey(236).withAlpha(0.46)
+    }
+
+    /// The capture stand-in: the worst face in the middle, and the measured
+    /// shape of the glass around it. Light: a white band inside the top and
+    /// bottom edges and a fine grey edge, darkest on the sides (sides
+    /// about −59, top −20, bottom −23 on #FAFAFA) with a faint shadow
+    /// below. Dark: a bright rim at the top and bottom (about +60 over the
+    /// face) fading along the sides, which end in a fine dark edge.
+    static func standIn(dark: Bool, increaseContrast: Bool) -> AtticRaisedRecipe {
+        if dark {
+            return AtticRaisedRecipe(
+                base: nil, fill: worstFace(dark: true),
+                sheenTop: .white(0.05), sheenBottom: .white(0.05), sheenReach: 0.25,
+                edgeTop: .white(increaseContrast ? 0.45 : 0.33),
+                edgeMiddle: increaseContrast ? .white(0.35) : .black(0.30),
+                edgeBottom: .white(increaseContrast ? 0.45 : 0.33),
+                edgeWidth: 1
+            )
+        }
+        return AtticRaisedRecipe(
+            base: nil, fill: worstFace(dark: false),
+            sheenTop: .white(0.7), sheenBottom: .white(0.6), sheenReach: 0.35,
+            innerRimTop: .white(0.95), innerRimBottom: .white(0.9),
+            edgeTop: .black(increaseContrast ? 0.30 : 0.08),
+            edgeMiddle: .black(increaseContrast ? 0.34 : 0.22),
+            edgeBottom: .black(increaseContrast ? 0.36 : 0.09),
+            edgeWidth: increaseContrast ? 1 : 0.5,
+            shadow: .black(0.05), shadowRadius: 3, shadowY: 1
+        )
+    }
+
+    /// A disabled glass control's ghost fill: the glass is taken back
+    /// towards the surface (lighter in Light, darker in Dark), so its label
+    /// can stay as quiet as the helper grey and still keep 3 : 1.
+    static func disabledFill(dark: Bool) -> AtticRGBA {
+        dark ? .black(0.12) : .white(0.35)
+    }
+
+    /// Increase Contrast: a stronger edge drawn over the system's own glass
+    /// (the same strength as the Craft style's contrast edge).
+    static func contrastEdge(dark: Bool) -> AtticRGBA {
+        dark ? .white(0.35) : .black(0.30)
+    }
 }
 
 /// Every resolved colour for one `AtticDesignContext`.
@@ -121,17 +225,32 @@ struct AtticColorTokens: Equatable, Sendable {
     let chipSelected: AtticRGBA
     let chipHover: AtticRGBA
     let skeleton: AtticRGBA
+    /// A done task's quiet disc: opaque, a step off the surface, not a
+    /// colour of meaning (the `doneCheck` on it is what must read).
+    let doneDisc: AtticRGBA
 
     // MARK: Materials
 
-    /// The opaque neutral base every raised control is drawn on, so content
-    /// never shows through a floating control and controls never pick up a
-    /// palette (they always stay in the base style).
+    /// The opaque neutral base the Craft-style controls are drawn on, so
+    /// content never shows through a floating control and the drawn
+    /// controls never pick up a palette. (Liquid Glass takes the colour of
+    /// whatever is behind it; see `AtticGlassModel`.)
     let controlBase: AtticRGBA
+    /// The Craft-style recipe (Reduce Transparency, or the Craft switch).
     let raised: AtticRaisedRecipe
     let raisedHover: AtticRaisedRecipe
     let raisedPressed: AtticRaisedRecipe
     let raisedDisabled: AtticRaisedRecipe
+    /// The capture stand-in for Liquid Glass.
+    let glassStandIn: AtticRaisedRecipe
+    /// The worst face Liquid Glass leaves over a surface (an overlay).
+    let glassFace: AtticRGBA
+    /// A disabled glass control's ghost: a fill that takes the glass back
+    /// towards the surface.
+    let glassDisabled: AtticRGBA
+    /// A pressed glass control (the system's interactive glass adds its
+    /// own press response live).
+    let glassPressed: AtticRGBA
     /// Menus, pop-overs, toasts and the selection bar: raised over content.
     let popoverFill: AtticRGBA
     let popoverInnerRim: AtticRGBA
@@ -144,6 +263,15 @@ struct AtticColorTokens: Equatable, Sendable {
     let inks: [AtticInk: AtticRGBA]
 
     func ink(_ ink: AtticInk) -> AtticRGBA { inks[ink] ?? .black(1) }
+
+    /// The Craft-style control face (opaque).
+    var controlFace: AtticRGBA { raised.face.over(controlBase) }
+
+    /// Every face a control's label can sit on over `surface`: the Craft
+    /// style's, and the worst Liquid Glass leaves on that surface.
+    func controlFaces(over surface: AtticRGBA) -> [AtticRGBA] {
+        [controlFace, glassFace.over(surface)]
+    }
     func color(_ ink: AtticInk) -> Color { self.ink(ink).color }
 
     var focusRing: AtticRGBA { ink(.accent) }
@@ -185,7 +313,13 @@ struct AtticColorTokens: Equatable, Sendable {
         let chipHover: AtticRGBA = dark ? .white(0.04) : .black(0.03)
         let recessed: AtticRGBA = dark ? .white(ic ? 0.09 : 0.055) : .black(ic ? 0.07 : 0.045)
 
-        let recipes = Self.recipes(dark: dark, ic: ic)
+        let recipes = Self.recipes(dark: dark, ic: ic, base: basePanel)
+        let glassFace = AtticGlassModel.worstFace(dark: dark)
+        let glassDisabled = AtticGlassModel.disabledFill(dark: dark)
+        // Lighter than the selected chip in Light: the outline icons on a
+        // pressed glass button render thin, and glass over a tinted Light
+        // surface is already the darkest face they sit on.
+        let glassPressed: AtticRGBA = dark ? chipSelected : .black(ic ? 0.10 : 0.045)
 
         let popoverFill = dark ? AtticRGBA(0x363637) : AtticRGBA(0xFEFEFE)
         let contentCard = dark ? AtticRGBA(0x2E2E2E) : AtticRGBA(0xFBFBFB)
@@ -195,15 +329,24 @@ struct AtticColorTokens: Equatable, Sendable {
         /// Tuning a role against backgrounds it never sits on would flatten
         /// the ladder (helper would climb to the label's grey).
         func backgrounds(for ink: AtticInk, on surface: AtticRGBA) -> [AtticRGBA] {
-            let face = recipes.rest.face.over(basePanel)
-            let ghostFace = recipes.disabled.face.over(basePanel)
+            // A control's label sits on the Craft-style face or on Liquid
+            // Glass over the surface, whichever the controls are.
+            let faces = [recipes.rest.face.over(basePanel), glassFace.over(surface)]
+            // A disabled control: the Craft style's ghost is judged on its
+            // rest face (the harder of the two), glass on its ghost fill.
+            let ghostFaces = [recipes.rest.face.over(basePanel), glassDisabled.over(glassFace.over(surface))]
             let card = recessed.over(surface)
             let rows = [surface, hover.over(surface), selected.over(surface), pressed.over(surface), card, hover.over(card)]
             let menus = [popoverFill, selected.over(popoverFill), pressed.over(popoverFill), chipHover.over(popoverFill)]
             let settings = [contentCard, recessed.over(contentCard), groupCard, hover.over(groupCard), selected.over(groupCard)]
             switch ink {
-            case .heading, .body, .glyph:
-                return rows + menus + settings + [face, chipHover.over(face), chipSelected.over(face)]
+            case .heading, .glyph:
+                // Labels and glyphs on controls, their hover and press,
+                // and the selected chip.
+                return rows + menus + settings + faces.flatMap { [$0, chipHover.over($0), chipSelected.over($0)] }
+            case .body:
+                // Typed text in the add bar, the selection bar's count.
+                return rows + menus + settings + faces
             case .label:
                 // Grouped-row labels and quick-look actions.
                 return rows + settings
@@ -217,13 +360,13 @@ struct AtticColorTokens: Equatable, Sendable {
                 return [surface, hover.over(surface)]
             case .placeholder:
                 // The add bar's field, and the surface.
-                return [face, surface]
+                return faces + [surface]
             case .icon, .chevron:
-                return rows + menus + [face, chipHover.over(face), chipSelected.over(face)]
+                return rows + menus + faces.flatMap { [$0, chipHover.over($0), chipSelected.over($0)] }
             case .disabledText, .disabledIcon:
                 // Disabled rows, menu rows, and the ghost of a raised control.
                 // A disabled control shows no hover or press.
-                return [surface, card, popoverFill, contentCard, groupCard, ghostFace, face]
+                return [surface, card, popoverFill, contentCard, groupCard] + ghostFaces
             default:
                 return rows + menus + settings
             }
@@ -261,7 +404,6 @@ struct AtticColorTokens: Equatable, Sendable {
         if inks[.label]!.contrast(on: basePanel) < helperOnBase * 1.06 {
             inks[.label] = inks[.helper]!.tuned(toContrast: helperOnBase * 1.06, against: [basePanel], lighten: dark)
         }
-        inks[.priorityNone] = inks[.icon]!
         let chromeBackgrounds = [baseChrome, selected.over(baseChrome), hover.over(baseChrome)]
         for ink in [AtticInk.chromeHeading, .chromeBody, .chromeHint] {
             inks[ink] = inks[ink]!.tuned(toContrast: target(ink), against: chromeBackgrounds, lighten: dark)
@@ -283,8 +425,14 @@ struct AtticColorTokens: Equatable, Sendable {
             .tuned(toContrast: target(.accentText), against: meaning + tagBackgrounds, lighten: dark)
         let pri = Ladder.priorityHues(dark: dark)
         inks[.priorityHigh] = pri.high.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
-        inks[.priorityMedium] = pri.medium.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
-        inks[.priorityLow] = pri.low.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        // Priority greys, on the rows the ring sits on (as High's red): None
+        // the faintest grey at the non-text floor, Low and Medium a step and
+        // two beyond it, as in the approved status sheet.
+        inks[.priorityNone] = (dark ? AtticRGBA(0x6C6C6F) : AtticRGBA(0xA2A2A4)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        let noneOnBase = inks[.priorityNone]!.contrast(on: basePanel)
+        for (ink, step) in Self.priorityGreySteps(dark: dark) {
+            inks[ink] = inks[.priorityNone]!.tuned(toContrast: noneOnBase * step, against: [basePanel], lighten: dark)
+        }
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
         // Done is faded as in v4 (#C9CBCE / a dim fill), held at 3 : 1.
@@ -296,12 +444,18 @@ struct AtticColorTokens: Equatable, Sendable {
         for fill in [AtticInk.doneFill, .disabledIcon] {
             inks[fill] = inks[fill]!.tuned(toContrast: nonTextTarget, against: [inks[.onDone]!], lighten: dark)
         }
+        // A done task: a quiet grey disc (about 0.88 white in Light, 0.32 in
+        // Dark) with a darker (Light) or lighter (Dark) grey check at 3 : 1.
+        let doneDisc: AtticRGBA = dark ? AtticRGBA(ic ? 0x5A5A5D : 0x525254) : AtticRGBA(ic ? 0xD8D8DA : 0xE1E1E3)
+        inks[.doneCheck] = (dark ? AtticRGBA(0xA9A9AC) : AtticRGBA(0x737376))
+            .tuned(toContrast: ic ? 4.5 : nonTextTarget, against: [doneDisc], lighten: dark)
 
         func panelPairs() -> [AtticSurfaceModel.Pair] {
             // Tag fills follow the accent as it is now (it may be retuned).
             AtticSurfaceModel.readabilityPairs(
                 inks: inks, hover: hover, selected: selected, pressed: pressed,
-                controlFace: recipes.rest.face.over(basePanel), chipSelected: chipSelected, chipHover: chipHover,
+                controlFace: recipes.rest.face.over(basePanel), glassFace: glassFace, glassDisabled: glassDisabled, glassPressed: glassPressed,
+                chipSelected: chipSelected, chipHover: chipHover, doneDisc: doneDisc,
                 recessed: recessed,
                 tagFill: inks[.accent]!.withAlpha(dark ? 0.16 : 0.10),
                 tagFillSelected: inks[.accent]!.withAlpha(dark ? 0.26 : 0.18)
@@ -319,12 +473,26 @@ struct AtticColorTokens: Equatable, Sendable {
         // no legacy grey and plays no part in the coverage.
         legacy[.accentText] = (key.palette == .original ? legacy[.helper]! : accentBase)
             .tuned(toContrast: textTarget, against: meaning + tagBackgrounds, lighten: dark)
+        // Low and Medium were blue and orange at the floor when PR #5 was
+        // measured; the greys that replaced them are never harder, and the
+        // coverage keeps the colours it was set with.
+        let legacyPriority: [AtticInk: AtticRGBA] = [
+            .priorityNone: inks[.icon]!,
+            .priorityLow: pri.low.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark),
+            .priorityMedium: pri.medium.tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
+        ]
         func coveragePairs(_ pairs: [AtticSurfaceModel.Pair]) -> [AtticSurfaceModel.Pair] {
+            // Labels on Liquid Glass are kept readable by their inks (tuned
+            // against the worst glass face), never by making the surface
+            // less see-through: the coverage stays the PR #5 look.
+            let pairs = pairs.filter { !$0.onGlass && $0.ink != .doneCheck }.map { pair in
+                legacyPriority[pair.ink].map { AtticSurfaceModel.Pair(ink: pair.ink, foreground: $0, overlays: pair.overlays, onGlass: pair.onGlass) } ?? pair
+            }
             guard !ic else { return pairs }
             return pairs.compactMap { pair in
                 guard pair.ink.isSecondaryText else { return pair }
                 guard let old = legacy[pair.ink] else { return nil }
-                return .init(ink: .body, foreground: old, overlays: pair.overlays)
+                return .init(ink: .body, foreground: old, overlays: pair.overlays, onGlass: pair.onGlass)
             }
         }
 
@@ -369,6 +537,12 @@ struct AtticColorTokens: Equatable, Sendable {
                 }
             }
         }
+        // The surface tuning can bring the priority greys together (each
+        // stops at the floor): keep Low and Medium a step beyond None.
+        let noneOnPanel = inks[.priorityNone]!.contrast(on: basePanel)
+        for (ink, step) in Self.priorityGreySteps(dark: dark) where inks[ink]!.contrast(on: basePanel) < noneOnPanel * step {
+            inks[ink] = inks[ink]!.tuned(toContrast: noneOnPanel * step, against: [basePanel], lighten: dark)
+        }
 
         return AtticColorTokens(
             context: key,
@@ -387,11 +561,16 @@ struct AtticColorTokens: Equatable, Sendable {
             chipSelected: chipSelected,
             chipHover: chipHover,
             skeleton: dark ? .white(0.08) : .black(0.06),
+            doneDisc: doneDisc,
             controlBase: basePanel,
             raised: recipes.rest,
             raisedHover: recipes.hover,
             raisedPressed: recipes.pressed,
             raisedDisabled: recipes.disabled,
+            glassStandIn: AtticGlassModel.standIn(dark: dark, increaseContrast: ic),
+            glassFace: glassFace,
+            glassDisabled: glassDisabled,
+            glassPressed: glassPressed,
             popoverFill: popoverFill,
             popoverInnerRim: dark ? .white(ic ? 0.24 : 0.10) : .white(0.9),
             popoverOuterRim: dark ? (ic ? .white(0.35) : .black(0.55)) : .black(ic ? 0.30 : 0.11),
@@ -401,44 +580,51 @@ struct AtticColorTokens: Equatable, Sendable {
         )
     }
 
-    private static func recipes(dark: Bool, ic: Bool) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
+    /// Low and Medium's contrast on the panel as multiples of None's: wider
+    /// steps in Light (the reference sheet's greys), gentler in Dark, where
+    /// the same multiples would reach almost white.
+    private static func priorityGreySteps(dark: Bool) -> [(AtticInk, Double)] {
+        dark ? [(.priorityLow, 1.2), (.priorityMedium, 1.5)] : [(.priorityLow, 1.35), (.priorityMedium, 1.85)]
+    }
+
+    /// The Craft-style recipe, matched to Craft's controls by their measured
+    /// deltas from the page (owner references, 2026-09-25) and moved onto
+    /// Attic's surfaces. Light (one notch firmer than Craft): a fill 7
+    /// below #FAFAFA with a white band inside the top and bottom edges, a
+    /// 1 pt edge about −11 at the top, −23 on the sides and −31 at the
+    /// bottom, and a barely-there shadow. Dark: a fill 17 above #2C2C2D and
+    /// a bright 1 pt rim, about +64 at the top, +37 on the sides and +56 at
+    /// the bottom, with no dark outer edge. Increase Contrast keeps the
+    /// fill and strengthens the edge.
+    private static func recipes(dark: Bool, ic: Bool, base: AtticRGBA) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
         if dark {
-            func recipe(fill: Double, top: Double, outer: AtticRGBA, shadow: Double) -> AtticRaisedRecipe {
+            func recipe(fill: Double, top: Double, middle: Double, bottom: Double) -> AtticRaisedRecipe {
                 AtticRaisedRecipe(
-                    sheenTop: .white(fill + 0.01), face: .white(fill), sheenBottom: .white(fill + 0.005),
-                    innerRimTop: .white(top), innerRimBottom: .white(top * 0.55),
-                    outerRimTop: outer, outerRimBottom: outer,
-                    outerRimWidth: ic ? 1 : 0.5,
-                    shadow: .black(shadow), shadowRadius: 1, shadowY: 1
+                    base: base, fill: .white(fill), sheenTop: .white(0.015), sheenBottom: .white(0.005),
+                    edgeTop: .white(ic ? 0.45 : top), edgeMiddle: .white(ic ? 0.35 : middle), edgeBottom: .white(ic ? 0.42 : bottom)
                 )
             }
-            let outer: AtticRGBA = ic ? .white(0.35) : .black(0.45)
             return (
-                recipe(fill: 0.11, top: 0.18, outer: outer, shadow: 0.25),
-                recipe(fill: 0.14, top: 0.20, outer: outer, shadow: 0.25),
-                recipe(fill: 0.07, top: 0.08, outer: outer, shadow: 0.12),
-                recipe(fill: 0.05, top: 0.06, outer: .black(0.25), shadow: 0)
+                recipe(fill: 0.08, top: 0.24, middle: 0.10, bottom: 0.21),
+                recipe(fill: 0.10, top: 0.26, middle: 0.12, bottom: 0.23),
+                recipe(fill: 0.05, top: 0.14, middle: 0.08, bottom: 0.14),
+                recipe(fill: 0.04, top: 0.10, middle: 0.06, bottom: 0.08)
             )
         }
-        // Light: "a sheen close to the surface colour (slightly lighter at top
-        // and bottom), a 1 pt white inner rim, a 0.5 pt hairline slightly
-        // darker at the bottom, and only a tiny 1 pt shadow". The sheen is
-        // kept faint on purpose: a stronger middle band is what read as puffy
-        // in the prototype.
-        func recipe(top: Double, face: Double, bottom: Double, rim: Double, outerTop: Double, outerBottom: Double, shadow: Double) -> AtticRaisedRecipe {
+        func recipe(fill: Double, sheen: Double, top: Double, middle: Double, bottom: Double, shadow: Double) -> AtticRaisedRecipe {
             AtticRaisedRecipe(
-                sheenTop: .white(top), face: face >= 0 ? .black(face) : .white(-face), sheenBottom: .white(bottom),
-                innerRimTop: .white(rim), innerRimBottom: .white(rim * 0.6),
-                outerRimTop: .black(ic ? 0.30 : outerTop), outerRimBottom: .black(ic ? 0.36 : outerBottom),
-                outerRimWidth: ic ? 1 : 0.5,
+                base: base, fill: fill >= 0 ? .black(fill) : .white(-fill),
+                sheenTop: .white(sheen), sheenBottom: .white(sheen * 0.67),
+                innerRimTop: .white(sheen > 0 ? 0.95 : 0), innerRimBottom: .white(sheen > 0 ? 0.7 : 0),
+                edgeTop: .black(ic ? 0.30 : top), edgeMiddle: .black(ic ? 0.30 : middle), edgeBottom: .black(ic ? 0.36 : bottom),
                 shadow: .black(shadow), shadowRadius: 0.75, shadowY: 0.5
             )
         }
         return (
-            recipe(top: 0.55, face: 0.018, bottom: 0.30, rim: 0.9, outerTop: 0.075, outerBottom: 0.13, shadow: 0.07),
-            recipe(top: 0.75, face: -0.25, bottom: 0.45, rim: 0.95, outerTop: 0.075, outerBottom: 0.13, shadow: 0.07),
-            recipe(top: 0.0, face: 0.055, bottom: 0.10, rim: 0.0, outerTop: 0.09, outerBottom: 0.12, shadow: 0.0),
-            recipe(top: 0.30, face: 0.0, bottom: 0.15, rim: 0.5, outerTop: 0.05, outerBottom: 0.06, shadow: 0.0)
+            recipe(fill: 0.028, sheen: 0.6, top: 0.045, middle: 0.065, bottom: 0.12, shadow: 0.05),
+            recipe(fill: 0.012, sheen: 0.7, top: 0.045, middle: 0.065, bottom: 0.12, shadow: 0.05),
+            recipe(fill: 0.06, sheen: 0, top: 0.06, middle: 0.075, bottom: 0.10, shadow: 0),
+            recipe(fill: 0.02, sheen: 0.4, top: 0.03, middle: 0.04, bottom: 0.06, shadow: 0)
         )
     }
 

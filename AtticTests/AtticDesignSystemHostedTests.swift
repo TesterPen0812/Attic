@@ -78,13 +78,59 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         spin(0.1)
     }
 
+    // MARK: Window appearance
+
+    /// Native menus follow the appearance chosen in Attic, not the Mac's:
+    /// with the system in Dark, a Light Attic window (and its pop-up
+    /// buttons) is aqua, and app-wide, a menu is aqua too.
+    func testNativeMenusFollowTheChosenAppearance() throws {
+        for (mode, expected) in [(AtticDesignContext.Mode?.some(.light), NSAppearance.Name.aqua), (.dark, .darkAqua), (nil, .darkAqua)] {
+            let hosting = NSHostingView(rootView: AnyView(Color.clear.frame(width: 200, height: 60).atticWindowAppearance(mode)))
+            hosting.frame = CGRect(x: 0, y: 0, width: 200, height: 60)
+            let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            // Stand in for a Mac in Dark mode (without touching the whole
+            // app's appearance, which other hosted tests share): the window
+            // starts dark, as it would inherit from a Dark system.
+            window.appearance = NSAppearance(named: .darkAqua)
+            let popUp = NSPopUpButton(frame: CGRect(x: 10, y: 10, width: 120, height: 24), pullsDown: false)
+            popUp.addItems(withTitles: ["Solid", "Glass"])
+            window.contentView = hosting
+            hosting.addSubview(popUp)
+            windows.append(window)
+            hosting.layoutSubtreeIfNeeded()
+            spin()
+            let caption = mode?.rawValue ?? "system"
+            if let mode {
+                XCTAssertEqual(window.appearance?.name, expected, caption)
+                XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), expected, caption)
+                XCTAssertEqual(popUp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), expected, "A pop-up's menu draws in its control's appearance · \(mode)")
+            } else {
+                XCTAssertNil(window.appearance, "nil follows the system")
+            }
+        }
+        // App-wide (the gallery): a menu with no window of its own follows
+        // too. Restored at once.
+        let previous = NSApp.appearance
+        AtticWindowAppearance.applyToApp(.light)
+        let menuAppearance = NSMenu(title: "Context").effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+        let appAppearance = NSApp.appearance?.name
+        NSApp.appearance = previous
+        spin()
+        XCTAssertEqual(appAppearance, .aqua)
+        XCTAssertEqual(menuAppearance, .aqua)
+    }
+
     // MARK: Native controls
 
     /// The pieces the spec keeps native (text field, switch, slider, pop-up
     /// and title menus) are the system's own AppKit controls when hosted,
     /// and what they draw meets the same rule as Attic's own ink.
     func testNativeControlsAreHostedAsTheSystemsOwn() throws {
-        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark), AtticDesignContext(mode: .light, increaseContrast: true)] {
+        // The Craft-style controls: a cached display cannot draw Liquid
+        // Glass, so the bar's face must be drawn for its placeholder to be
+        // read from pixels (the read ink is then judged on the glass too).
+        for context in [AtticDesignContext(mode: .light, controls: .craft), AtticDesignContext(mode: .dark, controls: .craft), AtticDesignContext(mode: .light, increaseContrast: true, controls: .craft)] {
             var isOn = true
             var tint = 0.6
             var surface = "solid"
@@ -154,11 +200,14 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             let field = try XCTUnwrap(all.first { $0 is NSTextField })
             let frame = field.convert(field.bounds, to: hosting)
             let flipped = CGRect(x: frame.minX, y: hosting.isFlipped ? frame.minY : hosting.bounds.height - frame.maxY, width: frame.width, height: frame.height)
+            // Judged on the drawn Craft-style face, and the ink it drew on
+            // the worst face Liquid Glass leaves on the surface.
             let tokens = context.tokens
-            let face = tokens.raised.face.over(tokens.controlBase)
-            let glyph = try XCTUnwrap(bitmap.glyphContrast(in: flipped, background: face, scale: scale), "The placeholder drew nothing")
             let floor = AtticSurfaceModel.floor(for: .placeholder, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
-            XCTAssertGreaterThanOrEqual(glyph.ratio + AtticAppearanceCheck.glyphTolerance, floor, "\(context.caption): hosted placeholder \(glyph.ink) on \(face)")
+            let glyph = try XCTUnwrap(bitmap.glyphContrast(in: flipped, background: tokens.controlFace, scale: scale), "The placeholder drew nothing")
+            XCTAssertGreaterThanOrEqual(glyph.ratio + AtticAppearanceCheck.glyphTolerance, floor, "\(context.caption): hosted placeholder \(glyph.ink) on \(tokens.controlFace)")
+            let glass = tokens.glassFace.over(tokens.panel.base)
+            XCTAssertGreaterThanOrEqual(glyph.ink.contrast(on: glass) + AtticAppearanceCheck.glyphTolerance, floor, "\(context.caption): hosted placeholder \(glyph.ink) on glass \(glass)")
 
             // The hosted add bar keeps its token height.
             XCTAssertEqual(NSHostingView(rootView: AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {}).atticDesign(context)).fittingSize.height, AtticControlSize.addBarHeight, accuracy: 0.5)

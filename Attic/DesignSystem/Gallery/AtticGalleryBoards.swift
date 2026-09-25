@@ -221,6 +221,24 @@ enum AtticGallerySamples {
         .init(title: "Renew domain", state: .done, priority: .low)
     ]
 
+    /// More rows for the live panel, so its list scrolls under the header
+    /// and the add bar.
+    static let moreRows: [AtticTaskRowModel] = [
+        .init(title: "Draft the onboarding email", state: .todo, priority: .medium, due: .init(text: "Mon", isUrgent: false)),
+        .init(title: "Review the Settings copy", state: .inProgress, priority: .low, tags: ["design"]),
+        .init(title: "Pay the studio invoice", state: .todo, priority: .high, due: .init(text: "Yesterday", isUrgent: true)),
+        .init(title: "Back up the photo library"),
+        .init(title: "Order printer paper", state: .todo, priority: .low),
+        .init(title: "Plan the team offsite", state: .todo, priority: .medium, subtasks: (0, 5)),
+        .init(title: "Renew the passport", state: .todo, priority: .none, due: .init(text: "Next week", isUrgent: false)),
+        .init(title: "Water the plants", state: .done),
+        .init(title: "Call the bank about the card", state: .todo, priority: .high, due: .init(text: "Today", isUrgent: true)),
+        .init(title: "Sketch the Canvas toolbar", state: .inProgress, priority: .medium, tags: ["canvas"]),
+        .init(title: "Book the car service", due: .init(text: "Oct 3", isUrgent: false)),
+        .init(title: "Send the contract back", state: .todo, priority: .medium),
+        .init(title: "Tidy the Downloads folder", state: .todo, priority: .low)
+    ]
+
     static let subtasks: [AtticSubtaskModel] = [
         .init(title: "Freeze strings", isDone: true),
         .init(title: "Write release notes"),
@@ -295,43 +313,119 @@ struct AtticGalleryPanelComposition: View {
     var selectedIndex: Int? = 1
     /// Expands the first row's quick look (puts label text in the panel).
     var showsQuickLook = false
+    /// Live only: where the list starts scrolled to (the glass lab shows
+    /// rows under the header and the add bar).
+    var initialScroll: CGFloat = 0
+
+    @Environment(\.atticCapture) private var capture
+    @State private var scroll = ScrollPosition()
+
+    /// The panel's own coordinate space (the scroll edge zones are measured in it).
+    static let space = NamedCoordinateSpace.named("AtticGalleryPanel")
+
+    /// Above the status tabs: the header's margin, controls and gap.
+    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.statusTabsTop
+    /// Below the list: the add bar and its margins.
+    private static let footerZone = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
 
     var body: some View {
-        ZStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.statusTabsTop)
-                AtticStatusTabs(items: AtticGallerySamples.tabs, selection: $demo.tab)
-                    .padding(.leading, AtticLayout.circleX)
-                Color.clear.frame(height: AtticLayout.statusTabsToList)
-                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    GalleryTaskRow(model: row, isSelected: index == selectedIndex, isExpanded: showsQuickLook && index == 0)
-                    if showsQuickLook, index == 0 {
-                        GalleryQuickLook(subtasks: AtticGallerySamples.subtasks)
-                    }
-                }
-                AtticEmptyLine(text: String(localized: "Done tasks move to Done tomorrow"))
-                Spacer(minLength: 0)
+        Group {
+            if capture == nil {
+                live
+            } else {
+                still
             }
-            VStack(spacing: 0) {
-                AtticEdgeVeil(edge: .top, height: AtticEdgeBlur.panelTop)
-                Spacer(minLength: 0)
-                AtticEdgeVeil(edge: .bottom, height: AtticEdgeBlur.panelBottom)
-            }
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)", action: demo.record("Pin"))
-                    Spacer(minLength: AtticSpacing.betweenControls)
-                    AtticPageSwitch(items: AtticGallerySamples.pages, selection: $demo.page)
-                }
-                Spacer(minLength: 0)
-                AtticAddBar(placeholder: "Add a task…", text: $demo.addText) { demo.addText = "" }
-            }
-            .padding(AtticSpacing.panelMargin)
         }
         .frame(width: AtticLayout.panelSize.width, height: AtticLayout.panelSize.height)
+        .coordinateSpace(Self.space)
         .background(AtticPanelStageSurface(cornerSize: 52))
         .clipShape(Squircle(cornerRadius: 52, exponent: AtticStyle.panelSquircleExponent))
         .overlay(AtticPanelRim(cornerSize: 52))
+    }
+
+    /// Live, the list scrolls under the header and the add bar, which float
+    /// over it. The system's soft scroll edge does not draw under Liquid
+    /// Glass bars (macOS 26: none at all under a `safeAreaBar` of glass
+    /// controls, and a hard line under drawn ones), so the scroll view has
+    /// no bars and no system edge effect: the rows blur and fade themselves
+    /// as they pass under a control (`atticScrollEdgeFade`), the same with
+    /// either control material.
+    private var live: some View {
+        ZStack(alignment: .top) {
+            ScrollView {
+                list(rows + AtticGallerySamples.moreRows, fades: true)
+            }
+            .contentMargins(.top, Self.headerZone, for: .scrollContent)
+            .contentMargins(.bottom, Self.footerZone, for: .scrollContent)
+            .scrollIndicators(.never)
+            .scrollEdgeEffectHidden(true, for: .all)
+            .scrollPosition($scroll)
+            .onAppear { if initialScroll > 0 { scroll.scrollTo(y: initialScroll) } }
+            controls
+        }
+    }
+
+    /// Captures: the same layout, still (nothing scrolls in a render).
+    private var still: some View {
+        ZStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: Self.headerZone)
+                list(rows)
+                Spacer(minLength: 0)
+            }
+            veils
+            controls
+        }
+    }
+
+    private var controls: some View {
+        VStack(spacing: 0) {
+            header
+            Spacer(minLength: 0)
+            addBar
+        }
+        .padding(AtticSpacing.panelMargin)
+    }
+
+    private var veils: some View {
+        VStack(spacing: 0) {
+            AtticEdgeVeil(edge: .top, height: AtticEdgeBlur.panelTop)
+            Spacer(minLength: 0)
+            AtticEdgeVeil(edge: .bottom, height: AtticEdgeBlur.panelBottom)
+        }
+    }
+
+    private var header: some View {
+        AtticControlGroup {
+            HStack(spacing: 0) {
+                AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)", action: demo.record("Pin"))
+                Spacer(minLength: AtticSpacing.betweenControls)
+                AtticPageSwitch(items: AtticGallerySamples.pages, selection: $demo.page)
+            }
+        }
+    }
+
+    private var addBar: some View {
+        AtticAddBar(placeholder: "Add a task…", text: $demo.addText) { demo.addText = "" }
+    }
+
+    private func list(_ rows: [AtticTaskRowModel], fades: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            AtticStatusTabs(items: AtticGallerySamples.tabs, selection: $demo.tab)
+                .padding(.leading, AtticLayout.circleX)
+                .atticScrollEdgeFade(fades, in: Self.space)
+            Color.clear.frame(height: AtticLayout.statusTabsToList)
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                GalleryTaskRow(model: row, isSelected: index == selectedIndex, isExpanded: showsQuickLook && index == 0)
+                    .atticScrollEdgeFade(fades, in: Self.space)
+                if showsQuickLook, index == 0 {
+                    GalleryQuickLook(subtasks: AtticGallerySamples.subtasks)
+                        .atticScrollEdgeFade(fades, in: Self.space)
+                }
+            }
+            AtticEmptyLine(text: String(localized: "Done tasks move to Done tomorrow"))
+                .atticScrollEdgeFade(fades, in: Self.space)
+        }
     }
 }
 
@@ -546,39 +640,43 @@ private struct SmallControlsBoard: View {
 private struct StatusCircleBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
+    /// Ticked of three subtasks, and none at all.
+    private static let fractions: [(title: String, subtasks: (done: Int, total: Int)?)] = [
+        ("0 of 3", (0, 3)), ("1 of 3", (1, 3)), ("2 of 3", (2, 3)), ("No subtasks", nil)
+    ]
+
     var body: some View {
-        BoardHeading(title: "States × priorities · 16 pt")
+        BoardHeading(title: "States × priorities · 16 pt · weight shows priority, only High is red")
         VStack(alignment: .leading, spacing: 10) {
             ForEach(AtticTaskState.allCases, id: \.self) { state in
                 AtticSpecimen(stateTitle(state), fullWidth: true) {
-                    HStack(spacing: 22) {
-                        ForEach(AtticPriority.allCases, id: \.self) { priority in
-                            VStack(spacing: 4) {
-                                AtticStatusCircle(state: state, priority: priority)
-                                AtticText(verbatim: priority.rawValue.capitalized, style: .rowMeta, ink: .helper)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
+                    priorities { AtticStatusCircle(state: state, priority: $0) }
                 }
             }
         }
-        BoardHeading(title: "Completion · fill fades in, check draws (200 ms)")
-        AtticSpecimen("Frames: 0, 35, 70, 100 %", fullWidth: true) {
+        BoardHeading(title: "In progress · the wedge is the share of subtasks ticked (at least a quarter)")
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Self.fractions, id: \.title) { fraction in
+                AtticSpecimen(fraction.title, fullWidth: true) {
+                    priorities { AtticStatusCircle(state: .inProgress, priority: $0, progress: AtticStatusCircle.progress(fraction.subtasks)) }
+                }
+            }
+        }
+        BoardHeading(title: "Completion · the wedge sweeps to a full disc, then the check draws")
+        AtticSpecimen("Frames from 1 of 3: sweep 0, 50, 100 %, then check 50, 100 %", fullWidth: true) {
             HStack(spacing: 22) {
-                ForEach([0.0, 0.35, 0.7, 1.0], id: \.self) { progress in
-                    // Frames of a 200 ms animation: the in-between frames are
+                ForEach(Array([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.0, 0.5), (1.0, 1.0)].enumerated()), id: \.offset) { _, frame in
+                    // Frames of the animation: the in-between frames are
                     // transient, so only the settled frame is judged.
-                    AtticStatusCircle(state: .done, priority: .high, checkProgress: progress)
-                        .opacity(progress == 0 ? 0.25 : min(1, 0.4 + progress))
-                        .transformEnvironment(\.atticProbesDisabled) { if progress < 1 { $0 = true } }
+                    AtticStatusCircle(state: .done, priority: .high, progress: 1.0 / 3, checkProgress: frame.1, completionProgress: frame.0)
+                        .transformEnvironment(\.atticProbesDisabled) { if frame.1 < 1 { $0 = true } }
                 }
             }
             .padding(.horizontal, 16)
         }
-        AtticSpecimen("Live: click the circle to advance", fullWidth: true) {
+        AtticSpecimen("Live: click the circle to advance (1 of 3 subtasks)", fullWidth: true) {
             HStack(spacing: 10) {
-                AtticStatusButton(state: demo.liveState, priority: .medium) {
+                AtticStatusButton(state: demo.liveState, priority: .medium, subtasks: (1, 3)) {
                     demo.liveState = switch demo.liveState {
                     case .todo: .inProgress
                     case .inProgress: .done
@@ -597,23 +695,34 @@ private struct StatusCircleBoard: View {
             }
             .padding(.horizontal, 10)
         }
-        AtticSpecimen("Differentiate Without Colour mark", fullWidth: true) {
-            HStack(spacing: 22) {
-                ForEach(AtticPriority.allCases, id: \.self) { priority in
-                    AtticStatusCircle(state: .todo, priority: priority)
-                }
+        AtticSpecimen("Differentiate Without Colour: High is heavier than Medium", fullWidth: true) {
+            VStack(alignment: .leading, spacing: 8) {
+                priorities { AtticStatusCircle(state: .todo, priority: $0) }
+                priorities { AtticStatusCircle(state: .inProgress, priority: $0, progress: 1.0 / 3) }
             }
-            .padding(.horizontal, 16)
             .transformEnvironment(\.atticDesign) { $0.differentiateWithoutColor = true }
         }
     }
 
+    /// One circle per priority, labelled.
+    private func priorities(@ViewBuilder _ circle: @escaping (AtticPriority) -> some View) -> some View {
+        HStack(spacing: 22) {
+            ForEach(AtticPriority.allCases, id: \.self) { priority in
+                VStack(spacing: 4) {
+                    circle(priority)
+                    AtticText(verbatim: priority.rawValue.capitalized, style: .rowMeta, ink: .helper)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
     private func stateTitle(_ state: AtticTaskState) -> String {
         switch state {
-        case .todo: "To do: ring in the priority colour"
-        case .inProgress: "In progress: half filled"
-        case .done: "Done: filled, with a check"
-        case .backlog: "Backlog: dashed ring"
+        case .todo: "To do: a grey ring, heavier and darker with priority; High is red"
+        case .inProgress: "In progress, no subtasks: a quarter wedge (started)"
+        case .done: "Done: a quiet grey disc with a darker check"
+        case .backlog: "Backlog: a dashed grey ring"
         }
     }
 }
@@ -846,16 +955,19 @@ private struct EdgeBlurBoard: View {
     @Environment(\.atticCapture) private var capture
 
     var body: some View {
-        BoardHeading(title: "Content fades under a surface veil (≤ 65 %) over the soft blur")
+        BoardHeading(title: "Content blurs (≤ 6 pt) and fades (≤ 65 %) under the controls")
         AtticSpecimen("Top 56 pt, bottom 60 pt", fullWidth: true) {
             Color.clear
                 .frame(height: 300)
                 .overlay(alignment: .top) { list }
                 .overlay {
-                    VStack(spacing: 0) {
-                        AtticEdgeVeil(edge: .top, height: AtticEdgeBlur.panelTop)
-                        Spacer(minLength: 0)
-                        AtticEdgeVeil(edge: .bottom, height: AtticEdgeBlur.panelBottom)
+                    // Captures draw the list still, so the fade is the veil.
+                    if capture != nil {
+                        VStack(spacing: 0) {
+                            AtticEdgeVeil(edge: .top, height: AtticEdgeBlur.panelTop)
+                            Spacer(minLength: 0)
+                            AtticEdgeVeil(edge: .bottom, height: AtticEdgeBlur.panelBottom)
+                        }
                     }
                 }
                 .overlay {
@@ -869,9 +981,12 @@ private struct EdgeBlurBoard: View {
                     }
                     .padding(AtticSpacing.panelMargin)
                 }
+                .coordinateSpace(Self.space)
                 .clipped()
         }
     }
+
+    private static let space = NamedCoordinateSpace.named("AtticEdgeBlurSpecimen")
 
     @ViewBuilder
     private var list: some View {
@@ -890,11 +1005,11 @@ private struct EdgeBlurBoard: View {
             ScrollView {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: AtticEdgeBlur.panelTop)
-                    ForEach(rows) { GalleryTaskRow(model: $0) }
+                    ForEach(rows) { GalleryTaskRow(model: $0).atticScrollEdgeFade(in: Self.space) }
                     Color.clear.frame(height: AtticEdgeBlur.panelBottom)
                 }
             }
-            .scrollEdgeEffectStyle(.soft, for: .all)
+            .scrollEdgeEffectHidden(true, for: .all)
         }
     }
 }
