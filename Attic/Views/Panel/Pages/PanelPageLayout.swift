@@ -13,6 +13,15 @@ struct PanelPageLayout: Equatable {
     /// Corner-aware insets for floating controls (header, bottom bars).
     var chromeInsets: EdgeInsets
 
+    /// The panel's own coordinate space: its bounds are the whole visible
+    /// panel, header and bottom bars included, so `atticScrollEdgeFade`
+    /// measures its edge zones in it.
+    static let coordinateSpace = NamedCoordinateSpace.named("AtticPanel")
+
+    /// The bottom of the header, measured from the panel's top edge. Content
+    /// that scrolls starts below it and fades as it passes under it.
+    var headerBottom: CGFloat { PanelHeaderLayout.bottom(chromeInsets: chromeInsets) }
+
     init(cornerSize: CGFloat, panelSize: CGSize) {
         self.cornerSize = cornerSize
         self.panelSize = panelSize

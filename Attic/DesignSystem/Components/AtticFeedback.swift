@@ -54,6 +54,79 @@ private struct AtticToastButton: View {
     }
 }
 
+// MARK: - Notice
+
+/// A problem that concerns the whole panel (a failed save, an import that
+/// could not finish): raised over content like the toast, in the warning
+/// colour, with the next step as a button. It stays until it is resolved or
+/// dismissed; a problem is never hidden. The message is the store's own
+/// sentence, so it may take two lines (the only wrapping panel text), and
+/// the full text is its tooltip and VoiceOver label.
+struct AtticNotice: View {
+    let message: String
+    /// "Retry" when the failed step can run again; nil offers only Dismiss.
+    var actionTitle: String?
+    var onAction: (() -> Void)?
+    let onDismiss: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @State private var probeID = UUID()
+
+    var body: some View {
+        let tokens = design.tokens
+        let radius = AtticRadius.control(height: AtticControlSize.toastHeight)
+        HStack(alignment: .center, spacing: AtticNoticeMetrics.gap) {
+            AtticIcon(systemName: "exclamationmark.circle", size: AtticErrorLineMetrics.iconSize, weight: .medium, ink: .warningText)
+            Text(verbatim: message)
+                .font(AtticTextStyle.toast.font)
+                .foregroundStyle(tokens.ink(.warningText).color)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(message)
+            if let actionTitle, let onAction {
+                AtticNoticeButton(title: actionTitle, outerRadius: radius, action: onAction)
+            }
+            AtticSmallButton(systemName: "xmark", label: "Dismiss", action: onDismiss)
+                .accessibilityIdentifier("panel-error-dismiss")
+        }
+        .padding(.leading, AtticToastMetrics.leadingPadding)
+        .padding(.trailing, AtticControlSize.capsuleInset)
+        .padding(.vertical, AtticControlSize.capsuleInset)
+        .frame(minHeight: AtticControlSize.toastHeight)
+        .background(AtticPopoverBackground(cornerRadius: radius))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(message)
+        .atticControlProbe("Notice", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+    }
+}
+
+private struct AtticNoticeButton: View {
+    let title: String
+    let outerRadius: CGFloat
+    let action: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticForcedState) private var forced
+    @State private var hovered = false
+
+    var body: some View {
+        let inner = AtticRadius.nested(outer: outerRadius, gap: AtticControlSize.capsuleInset) ?? outerRadius
+        let hover = forced == .hover || hovered
+        Button(action: action) {
+            AtticText(verbatim: title, style: .controlLabel, ink: .warningText)
+                .padding(.horizontal, AtticToastMetrics.buttonPadding)
+                .frame(height: AtticControlSize.smallHeight)
+                .background(RoundedRectangle(cornerRadius: inner, style: .continuous).fill((hover ? design.tokens.chipSelected : design.tokens.chipHover).color))
+                .contentShape(RoundedRectangle(cornerRadius: inner, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { hovered = $0 }
+    }
+}
+
 // MARK: - Empty, error and loading
 
 /// Empty: one quiet italic line where the first item would be, at the

@@ -572,11 +572,14 @@ final class AppCoordinator: ObservableObject {
         if isPerformanceSeedOnly {
             return
         }
-        NSApp.appearance = settings.appearance.nsAppearance
+        // Attic's chosen Light, Dark or System applies to the whole app, so
+        // every window and every native menu (the menu-bar item's included)
+        // follows it; the panel also sets it on its own window.
+        AtticWindowAppearance.applyToApp(settings.appearance.designMode)
         appearanceObservation = settings.$appearance
             .removeDuplicates()
             .sink { preference in
-                NSApp.appearance = preference.nsAppearance
+                AtticWindowAppearance.applyToApp(preference.designMode)
             }
 
         observeMenuTracking()

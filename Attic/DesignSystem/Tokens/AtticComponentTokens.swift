@@ -271,6 +271,10 @@ enum AtticToastMetrics {
     static let buttonPadding: CGFloat = 10
 }
 
+enum AtticNoticeMetrics {
+    static let gap: CGFloat = 8
+}
+
 enum AtticErrorLineMetrics {
     static let height: CGFloat = 22
     static let gap: CGFloat = 5

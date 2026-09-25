@@ -1,57 +1,21 @@
 import AppKit
 import SwiftUI
 
+/// The menu-bar item's menu: Show Attic, New task, New note, Settings and
+/// Quit, each with its shortcut. It shows no counts, so it observes no store
+/// and does no work while closed.
 struct MenuBarView: View {
-    @ObservedObject var store: TaskStore
     @ObservedObject var coordinator: AppCoordinator
 
     var body: some View {
-        Button("Show Attic", systemImage: "eye") {
-            coordinator.showPanel()
-        }
-
-        Button("New task", systemImage: "plus") {
-            coordinator.showNewTask()
-        }
-        .keyboardShortcut(advertisedGlobalShortcut)
-
-        Button("New note", systemImage: "note.text") {
-            coordinator.showNewNote()
-        }
-
-        Divider()
-
-        HStack {
-            Text("Active Tasks")
-            Spacer()
-            Text("\(activeTaskCount)")
-                .foregroundStyle(.secondary)
-        }
-
-        HStack {
-            Text("Notes")
-            Spacer()
-            Text("\(coordinator.noteStore.notes.count)")
-                .foregroundStyle(.secondary)
-        }
-
-        Button {
-            coordinator.openSettings()
-        } label: {
-            Label("Settings…", systemImage: "gearshape")
-        }
-        .keyboardShortcut(",")
-
-        Divider()
-
-        Button("Quit Attic", systemImage: "power") {
-            NSApp.terminate(nil)
-        }
-        .keyboardShortcut("q")
-    }
-
-    private var activeTaskCount: Int {
-        store.snapshot(for: .tasks).activeCount
+        AtticMenuItems(commands: MenuBarCommands.commands(
+            advertisedNewTaskShortcut: advertisedGlobalShortcut,
+            showPanel: coordinator.showPanel,
+            newTask: coordinator.showNewTask,
+            newNote: coordinator.showNewNote,
+            openSettings: coordinator.openSettings,
+            quit: { NSApp.terminate(nil) }
+        ))
     }
 
     /// Only Carbon's registration makes this combination work from anywhere,
@@ -63,5 +27,26 @@ struct MenuBarView: View {
     private var advertisedGlobalShortcut: KeyboardShortcut? {
         guard coordinator.globalShortcutRegistration.isActive else { return nil }
         return coordinator.globalShortcutCombination.keyboardShortcut
+    }
+}
+
+/// The menu's content, separate from the view so tests can read it.
+enum MenuBarCommands {
+    @MainActor
+    static func commands(
+        advertisedNewTaskShortcut: KeyboardShortcut?,
+        showPanel: @escaping () -> Void,
+        newTask: @escaping () -> Void,
+        newNote: @escaping () -> Void,
+        openSettings: @escaping () -> Void,
+        quit: @escaping () -> Void
+    ) -> [AtticMenuCommand] {
+        [
+            AtticMenuCommand("Show Attic", systemImage: "rectangle.topthird.inset.filled", action: showPanel),
+            AtticMenuCommand("New task", systemImage: "checkmark.circle", shortcut: advertisedNewTaskShortcut, startsSection: true, action: newTask),
+            AtticMenuCommand("New note", systemImage: "note.text", action: newNote),
+            AtticMenuCommand("Settings…", systemImage: "gearshape", shortcut: KeyboardShortcut(",", modifiers: .command), startsSection: true, action: openSettings),
+            AtticMenuCommand("Quit Attic", systemImage: "power", shortcut: KeyboardShortcut("q", modifiers: .command), startsSection: true, action: quit)
+        ]
     }
 }

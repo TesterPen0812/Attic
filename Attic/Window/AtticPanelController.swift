@@ -164,6 +164,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let settings: AppSettings
     private let uiState: PanelUIState
     let subtaskPanels: SubtaskPanelController
+    /// The panel's Undo toast; dismissed whenever the panel hides.
+    let toasts: PanelToastCenter
     private var cancellables: Set<AnyCancellable> = []
     private var isShowing = false
     private var isPanelMotionActive = false
@@ -209,6 +211,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.updatePanelSize(initialSize)
         let chromeInteractionState = PanelChromeInteractionState()
         self.chromeInteractionState = chromeInteractionState
+        let toasts = PanelToastCenter()
+        self.toasts = toasts
         panel = AtticPanel(
             contentRect: CGRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -229,7 +233,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 chromeInteractionState: chromeInteractionState,
                 uiState: uiState,
                 settings: settings,
-                subtaskPanels: subtaskPanels
+                subtaskPanels: subtaskPanels,
+                toasts: toasts
             ),
             panelCornerRadius: settings.panelCornerSize,
             dockedCorner: settings.corner,
@@ -501,6 +506,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
                 self.subtaskPanels.mainPanelDidHide()
+                self.toasts.dismiss()
                 self.visibilityTransition.completeHideTransition(generation)
             }
         }

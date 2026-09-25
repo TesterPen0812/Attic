@@ -148,7 +148,12 @@ struct AtticPageSwitch<Page: Hashable>: View {
         let page: Page
         let systemName: String
         let title: String
+        /// The shortcut as the tooltip shows it ("⌘1").
         let shortcut: String
+        /// The key that selects this page with ⌘ (live only).
+        var keyEquivalent: KeyEquivalent?
+        /// For UI tests and automation.
+        var accessibilityIdentifier: String?
         var id: String { title }
     }
 
@@ -374,8 +379,10 @@ private struct AtticPageChipButton<Page: Hashable>: View {
                 hoveredPage = nil
             }
         }
+        .keyboardShortcut(item.keyEquivalent.map { KeyboardShortcut($0, modifiers: .command) })
         .help("\(item.title) (\(item.shortcut))")
         .accessibilityLabel(item.title)
+        .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
         .atticPageChipProbe(id: probeID, isSelected: isSelected)
     }
@@ -676,12 +683,7 @@ struct AtticCommandMenu<Label: View>: View {
             label
         } else {
             Menu {
-                ForEach(commands) { command in
-                    if command.startsSection, command.id != commands.first?.id {
-                        Divider()
-                    }
-                    item(command)
-                }
+                AtticMenuItems(commands: commands)
             } label: {
                 label
             }
@@ -690,6 +692,23 @@ struct AtticCommandMenu<Label: View>: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel(accessibilityLabel)
+        }
+    }
+}
+
+/// The items of a native menu built from commands: sections separated by the
+/// system's own divider, each item with its symbol and its shortcut shown
+/// (spec: right-click menus show shortcuts too). Used by `AtticCommandMenu`
+/// and inside `.contextMenu`.
+struct AtticMenuItems: View {
+    let commands: [AtticMenuCommand]
+
+    var body: some View {
+        ForEach(commands) { command in
+            if command.startsSection, command.id != commands.first?.id {
+                Divider()
+            }
+            item(command)
         }
     }
 
