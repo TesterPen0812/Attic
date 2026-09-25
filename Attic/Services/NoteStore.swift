@@ -186,6 +186,11 @@ final class NoteStore: ObservableObject {
     private var reconciledAttachmentSignature: Int?
     /// Test/diagnostic seam: how many full metadata reconciliations ran.
     private(set) var attachmentReconciliationPasses = 0
+
+    /// Test/diagnostic seam: waits for the reconciliation in flight, if any.
+    func waitForAttachmentReconciliation() async {
+        await attachmentReconciliationTask?.value
+    }
     private static let cloudSyncActivityTimeout: Duration = .seconds(120)
 #endif
 

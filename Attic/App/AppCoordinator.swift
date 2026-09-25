@@ -11,19 +11,25 @@ struct AppRuntimeEnvironment {
     let testRunIdentifier: String
     let arguments: [String]
     let bundleIdentifier: String?
+    /// The Application Support directory the app's files live under; nil is
+    /// this process's own (the sandbox container's). Injected by tests so a
+    /// launch's file services can be checked against sentinel files.
+    let applicationSupportURL: URL?
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
         testRunIdentifier: String = UUID().uuidString,
         arguments: [String] = ProcessInfo.processInfo.arguments,
-        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier,
+        applicationSupportURL: URL? = nil
     ) {
         self.environment = environment
         self.processIdentifier = processIdentifier
         self.testRunIdentifier = testRunIdentifier
         self.arguments = arguments
         self.bundleIdentifier = bundleIdentifier
+        self.applicationSupportURL = applicationSupportURL
     }
 
     var isUITesting: Bool {
@@ -70,6 +76,32 @@ struct AppRuntimeEnvironment {
         isUITesting || isRunningTests || galleryLaunch != .none
     }
 
+    /// Any `--attic-gallery` launch, allowed or refused. The app's
+    /// coordinator is still built (the SwiftUI scene holds it), so every
+    /// service it builds that owns files is pointed away from the identity's
+    /// real data: the store is in memory, attachment and task-file stores
+    /// live under `galleryScratchRoot` (their launch reconciliation deletes
+    /// files the empty store doesn't reference), note draft recovery is off,
+    /// settings go to a scratch defaults suite, and the agent credential is
+    /// ephemeral.
+    var isGalleryLaunch: Bool { galleryLaunch != .none }
+
+    /// A temporary directory this process owns, for the file services of a
+    /// gallery launch. Nothing in it is ever the owner's data.
+    var galleryScratchRoot: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticGallery", isDirectory: true)
+            .appendingPathComponent("\(processIdentifier)-\(testRunIdentifier)", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    static let galleryDefaultsSuiteName = "com.taha.Attic.gallery-scratch"
+
+    private var resolvedApplicationSupportURL: URL? {
+        applicationSupportURL
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    }
+
     /// The menu-bar item appears only when the real app runs.
     var showsMenuBarItem: Bool {
         galleryLaunch == .none
@@ -85,7 +117,7 @@ struct AppRuntimeEnvironment {
         isRunningTests && !isUITesting
     }
 
-    var usesEphemeralAgentCredential: Bool { isUITesting || isRunningTests }
+    var usesEphemeralAgentCredential: Bool { isUITesting || isRunningTests || isGalleryLaunch }
 
     var shouldStartInteractiveShellServices: Bool {
         !isUnitTestHost
@@ -94,14 +126,21 @@ struct AppRuntimeEnvironment {
     var noteRecoveryURL: URL? {
         // The sandbox resolves this inside the running preview's own bundle
         // container. Test controllers inject their own temporary file instead.
-        guard !isRunningTests else { return nil }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("Attic/Notes/draft-recovery.json")
+        guard !isRunningTests, !isGalleryLaunch else { return nil }
+        return resolvedApplicationSupportURL?.appendingPathComponent("Attic/Notes/draft-recovery.json")
     }
 
     func makeSettingsDefaults(
         standard: UserDefaults = .standard
     ) -> UserDefaults {
+        if isGalleryLaunch {
+            // Settings migrations write on launch; a gallery launch keeps
+            // them away from the identity's real preferences.
+            guard let scratch = UserDefaults(suiteName: Self.galleryDefaultsSuiteName) else {
+                preconditionFailure("Unable to create the gallery's scratch defaults")
+            }
+            return scratch
+        }
         guard isUnitTestHost else { return standard }
         let suiteName = environment["ATTIC_TEST_DEFAULTS_SUITE"]
             ?? "com.taha.Attic.unit-tests.\(processIdentifier)"
@@ -166,10 +205,27 @@ struct AppRuntimeEnvironment {
         return candidate
     }
 
+    /// The notes' attachment file store: a gallery launch's scratch root,
+    /// a test host's owned temporary root, or the app's own directory
+    /// (nil: `AttachmentFileStore`'s default, unless Application Support was
+    /// injected).
     func makeAttachmentFileStore(
         fileManager: FileManager = .default
     ) -> AttachmentFileStore? {
-        guard isRunningTests else { return nil }
+        if isGalleryLaunch {
+            return AttachmentFileStore(
+                rootURL: galleryScratchRoot.appendingPathComponent("Attachments/v1", isDirectory: true),
+                fileManager: fileManager
+            )
+        }
+        guard isRunningTests else {
+            return applicationSupportURL.map {
+                AttachmentFileStore(
+                    rootURL: $0.appendingPathComponent("Attic/Attachments/v1", isDirectory: true),
+                    fileManager: fileManager
+                )
+            }
+        }
         guard let rootURL = attachmentRootURL(fileManager: fileManager) else {
             preconditionFailure(
                 "ATTIC_TEST_ATTACHMENT_ROOT was supplied without valid "
@@ -177,6 +233,41 @@ struct AppRuntimeEnvironment {
             )
         }
         return AttachmentFileStore(rootURL: rootURL, fileManager: fileManager)
+    }
+
+    /// Task attachment files: a gallery launch's scratch root, or the app's
+    /// own directory (`TaskImageFiles.shared` unless Application Support was
+    /// injected).
+    func makeTaskImageFiles() -> TaskImageFiles {
+        if isGalleryLaunch {
+            return TaskImageFiles(rootURL: galleryScratchRoot.appendingPathComponent("TaskImages", isDirectory: true))
+        }
+        if let applicationSupportURL {
+            return TaskImageFiles(rootURL: applicationSupportURL.appendingPathComponent("Attic/TaskImages", isDirectory: true))
+        }
+        return .shared
+    }
+
+    /// The task and note stores, with the file services this launch may use
+    /// (`makeTaskImageFiles`, `makeAttachmentFileStore`; a performance run
+    /// uses its own root). Both reconcile their files against the store they
+    /// are given, so a launch's store and its file roots must belong
+    /// together: an in-memory gallery store never meets the real files.
+    @MainActor
+    func makeItemStores(container: ModelContainer, performanceRoot: URL? = nil) -> (tasks: TaskStore, notes: NoteStore) {
+        let tasks = TaskStore(
+            container: container,
+            taskImageFiles: performanceRoot.map {
+                TaskImageFiles(rootURL: $0.appendingPathComponent("TaskImages", isDirectory: true))
+            } ?? makeTaskImageFiles()
+        )
+        let notes = NoteStore(
+            container: container,
+            attachmentFileStore: performanceRoot.map {
+                AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
+            } ?? makeAttachmentFileStore()
+        )
+        return (tasks, notes)
     }
 }
 
@@ -386,18 +477,7 @@ final class AppCoordinator: ObservableObject {
             #endif
         }
 
-        let store = TaskStore(
-            container: container,
-            taskImageFiles: performanceRoot.map {
-                TaskImageFiles(rootURL: $0.appendingPathComponent("TaskImages", isDirectory: true))
-            } ?? .shared
-        )
-        let noteStore = NoteStore(
-            container: container,
-            attachmentFileStore: performanceRoot.map {
-                AttachmentFileStore(rootURL: $0.appendingPathComponent("NoteAttachments", isDirectory: true))
-            } ?? runtime.makeAttachmentFileStore()
-        )
+        let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()
         if isUITesting,
