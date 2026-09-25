@@ -613,7 +613,19 @@ final class AppCoordinator: ObservableObject {
             // another app forward and clicks the panel, as a person would,
             // and reads the key state the panel exposes to UI tests.
             if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NONKEY_REVEAL"] == "1" {
+                // Capture seams: the page to show (tasks, notes, canvas), and
+                // a time after which the panel takes the keyboard as a click
+                // would, for hands-off captures of both looks.
+                let environment = ProcessInfo.processInfo.environment
+                if let page = environment["ATTIC_UI_TEST_PAGE"].flatMap(PanelPage.init(rawValue:)) {
+                    uiState.selectSection(page.section)
+                }
                 hoverMonitor.keepVisibleForUITesting(makeKey: false)
+                if let delay = environment["ATTIC_UI_TEST_KEY_AFTER"].flatMap(Double.init) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        self?.panelController.makeKeyForCapture()
+                    }
+                }
                 return
             }
             NSApp.activate()

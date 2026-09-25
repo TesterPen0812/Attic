@@ -1365,6 +1365,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         return nil
     }
 
+    /// Capture seam (UI testing only): the panel takes the keyboard as a
+    /// click would.
+    func makeKeyForCapture() {
+        panel.makeKey()
+    }
+
     /// Re-runs the click-through hit test where the pointer is now: after
     /// the panel is ordered front and after its geometry changes, when a
     /// resting pointer sends no event of its own. Only while visible and
