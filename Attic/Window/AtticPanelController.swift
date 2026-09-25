@@ -185,6 +185,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private var lastUsableFrame: CGRect?
     private(set) var currentCorner: ScreenCorner = .topRight
     var onInteractiveHideCompleted: (() -> Void)?
+    /// Where the pointer is, for the click-through hit test. Tests place it.
+    var pointerLocation: () -> CGPoint = { NSEvent.mouseLocation }
+    private var isResamplingPassthrough = false
 
     private var contentContainer: AtticPanelContentContainer? {
         panel.contentView as? AtticPanelContentContainer
@@ -406,9 +409,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             }
             if makeKey { panel.makeKey() }
             panel.orderFrontRegardless()
+            resamplePointerPassthrough()
             animateShow(to: safeFrame)
             PerformanceSignposts.panelOrderedFront()
-            return
+            return true
         }
 
         let finalFrame = frame(in: visibleFrame, corner: corner)
@@ -428,9 +432,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 panel.orderFrontRegardless()
             }
 
+            resamplePointerPassthrough()
             animateShow(to: finalFrame)
             PerformanceSignposts.panelOrderedFront()
-            return
+            return true
         }
 
         panel.setVisibleContentFrame(finalFrame, display: true)
@@ -445,8 +450,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             panel.orderFrontRegardless()
         }
 
+        // The pointer monitor started before the panel was on screen, so
+        // its first hit test could not see the corner wedges or the shadow
+        // margin; a pointer resting there sends no event to correct it.
+        resamplePointerPassthrough()
         animateShow(to: finalFrame)
         PerformanceSignposts.panelOrderedFront()
+        return true
     }
 
     private func animateShow(to finalFrame: CGRect) {
@@ -461,6 +471,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                     self.needsResizeAfterShowing = false
                     self.resizeAndReanchor()
                 }
+                self.resamplePointerPassthrough()
             }
         }
     }
@@ -761,10 +772,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let resizedPanel = notification.object as? NSWindow else { return }
         uiState.updatePanelSize(((resizedPanel as? AtticPanel)?.visibleContentFrame ?? resizedPanel.frame).size)
         subtaskPanels.mainPanelFrameDidChange()
+        if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidMove(_ notification: Notification) {
         subtaskPanels.mainPanelFrameDidChange()
+        if !isPanelMotionActive { resamplePointerPassthrough() }
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
@@ -1261,24 +1274,31 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         return durations
     }
 
-    /// UI-test seam: the panel takes the keyboard as a click would.
-    func makeKeyForUITesting() {
-        panel.makeKey()
+    private static func firstTokenField(in view: NSView?) -> AtticTokenTextView? {
+        guard let view else { return nil }
+        if let field = view as? AtticTokenTextView, !field.isHiddenOrHasHiddenAncestor { return field }
+        for subview in view.subviews {
+            if let found = firstTokenField(in: subview) { return found }
+        }
+        return nil
     }
 
-    private var keyStandInForUITesting: NSWindow?
-
-    /// UI-test seam: another window takes the keyboard, as the app the
-    /// person is typing in holds it while the corner reveals the panel.
-    func resignKeyForUITesting() {
-        let window = keyStandInForUITesting ?? NSWindow(
-            contentRect: CGRect(x: -10_000, y: -10_000, width: 40, height: 40),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
-        keyStandInForUITesting = window
-        window.makeKeyAndOrderFront(nil)
+    /// Re-runs the click-through hit test where the pointer is now: after
+    /// the panel is ordered front and after its geometry changes, when a
+    /// resting pointer sends no event of its own. Only while visible and
+    /// monitored; a live resize or drag keeps its own state.
+    private func resamplePointerPassthrough() {
+        guard panel.isVisible, localPointerMonitor != nil || globalPointerMonitor != nil,
+              !isResamplingPassthrough else { return }
+        isResamplingPassthrough = true
+        defer { isResamplingPassthrough = false }
+        updateMousePassthrough(at: pointerLocation())
     }
+
+    /// Test seam: whether clicks at the pointer now pass to the app behind.
+    var ignoresMouseEventsForTesting: Bool { panel.ignoresMouseEvents }
+    /// Test seam: the visible surface's frame on screen.
+    var visibleContentFrameForTesting: CGRect { panel.visibleContentFrame }
 
     private func startPointerPassthroughMonitoring() {
         guard localPointerMonitor == nil, globalPointerMonitor == nil else { return }
@@ -1290,7 +1310,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         ]
         localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             MainActor.assumeIsolated {
-                self?.updateMousePassthrough(at: NSEvent.mouseLocation)
+                guard let self else { return }
+                self.updateMousePassthrough(at: self.pointerLocation())
             }
             return event
         }
@@ -1299,10 +1320,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             // Keep acquisition synchronous so a fast outside-in move cannot
             // outrun the corner halo before the next mouse event arrives.
             MainActor.assumeIsolated {
-                self?.updateMousePassthrough(at: NSEvent.mouseLocation)
+                guard let self else { return }
+                self.updateMousePassthrough(at: self.pointerLocation())
             }
         }
-        updateMousePassthrough(at: NSEvent.mouseLocation)
+        updateMousePassthrough(at: pointerLocation())
     }
 
     private func stopPointerPassthroughMonitoring() {
