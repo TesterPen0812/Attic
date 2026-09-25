@@ -138,6 +138,7 @@ struct AtticStatusCircle: View {
     @State private var drawnCheck: Double = 1
     @State private var fillOpacity: Double = 1
     @State private var probeID = UUID()
+    @State private var checkProbeID = UUID()
 
     var body: some View {
         let tokens = design.tokens
@@ -159,6 +160,7 @@ struct AtticStatusCircle: View {
                 AtticCheckShape()
                     .trim(from: 0, to: checkProgress ?? drawnCheck)
                     .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
             case .backlog:
                 Circle().inset(by: m.edgeInset + lineWidth / 2)
@@ -209,6 +211,21 @@ struct AtticStatusCircle: View {
     }
 }
 
+extension View {
+    /// Reports a check mark to the appearance check: the `onDone` ink on
+    /// the fill it is drawn on (read inside the fill, where the stroke never
+    /// passes), so a check that is missing or too faint fails.
+    func atticCheckProbe(id: UUID, foreground: AtticRGBA) -> some View {
+        atticProbe { specimen in
+            AtticProbe(
+                id: id, kind: .icon(name: "check mark"), ink: .onDone, foreground: foreground,
+                specimen: specimen, allowsOverlap: true,
+                backgroundSamples: AtticCheckShape.fillOnlyPoints
+            )
+        }
+    }
+}
+
 /// The left half of a disc (in progress).
 struct AtticHalfDisc: Shape {
     func path(in rect: CGRect) -> Path {
@@ -223,6 +240,10 @@ struct AtticHalfDisc: Shape {
 
 /// A check mark drawn as one stroke, so `trim` can draw it.
 struct AtticCheckShape: Shape {
+    /// Points of its frame (unit coordinates) the stroke never reaches:
+    /// the lower right and the upper left, inside the fill behind it.
+    static let fillOnlyPoints = [CGPoint(x: 0.85, y: 0.85), CGPoint(x: 0.15, y: 0.15), CGPoint(x: 0.8, y: 0.95)]
+
     func path(in rect: CGRect) -> Path {
         var path = Path()
         path.move(to: CGPoint(x: rect.minX + rect.width * 0.08, y: rect.minY + rect.height * 0.55))
@@ -722,6 +743,7 @@ struct AtticSubtaskCheckbox: View {
     let isDone: Bool
 
     @Environment(\.atticDesign) private var design
+    @State private var checkProbeID = UUID()
     @State private var probeID = UUID()
 
     var body: some View {
@@ -735,6 +757,7 @@ struct AtticSubtaskCheckbox: View {
                 shape.fill(tokens.color(.doneFill))
                 AtticCheckShape()
                     .stroke(tokens.color(.onDone), style: StrokeStyle(lineWidth: m.checkLineWidth, lineCap: .round, lineJoin: .round))
+                    .atticCheckProbe(id: checkProbeID, foreground: tokens.ink(.onDone))
                     .padding(m.checkInset)
             } else {
                 shape.inset(by: lineWidth / 2).stroke(tokens.color(.priorityNone), lineWidth: lineWidth)

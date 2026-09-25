@@ -361,6 +361,38 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertTrue(blankIcon.failures.keys.contains { $0.kind == .unmeasured }, blankIcon.summary)
     }
 
+    func testCheckMarksAreMeasuredAgainstTheirFill() throws {
+        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark), AtticDesignContext(mode: .light, surface: .glass, tint: .bold)] {
+            // The model: the check keeps 3 : 1 on the done fill and on the
+            // disabled fill.
+            let tokens = context.tokens
+            XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.doneFill)), 3, context.caption)
+            XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.disabledIcon)), 3, context.caption)
+            // The pixels: a drawn check is measured and passes.
+            let drawn = try pixelReport(HStack { AtticStatusCircle(state: .done, priority: .high); AtticSubtaskCheckbox(isDone: true) }, context: context)
+            XCTAssertEqual(drawn.eligibleGlyphs, 4, "Two fills and two check marks")
+            XCTAssertEqual(drawn.glyphsMeasured, 4)
+            XCTAssertTrue(drawn.failures.isEmpty, drawn.summary)
+        }
+        // A deliberately absent check (not yet drawn) fails: its probe finds
+        // no glyph pixels on the fill.
+        let absent = try pixelReport(AtticStatusCircle(state: .done, priority: .high, checkProgress: 0))
+        XCTAssertTrue(absent.failures.keys.contains { $0.kind == .unmeasured && $0.detail.contains("check mark") }, absent.summary)
+    }
+
+    func testCapturePassesOnlyWhenEveryGlyphWasMeasured() {
+        var report = AtticAppearanceCheck.Report()
+        report.eligibleProbes = 10
+        report.contrastPairsChecked = 10
+        XCTAssertFalse(report.passed, "A 1× run reads no glyph pixels, so it cannot pass")
+        report.eligibleGlyphs = 10
+        report.glyphsMeasured = 9
+        XCTAssertFalse(report.passed)
+        report.glyphsMeasured = 10
+        XCTAssertTrue(report.passed)
+        XCTAssertFalse(AtticAppearanceCheck.Report().passed, "An empty run never passes")
+    }
+
     func testAProbeWithNoBackgroundToSampleFails() throws {
         // The probe's frame lies outside the rendered image: nothing to sample.
         var report = AtticAppearanceCheck.Report()

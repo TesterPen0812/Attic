@@ -298,7 +298,10 @@ struct AtticSurfaceModel: Equatable, Sendable {
             // Disabled rows and the ghost of a raised control (no hover or
             // press while disabled).
             p(.disabledText, []), p(.disabledText, [recessed]), p(.disabledText, [controlFace]),
-            p(.disabledIcon, []), p(.disabledIcon, [recessed]), p(.disabledIcon, [controlFace])
+            p(.disabledIcon, []), p(.disabledIcon, [recessed]), p(.disabledIcon, [controlFace]),
+            // The check mark on its fill (opaque, so the surface below
+            // does not matter): done, and done while disabled.
+            p(.onDone, [inks[.doneFill] ?? .black(1)]), p(.onDone, [inks[.disabledIcon] ?? .black(1)])
         ]
     }
 

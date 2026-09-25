@@ -290,6 +290,12 @@ struct AtticColorTokens: Equatable, Sendable {
         // Done is faded as in v4 (#C9CBCE / a dim fill), held at 3 : 1.
         inks[.doneFill] = (dark ? AtticRGBA(0x6E6F72) : AtticRGBA(0xC9CBCE)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
         inks[.onDone] = dark ? AtticRGBA(0x1E1E1F) : AtticRGBA(0xFFFFFF)
+        // The check mark keeps 3 : 1 on the fills it is drawn on (the done
+        // fill, and the disabled icon colour on a disabled row): a fill that
+        // would leave it fainter steps away from the check.
+        for fill in [AtticInk.doneFill, .disabledIcon] {
+            inks[fill] = inks[fill]!.tuned(toContrast: nonTextTarget, against: [inks[.onDone]!], lighten: dark)
+        }
 
         func panelPairs() -> [AtticSurfaceModel.Pair] {
             // Tag fills follow the accent as it is now (it may be retuned).

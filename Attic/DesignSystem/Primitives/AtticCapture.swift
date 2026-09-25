@@ -77,6 +77,10 @@ struct AtticProbe: Identifiable {
     var allowsOverlap = false
     /// User content that may truncate with an ellipsis.
     var allowsTruncation = false
+    /// For a glyph drawn on a fill (a check mark): where, in unit
+    /// coordinates of the frame, the fill shows and the glyph never does.
+    /// The background is read there instead of around the frame.
+    var backgroundSamples: [CGPoint]?
 }
 
 /// Collects probes during one render. Layout can run more than once; the

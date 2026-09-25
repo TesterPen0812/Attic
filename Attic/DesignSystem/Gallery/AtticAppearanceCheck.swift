@@ -65,6 +65,15 @@ enum AtticAppearanceCheck {
             failures[failure, default: []].append(combination)
         }
 
+        /// Passed: no failures, and every eligible probe measured, its
+        /// background and (at 2×) its glyph pixels. A 1× run, which reads no
+        /// glyph pixels, never passes.
+        var passed: Bool {
+            failures.isEmpty && eligibleProbes > 0
+                && contrastPairsChecked == eligibleProbes
+                && eligibleGlyphs == eligibleProbes && glyphsMeasured == eligibleGlyphs
+        }
+
         var headline: String {
             "\(combinations) combinations, \(renders) renders, \(probesChecked) probes, \(contrastPairsChecked) contrast checks, \(glyphsMeasured) of \(eligibleGlyphs) glyphs measured from pixels, \(geometryMeasured) corners and sizes fitted from pixels, \(failures.count) distinct failures"
         }
@@ -346,7 +355,12 @@ enum AtticAppearanceCheck {
             let specimen = displayName(probe.specimen)
             let floor = AtticSurfaceModel.floor(for: ink, kind: context.effectiveSurface, increaseContrast: context.increaseContrast)
             let floorText = floor == 4.5 ? "4.5" : String(format: "%.1f", floor)
-            guard let background = bitmap.background(around: probe.frame, outside: isIcon, foreground: foreground, scale: scale) else {
+            let sampled: AtticRGBA? = if let points = probe.backgroundSamples {
+                bitmap.background(at: points, in: probe.frame, scale: scale)
+            } else {
+                bitmap.background(around: probe.frame, outside: isIcon, foreground: foreground, scale: scale)
+            }
+            guard let background = sampled else {
                 report.fail(.init(kind: .unmeasured, family: family, specimen: specimen,
                                   detail: "\(label(probe)) \(ink.rawValue): no background pixels to measure against"), in: combination)
                 continue
@@ -560,6 +574,15 @@ struct AtticBitmap {
         let alpha = Double(bytes[index + 3]) / 255
         guard alpha > 0.99 else { return nil }
         return AtticRGBA(red: Double(bytes[index]) / 255, green: Double(bytes[index + 1]) / 255, blue: Double(bytes[index + 2]) / 255)
+    }
+
+    /// What lies behind a glyph drawn on a fill (a check on its circle):
+    /// the median of the given points (unit coordinates of the frame) that
+    /// the glyph never touches.
+    func background(at points: [CGPoint], in frame: CGRect, scale: CGFloat) -> AtticRGBA? {
+        let samples = points.compactMap { colour(atX: frame.minX + $0.x * frame.width, y: frame.minY + $0.y * frame.height, scale: scale) }
+        guard !samples.isEmpty else { return nil }
+        return samples.sorted { $0.relativeLuminance < $1.relativeLuminance }[samples.count / 2]
     }
 
     /// What lies behind a text run or icon: its frame's four corners, inset

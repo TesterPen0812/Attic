@@ -107,11 +107,14 @@ enum AtticGalleryLaunch {
             try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         }
         let sheets = AtticAppearanceCheck.writeContactSheets(to: target)
-        let report = AtticAppearanceCheck.run()
+        // At 2×, where every glyph's own pixels are read; it passes only
+        // when nothing failed and every eligible glyph was measured.
+        let report = AtticAppearanceCheck.run(scale: 2)
         try? report.summary.write(to: target.appendingPathComponent("appearance-check.txt"), atomically: true, encoding: .utf8)
-        print("Attic appearance check: \(report.failures.isEmpty ? "PASS" : "FAIL") — \(report.headline)")
+        let passed = report.passed
+        print("Attic appearance check: \(passed ? "PASS" : "FAIL") — \(report.headline)")
         print("Contact sheets:\n" + sheets.map(\.path).joined(separator: "\n"))
-        exit(report.failures.isEmpty ? 0 : 1)
+        exit(passed ? 0 : 1)
     }
 }
 
