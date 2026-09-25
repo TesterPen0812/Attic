@@ -1214,7 +1214,34 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private func cancelPageRelease() {
         pageReleaseWork?.cancel()
         pageReleaseWork = nil
+        pageReleaseRetry = nil
     }
+
+    /// A release the deadline had to skip (an import, a lock, an unsaved
+    /// draft) waits for that work to finish: every input to the decision
+    /// publishes its change, so the retry is event-driven, never polled,
+    /// and exists only between a skipped release and the next reveal.
+    private var pageReleaseRetry: AnyCancellable?
+
+    private func retryPageReleaseWhenWorkFinishes() {
+        guard pageReleaseRetry == nil else { return }
+        // Locks, the note draft and the canvas session announce every change
+        // before it lands; the retry runs on the next turn, after it.
+        pageReleaseRetry = Publishers.Merge3(
+            uiState.objectWillChange.map { _ in () },
+            noteDraft.objectWillChange.map { _ in () },
+            canvasSession.objectWillChange.map { _ in () }
+        )
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.pageReleaseRetry != nil else { return }
+                    self.releasePagesIfSafe()
+                }
+            }
+    }
+
+    var hasPendingPageReleaseRetryForTesting: Bool { pageReleaseRetry != nil }
 
     /// Whether the page showing is one the hidden release frees. The spec
     /// releases heavy views (an open canvas, large images: the Canvas and
@@ -1229,18 +1256,29 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// once every change is saved: a dirty note draft, an import, an open
     /// confirmation or any other interaction lock keeps them (the next hide
     /// tries again).
+    ///
+    /// A release skipped for unfinished work is retried when that work
+    /// finishes, while the panel stays hidden (a reveal cancels it).
     func releasePagesIfSafe() {
-        guard Self.releasesWhenHidden(uiState.selectedSection) else { return }
+        guard !panel.isVisible, uiState.isPageContentLoaded,
+              Self.releasesWhenHidden(uiState.selectedSection) else {
+            pageReleaseRetry = nil
+            return
+        }
         // Focus left in a field, and text typed in the add bar (kept in the
         // shell's TasksPageState), are not unsaved work; every other lock is.
         let keepsPages = uiState.interactionLockReasons
             .subtracting([.quickEntryFocus, .notesEditorFocus, .taskComposer])
-        guard !panel.isVisible,
-              keepsPages.isEmpty,
+        let importInFlight = canvasSession.imageImportProgress.map { $0.completedCount < $0.items.count } ?? false
+        guard keepsPages.isEmpty,
               !noteDraft.isDirty,
-              canvasSession.imageImportProgress == nil,
+              !importInFlight,
               canvasSession.pendingPlacement == nil,
-              noteDraft.flush() else { return }
+              noteDraft.flush() else {
+            retryPageReleaseWhenWorkFinishes()
+            return
+        }
+        pageReleaseRetry = nil
         canvasSession.flushViewState()
         uiState.releasePageContent()
     }
