@@ -234,27 +234,8 @@ final class AtticLibrary {
                 for id in ids { touched += tasks.subtasks(of: id).map(\.id) }
             }
             let before = touched.compactMap(tasks.editableState(of:))
-            for id in ids {
-                guard let task = tasks.task(withID: id) else { continue }
-                let ok: Bool
-                if status == .done, priority == nil, addingTag == nil {
-                    ok = tasks.completeFamily(taskID: id)
-                } else {
-                    ok = tasks.update(
-                        task,
-                        priority: priority,
-                        status: status,
-                        tags: addingTag.map { AtticTag.normalizedSet(task.tags + [$0]) },
-                        allowingUnfinishedSubtasks: true
-                    )
-                }
-                guard ok else {
-                    // Put back what earlier tasks in the batch already took.
-                    let partial = touched.compactMap(tasks.editableState(of:))
-                    _ = tasks.applyEditableTransition(from: partial, to: before)
-                    return nil
-                }
-            }
+            // One context, one save: every task changes or none does.
+            guard tasks.updateBatch(ids, priority: priority, status: status, addingTag: addingTag) else { return nil }
             succeeded = true
             let after = touched.compactMap(tasks.editableState(of:))
             guard before != after else { return nil }

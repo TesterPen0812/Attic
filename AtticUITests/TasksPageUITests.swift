@@ -116,6 +116,31 @@ final class TasksPageUITests: XCTestCase {
         waitFor(row("Book dentist").exists, "Undo brings it back")
     }
 
+    /// A real drag: the row lifts in place, the others slide apart, and it
+    /// lands where it was dropped within its group.
+    func testDraggingARowReordersItWithinItsGroup() throws {
+        XCTAssertTrue(row("Book dentist").waitForExistence(timeout: 5))
+        XCTAssertLessThan(row("Ship appearance PR").frame.minY, row("Book dentist").frame.minY)
+        let from = row("Book dentist").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
+        let to = row("Ship appearance PR").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.3))
+        from.press(forDuration: 0.2, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+        waitFor(row("Book dentist").frame.minY < row("Ship appearance PR").frame.minY, "Book dentist now sits above Ship appearance PR")
+        // One step: ⌘Z puts it back.
+        app.typeKey("z", modifierFlags: .command)
+        waitFor(row("Ship appearance PR").frame.minY < row("Book dentist").frame.minY, "⌘Z undoes the move")
+    }
+
+    /// Dragging a row onto the Backlog label moves it there.
+    func testDraggingARowOntoTheBacklogLabelMovesIt() throws {
+        XCTAssertTrue(row("Email beta testers").waitForExistence(timeout: 5))
+        let from = row("Email beta testers").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
+        let to = window.buttons["Backlog"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        from.press(forDuration: 0.2, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+        waitFor(!row("Email beta testers").exists, "it leaves Now")
+        window.buttons["Backlog"].click()
+        waitFor(row("Email beta testers").exists, "it is in Backlog")
+    }
+
     func testTheTabsSwitchBetweenNowBacklogAndDone() throws {
         XCTAssertTrue(window.buttons["Backlog"].waitForExistence(timeout: 5))
         window.buttons["Backlog"].click()
@@ -123,5 +148,15 @@ final class TasksPageUITests: XCTestCase {
         window.buttons["Done"].click()
         waitFor(row("Send invoice").isHittable, "Done lists the Done log")
         XCTAssertTrue(window.descendants(matching: .any)["Yesterday"].exists)
+        // "Open page" on a Done log task opens its details there.
+        row("Send invoice").rightClick()
+        let open = app.menuItems["Open Page"]
+        XCTAssertTrue(open.waitForExistence(timeout: 3))
+        open.click()
+        let restore = window.buttons["Restore to Now"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 3), "the details offer Restore to Now")
+        restore.click()
+        window.buttons["Now"].click()
+        waitFor(row("Send invoice").exists, "restored to Now")
     }
 }

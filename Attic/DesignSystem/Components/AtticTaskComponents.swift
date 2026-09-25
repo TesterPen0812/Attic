@@ -160,7 +160,9 @@ private struct AtticListTaskFocusModifier: ViewModifier {
 /// saves, Esc cancels, and leaving the field saves (nothing typed is lost).
 struct AtticTitleEditing {
     var text: Binding<String>
-    let commit: () -> Void
+    /// Saves; false when the save failed, so the field stays open with the
+    /// text and Return can try again.
+    let commit: () -> Bool
     let cancel: () -> Void
 }
 
@@ -190,8 +192,13 @@ struct AtticRowTitleEditor: View {
 
     private func finish(commit: Bool) {
         guard !finished else { return }
-        finished = true
-        commit ? editing.commit() : editing.cancel()
+        if commit {
+            // A failed save leaves the editor ready to try again.
+            finished = editing.commit()
+        } else {
+            finished = true
+            editing.cancel()
+        }
     }
 }
 
@@ -469,6 +476,12 @@ struct AtticOwnFocusRing: ViewModifier {
 
     let outline: Outline
 
+    /// The ring shows when the gallery pins it, or when the button has focus
+    /// while the keyboard drives; a click that focuses it shows none.
+    static func shows(pinned: Bool, focused: Bool, keyboardFocusVisible: Bool) -> Bool {
+        pinned || (focused && keyboardFocusVisible)
+    }
+
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticForcedState) private var forced
 
@@ -500,9 +513,12 @@ private struct AtticLiveOwnFocusRing: ViewModifier {
     let outline: AtticOwnFocusRing.Outline
     let pinned: Bool
     @FocusState private var focused: Bool
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
 
     func body(content: Content) -> some View {
-        let shows = pinned || focused
+        // Only while the keyboard drives: a click that focuses the button
+        // shows no ring (owner decision 2026-09-25).
+        let shows = AtticOwnFocusRing.shows(pinned: pinned, focused: focused, keyboardFocusVisible: keyboardFocusVisible)
         content
             .focused($focused)
             .overlay { if shows { AtticOwnFocusRing.ring(outline) } }

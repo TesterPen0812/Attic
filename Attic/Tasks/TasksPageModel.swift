@@ -81,6 +81,15 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var expanded: Set<UUID> = []
     @Published private(set) var editingTitleID: UUID?
     @Published var editingTitle = ""
+    /// A title, subtask or paste whose save failed: the text stays where it
+    /// was typed and the row offers "Not saved · Retry" until a save works.
+    @Published private(set) var failedSave: FailedSave?
+
+    enum FailedSave: Equatable {
+        case title(UUID)
+        case newSubtask(UUID)
+        case paste
+    }
     @Published private(set) var newSubtaskParentID: UUID?
     @Published var newSubtaskTitle = ""
     /// Finished rows held where they were for about a second, with the
@@ -96,6 +105,7 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var doneLogHasMore = false
     private var doneLogQuery: String?
     private var doneLogRevision: UInt64?
+    private var doneLogCursor = TaskStore.DoneLogCursor()
     /// The tab a dragged row is over (Now or Backlog): it outlines.
     @Published var dropTargetTab: TasksTab?
 
@@ -234,18 +244,22 @@ final class TasksPageModel: ObservableObject {
     func loadDoneLogIfNeeded() {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard doneLogQuery != query || doneLogRevision != store.revision else { return }
-        let page = store.doneLogPage(offset: 0, limit: max(Self.doneLogPageSize, doneLogTasks.count), matching: query)
+        let page = store.doneLogPage(limit: max(Self.doneLogPageSize, doneLogTasks.count), matching: query)
         doneLogQuery = query
         doneLogRevision = store.revision
         doneLogTasks = page.tasks
+        doneLogCursor = page.next
         doneLogHasMore = page.hasMore
     }
 
-    /// The next page, when the last loaded row comes on screen.
+    /// The next page, when the last loaded row comes on screen. The cursor
+    /// walks physical rows, so duplicates and superseded copies never stop it.
     func loadMoreDoneLog() {
         guard doneLogHasMore else { return }
-        let page = store.doneLogPage(offset: doneLogTasks.count, limit: Self.doneLogPageSize, matching: doneLogQuery)
-        doneLogTasks += page.tasks.filter { task in !doneLogTasks.contains { $0.id == task.id } }
+        let page = store.doneLogPage(from: doneLogCursor, limit: Self.doneLogPageSize, matching: doneLogQuery,
+                                     excluding: Set(doneLogTasks.map(\.id)))
+        doneLogTasks += page.tasks
+        doneLogCursor = page.next
         doneLogHasMore = page.hasMore
     }
 
@@ -464,15 +478,34 @@ final class TasksPageModel: ObservableObject {
         editingTitleID = id
     }
 
-    func commitTitle() {
-        guard let id = editingTitleID else { return }
+    /// Return (or leaving the field) saves the title. The editor closes only
+    /// once the save succeeded: a failed save keeps the field open with the
+    /// text and "Not saved · Retry". Returns whether the edit is finished.
+    @discardableResult
+    func commitTitle() -> Bool {
+        guard let id = editingTitleID else { return true }
         let title = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, let task = store.task(withID: id), task.title != title else {
+            editingTitleID = nil
+            clearFailure(.title(id))
+            return true
+        }
+        guard library.updateTask(id, title: title) else {
+            failedSave = .title(id)
+            return false
+        }
         editingTitleID = nil
-        guard !title.isEmpty, store.task(withID: id)?.title != title else { return }
-        library.updateTask(id, title: title)
+        clearFailure(.title(id))
+        return true
+    }
+
+    private func clearFailure(_ failure: FailedSave) {
+        if failedSave == failure { failedSave = nil }
     }
 
     func cancelEditing() {
+        if case .title? = failedSave { failedSave = nil }
+        if case .newSubtask? = failedSave { failedSave = nil }
         editingTitleID = nil
         newSubtaskParentID = nil
         newSubtaskTitle = ""
@@ -500,15 +533,21 @@ final class TasksPageModel: ObservableObject {
 
     /// Return in the new-subtask field: adds it (shorthand understood) and
     /// keeps the field for the next one.
-    func commitNewSubtask() {
-        guard let parentID = newSubtaskParentID else { return }
+    @discardableResult
+    func commitNewSubtask() -> Bool {
+        guard let parentID = newSubtaskParentID else { return true }
         let text = TaskAddBarText(text: newSubtaskTitle)
         guard let draft = text.draft(parser: parser, status: .todo, parentID: parentID) else {
             newSubtaskParentID = nil
-            return
+            return true
         }
-        guard library.createTasks([draft]) != nil else { return }
+        guard library.createTasks([draft]) != nil else {
+            failedSave = .newSubtask(parentID)
+            return false
+        }
+        clearFailure(.newSubtask(parentID))
         newSubtaskTitle = ""
+        return true
     }
 
     func toggleSubtask(_ id: UUID) {
@@ -545,12 +584,30 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// Pasted lines: one task per line, or all of them as one task.
+    /// The offer stays (with "Not saved · Retry") until the tasks exist.
     func acceptPaste(asOne: Bool) {
         guard let offer = pasteOffer else { return }
-        pasteOffer = nil
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
         let drafts = builder.drafts(from: offer.text, mode: asOne ? .single : .onePerLine)
-        _ = library.createTasks(drafts)
+        guard library.createTasks(drafts) != nil else {
+            failedSave = .paste
+            lastPasteAsOne = asOne
+            return
+        }
+        clearFailure(.paste)
+        pasteOffer = nil
+    }
+
+    private var lastPasteAsOne = false
+
+    /// "Retry" after a failed paste: the same choice again.
+    func retryPaste() {
+        acceptPaste(asOne: lastPasteAsOne)
+    }
+
+    func dismissPasteOffer() {
+        pasteOffer = nil
+        clearFailure(.paste)
     }
 
     // MARK: - Undo and the toast
@@ -580,7 +637,45 @@ final class TasksPageModel: ObservableObject {
         toast = nil
     }
 
+    /// "Open page" (⌘Return, the menu, VoiceOver). A task in the lists goes
+    /// to the host's detail route; a task in the Done log, which that route
+    /// can't show, opens its read-only details here: its subtasks and the
+    /// files it kept.
     func openPage(_ id: UUID) {
-        services.openPage(id)
+        if store.task(withID: id) != nil {
+            services.openPage(id)
+        } else if store.listedTask(withID: id) != nil {
+            doneDetailID = id
+        }
+    }
+
+    /// The Done log task whose details are open.
+    @Published var doneDetailID: UUID?
+
+    struct DoneDetail: Equatable {
+        let title: String
+        let finished: String
+        let subtasks: [AtticSubtaskModel]
+        let files: [TaskImageReference]
+
+        static func == (lhs: DoneDetail, rhs: DoneDetail) -> Bool {
+            lhs.title == rhs.title && lhs.finished == rhs.finished && lhs.files == rhs.files
+                && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
+        }
+    }
+
+    func doneDetail(for id: UUID) -> DoneDetail? {
+        guard let task = store.listedTask(withID: id) else { return nil }
+        let calendar = services.calendar()
+        let finished = task.completedAt.map {
+            String(localized: "Finished \(TaskRowPresentation.doneDayTitle($0, today: services.now(), calendar: calendar, locale: services.locale))")
+        } ?? String(localized: "Finished")
+        let children = store.task(withID: id) != nil ? store.subtasks(of: id) : store.doneLogSubtasks(of: id)
+        return DoneDetail(
+            title: task.title,
+            finished: finished,
+            subtasks: children.map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) },
+            files: task.attachments
+        )
     }
 }

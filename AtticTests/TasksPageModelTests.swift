@@ -69,7 +69,9 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertTrue(model.hasDoneToday)
     }
 
-    func testTheCircleAdvancesAndOptionClickCompletes() throws {
+    /// The model's side of the circle (the click and Option-click
+    /// themselves are driven in `TasksPageUITests`).
+    func testAdvanceAndCompleteFollowTheStatusCircleRules() throws {
         let id = try XCTUnwrap(add("Task"))
         model.advance(id)
         XCTAssertEqual(store.task(withID: id)?.status, .inProgress)
@@ -78,7 +80,7 @@ final class TasksPageModelTests: XCTestCase {
         model.advance(id)
         XCTAssertEqual(store.task(withID: id)?.status, .todo, "done → back to to do")
         model.complete(id)
-        XCTAssertEqual(store.task(withID: id)?.status, .done, "Option-click completes from to do")
+        XCTAssertEqual(store.task(withID: id)?.status, .done, "complete (Option-click, ⇧Space) finishes from to do")
         let idea = try XCTUnwrap(add("Idea", tab: .backlog))
         model.advance(idea)
         XCTAssertEqual(store.task(withID: idea)?.status, .todo, "backlog → Now as to do")
@@ -117,7 +119,9 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.selection, [ids[0]])
     }
 
-    func testReorderByKeyboardAndByDragIsOneUndoableStep() throws {
+    /// ⌘↑ ⌘↓ and the drop a drag ends in (the drag gesture itself is driven
+    /// in `TasksPageUITests`).
+    func testReorderMovesAreOneUndoableStepEach() throws {
         let a = try XCTUnwrap(add("A"))
         _ = try XCTUnwrap(add("B"))
         _ = try XCTUnwrap(add("C"))

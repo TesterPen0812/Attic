@@ -769,15 +769,41 @@ final class TaskStore: ObservableObject {
         // belong to the surface that owns it: a child's family panel, or the
         // main panel for a root.
         let owner = familyOwner(of: task)
-        let replicas: [TaskItem]
+        if let title, Self.normalized(title).isEmpty { return false }
+        let changed: Bool
         do {
-            replicas = try storedTasks(matching: task.id)
+            changed = try stageUpdate(task, title: title, priority: priority, status: status, tags: tags,
+                                      dueDay: dueDay, allowingUnfinishedSubtasks: allowingUnfinishedSubtasks)
         } catch {
+            context.rollback()
             report(error.localizedDescription, owner: owner)
             return false
         }
+        return changed ? save(owner: owner) : true
+    }
+
+    /// A refused edit: the reason is shown to the person.
+    private struct TaskEditRefusal: LocalizedError {
+        let errorDescription: String?
+        init(_ message: String) { errorDescription = message }
+    }
+
+    /// Writes one edit into the context without saving (see `update`), so a
+    /// batch can stage several and save once. Returns whether anything
+    /// changed; throws when the edit is refused or a read fails, leaving it
+    /// to the caller to roll the context back.
+    private func stageUpdate(
+        _ task: TaskItem,
+        title: String? = nil,
+        priority: TaskPriority? = nil,
+        status: TaskStatus? = nil,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil,
+        allowingUnfinishedSubtasks: Bool = false
+    ) throws -> Bool {
+        let replicas = try storedTasks(matching: task.id)
         let normalizedTitle = title.map(Self.normalized)
-        if let normalizedTitle, normalizedTitle.isEmpty { return false }
+        if let normalizedTitle, normalizedTitle.isEmpty { throw TaskEditRefusal("A task needs a title.") }
 
         let destinationTitle = normalizedTitle ?? task.title
         let destinationPriority = priority ?? task.priority
@@ -787,36 +813,29 @@ final class TaskStore: ObservableObject {
         // Status rules are checked against every stored replica, but only
         // the rows they concern: a title or priority edit fetches nothing.
         if destinationStatus != task.status {
-            do {
-                let doneRaw = TaskStatus.done.rawValue
-                if destinationStatus == .done, !allowingUnfinishedSubtasks {
-                    let taskID = task.id
-                    var unfinishedChildren = FetchDescriptor<TaskItem>(
-                        predicate: #Predicate {
-                            $0.parentID == taskID && $0.statusRaw != doneRaw && $0.deletedAt == nil
-                        }
-                    )
-                    unfinishedChildren.fetchLimit = 1
-                    if try !context.fetch(unfinishedChildren).isEmpty {
-                        report("Finish the subtasks before completing this task.", owner: owner)
-                        return false
+            let doneRaw = TaskStatus.done.rawValue
+            if destinationStatus == .done, !allowingUnfinishedSubtasks {
+                let taskID = task.id
+                var unfinishedChildren = FetchDescriptor<TaskItem>(
+                    predicate: #Predicate {
+                        $0.parentID == taskID && $0.statusRaw != doneRaw && $0.deletedAt == nil
                     }
+                )
+                unfinishedChildren.fetchLimit = 1
+                if try !context.fetch(unfinishedChildren).isEmpty {
+                    throw TaskEditRefusal("Finish the subtasks before completing this task.")
                 }
-                if destinationStatus != .done, task.status == .done, let parentID = task.parentID {
-                    var doneParents = FetchDescriptor<TaskItem>(
-                        predicate: #Predicate {
-                            $0.id == parentID && $0.statusRaw == doneRaw && $0.deletedAt == nil
-                        }
-                    )
-                    doneParents.fetchLimit = 1
-                    if try !context.fetch(doneParents).isEmpty {
-                        report("Reopen the main task before reopening a subtask.", owner: owner)
-                        return false
+            }
+            if destinationStatus != .done, task.status == .done, let parentID = task.parentID {
+                var doneParents = FetchDescriptor<TaskItem>(
+                    predicate: #Predicate {
+                        $0.id == parentID && $0.statusRaw == doneRaw && $0.deletedAt == nil
                     }
+                )
+                doneParents.fetchLimit = 1
+                if try !context.fetch(doneParents).isEmpty {
+                    throw TaskEditRefusal("Reopen the main task before reopening a subtask.")
                 }
-            } catch {
-                report(error.localizedDescription, owner: owner)
-                return false
             }
         }
         let titleChanged = destinationTitle != task.title
@@ -825,7 +844,7 @@ final class TaskStore: ObservableObject {
         let tagsChanged = destinationTagsRaw != task.tagsRaw
         let dueChanged = destinationDueDayRaw != task.dueDayRaw
         guard titleChanged || priorityChanged || statusChanged || tagsChanged || dueChanged else {
-            return true
+            return false
         }
 
         let timestamp = now()
@@ -833,17 +852,12 @@ final class TaskStore: ObservableObject {
         // task lands at the top of the done group); nothing else moves it.
         var destinationManualOrder: Int64?
         if statusChanged {
-            do {
-                destinationManualOrder = try nextManualOrder(
-                    status: destinationStatus,
-                    parentID: task.parentID,
-                    excluding: task.id,
-                    updatedAt: timestamp
-                )
-            } catch {
-                report(error.localizedDescription, owner: owner)
-                return false
-            }
+            destinationManualOrder = try nextManualOrder(
+                status: destinationStatus,
+                parentID: task.parentID,
+                excluding: task.id,
+                updatedAt: timestamp
+            )
         }
         let destinationCompletedAt: Date? = destinationStatus == .done ? timestamp : nil
 
@@ -871,7 +885,43 @@ final class TaskStore: ObservableObject {
             if dueChanged { replica.dueDayRaw = destinationDueDayRaw }
             if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
         }
-        return save(owner: owner)
+        return true
+    }
+
+    /// The selection bar's edit: the same change on several tasks, staged
+    /// in one context and saved once, so either every task changes or none
+    /// does (a refusal or a failed save leaves the store as it was).
+    /// Completing (`status` done alone) takes each task's open subtasks
+    /// along, as the circle does.
+    @discardableResult
+    func updateBatch(
+        _ ids: [UUID],
+        priority: TaskPriority? = nil,
+        status: TaskStatus? = nil,
+        addingTag: String? = nil
+    ) -> Bool {
+        guard !ids.isEmpty else { return false }
+        var changed = false
+        do {
+            for id in ids {
+                guard let task = task(withID: id) else { throw TaskReplicaMutationError.missingReplica(id) }
+                if status == .done, priority == nil, addingTag == nil {
+                    changed = try stageCompleteFamily(task) || changed
+                } else {
+                    changed = try stageUpdate(
+                        task, priority: priority, status: status,
+                        tags: addingTag.map { AtticTag.normalizedSet(task.tags + [$0]) },
+                        allowingUnfinishedSubtasks: true
+                    ) || changed
+                }
+            }
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error.localizedDescription, owner: nil)
+            return false
+        }
+        return changed ? save(owner: nil) : true
     }
 
     @discardableResult
@@ -1918,49 +1968,67 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    /// Where a walk through the Done log has got to: the physical rows read
+    /// so far, in the log's order.
+    struct DoneLogCursor: Equatable {
+        var rowOffset = 0
+    }
+
     /// One page of the Done log's main tasks, most recently completed first,
-    /// optionally only those whose title contains `query`. Paged so the Done
-    /// page never reads the whole history at once: `hasMore` says whether
-    /// another page follows. Each id is resolved over all its replicas, so a
-    /// newer copy that is live or deleted keeps the task out of the log.
-    func doneLogPage(offset: Int, limit: Int, matching query: String? = nil) -> (tasks: [TaskItem], hasMore: Bool) {
+    /// optionally only those whose title contains `query`. The walk is over
+    /// physical rows (a raw cursor): each row read moves the cursor on,
+    /// whether it shows a task, repeats one already shown (another copy of
+    /// it), or is superseded by a newer copy that is live or deleted; so a
+    /// run of duplicates can never stall the walk, and it goes on until it
+    /// has `limit` new tasks or runs out of rows. `excluding` holds tasks
+    /// already shown. Each id is resolved over all its replicas.
+    func doneLogPage(
+        from cursor: DoneLogCursor = DoneLogCursor(),
+        limit: Int,
+        matching query: String? = nil,
+        excluding shown: Set<UUID> = []
+    ) -> (tasks: [TaskItem], next: DoneLogCursor, hasMore: Bool) {
+        let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        func descriptor(offset: Int, limit: Int) -> FetchDescriptor<TaskItem> {
+            let order = [SortDescriptor(\TaskItem.completedAt, order: .reverse),
+                         SortDescriptor(\TaskItem.createdAt, order: .reverse)]
+            var descriptor = trimmed.isEmpty
+                ? FetchDescriptor<TaskItem>(predicate: #Predicate { $0.doneLoggedAt != nil && $0.parentID == nil }, sortBy: order)
+                : FetchDescriptor<TaskItem>(predicate: #Predicate {
+                    $0.doneLoggedAt != nil && $0.parentID == nil && $0.title.localizedStandardContains(trimmed)
+                }, sortBy: order)
+            descriptor.fetchOffset = offset
+            descriptor.fetchLimit = limit
+            return descriptor
+        }
+        var cursor = cursor
+        var seen = shown
+        var result: [TaskItem] = []
+        let batch = max(limit, 32)
         do {
-            let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            var descriptor: FetchDescriptor<TaskItem>
-            if trimmed.isEmpty {
-                descriptor = FetchDescriptor<TaskItem>(
-                    predicate: #Predicate { $0.doneLoggedAt != nil && $0.parentID == nil },
-                    sortBy: [SortDescriptor(\.completedAt, order: .reverse), SortDescriptor(\.createdAt, order: .reverse)]
+            walk: while result.count < limit {
+                let rows = try context.fetch(descriptor(offset: cursor.rowOffset, limit: batch))
+                guard !rows.isEmpty else { break }
+                let ids = Array(Set(rows.map(\.id)))
+                let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                let winners = Dictionary(
+                    Self.canonicalReplicas(from: replicas).map { ($0.id, $0) },
+                    uniquingKeysWith: { first, _ in first }
                 )
-            } else {
-                descriptor = FetchDescriptor<TaskItem>(
-                    predicate: #Predicate {
-                        $0.doneLoggedAt != nil && $0.parentID == nil && $0.title.localizedStandardContains(trimmed)
-                    },
-                    sortBy: [SortDescriptor(\.completedAt, order: .reverse), SortDescriptor(\.createdAt, order: .reverse)]
-                )
+                for row in rows {
+                    cursor.rowOffset += 1
+                    guard let winner = winners[row.id], winner.doneLoggedAt != nil, winner.deletedAt == nil,
+                          seen.insert(row.id).inserted else { continue }
+                    result.append(winner)
+                    if result.count == limit { break walk }
+                }
+                if rows.count < batch { break }
             }
-            descriptor.fetchOffset = max(0, offset)
-            descriptor.fetchLimit = limit + 1
-            let rows = try context.fetch(descriptor)
-            let hasMore = rows.count > limit
-            let page = Array(rows.prefix(limit))
-            var seen = Set<UUID>()
-            let ids = page.map(\.id).filter { seen.insert($0).inserted }
-            guard !ids.isEmpty else { return ([], hasMore) }
-            let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
-            let winners = Dictionary(
-                Self.canonicalReplicas(from: replicas).map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            let tasks = ids.compactMap { id -> TaskItem? in
-                guard let winner = winners[id], winner.doneLoggedAt != nil, winner.deletedAt == nil else { return nil }
-                return winner
-            }
-            return (tasks, hasMore)
+            let hasMore = try !context.fetch(descriptor(offset: cursor.rowOffset, limit: 1)).isEmpty
+            return (result, cursor, hasMore)
         } catch {
             report(error.localizedDescription, owner: nil)
-            return ([], false)
+            return (result, cursor, false)
         }
     }
 
@@ -2083,33 +2151,60 @@ final class TaskStore: ObservableObject {
     func completeFamily(taskID: UUID) -> Bool {
         guard let task = task(withID: taskID) else { return false }
         guard task.status != .done else { return true }
-        let open = parent(of: task) == nil ? subtasks(of: taskID).filter { $0.status != .done } : []
-        guard !open.isEmpty else { return update(task, status: .done, allowingUnfinishedSubtasks: true) }
         let owner = familyOwner(of: task)
-        let timestamp = now()
+        let changed: Bool
         do {
-            let order = try nextManualOrder(status: .done, excluding: taskID, updatedAt: timestamp)
-            let groups = try storedTaskGroups(matching: Set([taskID] + open.map(\.id)))
-            for (id, replicas) in groups {
-                guard let shownRow = self.task(withID: id) else { continue }
-                let shown = TaskContentSnapshot(shownRow)
-                for replica in replicas {
-                    let agrees = replica === shownRow || TaskContentSnapshot(replica) == shown
-                    replica.status = .done
-                    replica.completedAt = timestamp
-                    if id == taskID, let order {
-                        replica.manualOrder = order
-                        replica.listOrderVersion = TaskItem.currentListOrderVersion
-                    }
-                    if agrees { replica.updatedAt = timestamp }
-                }
-            }
+            changed = try stageCompleteFamily(task)
         } catch {
             context.rollback()
+            try? reloadTasks()
             report(error.localizedDescription, owner: owner)
             return false
         }
-        return save(owner: owner)
+        return changed ? save(owner: owner) : true
+    }
+
+    /// Stages `completeFamily` without saving. The subtasks are resolved
+    /// over every physical replica, not only the copy each one shows: a
+    /// subtask any copy of which is still open is completed on each open
+    /// copy (a done copy keeps its own completion time), so no hidden open
+    /// copy is left to block the daily cleanup. Copies that disagree about
+    /// which main task a subtask belongs to make the family ambiguous, and
+    /// the completion is refused.
+    private func stageCompleteFamily(_ task: TaskItem) throws -> Bool {
+        guard task.status != .done else { return false }
+        guard parent(of: task) == nil else {
+            return try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true)
+        }
+        let taskID = task.id
+        let linked = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == taskID }))
+        let childIDs = Array(Set(linked.map(\.id)))
+        let childReplicas = childIDs.isEmpty ? [] : try context.fetch(FetchDescriptor<TaskItem>(
+            predicate: #Predicate { childIDs.contains($0.id) }
+        ))
+        var openChildren: [UUID: [TaskItem]] = [:]
+        for (id, copies) in Dictionary(grouping: childReplicas, by: \.id) {
+            let live = copies.filter { $0.deletedAt == nil }
+            guard !live.isEmpty else { continue }
+            guard Set(live.map(\.parentID)).count == 1 else {
+                throw TaskEditRefusal("This task's subtasks disagree about where they belong. Refresh and try again.")
+            }
+            let open = live.filter { $0.status != .done }
+            if !open.isEmpty { openChildren[id] = open }
+        }
+        let timestamp = now()
+        for (id, copies) in openChildren {
+            let shownRow = self.task(withID: id)
+            let shown = shownRow.map(TaskContentSnapshot.init)
+            for replica in copies {
+                let agrees = replica === shownRow || shown.map { TaskContentSnapshot(replica) == $0 } == true
+                replica.status = .done
+                replica.completedAt = timestamp
+                if agrees { replica.updatedAt = timestamp }
+            }
+        }
+        _ = try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true)
+        return true
     }
 
     func orderedTasks(for status: TaskStatus) -> [TaskItem] {

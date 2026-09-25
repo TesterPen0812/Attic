@@ -53,7 +53,10 @@ struct TasksPageHost: View {
             // task's detail panel on its files (the old subpanel stays only
             // for a task's files).
             model.services.openPage = { [subtaskPanels] id in
-                subtaskPanels.openFamilyPanel(for: id, focusEntry: false, view: .attachments)
+                // A fresh open always starts on Subtasks; switch it to the
+                // files once it is up (Done log tasks open in the page).
+                subtaskPanels.openFamilyPanel(for: id, focusEntry: false)
+                subtaskPanels.showPanelView(.attachments, for: id)
             }
             if primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
         }

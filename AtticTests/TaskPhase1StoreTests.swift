@@ -162,6 +162,72 @@ final class TaskPhase1StoreTests: XCTestCase {
     /// container code. Core Data adds the column in place (every row reads
     /// 0), the order migration runs once, every row survives, and the
     /// fixture itself is never opened by the app.
+    /// The same migration on a store with files: a task holding attached
+    /// files and one removed into Recently Deleted (with a duplicate copy
+    /// that holds one more file). The order migration writes only the order
+    /// fields, so every reference list and every file on disk survives, and
+    /// the launch sweep of unreferenced files removes nothing.
+    func testACopiedPhase0StoreWithFilesKeepsEveryAttachmentAndFile() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AtticPhase1MigrationFiles-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let filesRoot = root.appendingPathComponent("task-files", isDirectory: true)
+        let sources = root.appendingPathComponent("sources", isDirectory: true)
+        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+        let urls = ["plan.txt", "photo.txt", "old.txt", "extra.txt"].map { sources.appendingPathComponent($0) }
+        for url in urls { try Data(url.lastPathComponent.utf8).write(to: url) }
+        let imported = try await TaskImageFiles(rootURL: filesRoot).importAttachments(urls, existing: [])
+        XCTAssertEqual(imported.count, 4)
+        let shownList = try TaskStore.encodedAttachments(Array(imported[0...1]))
+        let duplicateList = try TaskStore.encodedAttachments(Array(imported[0...1]) + [imported[3]])
+        let removedList = try TaskStore.encodedAttachments([RemovedTaskAttachment(reference: imported[2], removedAt: base)])
+
+        let fixtureURL = root.appendingPathComponent("fixture/phase0.store")
+        try FileManager.default.createDirectory(at: fixtureURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let withFiles = UUID()
+        try autoreleasepool {
+            let schema = Schema([Phase0Schema.TaskItem.self])
+            let container = try ModelContainer(for: schema, configurations: ModelConfiguration(
+                "fixture", schema: schema, url: fixtureURL, cloudKitDatabase: .none))
+            let context = ModelContext(container)
+            let shown = Phase0Schema.TaskItem(id: withFiles, title: "Read the plan", priority: .low, createdAt: base,
+                                              updatedAt: base.addingTimeInterval(9), manualOrder: 5)
+            shown.imageReferencesData = shownList
+            shown.removedAttachmentsData = removedList
+            let duplicate = Phase0Schema.TaskItem(id: withFiles, title: "Read the plan", priority: .low, createdAt: base,
+                                                  updatedAt: base, manualOrder: 5)
+            duplicate.imageReferencesData = duplicateList
+            duplicate.removedAttachmentsData = removedList
+            context.insert(shown)
+            context.insert(duplicate)
+            context.insert(Phase0Schema.TaskItem(title: "Urgent", priority: .high, createdAt: base, updatedAt: base, manualOrder: 1))
+            try context.save()
+        }
+        let storeDirectory = root.appendingPathComponent("app-copy", isDirectory: true)
+        let url = PersistenceController.makeConfiguration(cloudSyncEnabled: false, storeDirectory: storeDirectory).url
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for suffix in ["", "-wal", "-shm"] {
+            let from = URL(fileURLWithPath: fixtureURL.path + suffix)
+            guard FileManager.default.fileExists(atPath: from.path) else { continue }
+            try FileManager.default.copyItem(at: from, to: URL(fileURLWithPath: url.path + suffix))
+        }
+        let container = try PersistenceController.makeContainer(cloudSyncEnabled: false, storeDirectory: storeDirectory)
+        let files = TaskImageFiles(rootURL: filesRoot)
+        let store = TaskStore(container: container, taskImageFiles: files)
+        XCTAssertNil(store.lastErrorMessage)
+        XCTAssertEqual(titles(store, .todo), ["Urgent", "Read the plan"], "the old order (priority first) is kept")
+        let copies = try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == withFiles }))
+        XCTAssertEqual(Set(copies.map(\.imageReferencesData)), [shownList, duplicateList], "each copy keeps its own files")
+        XCTAssertTrue(copies.allSatisfy { $0.removedAttachmentsData == removedList })
+        XCTAssertEqual(store.task(withID: withFiles)?.attachments, Array(imported[0...1]))
+        let swept = await store.sweepUnreferencedAttachmentStorage(minimumAge: 0)
+        XCTAssertEqual(swept, 0, "every file is still referenced")
+        for reference in imported {
+            let exists = try await files.verifiedURL(for: reference)
+            XCTAssertNotNil(exists, "\(reference.filename) is still on disk")
+        }
+    }
+
     func testACopiedPhase0StoreMigratesInPlaceKeepingOrderAndEveryRow() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("AtticPhase1Migration-\(UUID().uuidString)", isDirectory: true)
@@ -348,13 +414,14 @@ final class TaskPhase1StoreTests: XCTestCase {
         XCTAssertEqual(store.moveCompletedToDoneLog(before: base.addingTimeInterval(2 * 86_400)), 6)
         XCTAssertEqual(store.doneLogCount(), 5)
 
-        let first = store.doneLogPage(offset: 0, limit: 2)
+        let first = store.doneLogPage(limit: 2)
         XCTAssertEqual(first.tasks.map(\.title), ["Finished 4", "Finished 3"])
         XCTAssertTrue(first.hasMore)
-        let last = store.doneLogPage(offset: 4, limit: 2)
+        let second = store.doneLogPage(from: first.next, limit: 2)
+        let last = store.doneLogPage(from: second.next, limit: 2)
         XCTAssertEqual(last.tasks.map(\.title), ["Finished 0"])
         XCTAssertFalse(last.hasMore)
-        XCTAssertEqual(store.doneLogPage(offset: 0, limit: 10, matching: "ished 2").tasks.map(\.title), ["Finished 2"])
+        XCTAssertEqual(store.doneLogPage(limit: 10, matching: "ished 2").tasks.map(\.title), ["Finished 2"])
         XCTAssertEqual(store.doneLogSubtasks(of: created[4].id).map(\.title), ["Step"])
 
         let loggedAt = try XCTUnwrap(store.listedTask(withID: created[4].id)?.doneLoggedAt)

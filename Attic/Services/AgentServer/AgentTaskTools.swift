@@ -501,15 +501,17 @@ final class AgentTaskTools {
     /// first, read a page at a time.
     private func doneLogTasks() -> [TaskItem] {
         var result: [TaskItem] = []
-        var offset = 0
+        var shown = Set<UUID>()
+        var cursor = TaskStore.DoneLogCursor()
         while true {
-            let page = store.doneLogPage(offset: offset, limit: 500)
+            let page = store.doneLogPage(from: cursor, limit: 500, excluding: shown)
             for task in page.tasks {
+                shown.insert(task.id)
                 result.append(task)
                 result += store.doneLogSubtasks(of: task.id)
             }
             guard page.hasMore else { return result }
-            offset += 500
+            cursor = page.next
         }
     }
 

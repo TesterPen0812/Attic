@@ -79,6 +79,13 @@ struct AtticTokenField: NSViewRepresentable {
         view.textView.setAccessibilityLabel(accessibilityLabel)
         if view.textView.string != text {
             coordinator.isApplyingModel = true
+            // The owner replaced the text (a task was added, the bar was
+            // cleared): the typing that led here is no longer undoable
+            // typing, so ⌘Z reaches the page's own undo next.
+            if let undoManager = view.textView.undoManager {
+                undoManager.removeAllActions(withTarget: view.textView)
+                if let storage = view.textView.textStorage { undoManager.removeAllActions(withTarget: storage) }
+            }
             view.textView.string = text
             view.textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
             coordinator.isApplyingModel = false

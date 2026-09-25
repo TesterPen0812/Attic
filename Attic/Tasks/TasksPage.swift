@@ -187,11 +187,32 @@ struct TasksPage: View {
                 onSelect: { rowClicked(id, tab: tab) },
                 focus: AtticRowFocus(binding: $focusedRow, id: id),
                 titleEditing: model.editingTitleID == id
-                    ? AtticTitleEditing(text: $model.editingTitle, commit: { model.commitTitle(); focusedRow = id },
+                    ? AtticTitleEditing(text: $model.editingTitle,
+                                        commit: {
+                                            let saved = model.commitTitle()
+                                            if saved { focusedRow = id }
+                                            return saved
+                                        },
                                         cancel: { model.cancelEditing(); focusedRow = id })
                     : nil
             )
             .contextMenu { rowMenu(row, tab: tab) }
+            // A Done log task's details open under its row (Esc or the
+            // menu closes them), raised over the list like a pop-over.
+            if model.doneDetailID == id, let detail = model.doneDetail(for: id) {
+                TasksDoneDetailView(detail: detail, store: store, restore: {
+                    model.doneDetailID = nil
+                    model.restoreToNow(id)
+                })
+                .padding(.leading, AtticLayout.textX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding)
+                .padding(.bottom, AtticSpacing.s8)
+                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
+                .onExitCommand { model.doneDetailID = nil }
+            }
+            if model.failedSave == .title(id) {
+                AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitTitle() })
+                    .padding(.leading, AtticLayout.textX)
+            }
             if expanded {
                 AtticQuickLook(
                     subtasks: row.subtasks,
@@ -204,6 +225,10 @@ struct TasksPage: View {
                         : nil
                 )
                 .transition(.opacity)
+                if model.failedSave == .newSubtask(id) {
+                    AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitNewSubtask() })
+                        .padding(.leading, AtticLayout.textX)
+                }
             }
         }
         .modifier(AtticScrollEdgeFade(space: space, top: Self.listTopFade, bottom: AtticEdgeBlur.panelBottom))
@@ -296,8 +321,10 @@ struct TasksPage: View {
         if tab == .done {
             Button(String(localized: "Restore to Now")) { targets.forEach(model.restoreToNow) }
             if single {
-                Button(String(localized: "Open page")) { model.openPage(row.id) }
-                    .keyboardShortcut(.return, modifiers: .command)
+                Button(model.doneDetailID == row.id ? String(localized: "Close Details") : String(localized: "Open Page")) {
+                    if model.doneDetailID == row.id { model.doneDetailID = nil } else { model.openPage(row.id) }
+                }
+                .keyboardShortcut(.return, modifiers: .command)
             }
         } else {
             Section {
@@ -399,6 +426,7 @@ struct TasksPage: View {
             model.setExpanded(current, false)
             return .handled
         case .escape:
+            if model.doneDetailID != nil { model.doneDetailID = nil; return .handled }
             if let current, model.expanded.contains(current) { model.setExpanded(current, false); return .handled }
             if model.selection.count > 1 { model.clearSelection(); return .handled }
             return .ignored
@@ -475,6 +503,9 @@ struct TasksPage: View {
                     .id(toast.id)
                     .transition(AtticMotionPreset.toast.transition(reduceMotion: design.reduceMotion))
             }
+            if model.failedSave == .paste {
+                AtticErrorLine(message: String(localized: "Not saved"), onRetry: { model.retryPaste() })
+            }
             if let offer = model.pasteOffer {
                 pasteOfferBar(offer)
                     .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
@@ -512,7 +543,7 @@ struct TasksPage: View {
                             return true
                         },
                         escape: {
-                            if model.pasteOffer != nil { model.pasteOffer = nil; return true }
+                            if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
                             return false
                         },
                         undoFallback: { model.undo() },
@@ -535,7 +566,7 @@ struct TasksPage: View {
             AtticSmallButton(systemName: nil, title: "Add as one task", label: "Add as one task") {
                 model.acceptPaste(asOne: true)
             }
-            AtticSmallButton(systemName: "xmark", label: "Cancel") { model.pasteOffer = nil }
+            AtticSmallButton(systemName: "xmark", label: "Cancel") { model.dismissPasteOffer() }
         }
         .padding(AtticControlSize.capsuleInset)
         .frame(height: height)
