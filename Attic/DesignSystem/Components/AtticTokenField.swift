@@ -178,6 +178,7 @@ final class AtticTokenFieldView: NSView {
         textView.isAutomaticTextReplacementEnabled = false
         textView.focusRingType = .none
         textView.setAccessibilityRole(.textField)
+        textView.setAccessibilityIdentifier("AtticTokenField")
         scrollView.drawsBackground = false
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
