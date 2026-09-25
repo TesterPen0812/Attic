@@ -330,8 +330,20 @@ final class AtticUITests: XCTestCase {
         }
     }
 
+    /// The Tasks page's add bar (the chip-drawing native field).
+    private var addBar: XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
+    }
+
+    /// Phase 1 replaced the legacy Tasks page (its composer, task options,
+    /// status buttons and `task-row-` rows); `TasksPageUITests` covers the
+    /// new page. These tests drive only the removed page.
+    private func skipLegacyTasksPage() throws {
+        throw XCTSkip("Drives the legacy Tasks page Phase 1 removed; the new page is covered by TasksPageUITests.")
+    }
+
     func testMainPanelIdleRetainsTaskDraftThenHidesCleanEditor() throws {
-        let field = app.textFields["quick-entry-title"]
+        let field = addBar
         XCTAssertTrue(field.waitForExistence(timeout: 3))
         field.click()
         field.typeText("Keep this unfinished draft")
@@ -350,7 +362,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testMainPanelIdleHidesAutosavedNoteWithEditorFocus() throws {
-        app.textFields["quick-entry-title"].click()
+        addBar.click()
         app.typeKey("2", modifierFlags: .command)
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
@@ -627,6 +639,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testCreateAdvanceCompleteAndOpenContextMenu() throws {
+        try skipLegacyTasksPage()
         let addButton = app.descendants(matching: .any)["add-task-button"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
         setTaskOptionsExpanded(true)
@@ -702,6 +715,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testCompactComposerAndSubtaskPanels() throws {
+        try skipLegacyTasksPage()
         // Keep this long editing workflow independent of pointer-driven
         // auto-hide; interaction-lock policy has separate focused coverage.
         app.buttons["panel-pin-button"].click()
@@ -925,6 +939,7 @@ final class AtticUITests: XCTestCase {
     /// (it fades at the trailing edge instead of wrapping), while the full
     /// text remains available as the row's accessibility label.
     func testLongTaskTitleStaysOnOneLineAndKeepsFullTextAccessible() throws {
+        try skipLegacyTasksPage()
         let shortTitle = "Short"
         let longTitle = "A long task title that must stay on a single row and fade at the trailing edge instead of wrapping"
         let titleField = app.textFields["quick-entry-title"]
@@ -968,6 +983,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testDragReordersTasksWithMatchingPriority() throws {
+        try skipLegacyTasksPage()
         addTask(named: "Alpha")
         addTask(named: "Beta")
 
@@ -1094,7 +1110,7 @@ final class AtticUITests: XCTestCase {
         XCTAssertEqual(panel.frame.maxX, initial.maxX, accuracy: 1)
         XCTAssertEqual(panel.frame.minY, initial.minY, accuracy: 1)
         XCTAssertTrue(app.buttons["panel-pin-button"].isSelected)
-        XCTAssertTrue(app.textFields["quick-entry-title"].isHittable)
+        XCTAssertTrue(addBar.isHittable)
         XCTAssertTrue(app.buttons["panel-section-tasks"].isHittable)
     }
 
@@ -1154,7 +1170,7 @@ final class AtticUITests: XCTestCase {
     }
 
     private func addTask(named title: String) {
-        let titleField = app.textFields["quick-entry-title"]
+        let titleField = addBar
         XCTAssertTrue(titleField.waitForExistence(timeout: 2))
         titleField.click()
         titleField.typeText(title)

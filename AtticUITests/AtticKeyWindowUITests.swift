@@ -35,10 +35,7 @@ final class AtticKeyWindowUITests: XCTestCase {
         app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
         app.launch()
         app.activate()
-        // The legacy add bar, or the Tasks stream's token field once it lands.
-        let addBar = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier IN %@", ["quick-entry-title", "AtticTokenField"]))
-            .firstMatch
+        let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         let deadline = Date().addingTimeInterval(3)
         while Date() < deadline, (addBar.value(forKey: "hasKeyboardFocus") as? Bool) != true {
