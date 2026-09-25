@@ -266,6 +266,7 @@ struct AtticPanelView: View {
                 surface: settings.panelSurfaceStyle,
                 tint: settings.panelTint,
                 tintLength: settings.panelTintLength,
+                hapticsEnabled: settings.panelHapticsEnabled,
                 controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey)
             )
             // Native menus (context menus, pop-ups) follow Attic's chosen
@@ -391,6 +392,18 @@ private struct PanelNoticeHeightPreferenceKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
     }
+}
+
+extension AppSettings {
+    /// INTEGRATION SEAM: the Haptics setting (spec § Touch and sound: a light
+    /// tick when a task is completed or a dragged item snaps into place, "can
+    /// be turned off"). The Settings stream adds `@Published var
+    /// hapticsEnabled` (stored under "hapticsEnabled", on by default); it is
+    /// not on this branch yet. When the streams are integrated, return
+    /// `hapticsEnabled` here. The panel already feeds this value into the
+    /// design context, so every design-system component in the panel (the
+    /// status circle's tick included) follows the setting from then on.
+    var panelHapticsEnabled: Bool { true }
 }
 
 extension AppearancePreference {
