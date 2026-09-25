@@ -485,7 +485,8 @@ struct AtticPanelStageSurface: View {
     }
 }
 
-/// The panel's edge: a hairline, and in Dark an inner light rim.
+/// The panel's edge: a hairline, and in Dark an inner light rim. The live
+/// panel, the gallery and Settings' Appearance miniature all draw this one.
 struct AtticPanelRim: View {
     var cornerSize: CGFloat
     @Environment(\.atticDesign) private var design
@@ -496,7 +497,7 @@ struct AtticPanelRim: View {
         ZStack {
             shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
             if dark {
-                Squircle(cornerRadius: cornerSize - 0.75, exponent: AtticStyle.panelSquircleExponent)
+                Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: AtticStyle.panelSquircleExponent)
                     .stroke(Color.white.opacity(design.increaseContrast ? 0.3 : 0.08), lineWidth: 0.5)
                     .padding(0.75)
             }

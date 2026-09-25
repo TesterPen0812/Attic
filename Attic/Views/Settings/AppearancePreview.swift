@@ -88,36 +88,10 @@ struct SettingsPanelMiniature: View {
         .frame(width: AtticLayout.panelSize.width, height: AtticLayout.panelSize.height)
         .background(AtticSurfaceBackground(model: design.tokens.panel, shape: shape, tintHeight: AtticLayout.panelSize.height))
         .clipShape(shape)
-        .overlay(SettingsPanelMiniatureRim(cornerSize: cornerSize))
+        .overlay(AtticPanelRim(cornerSize: cornerSize))
         // A picture: every control rests, none takes a click or focus.
         .atticForcedState(.rest)
         .disabled(true)
-        .accessibilityHidden(true)
-    }
-}
-
-/// The panel's edge at the miniature's corner: a hairline in Light; in
-/// Dark a dark outer edge with a faint light rim inside. The same values as
-/// the gallery's `AtticPanelRim`, which the Shell stream moves into the
-/// design system; use it here once both streams are integrated.
-private struct SettingsPanelMiniatureRim: View {
-    let cornerSize: CGFloat
-
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
-        let dark = design.mode == .dark
-        let ic = design.increaseContrast
-        ZStack {
-            shape.stroke(Color.black.opacity(dark ? 0.5 : (ic ? 0.3 : 0.10)), lineWidth: ic ? 1 : 0.5)
-            if dark {
-                Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: AtticStyle.panelSquircleExponent)
-                    .stroke(Color.white.opacity(ic ? 0.3 : 0.08), lineWidth: 0.5)
-                    .padding(0.75)
-            }
-        }
-        .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }
