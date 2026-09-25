@@ -95,3 +95,19 @@ or type style changed.
   so the divider still starts at the text column).
 - **`AtticAppearancePreview`**: `accessibilityLabel`, so the preview can say
   which look it shows.
+
+### Integration (redesign/phase-1)
+
+- **New `AtticRecipeShapeBackground` and `AtticRaisedShapeBackground`**: the
+  drawn raised recipe in any insettable control shape (circle, capsule, the
+  panel's squircle); `AtticRecipeBackground` now draws through it with a
+  rounded rectangle, unchanged. The older panel controls that go through
+  `atticGlassControl` (Notes, Canvas, subtask and attachment controls) draw
+  `AtticRaisedShapeBackground` while the panel is not key, the same rule as
+  the design system's own controls (native glass renders flat in a window
+  that is not key). Asked for by the Phase 1 shell review (finding 3).
+- **`AtticPanelRim` is the one panel edge**: Settings' Appearance miniature
+  draws it instead of its own copy; the inner rim's corner is clamped at 0
+  (the copy's guard). No visual change.
+- `Squircle` (Attic/Design) is now an `InsettableShape`, so the recipe's
+  inner rim can sit inside it. No visual change for existing callers.
