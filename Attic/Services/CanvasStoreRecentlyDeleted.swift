@@ -273,9 +273,14 @@ extension CanvasStore {
     ///
     /// A canvas deleted before Recently Deleted existed has no start date; the
     /// first run stamps it with "now", so it is removed 30 days after the app
-    /// first saw it. Returns the purged canvas ids.
+    /// first saw it. Returns the purged canvas ids. `alongside` stages
+    /// dependent removals (their links) in the same context, so they are
+    /// saved with the purge or not at all; if it throws, nothing is purged.
     @discardableResult
-    func purgeDeletedCanvases(before cutoff: Date) -> Set<UUID> {
+    func purgeDeletedCanvases(
+        before cutoff: Date,
+        alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
+    ) -> Set<UUID> {
         var purged = Set<UUID>()
         var stamped = false
         do {
@@ -312,6 +317,7 @@ extension CanvasStore {
                 }
                 purged.insert(id)
             }
+            if !purged.isEmpty { try alongside?(context, purged) }
         } catch {
             discardPendingChanges(after: error)
             return []

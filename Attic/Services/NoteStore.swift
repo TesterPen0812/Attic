@@ -463,9 +463,14 @@ final class NoteStore: ObservableObject {
     /// attachment rows and private files. A note is purged only when every
     /// replica agrees and its attachments are exactly what the delete hid
     /// (none added or changed after it, replicas identical); anything else
-    /// keeps it. Returns the purged ids.
+    /// keeps it. Returns the purged ids. `alongside` stages dependent
+    /// removals (their links) in the same context, so they are saved with
+    /// the notes or not at all; if it throws, nothing is purged.
     @discardableResult
-    func purgeDeleted(before cutoff: Date) -> Set<UUID> {
+    func purgeDeleted(
+        before cutoff: Date,
+        alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
+    ) -> Set<UUID> {
         var purgedIDs = Set<UUID>()
 #if os(macOS)
         var references: [AttachmentFileReference] = []
@@ -522,6 +527,7 @@ final class NoteStore: ObservableObject {
                 replicas.forEach(context.delete)
                 purgedIDs.insert(id)
             }
+            if !purgedIDs.isEmpty { try alongside?(context, purgedIDs) }
         } catch {
             context.rollback()
             lastErrorMessage = error.localizedDescription

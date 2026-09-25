@@ -50,4 +50,68 @@ final class LinkPurgeSafetyTests: XCTestCase {
         XCTAssertEqual(links.purgeRemovedLinks(before: .distantFuture), 0)
         XCTAssertEqual(try ModelContext(container).fetchCount(FetchDescriptor<ItemLink>()), 4)
     }
+
+    // MARK: - Failed link cleanup is retried (final review finding 8)
+
+    /// Saves normally, except that while `failsLinkRemoval` is set any save
+    /// that would remove a link fails: the item purge may already have
+    /// removed its rows by then.
+    @MainActor
+    private final class LinkRemovalFailure {
+        struct Failure: Error {}
+        var failsLinkRemoval = false
+        private(set) var refusedSaves = 0
+
+        func save(_ context: ModelContext) throws {
+            if failsLinkRemoval, context.deletedModelsArray.contains(where: { $0 is ItemLink }) {
+                refusedSaves += 1
+                throw Failure()
+            }
+            try context.save()
+        }
+    }
+
+    func testLinksOfAPurgedItemAreRemovedByTheNextCleanupWhenTheirRemovalFailed() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let gate = LinkRemovalFailure()
+        let tasks = TaskStore(container: container, now: { clock.value }, persist: gate.save)
+        let notes = NoteStore(container: container, now: { clock.value }, persist: gate.save,
+                              attachmentFileStore: makeTestAttachmentFileStore())
+        let library = AtticLibrary(tasks: tasks, notes: notes, now: { clock.value }, persist: gate.save)
+        let doomed = try XCTUnwrap(tasks.create(title: "Doomed"))
+        let other = try XCTUnwrap(tasks.create(title: "Other"))
+        let note = try XCTUnwrap(notes.create(title: "Note"))
+        let doomedNote = try XCTUnwrap(notes.create(title: "Doomed note"))
+        XCTAssertNotNil(library.link(AtticItemRef(.task, doomed.id), to: AtticItemRef(.task, other.id), kind: .reference))
+        XCTAssertNotNil(library.link(AtticItemRef(.note, note.id), to: AtticItemRef(.task, doomed.id), kind: .card))
+        XCTAssertNotNil(library.link(AtticItemRef(.note, doomedNote.id), to: AtticItemRef(.task, other.id), kind: .card))
+        let kept = try XCTUnwrap(library.link(AtticItemRef(.note, note.id), to: AtticItemRef(.task, other.id), kind: .card))
+        XCTAssertTrue(library.delete(AtticItemRef(.task, doomed.id)))
+        XCTAssertTrue(library.delete(AtticItemRef(.note, doomedNote.id)))
+        clock.value += 31 * day
+
+        gate.failsLinkRemoval = true
+        let failed = library.purgeExpired(now: clock.value, calendar: Calendar(identifier: .gregorian))
+        XCTAssertGreaterThan(gate.refusedSaves, 0)
+        XCTAssertEqual(failed.removedLinks, 0)
+        let context = ModelContext(container)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<ItemLink>()), 4, "no link was removed")
+        // Items and links go together: a failed link removal keeps the items
+        // too, so the next cleanup still knows which links to remove.
+        XCTAssertTrue(failed.taskIDs.isEmpty)
+        XCTAssertTrue(failed.noteIDs.isEmpty)
+        let doomedID = doomed.id
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == doomedID })), 1)
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, doomed.id)), .deleted)
+
+        gate.failsLinkRemoval = false
+        let retried = library.purgeExpired(now: clock.value, calendar: Calendar(identifier: .gregorian))
+        XCTAssertEqual(retried.taskIDs, [doomed.id])
+        XCTAssertEqual(retried.noteIDs, [doomedNote.id])
+        XCTAssertEqual(retried.removedLinks, 3)
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<ItemLink>()).map(\.id), [kept.id],
+                       "only the link between live items is left")
+        XCTAssertEqual(library.state(of: AtticItemRef(.task, doomed.id)), .missing)
+    }
 }

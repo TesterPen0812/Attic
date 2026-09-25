@@ -247,27 +247,46 @@ final class AtticLibrary {
             }
     }
 
-    /// Removes for good what has been in Recently Deleted for 30 days, then
-    /// the links of what was removed and links removed on their own that
-    /// long ago. Called only by the daily cleanup; never by agents.
+    /// Removes for good what has been in Recently Deleted for 30 days, with
+    /// the links of what was removed, then links removed on their own that
+    /// long ago. Each store removes its items and their links in one save
+    /// (`LinkStore.stagePurge`), so a failed save keeps both for the next
+    /// cleanup and a link never outlives its item. Called only by the daily
+    /// cleanup; never by agents.
     @discardableResult
     func purgeExpired(now: Date, calendar: Calendar) -> RecentlyDeletedPurgeReport {
         let cutoff = RecentlyDeletedPolicy.purgeCutoff(now: now, calendar: calendar)
         var report = RecentlyDeletedPurgeReport()
-        report.taskIDs = tasks.purgeDeleted(before: cutoff)
-        report.noteIDs = notes?.purgeDeleted(before: cutoff) ?? []
-        report.canvasIDs = canvases?.purgeDeletedCanvases(before: cutoff) ?? []
+        var staged = 0
+        func stageLinks(_ kind: AtticItemKind) -> (ModelContext, Set<UUID>) throws -> Void {
+            { [links] context, ids in
+                staged = try links.stagePurge(touching: Set(ids.map { AtticItemRef(kind, $0) }), in: context)
+            }
+        }
+        func committed(_ ids: Set<UUID>) -> Set<UUID> {
+            if !ids.isEmpty {
+                report.removedLinks += staged
+                if staged > 0 { links.stagedPurgeWasSaved() }
+            }
+            staged = 0
+            return ids
+        }
+        report.taskIDs = committed(tasks.purgeDeleted(before: cutoff, alongside: stageLinks(.task)))
+        report.noteIDs = committed(notes?.purgeDeleted(before: cutoff, alongside: stageLinks(.note)) ?? [])
+        report.canvasIDs = committed(
+            canvases?.purgeDeletedCanvases(before: cutoff, alongside: stageLinks(.canvas)) ?? []
+        )
         report.attachmentCount = tasks.purgeRemovedAttachments(before: cutoff)
             + (notes?.purgeRemovedAttachments(before: cutoff) ?? 0)
-        let purged = Set(report.taskIDs.map { AtticItemRef(.task, $0) })
-            .union(report.noteIDs.map { AtticItemRef(.note, $0) })
-            .union(report.canvasIDs.map { AtticItemRef(.canvas, $0) })
-        report.removedLinks = links.purgeLinks(touching: purged) + links.purgeRemovedLinks(before: cutoff)
+        report.removedLinks += links.purgeRemovedLinks(before: cutoff)
         return report
     }
 
     // MARK: - Tags
 
+    /// Undo and redo move the item's tags by the difference this change
+    /// made (see `tagDelta`), so tags added or renamed since, through any
+    /// history, survive.
     @discardableResult
     func setTags(_ newTags: [String], on ref: AtticItemRef, in history: UndoHistoryID? = nil) -> Bool {
         var succeeded = false

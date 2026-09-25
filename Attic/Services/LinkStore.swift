@@ -124,31 +124,47 @@ final class LinkStore {
     func purgeLinks(touching items: Set<AtticItemRef>) -> Int {
         guard !items.isEmpty else { return 0 }
         let context = ModelContext(container)
-        let ids = Array(Set(items.map(\.id)))
         do {
-            let candidates = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
-                ids.contains($0.sourceID) || ids.contains($0.targetID)
-            }))
-            let linkIDs = Array(Set(candidates.filter { row in
-                (row.source.map(items.contains) ?? false) || (row.target.map(items.contains) ?? false)
-            }.map(\.id)))
-            guard !linkIDs.isEmpty else { return 0 }
-            let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
-                linkIDs.contains($0.id)
-            }))
-            var removed = 0
-            for group in Dictionary(grouping: replicas, by: \.id).values {
-                let ends = Self.ends(of: group[0])
-                guard group.allSatisfy({ Self.ends(of: $0) == ends }) else { continue }
-                group.forEach(context.delete)
-                removed += 1
-            }
+            let removed = try stagePurge(touching: items, in: context)
             guard removed > 0 else { return 0 }
             return save(context) ? removed : 0
         } catch {
             lastErrorMessage = error.localizedDescription
             return 0
         }
+    }
+
+    /// The same removal as `purgeLinks(touching:)`, staged in `context`
+    /// without saving: an item store passes its own context, so the item
+    /// rows and their links are removed by one save, or neither is. A failed
+    /// save therefore leaves both for the next cleanup, and no link outlives
+    /// the item it points at. Returns how many link ids it staged.
+    func stagePurge(touching items: Set<AtticItemRef>, in context: ModelContext) throws -> Int {
+        guard !items.isEmpty else { return 0 }
+        let ids = Array(Set(items.map(\.id)))
+        let candidates = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
+            ids.contains($0.sourceID) || ids.contains($0.targetID)
+        }))
+        let linkIDs = Array(Set(candidates.filter { row in
+            (row.source.map(items.contains) ?? false) || (row.target.map(items.contains) ?? false)
+        }.map(\.id)))
+        guard !linkIDs.isEmpty else { return 0 }
+        let replicas = try context.fetch(FetchDescriptor<ItemLink>(predicate: #Predicate {
+            linkIDs.contains($0.id)
+        }))
+        var removed = 0
+        for group in Dictionary(grouping: replicas, by: \.id).values {
+            let ends = Self.ends(of: group[0])
+            guard group.allSatisfy({ Self.ends(of: $0) == ends }) else { continue }
+            group.forEach(context.delete)
+            removed += 1
+        }
+        return removed
+    }
+
+    /// Records that another store's save committed a staged purge.
+    func stagedPurgeWasSaved() {
+        revision &+= 1
     }
 
     /// Hard-deletes links removed softly before `cutoff`, when every replica

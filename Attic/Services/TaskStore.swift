@@ -1486,9 +1486,14 @@ final class TaskStore: ObservableObject {
     /// recorded is still there under the same deletion, and every replica of
     /// every task in it agrees; a divergent copy keeps the whole family.
     /// Files go only once no surviving replica references them. Returns the
-    /// ids of the purged deletes' tasks.
+    /// ids of the purged deletes' tasks. `alongside` stages dependent
+    /// removals (their links) in the same context, so they are saved with
+    /// the tasks or not at all; if it throws, nothing is purged.
     @discardableResult
-    func purgeDeleted(before cutoff: Date) -> Set<UUID> {
+    func purgeDeleted(
+        before cutoff: Date,
+        alongside: ((ModelContext, Set<UUID>) throws -> Void)? = nil
+    ) -> Set<UUID> {
         let rootsByID: [UUID: [TaskItem]]
         let storedByID: [UUID: [TaskItem]]
         do {
@@ -1542,6 +1547,13 @@ final class TaskStore: ObservableObject {
         guard !removed.isEmpty else { return [] }
         let removedFiles = removed.flatMap { $0.attachments + $0.removedAttachments.map(\.reference) }
         removed.forEach(context.delete)
+        do {
+            try alongside?(context, purgedIDs)
+        } catch {
+            context.rollback()
+            report(error.localizedDescription, owner: nil)
+            return []
+        }
         guard save() else { return [] }
         removeAttachmentFiles(removedFiles, excludingTaskIDs: purgedIDs)
         return purgedIDs
