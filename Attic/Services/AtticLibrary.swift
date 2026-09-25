@@ -47,6 +47,7 @@ final class AtticLibrary {
         links = LinkStore(container: tasks.container, now: now, persist: persist)
         tags = TagService(container: tasks.container, persist: persist)
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
+        tasks.commandLibrary = self
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
     }
 

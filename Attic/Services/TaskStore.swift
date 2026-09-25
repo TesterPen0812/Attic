@@ -339,6 +339,10 @@ final class TaskStore: ObservableObject {
     }
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var cloudSyncStatus = CloudSyncStatus()
+    /// The command layer built over this store (the app has one), so a page
+    /// handed only the store still records its changes in the same undo
+    /// history agents use. Set by `AtticLibrary`.
+    weak var commandLibrary: AtticLibrary?
 
     let container: ModelContainer
     private var context: ModelContext

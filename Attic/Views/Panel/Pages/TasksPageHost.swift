@@ -2,14 +2,21 @@ import SwiftUI
 
 /// State the Tasks page keeps while another page is showing. The shell owns
 /// one instance for the panel's lifetime, so switching to Notes and back never
-/// loses what was typed or attached in the add bar.
+/// loses what was typed, selected or expanded: it holds the page's model.
 @MainActor
 final class TasksPageState: ObservableObject {
-    @Published var quickEntryTitle = ""
-    @Published var quickEntryPriority: TaskPriority = .none
-    /// Pending attachments for the task being written; same lifetime as the
-    /// draft title above.
-    let composerAttachments = TaskComposerAttachments()
+    private var model: TasksPageModel?
+
+    /// The page model, made once over the app's command layer (the same
+    /// undo history agents use), or over a library of its own when the
+    /// store has none (tests that host the panel alone).
+    func model(for store: TaskStore) -> TasksPageModel {
+        if let model, model.store === store { return model }
+        let library = store.commandLibrary ?? AtticLibrary(tasks: store)
+        let made = TasksPageModel(library: library)
+        model = made
+        return made
+    }
 }
 
 /// The one place the shell hosts the Tasks page. The shell decides where the
@@ -27,17 +34,33 @@ struct TasksPageHost: View {
     /// switches can move focus into or out of the page.
     let primaryInputFocus: FocusState<Bool>.Binding
 
+    @State private var addBarFocused = false
+
     var body: some View {
-        LegacyTasksPage(
+        let model = state.model(for: store)
+        TasksPage(
+            model: model,
             store: store,
-            uiState: uiState,
-            subtaskPanels: subtaskPanels,
-            state: state,
-            composerAttachments: state.composerAttachments,
             layout: layout,
-            chromeInteractionState: chromeInteractionState,
-            usesOriginalTheme: settings.panelTheme == .original,
-            isQuickEntryFocused: primaryInputFocus
+            addBarFocused: $addBarFocused,
+            chrome: TasksPageChrome(
+                bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
+                typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) }
+            )
         )
+        .onAppear {
+            // Task pages arrive in Phase 3; until then "Open page" opens the
+            // task's detail panel on its files (the old subpanel stays only
+            // for a task's files).
+            model.services.openPage = { [subtaskPanels] id in
+                subtaskPanels.openFamilyPanel(for: id, focusEntry: false, view: .attachments)
+            }
+            if primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
+        }
+        // Quick capture (the global shortcut) and the shell's own focus
+        // requests put the insertion point in the add bar.
+        .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused { addBarFocused = true } }
+        .onChange(of: uiState.isComposerPresented) { _, presented in if presented { addBarFocused = true } }
+        .onChange(of: addBarFocused) { _, focused in if !focused, uiState.isComposerPresented { uiState.endAdding() } }
     }
 }
