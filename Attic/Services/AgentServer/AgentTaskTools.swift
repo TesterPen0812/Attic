@@ -45,7 +45,7 @@ final class AgentTaskTools {
         [
             "name": "list_tasks",
             "title": "List Attic Tasks",
-            "description": "Read main tasks and subtasks directly from Attic. Results include parent_id for subtasks; filter by parent_id to read a main task's steps, including completed ones. Status filtering is optional.",
+            "description": "Read main tasks and subtasks directly from Attic, in list order (in progress, to do, done, then backlog; manual order within each). Results include parent_id for subtasks; filter by parent_id to read a main task's steps, including completed ones. Optional filters combine: state (backlog is its own list), tag, due_before / due_after (inclusive days), text (in the title). Finished tasks from earlier days live in the Done log: add include_done_log to list them too (they carry done_logged_at).",
             "annotations": [
                 "readOnlyHint": true,
                 "destructiveHint": false,
@@ -60,9 +60,34 @@ final class AgentTaskTools {
                         "enum": TaskStatus.allCases.map(\.rawValue),
                         "description": "Only return tasks with this status."
                     ],
+                    "state": [
+                        "type": "string",
+                        "enum": TaskStatus.allCases.map(\.rawValue),
+                        "description": "Same as status (the name the app uses)."
+                    ],
                     "parent_id": [
                         "type": "string",
                         "description": "Main task UUID. Only return its subtasks."
+                    ],
+                    "tag": [
+                        "type": "string",
+                        "description": "Only tasks carrying this tag (a leading # is ignored)."
+                    ],
+                    "due_before": [
+                        "type": "string",
+                        "description": "Only tasks due on or before this day. " + dueDescription
+                    ],
+                    "due_after": [
+                        "type": "string",
+                        "description": "Only tasks due on or after this day. " + dueDescription
+                    ],
+                    "text": [
+                        "type": "string",
+                        "description": "Only tasks whose title contains this text (case and accents ignored)."
+                    ],
+                    "include_done_log": [
+                        "type": "boolean",
+                        "description": "Also list finished tasks the daily cleanup moved to the Done log (most recently finished first). Defaults to false."
                     ]
                 ],
                 "additionalProperties": false
@@ -88,7 +113,12 @@ final class AgentTaskTools {
                     "status": [
                         "type": "string",
                         "enum": ["todo", "inProgress", "backlog"],
-                        "description": "Initial status. Defaults to todo."
+                        "description": "Initial status. Defaults to todo (the Now list); backlog puts it in Backlog."
+                    ],
+                    "state": [
+                        "type": "string",
+                        "enum": ["todo", "inProgress", "backlog"],
+                        "description": "Same as status."
                     ],
                     "priority": [
                         "type": "string",
@@ -112,7 +142,7 @@ final class AgentTaskTools {
         [
             "name": "update_task",
             "title": "Update Attic Task",
-            "description": "Update a main task or subtask. Change title, status, priority, tags (replaces the list) or due date (null or an empty string clears it). Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual.",
+            "description": "Update a main task or subtask. Change title, status (state), priority, tags (replaces the list) or due date (null or an empty string clears it). backlog moves a task to Backlog; todo brings it back to Now. Finish all subtasks before completing a parent; reopen a completed parent before reopening a child. Parent completion stays manual. A task in the Done log (include_done_log in list_tasks) comes back to Now as to do when its status is set to todo, inProgress or backlog.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -130,6 +160,11 @@ final class AgentTaskTools {
                     "status": [
                         "type": "string",
                         "enum": TaskStatus.allCases.map(\.rawValue)
+                    ],
+                    "state": [
+                        "type": "string",
+                        "enum": TaskStatus.allCases.map(\.rawValue),
+                        "description": "Same as status."
                     ],
                     "priority": [
                         "type": "string",
@@ -429,6 +464,7 @@ final class AgentTaskTools {
     }
 
     private func listTasks(_ arguments: [String: Any]) throws -> String {
+        let arguments = try withStateAlias(arguments)
         let statuses: [TaskStatus]
         if arguments["status"] != nil {
             statuses = [try status(from: arguments, allowed: TaskStatus.allCases)]
@@ -436,12 +472,79 @@ final class AgentTaskTools {
             statuses = [.inProgress, .todo, .done, .backlog]
         }
         let parentID = try parentID(from: arguments)
-        let tasks = parentID.map { id in store.subtasks(of: id).filter { statuses.contains($0.status) } }
+        var tasks = parentID.map { id in store.subtasks(of: id).filter { statuses.contains($0.status) } }
             ?? statuses.flatMap(store.orderedTasks(for:))
+        if try bool(arguments, "include_done_log"), statuses.contains(.done) {
+            tasks += parentID.map { store.doneLogSubtasks(of: $0) } ?? doneLogTasks()
+        }
+        if let raw = arguments["tag"] {
+            guard let string = raw as? String, let tag = AtticTag.normalize(string) else {
+                throw AgentToolError.invalidArguments("tag must be a tag (letters, numbers and hyphens).")
+            }
+            tasks = tasks.filter { $0.tags.contains(tag) }
+        }
+        if let before = try dayFilter(arguments, "due_before") {
+            tasks = tasks.filter { $0.dueDay.map { $0 <= before } == true }
+        }
+        if let after = try dayFilter(arguments, "due_after") {
+            tasks = tasks.filter { $0.dueDay.map { $0 >= after } == true }
+        }
+        if let raw = arguments["text"] {
+            guard let text = raw as? String else { throw AgentToolError.invalidArguments("text must be a string.") }
+            let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !needle.isEmpty { tasks = tasks.filter { $0.title.localizedStandardContains(needle) } }
+        }
         return try encode(["count": tasks.count, "tasks": tasks.map(serialize)])
     }
 
+    /// Every main task and subtask in the Done log, most recently finished
+    /// first, read a page at a time.
+    private func doneLogTasks() -> [TaskItem] {
+        var result: [TaskItem] = []
+        var offset = 0
+        while true {
+            let page = store.doneLogPage(offset: offset, limit: 500)
+            for task in page.tasks {
+                result.append(task)
+                result += store.doneLogSubtasks(of: task.id)
+            }
+            guard page.hasMore else { return result }
+            offset += 500
+        }
+    }
+
+    /// `state` is the name the app uses for `status`; either may be given,
+    /// not both with different values.
+    private func withStateAlias(_ arguments: [String: Any]) throws -> [String: Any] {
+        guard let state = arguments["state"] else { return arguments }
+        var copy = arguments
+        copy.removeValue(forKey: "state")
+        if let status = arguments["status"] {
+            guard (status as? String) == (state as? String) else {
+                throw AgentToolError.invalidArguments("Give status or state, not both.")
+            }
+            return copy
+        }
+        copy["status"] = state
+        return copy
+    }
+
+    private func bool(_ arguments: [String: Any], _ key: String) throws -> Bool {
+        guard let raw = arguments[key] else { return false }
+        guard let value = raw as? Bool else { throw AgentToolError.invalidArguments("\(key) must be true or false.") }
+        return value
+    }
+
+    private func dayFilter(_ arguments: [String: Any], _ key: String) throws -> DueDay? {
+        guard let raw = arguments[key] else { return nil }
+        guard let phrase = raw as? String, let day = parser.parseDueDay(phrase) else {
+            throw AgentToolError.invalidArguments("\(key) must be a day such as 2026-09-30, today, fri or sep 30.")
+        }
+        return day
+    }
+
     private func createTask(_ arguments: [String: Any]) throws -> String {
+        let arguments = try withStateAlias(arguments)
         guard let title = arguments["title"] as? String,
               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentToolError.invalidArguments("A non-empty title is required.")
@@ -472,7 +575,8 @@ final class AgentTaskTools {
     private func updateTask(_ arguments: [String: Any]) throws -> String {
         // Validate every argument before mutating so an invalid one
         // doesn't leave the task half-updated.
-        let task = try findTask(arguments)
+        let arguments = try withStateAlias(arguments)
+        let task = try findTask(arguments, includingDoneLog: true)
         var newTitle: String?
         if let rawTitle = arguments["title"] {
             guard let title = rawTitle as? String,
@@ -488,6 +592,14 @@ final class AgentTaskTools {
         let newTags = try tags(from: arguments)
         let newDue = try dueDay(from: arguments, allowingClear: true)
 
+        // A task in the Done log comes back to Now first (as to do), then
+        // takes the rest of the edit; each is its own undoable step.
+        if store.task(withID: task.id) == nil {
+            guard let newStatus, newStatus != .done else {
+                throw AgentToolError.invalidArguments("This task is in the Done log. Set status to todo (or inProgress, backlog) to bring it back to Now first.")
+            }
+            try perform { library.restoreToNow(task.id) }
+        }
         try perform {
             library.updateTask(
                 task.id,
@@ -498,7 +610,7 @@ final class AgentTaskTools {
                 dueDay: newDue
             )
         }
-        return try encode(["task": serialize(task)])
+        return try encode(["task": serialize(store.task(withID: task.id) ?? task)])
     }
 
     private func deleteTask(_ arguments: [String: Any]) throws -> String {
@@ -508,11 +620,12 @@ final class AgentTaskTools {
         return try encode(["deleted": id])
     }
 
-    private func findTask(_ arguments: [String: Any]) throws -> TaskItem {
+    private func findTask(_ arguments: [String: Any], includingDoneLog: Bool = false) throws -> TaskItem {
         guard let rawID = arguments["id"] as? String, let id = UUID(uuidString: rawID) else {
             throw AgentToolError.invalidArguments("A task id (UUID) is required.")
         }
-        guard let task = store.tasks.first(where: { $0.id == id }) else {
+        guard let task = store.tasks.first(where: { $0.id == id })
+            ?? (includingDoneLog ? store.listedTask(withID: id) : nil) else {
             throw AgentToolError.notFound(rawID)
         }
         return task
@@ -658,6 +771,7 @@ final class AgentTaskTools {
         if let parentID = task.parentID { payload["parent_id"] = parentID.uuidString }
         payload["tags"] = task.tags
         if let due = task.dueDay { payload["due"] = due.rawValue }
+        if let logged = task.doneLoggedAt { payload["done_logged_at"] = Self.dateFormatter.string(from: logged) }
         return payload
     }
 
