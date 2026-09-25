@@ -23,6 +23,52 @@ final class AtticKeyWindowUITests: XCTestCase {
         try check(mode: "dark", assertsRaised: false)
     }
 
+    /// An explicit open on Tasks (quick capture, Show Attic) puts the
+    /// keyboard in the add bar, and the add bar draws no focus ring: text
+    /// typed right away lands there. (`ATTIC_UI_TEST_HOVER_MONITOR` opens
+    /// the panel the way quick capture does.)
+    func testAnExplicitOpenFocusesTheAddBarWithoutARing() throws {
+        app = XCUIApplication()
+        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_HOVER_MONITOR"] = "1"
+        app.launchArguments += ["-appearancePreference", "light", "-panelSurfaceStyle", "solid"]
+        app.launch()
+        app.activate()
+        // The legacy add bar, or the Tasks stream's token field once it lands.
+        let addBar = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier IN %@", ["quick-entry-title", "AtticTokenField"]))
+            .firstMatch
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, (addBar.value(forKey: "hasKeyboardFocus") as? Bool) != true {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "the add bar has the keyboard on open")
+
+        let image = addBar.screenshot().image
+        attach(image, name: "add-bar-on-open")
+        XCTAssertLessThan(try accentFraction(image), 0.002, "no focus ring on open")
+
+        app.typeText("Typed on open")
+        let typed = NSPredicate(format: "value CONTAINS %@", "Typed on open")
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 3), .completed,
+                       "what is typed on open lands in the add bar")
+    }
+
+    /// The share of pixels in the system's focus-ring blue (Original's accent
+    /// is grey, so nothing else in the add bar is blue).
+    private func accentFraction(_ image: NSImage) throws -> Double {
+        let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        var blue = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let c = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if c.blueComponent - c.redComponent > 0.25, c.blueComponent > 0.45 { blue += 1 }
+            }
+        }
+        return Double(blue) / Double(max(1, bitmap.pixelsWide * bitmap.pixelsHigh))
+    }
+
     private func check(mode: String, assertsRaised: Bool) throws {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
