@@ -38,12 +38,6 @@ struct SettingsPanelMiniature: View {
         .init(page: 2, systemName: "scribble.variable", title: String(localized: "Canvas"), shortcut: "⌘3")
     ]
 
-    private static let tabs: [AtticStatusTabs<Int>.Item] = [
-        .init(tab: 0, title: String(localized: "Now"), count: 4),
-        .init(tab: 1, title: String(localized: "Backlog"), count: 3),
-        .init(tab: 2, title: String(localized: "Done"), count: nil)
-    ]
-
     /// Sample tasks (the approved v4 mockup's).
     private static let rows: [AtticTaskRowModel] = [
         .init(title: String(localized: "Finalize launch checklist"), state: .inProgress, priority: .high,
@@ -60,17 +54,18 @@ struct SettingsPanelMiniature: View {
         advance: {}, start: {}, complete: {}, openPage: {}, moveToBacklog: {}, delete: {}
     )
 
-    /// Above the status tabs: the header's margin, controls and gap.
-    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.statusTabsTop
+    /// Above the page title: the header's margin, controls and gap.
+    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.pageTitleTop
 
     var body: some View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         ZStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: Self.headerZone)
-                AtticStatusTabs(items: Self.tabs, selection: .constant(0))
+                AtticText(verbatim: String(localized: "Tasks"), style: .pageHeading, ink: .heading)
+                    .frame(height: AtticLayout.pageTitleHeight)
                     .padding(.leading, AtticLayout.circleX)
-                Color.clear.frame(height: AtticLayout.statusTabsToList)
+                Color.clear.frame(height: AtticLayout.pageTitleToList)
                 ForEach(Self.rows) { row in
                     AtticTaskRow(model: row, actions: Self.noActions, onToggleExpanded: {})
                 }

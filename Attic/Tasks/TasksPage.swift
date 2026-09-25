@@ -10,11 +10,12 @@ struct TasksPageChrome {
     var typingLock: (Bool) -> Void = { _ in }
 }
 
-/// The Tasks page (spec § Tasks): the quiet Now · Backlog · Done switch,
+/// The Tasks page (spec § Tasks, v9): one title (Tasks, Backlog or Done),
 /// one list sorted by state with status circles, the row quick look, the
-/// selection bar, and the add bar that follows the page. Built only from the
-/// design system. Swiping between Now, Backlog and Done follows the
-/// trackpad (a paging scroll view), and the list stays lazy.
+/// selection bar, the page pill and the add bar that follows the page.
+/// Built only from the design system. Swiping between Tasks, Backlog and
+/// Done follows the trackpad 1:1 (a paging scroll view, the title moving
+/// with its list), and the list stays lazy.
 struct TasksPage: View {
     @ObservedObject var model: TasksPageModel
     @ObservedObject var store: TaskStore
@@ -28,30 +29,25 @@ struct TasksPage: View {
     @FocusState private var focusedRow: UUID?
     @State private var drag: TasksDrag?
     @State private var fileDropRow: UUID?
-    @State private var tabsOrigin: CGPoint = .zero
     /// The bottom stack's height: the add bar, plus the selection bar, a
     /// paste offer or an error line while they show.
     @State private var bottomControlsHeight: CGFloat = AtticControlSize.addBarHeight
 
     static let space = NamedCoordinateSpace.named("AtticTasksPage")
 
-    private var topPadding: CGFloat {
-        PanelGeometry.taskWorkspaceTopPadding(cornerSize: layout.cornerSize, panelSize: layout.panelSize)
-    }
+    /// The title's line box: 16 below the header, which moves inward with
+    /// larger corners, so the gap under the header stays the same.
+    private var titleTop: CGFloat { layout.headerBottom + AtticLayout.pageTitleTop }
 
     /// Room under the list for the add bar and its margins.
     static let footerZone: CGFloat = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
     private var footerZone: CGFloat { Self.footerZone }
+    /// The list also clears the page pill above the add bar.
+    static let listFooter: CGFloat = footerZone + AtticPagePillMetrics.collapsedHeight + AtticPagePillMetrics.toAddBar
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 0) {
-                tabs
-                    .padding(.leading, max(AtticLayout.circleX, layout.contentInsets.leading + AtticLayout.circleX - AtticLayout.rowHighlightInset))
-                    .padding(.top, topPadding + AtticLayout.statusTabsTop)
-                Color.clear.frame(height: AtticLayout.statusTabsToList)
-                pager
-            }
+            pager
             bottomControls
         }
         .coordinateSpace(Self.space)
@@ -70,40 +66,33 @@ struct TasksPage: View {
         // stack, so a selection bar or paste offer never hides under them.
         .preference(key: PanelPageNoticeClearancePreferenceKey.self,
                     value: footerZone + max(0, bottomControlsHeight - AtticControlSize.addBarHeight))
+
     }
 
-    // MARK: - Tabs
+    // MARK: - Title and page pill
 
-    private var tabs: some View {
-        AtticStatusTabs(
-            items: [
-                .init(tab: TasksTab.now, title: TasksTab.now.title, count: model.nowCount),
-                .init(tab: TasksTab.backlog, title: TasksTab.backlog.title, count: model.backlogCount),
-                .init(tab: TasksTab.done, title: TasksTab.done.title, count: nil)
-            ],
-            selection: Binding(get: { model.tab }, set: { model.select(tab: $0) }),
-            dropTargetTab: model.dropTargetTab
+    /// The page's one title. It belongs to its page, so a swipe carries it
+    /// with the list.
+    private func title(_ tab: TasksTab) -> some View {
+        AtticText(verbatim: tab.pageTitle, style: .pageHeading, ink: .heading)
+            .frame(height: AtticLayout.pageTitleHeight)
+            .padding(.leading, AtticLayout.circleX)
+            .padding(.top, titleTop)
+            .padding(.bottom, AtticLayout.pageTitleToList)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("tasks-page-title")
+    }
+
+    private var pagePill: some View {
+        AtticPagePill(
+            items: TasksTab.allCases.map { tab in
+                AtticPagePill.Item(page: tab, title: tab.pageTitle, icon: tab.pillIcon,
+                                   accessibilityIdentifier: "tasks-page-\(tab.identifier)")
+            },
+            selection: Binding(get: { model.tab }, set: { model.select(tab: $0) })
         )
-        .onGeometryChange(for: CGPoint.self) { $0.frame(in: Self.space).origin } action: { tabsOrigin = $0 }
-    }
-
-    /// Where each tab sits, for a row dragged onto a label. The tabs reserve
-    /// their selected width (see `AtticStatusTabs`), so this is exact.
-    private func tabFrame(_ tab: TasksTab) -> CGRect {
-        var x = tabsOrigin.x
-        for candidate in TasksTab.allCases {
-            let count = candidate == .now ? model.nowCount : candidate == .backlog ? model.backlogCount : nil
-            var width = AtticTextStyle.statusTabSelected.measuredWidth(candidate.title)
-            if let count {
-                width += AtticStatusTabMetrics.countGap + AtticTextStyle.statusCount.measuredWidth("\(count)")
-            }
-            if candidate == tab {
-                let outset = AtticStatusTabMetrics.dropOutlineOutset
-                return CGRect(x: x - outset, y: tabsOrigin.y - 6, width: width + outset * 2, height: AtticStatusTabMetrics.height + 12)
-            }
-            x += width + AtticLayout.statusTabsGap
-        }
-        return .null
+        .accessibilityIdentifier("tasks-page-pill")
     }
 
     // MARK: - Pages
@@ -126,13 +115,15 @@ struct TasksPage: View {
         .scrollEdgeEffectHidden(true, for: .all)
     }
 
-    @ViewBuilder
     private func page(_ tab: TasksTab) -> some View {
-        switch tab {
-        case .now, .backlog:
-            listPage(tab)
-        case .done:
-            TasksDonePage(model: model, store: store, footerZone: footerZone, cell: { row in cell(row, tab: .done, group: []) })
+        VStack(alignment: .leading, spacing: 0) {
+            title(tab)
+            switch tab {
+            case .now, .backlog:
+                listPage(tab)
+            case .done:
+                TasksDonePage(model: model, store: store, footerZone: Self.listFooter, cell: { row in cell(row, tab: .done, group: []) })
+            }
         }
     }
 
@@ -161,7 +152,7 @@ struct TasksPage: View {
                 }
                 .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion), value: rows.map(\.id))
             }
-            .contentMargins(.bottom, footerZone, for: .scrollContent)
+            .contentMargins(.bottom, Self.listFooter, for: .scrollContent)
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
             .coordinateSpace(listSpace(tab))
@@ -249,12 +240,9 @@ struct TasksPage: View {
         .modifier(TasksDragModifier(
             id: id, tab: tab, group: group, drag: $drag, enabled: tab != .done && model.editingTitleID == nil,
             offset: dragOffset(for: id), heights: { rowHeight($0, in: tab) },
-            overTab: { location in
-                for candidate in [TasksTab.now, .backlog] where candidate != tab && tabFrame(candidate).contains(location) {
-                    return candidate
-                }
-                return nil
-            },
+            // The tabs a row could be dropped on went with v9's one title;
+            // ⌘B and the menu still move a task between Tasks and Backlog.
+            overTab: { _ in nil },
             onTarget: { model.dropTargetTab = $0 },
             onEnd: finishDrag
         ))
@@ -512,6 +500,8 @@ struct TasksPage: View {
 
     private var bottomControls: some View {
         VStack(spacing: AtticSpacing.s8) {
+            pagePill
+                .padding(.bottom, AtticPagePillMetrics.toAddBar - AtticSpacing.s8)
             if model.failedSave == .paste {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { model.retryPaste() })
             }

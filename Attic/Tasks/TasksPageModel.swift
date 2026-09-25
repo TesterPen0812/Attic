@@ -16,6 +16,33 @@ enum TasksTab: Int, CaseIterable, Hashable, Identifiable {
         case .done: String(localized: "Done")
         }
     }
+
+    /// The page's one title (v9): the Now list is the Tasks page itself.
+    var pageTitle: String {
+        switch self {
+        case .now: String(localized: "Tasks")
+        case .backlog: String(localized: "Backlog")
+        case .done: String(localized: "Done")
+        }
+    }
+
+    /// For UI tests and automation.
+    var identifier: String {
+        switch self {
+        case .now: "now"
+        case .backlog: "backlog"
+        case .done: "done"
+        }
+    }
+
+    /// The page pill's icon: the status circle's state for the page.
+    var pillIcon: AtticPagePillIcon {
+        switch self {
+        case .now: .open
+        case .backlog: .dashed
+        case .done: .done
+        }
+    }
 }
 
 /// What the page needs from outside itself. The shell (or the preview)
@@ -622,9 +649,9 @@ final class TasksPageModel: ObservableObject {
 
     var addPlaceholder: String {
         switch tab {
-        case .now: String(localized: "Add a task…")
-        case .backlog: String(localized: "Add to backlog…")
-        case .done: String(localized: "Search done tasks…")
+        case .now: String(localized: "Add a task")
+        case .backlog: String(localized: "Add to backlog")
+        case .done: String(localized: "Search done tasks")
         }
     }
 
