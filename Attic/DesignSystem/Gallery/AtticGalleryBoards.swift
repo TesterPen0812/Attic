@@ -214,7 +214,7 @@ private struct BoardHeading: View {
 enum AtticGallerySamples {
     static let rows: [AtticTaskRowModel] = [
         .init(title: "Finalize launch checklist", state: .inProgress, priority: .high,
-              due: .init(text: "Today", isUrgent: true), tags: ["launch"], attachments: 2, subtasks: (1, 3)),
+              due: .init(text: "Today", isUrgent: true), tags: ["launch"], subtasks: (1, 3)),
         .init(title: "Ship appearance PR", state: .todo, priority: .high, subtasks: (2, 4)),
         .init(title: "Email beta testers", state: .todo, priority: .medium, due: .init(text: "Fri", isUrgent: false)),
         .init(title: "Book dentist", state: .todo, priority: .none, due: .init(text: "Tomorrow", isUrgent: false)),
@@ -626,7 +626,13 @@ private struct TaskRowsBoard: View {
         let rows = AtticGallerySamples.rows
         BoardHeading(title: "32 pt; 44 pt with a details line")
         AtticSpecimen("Rest", fullWidth: true) { GalleryTaskRow(model: rows[2]) }
-        AtticSpecimen("Details line: today, tag, files", fullWidth: true) { GalleryTaskRow(model: rows[0]) }
+        AtticSpecimen("Details line: today, tag", fullWidth: true) { GalleryTaskRow(model: rows[0]) }
+        AtticSpecimen("Date and count on the title line", fullWidth: true) {
+            GalleryTaskRow(model: .init(title: "Plan the offsite", priority: .low, due: .init(text: "Mon", isUrgent: false), subtasks: (0, 2)))
+        }
+        AtticSpecimen("Overdue at the right end", fullWidth: true) {
+            GalleryTaskRow(model: .init(title: "Pay the invoice", priority: .high, due: .init(text: "Yesterday", isUrgent: true)))
+        }
         AtticSpecimen("Hover", fullWidth: true) { GalleryTaskRow(model: rows[1]).atticForcedState(.hover) }
         AtticSpecimen("Selected", fullWidth: true) { GalleryTaskRow(model: rows[1], isSelected: true) }
         AtticSpecimen("Pressed", fullWidth: true) { GalleryTaskRow(model: rows[1]).atticForcedState(.pressed) }
@@ -643,8 +649,8 @@ private struct TaskRowsBoard: View {
                 GalleryTaskRow(model: rows[3], isSelected: true, selectionRun: .last)
             }
         }
-        AtticSpecimen("In a window; links", fullWidth: true) {
-            GalleryTaskRow(model: .init(title: "Draft the pricing page", priority: .medium, links: 2, inWindow: true))
+        AtticSpecimen("In a window; date, files and links", fullWidth: true) {
+            GalleryTaskRow(model: .init(title: "Draft the pricing page", priority: .medium, due: .init(text: "Thu", isUrgent: false), attachments: 2, links: 2, inWindow: true))
         }
         AtticSpecimen("A very long title truncates, never wraps", fullWidth: true) {
             GalleryTaskRow(model: .init(title: "Write the long overdue follow-up to everyone who replied to the beta invite", subtasks: (0, 5)))

@@ -93,12 +93,49 @@ final class AtticDesignSystemTests: XCTestCase {
         }
     }
 
-    func testTranslucentAndTintedPanelsStepTheTextOneShadeStronger() {
+    /// Spec rev 175: text that matters keeps 4.5 : 1, secondary text stays
+    /// soft at 3 : 1 at least, and Increase Contrast lifts all text to 4.5.
+    func testSecondaryTextIsSoftButReadable() {
+        for ink in [AtticInk.helper, .muted, .placeholder, .chromeHint, .disabledText, .accentText] {
+            XCTAssertTrue(ink.isSecondaryText, "\(ink)")
+            XCTAssertEqual(AtticSurfaceModel.floor(for: ink, kind: .solid, increaseContrast: false), 3)
+            XCTAssertEqual(AtticSurfaceModel.floor(for: ink, kind: .glass, increaseContrast: false), 3)
+            XCTAssertEqual(AtticSurfaceModel.floor(for: ink, kind: .solid, increaseContrast: true), 4.5)
+        }
+        for ink in [AtticInk.heading, .body, .label, .dueText, .warningText, .onInverse, .chromeBody] {
+            XCTAssertFalse(ink.isSecondaryText, "\(ink)")
+            XCTAssertEqual(AtticSurfaceModel.floor(for: ink, kind: .frosted, increaseContrast: false), 4.5)
+        }
+        // Close to v4's greys, not merely at the floor: secondary text on
+        // the plain surface reads between 3 and 4.5 : 1, and the quietest
+        // grey is lighter than the helper grey.
+        for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
+            let tokens = context.tokens
+            let base = tokens.panel.base
+            let helper = tokens.ink(.helper).contrast(on: base)
+            let muted = tokens.ink(.muted).contrast(on: base)
+            XCTAssertGreaterThanOrEqual(muted, 3, context.caption)
+            XCTAssertLessThan(helper, 4.5 * 1.05, "\(context.caption): helper stays soft (\(helper))")
+            XCTAssertLessThanOrEqual(muted, helper + 0.001, context.caption)
+            XCTAssertGreaterThanOrEqual(tokens.ink(.body).contrast(on: base), 4.5)
+        }
+        // Increase Contrast: every text 4.5 : 1.
+        let increased = AtticDesignContext(mode: .light, increaseContrast: true).tokens
+        for ink in AtticInk.allCases where ink.floor == .text && ink != .onInverse {
+            XCTAssertGreaterThanOrEqual(increased.ink(ink).contrast(on: increased.panel.base), 4.5, "\(ink)")
+        }
+    }
+
+    /// Translucent and tinted panels step a role stronger only where it
+    /// would miss its floor: a role that passes keeps its Solid colour.
+    func testTranslucentPanelsStepStrongerOnlyWhereNeeded() {
         let solid = AtticDesignContext(mode: .light).tokens
         for context in [AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, tint: .bold)] {
             let tokens = context.tokens
-            XCTAssertGreaterThanOrEqual(tokens.ink(.helper).contrast(on: solid.panel.base), solid.ink(.label).contrast(on: solid.panel.base) - 0.01, context.caption)
-            XCTAssertGreaterThanOrEqual(tokens.ink(.label).contrast(on: solid.panel.base), solid.ink(.body).contrast(on: solid.panel.base) - 0.01, context.caption)
+            for ink in [AtticInk.helper, .muted, .label, .body] {
+                XCTAssertGreaterThanOrEqual(tokens.ink(ink).contrast(on: solid.panel.base), solid.ink(ink).contrast(on: solid.panel.base) - 0.01, "\(context.caption) \(ink)")
+            }
+            XCTAssertEqual(tokens.ink(.heading), solid.ink(.heading), "Heading already passes everywhere")
         }
     }
 
@@ -132,6 +169,12 @@ final class AtticDesignSystemTests: XCTestCase {
             }
         }
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
+        // The PR #5 coverage, exactly (softening secondary text must not move it).
+        let measured = [
+            AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, surface: .frosted),
+            AtticDesignContext(mode: .dark, surface: .glass), AtticDesignContext(mode: .dark, surface: .frosted)
+        ].map { Int(($0.tokens.panel.foundationOpacity * 100).rounded()) }
+        XCTAssertEqual(measured, [67, 80, 66, 82])
     }
 
     func testDisabledTextAndIconsMeetTheRule() {

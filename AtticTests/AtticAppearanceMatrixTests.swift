@@ -29,6 +29,8 @@ final class AtticAppearanceMatrixTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let sheets = AtticAppearanceCheck.writeContactSheets(to: directory)
+        // The panel alone, Light and Dark, at 2× (for the side-by-side with v4).
+        AtticAppearanceCheck.writePanelRenders(to: directory)
         let summary = report.summary
             + String(format: "\n\nChecked in %.0f s.\nContact sheets:\n", elapsed)
             + sheets.map(\.lastPathComponent).joined(separator: "\n")

@@ -458,6 +458,28 @@ enum AtticAppearanceCheck {
     }
 }
 
+extension AtticAppearanceCheck {
+    /// The composed panel alone, default Light and Dark, 320 × 520 at 2×:
+    /// `panel-render-light.png` and `panel-render-dark.png`.
+    static func writePanelRenders(to directory: URL) {
+        for mode in AtticDesignContext.Mode.allCases {
+            let view = AtticGalleryPanelComposition(demo: AtticGalleryDemo())
+                .environment(AtticGalleryDemo())
+                .atticDesign(AtticDesignContext(mode: mode))
+                .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .wallpaper(.matchingMode)))
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            renderer.isOpaque = false
+            guard let image = renderer.cgImage else { continue }
+            let url = directory.appendingPathComponent("panel-render-\(mode.rawValue).png")
+            if let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                CGImageDestinationAddImage(destination, image, nil)
+                CGImageDestinationFinalize(destination)
+            }
+        }
+    }
+}
+
 /// One family in the curated combinations, on a neutral sheet.
 struct AtticContactSheet: View {
     let family: AtticGalleryFamily

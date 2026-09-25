@@ -22,9 +22,22 @@ final class AtticKeyboardFocusUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
         app.launchArguments += ["--attic-gallery", "--attic-gallery-keyboard"]
-        app.launch()
-        app.activate()
-        XCTAssertTrue(lab.waitForExistence(timeout: 20), "The keyboard lab window did not open: \(app.debugDescription)")
+        // The lab is an accessory (menu-bar) app turning itself into a
+        // regular app at launch; on a busy desktop the first window can
+        // take a moment to reach the accessibility tree, so activate while
+        // waiting and relaunch once if it never shows.
+        var opened = false
+        for _ in 0..<2 where !opened {
+            app.launch()
+            let deadline = Date().addingTimeInterval(15)
+            while Date() < deadline, !lab.exists {
+                app.activate()
+                _ = lab.waitForExistence(timeout: 1)
+            }
+            opened = lab.exists
+            if !opened { app.terminate() }
+        }
+        XCTAssertTrue(opened, "The keyboard lab window did not open: \(app.debugDescription)")
         lab.click()
     }
 
