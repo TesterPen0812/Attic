@@ -110,10 +110,12 @@ private struct AtticRaisedButtonLabel: View {
     @Environment(\.atticControlState) private var state
 
     var body: some View {
-        let glyph: AtticInk = state == .disabled ? .disabledIcon : .glyph
+        // Icons are lighter and thinner than text (v4): the secondary icon
+        // colour in a light outline weight.
+        let glyph: AtticInk = state == .disabled ? .disabledIcon : .icon
         HStack(spacing: AtticRaisedButtonMetrics.iconLabelGap) {
             if let systemName {
-                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.glyph : AtticRaisedButtonMetrics.labelIconSize, weight: .medium, ink: glyph)
+                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.glyph : AtticRaisedButtonMetrics.labelIconSize, weight: AtticIconWeight.outline, ink: glyph)
             }
             if let title {
                 AtticText(verbatim: title, style: .controlLabel, ink: state == .disabled ? .disabledText : .heading)
@@ -307,10 +309,10 @@ private struct AtticPageChipFace<Page: Hashable>: View {
     var body: some View {
         let m = AtticPageSwitchMetrics.self
         ZStack {
-            AtticIcon(systemName: item.systemName, size: m.iconSize, weight: .medium, ink: .glyph)
+            AtticIcon(systemName: item.systemName, size: m.iconSize, weight: .regular, ink: .glyph)
                 .opacity(isSelected ? 1 : 0)
                 .transformEnvironment(\.atticProbesDisabled) { if !isSelected { $0 = true } }
-            AtticIcon(systemName: item.systemName, size: m.iconSize, weight: .regular, ink: .icon)
+            AtticIcon(systemName: item.systemName, size: m.iconSize, weight: AtticIconWeight.outline, ink: .icon)
                 .opacity(isSelected ? 0 : 1)
                 .transformEnvironment(\.atticProbesDisabled) { if isSelected { $0 = true } }
         }
@@ -408,7 +410,7 @@ struct AtticAddBar: View {
         let state = AtticStateResolver(forced: forced, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: false).state
         let send = AtticControlSize.sendButton
         HStack(spacing: m.gap) {
-            AtticIcon(systemName: "plus", size: m.plusSize, weight: .medium, ink: state == .disabled ? .disabledIcon : .icon)
+            AtticIcon(systemName: "plus", size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
             field
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             ZStack {

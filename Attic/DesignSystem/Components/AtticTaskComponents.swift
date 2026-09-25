@@ -268,7 +268,7 @@ struct AtticStatusButton: View {
                 .frame(width: AtticControlSize.minimumHitTarget, height: AtticControlSize.minimumHitTarget)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AtticUndimmedButtonStyle())
         .focusable(isTabStop)
         .focusEffectDisabled()
         .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle))
@@ -409,11 +409,12 @@ private struct AtticStatusTab<Tab: Hashable>: View {
                     AtticText(
                         verbatim: item.title,
                         style: isSelected ? .statusTabSelected : .statusTab,
-                        ink: isSelected || state == .hover ? .body : .helper
+                        ink: ink(state)
                     )
                 }
                 if let count = item.count {
-                    AtticText(verbatim: "\(count)", style: .statusCount, ink: .helper)
+                    // The count reads with its tab (v4: "Now 4", "Backlog 3").
+                    AtticText(verbatim: "\(count)", style: .statusCount, ink: ink(state))
                 }
             }
             .frame(height: AtticStatusTabMetrics.height)
@@ -427,6 +428,12 @@ private struct AtticStatusTab<Tab: Hashable>: View {
         .accessibilityLabel(item.title)
         .accessibilityValue(item.count.map { String(localized: "\($0) tasks") } ?? "")
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+    }
+
+    /// Selected or hovered tabs read in the body colour; the others are the
+    /// quietest grey (secondary text, 3 : 1).
+    private func ink(_ state: AtticControlState) -> AtticInk {
+        isSelected || state == .hover ? .body : .muted
     }
 }
 
@@ -451,9 +458,20 @@ struct AtticTaskRowModel: Identifiable, Sendable {
     var links = 0
     var subtasks: (done: Int, total: Int)?
     var inWindow = false
+    /// The task has a page (notes written into it).
+    var hasPage = false
 
+    /// A second line only when the task has tags, a page, files or links
+    /// (or is open in a window); the due date then moves into that line
+    /// ("Today · #launch"). Otherwise the date sits at the right end of the
+    /// title line, as in v4.
     var hasDetails: Bool {
-        state != .done && (due != nil || !tags.isEmpty || attachments > 0 || links > 0 || inWindow)
+        state != .done && (!tags.isEmpty || hasPage || attachments > 0 || links > 0 || inWindow)
+    }
+
+    /// The due date shown at the right end of the title line.
+    var trailingDue: Due? {
+        hasDetails || state == .done ? nil : due
     }
 
     var accessibilityDescription: String {
@@ -587,9 +605,20 @@ struct AtticTaskRow: View {
             AtticText(verbatim: dropLabel, style: .dropLabel, ink: .accentText, allowsOverlap: true)
                 .frame(height: AtticLayout.rowHighlightHeight)
                 .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dropLabelInset)
-        } else if let subtasks = model.subtasks, model.state != .done {
-            AtticSubtaskCountButton(done: subtasks.done, total: subtasks.total, isExpanded: isExpanded, disabled: disabled, action: onToggleExpanded)
-                .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.countInset)
+        } else {
+            let count = model.state == .done ? nil : model.subtasks
+            HStack(spacing: AtticTaskRowMetrics.trailingGap) {
+                if let due = model.trailingDue {
+                    AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : (due.isUrgent ? .dueText : .helper))
+                        .frame(height: AtticLayout.rowHighlightHeight)
+                        .padding(.trailing, count == nil ? AtticTaskRowMetrics.dateInset : 0)
+                }
+                if let count {
+                    AtticSubtaskCountButton(done: count.done, total: count.total, isExpanded: isExpanded, disabled: disabled, action: onToggleExpanded)
+                        .padding(.trailing, AtticTaskRowMetrics.countInset)
+                }
+            }
+            .padding(.trailing, AtticLayout.rowHighlightInset)
         }
     }
 }
@@ -618,7 +647,7 @@ private struct AtticTaskDetails: View {
         var parts: [AnyView] = []
         if model.inWindow {
             parts.append(AnyView(HStack(spacing: m.detailsIconGap) {
-                AtticIcon(systemName: "macwindow", size: m.detailsIconSize, ink: icon)
+                AtticIcon(systemName: "macwindow", size: m.detailsIconSize, weight: .light, ink: icon)
                 AtticText("In window", style: .rowMeta, ink: text)
             }))
         }
@@ -628,9 +657,15 @@ private struct AtticTaskDetails: View {
         for tag in model.tags {
             parts.append(AnyView(AtticText(verbatim: "#" + tag, style: .rowMeta, ink: disabled ? .disabledText : .accentText)))
         }
+        if model.hasPage {
+            parts.append(AnyView(HStack(spacing: m.detailsIconGap) {
+                AtticIcon(systemName: "doc.text", size: m.detailsIconSize, weight: .light, ink: icon)
+                AtticText("Page", style: .rowMeta, ink: text)
+            }))
+        }
         if model.attachments > 0 {
             parts.append(AnyView(HStack(spacing: m.attachmentIconGap) {
-                AtticIcon(systemName: "paperclip", size: m.detailsIconSize, ink: icon)
+                AtticIcon(systemName: "paperclip", size: m.detailsIconSize, weight: .light, ink: icon)
                 AtticText(verbatim: "\(model.attachments)", style: .rowMeta, ink: text)
             }))
         }
@@ -641,7 +676,8 @@ private struct AtticTaskDetails: View {
     }
 }
 
-/// "1/3 ›": the second click target, which opens the quick look.
+/// "1/3": the second click target, which opens and closes the quick look.
+/// No chevron (v4): the count alone, with a hover fill.
 private struct AtticSubtaskCountButton: View {
     let done: Int
     let total: Int
@@ -655,37 +691,25 @@ private struct AtticSubtaskCountButton: View {
     var body: some View {
         let m = AtticSubtaskCountMetrics.self
         let radius = AtticRadius.control(height: m.height)
-        let chevronInk: AtticInk = disabled ? .disabledIcon : .chevron
         Button(action: action) {
-            HStack(spacing: m.gap) {
-                AtticText(verbatim: "\(done)/\(total)", style: .count, ink: disabled ? .disabledText : .helper)
-                ZStack {
-                    if isExpanded {
-                        AtticIcon(systemName: "chevron.down", size: m.chevronSize, weight: .semibold, ink: chevronInk)
-                            .transition(.opacity)
-                    } else {
-                        AtticIcon(systemName: "chevron.right", size: m.chevronSize, weight: .semibold, ink: chevronInk)
-                            .transition(.opacity)
-                    }
-                }
-                .frame(width: m.chevronSlot)
-            }
-            .padding(.horizontal, m.horizontalPadding)
-            .frame(height: m.height)
-            .background(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill((hovered && !disabled ? design.tokens.chipHover : .clear).color)
-            )
-            .frame(height: AtticLayout.rowHighlightHeight)
-            .contentShape(Rectangle())
+            AtticText(verbatim: "\(done)/\(total)", style: .count, ink: disabled ? .disabledText : .helper)
+                .padding(.horizontal, m.horizontalPadding)
+                .frame(height: m.height)
+                .background(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .fill((hovered && !disabled ? design.tokens.chipHover : .clear).color)
+                )
+                .frame(height: AtticLayout.rowHighlightHeight)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .atticOwnFocusRing(.rounded(radius: radius, height: m.height))
         .disabled(disabled)
         .onHover { hovered = $0 }
         .help(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"))
         .accessibilityLabel(String(localized: "\(done) of \(total) subtasks"))
+        .accessibilityValue(isExpanded ? String(localized: "expanded") : String(localized: "collapsed"))
         .accessibilityHint(isExpanded ? String(localized: "Collapses the quick look") : String(localized: "Expands the quick look"))
     }
 }

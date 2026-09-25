@@ -6,6 +6,16 @@ import SwiftUI
 // radii, control sizes, layout) are in `AtticTokens.swift`; colours that
 // depend on the look are in `AtticColorTokens`.
 
+// MARK: - Icons
+
+/// Icons are lighter and thinner than text (spec § Colour, v4): SF Symbols
+/// outlines in a light weight, in the secondary icon colour. Only a
+/// selected state (the current page) or a glyph on a filled control (send)
+/// is drawn heavier.
+enum AtticIconWeight {
+    static let outline: Font.Weight = .light
+}
+
 // MARK: - Rings and outlines
 
 /// Keyboard focus and the current choice (spec § Hover, selection, focus:
@@ -105,6 +115,10 @@ enum AtticTaskRowMetrics {
     static let dropLabelInset: CGFloat = 10
     /// The subtask count sits this far inside the highlight's trailing edge.
     static let countInset: CGFloat = 2
+    /// A date alone at the right end sits where the count's text would end.
+    static let dateInset: CGFloat = 8
+    /// Between the date and the count at the right end.
+    static let trailingGap: CGFloat = 4
 }
 
 /// "1/3 ›": the subtask count button in a row.
@@ -112,8 +126,6 @@ enum AtticSubtaskCountMetrics {
     static let height: CGFloat = 22
     static let horizontalPadding: CGFloat = 6
     static let gap: CGFloat = 3
-    static let chevronSize: CGFloat = 9
-    static let chevronSlot: CGFloat = 10
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").
