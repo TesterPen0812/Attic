@@ -14,6 +14,13 @@ struct PanelShellSurface: ViewModifier {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         content
             .background { AtticPanelStageSurface(cornerSize: cornerSize) }
+            // The window server routes a click on this transparent panel
+            // only where SwiftUI draws something hit-testable, and the design
+            // system draws the surface with hit testing off. Without this
+            // fill, a click on blank surface (the canvas, the space around a
+            // note's title field) fell through to the app behind. 1/255 black
+            // under the surface is invisible on every material.
+            .background { shape.fill(Color.black.opacity(1.0 / 255)) }
             .overlay { AtticPanelRim(cornerSize: cornerSize) }
             .clipShape(shape)
             // Keep the full surface in the native event region: blank
