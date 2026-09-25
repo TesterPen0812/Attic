@@ -12,9 +12,13 @@ enum AgentShowOutcome: Equatable {
     /// The person is typing in Attic; nothing moved.
     case userIsTyping
     case notFound(String)
+    /// The panel could not show it; the details say why (nothing that
+    /// was refused changed).
+    case failed(String)
 }
 
-/// Shows pages and items for an agent. The app coordinator implements it.
+/// Shows pages and items for an agent. `PanelAgentPresenter` implements it
+/// over the real panel.
 @MainActor
 protocol AgentPanelPresenting: AnyObject {
     func presentForAgent(_ target: AgentShowTarget) -> AgentShowOutcome
@@ -78,6 +82,8 @@ final class AgentShellTools {
             return "Not shown: the user is typing in Attic. Nothing was moved; ask again later or tell the user where to look."
         case let .notFound(description):
             throw AgentToolError.invalidArguments("No \(description) exists with that id.")
+        case let .failed(reason):
+            throw AgentToolError.notPerformed("Not shown: \(reason)")
         }
     }
 

@@ -5,6 +5,9 @@ enum AgentToolError: Error {
     case invalidArguments(String)
     case notFound(String)
     case storeFailure(String)
+    /// The request was valid but Attic could not carry it out (the panel
+    /// refused to change page, for example); the details say why.
+    case notPerformed(String)
 
     var message: String {
         switch self {
@@ -12,6 +15,7 @@ enum AgentToolError: Error {
         case let .invalidArguments(details): details
         case let .notFound(id): "No task exists with id \(id)."
         case let .storeFailure(details): "The change could not be saved: \(details)"
+        case let .notPerformed(details): details
         }
     }
 }

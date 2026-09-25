@@ -39,6 +39,29 @@ enum RevealRefreshPolicy: Equatable {
     }
 }
 
+/// What an explicit reveal did.
+enum PanelRevealOutcome: Equatable {
+    case shown
+    case refused(PanelRevealRefusal)
+}
+
+enum PanelRevealRefusal: Equatable {
+    /// No display to show the panel on.
+    case noScreen
+    /// The open note could not be saved, so the page did not change.
+    case unsavedNote
+    /// The display has no usable area for the panel.
+    case noUsableScreenArea
+
+    var explanation: String {
+        switch self {
+        case .noScreen: "no display is available for the Attic panel."
+        case .unsavedNote: "the note open in Attic could not be saved, so the panel stayed on it. Nothing was moved."
+        case .noUsableScreenArea: "the display has no room for the Attic panel right now."
+        }
+    }
+}
+
 @MainActor
 final class CornerHoverMonitor {
     private let settings: AppSettings
@@ -173,28 +196,43 @@ final class CornerHoverMonitor {
     /// takes the keyboard: the panel becomes key, and on Tasks the add bar
     /// is focused. `takesKeyboard: false` shows the panel without touching
     /// the keyboard (an agent's `show` while the user may be typing).
+    ///
+    /// Returns whether the panel now shows the requested page. A refusal
+    /// changes nothing: a Notes draft that could not be saved keeps its
+    /// page, and no reveal starts.
+    @discardableResult
     func revealProgrammatically(
         openComposer: Bool = false,
         section: PanelSection? = nil,
         takesKeyboard: Bool = true
-    ) {
-        guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
-        guard preparePresentation(openComposer: openComposer, section: section) else { return }
+    ) -> PanelRevealOutcome {
+        guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else {
+            return .refused(.noScreen)
+        }
+        if let refusal = preparePresentation(openComposer: openComposer, section: section) {
+            return .refused(refusal)
+        }
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
+        let wasVisible = stateMachine.isVisible
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
-        panelController.show(on: screen, corner: settings.corner, makeKey: takesKeyboard)
+        guard panelController.show(on: screen, corner: settings.corner, makeKey: takesKeyboard) else {
+            if !wasVisible { stateMachine.forceHidden() }
+            refreshSamplingCadence(at: NSEvent.mouseLocation)
+            return .refused(.noUsableScreenArea)
+        }
         if takesKeyboard, uiState.selectedSection.isTaskBased {
             uiState.requestPrimaryInputFocus()
         }
+        return .shown
     }
 
     /// Keep the real panel on screen through a performance sample, including
     /// a section change made while it is already visible.
     func revealForPerformanceProbe(section: PanelSection) {
         guard let screen = NSScreen.main,
-              preparePresentation(openComposer: false, section: section) else { return }
+              preparePresentation(openComposer: false, section: section) == nil else { return }
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
@@ -217,38 +255,40 @@ final class CornerHoverMonitor {
 
     func keepVisibleForUITesting(openComposer: Bool = false, makeKey: Bool = true) {
         guard let screen = NSScreen.main else { return }
-        guard preparePresentation(openComposer: openComposer, section: nil) else { return }
+        guard preparePresentation(openComposer: openComposer, section: nil) == nil else { return }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
         panelController.show(on: screen, corner: settings.corner, makeKey: makeKey)
     }
 
+    /// Moves to the target page (and opens its composer) before a reveal.
+    /// Returns why it could not, having changed nothing, or nil.
     private func preparePresentation(
         openComposer: Bool,
         section: PanelSection?
-    ) -> Bool {
+    ) -> PanelRevealRefusal? {
         let targetSection = section ?? uiState.selectedSection
 
         if targetSection != uiState.selectedSection {
             if uiState.selectedSection.isNotes, noteDraft.isActive {
-                guard noteDraft.close() else { return false }
+                guard noteDraft.close() else { return .unsavedNote }
             }
             PerformanceSignposts.beginPageSwitch()
             uiState.selectSection(targetSection)
         }
 
-        guard openComposer else { return true }
+        guard openComposer else { return nil }
         if targetSection.isNotes {
             guard noteDraft.beginNew() else {
                 PerformanceSignposts.cancelPageSwitch()
-                return false
+                return .unsavedNote
             }
         }
 
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { uiState.beginAdding() }
-        return true
+        return nil
     }
 
     private func samplePointer(at location: CGPoint = NSEvent.mouseLocation) {

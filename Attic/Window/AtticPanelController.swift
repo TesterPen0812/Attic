@@ -364,7 +364,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
+    /// Orders the panel front at `corner`. Returns false (and shows
+    /// nothing) when the screen has no usable area for it.
+    @discardableResult
+    func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) -> Bool {
         cancelPageRelease()
         // Build the pages now, before the first frame is shown, so the panel
         // never slides in empty; the reveal signpost includes it.
@@ -379,7 +382,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let workArea = refreshCurrentWorkArea(preferredScreen: screen) else {
             PerformanceSignposts.cancelReveal()
             PerformanceSignposts.cancelPageSwitch()
-            return
+            return false
         }
         let visibleFrame = workArea.visibleFrame
         let priorFrame = panel.visibleContentFrame

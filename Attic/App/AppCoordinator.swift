@@ -355,6 +355,8 @@ final class AppCoordinator: ObservableObject {
     }
     private let settingsWindowController: SettingsWindowController
     private let hoverMonitor: CornerHoverMonitor
+    /// An agent's `show` over the real panel (the shell tools hold it weakly).
+    private let agentPresenter: PanelAgentPresenter
     private let agentServer: AgentServer
     private let isUITesting: Bool
     private let isRunningTests: Bool
@@ -556,7 +558,7 @@ final class AppCoordinator: ObservableObject {
                 library.purgeExpired(now: now, calendar: calendar)
             }
         )
-        hoverMonitor = CornerHoverMonitor(
+        let hoverMonitor = CornerHoverMonitor(
             settings: settings,
             panelController: panelController,
             uiState: uiState,
@@ -565,8 +567,16 @@ final class AppCoordinator: ObservableObject {
             canvasStore: canvasStore,
             noteDraft: noteDraft
         )
+        self.hoverMonitor = hoverMonitor
+        agentPresenter = PanelAgentPresenter(
+            uiState: uiState, store: store, noteStore: noteStore,
+            canvasSession: canvasSession, noteDraft: noteDraft,
+            reveal: { [weak hoverMonitor] section in
+                hoverMonitor?.revealProgrammatically(section: section, takesKeyboard: false) ?? .refused(.noScreen)
+            }
+        )
         newTaskHotKey.action = { [weak self] in self?.showNewTask() }
-        shellTools.presenter = self
+        shellTools.presenter = agentPresenter
         globalShortcutObservation = newTaskHotKey.$registration
             .sink { [weak self] registration in
                 self?.globalShortcutRegistration = registration
@@ -836,18 +846,16 @@ final class AppCoordinator: ObservableObject {
         hoverMonitor.revealProgrammatically(openComposer: true, section: .notes)
     }
 
+    /// The menu-bar Search: the Tasks page's Done search, focused (⌘K
+    /// search arrives with the command palette in a later phase).
+    func showSearch() {
+        guard hoverMonitor.revealProgrammatically(section: .tasks) == .shown else { return }
+        uiState.requestSearch()
+    }
+
     func openSettings() {
         settingsWindowController.show()
     }
-
-    /// While the person types in the panel, an agent's `show` moves nothing.
-    private var isUserTypingInPanel: Bool {
-        let typing: Set<PanelInteractionLockReason> = [
-            .quickEntryFocus, .taskComposer, .taskEditing, .subtaskComposer, .notesEditorFocus, .notesDirty
-        ]
-        return uiState.isPanelKey && !uiState.interactionLockReasons.isDisjoint(with: typing)
-    }
-
 
     private func observeMenuTracking() {
         let center = NotificationCenter.default
@@ -868,40 +876,5 @@ final class AppCoordinator: ObservableObject {
                 }
             }
         ]
-    }
-}
-
-extension AppCoordinator: AgentPanelPresenting {
-    /// An agent's `show`: reveal the panel on the page (and item) without
-    /// taking the keyboard, and never while the person is typing in Attic.
-    func presentForAgent(_ target: AgentShowTarget) -> AgentShowOutcome {
-        guard !isUserTypingInPanel else { return .userIsTyping }
-        switch target {
-        case let .page(page):
-            hoverMonitor.revealProgrammatically(section: page.section, takesKeyboard: false)
-            return .shown("the \(page.title) page")
-        case let .item(ref):
-            switch ref.kind {
-            case .task:
-                guard let task = store.task(withID: ref.id) else { return .notFound("task") }
-                let section: PanelSection = task.status == .backlog ? .backlog : .tasks
-                hoverMonitor.revealProgrammatically(section: section, takesKeyboard: false)
-                uiState.showItem(ref)
-                return .shown("the task “\(task.title)” on the Tasks page")
-            case .note:
-                guard let note = noteStore.note(withID: ref.id) else { return .notFound("note") }
-                hoverMonitor.revealProgrammatically(section: .notes, takesKeyboard: false)
-                if uiState.editingNoteID != note.id, !noteDraft.isActive || noteDraft.close(), noteDraft.beginEditing(note) {
-                    uiState.beginEditingNote(note)
-                }
-                uiState.showItem(ref)
-                return .shown("the note “\(note.title)”")
-            case .canvas:
-                guard canvasSession.selectCanvas(ref.id) else { return .notFound("canvas") }
-                hoverMonitor.revealProgrammatically(section: .canvas, takesKeyboard: false)
-                uiState.showItem(ref)
-                return .shown("the canvas")
-            }
-        }
     }
 }
