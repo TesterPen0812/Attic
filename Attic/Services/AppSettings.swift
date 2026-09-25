@@ -53,7 +53,10 @@ enum PanelCornerSize: Double, CaseIterable, Identifiable {
 
     static let min = PanelCornerSize.small.rawValue
     static let max = PanelCornerSize.maximum.rawValue
-    static let defaultValue = PanelCornerSize.huge.rawValue
+    /// Fresh installs start at 52, about Craft's floating-panel corner
+    /// (spec § Appearance: "The panel's corner"). A size someone already
+    /// chose is stored and kept; only an unset value takes this default.
+    static let defaultValue: Double = 52
 }
 
 /// User-adjustable and live-resizable width of the panel, in points.
