@@ -674,8 +674,8 @@ struct AtticTaskRowModel: Identifiable, Sendable {
     }
 }
 
-/// A task row: 32 pt (30 highlight + 2), 44 pt with a details line; the
-/// circle at x = 16 and the title at x = 42; highlight inset 8, radius 10.
+/// A task row: 34 pt (32 highlight + 2), 48 pt with a details line; the
+/// circle at x = 20 and the title at x = 46; highlight inset 12, radius 10.
 /// Three click targets: the circle (advance), the subtask count (quick
 /// look), and the rest (open the page). Keyboard focusable: a focused row
 /// draws the 2 pt accent ring and answers the task keys (`AtticTaskKeys`).
@@ -755,8 +755,8 @@ struct AtticTaskRow: View {
                             AtticText(
                                 verbatim: model.title,
                                 style: .rowTitle,
+                                // Done fades the title, without a strike (v9).
                                 ink: disabled ? .disabledText : (done ? .helper : .body),
-                                strikethrough: done,
                                 truncates: true
                             )
                         }
@@ -1122,7 +1122,7 @@ struct AtticTaskCard: View {
                     .padding(.leading, m.leadingInset - hitInset)
                     .padding(.top, m.circleTop)
                 VStack(alignment: .leading, spacing: AtticTaskRowMetrics.titleToDetails) {
-                    AtticText(verbatim: model.title, style: .rowTitle, ink: model.state == .done ? .helper : .body, strikethrough: model.state == .done, truncates: true)
+                    AtticText(verbatim: model.title, style: .rowTitle, ink: model.state == .done ? .helper : .body, truncates: true)
                         .frame(height: m.titleHeight)
                     if model.hasDetails || model.subtasks != nil {
                         AtticCardDetails(model: model)

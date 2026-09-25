@@ -263,6 +263,12 @@ enum AtticGallerySamples {
         .init(page: 2, systemName: "scribble.variable", title: String(localized: "Canvas"), shortcut: "⌘3")
     ]
 
+    static let pillPages: [AtticPagePill<Int>.Item] = [
+        .init(page: 0, title: "Tasks", icon: .open),
+        .init(page: 1, title: "Backlog", icon: .dashed),
+        .init(page: 2, title: "Done", icon: .done)
+    ]
+
     static let tabs: [AtticStatusTabs<Int>.Item] = [
         .init(tab: 0, title: String(localized: "Now"), count: 4),
         .init(tab: 1, title: String(localized: "Backlog"), count: 3),
@@ -335,8 +341,8 @@ struct AtticGalleryPanelComposition: View {
     /// The panel's own coordinate space (the scroll edge zones are measured in it).
     static let space = NamedCoordinateSpace.named("AtticGalleryPanel")
 
-    /// Above the status tabs: the header's margin, controls and gap.
-    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.statusTabsTop
+    /// Above the page title: the header's margin, controls and gap.
+    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.pageTitleTop
     /// Below the list: the add bar and its margins.
     private static let footerZone = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
 
@@ -418,15 +424,19 @@ struct AtticGalleryPanelComposition: View {
     }
 
     private var addBar: some View {
-        AtticAddBar(placeholder: "Add a task…", text: $demo.addText) { demo.addText = "" }
+        VStack(spacing: AtticPagePillMetrics.toAddBar) {
+            AtticPagePill(items: AtticGallerySamples.pillPages, selection: $demo.tab)
+            AtticAddBar(placeholder: "Add a task", text: $demo.addText) { demo.addText = "" }
+        }
     }
 
     private func list(_ rows: [AtticTaskRowModel], fades: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            AtticStatusTabs(items: AtticGallerySamples.tabs, selection: $demo.tab)
+            AtticText(verbatim: String(localized: "Tasks"), style: .pageHeading, ink: .heading)
+                .frame(height: AtticLayout.pageTitleHeight)
                 .padding(.leading, AtticLayout.circleX)
                 .atticScrollEdgeFade(fades, in: Self.space)
-            Color.clear.frame(height: AtticLayout.statusTabsToList)
+            Color.clear.frame(height: AtticLayout.pageTitleToList)
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 GalleryTaskRow(model: row, isSelected: index == selectedIndex, isExpanded: showsQuickLook && index == 0)
                     .atticScrollEdgeFade(fades, in: Self.space)
@@ -447,7 +457,7 @@ struct AtticGalleryPanelComposition: View {
 private struct RaisedControlsBoard: View {
     @Environment(AtticGalleryDemo.self) private var demo
     var body: some View {
-        BoardHeading(title: "Single button · 36 × 32, radius 13.5")
+        BoardHeading(title: "Single button · 38 × 34, radius 14.5")
         SpecimenRow {
             ForEach([AtticControlState.rest, .hover, .pressed], id: \.self) { state in
                 AtticSpecimen(state.title) {
@@ -462,10 +472,10 @@ private struct RaisedControlsBoard: View {
                 }
             }
             AtticSpecimen("Pinned") {
-                AtticRaisedButton(systemName: "pin.fill", label: "Unpin", action: demo.record("Unpin"))
+                AtticRaisedButton(systemName: "pin", label: "Unpin", isSelected: true, action: demo.record("Unpin"))
             }
         }
-        BoardHeading(title: "Label buttons · 32 tall")
+        BoardHeading(title: "Label buttons · 34 tall")
         SpecimenRow {
             AtticSpecimen("All notes") {
                 AtticRaisedButton(systemName: "list.bullet", title: "All notes", action: demo.record("All notes"))

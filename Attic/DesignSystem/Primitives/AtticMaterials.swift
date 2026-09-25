@@ -388,6 +388,11 @@ struct AtticSurfaceBackground<S: Shape>: View {
             if model.kind != .solid {
                 underlay
                 shape.fill(model.base.withAlpha(model.foundationOpacity).color)
+            } else if model.porcelain, model.appearance == .light {
+                shape.fill(LinearGradient(
+                    stops: AtticSurfaceModel.porcelainStops.map { Gradient.Stop(color: $0.colour.color, location: $0.location) },
+                    startPoint: .top, endPoint: .bottom
+                ))
             } else {
                 shape.fill(model.base.color)
             }
@@ -520,6 +525,14 @@ struct AtticPanelRim: View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         let dark = design.mode == .dark
         ZStack {
+            if design.tokens.panel.porcelain {
+                // v9's light top edge: a 2 pt stroke (1 pt shows inside the
+                // clip) that fades out over the top fifth.
+                shape.stroke(LinearGradient(stops: [
+                    .init(color: Color.white.opacity(dark ? 0.16 : 1), location: 0),
+                    .init(color: Color.white.opacity(0), location: 0.22)
+                ], startPoint: .top, endPoint: .bottom), lineWidth: 2)
+            }
             shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
             if dark {
                 Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: AtticStyle.panelSquircleExponent)

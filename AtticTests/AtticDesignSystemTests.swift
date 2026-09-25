@@ -24,7 +24,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.control(height: 36), 15)
         XCTAssertEqual(AtticRadius.control(height: 28), 12)
         XCTAssertEqual(AtticRadius.control(height: 18), 7.5)
-        XCTAssertEqual(AtticRadius.nestedChip, 9.5, "Nested chips: outer radius minus the inset (13.5 − 4)")
+        XCTAssertEqual(AtticRadius.nestedChip, 10.5, "Nested chips: outer radius minus the inset (14.5 − 4)")
         XCTAssertEqual(AtticRadius.nested(outer: 13.5, gap: 4), 9.5)
         XCTAssertNil(AtticRadius.nested(outer: 20, gap: 12), "Nesting only applies to gaps of 6 pt or less")
         XCTAssertEqual(AtticRadius.ring(around: 10, offset: 4), 14)
@@ -466,7 +466,9 @@ final class AtticDesignSystemTests: XCTestCase {
         for ic in [false, true] {
             let widths = AtticPriority.allCases.map { m.ringWidth($0, increaseContrast: ic, differentiateWithoutColor: false) }
             XCTAssertEqual(widths, widths.sorted(), "Weight never falls as priority rises")
-            XCTAssertLessThan(widths[0], widths[1])
+            // v9: None and Low are the same thin ring (Low's grey is
+            // deeper); Medium and High are heavier.
+            XCTAssertEqual(widths[0], widths[1])
             XCTAssertLessThan(widths[1], widths[2])
             XCTAssertGreaterThan(
                 m.ringWidth(.high, increaseContrast: ic, differentiateWithoutColor: true),

@@ -17,14 +17,16 @@ struct PanelHeader: View {
     var body: some View {
         AtticControlGroup {
             HStack(alignment: .top, spacing: 0) {
+                // An outline pin in both states, at the switch's icon size;
+                // pinned shows as the button's selected chip (v9).
                 AtticRaisedButton(
-                    systemName: isPinned ? "pin.fill" : "pin",
+                    systemName: "pin",
                     label: isPinned ? "Unpin panel" : "Pin panel",
                     help: isPinned ? String(localized: "Unpin (⇧⌘P)") : String(localized: "Pin (⇧⌘P)"),
+                    isSelected: isPinned,
                     action: onTogglePin
                 )
                 .keyboardShortcut("p", modifiers: [.command, .shift])
-                .accessibilityAddTraits(isPinned ? .isSelected : [])
                 .accessibilityIdentifier("panel-pin-button")
                 Spacer(minLength: AtticSpacing.betweenControls)
                 AtticPageSwitch(

@@ -66,16 +66,17 @@ enum AtticHairline {
 enum AtticStatusCircleMetrics {
     /// Keeps the ring's outer edge half a point inside the 16 pt frame.
     static let edgeInset: CGFloat = 0.5
-    /// Priority is the ring's weight (only High is also red): None 1.2 pt,
-    /// Low 1.5, Medium and High 1.9. Under Differentiate Without Colour High
-    /// is heavier still (2.6 pt), so it never relies on its red; Increase
-    /// Contrast adds 0.4 pt to every ring.
+    /// Priority is the ring's weight (only High is also red), softer since
+    /// v9: None and Low thin rings (1.25 pt), Medium and High heavier (1.7).
+    /// Under Differentiate Without Colour High is heavier still (2.4 pt),
+    /// so it never relies on its red; Increase Contrast adds 0.4 pt to
+    /// every ring.
     static func ringWidth(_ priority: AtticPriority, increaseContrast: Bool, differentiateWithoutColor: Bool) -> CGFloat {
         let width: CGFloat = switch priority {
-        case .none: 1.2
-        case .low: 1.5
-        case .medium: 1.9
-        case .high: differentiateWithoutColor ? 2.6 : 1.9
+        case .none: 1.25
+        case .low: 1.25
+        case .medium: 1.7
+        case .high: differentiateWithoutColor ? 2.4 : 1.7
         }
         return width + (increaseContrast ? 0.4 : 0)
     }
@@ -124,8 +125,9 @@ enum AtticTaskRowMetrics {
     static let titleLineHeight: CGFloat = 18
     static let detailsLineHeight: CGFloat = 16
     static let titleToDetails: CGFloat = 1
-    /// Top of the title in a two-line row (centres both lines in 42).
-    static let twoLineTextTop: CGFloat = 5
+    /// Top of the title in a two-line row (both lines centred in the 46 pt
+    /// highlight, rounded up).
+    static let twoLineTextTop: CGFloat = 6
     /// The circle rises a point in a two-line row, level with the title.
     static let twoLineCircleLift: CGFloat = 1
     /// The row sits 1 pt below its pitch's top (half the 2 pt row gap).
@@ -211,10 +213,55 @@ enum AtticPageSwitchMetrics {
     static let selectedPadding: CGFloat = 9
 }
 
+/// The page pill above the add bar (v9, owner 2026-09-26): three dots
+/// that open, under the pointer or the keyboard, into the three pages'
+/// icons (open ring, dashed ring, done disc) with the page's name above.
+enum AtticPagePillMetrics {
+    static let dotSize: CGFloat = 5
+    static let dotGap: CGFloat = 5
+    static let collapsedHeight: CGFloat = 16
+    static let collapsedPadding: CGFloat = 7
+    static let segment = CGSize(width: 30, height: 24)
+    static let segmentGap: CGFloat = 2
+    static let inset: CGFloat = 3
+    /// The opened pill's corner (v9), with the segments nested inside it.
+    static let expandedRadius: CGFloat = 9
+    static let iconSize: CGFloat = 15
+    static let iconLineWidth: CGFloat = 1.4
+    static let dash: [CGFloat] = [1.95, 1.75]
+    /// The name above the pointed-at icon.
+    static let tooltipGap: CGFloat = 6
+    static let tooltipHorizontalPadding: CGFloat = 8
+    static let tooltipHeight: CGFloat = 22
+    static let tooltipRadius: CGFloat = 6
+    /// Between the pill and the add bar.
+    static let toAddBar: CGFloat = 8
+
+    static func expandedWidth(count: Int) -> CGFloat {
+        inset * 2 + segment.width * CGFloat(count) + segmentGap * CGFloat(max(count - 1, 0))
+    }
+    static var expandedHeight: CGFloat { segment.height + inset * 2 }
+    static func collapsedWidth(count: Int) -> CGFloat {
+        collapsedPadding * 2 + dotSize * CGFloat(count) + dotGap * CGFloat(max(count - 1, 0))
+    }
+    /// Where segment `index`'s centre sits, from the opened pill's centre.
+    static func segmentCentre(_ index: Int, count: Int) -> CGFloat {
+        -expandedWidth(count: count) / 2 + inset + CGFloat(index) * (segment.width + segmentGap) + segment.width / 2
+    }
+    /// Where dot `index`'s centre sits, from the pill's centre.
+    static func dotCentre(_ index: Int, count: Int) -> CGFloat {
+        (CGFloat(index) - CGFloat(count - 1) / 2) * (dotSize + dotGap)
+    }
+}
+
 /// The add bar (spec: 36 tall, radius 15; the send button inside).
 enum AtticAddBarMetrics {
-    static let leadingPadding: CGFloat = 12
-    static let gap: CGFloat = 8
+    /// With the bar 12 from the panel's edge (v9), the plus is centred on
+    /// the status circles' centre line (28 = 12 + 4 + 24 / 2) and the text
+    /// starts on the task titles' line (46 = 12 + 4 + 24 + 6).
+    static let leadingPadding: CGFloat = 4
+    static let iconSlot: CGFloat = 24
+    static let gap: CGFloat = 6
     static let plusSize: CGFloat = 12.5
     static let sendGlyphSize: CGFloat = 12
 }

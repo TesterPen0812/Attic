@@ -586,7 +586,7 @@ struct AtticColorTokens: Equatable, Sendable {
     /// steps in Light (the reference sheet's greys), gentler in Dark, where
     /// the same multiples would reach almost white.
     private static func priorityGreySteps(dark: Bool) -> [(AtticInk, Double)] {
-        dark ? [(.priorityLow, 1.2), (.priorityMedium, 1.5)] : [(.priorityLow, 1.35), (.priorityMedium, 1.85)]
+        dark ? [(.priorityLow, 1.2), (.priorityMedium, 1.7)] : [(.priorityLow, 1.35), (.priorityMedium, 2.2)]
     }
 
     /// The Craft-style recipe, matched to Craft's controls by their measured

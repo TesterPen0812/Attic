@@ -59,17 +59,24 @@ struct AtticRaisedButton: View {
     let accessibilityLabel: String
     var size: CGSize = AtticControlSize.panelButton
     var help: String?
+    /// A toggle that is on (the pinned pin): the button draws the same
+    /// inner chip as the page switch's selected page, inside its own
+    /// material (an overlay outside the glass does not render in a glass
+    /// group), and its glyph takes the selected page's ink.
+    var isSelected = false
     let action: () -> Void
 
     @State private var probeID = UUID()
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
-    init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil, action: @escaping () -> Void) {
+    init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
+         isSelected: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = nil
         self.accessibilityLabel = String(localized: label)
         self.size = size
         self.help = help
+        self.isSelected = isSelected
         self.action = action
     }
 
@@ -87,14 +94,20 @@ struct AtticRaisedButton: View {
     var body: some View {
         let radius = AtticRadius.control(height: size.height)
         Button(action: action) {
-            AtticRaisedButtonLabel(systemName: systemName, title: title)
+            AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
+                .background {
+                    if isSelected {
+                        AtticSelectedChip(outerHeight: size.height)
+                    }
+                }
         }
         .buttonStyle(AtticRaisedButtonStyle(cornerRadius: radius))
         .focusEffectDisabled()
         .help(help ?? accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .atticControlProbe(
             title == nil ? "Single button" : "Label button",
             id: probeID,
@@ -108,20 +121,21 @@ struct AtticRaisedButton: View {
 private struct AtticRaisedButtonLabel: View {
     let systemName: String?
     let title: String?
+    var isSelected = false
     @Environment(\.atticControlState) private var state
 
     var body: some View {
         // Icons are lighter and thinner than text (v4): the secondary icon
-        // colour in a light outline weight. Pressed, the glyph takes the
-        // primary colour, as a small control's does.
+        // colour in a light outline weight. Pressed or selected, the glyph
+        // takes the primary colour, as the page switch's selected page does.
         let glyph: AtticInk = switch state {
         case .disabled: .disabledIcon
         case .pressed: .glyph
-        default: .icon
+        default: isSelected ? .glyph : .icon
         }
         HStack(spacing: AtticRaisedButtonMetrics.iconLabelGap) {
             if let systemName {
-                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.glyph : AtticRaisedButtonMetrics.labelIconSize, weight: AtticIconWeight.outline, ink: glyph)
+                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize, weight: AtticIconWeight.outline, ink: glyph)
             }
             if let title {
                 AtticText(verbatim: title, style: .controlLabel, ink: state == .disabled ? .disabledText : .heading)
@@ -130,12 +144,30 @@ private struct AtticRaisedButtonLabel: View {
     }
 }
 
+/// The selected chip nested inside a raised control: the page switch's
+/// selected page and a selected raised button (the pinned pin) draw the
+/// same one, `capsuleInset` inside the control, radius nested.
+struct AtticSelectedChip: View {
+    var outerHeight: CGFloat = AtticControlSize.capsuleHeight
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let inset = AtticControlSize.capsuleInset
+        let radius = AtticRadius.nested(outer: AtticRadius.control(height: outerHeight), gap: inset) ?? AtticRadius.nestedChip
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(design.tokens.chipSelected.color)
+            .padding(inset)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Page switch (group capsule with nested chips)
 
 /// Icons in one capsule; the selected one also shows its label. Every icon
 /// has a tooltip with its shortcut and a VoiceOver label, and announces its
-/// selected state. The capsule is 32 tall, radius 13.5; chips are 24 tall,
-/// radius 9.5 (nested: 13.5 − 4), inset 4.
+/// selected state. The capsule is 34 tall, radius 14.5; chips are 26 tall,
+/// radius 10.5 (nested: 14.5 − 4), inset 4.
 ///
 /// Layout never animates. The capsule reserves the widest label, so its
 /// size is the same whichever page is selected; switching moves the
@@ -256,7 +288,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
         .atticControlProbe(
             "Page switch", id: probeID, expectedSize: nil,
             radius: AtticRadius.control(height: AtticControlSize.capsuleHeight),
-            expectedRadius: 13.5
+            expectedRadius: 14.5
         )
     }
 
@@ -388,6 +420,221 @@ private struct AtticPageChipButton<Page: Hashable>: View {
     }
 }
 
+// MARK: - Page pill
+
+/// The page pill (v9): a small pill of dots, the dark one the current page,
+/// centred above the add bar. Under the pointer (or keyboard focus) it
+/// opens into the pages' icons with the pointed-at page's name above it; a
+/// click goes there, and it folds back when the pointer leaves. Opening is
+/// a spring of position and opacity (the icons slide out from the dots);
+/// Reduce Motion crossfades.
+///
+/// One control for the keyboard: it takes focus once, ← → move between
+/// the pages while it has it. VoiceOver reads one group, "Pages", with a
+/// named, selectable choice per page.
+struct AtticPagePill<Page: Hashable>: View {
+    typealias Icon = AtticPagePillIcon
+
+    struct Item: Identifiable {
+        let page: Page
+        let title: String
+        let icon: Icon
+        var accessibilityIdentifier: String?
+        var id: String { title }
+    }
+
+    let items: [Item]
+    @Binding var selection: Page
+    /// The gallery and captures pin it open (or shut); nil follows the
+    /// pointer and focus.
+    var pinnedOpen: Bool?
+    /// The gallery pins the pointer on one page.
+    var pinnedHover: Page?
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @FocusState private var focused: Bool
+    @State private var hovering = false
+    @State private var hoveredPage: Page?
+
+    private typealias M = AtticPagePillMetrics
+
+    private var isOpen: Bool {
+        pinnedOpen ?? (hovering || (focused && keyboardFocusVisible))
+    }
+
+    var body: some View {
+        let count = items.count
+        let selected = items.firstIndex { $0.page == selection } ?? 0
+        let open = isOpen
+        let hovered = pinnedHover ?? hoveredPage
+        ZStack(alignment: .bottom) {
+            collapsed(count: count, selected: selected)
+                .opacity(open ? 0 : 1)
+            expanded(count: count, selected: selected, hovered: hovered, open: open)
+                .opacity(open ? 1 : 0)
+            if capture == nil {
+                hitLayer(count: count)
+            }
+        }
+        .frame(width: M.expandedWidth(count: count), height: M.expandedHeight, alignment: .bottom)
+        .overlay(alignment: .top) {
+            if open, let hovered, let index = items.firstIndex(where: { $0.page == hovered }) {
+                tooltip(items[index].title)
+                    .offset(x: M.segmentCentre(index, count: count), y: -(M.tooltipHeight + M.tooltipGap))
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(motion, value: open)
+        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: hovered)
+        .contentShape(Rectangle())
+        .onHover { inside in
+            hovering = inside
+            if !inside { hoveredPage = nil }
+        }
+        .focusable(capture == nil)
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(phases: .down) { press in
+            guard press.modifiers.intersection([.command, .option, .control, .shift]).isEmpty else { return .ignored }
+            let step: Int
+            switch press.key {
+            case .leftArrow: step = -1
+            case .rightArrow: step = 1
+            default: return .ignored
+            }
+            let next = min(max(selected + step, 0), count - 1)
+            guard next != selected else { return .handled }
+            select(items[next].page)
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Pages"))
+    }
+
+    private var motion: Animation? {
+        design.reduceMotion
+            ? .easeOut(duration: AtticMotionPreset.popover.duration)
+            : .spring(duration: AtticMotionPreset.expand.duration, bounce: 0)
+    }
+
+    private func select(_ page: Page) {
+        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
+            selection = page
+        }
+    }
+
+    private func pillFill(radius: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let dark = design.mode == .dark
+        return shape
+            .fill(design.tokens.popoverFill.color)
+            .overlay(shape.strokeBorder(Color.black.opacity(dark ? 0.5 : 0.07), lineWidth: 0.5))
+            .shadow(color: Color.black.opacity(dark ? 0.30 : 0.08), radius: dark ? 4 : 5, y: dark ? 2 : 1.5)
+    }
+
+    private func collapsed(count: Int, selected: Int) -> some View {
+        ZStack {
+            pillFill(radius: M.collapsedHeight / 2)
+                .frame(width: M.collapsedWidth(count: count), height: M.collapsedHeight)
+            ForEach(0..<count, id: \.self) { index in
+                Circle()
+                    .fill(design.tokens.color(index == selected ? .label : .disabledIcon))
+                    .frame(width: M.dotSize, height: M.dotSize)
+                    .offset(x: M.dotCentre(index, count: count))
+            }
+        }
+        .frame(height: M.collapsedHeight)
+        .accessibilityHidden(true)
+    }
+
+    private func expanded(count: Int, selected: Int, hovered: Page?, open: Bool) -> some View {
+        let inner = AtticRadius.nested(outer: M.expandedRadius, gap: M.inset) ?? M.expandedRadius
+        return ZStack {
+            pillFill(radius: M.expandedRadius)
+                .frame(width: M.expandedWidth(count: count), height: M.expandedHeight)
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                ZStack {
+                    RoundedRectangle(cornerRadius: inner, style: .continuous)
+                        .fill((item.page == hovered ? design.tokens.hover : .clear).color)
+                    AtticPagePillGlyph(icon: item.icon, ink: index == selected ? .heading : .icon)
+                }
+                .frame(width: M.segment.width, height: M.segment.height)
+                // The icons slide out from the dots as the pill opens.
+                .offset(x: open ? M.segmentCentre(index, count: count) : M.dotCentre(index, count: count))
+            }
+        }
+        .frame(height: M.expandedHeight)
+        .atticFocusRing(focused && keyboardFocusVisible && capture == nil, cornerRadius: M.expandedRadius)
+        .accessibilityHidden(true)
+    }
+
+    /// The buttons: clicks, hover and VoiceOver. Transparent, in the opened
+    /// pill's places whether it is open or not, so a click never lands on
+    /// a moving target.
+    private func hitLayer(count: Int) -> some View {
+        HStack(spacing: M.segmentGap) {
+            ForEach(items) { item in
+                Button { select(item.page) } label: {
+                    Color.clear
+                        .frame(width: M.segment.width, height: M.segment.height)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .onHover { inside in
+                    if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
+                }
+                .accessibilityLabel(item.title)
+                .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
+                .accessibilityAddTraits(item.page == selection ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        .padding(M.inset)
+    }
+
+    private func tooltip(_ title: String) -> some View {
+        AtticText(verbatim: title, style: .rowMeta, ink: .onInverse)
+            .fixedSize()
+            .padding(.horizontal, M.tooltipHorizontalPadding)
+            .frame(height: M.tooltipHeight)
+            .background(RoundedRectangle(cornerRadius: M.tooltipRadius, style: .continuous)
+                .fill(design.tokens.color(.inverseFill)))
+            .accessibilityHidden(true)
+    }
+}
+
+/// The page pill's icons: the status circle's three states.
+enum AtticPagePillIcon: Sendable { case open, dashed, done }
+
+/// The page pill's icons, drawn at 15 pt.
+struct AtticPagePillGlyph: View {
+    let icon: AtticPagePillIcon
+    let ink: AtticInk
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let m = AtticPagePillMetrics.self
+        let colour = design.tokens.color(ink)
+        ZStack {
+            switch icon {
+            case .open:
+                Circle().inset(by: 2).stroke(colour, lineWidth: m.iconLineWidth)
+            case .dashed:
+                Circle().inset(by: 2).stroke(colour, style: StrokeStyle(lineWidth: m.iconLineWidth, lineCap: .round, dash: m.dash))
+            case .done:
+                Circle().inset(by: 1.3).fill(colour)
+                AtticCheckShape()
+                    .stroke(design.tokens.popoverFill.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                    .padding(4.4)
+            }
+        }
+        .frame(width: m.iconSize, height: m.iconSize)
+    }
+}
+
 // MARK: - Add bar
 
 /// The add bar: one raised field, 36 tall, radius 15. The send button
@@ -464,6 +711,7 @@ struct AtticAddBar: View {
         let send = AtticControlSize.sendButton
         HStack(spacing: m.gap) {
             AtticIcon(systemName: systemImage, size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
+                .frame(width: m.iconSlot)
             field(disabled: state == .disabled)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             ZStack {
