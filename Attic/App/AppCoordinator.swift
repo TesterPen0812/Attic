@@ -479,6 +479,13 @@ final class AppCoordinator: ObservableObject {
             #endif
         }
 
+        #if DEBUG
+        // Capture seam: the in-memory UI-test store holds the design mockup's
+        // tasks (`TasksPagePreview.seedDemo`), never anything of the owner's.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" {
+            try? TasksPagePreview.seedDemo(in: container)
+        }
+        #endif
         let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         let canvasStore = CanvasStore(container: container)
         let canvasViewDefaults = runtime.isUnitTestHost ? nil : runtime.makeSettingsDefaults()

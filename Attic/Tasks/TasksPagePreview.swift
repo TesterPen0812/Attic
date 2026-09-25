@@ -65,7 +65,7 @@ enum TasksPagePreview {
         }
     }
 
-    /// The v4 mockup's tasks, plus a backlog and a few days of the Done log.
+    /// The v9 mockup's tasks, plus a backlog and a few days of the Done log.
     static func seedDemo(in container: ModelContainer) throws {
         let context = ModelContext(container)
         let calendar = Calendar.autoupdatingCurrent
@@ -98,6 +98,7 @@ enum TasksPagePreview {
         _ = task("Merge", parent: ship.id)
         _ = task("Email beta testers", .todo, .medium, due: day(3))
         _ = task("Book dentist", .todo, .low, due: day(1))
+        _ = task("Call the plumber")
         _ = task("Renew domain", .done, completed: now)
         _ = task("Try the paper sketch idea", .backlog)
         _ = task("Research note templates", .backlog, tags: ["notes"])
