@@ -32,6 +32,7 @@ private struct AtticRaisedButtonBody: View {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticControlCorner) private var corner
     @State private var hovered = false
 
     var body: some View {
@@ -39,7 +40,7 @@ private struct AtticRaisedButtonBody: View {
             forced: forced, isEnabled: isEnabled, isHovered: hovered,
             isPressed: configuration.isPressed, isFocused: isFocused
         ).state
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shape = AtticControlShape(radius: cornerRadius, corner: corner)
         configuration.label
             .environment(\.atticControlState, state)
             .background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
@@ -154,6 +155,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @Environment(\.atticCapture) private var capture
+    @Environment(\.atticControlCorner) private var corner
     @FocusState private var focusedPage: Page?
     @State private var hoveredPage: Page?
     @State private var probeID = UUID()
@@ -214,7 +216,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
             // have no focus system), not in the ForEach below.
             decorations(geometry: geometry, selected: selected, focused: capture == nil ? focusedPage : nil, hovered: hoveredPage)
                 .transaction { $0.animation = nil }
-            RoundedRectangle(cornerRadius: AtticRadius.nestedChip, style: .continuous)
+            AtticControlShape(radius: AtticRadius.nestedChip, corner: corner)
                 .fill(design.tokens.chipSelected.color)
                 .frame(width: geometry.selectedWidth, height: chipHeight)
                 .offset(x: geometry.x(of: selected, selected: selected))
@@ -262,7 +264,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
                 let pinned = pinned(item)
                 let hovered = pinned == .hover || (pinned == nil && hoveredPage == item.page)
                 let focused = pinned == .focused || (pinned == nil && focusedPage == item.page)
-                let shape = RoundedRectangle(cornerRadius: AtticRadius.nestedChip, style: .continuous)
+                let shape = AtticControlShape(radius: AtticRadius.nestedChip, corner: corner)
                 shape
                     .fill((hovered && index != selected ? design.tokens.chipHover : .clear).color)
                     .atticFocusRing(focused, cornerRadius: AtticRadius.nestedChip)
@@ -389,6 +391,7 @@ struct AtticAddBar: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
+    @Environment(\.atticControlCorner) private var corner
     @Environment(\.atticForcedState) private var forced
     @FocusState private var focused: Bool
     @State private var hovered = false
@@ -461,7 +464,7 @@ struct AtticAddBar: View {
     private func sendButton(radius: CGFloat) -> some View {
         let size = AtticControlSize.sendButton
         let inner = AtticRadius.nested(outer: radius, gap: AtticControlSize.sendInset) ?? radius
-        let shape = RoundedRectangle(cornerRadius: inner, style: .continuous)
+        let shape = AtticControlShape(radius: inner, corner: corner)
         return Button(action: onSubmit) {
             AtticIcon(systemName: "arrow.up", size: AtticAddBarMetrics.sendGlyphSize, weight: .semibold, ink: .onInverse)
                 .frame(width: size.width, height: size.height)
@@ -487,6 +490,7 @@ struct AtticSmallButton: View {
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCorner) private var corner
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
@@ -503,7 +507,7 @@ struct AtticSmallButton: View {
     var body: some View {
         let height = AtticControlSize.smallHeight
         let radius = AtticRadius.control(height: height)
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let shape = AtticControlShape(radius: radius, corner: corner)
         Button(action: action) {
             AtticSmallButtonFace(systemName: systemName, title: title, radius: radius, hovered: hovered)
                 .contentShape(shape)
@@ -552,6 +556,7 @@ private struct AtticSmallButtonFace: View {
     let hovered: Bool
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCorner) private var corner
     @Environment(\.atticForcedState) private var forced
     @Environment(\.atticIsPressed) private var isPressed
     @Environment(\.isEnabled) private var isEnabled
@@ -576,7 +581,7 @@ private struct AtticSmallButtonFace: View {
         }
         .padding(.horizontal, title == nil ? 0 : AtticSmallControlMetrics.labelPadding)
         .frame(minWidth: AtticControlSize.smallMinWidth, minHeight: AtticControlSize.smallHeight, maxHeight: AtticControlSize.smallHeight)
-        .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
+        .background(AtticControlShape(radius: radius, corner: corner).fill(fill.color))
         .atticFocusRing(state == .focused, cornerRadius: radius)
     }
 }

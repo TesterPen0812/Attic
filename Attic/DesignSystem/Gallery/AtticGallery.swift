@@ -19,6 +19,18 @@ enum AtticGalleryLaunch {
         ProcessInfo.processInfo.arguments.contains(argument)
     }
 
+    /// `--attic-gallery --control-shapes <dir>`: renders the panel with
+    /// each candidate control shape (1 continuous 32 %, 2 continuous 42 %,
+    /// 3–5 superellipse with exponent 3, 4, 5) for the owner's
+    /// comparison, then quits.
+    static let controlShapesArgument = "--control-shapes"
+
+    static var controlShapesDirectory: URL? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: controlShapesArgument), index + 1 < arguments.count else { return nil }
+        return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
+    }
+
     static var captureDirectory: URL? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: captureArgument), index + 1 < arguments.count else { return nil }
@@ -35,6 +47,21 @@ enum AtticGalleryLaunch {
         if let directory = captureDirectory {
             runCapture(into: directory)
             return true
+        }
+        if let directory = controlShapesDirectory {
+            let target = (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)) != nil
+                ? directory
+                : FileManager.default.temporaryDirectory.appendingPathComponent("AtticControlShapes", isDirectory: true)
+            try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            let variants: [(String, AtticControlCorner)] = [
+                ("1", .continuous), ("2", .continuousFraction(0.42)), ("3", .superellipse(exponent: 3)),
+                ("4", .superellipse(exponent: 4)), ("5", .superellipse(exponent: 5))
+            ]
+            for (name, corner) in variants {
+                AtticAppearanceCheck.writePanelRenders(to: target, corner: corner, suffix: "-\(name)")
+            }
+            print("Attic control shapes: \(target.path)")
+            exit(0)
         }
         if ProcessInfo.processInfo.arguments.contains(keyboardLabArgument) {
             openKeyboardLab()

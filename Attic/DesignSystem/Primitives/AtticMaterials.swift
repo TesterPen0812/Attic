@@ -67,6 +67,7 @@ struct AtticRaisedBackground: View {
     var state: AtticControlState = .rest
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticControlCorner) private var corner
 
     var body: some View {
         let tokens = design.tokens
@@ -76,7 +77,7 @@ struct AtticRaisedBackground: View {
         case .disabled: tokens.raisedDisabled
         case .rest, .focused: tokens.raised
         }
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shape = AtticControlShape(radius: cornerRadius, corner: corner)
         ZStack {
             if recipe.shadow.alpha > 0 {
                 AtticOutsideShadow(shape: shape, color: recipe.shadow, radius: recipe.shadowRadius, y: recipe.shadowY)
@@ -385,5 +386,58 @@ struct AtticEdgeVeil: View {
         .frame(height: height)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Control shape
+
+/// The corner of raised controls and their nested chips. The committed
+/// design is `.continuous` (Apple's continuous corner at about 32 % of the
+/// height, spec § Shape). `.superellipse` exists only so the gallery can
+/// render the owner's comparison of control shapes on the full panel
+/// (the panel's own Squircle curve, cornerRadius = height / 2), as does
+/// `.continuousFraction`: nothing outside that capture sets them.
+enum AtticControlCorner: Equatable, Sendable {
+    case continuous
+    /// A continuous corner at this fraction of each shape's own height
+    /// (0.42: the rounder candidate).
+    case continuousFraction(CGFloat)
+    case superellipse(exponent: CGFloat)
+}
+
+private struct AtticControlCornerKey: EnvironmentKey {
+    static let defaultValue: AtticControlCorner = .continuous
+}
+
+extension EnvironmentValues {
+    var atticControlCorner: AtticControlCorner {
+        get { self[AtticControlCornerKey.self] }
+        set { self[AtticControlCornerKey.self] = newValue }
+    }
+}
+
+/// A control's outline: a continuous rounded rectangle of `radius`, or (in
+/// the comparison variant) a superellipse spanning half the height.
+struct AtticControlShape: InsettableShape {
+    var radius: CGFloat
+    var corner: AtticControlCorner = .continuous
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let inset = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        switch corner {
+        case .continuous:
+            return RoundedRectangle(cornerRadius: max(radius - insetAmount, 0), style: .continuous).path(in: inset)
+        case let .continuousFraction(fraction):
+            return RoundedRectangle(cornerRadius: max(rect.height * fraction - insetAmount, 0), style: .continuous).path(in: inset)
+        case let .superellipse(exponent):
+            return Squircle(cornerRadius: inset.height / 2, exponent: exponent).path(in: inset)
+        }
+    }
+
+    func inset(by amount: CGFloat) -> AtticControlShape {
+        var copy = self
+        copy.insetAmount += amount
+        return copy
     }
 }
