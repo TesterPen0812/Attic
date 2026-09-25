@@ -212,6 +212,18 @@ private struct BoardHeading: View {
 // MARK: - Sample data
 
 enum AtticGallerySamples {
+    /// "Call mom fri #family !!": the date, the tag and the priority as chips.
+    @MainActor
+    static var chipTokens: AtticAddBar.Tokens {
+        AtticAddBar.Tokens(
+            chips: [NSRange(location: 9, length: 3), NSRange(location: 13, length: 7), NSRange(location: 21, length: 2)],
+            isFocused: .constant(false),
+            actions: AtticTokenFieldActions(submit: { _ in }, dismissChip: { _ in }, multilinePaste: { _ in false },
+                                            escape: { false }, undoFallback: {}, redoFallback: {},
+                                            edited: { _, _ in }, caretMoved: { _ in })
+        )
+    }
+
     static let rows: [AtticTaskRowModel] = [
         .init(title: "Finalize launch checklist", state: .inProgress, priority: .high,
               due: .init(text: "Today", isUrgent: true), tags: ["launch"], subtasks: (1, 3)),
@@ -536,6 +548,16 @@ private struct AddBarBoard: View {
             }
             AtticSpecimen("Backlog page", fullWidth: true) {
                 AtticAddBar(placeholder: "Add to backlog…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+            }
+            AtticSpecimen("Recognised pieces become chips (Phase 1)", fullWidth: true) {
+                AtticAddBar(placeholder: "Add a task…", text: .constant("Call mom fri #family !!"),
+                            tokens: AtticGallerySamples.chipTokens, onSubmit: demo.record("Add"))
+                    .padding(.horizontal, 12)
+            }
+            AtticSpecimen("Done page: the bar searches (Phase 1)", fullWidth: true) {
+                AtticAddBar(placeholder: "Search done tasks…", text: .constant(""), systemImage: "magnifyingglass",
+                            showsSend: false, tokens: nil, onSubmit: {})
+                    .padding(.horizontal, 12)
             }
             AtticSpecimen("Keyboard focus", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12).atticForcedState(.focused)

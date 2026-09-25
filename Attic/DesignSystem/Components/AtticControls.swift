@@ -396,14 +396,31 @@ private struct AtticPageChipButton<Page: Hashable>: View {
 /// with a short rise (opacity and position). Return adds; the bar keeps
 /// focus for the next one.
 struct AtticAddBar: View {
+    /// The chip-drawing field (Phase 1, logged in `CHANGELOG.md`): what it
+    /// draws as chips, its focus and what it reports.
+    struct Tokens {
+        var chips: [NSRange]
+        var isFocused: Binding<Bool>
+        var actions: AtticTokenFieldActions
+    }
+
     let placeholder: String
     @Binding var text: String
     let onSubmit: () -> Void
+    /// The leading glyph: `plus` for adding, `magnifyingglass` when the bar
+    /// searches (the Done log).
+    var systemImage = "plus"
+    /// Searching has nothing to send: the button never appears.
+    var showsSend = true
+    /// Live only: the native field that draws recognised pieces as chips.
+    /// Captures (and the gallery) keep the plain field.
+    var tokens: Tokens?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var focused: Bool
     @State private var hovered = false
     @State private var probeID = UUID()
@@ -415,22 +432,42 @@ struct AtticAddBar: View {
         self.onSubmit = onSubmit
     }
 
+    /// The live page's bar: a placeholder chosen at run time, the chip
+    /// field, and a glyph for the bar's job.
+    init(placeholder: String, text: Binding<String>, systemImage: String = "plus", showsSend: Bool = true,
+         tokens: Tokens?, onSubmit: @escaping () -> Void) {
+        self.placeholder = placeholder
+        self._text = text
+        self.systemImage = systemImage
+        self.showsSend = showsSend
+        self.tokens = tokens
+        self.onSubmit = onSubmit
+    }
+
     private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private var isFieldFocused: Bool {
+        if capture == nil, let tokens { return tokens.isFocused.wrappedValue }
+        return focused
+    }
 
     var body: some View {
         let m = AtticAddBarMetrics.self
         let height = AtticControlSize.addBarHeight
         let radius = AtticRadius.control(height: height)
         // The field's own keyboard focus and the environment's enabled
-        // state; the gallery's pinned states override both.
-        let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: focused).state
+        // state; the gallery's pinned states override both. The ring shows
+        // only while the keyboard is driving (a click into the field, or
+        // the panel opening with the bar focused, draws none).
+        let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false,
+                                       isFocused: isFieldFocused && keyboardFocusVisible).state
         let send = AtticControlSize.sendButton
         HStack(spacing: m.gap) {
-            AtticIcon(systemName: "plus", size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
+            AtticIcon(systemName: systemImage, size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
             field(disabled: state == .disabled)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             ZStack {
-                if hasText {
+                if hasText, showsSend {
                     sendButton(radius: radius)
                         .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: .bottom))
                 }
@@ -449,7 +486,30 @@ struct AtticAddBar: View {
 
     @ViewBuilder
     private func field(disabled: Bool) -> some View {
-        if capture != nil {
+        if capture == nil, let tokens {
+            AtticTokenField(
+                text: $text,
+                chips: tokens.chips,
+                isFocused: tokens.isFocused,
+                accessibilityLabel: placeholder,
+                isEnabled: !disabled,
+                actions: tokens.actions
+            )
+            .frame(height: AtticTokenFieldMetrics.height)
+            .overlay(alignment: .leading) {
+                if text.isEmpty {
+                    AtticText(verbatim: placeholder, style: .body, ink: disabled ? .disabledText : .placeholder)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if capture != nil, let tokens, !text.isEmpty {
+            // Captures draw the chips as SwiftUI (the native field can't
+            // render in a capture).
+            AtticChipText(text: text, chips: tokens.chips, disabled: disabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if capture != nil {
             Group {
                 if text.isEmpty {
                     AtticText(verbatim: placeholder, style: .body, ink: disabled ? .disabledText : .placeholder)
@@ -604,6 +664,9 @@ struct AtticSelectionBar: View {
         let systemName: String
         let label: String.LocalizationValue
         let handler: () -> Void
+        /// A choice (state, priority, tag): the button opens this native
+        /// menu instead of acting (Phase 1).
+        var menu: [AtticMenuCommand] = []
         var id: String { systemName }
     }
 
@@ -620,7 +683,15 @@ struct AtticSelectionBar: View {
                 .padding(.leading, AtticSelectionBarMetrics.countLeading)
                 .padding(.trailing, AtticSelectionBarMetrics.countTrailing)
             ForEach(actions) { action in
-                AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
+                if action.menu.isEmpty {
+                    AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
+                } else {
+                    AtticCommandMenu(commands: action.menu, accessibilityLabel: String(localized: action.label)) {
+                        AtticSmallButton(systemName: action.systemName, label: action.label, action: {})
+                            .allowsHitTesting(false)
+                    }
+                    .help(String(localized: action.label))
+                }
             }
         }
         .padding(AtticControlSize.capsuleInset)

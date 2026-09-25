@@ -47,6 +47,7 @@ final class AtticLibrary {
         links = LinkStore(container: tasks.container, now: now, persist: persist)
         tags = TagService(container: tasks.container, persist: persist)
         links.endpointState = { [weak self] ref in self?.state(of: ref) ?? .missing }
+        tasks.commandLibrary = self
         tags.afterChange = { [weak self] in self?.refreshItemStores() }
     }
 
@@ -168,21 +169,131 @@ final class AtticLibrary {
         return succeeded
     }
 
-    /// A drag reorder within a group as one step.
+    /// A reorder within a group (⌘↑ ⌘↓, or a drop onto a row) as one step.
     @discardableResult
     func moveTask(_ id: UUID, relativeTo targetID: UUID, in history: UndoHistoryID = .tasks) -> Bool {
+        orderStep(id, in: history) { tasks.reorder(taskID: id, relativeTo: targetID) }
+    }
+
+    /// A drag reorder to a place in the task's group as one step.
+    @discardableResult
+    func moveTask(_ id: UUID, toIndex index: Int, in history: UndoHistoryID = .tasks) -> Bool {
+        orderStep(id, in: history) { tasks.move(taskID: id, toIndex: index) }
+    }
+
+    private func orderStep(_ id: UUID, in history: UndoHistoryID, _ move: () -> Bool) -> Bool {
         var succeeded = false
         undo.perform(in: history) {
             guard let task = tasks.task(withID: id) else { return nil }
-            let group = tasks.tasks.filter {
-                $0.parentID == task.parentID && $0.statusRaw == task.statusRaw && $0.priorityRaw == task.priorityRaw
-            }.map(\.id)
+            let group = tasks.orderGroup(of: task).map(\.id)
             let before = group.compactMap(tasks.editableState(of:))
-            guard tasks.reorder(taskID: id, relativeTo: targetID) else { return nil }
+            guard move() else { return nil }
             succeeded = true
             let after = group.compactMap(tasks.editableState(of:))
             guard before != after else { return nil }
             return editStep("Move Task", before: before, after: after)
+        }
+        return succeeded
+    }
+
+    /// Completes a task with its unfinished subtasks as one step.
+    @discardableResult
+    func completeTask(_ id: UUID, in history: UndoHistoryID = .tasks) -> Bool {
+        var succeeded = false
+        undo.perform(in: history) {
+            guard let task = tasks.task(withID: id) else { return nil }
+            let family = [id] + (tasks.parent(of: task) == nil ? tasks.subtasks(of: id).map(\.id) : [])
+            let before = family.compactMap(tasks.editableState(of:))
+            guard tasks.completeFamily(taskID: id) else { return nil }
+            succeeded = true
+            let after = family.compactMap(tasks.editableState(of:))
+            guard before != after else { return nil }
+            return editStep("Complete Task", before: before, after: after)
+        }
+        return succeeded
+    }
+
+    /// The same edit applied to several tasks as one step (the selection
+    /// bar): all of them change, or none does.
+    @discardableResult
+    func updateTasks(
+        _ ids: [UUID],
+        priority: TaskPriority? = nil,
+        status: TaskStatus? = nil,
+        addingTag: String? = nil,
+        in history: UndoHistoryID = .tasks
+    ) -> Bool {
+        let ids = ids.filter { tasks.task(withID: $0) != nil }
+        guard !ids.isEmpty else { return false }
+        var succeeded = false
+        undo.perform(in: history) {
+            // Completing a main task takes its open subtasks along, as the
+            // circle does; their states are part of the step.
+            var touched = ids
+            if status == .done {
+                for id in ids { touched += tasks.subtasks(of: id).map(\.id) }
+            }
+            let before = touched.compactMap(tasks.editableState(of:))
+            // One context, one save: every task changes or none does.
+            guard tasks.updateBatch(ids, priority: priority, status: status, addingTag: addingTag) else { return nil }
+            succeeded = true
+            let after = touched.compactMap(tasks.editableState(of:))
+            guard before != after else { return nil }
+            let name = status != nil ? "Change Task State" : "Edit Tasks"
+            return editStep(name, before: before, after: after)
+        }
+        return succeeded
+    }
+
+    /// Moves several tasks to Recently Deleted as one step (the selection
+    /// bar, Delete on a multi-selection). Undo brings them all back.
+    @discardableResult
+    func deleteTasks(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> Bool {
+        guard ids.count > 1 else {
+            return ids.first.map { delete(AtticItemRef(.task, $0), in: history) } ?? false
+        }
+        return undo.perform(in: history) {
+            guard tasks.delete(taskIDs: ids) else { return nil }
+            return UndoStep(
+                name: "Delete \(ids.count) Tasks",
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.restoreDeleted(taskIDs: ids) { return .applied }
+                    return ids.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                },
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.delete(taskIDs: ids) { return .applied }
+                    return ids.allSatisfy { self.tasks.task(withID: $0) != nil } ? .failed : .obsolete
+                }
+            )
+        }
+    }
+
+    /// Brings a finished task back to Now as to do, as one step; undo puts
+    /// it back where it was (the done group, or the Done log).
+    @discardableResult
+    func restoreToNow(_ id: UUID, in history: UndoHistoryID = .tasks) -> Bool {
+        var succeeded = false
+        undo.perform(in: history) {
+            guard let before = tasks.listedEditableState(of: id) else { return nil }
+            let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt
+            guard tasks.restoreToNow(taskID: id), let after = tasks.editableState(of: id) else { return nil }
+            succeeded = true
+            let tasks = self.tasks
+            return UndoStep(
+                name: "Restore Task",
+                undoOutcome: {
+                    let outcome = tasks.applyEditableTransition(from: [after], to: [before])
+                    guard outcome == .applied, let loggedAt else { return outcome }
+                    _ = tasks.returnToDoneLog(taskID: id, loggedAt: loggedAt)
+                    return .applied
+                },
+                redoOutcome: {
+                    guard tasks.listedTask(withID: id) != nil else { return .obsolete }
+                    return tasks.restoreToNow(taskID: id) ? .applied : .failed
+                }
+            )
         }
         return succeeded
     }

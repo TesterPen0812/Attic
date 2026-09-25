@@ -311,6 +311,7 @@ final class AtticDesignSystemTests: XCTestCase {
         }
         XCTAssertEqual(command(.space, " ", []), .advance)
         XCTAssertEqual(command(.space, "\u{A0}", .option), .complete)
+        XCTAssertEqual(command(.space, " ", .shift), .complete, "⇧Space completes where launchers take ⌥Space (Phase 1)")
         XCTAssertEqual(command(.return, "\r", .command), .openPage)
         XCTAssertNil(command(.return, "\r", []), "Return edits the title (Phase 1), it never opens the page")
         XCTAssertEqual(command(KeyEquivalent("b"), "b", .command), .moveToBacklog)

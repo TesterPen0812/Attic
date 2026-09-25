@@ -44,6 +44,15 @@ final class TaskItem {
     /// A floating calendar day (`yyyy-MM-dd`, see `DueDay`), so a due date
     /// never moves when the Mac changes time zone.
     var dueDayRaw: String? = nil
+    /// Which ordering `manualOrder` belongs to. 0 is the pre-Phase 1 order,
+    /// kept per (state, priority) group and read after priority; 1 is the
+    /// Phase 1 order, one manual order per state group, which priority no
+    /// longer splits. `TaskStore` migrates version-0 rows once, keeping the
+    /// order each list showed (see `TaskStore.migrateListOrderIfNeeded`).
+    var listOrderVersion: Int = 0
+
+    /// The ordering every row written by this version uses.
+    static let currentListOrderVersion = 1
 
     /// Images and general files in one ordered list, parent-owned. Decoded
     /// once per stored payload: SwiftUI reads this several times per row body,

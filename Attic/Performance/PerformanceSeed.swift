@@ -78,6 +78,9 @@ enum PerformanceSeed {
                                        contentTypeIdentifier: "public.png", byteCount: Int64(image.count))
                 ])
             }
+            // A store this version wrote: no one-time order migration runs at
+            // launch, so it never lands inside a measured phase.
+            item.listOrderVersion = TaskItem.currentListOrderVersion
             context.insert(item)
         }
         try context.save()
@@ -98,6 +101,7 @@ enum PerformanceSeed {
                 // The daily move keeps the row and completion date, marking
                 // every moved task with the same cleanup timestamp.
                 item.doneLoggedAt = now
+                item.listOrderVersion = TaskItem.currentListOrderVersion
                 context.insert(item)
                 if index % 500 == 499 { try context.save() }
             }

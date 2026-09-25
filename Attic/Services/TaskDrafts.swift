@@ -68,7 +68,9 @@ struct TaskDraftBuilder {
         case .onePerLine:
             return Self.lines(of: text).compactMap(draft(fromLine:))
         case .single:
-            let joined = Self.lines(of: text).joined(separator: " ")
+            // Each line loses its own bullet, so "- Milk\n- Eggs" reads
+            // "Milk Eggs", not "Milk - Eggs".
+            let joined = Self.lines(of: text).map(Self.strippingListMarker).joined(separator: " ")
             return draft(fromLine: joined).map { [$0] } ?? []
         }
     }
