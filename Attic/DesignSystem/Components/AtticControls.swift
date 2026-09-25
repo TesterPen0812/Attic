@@ -712,6 +712,8 @@ struct AtticTitleMenu: View {
     var body: some View {
         AtticCommandMenu(commands: commands, accessibilityLabel: title) {
             AtticTitleMenuFace(title: title)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(title)
         }
     }
 }
