@@ -443,6 +443,14 @@ final class CornerHoverMonitor {
         guard isRunning, cadence != scheduledCadence else { return }
         scheduledCadence = cadence
         updateResponsivenessActivity(for: cadence)
+        if cadence == .responsive {
+            // Near the corner of a hidden panel: build its pages during the
+            // reveal delay (once; released again if no reveal follows).
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isRunning, self.scheduledCadence == .responsive else { return }
+                self.panelController.preparePagesForReveal()
+            }
+        }
     }
 
     var scheduledCadenceForTesting: CornerHoverSamplingCadence? { scheduledCadence }

@@ -366,12 +366,9 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
         cancelPageRelease()
-        if !uiState.isPageContentLoaded {
-            // Build the pages now, before the first frame is shown, so the
-            // panel never slides in empty; the reveal signpost includes it.
-            uiState.loadPageContent()
-            hostingView.layoutSubtreeIfNeeded()
-        }
+        // Build the pages now, before the first frame is shown, so the panel
+        // never slides in empty; the reveal signpost includes it.
+        buildPagesIfNeeded()
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
         // out a panel the user has just asked to see again.
@@ -1161,7 +1158,22 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         hostingView.cancelActiveInteraction(reason: .windowDeactivated)
     }
 
-    // MARK: Released when hidden
+    // MARK: Built on approach, released when hidden
+
+    private func buildPagesIfNeeded() {
+        guard !uiState.isPageContentLoaded else { return }
+        uiState.loadPageContent()
+        hostingView.layoutSubtreeIfNeeded()
+    }
+
+    /// The pointer is approaching the corner of a hidden panel: build the
+    /// pages during the reveal delay instead of after it. If no reveal
+    /// follows, the usual hidden release frees them again.
+    func preparePagesForReveal() {
+        guard !panel.isVisible, !uiState.isPageContentLoaded else { return }
+        buildPagesIfNeeded()
+        schedulePageRelease()
+    }
 
     /// How long the panel stays hidden before its pages are released (spec:
     /// about 5 minutes; a tunable, adjusted after real use).
@@ -1192,8 +1204,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// saved: a dirty note draft, an import, an open confirmation or any
     /// other interaction lock keeps them (the next hide tries again).
     func releasePagesIfSafe() {
+        // Focus left in a field, and text typed in the add bar (kept in the
+        // shell's TasksPageState), are not unsaved work; every other lock is.
+        let keepsPages = uiState.interactionLockReasons
+            .subtracting([.quickEntryFocus, .notesEditorFocus, .taskComposer])
         guard !panel.isVisible,
-              uiState.interactionLockReasons.isEmpty,
+              keepsPages.isEmpty,
               !noteDraft.isDirty,
               canvasSession.imageImportProgress == nil,
               canvasSession.pendingPlacement == nil,

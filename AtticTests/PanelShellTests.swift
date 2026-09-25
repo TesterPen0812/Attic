@@ -179,13 +179,36 @@ final class PanelShellTests: XCTestCase {
         controller.releasePagesIfSafe()
         XCTAssertTrue(state.isPageContentLoaded, "unfinished work keeps the pages")
         state.setInteractionLock(.notesImport, isActive: false)
+        state.setInteractionLock(.quickEntryFocus, isActive: true)
+        state.setInteractionLock(.taskComposer, isActive: true)
         controller.releasePagesIfSafe()
-        XCTAssertFalse(state.isPageContentLoaded)
+        XCTAssertFalse(state.isPageContentLoaded, "focus and the add bar's draft (kept by the shell) do not hold the pages")
         XCTAssertNil(controller.toasts.current)
 
         controller.show(on: screen, corner: .topRight)
         XCTAssertTrue(state.isPageContentLoaded, "a reveal builds them again")
         _ = controller.requestHide { _ in }
+    }
+
+    func testApproachingTheCornerBuildsTheHiddenPanelsPagesOnce() throws {
+        let suite = "PanelShellTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        let store = TaskStore(container: container)
+        let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
+        let state = PanelUIState()
+        let controller = AtticPanelController(
+            store: store, noteStore: notes,
+            canvasSession: CanvasSession(store: CanvasStore(container: container)),
+            noteDraft: NoteDraftController(noteStore: notes),
+            settings: AppSettings(defaults: defaults), uiState: state
+        )
+        XCTAssertFalse(state.isPageContentLoaded)
+        controller.preparePagesForReveal()
+        XCTAssertTrue(state.isPageContentLoaded, "built while the pointer approaches")
+        controller.releasePagesIfSafe()
+        XCTAssertFalse(state.isPageContentLoaded, "no reveal followed: released again")
     }
 
     func testHidingDismissesTheToast() throws {
