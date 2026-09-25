@@ -10,6 +10,9 @@ struct PanelHeader: View {
     let page: PanelPage
     let onTogglePin: () -> Void
     let onSelectPage: (PanelPage) -> Void
+    /// The pointer rests on the page switch: the pages it leads to are
+    /// built behind the current one, so the click only shows them.
+    var onApproachPageSwitch: () -> Void = {}
 
     var body: some View {
         AtticControlGroup {
@@ -29,6 +32,7 @@ struct PanelHeader: View {
                     selection: Binding(get: { page }, set: onSelectPage)
                 )
                 .accessibilityIdentifier("panel-section-picker")
+                .onHover { if $0 { onApproachPageSwitch() } }
             }
         }
         .frame(height: PanelHeaderLayout.height)

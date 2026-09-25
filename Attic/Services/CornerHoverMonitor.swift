@@ -156,6 +156,8 @@ final class CornerHoverMonitor {
         lockObservation = uiState.objectWillChange
             .sink { [weak self] _ in self?.scheduleLockSample() }
 
+        panelController.buildTasksPageWhenIdle()
+
         // Establish the initial cadence synchronously. A pointer already near
         // the configured corner gets the responsive path immediately; hidden
         // and far starts at the coalesced idle cadence without an activity hold.

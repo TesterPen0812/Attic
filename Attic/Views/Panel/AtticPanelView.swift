@@ -91,7 +91,22 @@ struct AtticPanelView: View {
     private var panelContent: some View {
         ZStack {
             if uiState.isPageContentLoaded {
-                pageHost
+                // The current page, over any page kept built behind it (a
+                // switch back only shows it). Only the current page takes
+                // clicks, keys, VoiceOver and the notices' clearance.
+                ForEach(PanelPage.allCases) { page in
+                    if page == currentPage || uiState.builtPages.contains(page) {
+                        pageHost(page)
+                            .modifier(PanelPageVisibility(
+                                isCurrent: page == currentPage,
+                                // Canvas has single-key tool shortcuts (V, P, E);
+                                // hidden, they must not fire. Tasks has none
+                                // outside its menus, and disabling it would
+                                // redraw the whole list on every switch.
+                                disablesWhenHidden: page == .canvas
+                            ))
+                    }
+                }
             }
         }
         .coordinateSpace(name: AtticPanelCoordinateSpaceName.taskWorkspace)
@@ -124,7 +139,8 @@ struct AtticPanelView: View {
             isPinned: uiState.isPanelPinned,
             page: currentPage,
             onTogglePin: { uiState.isPanelPinned.toggle() },
-            onSelectPage: selectPage
+            onSelectPage: selectPage,
+            onApproachPageSwitch: prepareOtherPages
         )
         .padding(.horizontal, chromeInsets.leading)
         .padding(.top, chromeInsets.top)
@@ -148,8 +164,8 @@ struct AtticPanelView: View {
     }
 
     @ViewBuilder
-    private var pageHost: some View {
-        switch currentPage {
+    private func pageHost(_ page: PanelPage) -> some View {
+        switch page {
         case .tasks:
             TasksPageHost(
                 store: store,
@@ -159,7 +175,8 @@ struct AtticPanelView: View {
                 state: tasksPageState,
                 layout: pageLayout,
                 chromeInteractionState: chromeInteractionState,
-                primaryInputFocus: $isQuickEntryFocused
+                primaryInputFocus: $isQuickEntryFocused,
+                isCurrent: page == currentPage
             )
             .transition(.opacity)
         case .canvas:
@@ -316,6 +333,19 @@ struct AtticPanelView: View {
 
     // MARK: Pages
 
+    /// Builds the pages the switch leads to (those the shell keeps), one per
+    /// main-thread turn so the pointer never waits on all of them at once.
+    private func prepareOtherPages() {
+        let pending = PanelPage.allCases.filter {
+            $0 != currentPage && PanelUIState.keepsBuilt($0) && !uiState.builtPages.contains($0)
+        }
+        for (index, page) in pending.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(index)) {
+                uiState.prepareBuiltPage(page)
+            }
+        }
+    }
+
     private func selectPage(_ page: PanelPage) {
         guard page != currentPage else { return }
         selectSection(page.section)
@@ -385,6 +415,26 @@ struct AtticPanelView: View {
         case .notes: noteStore.dismissError()
         case .tasks: store.dismissError()
         }
+    }
+}
+
+/// A page in the shell's stack: shown when current, otherwise kept built
+/// but invisible and inert (no clicks, no keyboard shortcuts, hidden from
+/// VoiceOver), and adding nothing to what the shell measures.
+private struct PanelPageVisibility: ViewModifier {
+    let isCurrent: Bool
+    let disablesWhenHidden: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isCurrent ? 1 : 0)
+            .allowsHitTesting(isCurrent)
+            .disabled(disablesWhenHidden && !isCurrent)
+            .accessibilityHidden(!isCurrent)
+            .zIndex(isCurrent ? 1 : 0)
+            .transformPreference(PanelPageNoticeClearancePreferenceKey.self) { value in
+                if !isCurrent { value = 0 }
+            }
     }
 }
 

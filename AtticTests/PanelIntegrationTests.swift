@@ -268,6 +268,49 @@ final class PanelIntegrationTests: XCTestCase {
         XCTAssertFalse(panel.uiState.isPageContentLoaded)
     }
 
+    // MARK: Pages kept built
+
+    /// A page shown during this reveal stays built behind the current one,
+    /// so switching back only shows it; Notes (rebuilt in Phase 2) is never
+    /// kept. The hidden release frees the kept pages; Tasks stays built.
+    func testShownPagesStayBuiltBehindTheCurrentOneUntilTheHiddenRelease() throws {
+        let panel = try makePanel()
+        let delay = AtticPanelController.pageReleaseDelay
+        AtticPanelController.pageReleaseDelay = 0.1
+        defer { AtticPanelController.pageReleaseDelay = delay }
+        panel.controller.show(on: try XCTUnwrap(NSScreen.main), corner: .topRight)
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks])
+        panel.uiState.selectSection(.canvas)
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas])
+        panel.uiState.selectSection(.notes)
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas, .notes])
+        panel.uiState.selectSection(.tasks)
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas], "Notes is rebuilt each time it shows")
+        panel.uiState.prepareBuiltPage(.notes)
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks, .canvas])
+
+        hide(panel)
+        spin(until: { panel.uiState.builtPages == [.tasks] })
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks], "the hidden release frees the pages kept behind Tasks")
+        XCTAssertTrue(panel.uiState.isPageContentLoaded, "Tasks stays built")
+    }
+
+    func testTheTasksPageIsBuiltOnceTheAppIsIdleAfterLaunch() throws {
+        let panel = try makePanel()
+        XCTAssertFalse(panel.uiState.isPageContentLoaded)
+        panel.controller.buildTasksPageWhenIdle(after: 0)
+        spin(until: { panel.uiState.isPageContentLoaded })
+        XCTAssertTrue(panel.uiState.isPageContentLoaded)
+        XCTAssertEqual(panel.uiState.builtPages, [.tasks])
+        XCTAssertFalse(panel.controller.isVisibleForPerformanceProbe, "built while hidden")
+
+        let other = try makePanel()
+        other.uiState.selectSection(.canvas)
+        other.controller.buildTasksPageWhenIdle(after: 0)
+        spin(0.2)
+        XCTAssertFalse(other.uiState.isPageContentLoaded, "a heavy page is never built ahead")
+    }
+
     // MARK: Key state, haptics
 
     /// The older glass controls (Notes, Canvas, subtask and attachment

@@ -135,11 +135,35 @@ final class PanelUIState: ObservableObject {
     func loadPageContent() {
         guard !isPageContentLoaded else { return }
         isPageContentLoaded = true
+        builtPages = [PanelPage(selectedSection)]
     }
 
     func releasePageContent() {
         guard isPageContentLoaded else { return }
         isPageContentLoaded = false
+        builtPages = []
+    }
+
+    /// The pages built and kept while hidden behind the current one, so a
+    /// switch back to them only shows them (spec § Performance: page switch
+    /// within 50 ms). A page joins when it is first shown (or when the
+    /// pointer rests on the page switch); the hidden release frees them.
+    /// Notes is never kept: its editor saves and releases its locks when it
+    /// leaves the screen, and it is rebuilt in Phase 2.
+    @Published private(set) var builtPages: Set<PanelPage> = []
+
+    static func keepsBuilt(_ page: PanelPage) -> Bool { page != .notes }
+
+    /// Builds `page` behind the current one (the pointer is on the switch).
+    func prepareBuiltPage(_ page: PanelPage) {
+        guard isPageContentLoaded, Self.keepsBuilt(page), !builtPages.contains(page) else { return }
+        builtPages.insert(page)
+    }
+
+    /// The hidden release: every page but the current one goes.
+    func releaseBackgroundPages() {
+        let current: Set<PanelPage> = isPageContentLoaded ? [PanelPage(selectedSection)] : []
+        if builtPages != current { builtPages = current }
     }
 
     /// The item an agent last asked to show, for the page to scroll to and
@@ -218,6 +242,14 @@ final class PanelUIState: ObservableObject {
 
     func selectSection(_ section: PanelSection) {
         guard selectedSection != section else { return }
+        if isPageContentLoaded {
+            // The page being left stays built behind the new one unless it
+            // is one that is never kept.
+            let leaving = PanelPage(selectedSection)
+            var pages = builtPages.filter { Self.keepsBuilt($0) || $0 != leaving }
+            pages.insert(PanelPage(section))
+            if pages != builtPages { builtPages = pages }
+        }
         managedInteractionLocks.remove(.quickEntryFocus)
         managedInteractionLocks.remove(.notesEditorFocus)
         managedInteractionLocks.remove(.notesPopover)

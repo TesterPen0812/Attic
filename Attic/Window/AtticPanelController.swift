@@ -624,7 +624,17 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.$selectedSection
             .removeDuplicates()
             .dropFirst()
-            .sink { [weak self] _ in self?.panel.cancelTrackpadSwipe() }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                panel.cancelTrackpadSwipe()
+                // A page kept built behind the new one must not keep the
+                // keyboard (a field in it would take what is typed on the
+                // page now showing). The new page asks for focus itself.
+                if let responder = panel.firstResponder as? NSView, responder !== hostingView,
+                   responder.isDescendant(of: hostingView) {
+                    panel.makeFirstResponder(nil)
+                }
+            }
             .store(in: &cancellables)
 
         settings.$corner
@@ -1189,6 +1199,21 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         hostingView.layoutSubtreeIfNeeded()
     }
 
+    /// After launch, once the main thread is idle: build the Tasks page
+    /// while hidden, so the first explicit open (quick capture, Show Attic)
+    /// shows a built list instead of building it before its first frame.
+    /// Tasks is never released while hidden, so this happens once. A
+    /// one-shot, not a timer.
+    func buildTasksPageWhenIdle(after delay: TimeInterval = 1) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.panel.isVisible, !self.uiState.isPageContentLoaded,
+                      !Self.releasesWhenHidden(self.uiState.selectedSection) else { return }
+                self.buildPagesIfNeeded()
+            }
+        }
+    }
+
     /// The pointer is approaching the corner of a hidden panel: build the
     /// pages during the reveal delay instead of after it. If no reveal
     /// follows, the usual hidden release frees a heavy page again.
@@ -1267,8 +1292,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// A release skipped for unfinished work is retried when that work
     /// finishes, while the panel stays hidden (a reveal cancels it).
     func releasePagesIfSafe() {
-        guard !panel.isVisible, uiState.isPageContentLoaded,
-              Self.releasesWhenHidden(uiState.selectedSection) else {
+        let current = PanelPage(uiState.selectedSection)
+        let releasesCurrent = Self.releasesWhenHidden(uiState.selectedSection)
+        let hasBackgroundPages = !uiState.builtPages.subtracting([current]).isEmpty
+        guard !panel.isVisible, uiState.isPageContentLoaded, releasesCurrent || hasBackgroundPages else {
             pageReleaseRetry = nil
             return
         }
@@ -1287,7 +1314,13 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         }
         pageReleaseRetry = nil
         canvasSession.flushViewState()
-        uiState.releasePageContent()
+        if releasesCurrent {
+            uiState.releasePageContent()
+        } else {
+            // Tasks stays built (an explicit open never waits for the list);
+            // the pages kept behind it go.
+            uiState.releaseBackgroundPages()
+        }
     }
 
     /// Performance probe (`--extra`): types `text` one key at a time into
