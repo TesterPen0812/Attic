@@ -24,6 +24,18 @@ enum AtticGalleryLaunch {
         AppRuntimeEnvironment().galleryLaunch == .allowed
     }
 
+    /// `--attic-gallery --raised-controls <dir>`: renders the panel with the
+    /// current raised controls and the Craft-matched candidates
+    /// (`AtticRaisedCandidates`), Light and Dark, prints each candidate's
+    /// control contrast, then quits. Capture only: no token changes.
+    static let raisedControlsArgument = "--raised-controls"
+
+    static var raisedControlsDirectory: URL? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: raisedControlsArgument), index + 1 < arguments.count else { return nil }
+        return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
+    }
+
     static var captureDirectory: URL? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: captureArgument), index + 1 < arguments.count else { return nil }
@@ -40,6 +52,20 @@ enum AtticGalleryLaunch {
         if let directory = captureDirectory {
             runCapture(into: directory)
             return true
+        }
+        if let directory = raisedControlsDirectory {
+            let target = (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)) != nil
+                ? directory
+                : FileManager.default.temporaryDirectory.appendingPathComponent("AtticRaisedControls", isDirectory: true)
+            try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            AtticAppearanceCheck.writePanelRenders(to: target, suffix: "-1")
+            AtticAppearanceCheck.writePanelRenders(to: target, suffix: "-2", raised: AtticRaisedCandidates.craft)
+            AtticAppearanceCheck.writePanelRenders(to: target, suffix: "-3", raised: AtticRaisedCandidates.craftStronger)
+            let report = AtticRaisedCandidates.contrastReport()
+            try? report.write(to: target.appendingPathComponent("raised-contrast.txt"), atomically: true, encoding: .utf8)
+            print(report)
+            print("Attic raised controls: \(target.path)")
+            exit(0)
         }
         if ProcessInfo.processInfo.arguments.contains(keyboardLabArgument) {
             openLab(AnyView(AtticGalleryKeyboardLab()), title: "Attic Keyboard Lab", height: 240)
@@ -124,6 +150,83 @@ enum AtticGalleryLaunch {
         print("Attic appearance check: \(passed ? "PASS" : "FAIL") — \(report.headline)")
         print("Contact sheets:\n" + sheets.map(\.path).joined(separator: "\n"))
         exit(passed ? 0 : 1)
+    }
+}
+
+/// Candidate raised-control looks translated from Craft's measured deltas
+/// (owner references, sRGB): Light page 255, fill about 249–250 with a
+/// white band inside the top edge, a 1 pt edge about 248 at the top, 240 on
+/// the sides and 231 at the bottom, no shadow; Dark page about 91, fill
+/// about +17, a bright 1 pt rim (+35 to +65 over the page, brightest at top
+/// and bottom), no dark outer edge. Moved onto Attic's #FAFAFA and #2C2C2D
+/// surfaces by the same deltas.
+enum AtticRaisedCandidates {
+    static func craft(_ mode: AtticDesignContext.Mode) -> AtticRaisedComparison {
+        switch mode {
+        case .light:
+            AtticRaisedComparison(
+                fill: .grey(245), sheenTop: .white(0.55), sheenBottom: .white(0.35),
+                innerRimTop: .white(0.9), innerRimBottom: .white(0.6),
+                edgeTop: .black(0.028), edgeMiddle: .black(0.04), edgeBottom: .black(0.09),
+                shadow: .black(0.03), shadowRadius: 0.5, shadowY: 0.5
+            )
+        case .dark:
+            AtticRaisedComparison(
+                fill: .grey(44 + 17), sheenTop: .white(0.015), sheenBottom: .white(0.005),
+                edgeTop: .white(0.24), edgeMiddle: .white(0.10), edgeBottom: .white(0.21)
+            )
+        }
+    }
+
+    static func craftStronger(_ mode: AtticDesignContext.Mode) -> AtticRaisedComparison {
+        switch mode {
+        case .light:
+            AtticRaisedComparison(
+                fill: .grey(243), sheenTop: .white(0.6), sheenBottom: .white(0.4),
+                innerRimTop: .white(0.95), innerRimBottom: .white(0.7),
+                edgeTop: .black(0.045), edgeMiddle: .black(0.065), edgeBottom: .black(0.12),
+                shadow: .black(0.05), shadowRadius: 0.75, shadowY: 0.5
+            )
+        case .dark:
+            AtticRaisedComparison(
+                fill: .grey(44 + 21), sheenTop: .white(0.02), sheenBottom: .white(0.008),
+                edgeTop: .white(0.30), edgeMiddle: .white(0.14), edgeBottom: .white(0.27)
+            )
+        }
+    }
+
+    /// Contrast of what sits on a raised control (the add bar's placeholder,
+    /// the control glyphs and icons, the selected chip's label) on each
+    /// candidate's face, at its middle and at its top and bottom sheen.
+    static func contrastReport() -> String {
+        var lines = ["Raised-control candidates: contrast on the control face (floor in brackets)"]
+        let candidates: [(String, (AtticDesignContext.Mode) -> AtticRaisedComparison?)] = [
+            ("1 current", { _ in nil }), ("2 Craft-matched", craft), ("3 Craft-matched stronger", craftStronger)
+        ]
+        for mode in AtticDesignContext.Mode.allCases {
+            let tokens = AtticDesignContext(mode: mode).tokens
+            for (name, candidate) in candidates {
+                let faces: [AtticRGBA]
+                if let recipe = candidate(mode) {
+                    faces = [recipe.fill, recipe.sheenTop.over(recipe.fill), recipe.sheenBottom.over(recipe.fill)]
+                } else {
+                    let r = tokens.raised
+                    faces = [r.face, r.sheenTop, r.sheenBottom].map { $0.over(tokens.controlBase) }
+                }
+                let checks: [(String, AtticInk, AtticRGBA?, Double)] = [
+                    ("placeholder", .placeholder, nil, 3), ("glyph", .glyph, nil, 3), ("icon", .icon, nil, 3),
+                    ("icon on chip hover", .icon, tokens.chipHover, 3), ("heading on selected chip", .heading, tokens.chipSelected, 4.5)
+                ]
+                let faceHex = faces.map { String(format: "%.0f", $0.red * 255) }.joined(separator: "/")
+                var parts: [String] = []
+                for (label, ink, overlay, floor) in checks {
+                    let worst = faces.map { face in tokens.ink(ink).contrast(on: overlay.map { $0.over(face) } ?? face) }.min() ?? 0
+                    parts.append(String(format: "%@ %.2f [%.1f]%@", label, worst, floor, worst < floor ? " FAIL" : ""))
+                }
+                lines.append("\(mode.title) \(name) (face mid/top/bottom \(faceHex)): " + parts.joined(separator: ", "))
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 }
 

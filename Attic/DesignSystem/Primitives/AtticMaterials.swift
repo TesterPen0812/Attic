@@ -67,8 +67,17 @@ struct AtticRaisedBackground: View {
     var state: AtticControlState = .rest
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticRaisedComparison) private var comparison
 
     var body: some View {
+        if let comparison, state == .rest || state == .focused {
+            AtticRaisedComparisonBackground(recipe: comparison, cornerRadius: cornerRadius)
+        } else {
+            standard
+        }
+    }
+
+    @ViewBuilder private var standard: some View {
         let tokens = design.tokens
         let recipe: AtticRaisedRecipe = switch state {
         case .hover: tokens.raisedHover
@@ -97,6 +106,76 @@ struct AtticRaisedBackground: View {
             shape.inset(by: recipe.outerRimWidth / 2).stroke(
                 LinearGradient(colors: [recipe.outerRimTop.color, recipe.outerRimBottom.color], startPoint: .top, endPoint: .bottom),
                 lineWidth: recipe.outerRimWidth
+            )
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A capture-only alternative to the raised recipe at rest, for comparing
+/// candidate looks side by side on the real panel (the gallery's
+/// `--raised-controls` capture). Nil everywhere else, so live UI and every
+/// committed token are unchanged.
+struct AtticRaisedComparison: Equatable, Sendable {
+    /// The opaque fill, and faint overlays at its top and bottom.
+    var fill: AtticRGBA
+    var sheenTop: AtticRGBA = .clear
+    var sheenBottom: AtticRGBA = .clear
+    /// A 1 pt rim just inside the edge (top and bottom of its gradient).
+    var innerRimTop: AtticRGBA = .clear
+    var innerRimBottom: AtticRGBA = .clear
+    /// The edge itself: top, sides (middle) and bottom of a vertical gradient.
+    var edgeTop: AtticRGBA
+    var edgeMiddle: AtticRGBA
+    var edgeBottom: AtticRGBA
+    var edgeWidth: CGFloat = 1
+    var shadow: AtticRGBA = .clear
+    var shadowRadius: CGFloat = 0.5
+    var shadowY: CGFloat = 0.5
+}
+
+private struct AtticRaisedComparisonKey: EnvironmentKey {
+    static let defaultValue: AtticRaisedComparison? = nil
+}
+
+extension EnvironmentValues {
+    var atticRaisedComparison: AtticRaisedComparison? {
+        get { self[AtticRaisedComparisonKey.self] }
+        set { self[AtticRaisedComparisonKey.self] = newValue }
+    }
+}
+
+private struct AtticRaisedComparisonBackground: View {
+    let recipe: AtticRaisedComparison
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            if recipe.shadow.alpha > 0 {
+                AtticOutsideShadow(shape: shape, color: recipe.shadow, radius: recipe.shadowRadius, y: recipe.shadowY)
+            }
+            shape.fill(recipe.fill.color)
+            shape.fill(LinearGradient(stops: [
+                .init(color: recipe.sheenTop.color, location: 0),
+                .init(color: AtticRGBA.clear.color, location: 0.4),
+                .init(color: AtticRGBA.clear.color, location: 0.7),
+                .init(color: recipe.sheenBottom.color, location: 1)
+            ], startPoint: .top, endPoint: .bottom))
+            if recipe.innerRimTop.alpha > 0 || recipe.innerRimBottom.alpha > 0 {
+                shape.inset(by: recipe.edgeWidth + AtticHairline.innerRim / 2).stroke(
+                    LinearGradient(colors: [recipe.innerRimTop.color, recipe.innerRimBottom.color], startPoint: .top, endPoint: .bottom),
+                    lineWidth: AtticHairline.innerRim
+                )
+            }
+            shape.inset(by: recipe.edgeWidth / 2).stroke(
+                LinearGradient(stops: [
+                    .init(color: recipe.edgeTop.color, location: 0),
+                    .init(color: recipe.edgeMiddle.color, location: 0.5),
+                    .init(color: recipe.edgeBottom.color, location: 1)
+                ], startPoint: .top, endPoint: .bottom),
+                lineWidth: recipe.edgeWidth
             )
         }
         .allowsHitTesting(false)
