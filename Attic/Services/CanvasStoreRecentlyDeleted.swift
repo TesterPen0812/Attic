@@ -4,6 +4,7 @@ import SwiftData
 enum CanvasRecentlyDeletedError: LocalizedError {
     case notRecentlyDeleted(UUID)
     case replicasDisagree(UUID)
+    case metadataDisagrees(UUID)
     case incompleteRestore(UUID)
 
     var errorDescription: String? {
@@ -12,6 +13,8 @@ enum CanvasRecentlyDeletedError: LocalizedError {
             "The canvas \(id.uuidString) is not in Recently Deleted."
         case let .replicasDisagree(id):
             "Copies of the canvas \(id.uuidString) disagree about its deletion. Refresh and try again."
+        case let .metadataDisagrees(id):
+            "Copies of the canvas \(id.uuidString) disagree about its name, tags or order. Refresh and try again."
         case .incompleteRestore:
             "Part of this deleted canvas is no longer there, so it can’t be restored safely."
         }
@@ -66,13 +69,22 @@ extension CanvasStore {
             }
             // Every physical board replica must be this same delete; a copy
             // already purged (its content gone) or deleted differently makes
-            // the restore incomplete, so nothing is written.
+            // the restore incomplete, so nothing is written. The copies must
+            // also agree on everything the restore does not change (name,
+            // tags, ordering, format, clear generation, creation): restoring
+            // clears only the deletion, and two copies that disagree about
+            // what the canvas is would come back side by side with one of
+            // them shown, so they are refused until they agree.
             guard boards.allSatisfy({
                 $0.tombstoned && $0.purgedAt == nil && $0.deletedAt == deletedAt
                     && $0.recentlyDeletedAt == winner.recentlyDeletedAt
                     && $0.deletedContentCount == winner.deletedContentCount
             }) else {
                 throw CanvasRecentlyDeletedError.replicasDisagree(id)
+            }
+            let metadata = Self.boardMetadata(winner)
+            guard boards.allSatisfy({ Self.boardMetadata($0) == metadata }) else {
+                throw CanvasRecentlyDeletedError.metadataDisagrees(id)
             }
             // Every replica of each object this restore brings back must hold
             // the same content: restoring copies the winner over its peers,
@@ -88,15 +100,10 @@ extension CanvasStore {
                 after: boards.map(\.mutationVersion).max() ?? 0,
                 objectID: id
             )
+            // Only the deletion is cleared; the metadata already agrees.
             for replica in boards {
-                replica.name = winner.name
-                replica.sortIndex = winner.sortIndex
-                replica.formatVersion = winner.formatVersion
-                replica.clearGeneration = winner.clearGeneration
-                replica.tagsRaw = winner.tagsRaw
                 replica.mutationVersion = nextVersion
                 replica.tombstoned = false
-                replica.createdAt = winner.createdAt
                 replica.updatedAt = timestamp
                 replica.deletedAt = nil
                 replica.recentlyDeletedAt = nil
@@ -388,7 +395,29 @@ extension CanvasStore {
         )
     }
 
-    /// Sets a live canvas's tags on every board replica.
+    /// What a board is apart from its tags, versioning and deletion state:
+    /// board operations that change neither must find every replica agreeing
+    /// on it before they touch any of them.
+    private struct BoardMetadata: Equatable {
+        let name: String
+        let sortIndex: Int64
+        let formatVersion: Int
+        let clearGeneration: Int64
+        let createdAt: Date
+        let tagsRaw: String
+    }
+
+    private static func boardMetadata(_ board: CanvasBoardItem, includingTags: Bool = true) -> BoardMetadata {
+        BoardMetadata(name: board.name, sortIndex: board.sortIndex, formatVersion: board.formatVersion,
+                      clearGeneration: board.clearGeneration, createdAt: board.createdAt,
+                      tagsRaw: includingTags ? board.tagsRaw : "")
+    }
+
+    /// Sets a live canvas's tags on every board replica, changing nothing
+    /// else. The replicas must agree on everything else about the board
+    /// (name, ordering, format, clear generation, creation and deletion
+    /// state); copies that disagree are refused rather than one being picked,
+    /// since giving them one new version would decide which copy is shown.
     @discardableResult
     func setTags(_ tags: [String], forCanvas id: UUID) -> Bool {
         guard canvases.contains(where: { $0.id == id }) else {
@@ -401,18 +430,20 @@ extension CanvasStore {
             guard !replicas.isEmpty else { throw CanvasReplicaMutationError.missingCanvas(id) }
             guard replicas.contains(where: { $0.tagsRaw != encoded }) else { return true }
             let winner = Self.winningBoardReplica(in: replicas)
+            let metadata = Self.boardMetadata(winner, includingTags: false)
+            guard replicas.allSatisfy({
+                Self.boardMetadata($0, includingTags: false) == metadata
+                    && $0.tombstoned == winner.tombstoned && $0.deletedAt == winner.deletedAt
+                    && $0.purgedAt == winner.purgedAt
+            }) else {
+                throw CanvasRecentlyDeletedError.metadataDisagrees(id)
+            }
             let nextVersion = try Self.nextMutationVersion(
                 after: replicas.map(\.mutationVersion).max() ?? 0,
                 objectID: id
             )
             let timestamp = now()
             for replica in replicas {
-                replica.name = winner.name
-                replica.sortIndex = winner.sortIndex
-                replica.clearGeneration = winner.clearGeneration
-                replica.tombstoned = winner.tombstoned
-                replica.deletedAt = winner.deletedAt
-                replica.createdAt = winner.createdAt
                 replica.tagsRaw = encoded
                 replica.mutationVersion = nextVersion
                 replica.updatedAt = timestamp

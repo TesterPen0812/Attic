@@ -257,4 +257,114 @@ final class CanvasRecentlyDeletedSafetyTests: XCTestCase {
         XCTAssertFalse(store.restoreCanvas(canvasID), "the stroke the delete hid is gone")
         XCTAssertFalse(store.canvases.contains { $0.id == canvasID })
     }
+
+    // MARK: - Board metadata (final review finding 3)
+
+    /// A second deleted board replica that agrees with `original` about the
+    /// delete but may hold its own name and tags.
+    private func insertDeletedPeer(of original: CanvasBoardItem, name: String, tagsRaw: String,
+                                   into context: ModelContext) {
+        let peer = CanvasBoardItem(id: original.id, name: name, sortIndex: original.sortIndex,
+                                   formatVersion: original.formatVersion, clearGeneration: original.clearGeneration,
+                                   mutationVersion: original.mutationVersion, tombstoned: true,
+                                   createdAt: original.createdAt, updatedAt: original.updatedAt,
+                                   deletedAt: original.deletedAt)
+        peer.recentlyDeletedAt = original.recentlyDeletedAt
+        peer.deletedContentCount = original.deletedContentCount
+        peer.tagsRaw = tagsRaw
+        context.insert(peer)
+    }
+
+    private func boards(_ store: CanvasStore, _ canvasID: UUID) throws -> [CanvasBoardItem] {
+        try ModelContext(store.container).fetch(FetchDescriptor<CanvasBoardItem>(predicate: #Predicate { $0.id == canvasID }))
+    }
+
+    func testCanvasRestoreIsRefusedWhenDeletedBoardReplicasDisagreeAboutTheirName() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
+        let (store, canvasID, _) = try deletedCanvas(clock)
+        let context = ModelContext(store.container)
+        let original = try XCTUnwrap(try boards(store, canvasID).first)
+        insertDeletedPeer(of: original, name: "Renamed elsewhere", tagsRaw: original.tagsRaw, into: context)
+        try context.save()
+
+        XCTAssertFalse(store.restoreCanvas(canvasID))
+        XCTAssertTrue(store.lastErrorMessage?.contains("disagree about its name, tags or order") == true,
+                      store.lastErrorMessage ?? "")
+        let rows = try boards(store, canvasID)
+        XCTAssertEqual(Set(rows.map(\.name)), ["Doomed", "Renamed elsewhere"], "neither name was overwritten")
+        XCTAssertTrue(rows.allSatisfy { $0.tombstoned && $0.deletedAt != nil }, "nothing was restored")
+        XCTAssertEqual(try strokeCount(store, canvasID), 1)
+        XCTAssertFalse(store.canvases.contains { $0.id == canvasID })
+    }
+
+    func testCanvasRestoreIsRefusedWhenDeletedBoardReplicasDisagreeAboutTheirTags() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
+        let (store, canvasID, _) = try deletedCanvas(clock)
+        let context = ModelContext(store.container)
+        let original = try XCTUnwrap(try boards(store, canvasID).first)
+        insertDeletedPeer(of: original, name: original.name, tagsRaw: AtticTag.encode(["elsewhere"]), into: context)
+        try context.save()
+
+        XCTAssertFalse(store.restoreCanvas(canvasID))
+        XCTAssertEqual(Set(try boards(store, canvasID).map(\.tagsRaw)), [original.tagsRaw, AtticTag.encode(["elsewhere"])])
+        XCTAssertTrue(try boards(store, canvasID).allSatisfy(\.tombstoned))
+    }
+
+    func testCanvasRestoreOfAgreeingReplicasChangesOnlyTheDeletion() throws {
+        let clock = MutableNow(Date(timeIntervalSince1970: 100_000))
+        let (store, canvasID, _) = try deletedCanvas(clock)
+        let context = ModelContext(store.container)
+        let original = try XCTUnwrap(try boards(store, canvasID).first)
+        insertDeletedPeer(of: original, name: original.name, tagsRaw: original.tagsRaw, into: context)
+        try context.save()
+        func metadata(_ board: CanvasBoardItem) -> String {
+            "\(board.name)|\(board.sortIndex)|\(board.tagsRaw)|\(board.clearGeneration)|\(board.formatVersion)"
+        }
+        let before = try boards(store, canvasID).map(metadata)
+
+        XCTAssertTrue(store.restoreCanvas(canvasID))
+        let rows = try boards(store, canvasID)
+        XCTAssertEqual(rows.map(metadata).sorted(), before.sorted())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.allSatisfy { !$0.tombstoned && $0.deletedAt == nil })
+    }
+
+    func testCanvasTagsAreRefusedWhileBoardReplicasDisagreeAndChangeOnlyTagsOtherwise() throws {
+        let store = try makeTestCanvasStore()
+        XCTAssertNotNil(store.createCanvas(name: "Keep"))
+        let board = try XCTUnwrap(store.createCanvas(name: "Board"))
+        let canvasID = board.id
+        let context = ModelContext(store.container)
+        let original = try XCTUnwrap(try boards(store, canvasID).first)
+        // An older copy another device renamed; the shown copy wins.
+        let peer = CanvasBoardItem(id: canvasID, name: "Renamed elsewhere", sortIndex: original.sortIndex + 7,
+                                   mutationVersion: 0, createdAt: original.createdAt,
+                                   updatedAt: original.updatedAt.addingTimeInterval(-60))
+        context.insert(peer)
+        try context.save()
+        store.refresh()
+        XCTAssertEqual(store.canvases.first { $0.id == canvasID }?.name, "Board")
+
+        XCTAssertFalse(store.setTags(["home"], forCanvas: canvasID))
+        XCTAssertTrue(store.lastErrorMessage?.contains("disagree about its name, tags or order") == true,
+                      store.lastErrorMessage ?? "")
+        var rows = try boards(store, canvasID)
+        XCTAssertEqual(Set(rows.map(\.name)), ["Board", "Renamed elsewhere"])
+        XCTAssertEqual(Set(rows.map(\.sortIndex)), [original.sortIndex, original.sortIndex + 7])
+        XCTAssertTrue(rows.allSatisfy { $0.tagsRaw.isEmpty })
+
+        // Once the copies agree, only the tags (and versioning) change.
+        let peerRow = try XCTUnwrap(rows.first { $0.name == "Renamed elsewhere" })
+        let fix = ModelContext(store.container)
+        let peerID = peerRow.persistentModelID
+        let editable = try XCTUnwrap(fix.model(for: peerID) as? CanvasBoardItem)
+        editable.name = "Board"
+        editable.sortIndex = original.sortIndex
+        try fix.save()
+        let agreed = CanvasStore(container: store.container)
+        XCTAssertTrue(agreed.setTags(["home"], forCanvas: canvasID), agreed.lastErrorMessage ?? "")
+        rows = try boards(store, canvasID)
+        XCTAssertTrue(rows.allSatisfy { $0.name == "Board" && $0.sortIndex == original.sortIndex
+            && $0.tagsRaw == AtticTag.encode(["home"]) && !$0.tombstoned })
+    }
 }
