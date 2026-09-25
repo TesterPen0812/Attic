@@ -636,6 +636,11 @@ final class AppCoordinator: ObservableObject {
             NSApp.activate()
             if let performanceRoot,
                ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
+                // `--corner`: a probe on a Mac in use can move the reveal
+                // away from the corner the person's pointer visits.
+                if let corner = ProcessInfo.processInfo.environment["ATTIC_PERF_CORNER"].flatMap(ScreenCorner.init(rawValue:)) {
+                    settings.corner = corner
+                }
                 hoverMonitor.start()
                 let window = Double(ProcessInfo.processInfo.environment["ATTIC_PERF_WINDOW_SECONDS"] ?? "10") ?? 10
                 func write(_ phase: String) {

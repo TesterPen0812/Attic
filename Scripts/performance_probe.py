@@ -102,7 +102,7 @@ def sample_phase(helper, pid, phase, seconds, run_dir):
 EXTRA_PHASES = ("warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open")
 
 
-def launch(app, root, token, logs, seed=False, done=False, extra=False):
+def launch(app, root, token, logs, seed=False, done=False, extra=False, corner=None):
     env = {
         "ATTIC_UI_TESTING": "1",
         "ATTIC_UI_TEST_CANVAS_PERSISTENCE": "1",
@@ -115,6 +115,8 @@ def launch(app, root, token, logs, seed=False, done=False, extra=False):
         "ATTIC_PERF_WINDOW_SECONDS": os.environ.get("ATTIC_PERF_WINDOW_SECONDS", "10"),
         "ATTIC_PERF_EXTRA": "1" if extra and not seed else "0",
     }
+    if corner and not seed:
+        env["ATTIC_PERF_CORNER"] = corner
     command("/usr/bin/open", "-n", "--stdout", str(logs.with_suffix(".stdout.log")),
             "--stderr", str(logs.with_suffix(".stderr.log")),
             *(arg for pair in env.items() for arg in ("--env", f"{pair[0]}={pair[1]}")), str(app))
@@ -200,7 +202,7 @@ def measure(args, app, executable, bundle, helper):
             (root / "phase.json").unlink()
             shutil.rmtree(root / "phase-markers", ignore_errors=True)
             (root / "timings.ndjson").unlink(missing_ok=True)
-            launch(app, root, token, run_dir / "probe", extra=args.extra)
+            launch(app, root, token, run_dir / "probe", extra=args.extra, corner=args.corner)
             first = wait_for_phase(root, "hidden_idle")
             if first.get("panel_visible") != 0:
                 raise RuntimeError(f"Panel was visible at hidden-idle marker: {first}")
@@ -298,6 +300,7 @@ def main():
     parser.add_argument("--window", type=float, default=10)
     parser.add_argument("--done-history", action="store_true")
     parser.add_argument("--extra", action="store_true")
+    parser.add_argument("--corner", choices=["topLeft", "topRight", "bottomLeft", "bottomRight"])
     parser.add_argument("--output", type=Path, default=ROOT / "Docs" / "performance-baseline-A.json")
     parser.add_argument("--measure", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--build-only", action="store_true", help=argparse.SUPPRESS)
@@ -314,6 +317,7 @@ def main():
                        "--measure", "--identity", identity, "--runs", str(args.runs),
                        "--window", str(args.window), *( ["--done-history"] if args.done_history else []),
                        *(["--extra"] if args.extra else []),
+                       *(["--corner", args.corner] if args.corner else []),
                        "--output", str(args.output))
     app = BUILD / "dd" / "Build" / "Products" / "Local" / f"AtticPerf{identity}.app"
     executable = app / "Contents" / "MacOS" / f"AtticPerf{identity}"
