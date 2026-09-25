@@ -429,35 +429,6 @@ struct AtticGalleryPanelComposition: View {
     }
 }
 
-/// The panel's own surface inside its squircle (the gallery draws the
-/// Phase 1 default corner, 52).
-struct AtticPanelStageSurface: View {
-    var cornerSize: CGFloat
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent))
-    }
-}
-
-struct AtticPanelRim: View {
-    var cornerSize: CGFloat
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
-        let dark = design.mode == .dark
-        ZStack {
-            shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
-            if dark {
-                Squircle(cornerRadius: cornerSize - 0.75, exponent: AtticStyle.panelSquircleExponent)
-                    .stroke(Color.white.opacity(design.increaseContrast ? 0.3 : 0.08), lineWidth: 0.5)
-                    .padding(0.75)
-            }
-        }
-        .allowsHitTesting(false)
-    }
-}
 
 // MARK: Raised controls
 

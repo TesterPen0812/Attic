@@ -164,6 +164,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     private let settings: AppSettings
     private let uiState: PanelUIState
     let subtaskPanels: SubtaskPanelController
+    /// The panel's Undo toast; dismissed whenever the panel hides.
+    let toasts: PanelToastCenter
     private var cancellables: Set<AnyCancellable> = []
     private var isShowing = false
     private var isPanelMotionActive = false
@@ -209,6 +211,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         uiState.updatePanelSize(initialSize)
         let chromeInteractionState = PanelChromeInteractionState()
         self.chromeInteractionState = chromeInteractionState
+        let toasts = PanelToastCenter()
+        self.toasts = toasts
         panel = AtticPanel(
             contentRect: CGRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -229,7 +233,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 chromeInteractionState: chromeInteractionState,
                 uiState: uiState,
                 settings: settings,
-                subtaskPanels: subtaskPanels
+                subtaskPanels: subtaskPanels,
+                toasts: toasts
             ),
             panelCornerRadius: settings.panelCornerSize,
             dockedCorner: settings.corner,
@@ -360,6 +365,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(on screen: NSScreen, corner: ScreenCorner, makeKey: Bool = false) {
+        cancelPageRelease()
+        // Build the pages now, before the first frame is shown, so the panel
+        // never slides in empty; the reveal signpost includes it.
+        buildPagesIfNeeded()
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
         // out a panel the user has just asked to see again.
@@ -501,6 +510,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
                 self.subtaskPanels.mainPanelDidHide()
+                self.toasts.dismiss()
+                self.schedulePageRelease()
                 self.visibilityTransition.completeHideTransition(generation)
             }
         }
@@ -1138,8 +1149,103 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         recoverPanelInsideUsableArea(preferredScreen: destinationScreen)
     }
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        uiState.setPanelKey(true)
+    }
+
     func windowDidResignKey(_ notification: Notification) {
+        uiState.setPanelKey(false)
         hostingView.cancelActiveInteraction(reason: .windowDeactivated)
+    }
+
+    // MARK: Built on approach, released when hidden
+
+    private func buildPagesIfNeeded() {
+        guard !uiState.isPageContentLoaded else { return }
+        uiState.loadPageContent()
+        hostingView.layoutSubtreeIfNeeded()
+    }
+
+    /// The pointer is approaching the corner of a hidden panel: build the
+    /// pages during the reveal delay instead of after it. If no reveal
+    /// follows, the usual hidden release frees a heavy page again.
+    func preparePagesForReveal() {
+        guard !panel.isVisible, !uiState.isPageContentLoaded else { return }
+        buildPagesIfNeeded()
+        schedulePageRelease()
+    }
+
+    /// How long the panel stays hidden before its pages are released (spec:
+    /// about 5 minutes; a tunable, adjusted after real use).
+    static var pageReleaseDelay: TimeInterval = 300
+    private var pageReleaseWork: DispatchWorkItem?
+
+    /// One one-shot deadline per hide; a reveal cancels it. Nothing else runs
+    /// while hidden.
+    private func schedulePageRelease() {
+        cancelPageRelease()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pageReleaseWork = nil
+                self.releasePagesIfSafe()
+            }
+        }
+        pageReleaseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pageReleaseDelay, execute: work)
+    }
+
+    private func cancelPageRelease() {
+        pageReleaseWork?.cancel()
+        pageReleaseWork = nil
+    }
+
+    /// Whether the page showing is one the hidden release frees. The spec
+    /// releases heavy views (an open canvas, large images: the Canvas and
+    /// Notes pages); the Tasks list stays, so an explicit open after a long
+    /// idle (quick capture, Show Attic) never waits for the list to be
+    /// rebuilt. Speed outranks weight.
+    static func releasesWhenHidden(_ section: PanelSection) -> Bool {
+        PanelPage(section) != .tasks
+    }
+
+    /// Releases the pages only while hidden, only for a heavy page, and only
+    /// once every change is saved: a dirty note draft, an import, an open
+    /// confirmation or any other interaction lock keeps them (the next hide
+    /// tries again).
+    func releasePagesIfSafe() {
+        guard Self.releasesWhenHidden(uiState.selectedSection) else { return }
+        // Focus left in a field, and text typed in the add bar (kept in the
+        // shell's TasksPageState), are not unsaved work; every other lock is.
+        let keepsPages = uiState.interactionLockReasons
+            .subtracting([.quickEntryFocus, .notesEditorFocus, .taskComposer])
+        guard !panel.isVisible,
+              keepsPages.isEmpty,
+              !noteDraft.isDirty,
+              canvasSession.imageImportProgress == nil,
+              canvasSession.pendingPlacement == nil,
+              noteDraft.flush() else { return }
+        canvasSession.flushViewState()
+        uiState.releasePageContent()
+    }
+
+    /// UI-test seam: the panel takes the keyboard as a click would.
+    func makeKeyForUITesting() {
+        panel.makeKey()
+    }
+
+    private var keyStandInForUITesting: NSWindow?
+
+    /// UI-test seam: another window takes the keyboard, as the app the
+    /// person is typing in holds it while the corner reveals the panel.
+    func resignKeyForUITesting() {
+        let window = keyStandInForUITesting ?? NSWindow(
+            contentRect: CGRect(x: -10_000, y: -10_000, width: 40, height: 40),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        keyStandInForUITesting = window
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func startPointerPassthroughMonitoring() {

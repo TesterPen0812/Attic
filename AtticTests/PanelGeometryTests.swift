@@ -1700,6 +1700,7 @@ final class PanelGeometryTests: XCTestCase {
         let notes = NoteStore(container: container, attachmentFileStore: makeTestAttachmentFileStore())
         let state = PanelUIState()
         state.updatePanelSize(visible.size)
+        state.loadPageContent()
         let chrome = PanelChromeInteractionState()
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(

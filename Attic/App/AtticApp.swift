@@ -11,7 +11,7 @@ struct AtticApp: App {
 
     var body: some Scene {
         MenuBarExtra(menuBarTitle, systemImage: menuBarSystemImage, isInserted: .constant(showsMenuBarItem)) {
-            MenuBarView(store: coordinator.store, coordinator: coordinator)
+            MenuBarView(coordinator: coordinator)
         }
         .menuBarExtraStyle(.menu)
         .commands {

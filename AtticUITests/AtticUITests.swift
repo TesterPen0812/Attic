@@ -346,7 +346,7 @@ final class AtticUITests: XCTestCase {
 
     func testMainPanelIdleHidesAutosavedNoteWithEditorFocus() throws {
         app.textFields["quick-entry-title"].click()
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("2", modifierFlags: .command)
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
@@ -930,7 +930,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testNotesEditorKeepsDraftWhileBrowsingSavedNotes() throws {
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("2", modifierFlags: .command)
 
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
@@ -1024,7 +1024,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testNoteTextScrollsUnderStationaryControls() throws {
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("2", modifierFlags: .command)
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))
         newNote.click()
@@ -1058,7 +1058,7 @@ final class AtticUITests: XCTestCase {
     }
 
     func testNotesBodyPreservesFocusAcrossIncrementalTyping() throws {
-        app.typeKey("3", modifierFlags: .command)
+        app.typeKey("2", modifierFlags: .command)
 
         let newNote = app.buttons["new-note-empty-state"]
         XCTAssertTrue(newNote.waitForExistence(timeout: 3))

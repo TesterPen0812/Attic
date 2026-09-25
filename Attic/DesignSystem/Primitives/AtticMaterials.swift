@@ -471,6 +471,41 @@ struct AtticVisualEffect: NSViewRepresentable {
     }
 }
 
+// MARK: - The panel's surface
+
+/// The panel's own surface inside its squircle: the palette-hued base, the
+/// native material on Glass and Frosted, and the Tint (the live panel and
+/// the gallery draw the same surface).
+struct AtticPanelStageSurface: View {
+    var cornerSize: CGFloat
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        AtticSurfaceBackground(model: design.tokens.panel, shape: Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent))
+    }
+}
+
+/// The panel's edge: a hairline, and in Dark an inner light rim.
+struct AtticPanelRim: View {
+    var cornerSize: CGFloat
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+        let dark = design.mode == .dark
+        ZStack {
+            shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
+            if dark {
+                Squircle(cornerRadius: cornerSize - 0.75, exponent: AtticStyle.panelSquircleExponent)
+                    .stroke(Color.white.opacity(design.increaseContrast ? 0.3 : 0.08), lineWidth: 0.5)
+                    .padding(0.75)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Scroll edge fade
 
 /// Content that scrolls under a floating bar (the header, the add bar)

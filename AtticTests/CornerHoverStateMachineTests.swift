@@ -98,18 +98,12 @@ final class CornerHoverStateMachineTests: XCTestCase {
         )
     }
 
-    func testSamplingCadenceDefinesDeterministicTimerSchedule() {
-        XCTAssertEqual(CornerHoverSamplingCadence.idle.intervalMilliseconds, 1_000)
-        XCTAssertEqual(CornerHoverSamplingCadence.idle.leewayMilliseconds, 250)
-        XCTAssertEqual(CornerHoverSamplingCadence.idle.nominalSamplesPerMinute, 60)
+    func testNoCadenceRunsATimerAndOnlyNearTheCornerHoldsAnAppNapExemption() {
+        XCTAssertFalse(CornerHoverSamplingCadence.idle.samplesEveryEvent, "far and hidden: boundary crossings only")
         XCTAssertFalse(CornerHoverSamplingCadence.idle.holdsResponsivenessActivity)
-
-        XCTAssertEqual(CornerHoverSamplingCadence.responsive.intervalMilliseconds, 50)
-        XCTAssertEqual(CornerHoverSamplingCadence.responsive.leewayMilliseconds, 15)
-        XCTAssertEqual(CornerHoverSamplingCadence.responsive.nominalSamplesPerMinute, 1_200)
+        XCTAssertTrue(CornerHoverSamplingCadence.responsive.samplesEveryEvent)
         XCTAssertTrue(CornerHoverSamplingCadence.responsive.holdsResponsivenessActivity)
-        XCTAssertNil(CornerHoverSamplingCadence.eventDriven.intervalMilliseconds, "a visible panel runs no timer")
-        XCTAssertEqual(CornerHoverSamplingCadence.eventDriven.nominalSamplesPerMinute, 0)
+        XCTAssertTrue(CornerHoverSamplingCadence.eventDriven.samplesEveryEvent)
         XCTAssertFalse(CornerHoverSamplingCadence.eventDriven.holdsResponsivenessActivity,
                        "a visible panel never holds an App Nap exemption")
     }
@@ -126,11 +120,6 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertEqual(decision.cadence, .idle)
         XCTAssertFalse(decision.shouldSampleImmediately)
         XCTAssertFalse(decision.cadence.holdsResponsivenessActivity)
-        XCTAssertLessThanOrEqual(decision.cadence.nominalSamplesPerMinute, 60)
-        XCTAssertGreaterThanOrEqual(
-            CornerHoverSamplingCadence.responsive.nominalSamplesPerMinute,
-            decision.cadence.nominalSamplesPerMinute * 10
-        )
     }
 
     func testPointerApproachImmediatelyPromotesToResponsiveSampling() {
@@ -153,7 +142,6 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertEqual(decision.cadence, .responsive)
         XCTAssertTrue(decision.shouldSampleImmediately)
         XCTAssertTrue(decision.cadence.holdsResponsivenessActivity)
-        XCTAssertLessThanOrEqual(decision.cadence.intervalMilliseconds ?? .max, 50)
     }
 
     func testFarPointerMovementDoesNotRequestFullMainThreadSample() {
@@ -197,7 +185,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
             isPanelVisible: false
         )
         XCTAssertEqual(hysteresisDecision.cadence, .responsive)
-        XCTAssertFalse(hysteresisDecision.shouldSampleImmediately)
+        XCTAssertTrue(hysteresisDecision.shouldSampleImmediately, "near the corner every event samples; no timer covers it")
 
         let exitDecision = sampling.update(
             pointer: CGPoint(x: 1_760, y: 900),
@@ -285,18 +273,26 @@ final class CornerHoverStateMachineTests: XCTestCase {
         XCTAssertFalse(decision.shouldSampleImmediately)
     }
 
-    func testCancelledOrReplacedTimerEpochRejectsStaleHandlers() {
-        var epoch = CornerHoverTimerEpoch()
-        let first = epoch.beginTimer()
-        XCTAssertTrue(epoch.permits(first, whileRunning: true))
+    /// A pointer resting in the hotspot sends no events, so the reveal
+    /// needs one follow-up at the deadline instead of a timer.
+    func testRestingPointerHasOneRevealDeadlineAndNoneOnceVisible() {
+        var machine = CornerHoverStateMachine()
+        XCTAssertNil(machine.nextRevealDeadline(revealDelay: 0.5), "no deadline before the hotspot is entered")
+        _ = machine.update(at: 10, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5)
+        XCTAssertEqual(machine.nextRevealDeadline(revealDelay: 0.5), 10.5)
+        XCTAssertEqual(machine.update(at: 10.5, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5), .reveal)
+        XCTAssertNil(machine.nextRevealDeadline(revealDelay: 0.5), "a visible panel has no reveal deadline")
+    }
 
-        let replacement = epoch.beginTimer()
-        XCTAssertFalse(epoch.permits(first, whileRunning: true))
-        XCTAssertTrue(epoch.permits(replacement, whileRunning: true))
+    func testLeavingTheHotspotOrRequiredExitClearsTheRevealDeadline() {
+        var machine = CornerHoverStateMachine()
+        _ = machine.update(at: 1, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5)
+        _ = machine.update(at: 1.2, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5)
+        XCTAssertNil(machine.nextRevealDeadline(revealDelay: 0.5))
 
-        epoch.invalidate()
-        XCTAssertFalse(epoch.permits(replacement, whileRunning: true))
-        XCTAssertFalse(epoch.permits(epoch.current, whileRunning: false))
+        machine.forceHidden(untilHotspotExit: true)
+        _ = machine.update(at: 2, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5)
+        XCTAssertNil(machine.nextRevealDeadline(revealDelay: 0.5), "a pointer that must leave first never reveals by waiting")
     }
 
     func testRevealsOnlyAfterConfiguredDwell() {
