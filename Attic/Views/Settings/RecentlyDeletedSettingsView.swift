@@ -8,6 +8,7 @@ struct RecentlyDeletedSettingsView: View {
     @StateObject private var model: RecentlyDeletedModel
     @State private var emptyConfirmation: Date?
     @FocusState private var searchFocused: Bool
+    @Environment(\.appearsActive) private var appearsActive
 
     init(library: AtticLibrary?) {
         _model = StateObject(wrappedValue: RecentlyDeletedModel(library: library))
@@ -62,8 +63,14 @@ struct RecentlyDeletedSettingsView: View {
                 }
             }
         }
-        .onAppear { model.start() }
+        // Follow the stores only while the page is on screen in the active
+        // Settings window: a closed or background window reads nothing, and
+        // catches up when it comes back.
+        .onAppear { if appearsActive { model.start() } else { model.reload() } }
         .onDisappear { model.stop() }
+        .onChange(of: appearsActive) { _, active in
+            if active { model.start() } else { model.stop() }
+        }
         .background {
             // ⌘Z undoes the last restore, unless the search field is
             // editing (then it undoes typing, as everywhere).
