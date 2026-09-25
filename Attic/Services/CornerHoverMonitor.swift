@@ -169,14 +169,25 @@ final class CornerHoverMonitor {
         }
     }
 
-    func revealProgrammatically(openComposer: Bool = false, section: PanelSection? = nil) {
+    /// An explicit open (Show Attic, quick capture, New note, the Dock icon)
+    /// takes the keyboard: the panel becomes key, and on Tasks the add bar
+    /// is focused. `takesKeyboard: false` shows the panel without touching
+    /// the keyboard (an agent's `show` while the user may be typing).
+    func revealProgrammatically(
+        openComposer: Bool = false,
+        section: PanelSection? = nil,
+        takesKeyboard: Bool = true
+    ) {
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
         guard preparePresentation(openComposer: openComposer, section: section) else { return }
         PerformanceSignposts.beginReveal()
         refreshStoreForReveal()
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 3)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
-        panelController.show(on: screen, corner: settings.corner, makeKey: openComposer)
+        panelController.show(on: screen, corner: settings.corner, makeKey: takesKeyboard)
+        if takesKeyboard, uiState.selectedSection.isTaskBased {
+            uiState.requestPrimaryInputFocus()
+        }
     }
 
     /// Keep the real panel on screen through a performance sample, including
@@ -204,12 +215,12 @@ final class CornerHoverMonitor {
         }
     }
 
-    func keepVisibleForUITesting(openComposer: Bool = false) {
+    func keepVisibleForUITesting(openComposer: Bool = false, makeKey: Bool = true) {
         guard let screen = NSScreen.main else { return }
         guard preparePresentation(openComposer: openComposer, section: nil) else { return }
         stateMachine.forceVisible(at: ProcessInfo.processInfo.systemUptime, grace: 86_400)
         refreshSamplingCadence(at: NSEvent.mouseLocation)
-        panelController.show(on: screen, corner: settings.corner, makeKey: true)
+        panelController.show(on: screen, corner: settings.corner, makeKey: makeKey)
     }
 
     private func preparePresentation(

@@ -32,6 +32,13 @@ final class TaskRenameDraft: ObservableObject {
 @MainActor
 final class PanelUIState: ObservableObject {
     @Published var isComposerPresented = false
+    /// Whether the panel is the key window. Native Liquid Glass renders flat
+    /// in a window that is not key, so while it is not (a hover reveal never
+    /// takes the keyboard) the shell draws its controls in the Craft style.
+    @Published private(set) var isPanelKey = false
+    /// Bumped when an explicit open (Show Attic, quick capture) should put
+    /// the keyboard in the current page's primary input (the Tasks add bar).
+    @Published private(set) var primaryInputFocusRequest: UInt64 = 0
     @Published var editingTaskID: UUID?
     /// Rename text for `editingTaskID`, owned here rather than by the row view
     /// so an in-flight rename survives surface promotion, family swaps, and
@@ -116,6 +123,40 @@ final class PanelUIState: ObservableObject {
             guard managedInteractionLocks.contains(reason) else { return }
             managedInteractionLocks.remove(reason)
         }
+    }
+
+    /// Whether the pages are built. Nothing is built before the first
+    /// reveal, and pages are released again after the panel has been hidden
+    /// for a while (spec § Performance: released when hidden), so a hidden
+    /// panel holds only the shell. What pages need to keep (drafts, undo,
+    /// the open note or canvas) lives outside their views.
+    @Published private(set) var isPageContentLoaded = false
+
+    func loadPageContent() {
+        guard !isPageContentLoaded else { return }
+        isPageContentLoaded = true
+    }
+
+    func releasePageContent() {
+        guard isPageContentLoaded else { return }
+        isPageContentLoaded = false
+    }
+
+    /// The item an agent last asked to show, for the page to scroll to and
+    /// highlight. Pages clear it once shown.
+    @Published var shownItem: AtticItemRef?
+
+    func showItem(_ ref: AtticItemRef) {
+        shownItem = ref
+    }
+
+    func setPanelKey(_ isKey: Bool) {
+        guard isPanelKey != isKey else { return }
+        isPanelKey = isKey
+    }
+
+    func requestPrimaryInputFocus() {
+        primaryInputFocusRequest &+= 1
     }
 
     func updatePanelSize(_ size: CGSize) {

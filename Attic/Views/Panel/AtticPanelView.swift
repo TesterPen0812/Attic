@@ -87,7 +87,9 @@ struct AtticPanelView: View {
 
     private var panelContent: some View {
         ZStack {
-            pageHost
+            if uiState.isPageContentLoaded {
+                pageHost
+            }
         }
         .coordinateSpace(name: AtticPanelCoordinateSpaceName.taskWorkspace)
         .coordinateSpace(PanelPageLayout.coordinateSpace)
@@ -236,6 +238,12 @@ struct AtticPanelView: View {
                 syncBottomControlsHeight()
                 syncNoteDraftInteractionLocks()
             }
+            .onChange(of: uiState.primaryInputFocusRequest) { _, _ in
+                // An explicit open on Tasks: the keyboard lands in the add
+                // bar. A plain text field draws no focus ring.
+                guard uiState.selectedSection.isTaskBased else { return }
+                isQuickEntryFocused = true
+            }
             .onChange(of: noteDraft.isDirty) { _, _ in syncNoteDraftInteractionLocks() }
             .onChange(of: noteDraft.hasConflict) { _, _ in syncNoteDraftInteractionLocks() }
             .onChange(of: noteStore.attachmentImportState) { _, _ in syncNoteDraftInteractionLocks() }
@@ -257,7 +265,8 @@ struct AtticPanelView: View {
                 palette: settings.panelTheme,
                 surface: settings.panelSurfaceStyle,
                 tint: settings.panelTint,
-                tintLength: settings.panelTintLength
+                tintLength: settings.panelTintLength,
+                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey)
             )
             // Native menus (context menus, pop-ups) follow Attic's chosen
             // appearance, not only the Mac's.
@@ -361,6 +370,18 @@ struct AtticPanelView: View {
         case .notes: noteStore.dismissError()
         case .tasks: store.dismissError()
         }
+    }
+}
+
+/// Native Liquid Glass renders flat (a grey slab with a dark outline) in a
+/// window that is not key, and a panel revealed from the corner must not
+/// take the keyboard from the app the person is typing in. So the panel's
+/// controls are real glass while it is key (an explicit open, or once the
+/// person clicks in it) and the Craft-style recipe, the design system's
+/// drawn material, while it is not.
+enum PanelKeyTreatment {
+    static func controls(isPanelKey: Bool) -> AtticControlMaterial {
+        isPanelKey ? .liquidGlass : .craft
     }
 }
 

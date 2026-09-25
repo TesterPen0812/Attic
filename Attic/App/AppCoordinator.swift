@@ -502,7 +502,11 @@ final class AppCoordinator: ObservableObject {
         // Both kinds of test host avoid Keychain. In normal use, credential
         // loading starts only after opt-in and runs away from the main thread.
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
-        let agentHandler = MCPRequestHandler(tools: AgentTaskTools(store: store, noteStore: noteStore, library: library))
+        let shellTools = AgentShellTools()
+        let agentHandler = MCPRequestHandler(
+            tools: AgentTaskTools(store: store, noteStore: noteStore, library: library),
+            shellTools: shellTools
+        )
         let agentServer: AgentServer
         if runtime.usesEphemeralAgentCredential {
             agentServer = AgentServer(port: settings.agentServerPort,
@@ -559,6 +563,7 @@ final class AppCoordinator: ObservableObject {
             noteDraft: noteDraft
         )
         newTaskHotKey.action = { [weak self] in self?.showNewTask() }
+        shellTools.presenter = self
         globalShortcutObservation = newTaskHotKey.$registration
             .sink { [weak self] registration in
                 self?.globalShortcutRegistration = registration
@@ -590,6 +595,30 @@ final class AppCoordinator: ObservableObject {
             // launches them. Activate the real process before presenting the
             // key panel so AppKit, not a test-only model shortcut, owns mouse
             // and keyboard delivery through the installed UI hierarchy.
+            // Capture seam for the key-window check: reveal the panel the
+            // way the corner does (not key, app not activated), then after
+            // the given seconds let it take the keyboard as a click would.
+            let nonKeyReveal = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NONKEY_REVEAL"].flatMap(Double.init)
+            if let nonKeyReveal {
+                // A launch from a terminal activates the app, and AppKit
+                // then makes the revealed panel key. As in real use (another
+                // app holds the keyboard), a stand-in window off screen takes
+                // key status back before the first capture.
+                hoverMonitor.keepVisibleForUITesting(makeKey: false)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.panelController.resignKeyForUITesting()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        NSLog("Attic key-window check: revealed, panel key = %d", self?.uiState.isPanelKey == true ? 1 : 0)
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + nonKeyReveal) { [weak self] in
+                    self?.panelController.makeKeyForUITesting()
+                    DispatchQueue.main.async {
+                        NSLog("Attic key-window check: after click, panel key = %d", self?.uiState.isPanelKey == true ? 1 : 0)
+                    }
+                }
+                return
+            }
             NSApp.activate()
             if let performanceRoot,
                ProcessInfo.processInfo.environment["ATTIC_PERF_PROBE"] == "1" {
@@ -766,6 +795,15 @@ final class AppCoordinator: ObservableObject {
         settingsWindowController.show()
     }
 
+    /// While the person types in the panel, an agent's `show` moves nothing.
+    private var isUserTypingInPanel: Bool {
+        let typing: Set<PanelInteractionLockReason> = [
+            .quickEntryFocus, .taskComposer, .taskEditing, .subtaskComposer, .notesEditorFocus, .notesDirty
+        ]
+        return uiState.isPanelKey && !uiState.interactionLockReasons.isDisjoint(with: typing)
+    }
+
+
     private func observeMenuTracking() {
         let center = NotificationCenter.default
         menuNotificationTokens = [
@@ -785,5 +823,40 @@ final class AppCoordinator: ObservableObject {
                 }
             }
         ]
+    }
+}
+
+extension AppCoordinator: AgentPanelPresenting {
+    /// An agent's `show`: reveal the panel on the page (and item) without
+    /// taking the keyboard, and never while the person is typing in Attic.
+    func presentForAgent(_ target: AgentShowTarget) -> AgentShowOutcome {
+        guard !isUserTypingInPanel else { return .userIsTyping }
+        switch target {
+        case let .page(page):
+            hoverMonitor.revealProgrammatically(section: page.section, takesKeyboard: false)
+            return .shown("the \(page.title) page")
+        case let .item(ref):
+            switch ref.kind {
+            case .task:
+                guard let task = store.task(withID: ref.id) else { return .notFound("task") }
+                let section: PanelSection = task.status == .backlog ? .backlog : .tasks
+                hoverMonitor.revealProgrammatically(section: section, takesKeyboard: false)
+                uiState.showItem(ref)
+                return .shown("the task “\(task.title)” on the Tasks page")
+            case .note:
+                guard let note = noteStore.note(withID: ref.id) else { return .notFound("note") }
+                hoverMonitor.revealProgrammatically(section: .notes, takesKeyboard: false)
+                if uiState.editingNoteID != note.id, !noteDraft.isActive || noteDraft.close(), noteDraft.beginEditing(note) {
+                    uiState.beginEditingNote(note)
+                }
+                uiState.showItem(ref)
+                return .shown("the note “\(note.title)”")
+            case .canvas:
+                guard canvasSession.selectCanvas(ref.id) else { return .notFound("canvas") }
+                hoverMonitor.revealProgrammatically(section: .canvas, takesKeyboard: false)
+                uiState.showItem(ref)
+                return .shown("the canvas")
+            }
+        }
     }
 }
