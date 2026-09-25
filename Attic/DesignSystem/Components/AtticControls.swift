@@ -540,8 +540,10 @@ struct AtticPagePill<Page: Hashable>: View {
             pillFill(radius: M.collapsedHeight / 2)
                 .frame(width: M.collapsedWidth(count: count), height: M.collapsedHeight)
             ForEach(0..<count, id: \.self) { index in
+                // The current page's dot in the helper grey, the others in
+                // the quiet grey of a done disc (v9).
                 Circle()
-                    .fill(design.tokens.color(index == selected ? .label : .disabledIcon))
+                    .fill(index == selected ? design.tokens.color(.helper) : design.tokens.doneDisc.color)
                     .frame(width: M.dotSize, height: M.dotSize)
                     .offset(x: M.dotCentre(index, count: count))
             }
