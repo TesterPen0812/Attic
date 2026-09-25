@@ -81,8 +81,7 @@ final class CornerHoverStateMachineTests: XCTestCase {
             at: focusFollowUp, isInHotspot: false, isInPanel: false,
             isInteractionLocked: lockedAfterDeadline, revealDelay: 0.2, hideDelay: 0.3
         ), .none)
-        XCTAssertEqual(machine.nextTimedDecision(
-            at: focusFollowUp, isInPanel: false, isInteractionLocked: false,
+        XCTAssertEqual(machine.nextTimedDecision(at: focusFollowUp, isInHotspot: false, isInPanel: false, isInteractionLocked: false,
             isPinned: false, hideDelay: 0.3
         ), focusFollowUp + 0.3)
         XCTAssertEqual(machine.update(
@@ -328,21 +327,42 @@ final class CornerHoverStateMachineTests: XCTestCase {
         var machine = CornerHoverStateMachine()
         machine.forceVisible(at: 5, grace: 0.8)
         // Pointer inside, pinned, or locked: nothing timed can change the outcome.
-        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInPanel: true, isInteractionLocked: false, isPinned: false, hideDelay: 0.3))
-        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInPanel: false, isInteractionLocked: true, isPinned: false, hideDelay: 0.3))
-        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInPanel: false, isInteractionLocked: false, isPinned: true, hideDelay: 0.3))
+        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInHotspot: false, isInPanel: true, isInteractionLocked: false, isPinned: false, hideDelay: 0.3))
+        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInHotspot: false, isInPanel: false, isInteractionLocked: true, isPinned: false, hideDelay: 0.3))
+        XCTAssertNil(machine.nextTimedDecision(at: 5.1, isInHotspot: false, isInPanel: false, isInteractionLocked: false, isPinned: true, hideDelay: 0.3))
         // Away during the reveal grace: follow up when the grace ends.
-        XCTAssertEqual(machine.nextTimedDecision(at: 5.1, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3), 5.8)
+        XCTAssertEqual(machine.nextTimedDecision(at: 5.1, isInHotspot: false, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3), 5.8)
         // Leave began: follow up exactly when the hide delay elapses.
         _ = machine.update(at: 6.0, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5, hideDelay: 0.3)
-        XCTAssertEqual(machine.nextTimedDecision(at: 6.05, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3), 6.3)
+        XCTAssertEqual(machine.nextTimedDecision(at: 6.05, isInHotspot: false, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3), 6.3)
         XCTAssertEqual(machine.update(at: 6.31, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5, hideDelay: 0.3), .requestHide)
-        XCTAssertNil(machine.nextTimedDecision(at: 6.31, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3),
+        XCTAssertNil(machine.nextTimedDecision(at: 6.31, isInHotspot: false, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3),
                      "a pending hide waits for the window, not a timer")
         var hidden = CornerHoverStateMachine()
-        XCTAssertNil(hidden.nextTimedDecision(at: 1, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3),
+        XCTAssertNil(hidden.nextTimedDecision(at: 1, isInHotspot: false, isInPanel: false, isInteractionLocked: false, isPinned: false, hideDelay: 0.3),
                      "hidden panels are timer-driven elsewhere")
         _ = hidden.update(at: 1, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.5)
+    }
+
+    /// A corner reveal leaves the pointer resting in the hotspot, in the
+    /// wedge outside the rounded panel. It keeps the panel open for as long
+    /// as it stays and sends no events, so no sample may be scheduled for it:
+    /// not during the reveal grace, not when the grace ends, not later.
+    func testAPointerRestingInTheHotspotSchedulesNoFollowUpThroughAndPastTheGrace() {
+        var machine = CornerHoverStateMachine()
+        XCTAssertEqual(machine.update(at: 0, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.2), .none)
+        XCTAssertEqual(machine.update(at: 0.25, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.2), .reveal)
+        for time in [0.3, 0.9, 1.04, 1.06, 2.0, 30.0, 3_600.0] {
+            XCTAssertEqual(machine.update(at: time, isInHotspot: true, isInPanel: false, isInteractionLocked: false, revealDelay: 0.2), .none)
+            XCTAssertNil(machine.nextTimedDecision(at: time, isInHotspot: true, isInPanel: false, isInteractionLocked: false,
+                                                   isPinned: false, hideDelay: 0.3),
+                         "a stationary pointer in the hotspot at \(time) s needs no timed sample")
+            XCTAssertTrue(machine.isVisible)
+        }
+        // Moving out of the hotspot (an event) starts the ordinary leave.
+        XCTAssertEqual(machine.update(at: 3_601, isInHotspot: false, isInPanel: false, isInteractionLocked: false, revealDelay: 0.2), .none)
+        XCTAssertEqual(machine.nextTimedDecision(at: 3_601, isInHotspot: false, isInPanel: false, isInteractionLocked: false,
+                                                 isPinned: false, hideDelay: 0.3), 3_601.3)
     }
 
     func testInteractionLockKeepsPanelVisible() {

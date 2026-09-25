@@ -308,8 +308,8 @@ final class CornerHoverMonitor {
             hideDelay: settings.hideDelay
         )
         scheduleFollowUp(
-            at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
-            isMouseButtonPressed: isMouseButtonPressed
+            at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
+            isInteractionLocked: isInteractionLocked, isMouseButtonPressed: isMouseButtonPressed
         )
 
         switch transition {
@@ -388,7 +388,8 @@ final class CornerHoverMonitor {
     /// `scheduleLockSample`), and a pressed button is followed by its
     /// mouse-up event.
     private func scheduleFollowUp(
-        at uptime: TimeInterval, isInPanel: Bool, isInteractionLocked: Bool, isMouseButtonPressed: Bool
+        at uptime: TimeInterval, isInHotspot: Bool, isInPanel: Bool,
+        isInteractionLocked: Bool, isMouseButtonPressed: Bool
     ) {
         followUpWork?.cancel()
         followUpWork = nil
@@ -402,8 +403,8 @@ final class CornerHoverMonitor {
         guard !stateMachine.isHidePending,
               !isMouseButtonPressed, !isPinned else { return }
         let stateDeadline = stateMachine.nextTimedDecision(
-            at: uptime, isInPanel: isInPanel, isInteractionLocked: isInteractionLocked,
-            isPinned: isPinned, hideDelay: settings.hideDelay
+            at: uptime, isInHotspot: isInHotspot, isInPanel: isInPanel,
+            isInteractionLocked: isInteractionLocked, isPinned: isPinned, hideDelay: settings.hideDelay
         )
         let focusDeadline = MainPanelAutoHidePolicy.focusExpirationDeadline(
             reasons: uiState.interactionLockReasons,

@@ -185,18 +185,25 @@ struct CornerHoverStateMachine {
     /// the outcome: when the hide delay (or the reveal grace) elapses for a
     /// pointer already away from the panel. nil when the next change can
     /// only come from an event — the pointer moving, a lock lifting, a pin.
+    /// A pointer resting in the hotspot (the corner wedge outside the
+    /// rounded panel) keeps the panel open for as long as it stays, so only
+    /// its moving out can change anything: no deadline, before or after the
+    /// reveal grace.
     func nextTimedDecision(
         at timestamp: TimeInterval,
+        isInHotspot: Bool,
         isInPanel: Bool,
         isInteractionLocked: Bool,
         isPinned: Bool,
         hideDelay: TimeInterval
     ) -> TimeInterval? {
-        guard isVisible, !isHidePending, !isPinned, !isInteractionLocked, !isInPanel else { return nil }
+        guard isVisible, !isHidePending, !isPinned, !isInteractionLocked, !isInPanel, !isInHotspot else { return nil }
         if !panelHasBeenEntered, let revealedAt, timestamp - revealedAt < revealGrace {
             return revealedAt + revealGrace
         }
-        guard let leaveBeganAt else { return timestamp }
+        // Away from the panel the sample that ran just before this call has
+        // started the leave; without one, the next pointer event starts it.
+        guard let leaveBeganAt else { return nil }
         return leaveBeganAt + max(0, hideDelay)
     }
 
