@@ -435,18 +435,18 @@ final class AtticDesignSystemTests: XCTestCase {
 
     func testCheckMarksAreMeasuredAgainstTheirFill() throws {
         for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark), AtticDesignContext(mode: .light, surface: .glass, tint: .bold)] {
-            // The model: the subtask check keeps 3 : 1 on the done fill and
-            // on the disabled fill, and a done task's check on its disc.
+            // The model: the done check keeps 3 : 1 on the quiet disc (the
+            // old filled Done's pairs still hold for the coverage).
             let tokens = context.tokens
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.doneFill)), 3, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.onDone).contrast(on: tokens.ink(.disabledIcon)), 3, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.doneCheck).contrast(on: tokens.doneDisc), 3, context.caption)
-            // The pixels: a drawn check is measured and passes. The done
-            // task's disc is decoration (its check is judged); the subtask
-            // checkbox's fill is judged as well as its check.
+            // The pixels: a drawn check is measured and passes. Done's fill
+            // (the task's disc, the subtask's square) is decoration: the
+            // check is judged.
             let drawn = try pixelReport(HStack { AtticStatusCircle(state: .done, priority: .high); AtticSubtaskCheckbox(isDone: true) }, context: context)
-            XCTAssertEqual(drawn.eligibleGlyphs, 3, "Two check marks and the checkbox's fill")
-            XCTAssertEqual(drawn.glyphsMeasured, 3)
+            XCTAssertEqual(drawn.eligibleGlyphs, 2, "Two check marks")
+            XCTAssertEqual(drawn.glyphsMeasured, 2)
             XCTAssertTrue(drawn.failures.isEmpty, drawn.summary)
         }
         // A deliberately absent check (not yet drawn) fails: its probe finds

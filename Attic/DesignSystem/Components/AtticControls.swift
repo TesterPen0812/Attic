@@ -396,6 +396,7 @@ struct AtticAddBar: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticForcedState) private var forced
+    @Environment(\.isEnabled) private var isEnabled
     @FocusState private var focused: Bool
     @State private var hovered = false
     @State private var probeID = UUID()
@@ -413,11 +414,13 @@ struct AtticAddBar: View {
         let m = AtticAddBarMetrics.self
         let height = AtticControlSize.addBarHeight
         let radius = AtticRadius.control(height: height)
-        let state = AtticStateResolver(forced: forced, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: false).state
+        // The field's own keyboard focus and the environment's enabled
+        // state; the gallery's pinned states override both.
+        let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: focused).state
         let send = AtticControlSize.sendButton
         HStack(spacing: m.gap) {
             AtticIcon(systemName: "plus", size: m.plusSize, weight: AtticIconWeight.outline, ink: state == .disabled ? .disabledIcon : .icon)
-            field
+            field(disabled: state == .disabled)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
             ZStack {
                 if hasText {
@@ -438,13 +441,13 @@ struct AtticAddBar: View {
     }
 
     @ViewBuilder
-    private var field: some View {
+    private func field(disabled: Bool) -> some View {
         if capture != nil {
             Group {
                 if text.isEmpty {
-                    AtticText(verbatim: placeholder, style: .body, ink: .placeholder)
+                    AtticText(verbatim: placeholder, style: .body, ink: disabled ? .disabledText : .placeholder)
                 } else {
-                    AtticText(verbatim: text, style: .body, ink: .body, truncates: true)
+                    AtticText(verbatim: text, style: .body, ink: disabled ? .disabledText : .body, truncates: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -452,11 +455,11 @@ struct AtticAddBar: View {
             TextField(
                 "",
                 text: $text,
-                prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.placeholder))
+                prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(disabled ? .disabledText : .placeholder))
             )
             .textFieldStyle(.plain)
             .font(AtticTextStyle.body.font)
-            .foregroundStyle(design.tokens.color(.body))
+            .foregroundStyle(design.tokens.color(disabled ? .disabledText : .body))
             .focused($focused)
             .onSubmit(onSubmit)
             .accessibilityLabel(placeholder)

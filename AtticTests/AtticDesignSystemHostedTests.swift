@@ -281,6 +281,107 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         XCTAssertEqual(fired, ["B advance", "B complete", "B open", "B backlog", "B delete"])
     }
 
+    /// The add bar's state comes from its own field's keyboard focus and the
+    /// environment's enabled state (no pinned states): focusing the field
+    /// draws the ring, and a disabled bar takes no focus and draws its plus
+    /// in the disabled icon colour.
+    func testAddBarFollowsRealFocusAndDisabled() throws {
+        let context = AtticDesignContext(mode: .light, palette: .electricBlue)
+        let pad: CGFloat = 12
+        let size = CGSize(width: 320, height: AtticControlSize.addBarHeight + pad * 2)
+        func bar(_ disabled: Bool) -> some View {
+            AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: {}).padding(pad).disabled(disabled)
+        }
+        /// Whether the ring shows (read on its stroke, left of the bar).
+        func ringShown(_ hosting: NSView) throws -> Bool {
+            let (bitmap, scale) = try snapshot(hosting)
+            let x = pad - AtticRingMetrics.gap - AtticRingMetrics.width / 2
+            let pixel = try XCTUnwrap(bitmap.colour(atX: x, y: size.height / 2, scale: scale))
+            return pixel.themeColor.contrastRatio(with: context.tokens.ink(.accent).themeColor) < 1.25
+        }
+        /// The plus glyph's strongest pixel, as contrast on white.
+        func plusInk(_ hosting: NSView) throws -> Double {
+            let (bitmap, scale) = try snapshot(hosting)
+            let m = AtticAddBarMetrics.self
+            var strongest = 1.0
+            var y = size.height / 2 - m.plusSize / 2
+            while y < size.height / 2 + m.plusSize / 2 {
+                var x = pad + m.leadingPadding
+                while x < pad + m.leadingPadding + m.plusSize {
+                    if let pixel = bitmap.colour(atX: x, y: y, scale: scale) { strongest = max(strongest, pixel.contrast(on: .white(1))) }
+                    x += 0.5 / scale
+                }
+                y += 0.5 / scale
+            }
+            return strongest
+        }
+
+        // Enabled: real first-responder focus in the field draws the ring.
+        let (window, hosting) = host(bar(false), size: size, context: context, key: true)
+        let field = try XCTUnwrap(descendants(of: hosting).compactMap { $0 as? NSTextField }.first, "The field is the system's own text field")
+        window.makeFirstResponder(nil)
+        spin()
+        XCTAssertFalse(try ringShown(hosting), "No ring without focus")
+        XCTAssertTrue(window.makeFirstResponder(field))
+        spin()
+        XCTAssertTrue(try ringShown(hosting), "Keyboard focus in the field draws the ring")
+        window.makeFirstResponder(nil)
+        spin()
+        XCTAssertFalse(try ringShown(hosting), "The ring leaves with the focus")
+        let enabledPlus = try plusInk(hosting)
+
+        // Disabled: the field takes no focus, and the plus is the disabled grey.
+        let (disabledWindow, disabledHosting) = host(bar(true), size: size, context: context, key: true)
+        if let disabledField = descendants(of: disabledHosting).compactMap({ $0 as? NSTextField }).first {
+            disabledWindow.makeFirstResponder(disabledField)
+            spin()
+        }
+        XCTAssertFalse(try ringShown(disabledHosting), "A disabled bar takes no focus ring")
+        let disabledPlus = try plusInk(disabledHosting)
+        let icon = context.tokens.ink(.icon).contrast(on: .white(1))
+        let disabledIcon = context.tokens.ink(.disabledIcon).contrast(on: .white(1))
+        XCTAssertGreaterThan(abs(icon - disabledIcon), 0.3, "The two greys differ enough to tell apart")
+        XCTAssertEqual(disabledPlus < enabledPlus, disabledIcon < icon,
+                       String(format: "The disabled plus is drawn in the disabled grey (plus %.2f vs %.2f)", disabledPlus, enabledPlus))
+        XCTAssertGreaterThan(abs(disabledPlus - enabledPlus), 0.2, "The plus changes colour when disabled")
+    }
+
+    /// A Settings sidebar row takes its disabled look from the environment
+    /// (`.disabled(true)`, no pinned states): its title is drawn in the
+    /// quiet hint grey, not the row's body ink.
+    func testSidebarRowFollowsTheEnvironmentsEnabledState() throws {
+        let context = AtticDesignContext(mode: .light)
+        let size = CGSize(width: 220, height: AtticLayout.sidebarRowPitch)
+        func row(_ disabled: Bool) -> some View {
+            AtticSidebarRow(systemName: "paintpalette", title: "Appearance", action: {}).disabled(disabled)
+        }
+        /// The title's strongest pixel, as contrast on white.
+        func titleInk(_ hosting: NSView) throws -> Double {
+            let (bitmap, scale) = try snapshot(hosting)
+            var strongest = 1.0
+            var y: CGFloat = 4
+            while y < size.height - 4 {
+                var x = AtticLayout.sidebarTextX
+                while x < AtticLayout.sidebarTextX + 60 {
+                    if let pixel = bitmap.colour(atX: x, y: y, scale: scale) { strongest = max(strongest, pixel.contrast(on: .white(1))) }
+                    x += 0.5 / scale
+                }
+                y += 0.5 / scale
+            }
+            return strongest
+        }
+        let (_, enabledHosting) = host(row(false), size: size, context: context)
+        let (_, disabledHosting) = host(row(true), size: size, context: context)
+        let enabled = try titleInk(enabledHosting)
+        let disabled = try titleInk(disabledHosting)
+        let body = context.tokens.ink(.chromeBody).contrast(on: .white(1))
+        let hint = context.tokens.ink(.chromeHint).contrast(on: .white(1))
+        XCTAssertGreaterThan(body - hint, 0.5, "The two inks differ enough to tell apart")
+        XCTAssertLessThan(disabled, enabled - 0.5, String(format: "The disabled title is quieter (%.2f vs %.2f)", disabled, enabled))
+        XCTAssertEqual(disabled, hint, accuracy: 0.6, "The disabled title is the hint grey")
+        XCTAssertEqual(enabled, body, accuracy: 0.6, "The enabled title is the body ink")
+    }
+
     /// A task card takes keyboard focus and draws the ring around its tile shape.
     func testTaskCardTakesKeyboardFocus() throws {
         var fired: [String] = []

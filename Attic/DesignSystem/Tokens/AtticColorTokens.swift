@@ -17,7 +17,9 @@ enum AtticInk: String, CaseIterable, Sendable {
     /// Priority is the status ring's weight and a grey that deepens with
     /// it (None the faintest, Medium the darkest); only High is red.
     case priorityNone, priorityLow, priorityMedium, priorityHigh
-    /// The subtask checkbox's done fill and its check.
+    /// The old filled Done and its white check. Nothing draws them since the
+    /// quiet Done (`doneDisc` and `doneCheck`); they stay only because the
+    /// PR #5 surface coverage was measured with them.
     case doneFill, onDone
     /// The check on a done task's quiet grey disc (`doneDisc`): the disc is
     /// decoration, the check carries the state and keeps 3 : 1 on it.
