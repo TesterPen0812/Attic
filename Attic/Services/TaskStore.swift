@@ -2047,9 +2047,11 @@ final class TaskStore: ObservableObject {
 
     /// How many main tasks the Done log holds (one count query).
     func doneLogCount() -> Int {
-        (try? context.fetchCount(FetchDescriptor<TaskItem>(
-            predicate: #Predicate { $0.doneLoggedAt != nil && $0.parentID == nil && $0.deletedAt == nil }
-        ))) ?? 0
+        // Typed and on its own: Xcode 26.6 times out type-checking this inline.
+        let predicate = #Predicate<TaskItem> { item in
+            item.doneLoggedAt != nil && item.parentID == nil && item.deletedAt == nil
+        }
+        return (try? context.fetchCount(FetchDescriptor(predicate: predicate))) ?? 0
     }
 
     /// The subtasks of a task in the Done log (they left with it).
