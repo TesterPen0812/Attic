@@ -26,6 +26,9 @@ struct AtticDesignContext: Hashable, Sendable {
     var reduceMotion = false
     var differentiateWithoutColor = false
     var hapticsEnabled = true
+    /// What raised controls are made of. The text on them is tuned against
+    /// both materials, so this changes no colour token.
+    var controls: AtticControlMaterial = .liquidGlass
 
     /// Reduce Transparency makes glass and blur solid.
     var effectiveSurface: AtticPanelSurfaceTreatment.Kind {
@@ -33,6 +36,11 @@ struct AtticDesignContext: Hashable, Sendable {
     }
 
     var isTranslucent: Bool { effectiveSurface != .solid }
+
+    /// Reduce Transparency makes the controls opaque: the Craft style.
+    var effectiveControls: AtticControlMaterial {
+        reduceTransparency ? .craft : controls
+    }
 
     static let `default` = AtticDesignContext()
 
@@ -81,6 +89,7 @@ struct AtticDesignContext: Hashable, Sendable {
         }
         if increaseContrast { parts.append("Increase contrast") }
         if reduceTransparency { parts.append("Reduce transparency") }
+        if !reduceTransparency, controls == .craft { parts.append("Craft-style controls") }
         return parts.joined(separator: " · ")
     }
 }
@@ -114,9 +123,11 @@ extension View {
         surface: PanelSurfaceStyle = .solid,
         tint: PanelTintLevel = .off,
         tintLength: Double = PanelTintLength.defaultValue,
-        hapticsEnabled: Bool = true
+        hapticsEnabled: Bool = true,
+        controls: AtticControlMaterial = .liquidGlass
     ) -> some View {
         modifier(AtticSystemDesignModifier(
+            controls: controls,
             palette: palette,
             surface: surface,
             tint: tint,
@@ -127,6 +138,7 @@ extension View {
 }
 
 private struct AtticSystemDesignModifier: ViewModifier {
+    let controls: AtticControlMaterial
     let palette: AtticPanelTheme
     let surface: PanelSurfaceStyle
     let tint: PanelTintLevel
@@ -150,7 +162,8 @@ private struct AtticSystemDesignModifier: ViewModifier {
             reduceTransparency: reduceTransparency,
             reduceMotion: reduceMotion,
             differentiateWithoutColor: differentiateWithoutColor,
-            hapticsEnabled: hapticsEnabled
+            hapticsEnabled: hapticsEnabled,
+            controls: controls
         ))
     }
 }

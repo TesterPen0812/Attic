@@ -14,9 +14,10 @@ extension EnvironmentValues {
 
 // MARK: - Raised button
 
-/// Button style for every raised control: the rim-lit material, hover and
-/// press states, a ghost when disabled, and the 2 pt focus ring. State
-/// changes are instant (only position and opacity ever animate).
+/// Button style for every raised control: Liquid Glass (or the Craft-style
+/// recipe), hover and press states, a ghost when disabled, and the 2 pt
+/// focus ring. State changes are instant (only position and opacity ever
+/// animate; interactive glass adds the system's own press response).
 struct AtticRaisedButtonStyle: ButtonStyle {
     var cornerRadius: CGFloat
 
@@ -42,7 +43,7 @@ private struct AtticRaisedButtonBody: View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         configuration.label
             .environment(\.atticControlState, state)
-            .background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
+            .atticRaisedMaterial(cornerRadius: cornerRadius, state: state, interactive: state != .disabled)
             .atticFocusRing(state == .focused, cornerRadius: cornerRadius)
             .contentShape(shape)
             .onHover { hovered = $0 }
@@ -111,8 +112,13 @@ private struct AtticRaisedButtonLabel: View {
 
     var body: some View {
         // Icons are lighter and thinner than text (v4): the secondary icon
-        // colour in a light outline weight.
-        let glyph: AtticInk = state == .disabled ? .disabledIcon : .icon
+        // colour in a light outline weight. Pressed, the glyph takes the
+        // primary colour, as a small control's does.
+        let glyph: AtticInk = switch state {
+        case .disabled: .disabledIcon
+        case .pressed: .glyph
+        default: .icon
+        }
         HStack(spacing: AtticRaisedButtonMetrics.iconLabelGap) {
             if let systemName {
                 AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.glyph : AtticRaisedButtonMetrics.labelIconSize, weight: AtticIconWeight.outline, ink: glyph)
@@ -239,7 +245,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
         .frame(width: geometry.innerWidth, height: chipHeight, alignment: .topLeading)
         .padding(AtticControlSize.capsuleInset)
         .frame(height: AtticControlSize.capsuleHeight)
-        .background(AtticRaisedBackground(cornerRadius: AtticRadius.control(height: AtticControlSize.capsuleHeight)))
+        .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: AtticControlSize.capsuleHeight), interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Pages"))
         .atticControlProbe(
@@ -424,7 +430,7 @@ struct AtticAddBar: View {
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, AtticControlSize.sendInset)
         .frame(height: height)
-        .background(AtticRaisedBackground(cornerRadius: radius, state: state == .hover ? .rest : state))
+        .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: hasText)
@@ -581,7 +587,7 @@ private struct AtticSmallButtonFace: View {
     }
 }
 
-/// The selection bar: a raised capsule that floats above a multi-selection
+/// The selection bar: a raised (glass) capsule that floats above a multi-selection
 /// with the count and state, priority, tag, move and delete.
 struct AtticSelectionBar: View {
     struct Action: Identifiable {
@@ -609,7 +615,7 @@ struct AtticSelectionBar: View {
         }
         .padding(AtticControlSize.capsuleInset)
         .frame(height: height)
-        .background(AtticPopoverBackground(cornerRadius: radius))
+        .atticRaisedMaterial(cornerRadius: radius, interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "\(count) selected"))
         .atticControlProbe("Selection bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)

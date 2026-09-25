@@ -96,6 +96,78 @@ final class AtticDesignSystemTests: XCTestCase {
         }
     }
 
+    /// Owner direction (2026-09-25): raised controls are real Liquid Glass
+    /// in Light and Dark; Reduce Transparency makes them the Craft style.
+    func testControlsAreLiquidGlassUnlessTransparencyIsReduced() {
+        XCTAssertEqual(AtticDesignContext.default.controls, .liquidGlass)
+        XCTAssertEqual(AtticDesignContext.default.effectiveControls, .liquidGlass)
+        XCTAssertEqual(AtticDesignContext(mode: .dark, reduceTransparency: true).effectiveControls, .craft)
+        XCTAssertEqual(AtticDesignContext(controls: .craft).effectiveControls, .craft)
+        // The switch changes no colour: the text is tuned for both materials.
+        XCTAssertEqual(AtticDesignContext(controls: .craft).colourKey, AtticDesignContext.default.colourKey)
+    }
+
+    /// The glass model is never kinder to a label than real Liquid Glass as
+    /// measured with `--glass-lab` (the darkest face in Light, the lightest
+    /// in Dark, in relative luminance). A sample of the 206 swatches.
+    func testGlassModelIsNoKinderThanMeasuredGlass() {
+        let light: [(surface: UInt32, darkestFace: UInt32)] = [
+            (0xFFFFFF, 0xF8F8F8), (0xFAFAFA, 0xF6F6F6), (0xE8E8E8, 0xECECEC), (0xC8C8C8, 0xDADBDA),
+            (0x969696, 0xBEBEBE), (0xB6BFD2, 0xCED5E9), (0xFCEFDB, 0xFBF0DC), (0xDAFCF4, 0xDCFAF2)
+        ]
+        for (surface, measured) in light {
+            let model = AtticGlassModel.worstFace(dark: false).over(AtticRGBA(surface))
+            XCTAssertLessThanOrEqual(model.relativeLuminance, AtticRGBA(measured).relativeLuminance, AtticRGBA(surface).hexString)
+        }
+        let dark: [(surface: UInt32, lightestFace: UInt32)] = [
+            (0x000000, 0x212121), (0x141414, 0x343434), (0x2C2C2D, 0x4A4A4B), (0x505050, 0x676767),
+            (0x042D25, 0x2A4D43), (0x0A2C25, 0x2E4C44)
+        ]
+        for (surface, measured) in dark {
+            let model = AtticGlassModel.worstFace(dark: true).over(AtticRGBA(surface))
+            XCTAssertGreaterThanOrEqual(model.relativeLuminance, AtticRGBA(measured).relativeLuminance, AtticRGBA(surface).hexString)
+        }
+    }
+
+    /// Every label a control carries keeps its floor on the Craft-style
+    /// face and on the worst glass face over every surface the panel can
+    /// draw, in every combination (the model check covers the rest).
+    func testControlLabelsKeepTheirFloorsOnGlassAndCraft() {
+        for context in AtticAppearanceCheck.allContexts() {
+            let tokens = context.tokens
+            let pairs = AtticSurfaceModel.readabilityPairs(
+                inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover,
+                recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
+            )
+            let onControls = pairs.filter { $0.overlays.first == tokens.controlFace || $0.onGlass }
+            XCTAssertEqual(onControls.filter(\.onGlass).count, onControls.count / 2, context.caption)
+            for pair in onControls where tokens.panel.worstMargin([pair]) < 0.999 {
+                XCTFail(String(format: "%@: %@ %@ on %@ margin %.3f", context.caption, pair.ink.rawValue, pair.foreground.hexString,
+                               pair.onGlass ? "glass" : "Craft", tokens.panel.worstMargin([pair])))
+            }
+        }
+        // Reduce Transparency's Craft style: Light fill 7 below #FAFAFA,
+        // Dark 17 above #2C2C2D (Craft's measured deltas).
+        let light = AtticDesignContext(mode: .light).tokens.controlFace
+        let dark = AtticDesignContext(mode: .dark).tokens.controlFace
+        XCTAssertEqual(light.red * 255, 243, accuracy: 0.6)
+        XCTAssertEqual(dark.red * 255, 61, accuracy: 0.6)
+    }
+
+    func testScrollEdgeVeilFollowsItsRamp() {
+        XCTAssertEqual(AtticEdgeBlur.veil(at: 0), 0)
+        XCTAssertEqual(AtticEdgeBlur.veil(at: 1), AtticEdgeBlur.maximumVeil, accuracy: 0.0001)
+        XCTAssertEqual(AtticEdgeBlur.veil(at: 0.55), 0.30, accuracy: 0.0001)
+        XCTAssertEqual(AtticEdgeBlur.veil(at: 2), AtticEdgeBlur.maximumVeil, accuracy: 0.0001)
+        var previous = -1.0
+        for step in 0...20 {
+            let value = AtticEdgeBlur.veil(at: Double(step) / 20)
+            XCTAssertGreaterThanOrEqual(value, previous)
+            previous = value
+        }
+    }
+
     /// Spec rev 175: text that matters keeps 4.5 : 1, secondary text stays
     /// soft at 3 : 1 at least, and Increase Contrast lifts all text to 4.5.
     func testSecondaryTextIsSoftButReadable() {

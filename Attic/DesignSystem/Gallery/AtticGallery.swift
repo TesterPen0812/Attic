@@ -24,17 +24,18 @@ enum AtticGalleryLaunch {
         AppRuntimeEnvironment().galleryLaunch == .allowed
     }
 
-    /// `--attic-gallery --raised-controls <dir>`: renders the panel with the
-    /// current raised controls and the Craft-matched candidates
-    /// (`AtticRaisedCandidates`), Light and Dark, prints each candidate's
-    /// control contrast, then quits. Capture only: no token changes.
-    static let raisedControlsArgument = "--raised-controls"
-
-    static var raisedControlsDirectory: URL? {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let index = arguments.firstIndex(of: raisedControlsArgument), index + 1 < arguments.count else { return nil }
-        return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
-    }
+    /// `--attic-gallery --glass-lab`: a key panel of flat surface swatches
+    /// (Light on the left, Dark on the right), each with a real Liquid Glass
+    /// control on it, for measuring what the glass does to every surface
+    /// the panel can draw (`AtticGlassModel` is fitted to these
+    /// measurements). Escape quits.
+    static let glassLabArgument = "--glass-lab"
+    /// `--attic-gallery --glass-lab-panels`: the live panel in Light and
+    /// Dark, plain and on a palette's tinted Glass surface, with Liquid
+    /// Glass controls (top row) and the Craft style (bottom row), its list
+    /// scrolled under the header and the add bar. With `--stand-in`, real
+    /// glass at rest above the capture stand-in. Escape quits.
+    static let glassLabPanelsArgument = "--glass-lab-panels"
 
     static var captureDirectory: URL? {
         let arguments = ProcessInfo.processInfo.arguments
@@ -53,19 +54,13 @@ enum AtticGalleryLaunch {
             runCapture(into: directory)
             return true
         }
-        if let directory = raisedControlsDirectory {
-            let target = (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)) != nil
-                ? directory
-                : FileManager.default.temporaryDirectory.appendingPathComponent("AtticRaisedControls", isDirectory: true)
-            try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-            AtticAppearanceCheck.writePanelRenders(to: target, suffix: "-1")
-            AtticAppearanceCheck.writePanelRenders(to: target, suffix: "-2", raised: AtticRaisedCandidates.craft)
-            AtticAppearanceCheck.writePanelRenders(to: target, suffix: "-3", raised: AtticRaisedCandidates.craftStronger)
-            let report = AtticRaisedCandidates.contrastReport()
-            try? report.write(to: target.appendingPathComponent("raised-contrast.txt"), atomically: true, encoding: .utf8)
-            print(report)
-            print("Attic raised controls: \(target.path)")
-            exit(0)
+        if ProcessInfo.processInfo.arguments.contains(glassLabPanelsArgument) {
+            AtticGlassLab.openPanels(standIn: ProcessInfo.processInfo.arguments.contains("--stand-in"))
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains(glassLabArgument) {
+            AtticGlassLab.open()
+            return true
         }
         if ProcessInfo.processInfo.arguments.contains(keyboardLabArgument) {
             openLab(AnyView(AtticGalleryKeyboardLab()), title: "Attic Keyboard Lab", height: 240)
@@ -150,83 +145,6 @@ enum AtticGalleryLaunch {
         print("Attic appearance check: \(passed ? "PASS" : "FAIL") — \(report.headline)")
         print("Contact sheets:\n" + sheets.map(\.path).joined(separator: "\n"))
         exit(passed ? 0 : 1)
-    }
-}
-
-/// Candidate raised-control looks translated from Craft's measured deltas
-/// (owner references, sRGB): Light page 255, fill about 249–250 with a
-/// white band inside the top edge, a 1 pt edge about 248 at the top, 240 on
-/// the sides and 231 at the bottom, no shadow; Dark page about 91, fill
-/// about +17, a bright 1 pt rim (+35 to +65 over the page, brightest at top
-/// and bottom), no dark outer edge. Moved onto Attic's #FAFAFA and #2C2C2D
-/// surfaces by the same deltas.
-enum AtticRaisedCandidates {
-    static func craft(_ mode: AtticDesignContext.Mode) -> AtticRaisedComparison {
-        switch mode {
-        case .light:
-            AtticRaisedComparison(
-                fill: .grey(245), sheenTop: .white(0.55), sheenBottom: .white(0.35),
-                innerRimTop: .white(0.9), innerRimBottom: .white(0.6),
-                edgeTop: .black(0.028), edgeMiddle: .black(0.04), edgeBottom: .black(0.09),
-                shadow: .black(0.03), shadowRadius: 0.5, shadowY: 0.5
-            )
-        case .dark:
-            AtticRaisedComparison(
-                fill: .grey(44 + 17), sheenTop: .white(0.015), sheenBottom: .white(0.005),
-                edgeTop: .white(0.24), edgeMiddle: .white(0.10), edgeBottom: .white(0.21)
-            )
-        }
-    }
-
-    static func craftStronger(_ mode: AtticDesignContext.Mode) -> AtticRaisedComparison {
-        switch mode {
-        case .light:
-            AtticRaisedComparison(
-                fill: .grey(243), sheenTop: .white(0.6), sheenBottom: .white(0.4),
-                innerRimTop: .white(0.95), innerRimBottom: .white(0.7),
-                edgeTop: .black(0.045), edgeMiddle: .black(0.065), edgeBottom: .black(0.12),
-                shadow: .black(0.05), shadowRadius: 0.75, shadowY: 0.5
-            )
-        case .dark:
-            AtticRaisedComparison(
-                fill: .grey(44 + 21), sheenTop: .white(0.02), sheenBottom: .white(0.008),
-                edgeTop: .white(0.30), edgeMiddle: .white(0.14), edgeBottom: .white(0.27)
-            )
-        }
-    }
-
-    /// Contrast of what sits on a raised control (the add bar's placeholder,
-    /// the control glyphs and icons, the selected chip's label) on each
-    /// candidate's face, at its middle and at its top and bottom sheen.
-    static func contrastReport() -> String {
-        var lines = ["Raised-control candidates: contrast on the control face (floor in brackets)"]
-        let candidates: [(String, (AtticDesignContext.Mode) -> AtticRaisedComparison?)] = [
-            ("1 current", { _ in nil }), ("2 Craft-matched", craft), ("3 Craft-matched stronger", craftStronger)
-        ]
-        for mode in AtticDesignContext.Mode.allCases {
-            let tokens = AtticDesignContext(mode: mode).tokens
-            for (name, candidate) in candidates {
-                let faces: [AtticRGBA]
-                if let recipe = candidate(mode) {
-                    faces = [recipe.fill, recipe.sheenTop.over(recipe.fill), recipe.sheenBottom.over(recipe.fill)]
-                } else {
-                    let r = tokens.raised
-                    faces = [r.face, r.sheenTop, r.sheenBottom].map { $0.over(tokens.controlBase) }
-                }
-                let checks: [(String, AtticInk, AtticRGBA?, Double)] = [
-                    ("placeholder", .placeholder, nil, 3), ("glyph", .glyph, nil, 3), ("icon", .icon, nil, 3),
-                    ("icon on chip hover", .icon, tokens.chipHover, 3), ("heading on selected chip", .heading, tokens.chipSelected, 4.5)
-                ]
-                let faceHex = faces.map { String(format: "%.0f", $0.red * 255) }.joined(separator: "/")
-                var parts: [String] = []
-                for (label, ink, overlay, floor) in checks {
-                    let worst = faces.map { face in tokens.ink(ink).contrast(on: overlay.map { $0.over(face) } ?? face) }.min() ?? 0
-                    parts.append(String(format: "%@ %.2f [%.1f]%@", label, worst, floor, worst < floor ? " FAIL" : ""))
-                }
-                lines.append("\(mode.title) \(name) (face mid/top/bottom \(faceHex)): " + parts.joined(separator: ", "))
-            }
-        }
-        return lines.joined(separator: "\n")
     }
 }
 
@@ -354,6 +272,12 @@ private struct AtticGalleryControls: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 220)
+                Picker("Controls", selection: $context.controls) {
+                    ForEach(AtticControlMaterial.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 250)
+                .help("What raised controls are made of, everywhere in the gallery. Reduce transparency always uses the Craft style.")
                 Picker("Palette", selection: $context.palette) {
                     ForEach(AtticPanelTheme.allCases) { Text($0.title).tag($0) }
                 }
@@ -417,6 +341,144 @@ struct AtticGalleryStage: View {
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.black.opacity(design.mode == .dark ? 0.5 : 0.10), lineWidth: 0.5))
         }
+    }
+}
+
+/// Flat swatches with a real glass control on each (see `glassLabArgument`).
+@MainActor
+enum AtticGlassLab {
+    static let tile = CGSize(width: 120, height: 64)
+    static let columns = 8
+    static let control = CGSize(width: 64, height: 32)
+    private static var windows: [NSWindow] = []
+
+    /// Every flat colour the panel can put under a control in `mode`: the
+    /// neutral ladder, each palette's surface over every desktop, and each
+    /// with the Bold tint at the content top (its strongest).
+    static func swatches(_ mode: AtticDesignContext.Mode) -> [AtticRGBA] {
+        var colours: [AtticRGBA] = (mode == .light ? [255, 250, 243, 232, 218, 200, 180, 150] : [0, 20, 32, 44, 60, 80, 100, 130]).map { AtticRGBA.grey(Double($0)) }
+        for palette in AtticPanelTheme.allCases {
+            for surface in PanelSurfaceStyle.allCases {
+                for tint in [PanelTintLevel.off, .bold] {
+                    let model = AtticDesignContext(mode: mode, palette: palette, surface: surface, tint: tint).tokens.panel
+                    for desktop in (model.kind == .solid ? [.midGrey] : AtticSurfaceModel.Desktop.allCases) {
+                        colours.append(model.composite(desktop, at: AtticSurfaceModel.contentTop))
+                    }
+                }
+            }
+        }
+        var seen = Set<String>()
+        return colours.filter { seen.insert($0.hexString).inserted }
+    }
+
+    /// One non-activating panel (it can be key without activating the app,
+    /// as Attic's own panel is), Light swatches on the left and Dark on the
+    /// right, each half in its own appearance. Glass draws its resting,
+    /// key-window look only in a key window.
+    static func open() {
+        let halves = AtticDesignContext.Mode.allCases.map { mode -> NSHostingView<AnyView> in
+            let view = NSHostingView(rootView: AnyView(AtticGlassLabGrid(colours: swatches(mode)).environment(\.colorScheme, mode.colorScheme)))
+            view.appearance = NSAppearance(named: mode == .dark ? .darkAqua : .aqua)
+            view.frame.size = view.fittingSize
+            return view
+        }
+        let width = halves.reduce(0) { $0 + $1.frame.width }
+        let height = halves.map(\.frame.height).max() ?? 0
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        var x: CGFloat = 0
+        for half in halves {
+            half.frame.origin = NSPoint(x: x, y: height - half.frame.height)
+            content.addSubview(half)
+            x += half.frame.width
+        }
+        present(content)
+        for mode in AtticDesignContext.Mode.allCases {
+            FileHandle.standardError.write(Data(("glass-lab \(mode.rawValue) swatches " + swatches(mode).map(\.hexString).joined(separator: " ") + "\n").utf8))
+        }
+    }
+
+    /// The contexts `openPanels` shows, left to right.
+    static let panelContexts: [AtticDesignContext] = [
+        AtticDesignContext(mode: .light),
+        AtticDesignContext(mode: .dark),
+        AtticDesignContext(mode: .light, palette: .porcelainVapor, surface: .glass, tint: .bold),
+        AtticDesignContext(mode: .dark, palette: .midnightCobalt, surface: .glass, tint: .bold)
+    ]
+
+    /// With `standIn`, the top row is real glass at rest (nothing under the
+    /// controls) and the bottom row the capture stand-in drawn live, for
+    /// comparing the two on screen.
+    static func openPanels(standIn: Bool = false) {
+        let rows = AtticControlMaterial.allCases.map { material in
+            HStack(spacing: 16) {
+                ForEach(Array(panelContexts.enumerated()), id: \.offset) { _, base in
+                    let context = withControls(base, standIn ? .liquidGlass : material)
+                    let capture = standIn && material == .craft
+                        ? AtticCaptureContext(collector: nil, backdrop: .wallpaper(.matchingMode)) : nil
+                    AtticGalleryPanelComposition(demo: AtticGalleryDemo(), initialScroll: standIn ? 0 : 132)
+                        .environment(AtticGalleryDemo())
+                        .atticDesign(context)
+                        .environment(\.atticCapture, capture)
+                        .padding(8)
+                        .background(AtticStandInWallpaper(dark: context.mode == .dark))
+                }
+            }
+        }
+        let view = NSHostingView(rootView: VStack(spacing: 16) { ForEach(0..<rows.count, id: \.self) { rows[$0] } }.padding(16).fixedSize())
+        view.frame.size = view.fittingSize
+        present(view)
+    }
+
+    private static func withControls(_ context: AtticDesignContext, _ controls: AtticControlMaterial) -> AtticDesignContext {
+        var context = context
+        context.controls = controls
+        return context
+    }
+
+    private static func present(_ content: NSView) {
+        let panel = AtticGlassLabPanel(contentRect: content.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.contentView = content
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        panel.setFrameTopLeftPoint(NSPoint(x: 20, y: (NSScreen.main?.visibleFrame.maxY ?? 900) - 20))
+        panel.makeKeyAndOrderFront(nil)
+        windows.append(panel)
+    }
+}
+
+private final class AtticGlassLabPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        NSApp.terminate(nil)
+    }
+}
+
+private struct AtticGlassLabGrid: View {
+    let colours: [AtticRGBA]
+
+    var body: some View {
+        let lab = AtticGlassLab.self
+        let radius = AtticRadius.control(height: lab.control.height)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<((colours.count + lab.columns - 1) / lab.columns), id: \.self) { row in
+                HStack(spacing: 0) {
+                    ForEach(0..<lab.columns, id: \.self) { column in
+                        let index = row * lab.columns + column
+                        ZStack {
+                            (index < colours.count ? colours[index] : .clear).color
+                            if index < colours.count {
+                                Color.clear
+                                    .frame(width: lab.control.width, height: lab.control.height)
+                                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                            }
+                        }
+                        .frame(width: lab.tile.width, height: lab.tile.height)
+                    }
+                }
+            }
+        }
+        .fixedSize()
     }
 }
 #endif

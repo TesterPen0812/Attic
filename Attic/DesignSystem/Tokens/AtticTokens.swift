@@ -156,6 +156,16 @@ enum AtticEdgeBlur {
     static let veilStops: [(location: Double, opacity: Double)] = [
         (0.00, 0.00), (0.30, 0.10), (0.55, 0.30), (0.80, 0.52), (1.00, 0.65)
     ]
+
+    /// The veil's opacity at `depth` into the zone (0 open edge, 1 the bar).
+    static func veil(at depth: Double) -> Double {
+        let y = min(max(depth, 0), 1)
+        for (lower, upper) in zip(veilStops, veilStops.dropFirst()) where y <= upper.location {
+            let span = upper.location - lower.location
+            return lower.opacity + (upper.opacity - lower.opacity) * (span > 0 ? (y - lower.location) / span : 1)
+        }
+        return veilStops.last?.opacity ?? 0
+    }
 }
 
 // MARK: - Type

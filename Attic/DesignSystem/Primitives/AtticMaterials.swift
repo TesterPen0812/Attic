@@ -54,118 +54,83 @@ struct AtticStateResolver {
     }
 }
 
-// MARK: - Raised (rim-lit) material
+// MARK: - Raised material
 
-/// The rim-lit raised material every control uses (spec § Raised controls):
-/// an opaque neutral base (content scrolling underneath never shows through),
-/// a faint vertical sheen, a 1 pt inner rim lit from above, a hairline that
-/// is slightly darker at the bottom, and a tiny shadow drawn outside the
-/// shape only (so a translucent face never darkens itself). Softly raised,
-/// never puffy.
+/// The drawn raised material: the Craft style (Reduce Transparency, or the
+/// gallery's Craft switch), or in captures, which cannot render Liquid
+/// Glass, its stand-in (`AtticGlassModel`). Live glass is not drawn here:
+/// see `atticRaisedMaterial`.
 struct AtticRaisedBackground: View {
     var cornerRadius: CGFloat
     var state: AtticControlState = .rest
 
     @Environment(\.atticDesign) private var design
-    @Environment(\.atticRaisedComparison) private var comparison
 
     var body: some View {
-        if let comparison, state == .rest || state == .focused {
-            AtticRaisedComparisonBackground(recipe: comparison, cornerRadius: cornerRadius)
-        } else {
-            standard
-        }
-    }
-
-    @ViewBuilder private var standard: some View {
         let tokens = design.tokens
-        let recipe: AtticRaisedRecipe = switch state {
-        case .hover: tokens.raisedHover
-        case .pressed: tokens.raisedPressed
-        case .disabled: tokens.raisedDisabled
-        case .rest, .focused: tokens.raised
-        }
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        ZStack {
-            if recipe.shadow.alpha > 0 {
-                AtticOutsideShadow(shape: shape, color: recipe.shadow, radius: recipe.shadowRadius, y: recipe.shadowY)
+        let recipe: AtticRaisedRecipe = if design.effectiveControls == .liquidGlass {
+            tokens.glassStandIn
+        } else {
+            switch state {
+            case .hover: tokens.raisedHover
+            case .pressed: tokens.raisedPressed
+            case .disabled: tokens.raisedDisabled
+            case .rest, .focused: tokens.raised
             }
-            shape.fill(tokens.controlBase.color)
-            shape.fill(LinearGradient(stops: [
-                .init(color: recipe.sheenTop.color, location: 0),
-                .init(color: recipe.face.color, location: 0.45),
-                .init(color: recipe.face.color, location: 0.70),
-                .init(color: recipe.sheenBottom.color, location: 1)
-            ], startPoint: .top, endPoint: .bottom))
-            if recipe.innerRimTop.alpha > 0 {
-                shape.inset(by: AtticHairline.innerRim / 2).stroke(
-                    LinearGradient(colors: [recipe.innerRimTop.color, recipe.innerRimBottom.color], startPoint: .top, endPoint: .bottom),
-                    lineWidth: AtticHairline.innerRim
-                )
-            }
-            shape.inset(by: recipe.outerRimWidth / 2).stroke(
-                LinearGradient(colors: [recipe.outerRimTop.color, recipe.outerRimBottom.color], startPoint: .top, endPoint: .bottom),
-                lineWidth: recipe.outerRimWidth
-            )
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        AtticRecipeBackground(recipe: recipe, cornerRadius: cornerRadius)
+            .overlay {
+                // The glass stand-in shows hover and press as the live glass
+                // control does: a fill inside it.
+                if design.effectiveControls == .liquidGlass, let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(fill.color)
+                }
+            }
     }
 }
 
-/// A capture-only alternative to the raised recipe at rest, for comparing
-/// candidate looks side by side on the real panel (the gallery's
-/// `--raised-controls` capture). Nil everywhere else, so live UI and every
-/// committed token are unchanged.
-struct AtticRaisedComparison: Equatable, Sendable {
-    /// The opaque fill, and faint overlays at its top and bottom.
-    var fill: AtticRGBA
-    var sheenTop: AtticRGBA = .clear
-    var sheenBottom: AtticRGBA = .clear
-    /// A 1 pt rim just inside the edge (top and bottom of its gradient).
-    var innerRimTop: AtticRGBA = .clear
-    var innerRimBottom: AtticRGBA = .clear
-    /// The edge itself: top, sides (middle) and bottom of a vertical gradient.
-    var edgeTop: AtticRGBA
-    var edgeMiddle: AtticRGBA
-    var edgeBottom: AtticRGBA
-    var edgeWidth: CGFloat = 1
-    var shadow: AtticRGBA = .clear
-    var shadowRadius: CGFloat = 0.5
-    var shadowY: CGFloat = 0.5
-}
-
-private struct AtticRaisedComparisonKey: EnvironmentKey {
-    static let defaultValue: AtticRaisedComparison? = nil
-}
-
-extension EnvironmentValues {
-    var atticRaisedComparison: AtticRaisedComparison? {
-        get { self[AtticRaisedComparisonKey.self] }
-        set { self[AtticRaisedComparisonKey.self] = newValue }
+/// Hover, press and the disabled ghost inside a Liquid Glass control (and
+/// its stand-in).
+enum AtticGlassStateFill {
+    static func fill(for state: AtticControlState, tokens: AtticColorTokens) -> AtticRGBA? {
+        switch state {
+        case .hover: tokens.chipHover
+        case .pressed: tokens.glassPressed
+        case .disabled: tokens.glassDisabled
+        case .rest, .focused: nil
+        }
     }
 }
 
-private struct AtticRaisedComparisonBackground: View {
-    let recipe: AtticRaisedComparison
+/// Draws one `AtticRaisedRecipe`.
+struct AtticRecipeBackground: View {
+    let recipe: AtticRaisedRecipe
     let cornerRadius: CGFloat
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let reach = min(max(recipe.sheenReach, 0.01), 0.45)
         ZStack {
             if recipe.shadow.alpha > 0 {
                 AtticOutsideShadow(shape: shape, color: recipe.shadow, radius: recipe.shadowRadius, y: recipe.shadowY)
             }
+            if let base = recipe.base {
+                shape.fill(base.color)
+            }
             shape.fill(recipe.fill.color)
             shape.fill(LinearGradient(stops: [
                 .init(color: recipe.sheenTop.color, location: 0),
-                .init(color: AtticRGBA.clear.color, location: 0.4),
-                .init(color: AtticRGBA.clear.color, location: 0.7),
+                .init(color: recipe.sheenTop.withAlpha(0).color, location: reach),
+                .init(color: recipe.sheenBottom.withAlpha(0).color, location: 1 - reach),
                 .init(color: recipe.sheenBottom.color, location: 1)
             ], startPoint: .top, endPoint: .bottom))
-            if recipe.innerRimTop.alpha > 0 || recipe.innerRimBottom.alpha > 0 {
+            if recipe.innerRimTop.alpha > 0 || recipe.innerRimMiddle.alpha > 0 || recipe.innerRimBottom.alpha > 0 {
                 shape.inset(by: recipe.edgeWidth + AtticHairline.innerRim / 2).stroke(
-                    LinearGradient(colors: [recipe.innerRimTop.color, recipe.innerRimBottom.color], startPoint: .top, endPoint: .bottom),
+                    LinearGradient(stops: [
+                        .init(color: recipe.innerRimTop.color, location: 0),
+                        .init(color: recipe.innerRimMiddle.color, location: 0.5),
+                        .init(color: recipe.innerRimBottom.color, location: 1)
+                    ], startPoint: .top, endPoint: .bottom),
                     lineWidth: AtticHairline.innerRim
                 )
             }
@@ -180,6 +145,69 @@ private struct AtticRaisedComparisonBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// Gives a raised control its material. Live, with Liquid Glass: the
+/// system's glass in the control's shape (interactive for buttons), with
+/// hover and press as fills inside it and, under Increase Contrast, a
+/// stronger edge. Otherwise (the Craft style, Reduce Transparency, or a
+/// capture) the drawn `AtticRaisedBackground`.
+struct AtticRaisedMaterialModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let state: AtticControlState
+    let interactive: Bool
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if capture == nil, design.effectiveControls == .liquidGlass {
+            let tokens = design.tokens
+            content
+                .background {
+                    if let fill = AtticGlassStateFill.fill(for: state, tokens: tokens) {
+                        shape.fill(fill.color)
+                    }
+                }
+                .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+                .overlay {
+                    if design.increaseContrast {
+                        shape.inset(by: AtticHairline.widthIncreased / 2)
+                            .stroke(AtticGlassModel.contrastEdge(dark: design.mode == .dark).color, lineWidth: AtticHairline.widthIncreased)
+                            .allowsHitTesting(false)
+                    }
+                }
+        } else {
+            content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
+        }
+    }
+}
+
+extension View {
+    /// The raised material in a control's shape (see `AtticRaisedMaterialModifier`).
+    func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true) -> some View {
+        modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive))
+    }
+}
+
+/// Controls that float together (the header's pin and page switch): live
+/// Liquid Glass shares one `GlassEffectContainer`, so neighbouring glass
+/// renders and blends as one material. A plain group otherwise.
+struct AtticControlGroup<Content: View>: View {
+    var spacing: CGFloat = AtticSpacing.betweenControls
+    @ViewBuilder let content: Content
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+
+    var body: some View {
+        if capture == nil, design.effectiveControls == .liquidGlass {
+            GlassEffectContainer(spacing: spacing) { content }
+        } else {
+            content
+        }
     }
 }
 
@@ -434,12 +462,61 @@ struct AtticVisualEffect: NSViewRepresentable {
     }
 }
 
+// MARK: - Scroll edge fade
+
+/// Content that scrolls under a floating bar (the header, the add bar)
+/// blurs and fades as it passes under it: over the edge zone (top 56 pt,
+/// bottom 60 pt) it blurs up to 6 pt and fades along the veil's eased ramp
+/// (to 65 % at the edge), into whatever surface is behind. Applied per
+/// item in a scroll view; the zones are measured in `space`, a coordinate
+/// space whose bounds are the whole visible area with the bars (the
+/// panel's own space).
+///
+/// The system's soft scroll edge does this under ordinary bars, but not
+/// under Liquid Glass ones: macOS 26 draws no edge effect at all under a
+/// `safeAreaBar` of glass controls (whatever the edge style, container or
+/// interactivity), and a hard band with a line under drawn controls. So
+/// the controls float over a scroll view with no bars and no system edge
+/// effect, and Attic fades the content itself, the same with either
+/// control material.
+struct AtticScrollEdgeFade: ViewModifier {
+    var space: NamedCoordinateSpace
+    var top: CGFloat = AtticEdgeBlur.panelTop
+    var bottom: CGFloat = AtticEdgeBlur.panelBottom
+
+    func body(content: Content) -> some View {
+        content.visualEffect { [space, top, bottom] effect, proxy in
+            let frame = proxy.frame(in: space)
+            let height = proxy.bounds(of: space)?.height ?? .infinity
+            let intoTop = (top - frame.midY) / top
+            let intoBottom = (frame.midY - (height - bottom)) / bottom
+            let depth = min(max(max(intoTop, intoBottom), 0), 1)
+            let veil = AtticEdgeBlur.veil(at: depth)
+            return effect
+                .blur(radius: AtticEdgeBlur.maximumBlur * depth)
+                .opacity(1 - veil)
+        }
+    }
+}
+
+extension View {
+    /// Blurs and fades this item as it scrolls under a bar (see `AtticScrollEdgeFade`).
+    @ViewBuilder
+    func atticScrollEdgeFade(_ enabled: Bool = true, in space: NamedCoordinateSpace) -> some View {
+        if enabled {
+            modifier(AtticScrollEdgeFade(space: space))
+        } else {
+            self
+        }
+    }
+}
+
 // MARK: - Edge veil
 
-/// Content scrolling under a floating bar fades under a veil of the surface
-/// (up to 65 %), on top of the system's soft scroll-edge blur. It replaces
-/// the hard divider line the system edge draws on the plain Light surface.
-/// Static: it never animates.
+/// Content under a floating bar fades under a veil of the surface (up to
+/// 65 %, the same ramp `AtticScrollEdgeFade` uses). For content that does
+/// not scroll, and for captures, which draw the list still. Static: it
+/// never animates.
 struct AtticEdgeVeil: View {
     enum Edge { case top, bottom }
 

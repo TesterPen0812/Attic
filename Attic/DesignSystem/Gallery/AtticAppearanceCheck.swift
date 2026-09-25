@@ -183,7 +183,7 @@ enum AtticAppearanceCheck {
             let tokens = context.tokens
             let pairs = AtticSurfaceModel.readabilityPairs(
                 inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
-                controlFace: tokens.raised.face.over(tokens.controlBase), chipSelected: tokens.chipSelected, chipHover: tokens.chipHover,
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover,
                 recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
             )
             if tokens.panel.worstMargin(pairs) < 0.999 {
@@ -475,22 +475,17 @@ enum AtticAppearanceCheck {
 extension AtticAppearanceCheck {
     /// The composed panel alone, default Light and Dark, 320 × 520 at 2×:
     /// `panel-render-light.png` and `panel-render-dark.png`.
-    static func writePanelRenders(
-        to directory: URL,
-        suffix: String = "",
-        raised: (AtticDesignContext.Mode) -> AtticRaisedComparison? = { _ in nil }
-    ) {
+    static func writePanelRenders(to directory: URL) {
         for mode in AtticDesignContext.Mode.allCases {
             let view = AtticGalleryPanelComposition(demo: AtticGalleryDemo())
                 .environment(AtticGalleryDemo())
-                .environment(\.atticRaisedComparison, raised(mode))
                 .atticDesign(AtticDesignContext(mode: mode))
                 .environment(\.atticCapture, AtticCaptureContext(collector: nil, backdrop: .wallpaper(.matchingMode)))
             let renderer = ImageRenderer(content: view)
             renderer.scale = 2
             renderer.isOpaque = false
             guard let image = renderer.cgImage else { continue }
-            let url = directory.appendingPathComponent("panel-render\(suffix)-\(mode.rawValue).png")
+            let url = directory.appendingPathComponent("panel-render-\(mode.rawValue).png")
             if let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) {
                 CGImageDestinationAddImage(destination, image, nil)
                 CGImageDestinationFinalize(destination)
