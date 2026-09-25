@@ -421,12 +421,26 @@ struct AtticPanelView: View {
 /// A page in the shell's stack: shown when current, otherwise kept built
 /// but invisible and inert (no clicks, no keyboard shortcuts, hidden from
 /// VoiceOver), and adding nothing to what the shell measures.
+private struct AtticPanelPageIsCurrentKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// False inside a page the shell keeps built behind the current one:
+    /// such a page does no work nobody can see (Canvas decodes no images).
+    var atticPanelPageIsCurrent: Bool {
+        get { self[AtticPanelPageIsCurrentKey.self] }
+        set { self[AtticPanelPageIsCurrentKey.self] = newValue }
+    }
+}
+
 private struct PanelPageVisibility: ViewModifier {
     let isCurrent: Bool
     let disablesWhenHidden: Bool
 
     func body(content: Content) -> some View {
         content
+            .environment(\.atticPanelPageIsCurrent, isCurrent)
             .opacity(isCurrent ? 1 : 0)
             .allowsHitTesting(isCurrent)
             .disabled(disablesWhenHidden && !isCurrent)

@@ -1062,6 +1062,24 @@ final class SubtaskPanelControllerTests: XCTestCase {
 
     /// An import reveal is the one path that lands on Attachments, and it
     /// still opens the workspace on Subtasks first and switches deliberately.
+    /// Round 2 #5: "Open page" from the Tasks page opens the old panel on
+    /// the task's files and never offers its Subtasks editor.
+    func testTheTasksPageOpensTheFilesPanelWithoutASubtasksRoute() throws {
+        let harness = try makeHarness()
+        let parent = try XCTUnwrap(harness.store.create(title: "Parent"))
+        installAnchor(harness, for: parent.id)
+        let controller = harness.controller
+        controller.openFilesPanel(for: parent.id)
+        XCTAssertEqual(controller.transientFamilyID, parent.id)
+        XCTAssertEqual(controller.panelView(for: parent.id), .attachments)
+        XCTAssertTrue(controller.panelViews.isFilesOnly(parent.id))
+        controller.showPanelView(.subtasks, for: parent.id)
+        XCTAssertEqual(controller.panelView(for: parent.id), .attachments, "no way back to Subtasks")
+        controller.openFamilyPanel(for: parent.id, focusEntry: true)
+        XCTAssertEqual(controller.panelView(for: parent.id), .attachments, "nor through the entry request")
+        XCTAssertFalse(harness.uiState.subtaskEntryActiveIDs.contains(parent.id), "and no subtask field takes the keyboard")
+    }
+
     func testImportRevealOpensOnSubtasksThenSwitchesToAttachments() throws {
         let harness = try makeHarness()
         let parent = try XCTUnwrap(harness.store.create(title: "Parent"))

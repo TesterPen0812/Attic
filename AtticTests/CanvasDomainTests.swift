@@ -2132,6 +2132,28 @@ final class CanvasAccessibilityTests: XCTestCase {
         )
     }
 
+    /// Round 2 #3: the page switch builds Canvas behind Tasks; built but
+    /// hidden, it starts no image decode until it is shown.
+    @MainActor
+    func testAHiddenPrebuiltCanvasDecodesNoImagesUntilItShows() async throws {
+        let session = CanvasSession(store: try makeTestCanvasStore())
+        XCTAssertTrue(session.importPreparedImage(corruptCanvasImage(7), at: CanvasPoint(x: 0, y: 0)))
+        let image = try XCTUnwrap(session.images.first)
+        let view = CanvasNSView(frame: CGRect(x: 0, y: 0, width: 480, height: 360))
+        let hidden = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue,
+                                               clearReadabilityEnabled: false, decodesImages: false)
+        hidden.configure(view)
+        view.display()
+        hidden.configure(view)
+        XCTAssertEqual(view.imageDecodePreparationCount, 0, "no decode pass while hidden")
+        XCTAssertEqual(view.imageCache.state(for: image), .idle)
+
+        let shown = CanvasNSViewRepresentable(session: session, selectionAccentColor: .systemBlue, clearReadabilityEnabled: false)
+        shown.configure(view)
+        XCTAssertGreaterThan(view.imageDecodePreparationCount, 0)
+        XCTAssertNotEqual(view.imageCache.state(for: image), .idle, "showing it starts the visible decodes")
+    }
+
     @MainActor
     func testRetryFailedImageDecodesRequeuesEveryVisibleFailure() async throws {
         let session = CanvasSession(store: try makeTestCanvasStore())

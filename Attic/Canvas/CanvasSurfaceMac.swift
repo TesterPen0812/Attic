@@ -9,6 +9,9 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
     let selectionAccentColor: NSColor
     let clearReadabilityEnabled: Bool
     var excludedRects: [CGRect] = []
+    /// False while the Canvas page is built but hidden behind another page
+    /// (the page switch prebuilds it): it decodes no images until it shows.
+    var decodesImages = true
     /// Presents the original bytes of an image for export. The canvas surface
     /// raises it from an accessibility or contextual recovery action; the
     /// owning SwiftUI view owns the file exporter.
@@ -49,6 +52,9 @@ struct CanvasNSViewRepresentable: NSViewRepresentable {
         // SwiftUI graph teardown, so the view must keep that session alive
         // until the deferred completion has captured it.
         view.representedSessionLifetime = session
+        if view.isImageDecodingSuspended == decodesImages {
+            view.isImageDecodingSuspended = !decodesImages
+        }
         if view.excludedControlRects != excludedRects {
             view.excludedControlRects = excludedRects
             view.window?.invalidateCursorRects(for: view)
@@ -543,13 +549,7 @@ final class CanvasNSView: NSView {
         if interaction.strokeContentRevision != strokeRevisionBefore {
             contentChanged = true
         }
-        imageCache.prepare(
-            for: CanvasImageDecodeCandidatePolicy.candidates(
-                in: imagesForDisplay,
-                viewport: interaction.viewport,
-                viewportSize: bounds.size
-            )
-        )
+        prepareVisibleImageDecodes(imagesForDisplay)
         if contentChanged {
             invalidateCanvasAccessibilityElements(postLayoutNotification: changed)
         } else {
@@ -626,6 +626,30 @@ final class CanvasNSView: NSView {
         NSCursor.arrow.set()
     }
 
+    /// A hidden, prebuilt Canvas decodes nothing (`decodesImages`); the
+    /// first configure or draw after it shows starts the visible decodes.
+    var isImageDecodingSuspended = false {
+        didSet {
+            guard oldValue != isImageDecodingSuspended, !isImageDecodingSuspended else { return }
+            needsDisplay = true
+        }
+    }
+
+    /// Decode passes started (for tests: a hidden Canvas starts none).
+    private(set) var imageDecodePreparationCount = 0
+
+    private func prepareVisibleImageDecodes(_ images: [CanvasPlacedImage]) {
+        guard !isImageDecodingSuspended else { return }
+        imageDecodePreparationCount += 1
+        imageCache.prepare(
+            for: CanvasImageDecodeCandidatePolicy.candidates(
+                in: images,
+                viewport: interaction.viewport,
+                viewportSize: bounds.size
+            )
+        )
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else {
             return
@@ -633,13 +657,7 @@ final class CanvasNSView: NSView {
         let displayOrder = imageDisplayOrder
         let displayImages = displayOrder.backToFront
         let increasedContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-        imageCache.prepare(
-            for: CanvasImageDecodeCandidatePolicy.candidates(
-                in: displayImages,
-                viewport: interaction.viewport,
-                viewportSize: bounds.size
-            )
-        )
+        prepareVisibleImageDecodes(displayImages)
         drawCanvas(
             in: context,
             bounds: bounds,

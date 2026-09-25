@@ -370,8 +370,17 @@ final class SubtaskPanelController: NSObject, ObservableObject {
     /// an import reveal, which switches deliberately after opening).
     /// Re-activating a panel already presenting the family keeps its view
     /// unless `view` asks for one; entering a subtask always shows Subtasks.
+    /// The Tasks page's "Open page" until task pages arrive (Phase 3): the
+    /// task's old detail panel, on its files and nothing else.
+    func openFilesPanel(for familyID: UUID) {
+        guard resolvedParent(familyID) != nil else { return }
+        panelViews.setFilesOnly(familyID)
+        openFamilyPanel(for: familyID, focusEntry: false, view: .attachments)
+    }
+
     func openFamilyPanel(for familyID: UUID, focusEntry: Bool, view: FamilyPanelView? = nil) {
         guard resolvedParent(familyID) != nil else { return }
+        let focusEntry = focusEntry && !panelViews.isFilesOnly(familyID)
         let requestedView = focusEntry ? .subtasks : view
         if lifecycle.pinnedFamilyIDs.contains(familyID) {
             if let requestedView { showPanelView(requestedView, for: familyID) }
@@ -1192,12 +1201,23 @@ struct SurfaceFrameAnimationTargets {
 @MainActor
 final class FamilyPanelViewState: ObservableObject {
     @Published private(set) var views: [UUID: FamilyPanelView] = [:]
+    /// Families opened from the Tasks page (Phase 1): the old panel shows
+    /// their files only. Subtasks live in the row's quick look, so this
+    /// panel never offers a second subtask editor for them.
+    @Published private(set) var filesOnly: Set<UUID> = []
 
     func view(for familyID: UUID) -> FamilyPanelView {
-        views[familyID] ?? .subtasks
+        filesOnly.contains(familyID) ? .attachments : (views[familyID] ?? .subtasks)
+    }
+
+    func isFilesOnly(_ familyID: UUID) -> Bool { filesOnly.contains(familyID) }
+
+    func setFilesOnly(_ familyID: UUID) {
+        filesOnly.insert(familyID)
     }
 
     func set(_ view: FamilyPanelView, for familyID: UUID) {
+        if filesOnly.contains(familyID) { return }
         let stored: FamilyPanelView? = view == .subtasks ? nil : view
         guard views[familyID] != stored else { return }
         views[familyID] = stored
@@ -1224,6 +1244,9 @@ final class FamilyPanelViewState: ObservableObject {
     func retain(_ familyIDs: Set<UUID>) {
         if freshAttachmentIDs.keys.contains(where: { !familyIDs.contains($0) }) {
             freshAttachmentIDs = freshAttachmentIDs.filter { familyIDs.contains($0.key) }
+        }
+        if filesOnly.contains(where: { !familyIDs.contains($0) }) {
+            filesOnly = filesOnly.filter { familyIDs.contains($0) }
         }
         guard views.keys.contains(where: { !familyIDs.contains($0) }) else { return }
         views = views.filter { familyIDs.contains($0.key) }
