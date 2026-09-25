@@ -1369,6 +1369,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// click would.
     func makeKeyForCapture() {
         panel.makeKey()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            NSLog("Attic capture seam: panel key = %d, shell key state = %d",
+                  self.panel.isKeyWindow ? 1 : 0, self.uiState.isPanelKey ? 1 : 0)
+        }
     }
 
     /// Re-runs the click-through hit test where the pointer is now: after

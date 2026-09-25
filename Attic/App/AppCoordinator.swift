@@ -620,7 +620,12 @@ final class AppCoordinator: ObservableObject {
                 if let page = environment["ATTIC_UI_TEST_PAGE"].flatMap(PanelPage.init(rawValue:)) {
                     uiState.selectSection(page.section)
                 }
-                hoverMonitor.keepVisibleForUITesting(makeKey: false)
+                // AppKit makes a visible window key when launching finishes,
+                // so the reveal waits until launch is over, as a corner reveal
+                // always does.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    self?.hoverMonitor.keepVisibleForUITesting(makeKey: false)
+                }
                 if let delay = environment["ATTIC_UI_TEST_KEY_AFTER"].flatMap(Double.init) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                         self?.panelController.makeKeyForCapture()

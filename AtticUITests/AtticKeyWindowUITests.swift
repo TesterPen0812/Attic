@@ -108,8 +108,11 @@ final class AtticKeyWindowUITests: XCTestCase {
     /// A flat inactive-glass slab is one even grey from top to bottom; a
     /// raised control (the drawn recipe's sheen and rim, or live glass's
     /// highlight) changes along its height. The spread of luminance down the
-    /// control's left face, away from the glyph, in sRGB.
-    private static let minimumRelief = 0.015
+    /// control's left face, away from the glyph, in sRGB. Measured on
+    /// 2026-09-25 screen captures of the Pin: the flat inactive-glass slab
+    /// 0.000; the drawn look 0.009 (Dark) and 0.025 (Light); key glass 0.016
+    /// (Light) and 0.020 (Dark). The bar sits well above flat and below all.
+    private static let minimumRelief = 0.004
 
     private func verticalRelief(_ image: NSImage) throws -> Double {
         let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
