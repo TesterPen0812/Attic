@@ -24,9 +24,10 @@ Every later change is recorded here: what changed, why, and who asked.
 - **Add bar** (`AtticAddBar`): a live init with a run-time placeholder, the
   leading glyph (`magnifyingglass` when the bar searches the Done log),
   `showsSend`, and `tokens`, the new `AtticTokenField`: a native text view that
-  draws recognised pieces (#tag, a date, `!`) as chips (the tag pill behind the
-  text as typed, the text in the heading ink: on the raised bar the tag's accent
-  grey measured 2.77 : 1 in Dark); Backspace after a chip turns it back into text; ⌘Return, Esc,
+  draws recognised pieces (#tag, a date, `!`) as chips (a pill in the selection
+  fill behind the text as typed, the text in the heading ink: on the raised bar
+  the tag's accent grey on the tag fill measured 2.77 : 1 in Dark, and heading
+  on the tag fill 4.42 : 1 on Dark Porcelain Glass); Backspace after a chip turns it back into text; ⌘Return, Esc,
   multi-line paste and ⌘Z (typing first, then the page) are reported to the
   owner. Captures draw the same chips with SwiftUI (`AtticChipText`); the
   gallery's add bar board shows them and the Done page's search bar.

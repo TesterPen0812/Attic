@@ -70,7 +70,9 @@ struct AtticTokenField: NSViewRepresentable {
             // The heading ink: the pill sits on the raised bar, where the
             // tag's accent grey falls below 3 : 1 in Dark.
             chipText: NSColor(tokens.color(.heading)),
-            chipFill: NSColor(tokens.tagFill.color),
+            // The selection fill, fainter than the tag pill: on the raised
+            // (and see-through) bar a stronger pill costs the text contrast.
+            chipFill: NSColor(tokens.selected.color),
             caret: NSColor(tokens.color(.heading))
         ))
         view.textView.isEditable = isEnabled
@@ -364,7 +366,7 @@ struct AtticChipText: View {
                     AtticText(verbatim: segment.text, style: .body, ink: .heading, allowsOverlap: true)
                         .background(
                             RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
-                                .fill(design.tokens.tagFill.color)
+                                .fill(design.tokens.selected.color)
                                 .frame(height: height)
                                 .padding(.horizontal, -AtticTokenFieldMetrics.chipOutset)
                         )
