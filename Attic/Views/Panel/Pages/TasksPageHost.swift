@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// State the Tasks page keeps while another page is showing. The shell owns
@@ -60,6 +61,13 @@ struct TasksPageHost: View {
             guard current else { return }
             model.resetForReveal()
             chromeInteractionState.bottomControlsHeight = TasksPage.footerZone
+            syncDraftLock(model)
+        }
+        // Text typed in the add bar holds the panel open (the shell's
+        // composer lock) until it is added or cleared; it is kept either way.
+        .onReceive(model.addBarState.$text.map { !$0.text.isEmpty }.removeDuplicates()) { hasDraft in
+            guard isCurrent else { return }
+            uiState.setInteractionLock(.taskComposer, isActive: hasDraft)
         }
         .onAppear {
             // Task pages arrive in Phase 3; until then "Open page" opens the
@@ -74,6 +82,7 @@ struct TasksPageHost: View {
             if primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
             handleSearchRequest(model)
             showItemIfNeeded(model)
+            syncDraftLock(model)
         }
         // Search (the menu-bar item): the Done page's search, focused.
         .onChange(of: uiState.searchRequest) { _, _ in handleSearchRequest(model) }
@@ -84,6 +93,10 @@ struct TasksPageHost: View {
         .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused { addBarFocused = true } }
         .onChange(of: uiState.isComposerPresented) { _, presented in if presented { addBarFocused = true } }
         .onChange(of: addBarFocused) { _, focused in if !focused, uiState.isComposerPresented { uiState.endAdding() } }
+    }
+
+    private func syncDraftLock(_ model: TasksPageModel) {
+        uiState.setInteractionLock(.taskComposer, isActive: !model.addBar.text.isEmpty)
     }
 
     private func handleSearchRequest(_ model: TasksPageModel) {
