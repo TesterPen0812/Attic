@@ -4,10 +4,11 @@ import XCTest
 /// The on-screen key-window check (spec § Appearance: native Liquid Glass
 /// renders flat in a window that is not key, which the drawn appearance
 /// matrix cannot catch). The panel is revealed the way the corner reveals
-/// it (another window holds the keyboard), captured, then made key as a
-/// click would, and captured again, in Light and Dark. The Pin control must
-/// read as a raised control in both states, never as the flat grey slab
-/// inactive glass draws; both captures are attached for review.
+/// it, another app is brought to the front (so Attic holds no keyboard),
+/// the whole panel is captured, then it is clicked (it becomes key) and
+/// captured again, in Light and Dark. Each capture waits for the key state
+/// the panel reports, never a fixed time. The controls must read as raised
+/// in both states, never as the flat grey slab inactive glass draws.
 final class AtticKeyWindowUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -16,11 +17,11 @@ final class AtticKeyWindowUITests: XCTestCase {
     }
 
     func testControlsStayRaisedBeforeAndAfterThePanelIsKeyInLight() throws {
-        try check(mode: "light", assertsRaised: true)
+        try check(mode: "light")
     }
 
     func testControlsStayRaisedBeforeAndAfterThePanelIsKeyInDark() throws {
-        try check(mode: "dark", assertsRaised: false)
+        try check(mode: "dark")
     }
 
     /// An explicit open on Tasks (quick capture, Show Attic) puts the
@@ -69,42 +70,65 @@ final class AtticKeyWindowUITests: XCTestCase {
         return Double(blue) / Double(max(1, bitmap.pixelsWide * bitmap.pixelsHigh))
     }
 
-    private func check(mode: String, assertsRaised: Bool) throws {
+    private func check(mode: String) throws {
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
-        app.launchEnvironment["ATTIC_UI_TEST_NONKEY_REVEAL"] = "4"
+        app.launchEnvironment["ATTIC_UI_TEST_NONKEY_REVEAL"] = "1"
         app.launchArguments += ["-appearancePreference", mode, "-panelSurfaceStyle", "solid"]
         app.launch()
         let pin = app.buttons["panel-pin-button"]
+        let keyState = app.descendants(matching: .any)["panel-key-state"]
         XCTAssertTrue(pin.waitForExistence(timeout: 5))
-        // The seam hands the keyboard to a stand-in window after 0.5 s.
-        Thread.sleep(forTimeInterval: 1.5)
-        let nonKey = pin.screenshot().image
-        attach(nonKey, name: "pin-\(mode)-not-key")
-        // …and gives it back to the panel after 4 s, as a click would.
-        Thread.sleep(forTimeInterval: 3.5)
-        let key = pin.screenshot().image
-        attach(key, name: "pin-\(mode)-key")
+        XCTAssertTrue(keyState.waitForExistence(timeout: 5))
 
-        let nonKeyContrast = try fillToSurfaceDifference(nonKey)
-        let keyContrast = try fillToSurfaceDifference(key)
-        if assertsRaised {
-            XCTAssertLessThan(nonKeyContrast, 0.12, "not key: the Pin must not be a flat grey slab (\(nonKeyContrast))")
-            XCTAssertLessThan(keyContrast, 0.12, "key: the Pin must not be a flat grey slab (\(keyContrast))")
+        // Another app in front holds the keyboard, as when the corner
+        // reveals the panel over the app the person is typing in.
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        finder.activate()
+        XCTAssertTrue(finder.wait(for: .runningForeground, timeout: 5))
+        try waitForKeyState("not key", keyState)
+        let panel = app.windows.containing(.button, identifier: "panel-pin-button").firstMatch
+        let nonKeyPanel = panel.screenshot().image
+        let nonKeyPin = pin.screenshot().image
+        attach(nonKeyPanel, name: "panel-\(mode)-not-key")
+        attach(nonKeyPin, name: "pin-\(mode)-not-key")
+
+        // A click on blank surface makes the panel key, as in real use.
+        pin.coordinate(withNormalizedOffset: CGVector(dx: 2.6, dy: 0.5)).click()
+        try waitForKeyState("key", keyState)
+        let keyPanel = panel.screenshot().image
+        let keyPin = pin.screenshot().image
+        attach(keyPanel, name: "panel-\(mode)-key")
+        attach(keyPin, name: "pin-\(mode)-key")
+
+        for (image, state) in [(nonKeyPin, "not key"), (keyPin, "key")] {
+            let relief = try verticalRelief(image)
+            XCTAssertGreaterThan(relief, Self.minimumRelief,
+                                 "\(mode), \(state): the Pin must read as raised, not a flat slab (relief \(relief))")
         }
     }
 
-    /// How far the control's face (left of the glyph) is from the surface
-    /// just outside its rounded corner, in sRGB luminance.
-    private func fillToSurfaceDifference(_ image: NSImage) throws -> Double {
+    /// A flat inactive-glass slab is one even grey from top to bottom; a
+    /// raised control (the drawn recipe's sheen and rim, or live glass's
+    /// highlight) changes along its height. The spread of luminance down the
+    /// control's left face, away from the glyph, in sRGB.
+    private static let minimumRelief = 0.015
+
+    private func verticalRelief(_ image: NSImage) throws -> Double {
         let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
-        func luminance(_ x: Int, _ y: Int) throws -> Double {
+        let x = Int(Double(bitmap.pixelsWide) * 0.2)
+        var values: [Double] = []
+        for y in stride(from: Int(Double(bitmap.pixelsHigh) * 0.12), through: Int(Double(bitmap.pixelsHigh) * 0.88), by: 1) {
             let colour = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
-            return 0.2126 * colour.redComponent + 0.7152 * colour.greenComponent + 0.0722 * colour.blueComponent
+            values.append(0.2126 * colour.redComponent + 0.7152 * colour.greenComponent + 0.0722 * colour.blueComponent)
         }
-        let face = try luminance(Int(Double(bitmap.pixelsWide) * 0.18), bitmap.pixelsHigh / 2)
-        let surface = try luminance(1, 1)
-        return abs(face - surface)
+        return (values.max() ?? 0) - (values.min() ?? 0)
+    }
+
+    private func waitForKeyState(_ expected: String, _ element: XCUIElement) throws {
+        let matches = NSPredicate(format: "value == %@", expected)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: matches, evaluatedWith: element)], timeout: 5), .completed,
+                       "the panel reports \(expected) (it reports \(element.value ?? "nothing"))")
     }
 
     private func attach(_ image: NSImage, name: String) {

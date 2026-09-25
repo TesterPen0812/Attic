@@ -79,6 +79,9 @@ struct AtticPanelView: View {
     /// surface, so the exterior elevation is drawn here.
     static let showsSurfaceElevation = true
 
+    private static let exposesKeyStateForUITesting =
+        ProcessInfo.processInfo.environment["ATTIC_UI_TESTING"] == "1"
+
     var body: some View {
         themedPanel
     }
@@ -95,6 +98,17 @@ struct AtticPanelView: View {
         .coordinateSpace(PanelPageLayout.coordinateSpace)
         .overlay(alignment: .top) {
             header
+        }
+        .overlay(alignment: .topLeading) {
+            if Self.exposesKeyStateForUITesting {
+                // UI tests read whether the panel is key (the drawn or the
+                // glass look) instead of waiting a fixed time.
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("panel-key-state")
+                    .accessibilityValue(uiState.isPanelKey ? "key" : "not key")
+            }
         }
         .overlay(alignment: .bottom) {
             notices

@@ -608,28 +608,12 @@ final class AppCoordinator: ObservableObject {
             // launches them. Activate the real process before presenting the
             // key panel so AppKit, not a test-only model shortcut, owns mouse
             // and keyboard delivery through the installed UI hierarchy.
-            // Capture seam for the key-window check: reveal the panel the
-            // way the corner does (not key, app not activated), then after
-            // the given seconds let it take the keyboard as a click would.
-            let nonKeyReveal = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NONKEY_REVEAL"].flatMap(Double.init)
-            if let nonKeyReveal {
-                // A launch from a terminal activates the app, and AppKit
-                // then makes the revealed panel key. As in real use (another
-                // app holds the keyboard), a stand-in window off screen takes
-                // key status back before the first capture.
+            // Key-window check seam: reveal the panel the way the corner
+            // does (not key, app not activated). The UI test then brings
+            // another app forward and clicks the panel, as a person would,
+            // and reads the key state the panel exposes to UI tests.
+            if ProcessInfo.processInfo.environment["ATTIC_UI_TEST_NONKEY_REVEAL"] == "1" {
                 hoverMonitor.keepVisibleForUITesting(makeKey: false)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.panelController.resignKeyForUITesting()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        NSLog("Attic key-window check: revealed, panel key = %d", self?.uiState.isPanelKey == true ? 1 : 0)
-                    }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + nonKeyReveal) { [weak self] in
-                    self?.panelController.makeKeyForUITesting()
-                    DispatchQueue.main.async {
-                        NSLog("Attic key-window check: after click, panel key = %d", self?.uiState.isPanelKey == true ? 1 : 0)
-                    }
-                }
                 return
             }
             NSApp.activate()
