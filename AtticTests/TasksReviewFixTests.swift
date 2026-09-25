@@ -89,6 +89,117 @@ final class TasksReviewFixTests: XCTestCase {
         XCTAssertEqual(model.failedSave, .newSubtask(parent.id))
     }
 
+    // MARK: Round 2 #1: unsaved edits survive page switches and reveals
+
+    /// A failed title save keeps its text and Retry when the person goes to
+    /// Notes and back (the host resets the page on return) and when the
+    /// panel hides and shows again.
+    func testAFailedTitleSaveSurvivesAPageSwitchAndARereveal() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let id = try XCTUnwrap(store.create(title: "Old")).id
+        model.beginEditingTitle(id)
+        model.editingTitle = "New title"
+        gate.shouldFail = true
+        XCTAssertFalse(model.commitTitle())
+        model.resetForReveal()          // back from Notes
+        model.pageDidHide()
+        model.resetForReveal()          // hidden and shown again
+        XCTAssertEqual(model.editingTitleID, id)
+        XCTAssertEqual(model.editingTitle, "New title")
+        XCTAssertEqual(model.failedSave, .title(id))
+        model.select(tab: .backlog)
+        XCTAssertEqual(model.tab, .now, "moving to Backlog tries the save; it fails, so the page stays")
+        XCTAssertEqual(model.failedSave, .title(id))
+        gate.shouldFail = false
+        XCTAssertTrue(model.commitTitle())
+        XCTAssertEqual(store.task(withID: id)?.title, "New title")
+    }
+
+    func testAFailedNewSubtaskSurvivesAPageSwitchAndARereveal() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let parent = try XCTUnwrap(store.create(title: "Trip"))
+        model.beginAddingSubtask(to: parent.id)
+        model.newSubtaskTitle = "Pack"
+        gate.shouldFail = true
+        XCTAssertFalse(model.commitNewSubtask())
+        model.resetForReveal()
+        model.pageDidHide()
+        model.resetForReveal()
+        XCTAssertEqual(model.newSubtaskParentID, parent.id)
+        XCTAssertEqual(model.newSubtaskTitle, "Pack")
+        XCTAssertEqual(model.failedSave, .newSubtask(parent.id))
+        gate.shouldFail = false
+        XCTAssertTrue(model.commitNewSubtask())
+        XCTAssertEqual(store.tasks.filter { $0.parentID == parent.id }.map(\.title), ["Pack"])
+    }
+
+    /// An edit that was changed but not yet committed is kept too; an open
+    /// editor with nothing changed closes on a reveal, as before.
+    func testAnUncommittedTitleChangeSurvivesARevealButAnUnchangedOneCloses() throws {
+        let store = try makeTestStore()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        let id = try XCTUnwrap(store.create(title: "Old")).id
+        model.beginEditingTitle(id)
+        model.resetForReveal()
+        XCTAssertNil(model.editingTitleID, "nothing typed: the editor closes")
+        model.beginEditingTitle(id)
+        model.editingTitle = "Typed"
+        model.resetForReveal()
+        XCTAssertEqual(model.editingTitleID, id)
+        XCTAssertEqual(model.editingTitle, "Typed")
+        model.select(tab: .backlog)
+        XCTAssertEqual(store.task(withID: id)?.title, "Typed", "moving page saves it")
+        XCTAssertEqual(model.tab, .backlog)
+    }
+
+    // MARK: Round 2 #2: the Undo toast undoes only its own step
+
+    func testTheToastNeverUndoesAChangeMadeAfterIt() throws {
+        let store = try makeTestStore()
+        let toasts = PanelToastCenter()
+        let library = AtticLibrary(tasks: store)
+        let model = TasksPageModel(library: library, toasts: toasts)
+        let doomed = try XCTUnwrap(store.create(title: "Doomed"))
+        model.delete([doomed.id])
+        XCTAssertNotNil(toasts.current, "Deleted … · Undo shows")
+
+        model.addBar = TaskAddBarText(text: "Newer task")
+        XCTAssertNotNil(model.submitAddBar())
+        // Clicked before the page noticed: the button still does not reach
+        // past its own step.
+        let steps = library.undo.undoCount(in: .tasks)
+        toasts.performAction()
+        XCTAssertEqual(library.undo.undoCount(in: .tasks), steps)
+        XCTAssertTrue(store.tasks.contains { $0.title == "Newer task" })
+        XCTAssertNil(store.task(withID: doomed.id), "the delete stands too")
+
+        // And once it has noticed, the stale toast is gone.
+        let other = try XCTUnwrap(store.create(title: "Other"))
+        model.delete([other.id])
+        XCTAssertNotNil(toasts.current)
+        model.addBar = TaskAddBarText(text: "Newest")
+        XCTAssertNotNil(model.submitAddBar())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(toasts.current, "a newer change takes the toast away")
+    }
+
+    func testTheToastUndoesItsStepWhileItIsStillTheLatest() throws {
+        let store = try makeTestStore()
+        let toasts = PanelToastCenter()
+        let library = AtticLibrary(tasks: store)
+        let model = TasksPageModel(library: library, toasts: toasts)
+        let task = try XCTUnwrap(store.create(title: "Keep me"))
+        model.delete([task.id])
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNotNil(toasts.current, "an unrelated redraw leaves the toast")
+        toasts.performAction()
+        XCTAssertNotNil(store.task(withID: task.id), "Undo brings it back")
+    }
+
     // MARK: 3. Completing a family reads every copy of its subtasks
 
     func testCompletingAMainTaskCompletesASubtaskWhoseHiddenCopyIsStillOpen() throws {

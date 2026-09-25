@@ -27,6 +27,9 @@ enum UndoOutcome: Equatable {
 
 /// One undoable step: how to reverse it and how to apply it again.
 struct UndoStep {
+    /// Which step this is, so something bound to it (the Undo toast) can
+    /// tell whether it is still the one an undo would reverse.
+    let id = UUID()
     let name: String
     let undo: @MainActor () -> UndoOutcome
     let redo: @MainActor () -> UndoOutcome
@@ -186,6 +189,11 @@ final class UndoRoute: ObservableObject {
 
     func redoName(in history: UndoHistoryID) -> String? {
         histories[history]?.redo.last?.name
+    }
+
+    /// The step an undo would reverse now.
+    func undoStepID(in history: UndoHistoryID) -> UUID? {
+        histories[history]?.undo.last?.id
     }
 
     func undoCount(in history: UndoHistoryID) -> Int {

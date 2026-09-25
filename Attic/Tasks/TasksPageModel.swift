@@ -168,6 +168,10 @@ final class TasksPageModel: ObservableObject {
         library.tasks.$revision
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneMissing() } }
             .store(in: &cancellables)
+        // `$revision` publishes before the history changes: check after it.
+        library.undo.$revision
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.dismissToastIfSuperseded() } }
+            .store(in: &cancellables)
     }
 
     // MARK: - Lists
@@ -306,12 +310,31 @@ final class TasksPageModel: ObservableObject {
     /// Tasks always opens on Now (spec § The shell), except when it was
     /// opened to search or to show a task: then it stays where that put it
     /// until the panel hides.
+    ///
+    /// Unsaved work is never dropped: a title or new subtask that was
+    /// changed, or whose save failed, keeps its text and "Not saved ·
+    /// Retry", and the page stays where that row is.
     func resetForReveal() {
+        if hasUnsavedEdit { return }
         // Assign only what changes: every assignment redraws the page.
         let target = revealTab ?? .now
         if tab != target { tab = target }
         if revealTab == nil, !selection.isEmpty { selection = [] }
-        if editingTitleID != nil || newSubtaskParentID != nil || failedSave != nil { cancelEditing() }
+        if editingTitleID != nil || newSubtaskParentID != nil { cancelEditing() }
+    }
+
+    /// A title or new subtask holds text that is not saved: it was changed,
+    /// or its save failed.
+    var hasUnsavedEdit: Bool {
+        switch failedSave {
+        case .title?, .newSubtask?: return true
+        case .paste?, nil: break
+        }
+        if let id = editingTitleID,
+           editingTitle.trimmingCharacters(in: .whitespacesAndNewlines) != (store.task(withID: id)?.title ?? "") {
+            return true
+        }
+        return newSubtaskParentID != nil && !newSubtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Where the current reveal opened the page (Search, an agent's `show`);
@@ -323,8 +346,13 @@ final class TasksPageModel: ObservableObject {
         revealTab = nil
     }
 
+    /// Moving to another page saves an open edit first; if that save
+    /// fails, the page stays with the text and Retry (Esc discards it).
     func select(tab: TasksTab) {
         guard tab != self.tab else { return }
+        if hasUnsavedEdit {
+            guard commitTitle(), commitNewSubtask() else { return }
+        }
         revealTab = nil
         cancelEditing()
         selection = []
@@ -710,12 +738,28 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// Posts "… · Undo" to the shell's toast host (6 s, held while the
-    /// pointer rests on it); its button undoes the step, as ⌘Z does.
+    /// pointer rests on it); its button undoes the step it announced, and
+    /// only that step: a newer change (a task added, a title edited, an
+    /// agent's edit) takes the toast away, and its button never reaches
+    /// past the step it names.
     func showToast(_ message: String) {
+        let step = library.undo.undoStepID(in: .tasks)
+        postedToastStep = step
         postedToastID = toasts.show(message) { [weak self] in
-            _ = self?.library.undo.undo(in: .tasks)
+            guard let self, let step, self.library.undo.undoStepID(in: .tasks) == step else { return }
+            _ = self.library.undo.undo(in: .tasks)
         }.id
     }
+
+    /// A change after the toast's step (or an undo of it) makes the toast
+    /// stale: it goes.
+    private func dismissToastIfSuperseded() {
+        guard postedToastID != nil, library.undo.undoStepID(in: .tasks) != postedToastStep else { return }
+        dismissToast()
+        postedToastID = nil
+    }
+
+    private var postedToastStep: UUID?
 
     /// Dismisses the toast only when it is this page's (another page's
     /// toast is not the Tasks history's to take away).
