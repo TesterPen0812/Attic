@@ -43,7 +43,9 @@ struct AtticSidebarHint: View {
 }
 
 /// A sidebar row: 32 pt pitch, a 30 pt soft grey pill (radius 10) when
-/// selected, icon lighter than text, 13 pt regular.
+/// selected, icon lighter than text, 13 pt regular. Disabled (from the
+/// environment), the icon and title take the sidebar's quiet hint grey
+/// (tuned to its floor on the sidebar) and the row shows no hover.
 struct AtticSidebarRow: View {
     let systemName: String
     let title: String
@@ -53,22 +55,24 @@ struct AtticSidebarRow: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
     @State private var probeID = UUID()
 
     var body: some View {
         let tokens = design.tokens
-        let state = AtticStateResolver(forced: forced, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: isFocused).state
+        let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: isFocused).state
+        let disabled = state == .disabled
         let fill: AtticRGBA? = isSelected ? tokens.selected : (state == .hover ? tokens.hover : nil)
         Button(action: action) {
             HStack(spacing: 0) {
                 let m = AtticSettingsMetrics.self
                 // The 16 pt icon slot is centred on the icon column.
                 let iconLeading = AtticLayout.sidebarIconX - (m.sidebarIconSlot - AtticControlSize.glyph) / 2
-                AtticIcon(systemName: systemName, size: m.sidebarIconSize, weight: .regular, ink: .chromeIcon)
+                AtticIcon(systemName: systemName, size: m.sidebarIconSize, weight: .regular, ink: disabled ? .chromeHint : .chromeIcon)
                     .frame(width: m.sidebarIconSlot)
                     .padding(.leading, iconLeading)
-                AtticText(verbatim: title, style: .sidebarRow, ink: .chromeBody)
+                AtticText(verbatim: title, style: .sidebarRow, ink: disabled ? .chromeHint : .chromeBody)
                     .padding(.leading, AtticLayout.sidebarTextX - iconLeading - m.sidebarIconSlot)
                 Spacer(minLength: m.rowTrailingMinGap)
             }
@@ -88,7 +92,9 @@ struct AtticSidebarRow: View {
             .frame(height: AtticLayout.sidebarRowPitch)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Disabled is drawn with the hint ink; the plain style would fade it
+        // further, below the floor.
+        .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .onHover { hovered = $0 }
         .accessibilityLabel(title)

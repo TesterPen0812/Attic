@@ -346,6 +346,42 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         XCTAssertGreaterThan(abs(disabledPlus - enabledPlus), 0.2, "The plus changes colour when disabled")
     }
 
+    /// A Settings sidebar row takes its disabled look from the environment
+    /// (`.disabled(true)`, no pinned states): its title is drawn in the
+    /// quiet hint grey, not the row's body ink.
+    func testSidebarRowFollowsTheEnvironmentsEnabledState() throws {
+        let context = AtticDesignContext(mode: .light)
+        let size = CGSize(width: 220, height: AtticLayout.sidebarRowPitch)
+        func row(_ disabled: Bool) -> some View {
+            AtticSidebarRow(systemName: "paintpalette", title: "Appearance", action: {}).disabled(disabled)
+        }
+        /// The title's strongest pixel, as contrast on white.
+        func titleInk(_ hosting: NSView) throws -> Double {
+            let (bitmap, scale) = try snapshot(hosting)
+            var strongest = 1.0
+            var y: CGFloat = 4
+            while y < size.height - 4 {
+                var x = AtticLayout.sidebarTextX
+                while x < AtticLayout.sidebarTextX + 60 {
+                    if let pixel = bitmap.colour(atX: x, y: y, scale: scale) { strongest = max(strongest, pixel.contrast(on: .white(1))) }
+                    x += 0.5 / scale
+                }
+                y += 0.5 / scale
+            }
+            return strongest
+        }
+        let (_, enabledHosting) = host(row(false), size: size, context: context)
+        let (_, disabledHosting) = host(row(true), size: size, context: context)
+        let enabled = try titleInk(enabledHosting)
+        let disabled = try titleInk(disabledHosting)
+        let body = context.tokens.ink(.chromeBody).contrast(on: .white(1))
+        let hint = context.tokens.ink(.chromeHint).contrast(on: .white(1))
+        XCTAssertGreaterThan(body - hint, 0.5, "The two inks differ enough to tell apart")
+        XCTAssertLessThan(disabled, enabled - 0.5, String(format: "The disabled title is quieter (%.2f vs %.2f)", disabled, enabled))
+        XCTAssertEqual(disabled, hint, accuracy: 0.6, "The disabled title is the hint grey")
+        XCTAssertEqual(enabled, body, accuracy: 0.6, "The enabled title is the body ink")
+    }
+
     /// A task card takes keyboard focus and draws the ring around its tile shape.
     func testTaskCardTakesKeyboardFocus() throws {
         var fired: [String] = []
