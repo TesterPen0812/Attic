@@ -197,6 +197,29 @@ xcodebuild test \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
+### Design system appearance check
+
+The ordinary unit-test run checks the design system fast: the colour model
+for every combination, corner radii and sizes fitted from rendered pixels,
+hosted native controls, keyboard focus and VoiceOver actions, and every
+component family rendered at 2× in the curated combinations (default Light
+and Dark plus the stress cases) with each glyph's contrast read from its own
+pixels.
+
+The full matrix (every family in every combination) and the 15 contact
+sheets are a separate, slower gate, run by the CI `appearance` job and
+locally with:
+
+```sh
+Scripts/run_appearance_matrix.zsh --output .build/appearance -- \
+  CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+```
+
+Set `XCODEBUILD` to a wrapper to serialise builds, and `--skip-build` to
+reuse an existing `build-for-testing`. The sheets and `appearance-check.txt`
+land in the output folder.
+
 ## Project generation
 
 `Scripts/generate_project.rb` atomically generates the Xcode project using the locked Ruby `xcodeproj` gem and stable UUIDs. Install the dependency with `bundle install`, then run `bundle exec ruby Scripts/generate_project.rb` after adding source files that need to be included in the project. Use `--help` to inspect the command without changing the project, or `--output PATH` to generate a separate copy.

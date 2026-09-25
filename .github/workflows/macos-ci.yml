@@ -378,6 +378,54 @@ jobs:
             echo "::warning::Performance lane requires macos-26 investigation before promotion to a blocking gate"
           fi
 
+  appearance:
+    name: Design system appearance matrix
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install Ruby dependencies outside the checkout
+        run: |
+          echo "BUNDLE_PATH=$RUNNER_TEMP/AtticBundle" >> "$GITHUB_ENV"
+          echo "BUNDLE_USER_CONFIG=$RUNNER_TEMP/AtticBundleConfig" >> "$GITHUB_ENV"
+          export BUNDLE_PATH="$RUNNER_TEMP/AtticBundle"
+          export BUNDLE_USER_CONFIG="$RUNNER_TEMP/AtticBundleConfig"
+          bundle install --jobs 4 --retry 3
+
+      - name: Regenerate checked-in Xcode project
+        run: bundle exec ruby Scripts/generate_project.rb
+
+      # Every family in every combination, checked by code, plus the 15
+      # contact sheets. The ordinary unit tests run only a representative
+      # subset; this job is the full gate.
+      - name: Run the full appearance matrix
+        run: |
+          Scripts/run_appearance_matrix.zsh \
+            --output "$RUNNER_TEMP/AtticAppearance" \
+            --derived-data "$RUNNER_TEMP/AtticAppearanceBuild" \
+            -- CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload contact sheets and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appearance-matrix-${{ github.sha }}
+          path: ${{ runner.temp }}/AtticAppearance
+          if-no-files-found: ignore
+          retention-days: 14
+
   iphone:
     name: Build Attic for iPhone Simulator
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_iphone }}
