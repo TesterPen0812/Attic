@@ -1297,7 +1297,11 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
     /// A proxy for "one frame per keystroke": it ends at the panel's
     /// display pass, not at scan-out. The text is removed again afterwards.
     func typeForPerformanceProbe(_ text: String) -> [Double] {
-        guard panel.isVisible, let field = panel.firstResponder as? NSTextView else { return [] }
+        guard panel.isVisible else { return [] }
+        if !(panel.firstResponder is AtticTokenTextView), let bar = Self.firstTokenField(in: panel.contentView) {
+            panel.makeFirstResponder(bar)
+        }
+        guard let field = panel.firstResponder as? NSTextView else { return [] }
         var durations: [Double] = []
         for character in text {
             let characters = String(character)
