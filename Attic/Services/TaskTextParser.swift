@@ -41,7 +41,10 @@ struct ParsedTaskText: Equatable {
 
 /// Understands the add bar's shorthand, for people and agents alike. Pure:
 /// the calendar, locale and "now" are injected, so the same text always
-/// parses the same way in tests.
+/// parses the same way in tests. The injected calendar contributes only its
+/// time zone: days are counted in the Gregorian calendar `DueDay` stores,
+/// so a Buddhist or Japanese system calendar never changes a stored year.
+/// The locale still decides the regional day/month order ("30/9").
 ///
 /// - `#tag`: at the start of a word, letters, numbers, `-` and `_`, with at
 ///   least one letter ("#42" stays text, like an issue number).
@@ -71,10 +74,14 @@ struct TaskTextParser {
         self.now = now
     }
 
+    /// The calendar every day is counted in: Gregorian, in the injected
+    /// calendar's time zone (see `DueDay.storageCalendar(matching:)`).
+    private var dayCalendar: Calendar { DueDay.storageCalendar(matching: calendar) }
+
     func parse(_ text: String) -> ParsedTaskText {
         let words = Self.words(in: text)
         var tokens: [ParsedTaskToken] = []
-        let today = DueDay(date: now(), calendar: calendar)
+        let today = DueDay(date: now(), calendar: dayCalendar)
 
         var index = 0
         var foundDate = false
@@ -112,7 +119,7 @@ struct TaskTextParser {
         if let iso = DueDay(rawValue: trimmed) { return iso }
         let words = Self.words(in: trimmed)
         guard !words.isEmpty,
-              let (day, length) = date(at: 0, in: words, today: DueDay(date: now(), calendar: calendar)),
+              let (day, length) = date(at: 0, in: words, today: DueDay(date: now(), calendar: dayCalendar)),
               length == words.count else { return nil }
         return day
     }
@@ -186,8 +193,8 @@ struct TaskTextParser {
         if word == "in", let next, let afterNext,
            let amount = next == "a" || next == "an" ? 1 : Int(next), (0...3650).contains(amount),
            let unit = Self.relativeUnit(afterNext),
-           let date = calendar.date(byAdding: unit, value: amount, to: now()) {
-            return (DueDay(date: date, calendar: calendar), 3)
+           let date = dayCalendar.date(byAdding: unit, value: amount, to: now()) {
+            return (DueDay(date: date, calendar: dayCalendar), 3)
         }
         if word == "next", let next {
             if next == "week", let monday = nextOccurrence(ofWeekday: 2, after: today) {
@@ -226,6 +233,7 @@ struct TaskTextParser {
     }
 
     private func offset(_ day: DueDay, days: Int) -> DueDay? {
+        let calendar = dayCalendar
         guard let start = day.startDate(in: calendar),
               let date = calendar.date(byAdding: .day, value: days, to: start) else { return nil }
         return DueDay(date: date, calendar: calendar)
@@ -234,6 +242,7 @@ struct TaskTextParser {
     /// The first day strictly after `today` that falls on `weekday`
     /// (1 = Sunday … 7 = Saturday).
     private func nextOccurrence(ofWeekday weekday: Int, after today: DueDay) -> DueDay? {
+        let calendar = dayCalendar
         guard let start = today.startDate(in: calendar) else { return nil }
         let current = calendar.component(.weekday, from: start)
         var delta = (weekday - current + 7) % 7

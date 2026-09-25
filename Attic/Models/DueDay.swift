@@ -3,7 +3,13 @@ import Foundation
 /// A due date is a calendar day, not an instant. It is stored as
 /// `yyyy-MM-dd` so it reads the same in every time zone and never shifts
 /// when the Mac travels; it becomes an instant only when compared with "now"
-/// in the current calendar.
+/// in the current time zone.
+///
+/// The stored form is an ISO (Gregorian) date whatever calendar the Mac is
+/// set to: a Buddhist or Japanese system calendar numbers years differently
+/// (2569, or 8 for Reiwa 8), and those numbers must never become the stored
+/// year. Conversions to and from instants therefore always use a Gregorian
+/// calendar in the supplied calendar's time zone.
 struct DueDay: Hashable, Comparable, Codable, Sendable, CustomStringConvertible {
     let year: Int
     let month: Int
@@ -23,10 +29,12 @@ struct DueDay: Hashable, Comparable, Codable, Sendable, CustomStringConvertible 
         self.day = day
     }
 
-    /// The day `date` falls on in `calendar` (its time zone decides).
+    /// The day `date` falls on in `calendar`'s time zone. Only the time zone
+    /// is taken from `calendar`; the day is always read in the Gregorian
+    /// calendar the stored form uses.
     init(date: Date, calendar: Calendar) {
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        // A Gregorian-compatible calendar always yields these components.
+        let components = Self.storageCalendar(matching: calendar).dateComponents([.year, .month, .day], from: date)
+        // The Gregorian calendar always yields these components.
         self.year = components.year ?? 1970
         self.month = components.month ?? 1
         self.day = components.day ?? 1
@@ -47,9 +55,21 @@ struct DueDay: Hashable, Comparable, Codable, Sendable, CustomStringConvertible 
 
     var description: String { rawValue }
 
-    /// Midnight at the start of this day in `calendar`.
+    /// Midnight at the start of this day in `calendar`'s time zone.
     func startDate(in calendar: Calendar) -> Date? {
-        calendar.date(from: DateComponents(year: year, month: month, day: day))
+        Self.storageCalendar(matching: calendar).date(from: DateComponents(year: year, month: month, day: day))
+    }
+
+    /// A Gregorian calendar in `calendar`'s time zone (and locale, which only
+    /// affects week numbering): the calendar every due-day conversion uses.
+    static func storageCalendar(matching calendar: Calendar) -> Calendar {
+        guard calendar.identifier != .gregorian else { return calendar }
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        gregorian.locale = calendar.locale
+        gregorian.firstWeekday = calendar.firstWeekday
+        gregorian.minimumDaysInFirstWeek = calendar.minimumDaysInFirstWeek
+        return gregorian
     }
 
     static func < (lhs: DueDay, rhs: DueDay) -> Bool {

@@ -228,4 +228,57 @@ final class TaskTextParserTests: XCTestCase {
         task.dueDay = day(2026, 9, 30)
         XCTAssertEqual(task.dueDayRaw, "2026-09-30")
     }
+
+    // MARK: - Non-Gregorian system calendars (final review finding 5)
+
+    private static func systemCalendar(_ identifier: Calendar.Identifier) -> Calendar {
+        var calendar = Calendar(identifier: identifier)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        return calendar
+    }
+
+    /// A Buddhist or Japanese system calendar numbers the year 2569 or 8
+    /// (Reiwa 8). The stored day must still be the ISO day, and the region's
+    /// day/month order and the time zone must still apply.
+    func testDueDaysAreStoredInTheGregorianCalendarWhateverTheSystemCalendar() {
+        // Friday 25 September 2026, 01:00 in Tokyo (still the 24th in Rome).
+        let instant = Self.systemCalendar(.gregorian)
+            .date(from: DateComponents(year: 2026, month: 9, day: 25, hour: 1))!
+        for identifier in [Calendar.Identifier.buddhist, .japanese, .gregorian] {
+            let calendar = Self.systemCalendar(identifier)
+            let parser = parser(now: instant, locale: "en_GB", calendar: calendar)
+            XCTAssertEqual(DueDay(date: instant, calendar: calendar), day(2026, 9, 25), "\(identifier)")
+            XCTAssertEqual(due("Pay today", parser), day(2026, 9, 25), "\(identifier)")
+            XCTAssertEqual(due("Pay tomorrow", parser), day(2026, 9, 26), "\(identifier)")
+            XCTAssertEqual(due("Pay monday", parser), day(2026, 9, 28), "\(identifier)")
+            XCTAssertEqual(due("Pay in 1 month", parser), day(2026, 10, 25), "\(identifier)")
+            XCTAssertEqual(due("Pay sep 30", parser), day(2026, 9, 30), "\(identifier)")
+            XCTAssertEqual(due("Pay 3/10", parser), day(2026, 10, 3), "en_GB reads day first: \(identifier)")
+            XCTAssertEqual(parser.parseDueDay("2026-12-01"), day(2026, 12, 1), "\(identifier)")
+            XCTAssertEqual(parser.parse("Pay tomorrow").dueDay?.rawValue, "2026-09-26", "\(identifier)")
+        }
+        let american = parser(now: instant, locale: "en_US", calendar: Self.systemCalendar(.japanese))
+        XCTAssertEqual(due("Pay 3/10", american), day(2027, 3, 10),
+                       "en_US reads month first; 10 March has passed, so next year")
+    }
+
+    /// A day saved under one system calendar reads back, and turns into the
+    /// same instant, after the Mac switches to another.
+    func testASavedDueDayIsUnchangedWhenTheSystemCalendarChanges() {
+        let instant = Self.systemCalendar(.gregorian)
+            .date(from: DateComponents(year: 2026, month: 9, day: 25, hour: 12))!
+        let saved = parser(now: instant, calendar: Self.systemCalendar(.gregorian)).parse("Pay tomorrow").dueDay
+        let task = TaskItem(title: "Pay")
+        task.dueDay = saved
+        XCTAssertEqual(task.dueDayRaw, "2026-09-26")
+        let midnight = Self.systemCalendar(.gregorian)
+            .date(from: DateComponents(year: 2026, month: 9, day: 26))!
+        for identifier in [Calendar.Identifier.buddhist, .japanese] {
+            let changed = Self.systemCalendar(identifier)
+            XCTAssertEqual(task.dueDay, day(2026, 9, 26))
+            XCTAssertEqual(task.dueDay?.startDate(in: changed), midnight, "\(identifier)")
+            // Parsing again after the change still produces the same day.
+            XCTAssertEqual(parser(now: instant, calendar: changed).parse("Pay tomorrow").dueDay, saved, "\(identifier)")
+        }
+    }
 }
