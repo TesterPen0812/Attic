@@ -155,7 +155,7 @@ jobs:
       - name: Run macOS UI tests
         id: ui_tests
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 40
         run: |
           rm -rf "$RUNNER_TEMP/AtticUITests.xcresult"
           rm -rf "$RUNNER_TEMP/attic-visual-uat"

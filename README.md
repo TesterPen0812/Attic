@@ -28,7 +28,7 @@ Attic lives in the menu bar and reveals a lightweight panel when the pointer res
 ## Requirements
 
 - macOS 26 or newer
-- Xcode 26 or newer
+- Xcode 26.6 or newer (the version CI uses)
 
 ## Build and run
 
@@ -207,7 +207,8 @@ and Dark plus the stress cases) with each glyph's contrast read from its own
 pixels.
 
 The full matrix (every family in every combination) and the 15 contact
-sheets are a separate, slower gate, run by the CI `appearance` job and
+sheets are a separate, slower gate (about 30 minutes on a GitHub macos-26
+runner), run by the CI `appearance` job and
 locally with:
 
 ```sh
