@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Undo toast
 
-/// The Undo toast: raised over content, 36 tall (radius 11.5), slides up in
+/// The Undo toast: raised over content, 36 tall (radius 15), slides up in
 /// 200 ms and stays 6 s. No pop-ups for everyday actions; this is the one
 /// place an action reports back, and only for deletes and moves.
 struct AtticUndoToast: View {
@@ -25,7 +25,7 @@ struct AtticUndoToast: View {
         .background(AtticPopoverBackground(cornerRadius: radius))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(message)
-        .atticControlProbe("Toast", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 11.5)
+        .atticControlProbe("Toast", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }
 

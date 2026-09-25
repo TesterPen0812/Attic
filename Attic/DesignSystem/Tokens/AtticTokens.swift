@@ -46,10 +46,14 @@ enum AtticSpacing {
 /// Corner radii. Controls follow `control(height:)`; surfaces keep a fixed
 /// radius by kind whatever their size (spec § Corner rules).
 enum AtticRadius {
-    /// Controls: Apple's continuous corner at about 32 % of the height,
-    /// rounded to the half point (10 on 32, 11.5 on 36, 11 on 34, 9 on 28).
+    /// Controls: Apple's continuous corner at about 42 % of the height
+    /// (owner's decision, 2026-09-25, spec rev 175: the rounder corner,
+    /// chosen over Craft's 32 % on the full panel), rounded to the half
+    /// point: 13.5 on 32, 14.5 on 34, 15 on 36, 12 on 28, 7.5 on 18.
+    static let controlFraction: CGFloat = 0.42
+
     static func control(height: CGFloat) -> CGFloat {
-        (height * 0.32 * 2).rounded() / 2
+        (height * controlFraction * 2).rounded() / 2
     }
 
     static let menu: CGFloat = 20
@@ -60,9 +64,11 @@ enum AtticRadius {
     static let image: CGFloat = 8
     /// Hover, selection and pressed highlights on rows (always 10).
     static let highlight: CGFloat = 10
-    /// A chip nested in a capsule: outer radius minus the inset (10 − 4).
-    static let nestedChip: CGFloat = 6
-    /// Rounded-square subtask checkbox (32 % of 14).
+    /// A chip nested in a capsule: outer radius minus the inset
+    /// (13.5 − 4 = 9.5 on the 32 pt capsule).
+    static let nestedChip: CGFloat = control(height: AtticControlSize.capsuleHeight) - AtticControlSize.capsuleInset
+    /// Rounded-square subtask checkbox: a fixed glyph radius (a glyph, not
+    /// a control, so it keeps its square look beside the round circles).
     static let subtaskCheckbox: CGFloat = 4.5
 
     /// Nested radius, used only when the gap is 6 pt or less (spec rule 3).
@@ -85,14 +91,14 @@ enum AtticControlSize {
     /// An icon-only chip, 24 tall and 1.15 × as wide.
     static let chipIconWidth: CGFloat = 28
     static let addBarHeight: CGFloat = 36
-    /// The send button: 28 × 28, radius 7.5, **inside** the add bar.
+    /// The send button: 28 × 28, radius 11, **inside** the add bar.
     ///
     /// The spec's Raised controls table says "send 36 × 36"; that size came
     /// from mockups where the button sat beside the bar. The owner's polish
     /// rule outranks it: "the send button lives inside the add bar and
     /// appears only when there is text". Inside the 36 pt bar it is nested
     /// `sendInset` (4 pt) from the top, bottom and trailing edges, so it is
-    /// 36 − 2 × 4 = 28 pt square, with the nested radius 11.5 − 4 = 7.5
+    /// 36 − 2 × 4 = 28 pt square, with the nested radius 15 − 4 = 11
     /// (corner rule 3: nesting for gaps of 6 pt or less). Kept at 28 × 28
     /// by the owner on 2026-09-24; a test holds the arithmetic.
     static let sendButton = CGSize(width: addBarHeight - 2 * sendInset, height: addBarHeight - 2 * sendInset)

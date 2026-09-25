@@ -128,8 +128,8 @@ private struct AtticRaisedButtonLabel: View {
 
 /// Icons in one capsule; the selected one also shows its label. Every icon
 /// has a tooltip with its shortcut and a VoiceOver label, and announces its
-/// selected state. The capsule is 32 tall, radius 10; chips are 24 tall,
-/// radius 6 (nested), inset 4.
+/// selected state. The capsule is 32 tall, radius 13.5; chips are 24 tall,
+/// radius 9.5 (nested: 13.5 − 4), inset 4.
 ///
 /// Layout never animates. The capsule reserves the widest label, so its
 /// size is the same whichever page is selected; switching moves the
@@ -245,7 +245,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
         .atticControlProbe(
             "Page switch", id: probeID, expectedSize: nil,
             radius: AtticRadius.control(height: AtticControlSize.capsuleHeight),
-            expectedRadius: 10
+            expectedRadius: 13.5
         )
     }
 
@@ -377,7 +377,7 @@ private struct AtticPageChipButton<Page: Hashable>: View {
 
 // MARK: - Add bar
 
-/// The add bar: one raised field, 36 tall, radius 11.5. The send button
+/// The add bar: one raised field, 36 tall, radius 15. The send button
 /// lives inside it and appears only when there is text. Its slot is always
 /// reserved, so the field never changes width: the button only fades in
 /// with a short rise (opacity and position). Return adds; the bar keeps
@@ -428,7 +428,7 @@ struct AtticAddBar: View {
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: hasText)
-        .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 11.5)
+        .atticControlProbe("Add bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 
     @ViewBuilder
@@ -478,7 +478,7 @@ struct AtticAddBar: View {
 
 // MARK: - Small controls
 
-/// A 28 pt control (radius 9) for the selection bar and other tight spots.
+/// A 28 pt control (radius 12) for the selection bar and other tight spots.
 /// Flat inside its raised container: hover and press are fills.
 struct AtticSmallButton: View {
     let systemName: String?
@@ -513,7 +513,7 @@ struct AtticSmallButton: View {
         .onHover { hovered = $0 }
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
-        .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 9)
+        .atticControlProbe("Small control", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
     }
 }
 
@@ -612,7 +612,7 @@ struct AtticSelectionBar: View {
         .background(AtticPopoverBackground(cornerRadius: radius))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "\(count) selected"))
-        .atticControlProbe("Selection bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 11.5)
+        .atticControlProbe("Selection bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }
 
@@ -704,7 +704,7 @@ struct AtticCommandMenu<Label: View>: View {
 
 /// A title that opens its item's native menu (spec § Minimalism: anything
 /// rarer lives behind one button, usually the item's title). 28 tall,
-/// radius 9, a hover fill, the heading and a small chevron.
+/// radius 12, a hover fill, the heading and a small chevron.
 struct AtticTitleMenu: View {
     let title: String
     let commands: [AtticMenuCommand]
@@ -737,7 +737,7 @@ private struct AtticTitleMenuFace: View {
         .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill((hover ? design.tokens.chipHover : .clear).color))
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .onHover { hovered = $0 }
-        .atticControlProbe("Title menu", id: probeID, expectedSize: CGSize(width: 0, height: m.height), radius: radius, expectedRadius: 9)
+        .atticControlProbe("Title menu", id: probeID, expectedSize: CGSize(width: 0, height: m.height), radius: radius, expectedRadius: 12)
     }
 }
 
@@ -745,7 +745,7 @@ private struct AtticTitleMenuFace: View {
 
 /// A choice row inside one of Attic's own pop-overs: genuine pop-over
 /// content such as the link picker's results or ⌘K's list, never a command
-/// menu (those are native, `AtticCommandMenu`). 28 tall, radius 9; the
+/// menu (those are native, `AtticCommandMenu`). 28 tall, radius 12; the
 /// hovered row, or the one the list's keyboard selection is on, takes the
 /// selection fill.
 struct AtticPopoverRow: View {
@@ -803,7 +803,7 @@ struct AtticPopoverRow: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .onHover { hovered = $0 }
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
-        .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 9)
+        .atticControlProbe("Pop-over row", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 12)
     }
 }
 

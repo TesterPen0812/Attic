@@ -999,7 +999,7 @@ private struct AtticCardDetails: View {
 
 /// A tag: the accent (grey on Original), sentence of `#word`. `inline` is
 /// plain text for details lines; `chip` is a recessed pill that follows the
-/// control corner rule (18 tall, radius 6).
+/// control corner rule (18 tall, radius 7.5).
 struct AtticTagChip: View {
     enum Style { case chip, inline }
 
@@ -1029,7 +1029,7 @@ struct AtticTagChip: View {
                 .onHover { hovered = $0 }
                 .accessibilityLabel(String(localized: "Tag \(name)"))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
-                .atticControlProbe("Tag", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 6)
+                .atticControlProbe("Tag", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 7.5)
         }
     }
 }

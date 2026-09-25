@@ -370,7 +370,7 @@ struct AtticPanelRim: View {
 private struct RaisedControlsBoard: View {
     @Environment(AtticGalleryDemo.self) private var demo
     var body: some View {
-        BoardHeading(title: "Single button · 36 × 32, radius 10")
+        BoardHeading(title: "Single button · 36 × 32, radius 13.5")
         SpecimenRow {
             ForEach([AtticControlState.rest, .hover, .pressed], id: \.self) { state in
                 AtticSpecimen(state.title) {
@@ -397,7 +397,7 @@ private struct RaisedControlsBoard: View {
                 AtticRaisedButton(systemName: "square.and.pencil", title: "New note", action: demo.record("New note")).atticForcedState(.hover)
             }
         }
-        BoardHeading(title: "Settings back button · 38 × 34, radius 11")
+        BoardHeading(title: "Settings back button · 38 × 34, radius 14.5")
         SpecimenRow {
             ForEach([AtticControlState.rest, .hover, .pressed, .focused], id: \.self) { state in
                 AtticSpecimen(state.title) {
@@ -415,7 +415,7 @@ private struct PageSwitchBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
     var body: some View {
-        BoardHeading(title: "Group capsule · 32 tall, chips 24, radius 6, inset 4")
+        BoardHeading(title: "Group capsule · 32 tall, chips 24, radius 9.5, inset 4")
         ForEach(0..<3, id: \.self) { page in
             SpecimenRow {
                 AtticSpecimen(["Tasks selected", "Notes selected", "Canvas selected"][page]) {
@@ -458,7 +458,7 @@ private struct AddBarBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
     var body: some View {
-        BoardHeading(title: "Add bar · 36 tall, radius 11.5; send appears with text")
+        BoardHeading(title: "Add bar · 36 tall, radius 15; send appears with text")
         Group {
             AtticSpecimen("Empty", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task…", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
@@ -487,7 +487,7 @@ private struct AddBarBoard: View {
 private struct SmallControlsBoard: View {
     @Environment(AtticGalleryDemo.self) private var demo
     var body: some View {
-        BoardHeading(title: "Selection bar · small controls 28 tall, radius 9")
+        BoardHeading(title: "Selection bar · small controls 28 tall, radius 12")
         AtticSpecimen("Selection bar", fullWidth: true) {
             AtticSelectionBar(count: 3, actions: [
                 .init(systemName: "circle.dashed", label: "State", handler: demo.record("State")),
@@ -514,7 +514,7 @@ private struct SmallControlsBoard: View {
                 AtticTitleMenu(title: "Launch sync", commands: titleCommands).atticForcedState(.hover)
             }
         }
-        BoardHeading(title: "Pop-over · radius 20; rows 28, radius 9")
+        BoardHeading(title: "Pop-over · radius 20; rows 28, radius 12")
         SpecimenRow {
             AtticSpecimen("Link picker (Attic's own pop-over content)") {
                 AtticPopover(width: 236) {
@@ -712,7 +712,7 @@ private struct QuickLookBoard: View {
 private struct TagsBoard: View {
     @Environment(AtticGalleryDemo.self) private var demo
     var body: some View {
-        BoardHeading(title: "Tag chip · 18 tall, radius 6, accent")
+        BoardHeading(title: "Tag chip · 18 tall, radius 7.5, accent")
         SpecimenRow {
             AtticSpecimen("Rest") { AtticTagChip(name: "launch") }
             AtticSpecimen("Hover") { AtticTagChip(name: "launch").atticForcedState(.hover) }
@@ -745,7 +745,7 @@ private struct FeedbackBoard: View {
     @Environment(\.atticDesign) private var design
 
     var body: some View {
-        BoardHeading(title: "Undo toast · 36 tall, radius 11.5, stays 6 s")
+        BoardHeading(title: "Undo toast · 36 tall, radius 15, stays 6 s")
         AtticSpecimen("Deleted", fullWidth: true) {
             AtticUndoToast(message: String(localized: "Task deleted"), onUndo: demo.record("Undo")).padding(.horizontal, 16)
         }
@@ -1159,7 +1159,7 @@ private struct TokensBoard: View {
             }
         }
         .padding(.horizontal, 16)
-        BoardHeading(title: "Corners · continuous; controls 32 % of height")
+        BoardHeading(title: "Corners · continuous; controls 42 % of height")
         HStack(alignment: .bottom, spacing: 12) {
             ForEach([(28.0, "9"), (32.0, "10"), (34.0, "11"), (36.0, "11.5")], id: \.0) { height, label in
                 VStack(spacing: 4) {

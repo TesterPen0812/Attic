@@ -16,13 +16,16 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(documentedExceptions, [14, 10, 52, 34])
     }
 
-    func testControlCornersFollowThirtyTwoPercentOfHeight() {
-        XCTAssertEqual(AtticRadius.control(height: 32), 10)
-        XCTAssertEqual(AtticRadius.control(height: 34), 11)
-        XCTAssertEqual(AtticRadius.control(height: 36), 11.5)
-        XCTAssertEqual(AtticRadius.control(height: 28), 9)
-        XCTAssertEqual(AtticRadius.control(height: 18), 6)
-        XCTAssertEqual(AtticRadius.nested(outer: 10, gap: 4), 6)
+    /// Owner's decision (2026-09-25): the rounder continuous corner, about
+    /// 42 % of the height.
+    func testControlCornersFollowFortyTwoPercentOfHeight() {
+        XCTAssertEqual(AtticRadius.control(height: 32), 13.5)
+        XCTAssertEqual(AtticRadius.control(height: 34), 14.5)
+        XCTAssertEqual(AtticRadius.control(height: 36), 15)
+        XCTAssertEqual(AtticRadius.control(height: 28), 12)
+        XCTAssertEqual(AtticRadius.control(height: 18), 7.5)
+        XCTAssertEqual(AtticRadius.nestedChip, 9.5, "Nested chips: outer radius minus the inset (13.5 − 4)")
+        XCTAssertEqual(AtticRadius.nested(outer: 13.5, gap: 4), 9.5)
         XCTAssertNil(AtticRadius.nested(outer: 20, gap: 12), "Nesting only applies to gaps of 6 pt or less")
         XCTAssertEqual(AtticRadius.ring(around: 10, offset: 4), 14)
         XCTAssertEqual([AtticRadius.menu, AtticRadius.groupCard, AtticRadius.contentCard, AtticRadius.image, AtticRadius.highlight], [20, 17, 10, 8, 10])
@@ -227,7 +230,7 @@ final class AtticDesignSystemTests: XCTestCase {
         let send = AtticControlSize.sendButton
         XCTAssertEqual(send, CGSize(width: 28, height: 28), "Owner's decision: 28 × 28 inside the bar")
         XCTAssertEqual(send.height, AtticControlSize.addBarHeight - 2 * AtticControlSize.sendInset)
-        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 7.5)
+        XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 11)
     }
 
     func testTaskKeysMapToDistinctCommands() {

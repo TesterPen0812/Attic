@@ -177,7 +177,7 @@ enum AtticRaisedButtonMetrics {
 }
 
 /// The page switch: icons in one capsule, the selected one also showing its
-/// label (spec § Raised controls: 32 tall, chips 24, radius 6, inset 4).
+/// label (spec § Raised controls: 32 tall, chips 24, radius 9.5, inset 4).
 enum AtticPageSwitchMetrics {
     static let chipSpacing: CGFloat = 2
     static let iconSize: CGFloat = 13
@@ -187,7 +187,7 @@ enum AtticPageSwitchMetrics {
     static let selectedPadding: CGFloat = 9
 }
 
-/// The add bar (spec: 36 tall, radius 11.5; the send button inside).
+/// The add bar (spec: 36 tall, radius 15; the send button inside).
 enum AtticAddBarMetrics {
     static let leadingPadding: CGFloat = 12
     static let gap: CGFloat = 8

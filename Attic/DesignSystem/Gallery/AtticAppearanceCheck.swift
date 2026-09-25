@@ -394,7 +394,7 @@ enum AtticAppearanceCheck {
     /// a touch lighter than its ink; a glyph fails only below this slack.
     static let glyphTolerance = 0.12
 
-    /// Controls whose radius must follow the 32 %-of-height rule.
+    /// Controls whose radius must follow the 42 %-of-height rule.
     static let controlRuleNames: Set<String> = [
         "Single button", "Label button", "Page switch", "Add bar", "Small control",
         "Selection bar", "Toast", "Pop-over row", "Title menu", "Tag"
