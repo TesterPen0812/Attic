@@ -33,7 +33,7 @@ struct AtticTaskActions {
 }
 
 /// The task keys a focused row or card answers (spec § Keyboard map):
-/// Space starts or completes, ⌥Space completes, ⌘Return opens the page;
+/// Space starts or completes, ⇧Space (and ⌥Space) completes, ⌘Return opens the page;
 /// rows also take ⌘B (Backlog) and Delete. ↑ ↓ and ⌘↑ ⌘↓ belong to the
 /// list, and Return (edit title) to the row's title editor, in Phase 1.
 enum AtticTaskKeys {
@@ -43,9 +43,11 @@ enum AtticTaskKeys {
     static func command(key: KeyEquivalent, characters: String, modifiers: EventModifiers, listCommands: Bool) -> Command? {
         let relevant = modifiers.intersection([.command, .option, .control, .shift])
         // ⌥Space types a non-breaking space, so match the characters too.
+        // ⇧Space also completes (Phase 1): launchers such as Raycast and
+        // ChatGPT take ⌥Space on many Macs, so it never reaches Attic there.
         if key == .space || characters == " " || characters == "\u{A0}" {
             if relevant == [] { return .advance }
-            if relevant == .option { return .complete }
+            if relevant == .option || relevant == .shift { return .complete }
             return nil
         }
         if key == .return, relevant == .command { return .openPage }
@@ -74,8 +76,11 @@ private extension View {
     /// `isFocused`), and the task keys. Captures (`ImageRenderer`) have no
     /// focus system, so they get none of it.
     @ViewBuilder
-    func atticTaskFocus(_ isFocused: Binding<Bool>, enabled: Bool, actions: AtticTaskActions, listCommands: Bool, live: Bool) -> some View {
-        if live {
+    func atticTaskFocus(_ isFocused: Binding<Bool>, enabled: Bool, actions: AtticTaskActions, listCommands: Bool, live: Bool,
+                        external: AtticRowFocus? = nil) -> some View {
+        if live, let external {
+            modifier(AtticListTaskFocusModifier(enabled: enabled, actions: actions, listCommands: listCommands, focus: external))
+        } else if live {
             modifier(AtticTaskFocusModifier(isFocused: isFocused, enabled: enabled, actions: actions, listCommands: listCommands))
         } else {
             self
@@ -116,6 +121,77 @@ private struct AtticTaskFocusModifier: ViewModifier {
                 AtticTaskKeys.perform(command, actions)
                 return .handled
             }
+    }
+}
+
+/// A list's keyboard focus for one of its rows: the list owns one
+/// `FocusState<UUID?>` for all its rows, so ↑ ↓ and a click can move focus
+/// from row to row (Phase 1).
+struct AtticRowFocus {
+    let binding: FocusState<UUID?>.Binding
+    let id: UUID
+
+    var isFocused: Bool { binding.wrappedValue == id }
+}
+
+/// The same keys as `AtticTaskFocusModifier`, with focus held by the list.
+private struct AtticListTaskFocusModifier: ViewModifier {
+    let enabled: Bool
+    let actions: AtticTaskActions
+    let listCommands: Bool
+    let focus: AtticRowFocus
+
+    func body(content: Content) -> some View {
+        content
+            .focusable(enabled)
+            .focused(focus.binding, equals: focus.id)
+            .focusEffectDisabled()
+            .onKeyPress(phases: .down) { press in
+                guard enabled, let command = AtticTaskKeys.command(
+                    key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
+                ) else { return .ignored }
+                AtticTaskKeys.perform(command, actions)
+                return .handled
+            }
+    }
+}
+
+/// Editing a row's title in place (Return or a double-click): Return
+/// saves, Esc cancels, and leaving the field saves (nothing typed is lost).
+struct AtticTitleEditing {
+    var text: Binding<String>
+    let commit: () -> Void
+    let cancel: () -> Void
+}
+
+/// The title editor: the row's title style, in place, focused on appear.
+struct AtticRowTitleEditor: View {
+    let editing: AtticTitleEditing
+
+    @Environment(\.atticDesign) private var design
+    @FocusState private var focused: Bool
+    @State private var finished = false
+
+    var body: some View {
+        TextField("", text: editing.text)
+            .textFieldStyle(.plain)
+            .font(AtticTextStyle.rowTitle.font)
+            .foregroundStyle(design.tokens.color(.body))
+            .focused($focused)
+            .onSubmit { finish(commit: true) }
+            .onExitCommand { finish(commit: false) }
+            .onAppear { focused = true }
+            .onChange(of: focused) { _, now in if !now { finish(commit: true) } }
+            // A field that stays for the next entry (a new subtask) is
+            // ready again once its text is cleared or changed.
+            .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
+            .accessibilityLabel(String(localized: "Title"))
+    }
+
+    private func finish(commit: Bool) {
+        guard !finished else { return }
+        finished = true
+        commit ? editing.commit() : editing.cancel()
     }
 }
 
@@ -597,11 +673,19 @@ struct AtticTaskRow: View {
     let actions: AtticTaskActions
     /// The subtask count: opens or closes the quick look.
     let onToggleExpanded: () -> Void
+    /// A click on the row (Phase 1: selects; the page arrives in Phase 3).
+    /// nil opens the page, as the spec's row does.
+    var onSelect: (() -> Void)? = nil
+    /// The list's focus for this row (↑ ↓ move it); nil keeps its own.
+    var focus: AtticRowFocus? = nil
+    /// Editing the title in place.
+    var titleEditing: AtticTitleEditing? = nil
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.atticCapture) private var capture
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @State private var focused = false
     @State private var hovered = false
     @State private var probeID = UUID()
@@ -611,7 +695,9 @@ struct AtticTaskRow: View {
         let m = AtticTaskRowMetrics.self
         let state = AtticStateResolver(forced: forced, isEnabled: isEnabled, isHovered: hovered, isPressed: false, isFocused: false).state
         // Captures have no focus system: FocusState is read only when live.
-        let showsFocusRing = forced == .focused || (forced == nil && isEnabled && focused)
+        // The ring shows only while the keyboard drives (a click shows none).
+        let rowFocused = focus?.isFocused ?? focused
+        let showsFocusRing = forced == .focused || (forced == nil && isEnabled && rowFocused && keyboardFocusVisible && titleEditing == nil)
         let twoLine = model.hasDetails
         let highlightHeight = twoLine ? AtticLayout.detailRowHighlightHeight : AtticLayout.rowHighlightHeight
         let pitch = twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
@@ -646,13 +732,19 @@ struct AtticTaskRow: View {
                     .padding(.leading, AtticLayout.circleX - hitInset)
                     .padding(.top, (AtticLayout.rowHighlightHeight - AtticControlSize.minimumHitTarget) / 2 - (twoLine ? m.twoLineCircleLift : 0))
                 VStack(alignment: .leading, spacing: m.titleToDetails) {
-                    AtticText(
-                        verbatim: model.title,
-                        style: .rowTitle,
-                        ink: disabled ? .disabledText : (done ? .helper : .body),
-                        strikethrough: done,
-                        truncates: true
-                    )
+                    Group {
+                        if let titleEditing, capture == nil {
+                            AtticRowTitleEditor(editing: titleEditing)
+                        } else {
+                            AtticText(
+                                verbatim: model.title,
+                                style: .rowTitle,
+                                ink: disabled ? .disabledText : (done ? .helper : .body),
+                                strikethrough: done,
+                                truncates: true
+                            )
+                        }
+                    }
                     .frame(height: twoLine ? m.titleLineHeight : AtticLayout.rowHighlightHeight)
                     if twoLine {
                         AtticTaskDetails(model: model, disabled: disabled)
@@ -679,8 +771,9 @@ struct AtticTaskRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
-        .onTapGesture { if isEnabled { actions.openPage() } }
-        .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true, live: capture == nil)
+        .onTapGesture { if isEnabled { (onSelect ?? actions.openPage)() } }
+        .atticTaskFocus($focused, enabled: isEnabled && titleEditing == nil, actions: actions, listCommands: true,
+                        live: capture == nil, external: focus)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(model.accessibilityDescription)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -889,13 +982,27 @@ struct AtticQuickLook: View {
     let onToggle: (AtticSubtaskModel) -> Void
     let onAddSubtask: () -> Void
     let onOpenPage: () -> Void
+    /// While a subtask is being written (Phase 1): an unticked box and the
+    /// title field in place of "Add subtask". Return adds it and keeps the
+    /// field for the next one; Esc stops.
+    var newSubtask: AtticTitleEditing? = nil
+
+    @Environment(\.atticCapture) private var capture
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(subtasks) { subtask in
                 AtticSubtaskRow(subtask: subtask) { onToggle(subtask) }
             }
-            AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
+            if let newSubtask, capture == nil {
+                HStack(spacing: AtticSubtaskMetrics.titleGap) {
+                    AtticSubtaskCheckbox(isDone: false)
+                    AtticRowTitleEditor(editing: newSubtask)
+                }
+                .frame(height: AtticLayout.subtaskPitch)
+            } else {
+                AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
+            }
             AtticQuietAction(systemName: nil, title: String(localized: "Open page"), trailingChevron: true, emphasised: true, action: onOpenPage)
         }
         .padding(.leading, AtticLayout.textX)

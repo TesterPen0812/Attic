@@ -66,6 +66,11 @@ enum AtticGalleryLaunch {
             openLab(AnyView(AtticGalleryKeyboardLab()), title: "Attic Keyboard Lab", height: 240)
             return true
         }
+        if TasksPagePreview.isRequested {
+            // The Phase 1 Tasks page on its own (Attic/Tasks), in memory.
+            TasksPagePreview.open()
+            return true
+        }
         if ProcessInfo.processInfo.arguments.contains(menuLabArgument) {
             openLab(AnyView(AtticGalleryMenuLab()), title: "Attic Menu Lab", height: 200)
             return true
