@@ -14,9 +14,14 @@ enum AtticGalleryLaunch {
     /// Opens the keyboard lab instead of the full gallery: a few live task
     /// rows for keyboard UI tests (Tab, Shift-Tab, the task keys).
     static let keyboardLabArgument = "--attic-gallery-keyboard"
+    /// Opens the menu lab: a title menu and a pop-up row, for UI tests that
+    /// open the native menus in the running (activatable) app.
+    static let menuLabArgument = "--attic-gallery-menus"
 
+    /// Requested and allowed (`AppRuntimeEnvironment.galleryLaunch`): only
+    /// preview identities and UI tests may open the gallery.
     static var isRequested: Bool {
-        ProcessInfo.processInfo.arguments.contains(argument)
+        AppRuntimeEnvironment().galleryLaunch == .allowed
     }
 
     static var captureDirectory: URL? {
@@ -37,7 +42,11 @@ enum AtticGalleryLaunch {
             return true
         }
         if ProcessInfo.processInfo.arguments.contains(keyboardLabArgument) {
-            openKeyboardLab()
+            openLab(AnyView(AtticGalleryKeyboardLab()), title: "Attic Keyboard Lab", height: 240)
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains(menuLabArgument) {
+            openLab(AnyView(AtticGalleryMenuLab()), title: "Attic Menu Lab", height: 200)
             return true
         }
         open()
@@ -68,17 +77,17 @@ enum AtticGalleryLaunch {
         NSApp.activate()
     }
 
-    static func openKeyboardLab() {
+    static func openLab(_ root: AnyView, title: String, height: CGFloat) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 240),
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: height),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Attic Keyboard Lab"
-        window.identifier = NSUserInterfaceItemIdentifier("AtticKeyboardLab")
+        window.title = title
+        window.identifier = NSUserInterfaceItemIdentifier(title)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: AtticGalleryKeyboardLab())
+        window.contentView = NSHostingView(rootView: root)
         window.center()
         self.window = window
         NSApp.setActivationPolicy(.regular)
@@ -159,6 +168,34 @@ struct AtticGalleryKeyboardLab: View {
         .frame(width: 360, height: 240, alignment: .topLeading)
         .background(Self.context.tokens.panel.base.color)
         .atticDesign(Self.context)
+    }
+}
+
+/// A title menu and a pop-up row on the panel surface, for UI tests that
+/// open the native menus as a person does and pick an item.
+struct AtticGalleryMenuLab: View {
+    @State private var demo = AtticGalleryDemo()
+    @State private var surface = "solid"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AtticSpacing.s12) {
+            AtticTitleMenu(title: "Launch sync", commands: [
+                AtticMenuCommand("Duplicate", systemImage: "plus.square.on.square", shortcut: KeyboardShortcut("d", modifiers: .command), action: demo.record("Duplicate")),
+                AtticMenuCommand("Delete", systemImage: "trash", isDestructive: true, startsSection: true, action: demo.record("Delete"))
+            ])
+            .accessibilityIdentifier("menu-lab-title")
+            AtticGroupCard {
+                AtticPopUpRow(label: "Surface", choices: [("solid", "Solid"), ("glass", "Glass")], selection: $surface)
+                    .accessibilityIdentifier("menu-lab-popup")
+            }
+            Text(verbatim: "\(demo.lastAction) · \(surface)")
+                .font(.caption)
+                .accessibilityIdentifier("menu-lab-state")
+        }
+        .padding(AtticSpacing.s16)
+        .frame(width: 360, height: 200, alignment: .topLeading)
+        .background(AtticDesignContext.default.tokens.panel.base.color)
+        .atticDesign(.default)
     }
 }
 

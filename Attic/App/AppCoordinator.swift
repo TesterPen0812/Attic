@@ -8,19 +8,70 @@ struct AppRuntimeEnvironment {
     let environment: [String: String]
     let processIdentifier: Int32
     let testRunIdentifier: String
+    let arguments: [String]
+    let bundleIdentifier: String?
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
-        testRunIdentifier: String = UUID().uuidString
+        testRunIdentifier: String = UUID().uuidString,
+        arguments: [String] = ProcessInfo.processInfo.arguments,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) {
         self.environment = environment
         self.processIdentifier = processIdentifier
         self.testRunIdentifier = testRunIdentifier
+        self.arguments = arguments
+        self.bundleIdentifier = bundleIdentifier
     }
 
     var isUITesting: Bool {
         environment["ATTIC_UI_TESTING"] == "1"
+    }
+
+    // MARK: Design-system gallery
+
+    static let galleryArgument = "--attic-gallery"
+    static let officialBundleIdentifier = "com.taha.Attic"
+
+    /// What a launch with `--attic-gallery` (preview builds only) may do.
+    enum GalleryLaunch: Equatable {
+        /// No gallery requested: the app starts normally.
+        case none
+        /// The gallery opens; the persistent store is never opened.
+        case allowed
+        /// Requested under an identity that could hold real data (the
+        /// official bundle): refused, and still no store is opened.
+        case refused
+    }
+
+    /// The gallery is allowed only under a preview identity
+    /// (`com.taha.Attic.<preview>`) or in UI testing, never under the
+    /// official `com.taha.Attic` identity that holds the owner's data.
+    var galleryLaunch: GalleryLaunch {
+        #if DEBUG
+        guard arguments.contains(Self.galleryArgument) else { return .none }
+        if isUITesting { return .allowed }
+        if let bundleIdentifier, bundleIdentifier.hasPrefix(Self.officialBundleIdentifier + "."),
+           bundleIdentifier.count > Self.officialBundleIdentifier.count + 1 {
+            return .allowed
+        }
+        return .refused
+        #else
+        return .none
+        #endif
+    }
+
+    /// Whether the app's SwiftData store lives in memory only: tests, and
+    /// every gallery launch (allowed or refused), so the gallery never
+    /// opens, migrates or writes a persistent store.
+    var usesInMemoryStore: Bool {
+        isUITesting || isRunningTests || galleryLaunch != .none
+    }
+
+    /// The menu-bar item appears only when the real app runs.
+    var showsMenuBarItem: Bool {
+        galleryLaunch == .none
     }
 
     var isRunningTests: Bool {
@@ -229,10 +280,12 @@ final class AppCoordinator: ObservableObject {
         shouldStartInteractiveShellServices = runtime.shouldStartInteractiveShellServices
         let usesCanvasUITestPersistence = (isUITesting || isRunningTests)
             && environment["ATTIC_UI_TEST_CANVAS_PERSISTENCE"] == "1"
+            && runtime.galleryLaunch == .none
+        let inMemoryStore = runtime.usesInMemoryStore
 
         let settings = AppSettings(defaults: runtime.makeSettingsDefaults())
         #if DEBUG && !ATTIC_LOCAL_ONLY
-        if !isUITesting && !isRunningTests {
+        if !inMemoryStore {
             do {
                 try PersistenceController.initializeCloudKitDevelopmentSchemaIfNeeded()
             } catch {
@@ -256,7 +309,7 @@ final class AppCoordinator: ObservableObject {
             #if ATTIC_LOCAL_ONLY
             do {
                 container = try PersistenceController.makeContainer(
-                    inMemory: isUITesting || isRunningTests,
+                    inMemory: inMemoryStore,
                     cloudSyncEnabled: false
                 )
             } catch {
@@ -265,12 +318,12 @@ final class AppCoordinator: ObservableObject {
             #else
             do {
                 container = try PersistenceController.makeContainer(
-                    inMemory: isUITesting || isRunningTests
+                    inMemory: inMemoryStore
                 )
             } catch let cloudError {
                 do {
                     container = try PersistenceController.makeContainer(
-                        inMemory: isUITesting || isRunningTests,
+                        inMemory: inMemoryStore,
                         cloudSyncEnabled: false
                     )
                     settings.reportCloudSyncStartupFailure(cloudError.localizedDescription)
