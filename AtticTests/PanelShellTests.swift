@@ -175,6 +175,10 @@ final class PanelShellTests: XCTestCase {
         while !hidden, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(hidden)
 
+        controller.releasePagesIfSafe()
+        XCTAssertTrue(state.isPageContentLoaded, "the Tasks list is not a heavy view: it stays built")
+        state.selectSection(.canvas)
+
         state.setInteractionLock(.notesImport, isActive: true)
         controller.releasePagesIfSafe()
         XCTAssertTrue(state.isPageContentLoaded, "unfinished work keeps the pages")
@@ -204,11 +208,21 @@ final class PanelShellTests: XCTestCase {
             noteDraft: NoteDraftController(noteStore: notes),
             settings: AppSettings(defaults: defaults), uiState: state
         )
+        state.selectSection(.canvas)
         XCTAssertFalse(state.isPageContentLoaded)
         controller.preparePagesForReveal()
         XCTAssertTrue(state.isPageContentLoaded, "built while the pointer approaches")
+        controller.preparePagesForReveal()
+        XCTAssertTrue(state.isPageContentLoaded)
         controller.releasePagesIfSafe()
-        XCTAssertFalse(state.isPageContentLoaded, "no reveal followed: released again")
+        XCTAssertFalse(state.isPageContentLoaded, "no reveal followed: a heavy page is released again")
+    }
+
+    func testOnlyHeavyPagesAreReleasedWhenHidden() {
+        XCTAssertFalse(AtticPanelController.releasesWhenHidden(.tasks))
+        XCTAssertFalse(AtticPanelController.releasesWhenHidden(.backlog))
+        XCTAssertTrue(AtticPanelController.releasesWhenHidden(.notes))
+        XCTAssertTrue(AtticPanelController.releasesWhenHidden(.canvas))
     }
 
     func testHidingDismissesTheToast() throws {

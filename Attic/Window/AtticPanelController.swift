@@ -1168,7 +1168,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
 
     /// The pointer is approaching the corner of a hidden panel: build the
     /// pages during the reveal delay instead of after it. If no reveal
-    /// follows, the usual hidden release frees them again.
+    /// follows, the usual hidden release frees a heavy page again.
     func preparePagesForReveal() {
         guard !panel.isVisible, !uiState.isPageContentLoaded else { return }
         buildPagesIfNeeded()
@@ -1200,10 +1200,21 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         pageReleaseWork = nil
     }
 
-    /// Releases the pages only while hidden and only once every change is
-    /// saved: a dirty note draft, an import, an open confirmation or any
-    /// other interaction lock keeps them (the next hide tries again).
+    /// Whether the page showing is one the hidden release frees. The spec
+    /// releases heavy views (an open canvas, large images: the Canvas and
+    /// Notes pages); the Tasks list stays, so an explicit open after a long
+    /// idle (quick capture, Show Attic) never waits for the list to be
+    /// rebuilt. Speed outranks weight.
+    static func releasesWhenHidden(_ section: PanelSection) -> Bool {
+        PanelPage(section) != .tasks
+    }
+
+    /// Releases the pages only while hidden, only for a heavy page, and only
+    /// once every change is saved: a dirty note draft, an import, an open
+    /// confirmation or any other interaction lock keeps them (the next hide
+    /// tries again).
     func releasePagesIfSafe() {
+        guard Self.releasesWhenHidden(uiState.selectedSection) else { return }
         // Focus left in a field, and text typed in the add bar (kept in the
         // shell's TasksPageState), are not unsaved work; every other lock is.
         let keepsPages = uiState.interactionLockReasons
