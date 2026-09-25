@@ -14,7 +14,7 @@ import SwiftUI
 /// Higher values approach a sharp rectangle; lower values produce a softer,
 /// more elliptical corner. The default of 5 gives a recognisably squircular
 /// silhouette without aggressive inward curvature.
-struct Squircle: Shape {
+struct Squircle: InsettableShape {
     /// Extent of each corner curve in points. The curve spans this distance
     /// from the corner along both the horizontal and vertical edges.
     var cornerRadius: CGFloat
@@ -22,7 +22,24 @@ struct Squircle: Shape {
     /// Superellipse exponent for the corner curve.
     var exponent: CGFloat = 5
 
-    func path(in rect: CGRect) -> Path {
+    /// How far the shape is drawn inside its rect (`inset(by:)`, so strokes
+    /// can sit inside the edge); the corner shrinks with it.
+    var insetAmount: CGFloat = 0
+
+    init(cornerRadius: CGFloat, exponent: CGFloat = 5) {
+        self.cornerRadius = cornerRadius
+        self.exponent = exponent
+    }
+
+    func inset(by amount: CGFloat) -> Squircle {
+        var inset = self
+        inset.insetAmount += amount
+        return inset
+    }
+
+    func path(in fullRect: CGRect) -> Path {
+        let rect = fullRect.insetBy(dx: insetAmount, dy: insetAmount)
+        let cornerRadius = max(0, cornerRadius - insetAmount)
         let r = min(cornerRadius, rect.width / 2, rect.height / 2)
         guard r > 0, rect.width > 0, rect.height > 0 else {
             return Path(roundedRect: rect, cornerRadius: 0)

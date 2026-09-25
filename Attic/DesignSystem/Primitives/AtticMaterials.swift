@@ -108,7 +108,17 @@ struct AtticRecipeBackground: View {
     let cornerRadius: CGFloat
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        AtticRecipeShapeBackground(recipe: recipe, shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+/// `AtticRecipeBackground` in any control shape (a circle, a capsule, the
+/// panel's squircle): the same layers, the shape's own outline.
+struct AtticRecipeShapeBackground<S: InsettableShape>: View {
+    let recipe: AtticRaisedRecipe
+    let shape: S
+
+    var body: some View {
         let reach = min(max(recipe.sheenReach, 0.01), 0.45)
         ZStack {
             if recipe.shadow.alpha > 0 {
@@ -145,6 +155,21 @@ struct AtticRecipeBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// The Craft-style raised material at rest, in any control shape. The
+/// panel's older controls (Notes, Canvas, subtask and attachment controls,
+/// through `atticGlassControl`) draw it while the panel is not key, the same
+/// rule as the design system's own controls: native Liquid Glass renders
+/// flat in a window that is not key.
+struct AtticRaisedShapeBackground<S: InsettableShape>: View {
+    let shape: S
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        AtticRecipeShapeBackground(recipe: design.tokens.raised, shape: shape)
     }
 }
 
