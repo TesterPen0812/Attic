@@ -76,7 +76,7 @@ struct TasksPage: View {
     private func title(_ tab: TasksTab) -> some View {
         AtticText(verbatim: tab.pageTitle, style: .pageHeading, ink: .heading)
             .frame(height: AtticLayout.pageTitleHeight)
-            .padding(.leading, AtticLayout.circleX)
+            .padding(.leading, AtticLayout.circleX + AtticLayout.pageTitleIndent)
             .padding(.top, titleTop)
             .padding(.bottom, AtticLayout.pageTitleToList)
             .frame(maxWidth: .infinity, alignment: .leading)

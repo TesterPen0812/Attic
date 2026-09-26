@@ -143,10 +143,12 @@ enum AtticLayout {
     static let subtaskTextX: CGFloat = textX + 14 + 8
 
     /// The page's one title ("Tasks", "Backlog", "Done"): its line box
-    /// sits 16 below the header, and the list starts 14 below it (v9).
-    static let pageTitleTop: CGFloat = 16
-    static let pageTitleHeight: CGFloat = 20
-    static let pageTitleToList: CGFloat = 14
+    /// sits 18 below the header, the list starts 8 below it, and it is
+    /// indented 4 past the circles' line (owner, 2026-09-26).
+    static let pageTitleTop: CGFloat = 18
+    static let pageTitleHeight: CGFloat = 18
+    static let pageTitleToList: CGFloat = 8
+    static let pageTitleIndent: CGFloat = 4
 
     static let statusTabsGap: CGFloat = 14
     static let statusTabsTop: CGFloat = 12
@@ -211,7 +213,7 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     var spec: Spec {
         switch self {
         case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
-        case .pageHeading: Spec(size: 17, weight: .semibold, italic: false, monospacedDigits: false)
+        case .pageHeading: Spec(size: 15, weight: .semibold, italic: false, monospacedDigits: false)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
