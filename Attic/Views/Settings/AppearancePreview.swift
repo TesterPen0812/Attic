@@ -74,7 +74,7 @@ struct SettingsPanelMiniature: View {
                     AtticTaskRow(model: row, actions: Self.noActions, onToggleExpanded: {})
                 }
                 AtticCompletedLine(title: String(localized: "Completed today"), count: 1, isExpanded: false) {}
-                    .padding(.leading, AtticLayout.circleX)
+                    .padding(.leading, AtticLayout.textX)
                     .padding(.top, AtticCompletedLineMetrics.top)
                 Spacer(minLength: 0)
             }

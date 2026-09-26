@@ -659,7 +659,7 @@ struct AtticPageTabs<Page: Hashable>: View {
                     }
                     .padding(.horizontal, m.horizontalPadding)
                     .frame(height: m.height)
-                    .background(shape.fill((isSelected ? design.tokens.chipSelected : (hovered ? design.tokens.chipHover : .clear)).color))
+                    .background(shape.fill((isSelected ? design.tokens.tabSelected : (hovered ? design.tokens.tabHover : .clear)).color))
                     .atticFocusRing(ringed, cornerRadius: radius)
                     .contentShape(shape)
                     .transaction { $0.animation = nil }
@@ -828,7 +828,6 @@ struct AtticTaskRow: View {
         }
         let disabled = state == .disabled
         let done = model.state == .done
-        let hitInset = (AtticControlSize.minimumHitTarget - AtticControlSize.statusCircle) / 2
 
         ZStack(alignment: .topLeading) {
             Group {
@@ -842,41 +841,45 @@ struct AtticTaskRow: View {
             .frame(height: highlightHeight)
             .padding(.horizontal, AtticLayout.rowHighlightInset)
 
-            HStack(alignment: .top, spacing: 0) {
-                AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false, onToggle: actions.toggleDone)
-                    .atticForcedState(nil)
-                    .padding(.leading, AtticLayout.circleX - hitInset)
-                    .padding(.top, (AtticLayout.rowHighlightHeight - AtticControlSize.minimumHitTarget) / 2 - (twoLine ? m.twoLineCircleLift : 0))
-                VStack(alignment: .leading, spacing: m.titleToDetails) {
-                    Group {
-                        if let titleEditing, capture == nil {
-                            AtticRowTitleEditor(editing: titleEditing)
-                        } else {
-                            HStack(spacing: AtticPriorityMarkMetrics.titleGap) {
-                                AtticText(
-                                    verbatim: model.title,
-                                    style: .rowTitle,
-                                    // Done fades the title, without a strike (v9).
-                                    ink: disabled ? .disabledText : (done ? .helper : .body),
-                                    truncates: true
-                                )
-                                if !done {
-                                    AtticPriorityMark(priority: model.priority, disabled: disabled)
-                                }
+            // The circle, centred on the title line (row top + 17), its
+            // 28 pt hit area around the 14 pt drawing.
+            AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false, onToggle: actions.toggleDone)
+                .atticForcedState(nil)
+                .padding(.leading, AtticLayout.circleX + AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2)
+                .padding(.top, m.circleCentreY - m.pitchTopInset - AtticControlSize.minimumHitTarget / 2)
+
+            // The title line (title, priority mark, and the date on the
+            // title's baseline), then the details line.
+            VStack(alignment: .leading, spacing: m.titleToDetails) {
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    if let titleEditing, capture == nil {
+                        AtticRowTitleEditor(editing: titleEditing)
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: AtticPriorityMarkMetrics.titleGap) {
+                            AtticText(
+                                verbatim: model.title,
+                                style: .rowTitle,
+                                // Done fades the title, without a strike (v9).
+                                ink: disabled ? .disabledText : (done ? .helper : .body),
+                                truncates: true
+                            )
+                            if !done {
+                                AtticPriorityMark(priority: model.priority, disabled: disabled)
                             }
                         }
                     }
-                    .frame(height: twoLine ? m.titleLineHeight : AtticLayout.rowHighlightHeight)
-                    if twoLine {
-                        AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded)
-                            .frame(height: m.detailsLineHeight)
-                    }
+                    Spacer(minLength: m.trailingMinGap)
+                    trailing(disabled: disabled)
                 }
-                .padding(.leading, AtticLayout.textX - AtticLayout.circleX - AtticControlSize.minimumHitTarget + hitInset)
-                .padding(.top, twoLine ? m.twoLineTextTop : 0)
-                Spacer(minLength: m.trailingMinGap)
-                trailing(disabled: disabled, twoLine: twoLine)
+                .frame(height: m.titleLineHeight)
+                if twoLine {
+                    AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded)
+                        .frame(height: m.detailsLineHeight)
+                }
             }
+            .padding(.leading, AtticLayout.textX)
+            .padding(.trailing, AtticLayout.rowHighlightInset + m.dateInset)
+            .padding(.top, m.titleTop - m.pitchTopInset)
         }
         .frame(height: pitch, alignment: .top)
         .padding(.top, m.pitchTopInset)
@@ -911,23 +914,17 @@ struct AtticTaskRow: View {
         )
     }
 
-    /// The right-hand meta: the due date, always here, on the title line.
+    /// The right-hand meta: the due date, always here, on the title's
+    /// baseline (or "Add to page" while a file hovers over the row).
     @ViewBuilder
-    private func trailing(disabled: Bool, twoLine: Bool) -> some View {
-        let lineHeight = twoLine ? AtticTaskRowMetrics.titleLineHeight : AtticLayout.rowHighlightHeight
-        Group {
-            if let dropLabel {
-                AtticText(verbatim: dropLabel, style: .dropLabel, ink: .accentText, allowsOverlap: true)
-                    .frame(height: lineHeight)
-                    .padding(.trailing, AtticTaskRowMetrics.dropLabelInset)
-            } else if let due = model.trailingDue {
-                AtticDueText(due: due, disabled: disabled)
-                    .frame(height: lineHeight)
-                    .padding(.trailing, AtticTaskRowMetrics.dateInset)
-            }
+    private func trailing(disabled: Bool) -> some View {
+        if let dropLabel {
+            AtticText(verbatim: dropLabel, style: .dropLabel, ink: .accentText, allowsOverlap: true)
+                .fixedSize()
+        } else if let due = model.trailingDue {
+            AtticDueText(due: due, disabled: disabled)
+                .fixedSize()
         }
-        .padding(.top, twoLine ? AtticTaskRowMetrics.twoLineTextTop : 0)
-        .padding(.trailing, AtticLayout.rowHighlightInset)
     }
 }
 
@@ -1028,6 +1025,7 @@ private struct AtticSubtaskChecklistButton: View {
         Button(action: action) {
             HStack(spacing: m.iconGap) {
                 AtticIcon(systemName: "checkmark.square", size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
+                    .frame(width: m.iconSlot)
                 AtticText(verbatim: "\(done)/\(total)", style: .count, ink: disabled ? .disabledText : .helper)
             }
             .padding(.horizontal, m.horizontalPadding)
@@ -1074,7 +1072,7 @@ struct AtticCompletedLine: View {
                 AtticText(verbatim: title, style: .sectionToggle, ink: hover ? .body : .helper)
                 AtticText(verbatim: "·", style: .sectionToggle, ink: .helper)
                 AtticText(verbatim: "\(count)", style: .sectionToggle, ink: hover ? .body : .helper)
-                AtticIcon(systemName: "chevron.right", size: m.chevronSize, weight: .semibold, ink: .chevron)
+                AtticIcon(systemName: "chevron.right", size: m.chevronSize, weight: .medium, ink: .chevron)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
             .padding(.horizontal, m.horizontalPadding)

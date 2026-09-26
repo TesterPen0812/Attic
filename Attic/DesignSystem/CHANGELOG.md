@@ -148,3 +148,34 @@ mockup v11-direction-a). Unlike the streams above, these change existing looks.
 - **`AtticEmptyLine` is upright 13 pt** (`body` style, `helper` ink); `isFootnote` is gone.
 - The page pill (`AtticPagePill`) and the status tabs stay in the design system and
   the gallery, unused by the Tasks page.
+
+### Visual A, "Calm" (redesign/p1-direction-a, on the Direction A trial)
+
+From Astra's visual review (`phase0/runs/p1-astra-visual.md`, variant A). Appearance only.
+
+- **Spacing:** controls 20 from the panel's edges (`AtticStyle.chromeMinimumInset`); header 32
+  tall (`capsuleHeight`, pin 32 × 32); tabs 20 under the header, the list 8 under the tabs;
+  rows 36 / 52 (highlights 34 / 50) with the title's 18 pt line at row top + 8, details 2 below,
+  the circle centred at row top + 17; the 20 → 24 → 48 lines (`textX` 40 in the page's frame);
+  dates 24 from the right, 12 pt least gap; "Completed today" 12 below the list, text at 48;
+  at least 16 pt between content and the add bar.
+- **Controls:** page switch 144 × 32 (selected chip at least 76, others 28, 2 apart, icon slot
+  14, gap 6); tabs 4 apart; add bar plus at x 31 (slot 22, 12 pt light), text at 48.
+  Radii follow the 42 % rule (13.5 / 9.5 / 10 / 15); Round controls (temporary) gives variant
+  C (16 / 12 / 12 / 18). The pinned pin's glyph is regular weight, like a selected page icon.
+- **Type:** unselected tabs 12 regular; priority mark 11 semibold; "Completed today" 11.5
+  regular with an 8 pt medium chevron.
+- **Status circle:** 14 pt outer, 1.25 pt inward stroke (1.5 Increase Contrast), dot 4.5,
+  check 1.4.
+- **Colours** (Original on Solid, no Tint: the `Calm` enum): surface #FCFBFA / #2C2E2D with a
+  24 pt top sheen, task text, strong text, secondary, open ring, High, done disc and check,
+  row hover and selection, selected tab and tab hover (new `tabSelected`, `tabHover`), page
+  chip, all exact. State fills are overlays that reach the exact colour on the surface
+  (`AtticRGBA.overlay(reaching:on:)`). Increase Contrast's secondary starts from #5E645F /
+  #BBC1BB and steps darker only where a pressed or selected fill needs it for 4.5 : 1.
+- **Drawn control material** (every palette): body #F6F6F3 / #373938, one 0.5 pt outline,
+  a top highlight over 8 pt, one y 1 radius 2 shadow. The add bar draws flat (`addBarFlat`):
+  #F6F6F3 / #323433 with a #D9DDD6 / #484D48 hairline, no shadow, no rim.
+- **Panel:** one 0.5 pt inside edge (black 6 % / white 8 %) on the default surface; elevation
+  10 % / 24 %, y 4, radius 12 plus a 3 % / 8 % contact shadow, so the window margin grew to 28.
+- The Done search field's placeholder uses the helper grey (it failed 3 : 1 on Frosted).

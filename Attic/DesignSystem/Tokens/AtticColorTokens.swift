@@ -230,6 +230,10 @@ struct AtticColorTokens: Equatable, Sendable {
     /// The selected chip inside a capsule: pressed-in grey (Light), lighter (Dark).
     let chipSelected: AtticRGBA
     let chipHover: AtticRGBA
+    /// The page tabs' selected chip and unselected hover (visual A tunes
+    /// them apart from the page switch's chip on the default surface).
+    let tabSelected: AtticRGBA
+    let tabHover: AtticRGBA
     let skeleton: AtticRGBA
     /// A done task's quiet disc: opaque, a step off the surface, not a
     /// colour of meaning (the `doneCheck` on it is what must read).
@@ -247,6 +251,9 @@ struct AtticColorTokens: Equatable, Sendable {
     let raisedHover: AtticRaisedRecipe
     let raisedPressed: AtticRaisedRecipe
     let raisedDisabled: AtticRaisedRecipe
+    /// The add bar when drawn (visual A): flat, a hairline border, no
+    /// shadow or rim, lower in the hierarchy than the header's controls.
+    let addBarFlat: AtticRaisedRecipe
     /// The capture stand-in for Liquid Glass.
     let glassStandIn: AtticRaisedRecipe
     /// The worst face Liquid Glass leaves over a surface (an overlay).
@@ -307,16 +314,29 @@ struct AtticColorTokens: Equatable, Sendable {
 
         // Base neutrals (spec § Default and Dark ladder). The Dark chrome is
         // #505050, not the spec's #5B5B5B: see `Ladder.darkChrome`.
-        let basePanel = dark ? AtticRGBA(0x2C2C2D) : AtticRGBA(0xFAFAFA)
+        // Visual A ("Calm", 2026-09-26) sets the default look: Original on
+        // Solid without a Tint. Other palettes, Tints, Glass and Frosted keep
+        // their recipes; the drawn control material is Calm everywhere.
+        let calm = key.palette == .original && key.surface == .solid && key.tint == .off
+        let basePanel = calm ? Calm.panel(dark: dark) : (dark ? AtticRGBA(0x2C2C2D) : AtticRGBA(0xFAFAFA))
         let baseChrome = dark ? Ladder.darkChrome : AtticRGBA(0xF3F3F3)
         let panelBase = AtticSurfaceModel.hued(basePanel, palette: key.palette, themePalette: themePalette, dark: dark)
         let chromeBase = AtticSurfaceModel.hued(baseChrome, palette: key.palette, themePalette: themePalette, dark: dark, chrome: true)
 
-        let hover: AtticRGBA = dark ? .white(ic ? 0.08 : 0.04) : .black(ic ? 0.07 : 0.035)
-        let selected: AtticRGBA = dark ? .white(ic ? 0.14 : 0.07) : .black(ic ? 0.12 : 0.06)
+        let calmStates = calm && !ic
+        let hover: AtticRGBA = calmStates ? .overlay(reaching: Calm.rowHover(dark: dark), on: basePanel)
+            : (dark ? .white(ic ? 0.08 : 0.04) : .black(ic ? 0.07 : 0.035))
+        let selected: AtticRGBA = calmStates ? .overlay(reaching: Calm.rowSelection(dark: dark), on: basePanel)
+            : (dark ? .white(ic ? 0.14 : 0.07) : .black(ic ? 0.12 : 0.06))
         let pressed: AtticRGBA = dark ? .white(ic ? 0.18 : 0.10) : .black(ic ? 0.16 : 0.085)
-        let chipSelected: AtticRGBA = dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06)
+        // The page switch's selected chip sits on the drawn control body,
+        // which is Calm everywhere.
+        let chipSelected: AtticRGBA = calmStates ? .overlay(reaching: Calm.pageChip(dark: dark), on: Calm.controlBody(dark: dark))
+            : (dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06))
         let chipHover: AtticRGBA = dark ? .white(0.04) : .black(0.03)
+        let tabSelected: AtticRGBA = calmStates ? .overlay(reaching: Calm.tabSelected(dark: dark), on: basePanel)
+            : (dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06))
+        let tabHover: AtticRGBA = calmStates ? .overlay(reaching: Calm.tabHover(dark: dark), on: basePanel) : chipHover
         let recessed: AtticRGBA = dark ? .white(ic ? 0.09 : 0.055) : .black(ic ? 0.07 : 0.045)
 
         let recipes = Self.recipes(dark: dark, ic: ic, base: basePanel)
@@ -453,9 +473,43 @@ struct AtticColorTokens: Equatable, Sendable {
         }
         // A done task: a quiet grey disc (about 0.88 white in Light, 0.32 in
         // Dark) with a darker (Light) or lighter (Dark) grey check at 3 : 1.
-        let doneDisc: AtticRGBA = dark ? AtticRGBA(ic ? 0x5A5A5D : 0x525254) : AtticRGBA(ic ? 0xD8D8DA : 0xE1E1E3)
-        inks[.doneCheck] = (dark ? AtticRGBA(0xA9A9AC) : AtticRGBA(0x737376))
+        let doneDisc: AtticRGBA = calmStates ? Calm.doneDisc(dark: dark)
+            : (dark ? AtticRGBA(ic ? 0x5A5A5D : 0x525254) : AtticRGBA(ic ? 0xD8D8DA : 0xE1E1E3))
+        inks[.doneCheck] = calmStates ? Calm.doneCheck(dark: dark) : (dark ? AtticRGBA(0xA9A9AC) : AtticRGBA(0x737376))
             .tuned(toContrast: ic ? 4.5 : nonTextTarget, against: [doneDisc], lighten: dark)
+
+        // Visual A's exact inks on the default surface (the review's colour
+        // table; Increase Contrast takes its stronger secondary grey and
+        // keeps the tuned ladder otherwise).
+        if calm {
+            // Under Increase Contrast the review's grey is a starting point:
+            // it keeps 4.5 : 1 on the panel but not on the stronger pressed
+            // and selected fills, so it steps darker only as far as those need.
+            var secondary = Calm.secondary(dark: dark, increaseContrast: ic)
+            if ic {
+                secondary = secondary.tuned(toContrast: textTarget, against: backgrounds(for: .helper, on: basePanel)
+                    + [inks[.accent]!.withAlpha(dark ? 0.26 : 0.18).over(recessed.over(basePanel)), hover.over(inks[.accent]!.withAlpha(dark ? 0.16 : 0.10).over(basePanel))], lighten: dark)
+            }
+            for ink in [AtticInk.helper, .placeholder, .accentText] { inks[ink] = secondary }
+            if !ic {
+                inks[.body] = Calm.taskText(dark: dark)
+                inks[.heading] = Calm.strongText(dark: dark)
+                inks[.glyph] = Calm.strongText(dark: dark)
+                inks[.priorityNone] = Calm.openRing(dark: dark)
+                inks[.priorityMark] = Calm.highPriority(dark: dark)
+            }
+            // Keep the ladder in order around the new secondary grey.
+            let helperOnBase = secondary.contrast(on: basePanel)
+            if inks[.muted]!.contrast(on: basePanel) > helperOnBase { inks[.muted] = secondary }
+            if inks[.disabledText]!.contrast(on: basePanel) > helperOnBase { inks[.disabledText] = secondary }
+            if inks[.label]!.contrast(on: basePanel) < helperOnBase * 1.06 {
+                inks[.label] = secondary.tuned(toContrast: helperOnBase * 1.06, against: [basePanel], lighten: dark)
+            }
+            let noneOnBase = inks[.priorityNone]!.contrast(on: basePanel)
+            for (ink, step) in Self.priorityGreySteps(dark: dark) {
+                inks[ink] = inks[.priorityNone]!.tuned(toContrast: noneOnBase * step, against: [basePanel], lighten: dark)
+            }
+        }
 
         func panelPairs() -> [AtticSurfaceModel.Pair] {
             // Tag fills follow the accent as it is now (it may be retuned).
@@ -567,6 +621,8 @@ struct AtticColorTokens: Equatable, Sendable {
             pressed: pressed,
             chipSelected: chipSelected,
             chipHover: chipHover,
+            tabSelected: tabSelected,
+            tabHover: tabHover,
             skeleton: dark ? .white(0.08) : .black(0.06),
             doneDisc: doneDisc,
             controlBase: basePanel,
@@ -574,6 +630,7 @@ struct AtticColorTokens: Equatable, Sendable {
             raisedHover: recipes.hover,
             raisedPressed: recipes.pressed,
             raisedDisabled: recipes.disabled,
+            addBarFlat: Calm.addBar(dark: dark, increaseContrast: ic),
             glassStandIn: AtticGlassModel.standIn(dark: dark, increaseContrast: ic),
             glassFace: glassFace,
             glassDisabled: glassDisabled,
@@ -604,6 +661,7 @@ struct AtticColorTokens: Equatable, Sendable {
     /// the bottom, with no dark outer edge. Increase Contrast keeps the
     /// fill and strengthens the edge.
     private static func recipes(dark: Bool, ic: Bool, base: AtticRGBA) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
+        if !ic { return Calm.controlRecipes(dark: dark) }
         if dark {
             func recipe(fill: Double, top: Double, middle: Double, bottom: Double) -> AtticRaisedRecipe {
                 AtticRaisedRecipe(
@@ -770,4 +828,73 @@ final class AtticColorTokenCache: @unchecked Sendable {
 extension EnvironmentValues {
     /// Resolved colour tokens for the current `atticDesign` context.
     var atticTokens: AtticColorTokens { atticDesign.tokens }
+}
+
+// MARK: - Visual A ("Calm")
+
+/// Visual A, "Calm" (Astra's visual review, 2026-09-26): the exact colours
+/// of the default look (Original on Solid, no Tint) and the drawn control
+/// material. Solid and drawn targets: native Liquid Glass keeps its own.
+enum Calm {
+    static func panel(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x2C2E2D) : AtticRGBA(0xFCFBFA) }
+    static func taskText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xDEDFDD) : AtticRGBA(0x494B4A) }
+    static func strongText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xF0F2EE) : AtticRGBA(0x252826) }
+    static func secondary(dark: Bool, increaseContrast: Bool) -> AtticRGBA {
+        switch (dark, increaseContrast) {
+        case (false, false): AtticRGBA(0x777B78)
+        case (false, true): AtticRGBA(0x5E645F)
+        case (true, false): AtticRGBA(0xA0A5A1)
+        case (true, true): AtticRGBA(0xBBC1BB)
+        }
+    }
+    static func openRing(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x909790) : AtticRGBA(0x7F857F) }
+    static func controlBody(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x373938) : AtticRGBA(0xF6F6F3) }
+    static func pageChip(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x4A4D4B) : AtticRGBA(0xE7E9E5) }
+    static func tabSelected(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x3D413D) : AtticRGBA(0xECEEE9) }
+    static func tabHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x333633) : AtticRGBA(0xF6F6F3) }
+    static func rowHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x353935) : AtticRGBA(0xF0F1ED) }
+    static func rowSelection(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x414641) : AtticRGBA(0xE5E8E2) }
+    static func addBarBody(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x323433) : AtticRGBA(0xF6F6F3) }
+    static func addBarBorder(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x484D48) : AtticRGBA(0xD9DDD6) }
+    static func highPriority(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xD9A16C) : AtticRGBA(0xB35D27) }
+    static func doneDisc(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x424841) : AtticRGBA(0xE1E5DE) }
+    static func doneCheck(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xB3BAB3) : AtticRGBA(0x737B73) }
+
+    /// The drawn header material: the control body, one 0.5 pt outline
+    /// (black 7 % / white 10 %), a top highlight (white 65 % / 8 %) fading
+    /// out over the upper 8 pt of the 32 pt header, and one shadow (y 1,
+    /// radius 2, black 4 % / 12 %). Hover a step lighter, pressed a step
+    /// darker without highlight or shadow, disabled quieter.
+    static func controlRecipes(dark: Bool) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
+        func recipe(_ body: UInt32, highlight: Double, edge: Double, shadow: Double) -> AtticRaisedRecipe {
+            let outline: AtticRGBA = dark ? .white(edge) : .black(edge)
+            return AtticRaisedRecipe(
+                base: AtticRGBA(body), fill: .clear,
+                sheenTop: .white(highlight), sheenBottom: .clear, sheenReach: 8.0 / 32,
+                edgeTop: outline, edgeMiddle: outline, edgeBottom: outline, edgeWidth: AtticHairline.width,
+                shadow: .black(shadow), shadowRadius: 2, shadowY: 1
+            )
+        }
+        if dark {
+            return (recipe(0x373938, highlight: 0.08, edge: 0.10, shadow: 0.12),
+                    recipe(0x3C3E3D, highlight: 0.08, edge: 0.10, shadow: 0.12),
+                    recipe(0x323433, highlight: 0, edge: 0.10, shadow: 0),
+                    recipe(0x333534, highlight: 0.04, edge: 0.07, shadow: 0))
+        }
+        return (recipe(0xF6F6F3, highlight: 0.65, edge: 0.07, shadow: 0.04),
+                recipe(0xF9F9F7, highlight: 0.65, edge: 0.07, shadow: 0.04),
+                recipe(0xEDEEEA, highlight: 0, edge: 0.07, shadow: 0),
+                recipe(0xF8F8F6, highlight: 0.4, edge: 0.05, shadow: 0))
+    }
+
+    /// The add bar, drawn: a flat body and a 0.5 pt border, no shadow and
+    /// no bright inner rim. Increase Contrast keeps a 1 pt contrast edge.
+    static func addBar(dark: Bool, increaseContrast: Bool) -> AtticRaisedRecipe {
+        let border: AtticRGBA = increaseContrast ? (dark ? .white(0.35) : .black(0.30)) : addBarBorder(dark: dark)
+        return AtticRaisedRecipe(
+            base: addBarBody(dark: dark), fill: .clear,
+            edgeTop: border, edgeMiddle: border, edgeBottom: border,
+            edgeWidth: increaseContrast ? AtticHairline.widthIncreased : AtticHairline.width
+        )
+    }
 }

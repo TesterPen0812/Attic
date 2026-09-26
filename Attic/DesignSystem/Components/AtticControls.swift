@@ -64,19 +64,23 @@ struct AtticRaisedButton: View {
     /// material (an overlay outside the glass does not render in a glass
     /// group), and its glyph takes the selected page's ink.
     var isSelected = false
+    /// An optical nudge of the glyph inside the button (the pin: −0.5,
+    /// visual A), so its visible outline looks centred.
+    var glyphOffsetY: CGFloat = 0
     let action: () -> Void
 
     @State private var probeID = UUID()
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
-         isSelected: Bool = false, action: @escaping () -> Void) {
+         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = nil
         self.accessibilityLabel = String(localized: label)
         self.size = size
         self.help = help
         self.isSelected = isSelected
+        self.glyphOffsetY = glyphOffsetY
         self.action = action
     }
 
@@ -95,6 +99,7 @@ struct AtticRaisedButton: View {
         let radius = AtticRadius.control(height: size.height)
         Button(action: action) {
             AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected)
+                .offset(y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)
                 .background {
@@ -135,7 +140,10 @@ private struct AtticRaisedButtonLabel: View {
         }
         HStack(spacing: AtticRaisedButtonMetrics.iconLabelGap) {
             if let systemName {
-                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize, weight: AtticIconWeight.outline, ink: glyph)
+                // Selected (the pinned pin), the glyph is regular weight, as
+                // the page switch's selected icon is (visual A).
+                AtticIcon(systemName: systemName, size: title == nil ? AtticControlSize.raisedGlyph : AtticRaisedButtonMetrics.labelIconSize,
+                          weight: isSelected ? .regular : AtticIconWeight.outline, ink: glyph)
             }
             if let title {
                 AtticText(verbatim: title, style: .controlLabel, ink: state == .disabled ? .disabledText : .heading)
@@ -214,7 +222,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
             labelWidths = titles.map { AtticTextStyle.chipLabel.measuredWidth($0) }
             unselectedWidth = AtticControlSize.chipIconWidth
             spacing = m.chipSpacing
-            selectedWidth = (m.selectedPadding * 2 + m.iconSlot + m.iconLabelGap + (labelWidths.max() ?? 0)).rounded(.up)
+            selectedWidth = max(m.selectedMinWidth, (m.selectedPadding * 2 + m.iconSlot + m.iconLabelGap + (labelWidths.max() ?? 0)).rounded(.up))
             count = titles.count
         }
 
@@ -288,7 +296,7 @@ struct AtticPageSwitch<Page: Hashable>: View {
         .atticControlProbe(
             "Page switch", id: probeID, expectedSize: nil,
             radius: AtticRadius.control(height: AtticControlSize.capsuleHeight),
-            expectedRadius: 14.5
+            expectedRadius: AtticRadius.control(height: AtticControlSize.capsuleHeight)
         )
     }
 
@@ -736,7 +744,7 @@ struct AtticAddBar: View {
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, AtticControlSize.sendInset)
         .frame(height: height)
-        .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
+        .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false, flat: true)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: hasText)
@@ -834,7 +842,7 @@ struct AtticListSearchField: View {
         HStack(spacing: m.gap) {
             AtticIcon(systemName: "magnifyingglass", size: m.iconSize, weight: AtticIconWeight.outline, ink: .icon)
             if capture == nil {
-                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.placeholder)))
+                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.helper)))
                     .textFieldStyle(.plain)
                     .font(AtticTextStyle.body.font)
                     .foregroundStyle(design.tokens.color(.body))
@@ -845,14 +853,14 @@ struct AtticListSearchField: View {
                     .accessibilityLabel(placeholder)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                AtticText(verbatim: text.isEmpty ? placeholder : text, style: .body, ink: text.isEmpty ? .placeholder : .body, truncates: true)
+                AtticText(verbatim: text.isEmpty ? placeholder : text, style: .body, ink: text.isEmpty ? .helper : .body, truncates: true)
                 Spacer(minLength: 0)
             }
         }
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, m.leadingPadding)
         .frame(height: m.height)
-        .background(shape.fill(design.tokens.chipSelected.color))
+        .background(shape.fill(design.tokens.tabSelected.color))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: m.radius)
         .onAppear { if isFocused?.wrappedValue == true { focused = true } }
         .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }

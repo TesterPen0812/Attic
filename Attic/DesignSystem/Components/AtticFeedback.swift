@@ -137,7 +137,9 @@ struct AtticEmptyLine: View {
 
     var body: some View {
         AtticText(verbatim: text, style: .body, ink: .helper)
-            .frame(height: AtticLayout.rowPitch)
+            .frame(height: AtticTaskRowMetrics.titleLineHeight)
+            .padding(.top, AtticTaskRowMetrics.titleTop)
+            .padding(.bottom, AtticLayout.rowPitch - AtticTaskRowMetrics.titleTop - AtticTaskRowMetrics.titleLineHeight)
             .padding(.leading, AtticLayout.textX)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

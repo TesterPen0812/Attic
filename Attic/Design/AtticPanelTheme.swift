@@ -789,11 +789,16 @@ struct AtticPanelSurfaceElevation: Equatable, Sendable {
     let opacity: Double
     let radius: CGFloat
     let offsetY: CGFloat
+    /// A tight contact shadow under the soft one (visual A).
+    var contactOpacity: Double = 0
+    var contactRadius: CGFloat = 1
+    var contactOffsetY: CGFloat = 0.5
 
-    /// v9's longer, softer shadow, as long as the window's 24 pt margin
-    /// lets it fade out (extent 11 × 2 + 2 = 24).
-    static let light = AtticPanelSurfaceElevation(opacity: 0.12, radius: 11, offsetY: 2)
-    static let dark = AtticPanelSurfaceElevation(opacity: 0.34, radius: 11, offsetY: 2)
+    /// Visual A ("Calm"): black 10 % (Dark 24 %), y 4, radius 12, with a
+    /// contact shadow of 3 % (Dark 8 %), y 0.5, radius 1. The window's
+    /// margin grew to 28 pt so it fades out (extent 12 × 2 + 4 = 28).
+    static let light = AtticPanelSurfaceElevation(opacity: 0.10, radius: 12, offsetY: 4, contactOpacity: 0.03)
+    static let dark = AtticPanelSurfaceElevation(opacity: 0.24, radius: 12, offsetY: 4, contactOpacity: 0.08)
 
     /// Room the shadow needs beyond the visible surface before it fades out.
     var extent: CGFloat { radius * 2 + abs(offsetY) }

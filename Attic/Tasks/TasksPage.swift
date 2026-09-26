@@ -44,7 +44,9 @@ struct TasksPage: View {
     /// Room under the list for the add bar and its margins.
     static let footerZone: CGFloat = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
     private var footerZone: CGFloat { Self.footerZone }
-    static let listFooter: CGFloat = footerZone
+    /// The list clears the add bar by at least 16 pt (visual A); the rest
+    /// of the height flexes.
+    static let listFooter: CGFloat = AtticControlSize.addBarHeight + AtticStyle.chromeMinimumInset + AtticLayout.contentToAddBar
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -170,7 +172,7 @@ struct TasksPage: View {
                             }
                         }
                         .accessibilityIdentifier("tasks-completed-today")
-                        .padding(.leading, AtticLayout.circleX)
+                        .padding(.leading, AtticLayout.textX)
                         .padding(.top, AtticCompletedLineMetrics.top)
                         .padding(.bottom, model.completedTodayExpanded ? AtticSpacing.s4 : 0)
                         .modifier(AtticScrollEdgeFade(space: listSpace(tab), top: Self.listTopFade, bottom: AtticEdgeBlur.panelBottom))

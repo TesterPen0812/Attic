@@ -63,6 +63,8 @@ struct AtticStateResolver {
 struct AtticRaisedBackground: View {
     var cornerRadius: CGFloat
     var state: AtticControlState = .rest
+    /// The add bar (visual A): drawn flat, lower than the header's controls.
+    var flat = false
 
     @Environment(\.atticDesign) private var design
 
@@ -70,6 +72,8 @@ struct AtticRaisedBackground: View {
         let tokens = design.tokens
         let recipe: AtticRaisedRecipe = if design.effectiveControls == .liquidGlass {
             tokens.glassStandIn
+        } else if flat, state != .disabled {
+            tokens.addBarFlat
         } else {
             switch state {
             case .hover: tokens.raisedHover
@@ -191,6 +195,7 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     let cornerRadius: CGFloat
     let state: AtticControlState
     let interactive: Bool
+    var flat = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -214,15 +219,15 @@ struct AtticRaisedMaterialModifier: ViewModifier {
                     }
                 }
         } else {
-            content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
+            content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state, flat: flat))
         }
     }
 }
 
 extension View {
     /// The raised material in a control's shape (see `AtticRaisedMaterialModifier`).
-    func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true) -> some View {
-        modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive))
+    func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true, flat: Bool = false) -> some View {
+        modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive, flat: flat))
     }
 }
 
@@ -388,11 +393,17 @@ struct AtticSurfaceBackground<S: Shape>: View {
             if model.kind != .solid {
                 underlay
                 shape.fill(model.base.withAlpha(model.foundationOpacity).color)
-            } else if model.porcelain, model.appearance == .light {
-                shape.fill(LinearGradient(
-                    stops: AtticSurfaceModel.porcelainStops.map { Gradient.Stop(color: $0.colour.color, location: $0.location) },
-                    startPoint: .top, endPoint: .bottom
-                ))
+            } else if model.porcelain {
+                // Visual A: the flat surface, with its top sheen kept within
+                // the first 24 pt.
+                shape.fill(model.base.color)
+                ZStack(alignment: .top) {
+                    Color.clear
+                    LinearGradient(colors: [AtticSurfaceModel.calmSheen(dark: model.appearance == .dark).color, .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: AtticSurfaceModel.calmSheenHeight)
+                }
+                .clipShape(shape)
             } else {
                 shape.fill(model.base.color)
             }
@@ -526,13 +537,20 @@ struct AtticPanelRim: View {
         let dark = design.mode == .dark
         ZStack {
             if design.tokens.panel.porcelain {
-                // v9's light top edge: a 2 pt stroke (1 pt shows inside the
-                // clip) that fades out over the top fifth.
-                shape.stroke(LinearGradient(stops: [
-                    .init(color: Color.white.opacity(dark ? 0.16 : 1), location: 0),
-                    .init(color: Color.white.opacity(0), location: 0.22)
-                ], startPoint: .top, endPoint: .bottom), lineWidth: 2)
+                // Visual A: one 0.5 pt inside edge (black 6 % / white 8 %).
+                shape.inset(by: AtticHairline.width / 2)
+                    .stroke((dark ? AtticRGBA.white(0.08) : AtticRGBA.black(0.06)).color, lineWidth: AtticHairline.width)
+            } else {
+                legacyRim(shape: shape, dark: dark)
             }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func legacyRim(shape: Squircle, dark: Bool) -> some View {
+        ZStack {
             shape.stroke(dark ? Color.black.opacity(0.5) : Color.black.opacity(design.increaseContrast ? 0.3 : 0.10), lineWidth: design.increaseContrast ? 1 : 0.5)
             if dark {
                 Squircle(cornerRadius: max(cornerSize - 0.75, 0), exponent: AtticStyle.panelSquircleExponent)

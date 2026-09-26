@@ -24,6 +24,7 @@ struct PanelHeader: View {
                     label: isPinned ? "Unpin panel" : "Pin panel",
                     help: isPinned ? String(localized: "Unpin (⇧⌘P)") : String(localized: "Pin (⇧⌘P)"),
                     isSelected: isPinned,
+                    glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY,
                     action: onTogglePin
                 )
                 .keyboardShortcut("p", modifiers: [.command, .shift])

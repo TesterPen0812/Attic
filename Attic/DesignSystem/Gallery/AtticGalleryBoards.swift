@@ -449,7 +449,7 @@ struct AtticGalleryPanelComposition: View {
             }
             if done > 0 {
                 AtticCompletedLine(title: String(localized: "Completed today"), count: done, isExpanded: false, action: demo.record("Completed today"))
-                    .padding(.leading, AtticLayout.circleX)
+                    .padding(.leading, AtticLayout.textX)
                     .padding(.top, AtticCompletedLineMetrics.top)
                     .atticScrollEdgeFade(fades, in: Self.space)
             }
@@ -463,7 +463,7 @@ struct AtticGalleryPanelComposition: View {
 private struct RaisedControlsBoard: View {
     @Environment(AtticGalleryDemo.self) private var demo
     var body: some View {
-        BoardHeading(title: "Single button · 38 × 34, radius 14.5")
+        BoardHeading(title: "Single button · 32 × 32, radius 13.5 (visual A)")
         SpecimenRow {
             ForEach([AtticControlState.rest, .hover, .pressed], id: \.self) { state in
                 AtticSpecimen(state.title) {
@@ -481,7 +481,7 @@ private struct RaisedControlsBoard: View {
                 AtticRaisedButton(systemName: "pin", label: "Unpin", isSelected: true, action: demo.record("Unpin"))
             }
         }
-        BoardHeading(title: "Label buttons · 34 tall")
+        BoardHeading(title: "Label buttons · 32 tall")
         SpecimenRow {
             AtticSpecimen("All notes") {
                 AtticRaisedButton(systemName: "list.bullet", title: "All notes", action: demo.record("All notes"))
@@ -578,17 +578,16 @@ private struct AddBarBoard: View {
             AtticSpecimen("With text: send button inside", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task", text: .constant(demo.addTextFilled), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
-            AtticSpecimen("Backlog page", fullWidth: true) {
-                AtticAddBar(placeholder: "Add to backlog", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
+            AtticSpecimen("Later page", fullWidth: true) {
+                AtticAddBar(placeholder: "Add to later", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
             AtticSpecimen("Recognised pieces become chips (Phase 1)", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task", text: .constant("Call mom fri #family !!"),
                             tokens: AtticGallerySamples.chipTokens, onSubmit: demo.record("Add"))
                     .padding(.horizontal, 12)
             }
-            AtticSpecimen("Done page: the bar searches (Phase 1)", fullWidth: true) {
-                AtticAddBar(placeholder: "Search done tasks", text: .constant(""), systemImage: "magnifyingglass",
-                            showsSend: false, tokens: nil, onSubmit: {})
+            AtticSpecimen("Done page: the bar still adds; its search sits at the top of the list", fullWidth: true) {
+                AtticListSearchField(placeholder: "Search done tasks", text: .constant(""))
                     .padding(.horizontal, 12)
             }
             AtticSpecimen("Keyboard focus", fullWidth: true) {

@@ -13,7 +13,8 @@ enum AtticStyle {
     /// Transparent, click-through room the native window keeps around the
     /// visible surface so the SwiftUI shape elevation can fade out instead of
     /// being cut at the window edge. It never becomes a resize grip.
-    static let panelElevationMargin: CGFloat = 24
+    /// 28 pt (visual A): room for the panel's 12 pt, y 4 shadow to fade out.
+    static let panelElevationMargin: CGFloat = 28
     static let horizontalPadding: CGFloat = 16
     static let rowHeight: CGFloat = 32
     static let taskSpacing: CGFloat = 4
@@ -40,7 +41,9 @@ enum AtticStyle {
     /// minimum rather than treating it as a fixed position.
     /// 12 pt from every edge at the default corner size (v9, owner
     /// 2026-09-26); larger corners still push the controls inward.
-    static let chromeMinimumInset: CGFloat = 18
+    /// Visual A ("Calm", 2026-09-26): 20 pt, the panel's principal outer
+    /// alignment (header, tabs and add bar).
+    static let chromeMinimumInset: CGFloat = 20
     static let chromeCornerClearance: CGFloat = 7
     static let chromeWorkspaceSpacing: CGFloat = 24
     static let taskScrollTopPadding: CGFloat = 22
@@ -229,6 +232,17 @@ struct AtticPanelOutsideShadow: View {
                     x: 0,
                     y: elevation.offsetY
                 )
+            if elevation.contactOpacity > 0 {
+                shape
+                    .fill(Color.black)
+                    .padding(Self.casterInset)
+                    .shadow(
+                        color: Color.black.opacity(elevation.contactOpacity),
+                        radius: elevation.contactRadius,
+                        x: 0,
+                        y: elevation.contactOffsetY
+                    )
+            }
             shape
                 .fill(Color.black)
                 .blendMode(.destinationOut)

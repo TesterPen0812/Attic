@@ -48,7 +48,11 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// base keeps its contrast.
     var porcelain = false
 
-    /// The porcelain face, top to bottom (Light only).
+    /// Visual A: the default surface's top sheen, within the first 24 pt.
+    static let calmSheenHeight: CGFloat = 24
+    static func calmSheen(dark: Bool) -> AtticRGBA { dark ? .white(0.025) : .white(0.7) }
+
+    /// The porcelain face, top to bottom (Light only; before visual A).
     static let porcelainStops: [(colour: AtticRGBA, location: Double)] = [
         (AtticRGBA(0xFFFFFE), 0), (AtticRGBA(0xFCFCFA), 0.42), (AtticRGBA(0xFBFBF9), 1)
     ]
