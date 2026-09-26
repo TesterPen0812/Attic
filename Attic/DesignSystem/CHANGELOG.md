@@ -124,7 +124,7 @@ mockup v11-direction-a). Unlike the streams above, these change existing looks.
   (`activeDotDiameter` 4.8); the pie, `minimumWedge` and `wedgeSweep` are gone.
   Completing sweeps the done disc in from 12 o'clock as before.
 - **Priority is a mark** (`AtticPriorityMark`): High "!!" in the new `priorityMark`
-  ink (orange, Light #D9822B / Dark #F0A04E tuned; secondary text, 3 : 1, 4.5 : 1
+  ink (orange, Light #E2711D / Dark #F0A04E before tuning: a redder orange stays orange, not brown, at 3 : 1; secondary text, 3 : 1, 4.5 : 1
   under Increase Contrast), Medium "!" in `helper`, Low and None nothing. New text
   style `priorityMark` (11.5 bold).
 - **Due tones** (`AtticTaskRowModel.Due.tone`: quiet, today, overdue) replace

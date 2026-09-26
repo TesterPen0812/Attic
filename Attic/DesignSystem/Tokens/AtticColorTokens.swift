@@ -440,7 +440,7 @@ struct AtticColorTokens: Equatable, Sendable {
             inks[ink] = inks[.priorityNone]!.tuned(toContrast: noneOnBase * step, against: [basePanel], lighten: dark)
         }
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
-        inks[.priorityMark] = (dark ? AtticRGBA(0xF0A04E) : AtticRGBA(0xD9822B)).tuned(toContrast: target(.priorityMark), against: meaning, lighten: dark)
+        inks[.priorityMark] = (dark ? AtticRGBA(0xF0A04E) : AtticRGBA(0xE2711D)).tuned(toContrast: target(.priorityMark), against: meaning, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
         // Done is faded as in v4 (#C9CBCE / a dim fill), held at 3 : 1.
         inks[.doneFill] = (dark ? AtticRGBA(0x6E6F72) : AtticRGBA(0xC9CBCE)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)
