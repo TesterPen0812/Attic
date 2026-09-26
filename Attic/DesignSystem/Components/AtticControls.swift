@@ -908,7 +908,7 @@ struct AtticAddBar: View {
             .frame(height: AtticTokenFieldMetrics.height)
             .overlay(alignment: .leading) {
                 if text.isEmpty {
-                    AtticText(verbatim: placeholder, style: .body, ink: disabled ? .disabledText : .placeholder)
+                    AtticText(verbatim: placeholder, style: .listBody, ink: disabled ? .disabledText : .placeholder)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
@@ -922,9 +922,9 @@ struct AtticAddBar: View {
         } else if capture != nil {
             Group {
                 if text.isEmpty {
-                    AtticText(verbatim: placeholder, style: .body, ink: disabled ? .disabledText : .placeholder)
+                    AtticText(verbatim: placeholder, style: .listBody, ink: disabled ? .disabledText : .placeholder)
                 } else {
-                    AtticText(verbatim: text, style: .body, ink: disabled ? .disabledText : .body, truncates: true)
+                    AtticText(verbatim: text, style: .listBody, ink: disabled ? .disabledText : .body, truncates: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -935,7 +935,7 @@ struct AtticAddBar: View {
                 prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(disabled ? .disabledText : .placeholder))
             )
             .textFieldStyle(.plain)
-            .font(AtticTextStyle.body.font)
+            .font(AtticTextStyle.listBody.font)
             .foregroundStyle(design.tokens.color(disabled ? .disabledText : .body))
             .focused($focused)
             .onSubmit(onSubmit)
@@ -987,7 +987,7 @@ struct AtticListSearchField: View {
             if capture == nil {
                 TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.helper)))
                     .textFieldStyle(.plain)
-                    .font(AtticTextStyle.body.font)
+                    .font(AtticTextStyle.listBody.font)
                     .foregroundStyle(design.tokens.color(.body))
                     .focused($focused)
                     .onExitCommand {
@@ -996,7 +996,7 @@ struct AtticListSearchField: View {
                     .accessibilityLabel(placeholder)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                AtticText(verbatim: text.isEmpty ? placeholder : text, style: .body, ink: text.isEmpty ? .helper : .body, truncates: true)
+                AtticText(verbatim: text.isEmpty ? placeholder : text, style: .listBody, ink: text.isEmpty ? .helper : .body, truncates: true)
                 Spacer(minLength: 0)
             }
         }

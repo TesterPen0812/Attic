@@ -22,7 +22,7 @@ struct TasksDoneDetailView: View {
                     ForEach(detail.subtasks) { subtask in
                         HStack(spacing: AtticSubtaskMetrics.titleGap) {
                             AtticSubtaskCheckbox(isDone: subtask.isDone)
-                            AtticText(verbatim: subtask.title, style: .body, ink: subtask.isDone ? .helper : .body,
+                            AtticText(verbatim: subtask.title, style: .listBody, ink: subtask.isDone ? .helper : .body,
                                       strikethrough: subtask.isDone, truncates: true)
                         }
                         .frame(height: AtticLayout.subtaskPitch)

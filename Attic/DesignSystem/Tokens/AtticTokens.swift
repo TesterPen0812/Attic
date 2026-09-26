@@ -239,6 +239,9 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     // Direction A: page tabs, today's date, the priority mark, the
     // "Completed today" line.
     case pageTab, pageTabSelected, rowMetaEmphasis, priorityMark, sectionToggle
+    // Phase 0's qualities: an in-progress title (medium) and the list's own
+    // 13 pt text (empty states, the add bar, subtasks, the Done search).
+    case rowTitleActive, listBody
     case controlLabel, chipLabel, menuRow, shortcut, toast, tag, count, dropLabel
     // Settings
     case pageTitle, sectionHeading, sidebarHeading, sidebarRow, groupLabel, groupValue
@@ -249,14 +252,33 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         let weight: Font.Weight
         let italic: Bool
         let monospacedDigits: Bool
+        /// SF Pro Rounded (Phase 0's task list, owner 2026-09-26).
+        var rounded = false
+    }
+
+    /// The task list's text is SF Pro Rounded, like Phase 0's: titles, the
+    /// second line, dates, the page labels, "Completed today", empty
+    /// states and the add bar. The header and Settings stay SF Pro.
+    var isListText: Bool {
+        switch self {
+        case .rowTitle, .rowTitleActive, .rowMeta, .rowMetaEmphasis, .count, .priorityMark,
+             .pageTab, .pageTabSelected, .sectionToggle, .listBody: true
+        default: false
+        }
     }
 
     var spec: Spec {
+        let base = baseSpec
+        return Spec(size: base.size, weight: base.weight, italic: base.italic, monospacedDigits: base.monospacedDigits, rounded: isListText)
+    }
+
+    private var baseSpec: Spec {
         switch self {
         case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
         case .pageHeading: Spec(size: 10.5, weight: .medium, italic: false, monospacedDigits: true)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
-        case .body, .rowTitle, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
+        case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
+        case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
         case .rowMeta, .helper: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
@@ -289,7 +311,7 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     }
 
     var font: Font {
-        var font = Font.system(size: spec.size, weight: spec.weight)
+        var font = Font.system(size: spec.size, weight: spec.weight, design: spec.rounded ? .rounded : .default)
         if spec.italic { font = font.italic() }
         if spec.monospacedDigits { font = font.monospacedDigit() }
         return font
@@ -304,6 +326,9 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         default: .regular
         }
         var font = NSFont.systemFont(ofSize: spec.size, weight: weight)
+        if spec.rounded, let rounded = font.fontDescriptor.withDesign(.rounded) {
+            font = NSFont(descriptor: rounded, size: spec.size) ?? font
+        }
         if spec.italic {
             font = NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(.italic), size: spec.size) ?? font
         }

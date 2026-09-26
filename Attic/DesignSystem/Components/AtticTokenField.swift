@@ -65,7 +65,7 @@ struct AtticTokenField: NSViewRepresentable {
         coordinator.parent = self
         let tokens = design.tokens
         view.apply(style: AtticTokenFieldView.Style(
-            font: AtticTextStyle.body.nsFont,
+            font: AtticTextStyle.listBody.nsFont,
             text: NSColor(tokens.color(isEnabled ? .body : .disabledText)),
             // The heading ink: the pill sits on the raised bar, where the
             // tag's accent grey falls below 3 : 1 in Dark.
@@ -370,7 +370,7 @@ struct AtticChipText: View {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 if segment.isChip {
                     let height = AtticControlSize.tagHeight
-                    AtticText(verbatim: segment.text, style: .body, ink: .heading, allowsOverlap: true)
+                    AtticText(verbatim: segment.text, style: .listBody, ink: .heading, allowsOverlap: true)
                         .background(
                             RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
                                 .fill(design.tokens.selected.color)
@@ -379,9 +379,9 @@ struct AtticChipText: View {
                         )
                 } else if segment.text.allSatisfy(\.isWhitespace) {
                     // Only space: nothing to read, so nothing to check.
-                    Text(verbatim: segment.text).font(AtticTextStyle.body.font).accessibilityHidden(true)
+                    Text(verbatim: segment.text).font(AtticTextStyle.listBody.font).accessibilityHidden(true)
                 } else {
-                    AtticText(verbatim: segment.text, style: .body, ink: disabled ? .disabledText : .body, allowsOverlap: true)
+                    AtticText(verbatim: segment.text, style: .listBody, ink: disabled ? .disabledText : .body, allowsOverlap: true)
                 }
             }
         }

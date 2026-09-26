@@ -501,7 +501,7 @@ final class AtticDesignSystemTests: XCTestCase {
     // MARK: Status circle
 
     /// Direction A with Phase 0's confident circles: every open ring is one
-    /// ink (the task text's) at one weight, 1.6 pt (2 under Increase
+    /// ink (the task title's primary ink) at one weight, 1.6 pt (2 under Increase
     /// Contrast); priority is a mark after the title. High's "!!" is an
     /// orange at least as readable as secondary text, and red is left to
     /// overdue dates.
@@ -509,8 +509,9 @@ final class AtticDesignSystemTests: XCTestCase {
         let m = AtticStatusCircleMetrics.self
         XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.6)
         XCTAssertEqual(m.ringWidth(increaseContrast: true), 2)
-        XCTAssertEqual(AtticStatusCircle.ringInk, .body)
-        XCTAssertEqual(AtticStatusCircle.activeInk, .body)
+        // The task title's primary ink (Phase 0's qualities, item 6).
+        XCTAssertEqual(AtticStatusCircle.ringInk, .heading)
+        XCTAssertEqual(AtticStatusCircle.activeInk, .heading)
         for context in AtticAppearanceCheck.allContexts() {
             let tokens = context.tokens
             let base = tokens.panel.base
@@ -522,6 +523,23 @@ final class AtticDesignSystemTests: XCTestCase {
             XCTAssertNotEqual(mark, tokens.ink(.dueText), "orange, not the overdue red · \(context.caption)")
         }
         XCTAssertTrue(AtticInk.priorityMark.isSecondaryText)
+    }
+
+    /// Phase 0's qualities, item 6: the task list's text is SF Pro Rounded
+    /// (a flag on its styles), an in-progress title is medium, and the
+    /// header's and Settings' styles stay SF Pro.
+    func testTheTaskListIsSFProRounded() {
+        for style in [AtticTextStyle.rowTitle, .rowTitleActive, .rowMeta, .rowMetaEmphasis, .count, .priorityMark,
+                      .pageTab, .pageTabSelected, .sectionToggle, .listBody] {
+            XCTAssertTrue(style.spec.rounded, "\(style)")
+            XCTAssertTrue(style.nsFont.fontDescriptor.symbolicTraits.contains(.monoSpace) == false)
+        }
+        for style in [AtticTextStyle.chipLabel, .controlLabel, .body, .menuRow, .groupLabel, .groupValue, .pageTitle, .sidebarRow] {
+            XCTAssertFalse(style.spec.rounded, "\(style) stays SF Pro")
+        }
+        XCTAssertEqual(AtticTextStyle.rowTitle.spec.size, 13)
+        XCTAssertEqual(AtticTextStyle.rowTitleActive.spec.weight, .medium)
+        XCTAssertNotEqual(AtticTextStyle.listBody.nsFont.fontName, AtticTextStyle.body.nsFont.fontName, "the rounded face is a different font")
     }
 
     /// In progress is a ring with a centre dot, never a share: VoiceOver

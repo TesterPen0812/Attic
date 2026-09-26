@@ -206,3 +206,9 @@ visual A's text and surface colours, the priority marks and Completed today stay
   Dark, where more fails the heading over Liquid Glass). The pin's glyph is in the strong ink at
   regular weight, level with the page button's (`AtticRaisedButton.emphasisedGlyph`).
   Visual A's flat recipe (`Calm.controlRecipes`, `addBarFlat`) is kept but unused.
+- **SF Pro Rounded in the task list (item 6):** `AtticTextStyle.Spec.rounded`, set for the list's
+  styles (`isListText`: `rowTitle`, new `rowTitleActive` 13 medium for in-progress titles,
+  `rowMeta`, `rowMetaEmphasis`, `count`, `priorityMark`, `pageTab(Selected)`, `sectionToggle`, and
+  new `listBody` for empty states, the add bar, subtasks and the Done search). `font` and `nsFont`
+  follow it. Task titles (and the title editor) use the primary ink (`heading`), and so do the
+  circles' rings. The header and Settings stay SF Pro.

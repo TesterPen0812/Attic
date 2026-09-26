@@ -178,7 +178,7 @@ struct AtticRowTitleEditor: View {
         TextField("", text: editing.text)
             .textFieldStyle(.plain)
             .font(AtticTextStyle.rowTitle.font)
-            .foregroundStyle(design.tokens.color(.body))
+            .foregroundStyle(design.tokens.color(.heading))
             .focused($focused)
             .onSubmit { finish(commit: true) }
             .onExitCommand { finish(commit: false) }
@@ -235,10 +235,10 @@ struct AtticStatusCircle: View {
     @State private var probeID = UUID()
     @State private var checkProbeID = UUID()
 
-    /// Phase 0's confident circles: the ring is the task text's ink, open
-    /// or working (the working one adds its centre dot).
-    static let ringInk: AtticInk = .body
-    static let activeInk: AtticInk = .body
+    /// Phase 0's confident circles: the ring is the task title's primary
+    /// ink, open or working (the working one adds its centre dot).
+    static let ringInk: AtticInk = .heading
+    static let activeInk: AtticInk = .heading
 
     var body: some View {
         let tokens = design.tokens
@@ -858,9 +858,11 @@ struct AtticTaskRow: View {
                         HStack(alignment: .firstTextBaseline, spacing: AtticPriorityMarkMetrics.titleGap) {
                             AtticText(
                                 verbatim: model.title,
-                                style: .rowTitle,
+                                // Phase 0's qualities: SF Pro Rounded, medium
+                                // while in progress, in the primary ink.
+                                style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
                                 // Done fades the title, without a strike (v9).
-                                ink: disabled ? .disabledText : (done ? .helper : .body),
+                                ink: disabled ? .disabledText : (done ? .helper : .heading),
                                 truncates: true
                             )
                             if !done {
@@ -1152,7 +1154,7 @@ struct AtticSubtaskRow: View {
             }
             .buttonStyle(.plain)
             .padding(.horizontal, -(m.hitSize - AtticControlSize.subtaskCheckbox) / 2)
-            AtticText(verbatim: subtask.title, style: .body, ink: subtask.isDone ? .helper : .body, strikethrough: subtask.isDone, truncates: true)
+            AtticText(verbatim: subtask.title, style: .listBody, ink: subtask.isDone ? .helper : .body, strikethrough: subtask.isDone, truncates: true)
             Spacer(minLength: 0)
         }
         .frame(height: AtticLayout.subtaskPitch)
