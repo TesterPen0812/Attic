@@ -49,13 +49,6 @@ struct AppearanceSettingsView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     /// Palette tiles keep their size and wrap, 12 pt apart.
-    private let paletteColumns = [
-        GridItem(
-            .adaptive(minimum: AtticPaletteTileMetrics.width, maximum: AtticPaletteTileMetrics.width),
-            spacing: AtticPaletteTileMetrics.spacing,
-            alignment: .leading
-        )
-    ]
 
     var body: some View {
         SettingsPage(section: .appearance) {
@@ -88,7 +81,9 @@ struct AppearanceSettingsView: View {
             .padding(.bottom, AtticSpacing.settingsBetweenSections)
 
             SettingsTileSection(title: String(localized: "Palette")) {
-                LazyVGrid(columns: paletteColumns, alignment: .leading, spacing: AtticPaletteTileMetrics.spacing) {
+                // Not lazy: seven tiles, and every one must stay in the
+                // accessibility tree when the page scrolls it out of view.
+                AtticTileFlow(spacing: AtticPaletteTileMetrics.spacing) {
                     ForEach(AtticPanelTheme.allCases) { theme in
                         AtticPaletteTile(
                             palette: theme,

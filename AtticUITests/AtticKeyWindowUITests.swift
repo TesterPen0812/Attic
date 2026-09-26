@@ -84,7 +84,8 @@ final class AtticKeyWindowUITests: XCTestCase {
         finder.activate()
         XCTAssertTrue(finder.wait(for: .runningForeground, timeout: 5))
         try waitForKeyState("not key", keyState)
-        let panel = app.windows.containing(.button, identifier: "panel-pin-button").firstMatch
+        // The panel is a non-activating panel: XCUI lists it as a dialog.
+        let panel = app.dialogs.containing(.button, identifier: "panel-pin-button").firstMatch
         let nonKeyPanel = panel.screenshot().image
         let nonKeyPin = pin.screenshot().image
         attach(nonKeyPanel, name: "panel-\(mode)-not-key")
@@ -126,9 +127,9 @@ final class AtticKeyWindowUITests: XCTestCase {
     }
 
     private func waitForKeyState(_ expected: String, _ element: XCUIElement) throws {
-        let matches = NSPredicate(format: "value == %@", expected)
+        let matches = NSPredicate(format: "label == %@ OR value == %@", expected, expected)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: matches, evaluatedWith: element)], timeout: 5), .completed,
-                       "the panel reports \(expected) (it reports \(element.value ?? "nothing"))")
+                       "the panel reports \(expected) (it reports \(element.label) / \(element.value ?? "nothing"))")
     }
 
     private func attach(_ image: NSImage, name: String) {

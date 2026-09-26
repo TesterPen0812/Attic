@@ -67,7 +67,12 @@ final class PerformanceUITests: XCTestCase {
         launchOptions.iterationCount = 3
         measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)],
                 options: launchOptions) {
-            if visible.state != .notRunning { visible.terminate() }
+            // Every iteration is a cold launch: the previous one has fully
+            // exited before the next starts, or the metric records nothing.
+            if visible.state != .notRunning {
+                visible.terminate()
+                _ = visible.wait(for: .notRunning, timeout: 15)
+            }
             visible.launch()
         }
         XCTAssertTrue(visible.descendants(matching: .any)["panel-section-picker"]

@@ -65,7 +65,9 @@ struct RecentlyDeletedSettingsView: View {
         // Follow the stores only while the page is on screen in the active
         // Settings window: a closed or background window reads nothing, and
         // catches up when it comes back.
-        .onAppear { if appearsActive { model.start() } }
+        // Opening the page always lists what is there, even when Settings
+        // opens behind another app (Attic has no Dock icon to activate).
+        .onAppear { if appearsActive { model.start() } else { model.reload() } }
         .onDisappear { model.stop() }
         .onChange(of: appearsActive) { _, active in
             if active { model.start() } else { model.stop() }

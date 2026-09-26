@@ -51,7 +51,9 @@ final class PanelShellUITests: XCTestCase {
         pin.coordinate(withNormalizedOffset: CGVector(dx: 2.6, dy: 0.5)).rightClick()
         let settingsItem = app.menuItems["Settings…"]
         XCTAssertTrue(settingsItem.waitForExistence(timeout: 3))
-        app.typeKey(.escape, modifierFlags: [])
+        // To the menu itself: on a runner where Attic is not the active app,
+        // an app-level key reaches the front app instead of the open menu.
+        settingsItem.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(settingsItem.waitForNonExistence(timeout: 3))
         XCTAssertTrue(pin.exists, "Esc in a menu closes the menu only")
 

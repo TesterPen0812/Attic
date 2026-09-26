@@ -587,6 +587,10 @@ final class AtticUITests: XCTestCase {
         settings.descendants(matching: .any)["settings-nav-general"].click()
         let haptics = settings.descendants(matching: .any)["setting-haptics"]
         XCTAssertTrue(haptics.waitForExistence(timeout: 3))
+        // On the 1024 pt CI display the panel covers part of Settings.
+        revealSettingsControl(haptics, in: settings,
+                              page: settings.descendants(matching: .any)["settings-page-general"])
+        XCTAssertTrue(haptics.isHittable, "Settings control must be reachable without resizing the window")
         let before = String(describing: haptics.value)
         haptics.click()
         let expectation = XCTNSPredicateExpectation(
@@ -612,6 +616,7 @@ final class AtticUITests: XCTestCase {
 
         let search = settings.textFields["recently-deleted-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 3))
+        revealSettingsControl(search, in: settings, page: page)
         search.click()
         search.typeText("meeting")
         let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: restoreTask)
@@ -620,12 +625,14 @@ final class AtticUITests: XCTestCase {
         search.typeKey(.escape, modifierFlags: [])
 
         XCTAssertTrue(restoreTask.waitForExistence(timeout: 3))
+        revealSettingsControl(restoreTask, in: settings, page: page)
         restoreTask.click()
         let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: restoreTask)
         XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 3), .completed, "a restored task leaves the list")
 
         let empty = settings.buttons["recently-deleted-empty"]
         XCTAssertTrue(empty.waitForExistence(timeout: 3))
+        revealSettingsControl(empty, in: settings, page: page)
         empty.click()
         // The native alert's destructive button (identified, or by its title
         // where the alert does not carry the identifier through).

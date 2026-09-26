@@ -118,9 +118,13 @@ struct AtticPanelView: View {
             if Self.exposesKeyStateForUITesting {
                 // UI tests read whether the panel is key (the drawn or the
                 // glass look) instead of waiting a fixed time.
-                Color.clear
+                // A static text: its words are what the tests read (the
+                // value of an empty element is not exposed on every runner).
+                Text(verbatim: uiState.isPanelKey ? "key" : "not key")
+                    .font(.system(size: 1))
                     .frame(width: 1, height: 1)
-                    .accessibilityElement()
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
                     .accessibilityIdentifier("panel-key-state")
                     .accessibilityValue(uiState.isPanelKey ? "key" : "not key")
             }
