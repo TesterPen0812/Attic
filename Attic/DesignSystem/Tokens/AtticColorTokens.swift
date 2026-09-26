@@ -331,7 +331,7 @@ struct AtticColorTokens: Equatable, Sendable {
         let pressed: AtticRGBA = dark ? .white(ic ? 0.18 : 0.10) : .black(ic ? 0.16 : 0.085)
         // The selected chip inside a raised control (Phase 0's drawn look,
         // as before visual A).
-        let chipSelected: AtticRGBA = dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06)
+        let chipSelected: AtticRGBA = dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.13 : 0.10)
         let chipHover: AtticRGBA = dark ? .white(0.04) : .black(0.03)
         let tabSelected: AtticRGBA = calmStates ? .overlay(reaching: Calm.tabSelected(dark: dark), on: basePanel)
             : (dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06))
@@ -667,11 +667,13 @@ struct AtticColorTokens: Equatable, Sendable {
                     edgeTop: .white(ic ? 0.45 : top), edgeMiddle: .white(ic ? 0.35 : middle), edgeBottom: .white(ic ? 0.42 : bottom)
                 )
             }
+            // Phase 0's out-of-focus weight (owner, 2026-09-26): a fuller
+            // face and a clearer rim than before visual A.
             return (
-                recipe(fill: 0.08, top: 0.24, middle: 0.10, bottom: 0.21),
-                recipe(fill: 0.10, top: 0.26, middle: 0.12, bottom: 0.23),
-                recipe(fill: 0.05, top: 0.14, middle: 0.08, bottom: 0.14),
-                recipe(fill: 0.04, top: 0.10, middle: 0.06, bottom: 0.08)
+                recipe(fill: 0.11, top: 0.26, middle: 0.15, bottom: 0.22),
+                recipe(fill: 0.13, top: 0.28, middle: 0.17, bottom: 0.24),
+                recipe(fill: 0.07, top: 0.16, middle: 0.10, bottom: 0.15),
+                recipe(fill: 0.05, top: 0.10, middle: 0.06, bottom: 0.08)
             )
         }
         func recipe(fill: Double, sheen: Double, top: Double, middle: Double, bottom: Double, shadow: Double) -> AtticRaisedRecipe {
@@ -683,11 +685,14 @@ struct AtticColorTokens: Equatable, Sendable {
                 shadow: .black(shadow), shadowRadius: 0.75, shadowY: 0.5
             )
         }
+        // Phase 0's out-of-focus weight (owner, 2026-09-26): the face about
+        // 19 below the surface (the reference's #ECECEC on white), a crisp
+        // grey rim, a softer sheen, and the soft shadow.
         return (
-            recipe(fill: 0.028, sheen: 0.6, top: 0.045, middle: 0.065, bottom: 0.12, shadow: 0.05),
-            recipe(fill: 0.012, sheen: 0.7, top: 0.045, middle: 0.065, bottom: 0.12, shadow: 0.05),
-            recipe(fill: 0.06, sheen: 0, top: 0.06, middle: 0.075, bottom: 0.10, shadow: 0),
-            recipe(fill: 0.02, sheen: 0.4, top: 0.03, middle: 0.04, bottom: 0.06, shadow: 0)
+            recipe(fill: 0.075, sheen: 0.3, top: 0.14, middle: 0.19, bottom: 0.24, shadow: 0.06),
+            recipe(fill: 0.055, sheen: 0.4, top: 0.14, middle: 0.19, bottom: 0.24, shadow: 0.06),
+            recipe(fill: 0.11, sheen: 0, top: 0.16, middle: 0.20, bottom: 0.22, shadow: 0),
+            recipe(fill: 0.04, sheen: 0.3, top: 0.07, middle: 0.09, bottom: 0.12, shadow: 0)
         )
     }
 

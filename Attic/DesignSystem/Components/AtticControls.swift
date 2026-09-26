@@ -67,13 +67,16 @@ struct AtticRaisedButton: View {
     /// An optical nudge of the glyph inside the button (the pin: −0.5,
     /// visual A), so its visible outline looks centred.
     var glyphOffsetY: CGFloat = 0
+    /// The header's glyphs (Phase 0's qualities): the strong ink at regular
+    /// weight, level with the page button's current page.
+    var emphasisedGlyph = false
     let action: () -> Void
 
     @State private var probeID = UUID()
 
     /// Icon only. `label` is what VoiceOver and the tooltip say.
     init(systemName: String, label: String.LocalizationValue, size: CGSize = AtticControlSize.panelButton, help: String? = nil,
-         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, action: @escaping () -> Void) {
+         isSelected: Bool = false, glyphOffsetY: CGFloat = 0, emphasisedGlyph: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = nil
         self.accessibilityLabel = String(localized: label)
@@ -81,6 +84,7 @@ struct AtticRaisedButton: View {
         self.help = help
         self.isSelected = isSelected
         self.glyphOffsetY = glyphOffsetY
+        self.emphasisedGlyph = emphasisedGlyph
         self.action = action
     }
 
@@ -98,7 +102,7 @@ struct AtticRaisedButton: View {
     var body: some View {
         let radius = AtticRadius.control(height: size.height)
         Button(action: action) {
-            AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected)
+            AtticRaisedButtonLabel(systemName: systemName, title: title, isSelected: isSelected || emphasisedGlyph)
                 .offset(y: glyphOffsetY)
                 .padding(.horizontal, title == nil ? 0 : AtticRaisedButtonMetrics.labelPadding)
                 .frame(width: title == nil ? size.width : nil, height: size.height)

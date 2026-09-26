@@ -200,4 +200,9 @@ visual A's text and surface colours, the priority marks and Completed today stay
 - **Confident circles:** 16 pt, 1.6 pt ring (2 with Increase Contrast) in the task text's ink
   (`body`), in progress dot 5, Later dashed in the same ink; the done disc as before visual A.
 - **Out of focus:** the drawn controls and the add bar use the Craft-style recipe again (as before
-  visual A); visual A's flat recipe (`Calm.controlRecipes`, `addBarFlat`) is kept but unused.
+  visual A), deepened to the Phase 0 references' weight: Light fill 7.5 % black (face ≈ 19 below
+  the surface, the reference's #ECECEC on white), sheen 30 %, rim 14 / 19 / 24 %, shadow 6 %;
+  Dark fill 11 % white, rim 26 / 15 / 22 %. The selected chip is 10 % black in Light (8 % white in
+  Dark, where more fails the heading over Liquid Glass). The pin's glyph is in the strong ink at
+  regular weight, level with the page button's (`AtticRaisedButton.emphasisedGlyph`).
+  Visual A's flat recipe (`Calm.controlRecipes`, `addBarFlat`) is kept but unused.

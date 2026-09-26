@@ -88,7 +88,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.tabSelected.over(light.panel.base).hexString, "#ECEEE9")
         XCTAssertEqual(light.tabHover.over(light.panel.base).hexString, "#F6F6F3")
         // Phase 0's drawn control look (as before visual A) over this surface.
-        XCTAssertEqual(light.controlFace.hexString, "#F5F4F3")
+        XCTAssertEqual(light.controlFace.hexString, "#E9E8E7")
         XCTAssertEqual(light.addBarFlat.face.hexString, "#F6F6F3")
         XCTAssertEqual(light.contentCard.hexString, "#FBFBFB")
         XCTAssertEqual(light.groupCard.hexString, "#F2F2F2")
@@ -105,7 +105,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#414641")
         XCTAssertEqual(dark.tabSelected.over(dark.panel.base).hexString, "#3D413D")
         XCTAssertEqual(dark.tabHover.over(dark.panel.base).hexString, "#333633")
-        XCTAssertEqual(dark.controlFace.hexString, "#3D3F3E")
+        XCTAssertEqual(dark.controlFace.hexString, "#434544")
         XCTAssertEqual(dark.addBarFlat.face.hexString, "#323433")
         XCTAssertEqual(dark.contentCard.hexString, "#2E2E2E")
         XCTAssertEqual(dark.groupCard.hexString, "#333333")
@@ -186,12 +186,12 @@ final class AtticDesignSystemTests: XCTestCase {
                                pair.onGlass ? "glass" : "Craft", tokens.panel.worstMargin([pair])))
             }
         }
-        // The drawn control face: Phase 0's (pre-visual-A) recipe, 7 below
-        // the Light surface and 17 above the Dark one.
+        // The drawn control face at Phase 0's weight: about 19 below
+        // the Light surface (the reference's #ECECEC on white), 23 above the Dark one.
         let light = AtticDesignContext(mode: .light).tokens.controlFace
         let dark = AtticDesignContext(mode: .dark).tokens.controlFace
-        XCTAssertEqual(light.hexString, "#F5F4F3")
-        XCTAssertEqual(dark.hexString, "#3D3F3E")
+        XCTAssertEqual(light.hexString, "#E9E8E7")
+        XCTAssertEqual(dark.hexString, "#434544")
     }
 
     func testScrollEdgeVeilFollowsItsRamp() {
