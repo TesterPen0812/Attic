@@ -172,8 +172,11 @@ struct TasksPage: View {
                             }
                         }
                         .accessibilityIdentifier("tasks-completed-today")
-                        .padding(.leading, AtticLayout.textX)
-                        .padding(.top, AtticCompletedLineMetrics.top)
+                        // Under an empty message it is the next row (one
+                        // row apart); after tasks, 12 below the last one.
+                        .padding(.top, sections.open.isEmpty
+                            ? (AtticLayout.rowPitch - AtticCompletedLineMetrics.height) / 2
+                            : AtticCompletedLineMetrics.top)
                         .padding(.bottom, model.completedTodayExpanded ? AtticSpacing.s4 : 0)
                         .modifier(AtticScrollEdgeFade(space: listSpace(tab), top: Self.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                         if model.completedTodayExpanded {

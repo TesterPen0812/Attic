@@ -449,7 +449,6 @@ struct AtticGalleryPanelComposition: View {
             }
             if done > 0 {
                 AtticCompletedLine(title: String(localized: "Completed today"), count: done, isExpanded: false, action: demo.record("Completed today"))
-                    .padding(.leading, AtticLayout.textX)
                     .padding(.top, AtticCompletedLineMetrics.top)
                     .atticScrollEdgeFade(fades, in: Self.space)
             }

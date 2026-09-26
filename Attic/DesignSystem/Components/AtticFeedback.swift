@@ -140,7 +140,8 @@ struct AtticEmptyLine: View {
             .frame(height: AtticTaskRowMetrics.titleLineHeight)
             .padding(.top, AtticTaskRowMetrics.titleTop(twoLine: false))
             .padding(.bottom, AtticLayout.rowPitch - AtticTaskRowMetrics.titleTop(twoLine: false) - AtticTaskRowMetrics.titleLineHeight)
-            .padding(.leading, AtticLayout.textX)
+            // On the tab labels' line (x 28; owner, 2026-09-26).
+            .padding(.leading, AtticLayout.pageTabsX)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

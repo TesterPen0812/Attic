@@ -1070,9 +1070,10 @@ private struct AtticSubtaskChecklistButton: View {
     }
 }
 
-/// "Completed today · N ›" (Direction A): the Now list's done section, a
-/// quiet toggle after the open tasks. The chevron turns down while the
-/// done rows show under it.
+/// "Completed today · N": the Now list's done section as a disclosure
+/// (owner, 2026-09-26). Its chevron sits centred on the circles' line (›
+/// shut, turning to ⌄ open), so the circle column is never empty for it,
+/// and its text on the titles' line. Laid out across the row's width.
 struct AtticCompletedLine: View {
     let title: String
     let count: Int
@@ -1085,21 +1086,22 @@ struct AtticCompletedLine: View {
 
     var body: some View {
         let m = AtticCompletedLineMetrics.self
-        let radius = AtticRadius.control(height: m.height)
         let hover = forced == .hover || hovered
         Button(action: action) {
-            HStack(spacing: m.gap) {
-                AtticText(verbatim: title, style: .sectionToggle, ink: hover ? .body : .helper)
-                AtticText(verbatim: "·", style: .sectionToggle, ink: .helper)
-                AtticText(verbatim: "\(count)", style: .sectionToggle, ink: hover ? .body : .helper)
-                AtticIcon(systemName: "chevron.right", size: m.chevronSize, weight: .medium, ink: .chevron)
+            HStack(spacing: 0) {
+                AtticIcon(systemName: "chevron.right", size: m.chevronSize, weight: .medium, ink: hover ? .body : .chevron)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: AtticControlSize.statusCircle)
+                    .padding(.leading, AtticLayout.circleX)
+                    .padding(.trailing, AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle)
+                HStack(spacing: m.gap) {
+                    AtticText(verbatim: title, style: .sectionToggle, ink: hover ? .body : .helper)
+                    AtticText(verbatim: "·", style: .sectionToggle, ink: .helper)
+                    AtticText(verbatim: "\(count)", style: .sectionToggle, ink: hover ? .body : .helper)
+                }
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, m.horizontalPadding)
             .frame(height: m.height)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill((hover ? design.tokens.chipHover : .clear).color))
-            .padding(.horizontal, -m.horizontalPadding)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
