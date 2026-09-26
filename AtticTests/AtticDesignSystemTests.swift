@@ -42,14 +42,16 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticControlSize.settingsBackButton, CGSize(width: 38, height: 34))
         XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 36)
         XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 96)
-        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [44, 42, 56, 54])
+        // Compact round (owner): rows 36 / 50, highlights 30 / 44.
+        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [36, 30, 50, 44])
+        XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 3)
         XCTAssertEqual(AtticControlSize.statusCircle, 16)
         XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 12)
         let m = AtticTaskRowMetrics.self
-        XCTAssertEqual(m.titleTop(twoLine: false), 13, "18 pt title centred in 44")
-        XCTAssertEqual(m.titleTop(twoLine: true), 10, "18 + 2 + 16 centred in 56")
-        XCTAssertEqual(m.circleCentreY(twoLine: false), 22)
-        XCTAssertEqual(m.circleCentreY(twoLine: true), 19)
+        XCTAssertEqual(m.titleTop(twoLine: false), 9, "18 pt title centred in 36")
+        XCTAssertEqual(m.titleTop(twoLine: true), 7, "18 + 2 + 16 centred in 50")
+        XCTAssertEqual(m.circleCentreY(twoLine: false), 18)
+        XCTAssertEqual(m.circleCentreY(twoLine: true), 16)
     }
 
     func testMotionPresetsAreCalmSpringsWithReduceMotionFallbacks() {
@@ -72,47 +74,59 @@ final class AtticDesignSystemTests: XCTestCase {
         }
     }
 
-    /// Visual A ("Calm") sets the default look's colours exactly.
+    /// Visual A ("Calm") sets the default look's colours, as neutral greys
+    /// of the review's lightness (owner, 2026-09-26: no green cast).
     func testDefaultLadderMatchesVisualA() {
         let light = AtticDesignContext(mode: .light).tokens
         XCTAssertEqual(light.panel.base.hexString, "#FCFBFA")
-        XCTAssertEqual(light.ink(.heading).hexString, "#252826")
-        XCTAssertEqual(light.ink(.body).hexString, "#494B4A")
-        XCTAssertEqual(light.ink(.helper).hexString, "#777B78")
-        XCTAssertEqual(light.ink(.priorityNone).hexString, "#7F857F")
+        XCTAssertEqual(light.ink(.heading).hexString, "#272727")
+        XCTAssertEqual(light.ink(.body).hexString, "#4B4B4B")
+        XCTAssertEqual(light.ink(.helper).hexString, "#7A7A7A")
+        XCTAssertEqual(light.ink(.priorityNone).hexString, "#838383")
         XCTAssertEqual(light.ink(.priorityMark).hexString, "#B35D27")
-        XCTAssertEqual(light.doneDisc.hexString, "#E1E5DE")
-        XCTAssertEqual(light.ink(.doneCheck).hexString, "#737B73")
-        XCTAssertEqual(light.hover.over(light.panel.base).hexString, "#F0F1ED")
-        XCTAssertEqual(light.selected.over(light.panel.base).hexString, "#E5E8E2")
-        XCTAssertEqual(light.tabSelected.over(light.panel.base).hexString, "#ECEEE9")
-        XCTAssertEqual(light.tabHover.over(light.panel.base).hexString, "#F6F6F3")
+        XCTAssertEqual(light.doneDisc.hexString, "#E4E4E4")
+        XCTAssertEqual(light.ink(.doneCheck).hexString, "#797979")
+        XCTAssertEqual(light.hover.over(light.panel.base).hexString, "#F1F1F1")
+        XCTAssertEqual(light.selected.over(light.panel.base).hexString, "#E7E7E7")
+        XCTAssertEqual(light.tabSelected.over(light.panel.base).hexString, "#EDEDED")
+        XCTAssertEqual(light.tabHover.over(light.panel.base).hexString, "#F6F6F6")
         // Phase 0's drawn control look (as before visual A) over this surface.
-        XCTAssertEqual(light.controlFace.hexString, "#E9E8E7")
-        XCTAssertEqual(light.addBarFlat.face.hexString, "#F6F6F3")
+        XCTAssertEqual(light.controlFace.hexString, "#E8E8E8")
+        XCTAssertEqual(light.addBarFlat.face.hexString, "#F6F6F6")
         XCTAssertEqual(light.contentCard.hexString, "#FBFBFB")
         XCTAssertEqual(light.groupCard.hexString, "#F2F2F2")
         let dark = AtticDesignContext(mode: .dark).tokens
-        XCTAssertEqual(dark.panel.base.hexString, "#2C2E2D")
-        XCTAssertEqual(dark.ink(.heading).hexString, "#F0F2EE")
-        XCTAssertEqual(dark.ink(.body).hexString, "#DEDFDD")
-        XCTAssertEqual(dark.ink(.helper).hexString, "#A0A5A1")
-        XCTAssertEqual(dark.ink(.priorityNone).hexString, "#909790")
+        XCTAssertEqual(dark.panel.base.hexString, "#2E2E2E")
+        XCTAssertEqual(dark.ink(.heading).hexString, "#F1F1F1")
+        XCTAssertEqual(dark.ink(.body).hexString, "#DFDFDF")
+        XCTAssertEqual(dark.ink(.helper).hexString, "#A4A4A4")
+        XCTAssertEqual(dark.ink(.priorityNone).hexString, "#959595")
         XCTAssertEqual(dark.ink(.priorityMark).hexString, "#D9A16C")
-        XCTAssertEqual(dark.doneDisc.hexString, "#424841")
-        XCTAssertEqual(dark.ink(.doneCheck).hexString, "#B3BAB3")
-        XCTAssertEqual(dark.hover.over(dark.panel.base).hexString, "#353935")
-        XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#414641")
-        XCTAssertEqual(dark.tabSelected.over(dark.panel.base).hexString, "#3D413D")
-        XCTAssertEqual(dark.tabHover.over(dark.panel.base).hexString, "#333633")
-        XCTAssertEqual(dark.controlFace.hexString, "#434544")
-        XCTAssertEqual(dark.addBarFlat.face.hexString, "#323433")
+        XCTAssertEqual(dark.doneDisc.hexString, "#464646")
+        XCTAssertEqual(dark.ink(.doneCheck).hexString, "#B8B8B8")
+        XCTAssertEqual(dark.hover.over(dark.panel.base).hexString, "#383838")
+        XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#454545")
+        XCTAssertEqual(dark.tabSelected.over(dark.panel.base).hexString, "#404040")
+        XCTAssertEqual(dark.tabHover.over(dark.panel.base).hexString, "#353535")
+        XCTAssertEqual(dark.controlFace.hexString, "#454545")
+        XCTAssertEqual(dark.addBarFlat.face.hexString, "#343434")
         XCTAssertEqual(dark.contentCard.hexString, "#2E2E2E")
         XCTAssertEqual(dark.groupCard.hexString, "#333333")
         // Original's accent is grey.
         let accent = light.ink(.accent).hsl
         XCTAssertLessThan(accent.saturation, 0.05)
-    }
+            // No green cast: every grey the default look draws is neutral.
+        for tokens in [light, dark] {
+            let base = tokens.panel.base
+            let greys = [tokens.ink(.heading), tokens.ink(.body), tokens.ink(.helper), tokens.ink(.priorityNone), tokens.doneDisc,
+                         tokens.ink(.doneCheck), tokens.controlFace, tokens.addBarFlat.face,
+                         tokens.hover.over(base), tokens.selected.over(base), tokens.tabSelected.over(base), tokens.tabHover.over(base)]
+            for grey in greys {
+                XCTAssertTrue(abs(grey.red - grey.green) < 0.006 && abs(grey.green - grey.blue) < 0.006, "\(grey.hexString) is not neutral")
+            }
+        }
+        XCTAssertEqual(dark.panel.base.hexString, "#2E2E2E")
+}
 
     func testCustomisationChangesOnlyTheBackgroundAndTheAccent() {
         // Visual A tunes the default look (Original on Solid) on its own:
@@ -190,8 +204,8 @@ final class AtticDesignSystemTests: XCTestCase {
         // the Light surface (the reference's #ECECEC on white), 23 above the Dark one.
         let light = AtticDesignContext(mode: .light).tokens.controlFace
         let dark = AtticDesignContext(mode: .dark).tokens.controlFace
-        XCTAssertEqual(light.hexString, "#E9E8E7")
-        XCTAssertEqual(dark.hexString, "#434544")
+        XCTAssertEqual(light.hexString, "#E8E8E8")
+        XCTAssertEqual(dark.hexString, "#454545")
     }
 
     func testScrollEdgeVeilFollowsItsRamp() {
@@ -540,6 +554,17 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticTextStyle.rowTitle.spec.size, 13)
         XCTAssertEqual(AtticTextStyle.rowTitleActive.spec.weight, .medium)
         XCTAssertNotEqual(AtticTextStyle.listBody.nsFont.fontName, AtticTextStyle.body.nsFont.fontName, "the rounded face is a different font")
+    }
+
+    /// In progress (owner, 2026-09-26): the centre dot until a subtask is
+    /// ticked, then a true pie of the share ticked, with no minimum.
+    func testInProgressIsADotUntilASubtaskIsTickedThenATruePie() {
+        XCTAssertNil(AtticStatusCircle.pieShare(nil))
+        XCTAssertNil(AtticStatusCircle.pieShare((0, 3)))
+        XCTAssertNil(AtticStatusCircle.pieShare((0, 0)))
+        XCTAssertEqual(AtticStatusCircle.pieShare((1, 3))!, 1.0 / 3, accuracy: 1e-9)
+        XCTAssertEqual(AtticStatusCircle.pieShare((1, 10))!, 0.1, accuracy: 1e-9, "no minimum")
+        XCTAssertEqual(AtticStatusCircle.pieShare((3, 3)), 1)
     }
 
     /// In progress is a ring with a centre dot, never a share: VoiceOver
