@@ -16,7 +16,9 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
         // (`task-row-` identifiers, "Show subtasks", "Add subtask…"), which
         // Phase 1 replaced; the panel now opens from "Open page" for a
         // task's files until task pages arrive in Phase 3.
-        throw XCTSkip("Opens subtask panels from the legacy Tasks rows Phase 1 removed; needs rewriting against the new page.")
+        // The files panel's open, dismiss, pin and focus behaviour is covered
+        // against the integrated panel by `TasksPanelUITests`.
+        throw XCTSkip("Opens subtask panels from the legacy Tasks rows Phase 1 removed; TasksPanelUITests covers the retained files panel.")
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
@@ -29,9 +31,11 @@ final class SubtaskHoverPinnedUITests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        // setUp skips before launching: there may be no app to stop.
+        guard let app else { return }
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
-        app = nil
+        self.app = nil
     }
 
     // MARK: - Helpers

@@ -103,6 +103,9 @@ struct TasksPage: View {
                 ForEach(TasksTab.allCases) { tab in
                     page(tab)
                         .containerRelativeFrame(.horizontal)
+                        // The pages beside the current one are built for the
+                        // swipe; VoiceOver reads only the page shown.
+                        .accessibilityHidden(tab != model.tab)
                         .id(tab)
                 }
             }

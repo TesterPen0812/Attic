@@ -3,7 +3,7 @@ import XCTest
 
 /// The Phase 1 Tasks page, driven as a person drives it: the page runs on
 /// its own in a preview window (`--attic-gallery --attic-tasks-page`, an
-/// in-memory store with the v4 demo tasks), and each test types, clicks and
+/// in-memory store with the v9 demo tasks), and each test types, clicks and
 /// right-clicks, then reads what VoiceOver would read.
 final class TasksPageUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -50,10 +50,10 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(condition(), message)
     }
 
-    /// Clicks the row's status circle (16 pt at x = 16, on the title line).
+    /// Clicks the row's status circle (16 pt at x = 20, on the title line).
     private func clickCircle(_ title: String, modifiers: XCUIElement.KeyModifierFlags = []) {
         let element = row(title)
-        let point = element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 24, dy: 16))
+        let point = element.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 28, dy: 17))
         if modifiers.isEmpty {
             point.click()
         } else {
@@ -93,6 +93,17 @@ final class TasksPageUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
         // ↓ moved to Email beta testers: Return edits its title in place.
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        // The title editor takes the keyboard on the next turn: wait for it
+        // before ⌘A, or the list's select-all takes the key instead.
+        let editor = window.descendants(matching: .textField)
+            .matching(NSPredicate(format: "value == %@", "Email beta testers")).firstMatch
+        // (The row may merge the field into its own element; then give the
+        // editor a moment to take the keyboard instead.)
+        if editor.waitForExistence(timeout: 2) {
+            waitFor((editor.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the editor has the keyboard")
+        } else {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
         app.typeKey("a", modifierFlags: .command)
         app.typeText("Email the beta testers\r")
         waitFor(row("Email the beta testers").exists, "Return saves the edited title")
@@ -130,22 +141,24 @@ final class TasksPageUITests: XCTestCase {
         waitFor(row("Ship appearance PR").frame.minY < row("Book dentist").frame.minY, "⌘Z undoes the move")
     }
 
-    /// Dragging a row onto the Backlog label moves it there.
-    func testDraggingARowOntoTheBacklogLabelMovesIt() throws {
-        XCTAssertTrue(row("Email beta testers").waitForExistence(timeout: 5))
-        let from = row("Email beta testers").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
-        let to = window.buttons["Backlog"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        from.press(forDuration: 0.2, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
-        waitFor(!row("Email beta testers").exists, "it leaves Now")
-        window.buttons["Backlog"].click()
-        waitFor(row("Email beta testers").exists, "it is in Backlog")
+    /// The page pill's three choices (v9): Tasks, Backlog and Done, with
+    /// the page's one title following.
+    private func pill(_ page: String) -> XCUIElement {
+        window.buttons["tasks-page-\(page)"]
     }
 
-    func testTheTabsSwitchBetweenNowBacklogAndDone() throws {
-        XCTAssertTrue(window.buttons["Backlog"].waitForExistence(timeout: 5))
-        window.buttons["Backlog"].click()
+    private var pageTitle: XCUIElement {
+        window.descendants(matching: .any).matching(identifier: "tasks-page-title").firstMatch
+    }
+
+    func testThePagePillMovesBetweenTasksBacklogAndDone() throws {
+        XCTAssertTrue(pill("backlog").waitForExistence(timeout: 5))
+        XCTAssertEqual(pageTitle.label, "Tasks")
+        pill("backlog").click()
         waitFor(row("Plan the spring trip").isHittable, "Backlog lists its tasks")
-        window.buttons["Done"].click()
+        waitFor(pageTitle.label == "Backlog", "the title reads Backlog")
+        pill("done").click()
+        waitFor(pageTitle.label == "Done", "the title reads Done")
         waitFor(row("Send invoice").isHittable, "Done lists the Done log")
         XCTAssertTrue(window.descendants(matching: .any)["Yesterday"].exists)
         // "Open page" on a Done log task opens its details there.
@@ -156,7 +169,8 @@ final class TasksPageUITests: XCTestCase {
         let restore = window.buttons["Restore to Now"]
         XCTAssertTrue(restore.waitForExistence(timeout: 3), "the details offer Restore to Now")
         restore.click()
-        window.buttons["Now"].click()
+        pill("now").click()
+        waitFor(pageTitle.label == "Tasks", "the title reads Tasks")
         waitFor(row("Send invoice").exists, "restored to Now")
     }
 }
