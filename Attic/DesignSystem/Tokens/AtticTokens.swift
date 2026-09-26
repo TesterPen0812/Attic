@@ -168,9 +168,9 @@ enum AtticLayout {
     /// title: the chip row on the panel's 18 pt line (12 inside the page),
     /// 14 below the header, the list 10 below the chips.
     static let pageTabsX: CGFloat = 12
-    /// Visual A: 20 below the header, the list 8 below the tabs.
+    /// Visual A: 20 below the header; the list 14 below the tabs (owner, 2026-09-26; the review had 8).
     static let pageTabsTop: CGFloat = 20
-    static let pageTabsToList: CGFloat = 8
+    static let pageTabsToList: CGFloat = 14
     /// The least room between the list's last content and the add bar.
     static let contentToAddBar: CGFloat = 16
 
