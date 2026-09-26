@@ -24,20 +24,32 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.control(height: 36), 15)
         XCTAssertEqual(AtticRadius.control(height: 28), 12)
         XCTAssertEqual(AtticRadius.control(height: 18), 7.5)
-        XCTAssertEqual(AtticRadius.nestedChip, 10.5, "Nested chips: outer radius minus the inset (14.5 − 4)")
+        XCTAssertEqual(AtticRadius.nestedChip, 9.5, "Nested chips: outer radius minus the inset (13.5 − 4, visual A)")
         XCTAssertEqual(AtticRadius.nested(outer: 13.5, gap: 4), 9.5)
         XCTAssertNil(AtticRadius.nested(outer: 20, gap: 12), "Nesting only applies to gaps of 6 pt or less")
         XCTAssertEqual(AtticRadius.ring(around: 10, offset: 4), 14)
         XCTAssertEqual([AtticRadius.menu, AtticRadius.groupCard, AtticRadius.contentCard, AtticRadius.image, AtticRadius.highlight], [20, 17, 10, 8, 10])
     }
 
-    func testControlSizesAreWiderThanTall() {
-        for size in [AtticControlSize.panelButton, AtticControlSize.settingsBackButton] {
-            XCTAssertGreaterThan(size.width / size.height, 1.1)
-            XCTAssertLessThan(size.width / size.height, 1.2)
-        }
-        XCTAssertEqual(AtticLayout.rowPitch, AtticLayout.rowHighlightHeight + 2)
+    /// Visual A ("Calm"): the panel's buttons are 32 × 32 (radius 13.5),
+    /// the page switch 144 × 32 with a 76 pt selected chip and 28 pt
+    /// others; Settings' back button keeps 38 × 34. Rows are 36 / 52 with
+    /// highlights 2 shorter, and circle → title is 10 on the 24 → 48 lines.
+    func testControlSizesFollowVisualA() {
+        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
+        XCTAssertEqual(AtticControlSize.settingsBackButton, CGSize(width: 38, height: 34))
+        XCTAssertEqual(AtticControlSize.capsuleHeight, 32)
+        XCTAssertEqual(AtticControlSize.chipHeight, 24)
+        XCTAssertEqual(AtticControlSize.chipIconWidth, 28)
+        let geometry = AtticPageSwitch<Int>.Geometry(titles: AtticGallerySamples.pages.map(\.title))
+        XCTAssertEqual(geometry.selectedWidth, 76)
+        XCTAssertEqual(geometry.innerWidth + 2 * AtticControlSize.capsuleInset, 144)
+        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [36, 34, 52, 50])
         XCTAssertEqual(AtticLayout.textX, AtticLayout.circleX + AtticControlSize.statusCircle + AtticSpacing.gap10)
+        let m = AtticTaskRowMetrics.self
+        XCTAssertEqual(m.titleTop + m.titleLineHeight + 10, AtticLayout.rowPitch, "8 + 18 + 10")
+        XCTAssertEqual(m.titleTop + m.titleLineHeight + m.titleToDetails + m.detailsLineHeight + 8, AtticLayout.detailRowPitch, "8 + 18 + 2 + 16 + 8")
+        XCTAssertEqual(m.circleCentreY, 17)
     }
 
     func testMotionPresetsAreCalmSpringsWithReduceMotionFallbacks() {
@@ -60,17 +72,42 @@ final class AtticDesignSystemTests: XCTestCase {
         }
     }
 
-    func testDefaultLadderMatchesTheSpecWhereItCan() {
+    /// Visual A ("Calm") sets the default look's colours exactly.
+    func testDefaultLadderMatchesVisualA() {
         let light = AtticDesignContext(mode: .light).tokens
-        XCTAssertEqual(light.panel.base.hexString, "#FAFAFA")
-        XCTAssertEqual(light.ink(.heading).hexString, "#1E1F1F")
+        XCTAssertEqual(light.panel.base.hexString, "#FCFBFA")
+        XCTAssertEqual(light.ink(.heading).hexString, "#252826")
         XCTAssertEqual(light.ink(.body).hexString, "#494B4A")
+        XCTAssertEqual(light.ink(.helper).hexString, "#777B78")
+        XCTAssertEqual(light.ink(.priorityNone).hexString, "#7F857F")
+        XCTAssertEqual(light.ink(.priorityMark).hexString, "#B35D27")
+        XCTAssertEqual(light.doneDisc.hexString, "#E1E5DE")
+        XCTAssertEqual(light.ink(.doneCheck).hexString, "#737B73")
+        XCTAssertEqual(light.hover.over(light.panel.base).hexString, "#F0F1ED")
+        XCTAssertEqual(light.selected.over(light.panel.base).hexString, "#E5E8E2")
+        XCTAssertEqual(light.tabSelected.over(light.panel.base).hexString, "#ECEEE9")
+        XCTAssertEqual(light.tabHover.over(light.panel.base).hexString, "#F6F6F3")
+        XCTAssertEqual(light.chipSelected.over(Calm.controlBody(dark: false)).hexString, "#E7E9E5")
+        XCTAssertEqual(light.controlFace.hexString, "#F6F6F3")
+        XCTAssertEqual(light.addBarFlat.face.hexString, "#F6F6F3")
         XCTAssertEqual(light.contentCard.hexString, "#FBFBFB")
         XCTAssertEqual(light.groupCard.hexString, "#F2F2F2")
         let dark = AtticDesignContext(mode: .dark).tokens
-        XCTAssertEqual(dark.panel.base.hexString, "#2C2C2D")
-        XCTAssertEqual(dark.ink(.heading).hexString, "#F5F5F5")
-        XCTAssertEqual(dark.ink(.body).hexString, "#D5D5D5")
+        XCTAssertEqual(dark.panel.base.hexString, "#2C2E2D")
+        XCTAssertEqual(dark.ink(.heading).hexString, "#F0F2EE")
+        XCTAssertEqual(dark.ink(.body).hexString, "#DEDFDD")
+        XCTAssertEqual(dark.ink(.helper).hexString, "#A0A5A1")
+        XCTAssertEqual(dark.ink(.priorityNone).hexString, "#909790")
+        XCTAssertEqual(dark.ink(.priorityMark).hexString, "#D9A16C")
+        XCTAssertEqual(dark.doneDisc.hexString, "#424841")
+        XCTAssertEqual(dark.ink(.doneCheck).hexString, "#B3BAB3")
+        XCTAssertEqual(dark.hover.over(dark.panel.base).hexString, "#353935")
+        XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#414641")
+        XCTAssertEqual(dark.tabSelected.over(dark.panel.base).hexString, "#3D413D")
+        XCTAssertEqual(dark.tabHover.over(dark.panel.base).hexString, "#333633")
+        XCTAssertEqual(dark.chipSelected.over(Calm.controlBody(dark: true)).hexString, "#4A4D4B")
+        XCTAssertEqual(dark.controlFace.hexString, "#373938")
+        XCTAssertEqual(dark.addBarFlat.face.hexString, "#323433")
         XCTAssertEqual(dark.contentCard.hexString, "#2E2E2E")
         XCTAssertEqual(dark.groupCard.hexString, "#333333")
         // Original's accent is grey.
@@ -79,7 +116,9 @@ final class AtticDesignSystemTests: XCTestCase {
     }
 
     func testCustomisationChangesOnlyTheBackgroundAndTheAccent() {
-        let base = AtticDesignContext(mode: .light).tokens
+        // Visual A tunes the default look (Original on Solid) on its own:
+        // the other palettes share the ladder of Original with a Tint.
+        let base = AtticDesignContext(mode: .light, palette: .amethyst).tokens
         for palette in AtticPanelTheme.allCases {
             for surface in PanelSurfaceStyle.allCases {
                 let tokens = AtticDesignContext(mode: .light, palette: palette, surface: surface, tint: .bold).tokens
@@ -89,6 +128,7 @@ final class AtticDesignSystemTests: XCTestCase {
                 XCTAssertEqual(tokens.groupCard, base.groupCard)
             }
             // On the plain Solid look a palette changes no text at all.
+            guard palette != .original else { continue }
             let solid = AtticDesignContext(mode: .light, palette: palette).tokens
             for ink in [AtticInk.heading, .body, .label, .helper, .glyph] {
                 XCTAssertEqual(solid.ink(ink), base.ink(ink), "\(palette) changed \(ink)")
@@ -147,12 +187,11 @@ final class AtticDesignSystemTests: XCTestCase {
                                pair.onGlass ? "glass" : "Craft", tokens.panel.worstMargin([pair])))
             }
         }
-        // Reduce Transparency's Craft style: Light fill 7 below #FAFAFA,
-        // Dark 17 above #2C2C2D (Craft's measured deltas).
+        // The drawn control body (visual A): #F6F6F3 Light, #373938 Dark.
         let light = AtticDesignContext(mode: .light).tokens.controlFace
         let dark = AtticDesignContext(mode: .dark).tokens.controlFace
-        XCTAssertEqual(light.red * 255, 243, accuracy: 0.6)
-        XCTAssertEqual(dark.red * 255, 61, accuracy: 0.6)
+        XCTAssertEqual(light.hexString, "#F6F6F3")
+        XCTAssertEqual(dark.hexString, "#373938")
     }
 
     func testScrollEdgeVeilFollowsItsRamp() {
@@ -190,7 +229,8 @@ final class AtticDesignSystemTests: XCTestCase {
             let helper = tokens.ink(.helper).contrast(on: base)
             let muted = tokens.ink(.muted).contrast(on: base)
             XCTAssertGreaterThanOrEqual(muted, 3, context.caption)
-            XCTAssertLessThan(helper, 4.5 * 1.05, "\(context.caption): helper stays soft (\(helper))")
+            // Visual A's Dark secondary grey is deliberately 5.46 : 1.
+            XCTAssertLessThan(helper, context.mode == .dark ? 5.5 : 4.5 * 1.05, "\(context.caption): helper stays soft (\(helper))")
             XCTAssertLessThanOrEqual(muted, helper + 0.001, context.caption)
             XCTAssertGreaterThanOrEqual(tokens.ink(.body).contrast(on: base), 4.5)
         }
@@ -210,7 +250,9 @@ final class AtticDesignSystemTests: XCTestCase {
             for ink in [AtticInk.helper, .muted, .label, .body] {
                 XCTAssertGreaterThanOrEqual(tokens.ink(ink).contrast(on: solid.panel.base), solid.ink(ink).contrast(on: solid.panel.base) - 0.01, "\(context.caption) \(ink)")
             }
-            XCTAssertEqual(tokens.ink(.heading), solid.ink(.heading), "Heading already passes everywhere")
+            // Visual A sets the plain default's heading exactly; elsewhere
+            // the heading is the ladder's, which already passes everywhere.
+            XCTAssertEqual(tokens.ink(.heading), AtticDesignContext(mode: .light, palette: .amethyst).tokens.ink(.heading), "Heading already passes everywhere")
         }
     }
 
@@ -464,8 +506,8 @@ final class AtticDesignSystemTests: XCTestCase {
     /// is left to overdue dates.
     func testStatusRingIsOneGreyAndPriorityIsAMark() {
         let m = AtticStatusCircleMetrics.self
-        XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.4)
-        XCTAssertEqual(m.ringWidth(increaseContrast: true), 1.8, accuracy: 1e-9)
+        XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.25, "visual A")
+        XCTAssertEqual(m.ringWidth(increaseContrast: true), 1.5, accuracy: 1e-9)
         XCTAssertEqual(AtticStatusCircle.ringInk, .priorityNone)
         for context in AtticAppearanceCheck.allContexts() {
             let tokens = context.tokens

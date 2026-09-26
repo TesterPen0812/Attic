@@ -33,9 +33,11 @@ final class PanelShellTests: XCTestCase {
             let total = (0..<3).map { geometry.width(of: $0, selected: selected) }.reduce(0, +) + 2 * geometry.spacing
             XCTAssertEqual(total, geometry.innerWidth, accuracy: 0.001, "the switch is the same width whichever page is selected")
         }
-        // v9 (owner, 2026-09-26): the header's controls are 34 tall.
-        XCTAssertEqual(PanelHeaderLayout.height, 34)
-        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 38, height: 34))
+        // Visual A ("Calm"): the header's controls are 32 tall, the pin 32 × 32,
+        // the switch 144 wide.
+        XCTAssertEqual(PanelHeaderLayout.height, 32)
+        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 32, height: 32))
+        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 144)
     }
 
     func testPageLayoutUsesTheCornerAwareInsetsAndPlacesTheHeaderBand() {
@@ -44,12 +46,13 @@ final class PanelShellTests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: corner, panelSize: size)
             XCTAssertEqual(layout.contentInsets, PanelGeometry.contentInsets(cornerSize: corner, panelSize: size))
             XCTAssertEqual(layout.chromeInsets, PanelGeometry.chromeInsets(cornerSize: corner, panelSize: size))
-            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 34)
+            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 32)
         }
-        // Owner, 2026-09-26: the controls sit 18 from every edge at the default corner,
-        // and move inward with larger corners.
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 18)
-        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 18)
+        // Visual A: the controls sit 20 from every edge at the default corner
+        // (the header 20–52), and move inward with larger corners.
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 20)
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).headerBottom, 52)
+        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 20)
     }
 
     // MARK: Key window

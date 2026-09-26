@@ -56,7 +56,8 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(panel.nativeMargin, AtticStyle.panelElevationMargin)
         panel.setVisibleContentFrame(visible, display: false)
         XCTAssertEqual(panel.visibleContentFrame, visible)
-        XCTAssertEqual(panel.frame, visible.insetBy(dx: -24, dy: -24))
+        XCTAssertEqual(panel.frame, visible.insetBy(dx: -AtticStyle.panelElevationMargin, dy: -AtticStyle.panelElevationMargin))
+        XCTAssertEqual(AtticStyle.panelElevationMargin, 28, "visual A: room for the 12 pt, y 4 shadow")
         XCTAssertEqual(panel.accessibilityFrame(), visible)
 
         // A margin smaller than the grip never shrinks the acquisition band.
@@ -110,7 +111,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(AtticStyle.controlHitSize, 42)
         XCTAssertEqual(AtticStyle.composerControlHeight, 42)
         XCTAssertEqual(AtticStyle.composerActionSize, 34)
-        XCTAssertEqual(AtticStyle.chromeMinimumInset, 18)
+        XCTAssertEqual(AtticStyle.chromeMinimumInset, 20)
         XCTAssertEqual(AtticStyle.chromeCornerClearance, 7)
         XCTAssertEqual(AtticStyle.chromeWorkspaceSpacing, 24)
         XCTAssertEqual(AtticStyle.taskScrollTopPadding, 22)
