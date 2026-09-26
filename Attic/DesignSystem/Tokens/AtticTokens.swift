@@ -146,8 +146,10 @@ enum AtticLayout {
     /// highlights are 16 from the panel's edges, circles' visible edge at
     /// 24 (centre 31) and titles at 48: the 20 → 24 → 48 lines.
     static let rowHighlightInset: CGFloat = 8
-    static let circleX: CGFloat = 16
-    static let textX: CGFloat = 40
+    /// Owner, 2026-09-26: tasks sit under the page tabs' text — circles at
+    /// 31 from the panel edge (23 in the page), titles at 55 (47).
+    static let circleX: CGFloat = 23
+    static let textX: CGFloat = 47
     /// Settings' sidebar keeps its own highlight inset.
     static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28

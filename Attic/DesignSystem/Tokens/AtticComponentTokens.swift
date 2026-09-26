@@ -237,10 +237,10 @@ enum AtticPagePillMetrics {
 
 /// The add bar (spec: 36 tall, radius 15; the send button inside).
 enum AtticAddBarMetrics {
-    /// Visual A: with the bar 20 from the panel's edge, the plus is centred
-    /// on the status circles' centre line (31 = 20 + 22 / 2) and the text
-    /// starts on the task titles' line (48 = 20 + 22 + 6).
-    static let leadingPadding: CGFloat = 0
+    /// With the bar 20 from the panel's edge, the plus is centred on the
+    /// status circles' centre line (38 = 20 + 7 + 22 / 2) and the text
+    /// starts on the task titles' line (55 = 20 + 7 + 22 + 6).
+    static let leadingPadding: CGFloat = 7
     static let iconSlot: CGFloat = 22
     static let gap: CGFloat = 6
     static let plusSize: CGFloat = 12
