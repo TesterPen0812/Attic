@@ -9,6 +9,7 @@ standard phases and timing names stay comparable with Baselines A and B.
 """
 
 import argparse
+import ctypes
 import re
 import json
 import os
@@ -57,6 +58,33 @@ def wait_for_phase(root, expected, timeout=300, pid=None):
             raise RuntimeError(f"Preview PID {pid} exited before {expected}")
         time.sleep(0.2)
     raise TimeoutError(f"No {expected} phase within {timeout}s; root={root}")
+
+
+class _Point(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class _Size(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+
+class _Rect(ctypes.Structure):
+    _fields_ = [("origin", _Point), ("size", _Size)]
+
+
+def park_pointer():
+    """Moves the pointer to the middle of the main display, away from every
+    reveal corner and the panel, so a pointer left in (or crossing) the
+    probed corner cannot reveal or hide the panel mid-window. The probe does
+    this itself before launch and before every phase."""
+    graphics = ctypes.CDLL("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+    graphics.CGMainDisplayID.restype = ctypes.c_uint32
+    graphics.CGDisplayBounds.restype = _Rect
+    graphics.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+    graphics.CGWarpMouseCursorPosition.argtypes = [_Point]
+    bounds = graphics.CGDisplayBounds(graphics.CGMainDisplayID())
+    graphics.CGWarpMouseCursorPosition(_Point(bounds.origin.x + bounds.size.width / 2,
+                                              bounds.origin.y + bounds.size.height / 2))
 
 
 def process_sample(helper, pid):
@@ -202,6 +230,7 @@ def measure(args, app, executable, bundle, helper):
             (root / "phase.json").unlink()
             shutil.rmtree(root / "phase-markers", ignore_errors=True)
             (root / "timings.ndjson").unlink(missing_ok=True)
+            park_pointer()
             launch(app, root, token, run_dir / "probe", extra=args.extra, corner=args.corner)
             first = wait_for_phase(root, "hidden_idle")
             if first.get("panel_visible") != 0:
@@ -231,6 +260,7 @@ def measure(args, app, executable, bundle, helper):
                                                    or marker.get("visible_strokes") != 1700):
                         raise RuntimeError(f"Large canvas was not selected: {marker}")
                     sample = sample_phase(helper, pid, phase, args.window, run_dir)
+                    park_pointer()
                     command("/bin/kill", "-USR1", str(pid))
                     end = wait_for_phase(root, phase + "_end", timeout=30, pid=pid)
                     if end.get("panel_visible") != marker.get("panel_visible") or \
@@ -244,6 +274,7 @@ def measure(args, app, executable, bundle, helper):
                     # phase; each later USR1 ends one and starts the next.
                     for index, phase in enumerate(EXTRA_PHASES):
                         if index > 0:
+                            park_pointer()
                             command("/bin/kill", "-USR1", str(pid))
                         wait_for_phase(root, phase, timeout=60, pid=pid)
                         time.sleep(1)
