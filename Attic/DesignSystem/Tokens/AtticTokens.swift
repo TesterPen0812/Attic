@@ -148,11 +148,11 @@ enum AtticLayout {
     /// The page's one title ("Tasks", "Backlog", "Done"): a small section
     /// label (owner's reference, 2026-09-26) on the pin's left edge (12,
     /// the controls' inset), its line box 28 below the header, and the
-    /// list 8 below it.
+    /// list 14 below it.
     static let pageTitleX: CGFloat = 12
     static let pageTitleTop: CGFloat = 28
     static let pageTitleHeight: CGFloat = 13
-    static let pageTitleToList: CGFloat = 8
+    static let pageTitleToList: CGFloat = 14
 
     static let statusTabsGap: CGFloat = 14
     static let statusTabsTop: CGFloat = 12
