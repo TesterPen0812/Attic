@@ -50,7 +50,12 @@ enum AtticRadius {
     /// (owner's decision, 2026-09-25, spec rev 175: the rounder corner,
     /// chosen over Craft's 32 % on the full panel), rounded to the half
     /// point: 13.5 on 32, 14.5 on 34, 15 on 36, 12 on 28, 7.5 on 18.
-    static let controlFraction: CGFloat = 0.42
+    static let controlFraction42: CGFloat = 0.42
+    /// TEMPORARY owner test (2026-09-26): Settings → Appearance → Round
+    /// controls switches every control to fully round ends. Remove before
+    /// merging.
+    nonisolated(unsafe) static var roundControls = false
+    static var controlFraction: CGFloat { roundControls ? 0.5 : controlFraction42 }
 
     static func control(height: CGFloat) -> CGFloat {
         (height * controlFraction * 2).rounded() / 2
@@ -66,7 +71,7 @@ enum AtticRadius {
     static let highlight: CGFloat = 10
     /// A chip nested in a capsule: outer radius minus the inset
     /// (14.5 − 4 = 10.5 on the 34 pt capsule).
-    static let nestedChip: CGFloat = control(height: AtticControlSize.capsuleHeight) - AtticControlSize.capsuleInset
+    static var nestedChip: CGFloat { control(height: AtticControlSize.capsuleHeight) - AtticControlSize.capsuleInset }
     /// Rounded-square subtask checkbox: a fixed glyph radius (a glyph, not
     /// a control, so it keeps its square look beside the round circles).
     static let subtaskCheckbox: CGFloat = 4.5
@@ -86,7 +91,7 @@ enum AtticControlSize {
     /// The panel's raised buttons (pin, All notes, New note): 38 × 34, the
     /// header's height since the owner's round-2 panel redesign (v9), and
     /// the same as Settings' back button.
-    static let panelButton = CGSize(width: 38, height: 34)
+    static var panelButton: CGSize { AtticRadius.roundControls ? CGSize(width: 34, height: 34) : CGSize(width: 38, height: 34) }
     static let settingsBackButton = CGSize(width: 38, height: 34)
     /// The page switch: 34 tall (v9), chips 26 inside a 4 pt inset.
     static let capsuleHeight: CGFloat = 34

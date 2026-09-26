@@ -72,7 +72,7 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 enum PanelHeaderLayout {
     /// The header's controls are one row, 32 tall.
     static let height = AtticControlSize.capsuleHeight
-    static let pinSize = AtticControlSize.panelButton
+    static var pinSize: CGSize { AtticControlSize.panelButton }
 
     /// The page switch's width: fixed whichever page is selected.
     static let pageSwitchWidth: CGFloat = {

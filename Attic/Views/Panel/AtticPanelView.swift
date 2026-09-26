@@ -84,6 +84,7 @@ struct AtticPanelView: View {
 
     var body: some View {
         themedPanel
+            .id(settings.roundControlsTest) // TEMPORARY owner test: redraw with the other corners
     }
 
     // MARK: Composition
