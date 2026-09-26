@@ -60,7 +60,10 @@ struct SettingsPanelMiniature: View {
     )
 
     /// The page tabs' top: the header's margin and controls, then the gap.
-    private static let tabsTop = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.pageTabsTop
+    private static let tabsTop = AtticStyle.chromeMinimumInset + AtticControlSize.capsuleHeight + AtticLayout.pageTabsTop
+    /// The page sits this far inside the panel's own 12 pt frame, as the
+    /// live Tasks page does (visual A's 20 → 24 → 48 lines).
+    private static let pageInset = AtticStyle.chromeMinimumInset - AtticSpacing.panelMargin
 
     var body: some View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
@@ -68,7 +71,7 @@ struct SettingsPanelMiniature: View {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: Self.tabsTop)
                 AtticPageTabs(items: Self.tabs, selection: .constant(0))
-                    .padding(.leading, AtticSpacing.panelMargin)
+                    .padding(.leading, AtticLayout.pageTabsX)
                     .padding(.bottom, AtticLayout.pageTabsToList)
                 ForEach(Self.rows) { row in
                     AtticTaskRow(model: row, actions: Self.noActions, onToggleExpanded: {})
@@ -78,6 +81,7 @@ struct SettingsPanelMiniature: View {
                     .padding(.top, AtticCompletedLineMetrics.top)
                 Spacer(minLength: 0)
             }
+            .padding(.horizontal, Self.pageInset)
             AtticControlGroup {
                 HStack(spacing: 0) {
                     AtticRaisedButton(systemName: "pin", label: "Pin") {}
@@ -85,7 +89,7 @@ struct SettingsPanelMiniature: View {
                     AtticPageSwitch(items: Self.pages, selection: .constant(0))
                 }
             }
-            .padding(AtticSpacing.panelMargin)
+            .padding(AtticStyle.chromeMinimumInset)
         }
         .frame(width: AtticLayout.panelSize.width, height: AtticLayout.panelSize.height)
         .background(AtticSurfaceBackground(model: design.tokens.panel, shape: shape, tintHeight: AtticLayout.panelSize.height))
