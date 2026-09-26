@@ -75,6 +75,9 @@ enum AtticRadius {
     /// Rounded-square subtask checkbox: a fixed glyph radius (a glyph, not
     /// a control, so it keeps its square look beside the round circles).
     static let subtaskCheckbox: CGFloat = 4.5
+    /// The subtask checkbox is a true squircle: a superellipse of this
+    /// exponent across the whole 14 pt box (owner, 2026-09-26).
+    static let subtaskCheckboxExponent: CGFloat = 4
 
     /// Nested radius, used only when the gap is 6 pt or less (spec rule 3).
     static func nested(outer: CGFloat, gap: CGFloat) -> CGFloat? {

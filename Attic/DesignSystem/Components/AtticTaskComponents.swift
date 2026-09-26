@@ -1131,7 +1131,8 @@ struct AtticSubtaskCheckbox: View {
         let tokens = design.tokens
         let m = AtticSubtaskMetrics.self
         let size = AtticControlSize.subtaskCheckbox
-        let shape = RoundedRectangle(cornerRadius: AtticRadius.subtaskCheckbox, style: .continuous)
+        // A true squircle (superellipse, n = 4): the owner's choice, 2026-09-26.
+        let shape = Squircle(cornerRadius: size / 2, exponent: AtticRadius.subtaskCheckboxExponent)
         let lineWidth = design.increaseContrast ? m.lineWidthIncreased : m.lineWidth
         ZStack {
             if isDone {
