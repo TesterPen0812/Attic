@@ -518,7 +518,9 @@ struct AtticPageButton<Page: Hashable>: View {
             if inside { onApproach() } else { hoveredPage = nil }
         }
         .animation(design.reduceMotion ? nil : .spring(duration: AtticMotionPreset.expand.duration, bounce: 0), value: open)
-        .focusable(capture == nil)
+        // A Tab stop like a button: only when keyboard navigation is on,
+        // so the panel never opens it by focusing it when revealed.
+        .focusable(capture == nil, interactions: .activate)
         .focused($focused)
         .focusEffectDisabled()
         .onKeyPress(phases: .down) { press in
