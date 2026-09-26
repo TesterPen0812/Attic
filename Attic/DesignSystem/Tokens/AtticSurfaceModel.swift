@@ -50,7 +50,8 @@ struct AtticSurfaceModel: Equatable, Sendable {
 
     /// Visual A: the default surface's top sheen, within the first 24 pt.
     static let calmSheenHeight: CGFloat = 24
-    static func calmSheen(dark: Bool) -> AtticRGBA { dark ? .white(0.025) : .white(0.7) }
+    /// None in Light (the surface is pure white, owner 2026-09-26).
+    static func calmSheen(dark: Bool) -> AtticRGBA { dark ? .white(0.025) : .clear }
 
     /// The porcelain face, top to bottom (Light only; before visual A).
     static let porcelainStops: [(colour: AtticRGBA, location: Double)] = [

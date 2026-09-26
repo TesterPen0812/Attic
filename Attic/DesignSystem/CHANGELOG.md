@@ -212,3 +212,18 @@ visual A's text and surface colours, the priority marks and Completed today stay
   new `listBody` for empty states, the add bar, subtasks and the Done search). `font` and `nsFont`
   follow it. Task titles (and the title editor) use the primary ink (`heading`), and so do the
   circles' rings. The header and Settings stay SF Pro.
+
+### Compact round (owner, 2026-09-26)
+
+- **In progress:** `AtticStatusCircle(subtasks:)` draws the centre dot until a subtask is ticked,
+  then a true pie of the share ticked, no minimum (`pieShare`); not started keeps the empty ring.
+- **Rows 36 / 50**, highlights 30 / 44 (3 pt clear above and below), text and circle centred.
+- **No green cast:** every visual-A grey of the default look is the neutral grey of its lightness
+  (`AtticRGBA.neutralGrey`); the drawn controls sit on a neutral base.
+- **Pure white Light surface** (#FFFFFF, no sheen); the inside edge and shadow stay. The drawn
+  control face is now #ECECEC, Phase 0's reference exactly. Dark unchanged.
+- **Done search is an inline row** (`AtticListSearchField`): no box, the magnifier (13 pt,
+  secondary) on the circles' line, the text on the titles' line, the row's hover, a clear button.
+- **Completed today is a disclosure:** its chevron on the circles' line (› / ⌄), its text on the
+  titles' line; the component lays itself out across the row. Empty messages start on the tab
+  labels' line (x 28); under an empty message Completed today is the next row.

@@ -841,7 +841,8 @@ extension EnvironmentValues {
 /// of the default look (Original on Solid, no Tint) and the drawn control
 /// material. Solid and drawn targets: native Liquid Glass keeps its own.
 enum Calm {
-    static func panel(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x2E2E2E) : AtticRGBA(0xFCFBFA) }
+    /// Owner, 2026-09-26: the Light surface is pure white.
+    static func panel(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x2E2E2E) : AtticRGBA(0xFFFFFF) }
     static func taskText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xDFDFDF) : AtticRGBA(0x4B4B4B) }
     static func strongText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xF1F1F1) : AtticRGBA(0x272727) }
     static func secondary(dark: Bool, increaseContrast: Bool) -> AtticRGBA {

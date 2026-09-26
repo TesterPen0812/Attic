@@ -78,7 +78,7 @@ final class AtticDesignSystemTests: XCTestCase {
     /// of the review's lightness (owner, 2026-09-26: no green cast).
     func testDefaultLadderMatchesVisualA() {
         let light = AtticDesignContext(mode: .light).tokens
-        XCTAssertEqual(light.panel.base.hexString, "#FCFBFA")
+        XCTAssertEqual(light.panel.base.hexString, "#FFFFFF")
         XCTAssertEqual(light.ink(.heading).hexString, "#272727")
         XCTAssertEqual(light.ink(.body).hexString, "#4B4B4B")
         XCTAssertEqual(light.ink(.helper).hexString, "#7A7A7A")
@@ -91,7 +91,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.tabSelected.over(light.panel.base).hexString, "#EDEDED")
         XCTAssertEqual(light.tabHover.over(light.panel.base).hexString, "#F6F6F6")
         // Phase 0's drawn control look (as before visual A) over this surface.
-        XCTAssertEqual(light.controlFace.hexString, "#E8E8E8")
+        XCTAssertEqual(light.controlFace.hexString, "#ECECEC")
         XCTAssertEqual(light.addBarFlat.face.hexString, "#F6F6F6")
         XCTAssertEqual(light.contentCard.hexString, "#FBFBFB")
         XCTAssertEqual(light.groupCard.hexString, "#F2F2F2")
@@ -204,7 +204,7 @@ final class AtticDesignSystemTests: XCTestCase {
         // the Light surface (the reference's #ECECEC on white), 23 above the Dark one.
         let light = AtticDesignContext(mode: .light).tokens.controlFace
         let dark = AtticDesignContext(mode: .dark).tokens.controlFace
-        XCTAssertEqual(light.hexString, "#E8E8E8")
+        XCTAssertEqual(light.hexString, "#ECECEC")
         XCTAssertEqual(dark.hexString, "#454545")
     }
 
