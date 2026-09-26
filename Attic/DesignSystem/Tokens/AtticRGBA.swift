@@ -80,6 +80,14 @@ struct AtticRGBA: Equatable, Hashable, Sendable, CustomStringConvertible {
                          blue: channel(target.blue, surface.blue), alpha: alpha)
     }
 
+    /// The neutral grey (R = G = B) with this colour's relative luminance.
+    var neutralGrey: AtticRGBA {
+        let target = relativeLuminance
+        func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let byte = (0...255).min { abs(linear(Double($0) / 255) - target) < abs(linear(Double($1) / 255) - target) } ?? 0
+        return AtticRGBA.grey(Double(byte)).withAlpha(alpha)
+    }
+
     /// Straight mix toward `other` by `amount` (0 = self, 1 = other), alpha included.
     func mixed(with other: AtticRGBA, amount: Double) -> AtticRGBA {
         let t = min(max(amount, 0), 1)

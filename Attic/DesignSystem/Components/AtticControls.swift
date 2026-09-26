@@ -964,11 +964,13 @@ struct AtticAddBar: View {
 
 // MARK: - Search field
 
-/// A search field that sits at the top of the list it searches (Direction
-/// A: the Done page), not in the add bar: 28 tall, radius 9, the chip
-/// fill, a magnifier and the placeholder. Its focus is a binding, so
-/// Search from the menu bar can put the keyboard in it; Esc clears the
-/// text, then leaves the field.
+/// A search row at the top of the list it searches (the Done page; owner,
+/// 2026-09-26): no box, one row tall. A 13 pt magnifier in the secondary
+/// ink centred on the circles' line, the placeholder (secondary) and the
+/// typed text (primary) on the titles' line in the list's rounded face,
+/// the row's hover highlight, and a small clear button on the right once
+/// there is text. Its focus is a binding, so Search from the menu bar can
+/// put the keyboard in it; Esc clears the text, then leaves the field.
 struct AtticListSearchField: View {
     let placeholder: String
     @Binding var text: String
@@ -976,35 +978,57 @@ struct AtticListSearchField: View {
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
-    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @Environment(\.atticForcedState) private var forced
     @FocusState private var focused: Bool
+    @State private var hovered = false
 
     var body: some View {
         let m = AtticListSearchFieldMetrics.self
-        let shape = RoundedRectangle(cornerRadius: m.radius, style: .continuous)
-        HStack(spacing: m.gap) {
-            AtticIcon(systemName: "magnifyingglass", size: m.iconSize, weight: AtticIconWeight.outline, ink: .icon)
-            if capture == nil {
-                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.helper)))
-                    .textFieldStyle(.plain)
-                    .font(AtticTextStyle.listBody.font)
-                    .foregroundStyle(design.tokens.color(.body))
-                    .focused($focused)
-                    .onExitCommand {
-                        if text.isEmpty { focused = false } else { text = "" }
-                    }
-                    .accessibilityLabel(placeholder)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                AtticText(verbatim: text.isEmpty ? placeholder : text, style: .listBody, ink: text.isEmpty ? .helper : .body, truncates: true)
-                Spacer(minLength: 0)
+        let tokens = design.tokens
+        let hover = forced == .hover || hovered
+        ZStack(alignment: .leading) {
+            if hover {
+                AtticHighlight(fill: tokens.hover, run: .single)
+                    .frame(height: AtticLayout.rowHighlightHeight)
+                    .padding(.horizontal, AtticLayout.rowHighlightInset)
             }
+            AtticIcon(systemName: "magnifyingglass", size: m.iconSize, weight: AtticIconWeight.outline, ink: .helper)
+                .frame(width: AtticControlSize.statusCircle)
+                .padding(.leading, AtticLayout.circleX)
+            HStack(spacing: AtticTaskRowMetrics.trailingMinGap) {
+                if capture == nil {
+                    TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
+                        .textFieldStyle(.plain)
+                        .font(AtticTextStyle.listBody.font)
+                        .foregroundStyle(tokens.color(.heading))
+                        .focused($focused)
+                        .onExitCommand {
+                            if text.isEmpty { focused = false } else { text = "" }
+                        }
+                        .accessibilityLabel(placeholder)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    AtticText(verbatim: text.isEmpty ? placeholder : text, style: .listBody, ink: text.isEmpty ? .helper : .heading, truncates: true)
+                    Spacer(minLength: 0)
+                }
+                if !text.isEmpty {
+                    Button { text = "" } label: {
+                        AtticIcon(systemName: "xmark.circle.fill", size: m.clearSize, weight: .regular, ink: .helper)
+                            .frame(width: AtticControlSize.minimumHitTarget - 8, height: AtticControlSize.minimumHitTarget - 8)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(String(localized: "Clear search"))
+                    .accessibilityLabel(String(localized: "Clear search"))
+                }
+            }
+            .padding(.leading, AtticLayout.textX)
+            .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset)
         }
-        .padding(.leading, m.leadingPadding)
-        .padding(.trailing, m.leadingPadding)
-        .frame(height: m.height)
-        .background(shape.fill(design.tokens.tabSelected.color))
-        .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: m.radius)
+        .frame(height: AtticLayout.rowPitch)
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .onTapGesture { focused = true }
         .onAppear { if isFocused?.wrappedValue == true { focused = true } }
         .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }
         .onChange(of: isFocused?.wrappedValue) { _, wanted in

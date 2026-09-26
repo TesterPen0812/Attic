@@ -115,15 +115,16 @@ enum AtticTaskRowMetrics {
     static let detailsLineHeight: CGFloat = 16
     static let titleToDetails: CGFloat = 2
     /// The text block (title, or title + 2 + details) is centred in the
-    /// row: 13 from the top of a 44 pt row, 10 in a 56 pt one.
+    /// row: 9 from the top of a 36 pt row, 7 in a 50 pt one.
     static func titleTop(twoLine: Bool) -> CGFloat {
         let block = titleLineHeight + (twoLine ? titleToDetails + detailsLineHeight : 0)
         return ((twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch) - block) / 2
     }
     /// The circle's centre below the row's top: the title line's centre.
     static func circleCentreY(twoLine: Bool) -> CGFloat { titleTop(twoLine: twoLine) + titleLineHeight / 2 }
-    /// The highlight sits 1 pt below the row's top (half the 2 pt gap).
-    static let pitchTopInset: CGFloat = 1
+    /// The highlight sits 3 pt below the row's top (3 pt clear above and
+    /// below, owner 2026-09-26).
+    static var pitchTopInset: CGFloat { (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2 }
     /// The least room between a title (or its priority mark) and the date.
     static let trailingMinGap: CGFloat = 12
     /// Small icons in the details line (window, paperclip).
@@ -321,13 +322,11 @@ enum AtticCompletedLineMetrics {
     static let horizontalPadding: CGFloat = 6
 }
 
-/// The Done page's search field (`AtticListSearchField`): 28 tall, radius 9, the chip fill.
+/// The Done page's search row (`AtticListSearchField`): one row tall, no box.
 enum AtticListSearchFieldMetrics {
-    static let height: CGFloat = 28
-    static let radius: CGFloat = 9
-    static let leadingPadding: CGFloat = 9
-    static let iconSize: CGFloat = 12
-    static let gap: CGFloat = 7
+    /// The magnifier (13 pt) on the circles' line; the clear button's glyph.
+    static let iconSize: CGFloat = 13
+    static let clearSize: CGFloat = 12
 }
 
 /// Title menus and Attic's own pop-overs (radius 20).

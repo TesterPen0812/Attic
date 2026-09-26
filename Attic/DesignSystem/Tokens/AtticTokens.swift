@@ -136,11 +136,12 @@ enum AtticLayout {
     static let panelSize = CGSize(width: 320, height: 520)
     /// Rows are 36 pt, 52 with a details line (visual A, "Calm"): the
     /// highlight is 2 pt shorter than the pitch (1 pt inset top and bottom).
-    /// Phase 0's room (2026-09-26): 44 pt, 56 with a second line.
-    static let rowPitch: CGFloat = 44
-    static let rowHighlightHeight: CGFloat = 42
-    static let detailRowPitch: CGFloat = 56
-    static let detailRowHighlightHeight: CGFloat = 54
+    /// Owner, 2026-09-26 (compact round): 36 pt, 50 with a second line;
+    /// highlights 30 / 44, 3 pt clear above and below.
+    static let rowPitch: CGFloat = 36
+    static let rowHighlightHeight: CGFloat = 30
+    static let detailRowPitch: CGFloat = 50
+    static let detailRowHighlightHeight: CGFloat = 44
     /// The panel's lines (v9): row highlights 12 from the panel's edges,
     /// status circles (and the page title) at 20, task titles at 46, and
     /// the right-hand meta 20 from the right edge.

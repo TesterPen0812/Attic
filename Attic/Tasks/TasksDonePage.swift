@@ -21,7 +21,6 @@ struct TasksDonePage<Cell: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             AtticListSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch, isFocused: $searchFocused)
                 .accessibilityIdentifier("tasks-done-search")
-                .padding(.horizontal, AtticLayout.pageTabsX)
             list(days)
         }
         .onAppear { model.loadDoneLogIfNeeded() }

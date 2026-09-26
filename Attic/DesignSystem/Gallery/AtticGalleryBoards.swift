@@ -685,6 +685,15 @@ private struct StatusCircleBoard: View {
                 }
             }
         }
+        BoardHeading(title: "In progress · the centre dot, then a true pie once a subtask is ticked")
+        AtticSpecimen("No subtasks, 0 of 3, 1 of 3, 2 of 3, 3 of 3", fullWidth: true) {
+            HStack(spacing: 22) {
+                ForEach(Array([nil, (0, 3), (1, 3), (2, 3), (3, 3)].enumerated()), id: \.offset) { _, subtasks in
+                    AtticStatusCircle(state: .inProgress, subtasks: subtasks)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
         BoardHeading(title: "Priority is a mark after the title, not the ring")
         VStack(alignment: .leading, spacing: 10) {
             ForEach(AtticPriority.allCases.reversed(), id: \.self) { priority in
@@ -730,7 +739,7 @@ private struct StatusCircleBoard: View {
     private func stateTitle(_ state: AtticTaskState) -> String {
         switch state {
         case .todo: "To do: a grey ring"
-        case .inProgress: "In progress: the ring a step darker, with a centre dot"
+        case .inProgress: "In progress: the ring with a centre dot (a pie once a subtask is ticked)"
         case .done: "Done: a quiet grey disc with a darker check"
         case .backlog: "Later: a dashed grey ring"
         }

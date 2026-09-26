@@ -338,7 +338,9 @@ struct AtticColorTokens: Equatable, Sendable {
         let tabHover: AtticRGBA = calmStates ? .overlay(reaching: Calm.tabHover(dark: dark), on: basePanel) : chipHover
         let recessed: AtticRGBA = dark ? .white(ic ? 0.09 : 0.055) : .black(ic ? 0.07 : 0.045)
 
-        let recipes = Self.recipes(dark: dark, ic: ic, base: basePanel)
+        // The drawn controls sit on a neutral base of the surface's lightness
+        // (no warm or green cast in their faces; owner, 2026-09-26).
+        let recipes = Self.recipes(dark: dark, ic: ic, base: calm ? basePanel.neutralGrey : basePanel)
         let glassFace = AtticGlassModel.worstFace(dark: dark)
         let glassDisabled = AtticGlassModel.disabledFill(dark: dark)
         // Lighter than the selected chip in Light: the outline icons on a
@@ -839,29 +841,29 @@ extension EnvironmentValues {
 /// of the default look (Original on Solid, no Tint) and the drawn control
 /// material. Solid and drawn targets: native Liquid Glass keeps its own.
 enum Calm {
-    static func panel(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x2C2E2D) : AtticRGBA(0xFCFBFA) }
-    static func taskText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xDEDFDD) : AtticRGBA(0x494B4A) }
-    static func strongText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xF0F2EE) : AtticRGBA(0x252826) }
+    static func panel(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x2E2E2E) : AtticRGBA(0xFCFBFA) }
+    static func taskText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xDFDFDF) : AtticRGBA(0x4B4B4B) }
+    static func strongText(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xF1F1F1) : AtticRGBA(0x272727) }
     static func secondary(dark: Bool, increaseContrast: Bool) -> AtticRGBA {
         switch (dark, increaseContrast) {
-        case (false, false): AtticRGBA(0x777B78)
-        case (false, true): AtticRGBA(0x5E645F)
-        case (true, false): AtticRGBA(0xA0A5A1)
-        case (true, true): AtticRGBA(0xBBC1BB)
+        case (false, false): AtticRGBA(0x7A7A7A)
+        case (false, true): AtticRGBA(0x626262)
+        case (true, false): AtticRGBA(0xA4A4A4)
+        case (true, true): AtticRGBA(0xBFBFBF)
         }
     }
-    static func openRing(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x909790) : AtticRGBA(0x7F857F) }
-    static func controlBody(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x373938) : AtticRGBA(0xF6F6F3) }
-    static func pageChip(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x4A4D4B) : AtticRGBA(0xE7E9E5) }
-    static func tabSelected(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x3D413D) : AtticRGBA(0xECEEE9) }
-    static func tabHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x333633) : AtticRGBA(0xF6F6F3) }
-    static func rowHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x353935) : AtticRGBA(0xF0F1ED) }
-    static func rowSelection(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x414641) : AtticRGBA(0xE5E8E2) }
-    static func addBarBody(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x323433) : AtticRGBA(0xF6F6F3) }
-    static func addBarBorder(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x484D48) : AtticRGBA(0xD9DDD6) }
+    static func openRing(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x959595) : AtticRGBA(0x838383) }
+    static func controlBody(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x393939) : AtticRGBA(0xF6F6F6) }
+    static func pageChip(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x4C4C4C) : AtticRGBA(0xE8E8E8) }
+    static func tabSelected(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x404040) : AtticRGBA(0xEDEDED) }
+    static func tabHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x353535) : AtticRGBA(0xF6F6F6) }
+    static func rowHover(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x383838) : AtticRGBA(0xF1F1F1) }
+    static func rowSelection(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x454545) : AtticRGBA(0xE7E7E7) }
+    static func addBarBody(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x343434) : AtticRGBA(0xF6F6F6) }
+    static func addBarBorder(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x4C4C4C) : AtticRGBA(0xDCDCDC) }
     static func highPriority(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xD9A16C) : AtticRGBA(0xB35D27) }
-    static func doneDisc(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x424841) : AtticRGBA(0xE1E5DE) }
-    static func doneCheck(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xB3BAB3) : AtticRGBA(0x737B73) }
+    static func doneDisc(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x464646) : AtticRGBA(0xE4E4E4) }
+    static func doneCheck(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xB8B8B8) : AtticRGBA(0x797979) }
 
     /// Visual A's drawn header material (not used while Direction A shows
     /// Phase 0's drawn look, 2026-09-26; kept for comparison): the control body, one 0.5 pt outline
@@ -880,15 +882,15 @@ enum Calm {
             )
         }
         if dark {
-            return (recipe(0x373938, highlight: 0.08, edge: 0.10, shadow: 0.12),
-                    recipe(0x3C3E3D, highlight: 0.08, edge: 0.10, shadow: 0.12),
-                    recipe(0x323433, highlight: 0, edge: 0.10, shadow: 0),
-                    recipe(0x333534, highlight: 0.04, edge: 0.07, shadow: 0))
+            return (recipe(0x393939, highlight: 0.08, edge: 0.10, shadow: 0.12),
+                    recipe(0x3E3E3E, highlight: 0.08, edge: 0.10, shadow: 0.12),
+                    recipe(0x343434, highlight: 0, edge: 0.10, shadow: 0),
+                    recipe(0x353535, highlight: 0.04, edge: 0.07, shadow: 0))
         }
-        return (recipe(0xF6F6F3, highlight: 0.65, edge: 0.07, shadow: 0.04),
-                recipe(0xF9F9F7, highlight: 0.65, edge: 0.07, shadow: 0.04),
-                recipe(0xEDEEEA, highlight: 0, edge: 0.07, shadow: 0),
-                recipe(0xF8F8F6, highlight: 0.4, edge: 0.05, shadow: 0))
+        return (recipe(0xF6F6F6, highlight: 0.65, edge: 0.07, shadow: 0.04),
+                recipe(0xF9F9F9, highlight: 0.65, edge: 0.07, shadow: 0.04),
+                recipe(0xEDEDED, highlight: 0, edge: 0.07, shadow: 0),
+                recipe(0xF8F8F8, highlight: 0.4, edge: 0.05, shadow: 0))
     }
 
     /// The add bar, drawn: a flat body and a 0.5 pt border, no shadow and

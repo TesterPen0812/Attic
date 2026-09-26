@@ -211,7 +211,9 @@ struct AtticRowTitleEditor: View {
 /// - **To do:** one confident ring (16 pt, 1.6 pt, the task text's ink),
 ///   whatever the priority.
 /// - **In progress:** the same ring with a 5 pt filled centre dot
-///   ("working on it"): never a share of anything.
+///   ("working on it") until a subtask is ticked; then a true pie of the
+///   share ticked, with no minimum (owner, 2026-09-26). A task not started
+///   keeps its empty ring whatever its subtasks say (its "☑ n/m" shows it).
 /// - **Done:** a quiet grey disc with a darker grey check.
 /// - **Backlog (Later):** the same ring, dashed.
 ///
@@ -221,6 +223,8 @@ struct AtticRowTitleEditor: View {
 /// ring takes the disabled icon colour (3 : 1), never faded below it.
 struct AtticStatusCircle: View {
     let state: AtticTaskState
+    /// Ticked and total subtasks: in progress, the pie once one is ticked.
+    var subtasks: (done: Int, total: Int)?
     /// Pin the check's drawing progress (gallery); nil animates live.
     var checkProgress: Double?
     /// Pin the completion sweep, 0 (nothing) to 1 (the full disc)
@@ -256,8 +260,14 @@ struct AtticStatusCircle: View {
             case .inProgress:
                 Circle().inset(by: m.edgeInset + width / 2).stroke(colour, lineWidth: width)
                     .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
-                Circle().fill(colour)
-                    .frame(width: m.activeDotDiameter, height: m.activeDotDiameter)
+                if let share = Self.pieShare(subtasks) {
+                    AtticWedge(sweep: share, inset: m.wedgeInset(ringWidth: width))
+                        .fill(colour)
+                        .animation(motion, value: share)
+                } else {
+                    Circle().fill(colour)
+                        .frame(width: m.activeDotDiameter, height: m.activeDotDiameter)
+                }
             case .done:
                 AtticCompletionMark(
                     completion: completionProgress ?? completion,
@@ -304,6 +314,13 @@ struct AtticStatusCircle: View {
             }
         }
         .accessibilityHidden(true)
+    }
+
+    /// In progress: the pie's share, or nil (the centre dot) while no
+    /// subtask is ticked. A true share, with no minimum.
+    static func pieShare(_ subtasks: (done: Int, total: Int)?) -> Double? {
+        guard let subtasks, subtasks.total > 0, subtasks.done > 0 else { return nil }
+        return min(1, Double(subtasks.done) / Double(subtasks.total))
     }
 
     /// The spoken state: "in progress, 1 of 3 subtasks".
@@ -423,7 +440,7 @@ struct AtticStatusButton: View {
 
     var body: some View {
         Button(action: onToggle) {
-            AtticStatusCircle(state: state, isDisabled: isDisabled)
+            AtticStatusCircle(state: state, subtasks: subtasks, isDisabled: isDisabled)
                 .frame(width: AtticControlSize.minimumHitTarget, height: AtticControlSize.minimumHitTarget)
                 .contentShape(Rectangle())
         }
