@@ -843,18 +843,17 @@ struct AtticListSearchField: View {
                         if text.isEmpty { focused = false } else { text = "" }
                     }
                     .accessibilityLabel(placeholder)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 AtticText(verbatim: text.isEmpty ? placeholder : text, style: .body, ink: text.isEmpty ? .placeholder : .body, truncates: true)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, m.leadingPadding)
         .frame(height: m.height)
         .background(shape.fill(design.tokens.chipSelected.color))
         .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: m.radius)
-        .contentShape(shape)
-        .onTapGesture { focused = true }
         .onAppear { if isFocused?.wrappedValue == true { focused = true } }
         .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }
         .onChange(of: isFocused?.wrappedValue) { _, wanted in
