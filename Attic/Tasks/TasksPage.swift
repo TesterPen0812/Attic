@@ -74,7 +74,7 @@ struct TasksPage: View {
     /// The page's one title. It belongs to its page, so a swipe carries it
     /// with the list.
     private func title(_ tab: TasksTab) -> some View {
-        AtticText(verbatim: tab.pageTitle, style: .pageHeading, ink: .heading)
+        AtticText(verbatim: tab.pageTitle, style: .pageHeading, ink: .body)
             .frame(height: AtticLayout.pageTitleHeight)
             .padding(.leading, AtticLayout.pageTitleX)
             .padding(.top, titleTop)
@@ -128,7 +128,13 @@ struct TasksPage: View {
                 TasksDonePage(model: model, store: store, footerZone: Self.listFooter, cell: { row in cell(row, tab: .done, group: []) })
             }
         }
+        // Larger corners move the pin (and the add bar) inward; the title
+        // and the list follow, so the title stays on the pin's edge.
+        .padding(.horizontal, cornerInset)
     }
+
+    /// How far the controls sit inside their 12 pt line at this corner size.
+    private var cornerInset: CGFloat { max(0, layout.chromeInsets.leading - AtticSpacing.panelMargin) }
 
     private func listSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
         .named("AtticTasksList\(tab.rawValue)")

@@ -145,12 +145,13 @@ enum AtticLayout {
     /// Subtask text column: checkbox at the row's text column, text after it.
     static let subtaskTextX: CGFloat = textX + 14 + 8
 
-    /// The page's one title ("Tasks", "Backlog", "Done"): on the pin's
-    /// left edge (12, the controls' inset), its line box 18 below the
-    /// header, and the list 8 below it (owner, 2026-09-26).
+    /// The page's one title ("Tasks", "Backlog", "Done"): a small section
+    /// label (owner's reference, 2026-09-26) on the pin's left edge (12,
+    /// the controls' inset), its line box 24 below the header, and the
+    /// list 8 below it.
     static let pageTitleX: CGFloat = 12
-    static let pageTitleTop: CGFloat = 18
-    static let pageTitleHeight: CGFloat = 18
+    static let pageTitleTop: CGFloat = 24
+    static let pageTitleHeight: CGFloat = 14
     static let pageTitleToList: CGFloat = 8
 
     static let statusTabsGap: CGFloat = 14
@@ -216,7 +217,7 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     var spec: Spec {
         switch self {
         case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
-        case .pageHeading: Spec(size: 15, weight: .semibold, italic: false, monospacedDigits: false)
+        case .pageHeading: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
