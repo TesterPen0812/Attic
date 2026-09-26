@@ -399,14 +399,20 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertEqual(result["palette"] as? String, "seaGlass", "the answer is the settings after the change")
     }
 
-    /// Owner decision (orchestrator default 2026-09-25): agents may read
-    /// Launch at login but never change it; a request that includes it
-    /// changes nothing at all.
+    /// Owner decision (2026-09-26): agents may read Launch at login but
+    /// never change it; a request that includes it changes nothing at all,
+    /// and the error says why and where the person changes it.
     func testAgentsCannotChangeLaunchAtLoginAndTheWholeRequestIsRefused() throws {
         let (tools, settings, cleanUp) = try makeSettingsTools(launchAtLogin: { false })
         defer { cleanUp() }
-        XCTAssertThrowsError(try tools.call(name: "update_settings", arguments: ["launch_at_login": true, "palette": "amethyst"])) { error in
-            XCTAssertTrue((error as? AgentToolError)?.message.contains("Launch at login can only be changed by the person") == true)
+        for key in ["launch_at_login", "launchAtLogin"] {
+            XCTAssertThrowsError(try tools.call(name: "update_settings", arguments: [key: true, "palette": "amethyst"])) { error in
+                let message = (error as? AgentToolError)?.message ?? ""
+                XCTAssertEqual(message, AgentSettingsTools.launchAtLoginRefusal)
+                XCTAssertTrue(message.contains("Agents can't change Launch at login"))
+                XCTAssertTrue(message.contains("Settings → General"))
+                XCTAssertTrue(message.contains("Nothing was changed"))
+            }
         }
         XCTAssertEqual(settings.panelTheme, .defaultTheme, "nothing else was applied")
         let schema = try XCTUnwrap(AgentSettingsTools.definitions.first { $0["name"] as? String == "update_settings" })

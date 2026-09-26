@@ -4,7 +4,7 @@ import Foundation
 /// `update_settings`): every setting a person can change in Settings,
 /// except Agent Access itself and Launch at login, which only the person
 /// changes (Launch at login registers a macOS login item, an effect outside
-/// Attic; orchestrator default 2026-09-25, the owner may reverse it).
+/// Attic; the owner decided on 2026-09-26 that agents may not change it).
 /// Changes go through `AppSettings`, so they are validated and clamped
 /// exactly as the Settings window's controls are, and the window shows them
 /// at once. An update is all or nothing and one undoable step.
@@ -33,6 +33,10 @@ final class AgentSettingsTools {
     }
 
     static let toolNames: Set<String> = ["get_settings", "update_settings"]
+
+    /// The owner's decision (2026-09-26), said plainly to the agent.
+    static let launchAtLoginRefusal = "Agents can't change Launch at login: the owner decided only they change it, "
+        + "in Settings → General. Nothing was changed, including the other settings in this request."
 
     /// The settings an agent can change, with their JSON schema.
     private static var settingProperties: [String: Any] {
@@ -165,8 +169,8 @@ final class AgentSettingsTools {
         if arguments.keys.contains(where: { ["agent_access", "is_agent_access_enabled", "agentAccess"].contains($0) }) {
             throw AgentToolError.invalidArguments("Agent Access can only be changed by the person, in Settings → Agent Access.")
         }
-        if arguments["launch_at_login"] != nil {
-            throw AgentToolError.invalidArguments("Launch at login can only be changed by the person, in Settings → General. Nothing was changed.")
+        if arguments.keys.contains(where: { ["launch_at_login", "launchAtLogin", "launch_at_startup"].contains($0) }) {
+            throw AgentToolError.invalidArguments(Self.launchAtLoginRefusal)
         }
         let known = Set(Self.settingProperties.keys)
         if let unknown = arguments.keys.sorted().first(where: { !known.contains($0) }) {
