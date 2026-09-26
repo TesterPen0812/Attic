@@ -151,7 +151,7 @@ enum AtticLayout {
     /// list 8 below it.
     static let pageTitleX: CGFloat = 12
     static let pageTitleTop: CGFloat = 24
-    static let pageTitleHeight: CGFloat = 14
+    static let pageTitleHeight: CGFloat = 13
     static let pageTitleToList: CGFloat = 8
 
     static let statusTabsGap: CGFloat = 14
@@ -217,7 +217,7 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     var spec: Spec {
         switch self {
         case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
-        case .pageHeading: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
+        case .pageHeading: Spec(size: 10.5, weight: .medium, italic: false, monospacedDigits: true)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)

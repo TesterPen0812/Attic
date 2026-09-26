@@ -74,7 +74,7 @@ struct TasksPage: View {
     /// The page's one title. It belongs to its page, so a swipe carries it
     /// with the list.
     private func title(_ tab: TasksTab) -> some View {
-        AtticText(verbatim: tab.pageTitle, style: .pageHeading, ink: .body)
+        AtticText(verbatim: titleText(tab), style: .pageHeading, ink: .heading)
             .frame(height: AtticLayout.pageTitleHeight)
             .padding(.leading, AtticLayout.pageTitleX)
             .padding(.top, titleTop)
@@ -135,6 +135,15 @@ struct TasksPage: View {
 
     /// How far the controls sit inside their 12 pt line at this corner size.
     private var cornerInset: CGFloat { max(0, layout.chromeInsets.leading - AtticSpacing.panelMargin) }
+
+    /// "Tasks · 4": the page's name and how many open tasks it holds, as a
+    /// small section label (owner's reference, 2026-09-26). Done shows
+    /// its name only.
+    private func titleText(_ tab: TasksTab) -> String {
+        guard tab != .done else { return tab.pageTitle }
+        let open = model.rows(for: tab).filter { $0.status != .done }.count
+        return open > 0 ? "\(tab.pageTitle) · \(open)" : tab.pageTitle
+    }
 
     private func listSpace(_ tab: TasksTab) -> NamedCoordinateSpace {
         .named("AtticTasksList\(tab.rawValue)")

@@ -40,8 +40,8 @@ enum AtticStyle {
     /// minimum rather than treating it as a fixed position.
     /// 12 pt from every edge at the default corner size (v9, owner
     /// 2026-09-26); larger corners still push the controls inward.
-    static let chromeMinimumInset: CGFloat = 12
-    static let chromeCornerClearance: CGFloat = 5
+    static let chromeMinimumInset: CGFloat = 16
+    static let chromeCornerClearance: CGFloat = 7
     static let chromeWorkspaceSpacing: CGFloat = 24
     static let taskScrollTopPadding: CGFloat = 22
 }
