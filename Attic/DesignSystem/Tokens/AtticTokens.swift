@@ -133,22 +133,24 @@ enum AtticLayout {
     /// The panel's lines (v9): row highlights 12 from the panel's edges,
     /// status circles (and the page title) at 20, task titles at 46, and
     /// the right-hand meta 20 from the right edge.
+    /// Owner, 2026-09-26: the tasks sit 4 pt in from the page title, so
+    /// circles are at 24 and task titles at 50; the title stays at 20.
     static let rowHighlightInset: CGFloat = 12
-    static let circleX: CGFloat = 20
-    static let textX: CGFloat = 46
+    static let circleX: CGFloat = 24
+    static let textX: CGFloat = 50
     /// Settings' sidebar keeps its own highlight inset.
     static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28
     /// Subtask text column: checkbox at the row's text column, text after it.
     static let subtaskTextX: CGFloat = textX + 14 + 8
 
-    /// The page's one title ("Tasks", "Backlog", "Done"): its line box
-    /// sits 18 below the header, the list starts 8 below it, and it is
-    /// indented 4 past the circles' line (owner, 2026-09-26).
+    /// The page's one title ("Tasks", "Backlog", "Done"): 20 from the
+    /// panel's edge, its line box 18 below the header, and the list 8
+    /// below it (owner, 2026-09-26).
+    static let pageTitleX: CGFloat = 20
     static let pageTitleTop: CGFloat = 18
     static let pageTitleHeight: CGFloat = 18
     static let pageTitleToList: CGFloat = 8
-    static let pageTitleIndent: CGFloat = 4
 
     static let statusTabsGap: CGFloat = 14
     static let statusTabsTop: CGFloat = 12
