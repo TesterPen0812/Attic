@@ -630,11 +630,17 @@ struct AtticColorTokens: Equatable, Sendable {
         // colours exactly, whatever the surface (named exceptions in
         // `AtticDesignSystemTests.phase0ContrastExceptions` if one misses a
         // floor).
-        if phase0LightPalette {
+        // Glass and Frosted (every palette, both modes; owner, 2026-09-26)
+        // take Phase 0's text too: its near-black / near-white primary and
+        // secondary greys stay readable where the softer ladder fades.
+        if phase0LightPalette || phase0Translucent {
             let p0 = phase0Treatment.palette
             for ink in [AtticInk.heading, .body, .label] { inks[ink] = AtticRGBA(p0.primaryForeground) }
             inks[.helper] = AtticRGBA(p0.secondaryForeground)
             inks[.placeholder] = AtticRGBA(p0.secondaryForeground)
+        }
+        if phase0LightPalette {
+            let p0 = phase0Treatment.palette
             inks[.accent] = AtticRGBA(p0.accent)
             inks[.accentText] = AtticRGBA(p0.accent)
         }

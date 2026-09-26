@@ -337,14 +337,25 @@ final class AtticDesignSystemTests: XCTestCase {
             AtticDesignContext(mode: .dark, surface: .glass), AtticDesignContext(mode: .dark, surface: .frosted)
         ].map { Int(($0.tokens.panel.foundationOpacity * 100).rounded()) }
         XCTAssertEqual(measured, [1, 16, 10, 32])
-        // Text on them is not stepped up: Original and Dark keep the ladder.
+        // Text on them is Phase 0's (owner, 2026-09-26): its primary and
+        // secondary greys, placeholder included, every palette, both modes.
         for mode in AtticDesignContext.Mode.allCases {
-            let solid = AtticDesignContext(mode: mode, palette: .amethyst).tokens
-            for surface in [PanelSurfaceStyle.glass, .frosted] where mode == .dark {
-                let tokens = AtticDesignContext(mode: mode, palette: .amethyst, surface: surface).tokens
-                XCTAssertEqual(tokens.ink(.body), solid.ink(.body), "\(mode) \(surface)")
+            let appearance: AtticPanelThemeAppearance = mode == .dark ? .dark : .light
+            for palette in AtticPanelTheme.allCases {
+                let p0 = palette.palette(for: appearance)
+                for surface in [PanelSurfaceStyle.glass, .frosted] {
+                    let tokens = AtticDesignContext(mode: mode, palette: palette, surface: surface).tokens
+                    for ink in [AtticInk.heading, .body, .label] {
+                        XCTAssertEqual(tokens.ink(ink), AtticRGBA(p0.primaryForeground), "\(mode) \(palette) \(surface) \(ink)")
+                    }
+                    XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
+                    XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground), "\(mode) \(palette) \(surface)")
+                }
             }
         }
+        // Solid keeps its text: Original's Light (neutral greys) and Dark.
+        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.ink(.helper).hexString, "#7A7A7A")
+        XCTAssertNotEqual(AtticDesignContext(mode: .dark).tokens.ink(.helper), AtticRGBA(AtticPanelTheme.original.palette(for: AtticPanelThemeAppearance.dark).secondaryForeground))
     }
 
     /// Owner, 2026-09-26: the Light palettes are Phase 0's: its surface,

@@ -245,3 +245,6 @@ The look ported, not the code: the design system's surface model now carries Pha
 - **Named contrast exceptions** (tests, the owner decides): `Phase0TranslucentException` (Glass
   and Frosted are far more see-through than the rule allows) and `Phase0AccentException` (the Light
   accents as tag text under Increase Contrast).
+- **Follow-up (owner, 2026-09-26):** Glass and Frosted, every palette and both modes, also take
+  Phase 0's text: its primary (`heading`, `body`, `label`) and secondary (`helper`, `placeholder`)
+  greys, near-black in Light and near-white in Dark. Solid keeps its text.
