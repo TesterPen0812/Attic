@@ -881,9 +881,10 @@ struct AtticTaskRow: View {
             .padding(.trailing, AtticLayout.rowHighlightInset + m.dateInset)
             .padding(.top, m.titleTop - m.pitchTopInset)
         }
-        .frame(height: pitch, alignment: .top)
+        // The highlight and the content sit 1 pt below the row's top; the
+        // row is exactly its pitch (no half-point centring).
+        .frame(height: pitch - m.pitchTopInset, alignment: .top)
         .padding(.top, m.pitchTopInset)
-        .frame(height: pitch)
         .overlay(alignment: .top) {
             if showsFocusRing {
                 Color.clear
