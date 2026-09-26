@@ -195,7 +195,10 @@ final class AtticDesignSystemTests: XCTestCase {
             )
             let onControls = pairs.filter { $0.overlays.first == tokens.controlFace || $0.onGlass }
             XCTAssertEqual(onControls.filter(\.onGlass).count, onControls.count / 2, context.caption)
-            for pair in onControls where tokens.panel.worstMargin([pair]) < 0.999 {
+            // Named exception: labels on Liquid Glass over Phase 0's Glass
+            // and Frosted surfaces (`Phase0TranslucentException`).
+            for pair in onControls where tokens.panel.worstMargin([pair]) < 0.999
+                && !(pair.onGlass && Phase0TranslucentException.covers(context)) {
                 XCTFail(String(format: "%@: %@ %@ on %@ margin %.3f", context.caption, pair.ink.rawValue, pair.foreground.hexString,
                                pair.onGlass ? "glass" : "Craft", tokens.panel.worstMargin([pair])))
             }
@@ -259,14 +262,18 @@ final class AtticDesignSystemTests: XCTestCase {
     /// would miss its floor: a role that passes keeps its Solid colour.
     func testTranslucentPanelsStepStrongerOnlyWhereNeeded() {
         let solid = AtticDesignContext(mode: .light).tokens
-        for context in [AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, tint: .bold)] {
+        // Tinted panels step a role stronger only where needed. (Glass and
+        // Frosted are Phase 0's and keep their text unstepped:
+        // `testGlassAndFrostedArePhase0s`.)
+        for context in [AtticDesignContext(mode: .light, tint: .bold)] {
             let tokens = context.tokens
             for ink in [AtticInk.helper, .muted, .label, .body] {
                 XCTAssertGreaterThanOrEqual(tokens.ink(ink).contrast(on: solid.panel.base), solid.ink(ink).contrast(on: solid.panel.base) - 0.01, "\(context.caption) \(ink)")
             }
             // Visual A sets the plain default's heading exactly; elsewhere
-            // the heading is the ladder's, which already passes everywhere.
-            XCTAssertEqual(tokens.ink(.heading), AtticDesignContext(mode: .light, palette: .amethyst).tokens.ink(.heading), "Heading already passes everywhere")
+            // the heading is the ladder's, which already passes everywhere
+            // (the Light palettes use Phase 0's: `testLightPalettesArePhase0s`).
+            XCTAssertEqual(tokens.ink(.heading), AtticColorTokens.Ladder.neutral(dark: false, ic: false)[.heading], "Heading already passes everywhere")
         }
     }
 
@@ -287,25 +294,83 @@ final class AtticDesignSystemTests: XCTestCase {
         let contexts = AtticAppearanceCheck.allContexts()
         AtticAppearanceCheck.checkModel(contexts: contexts, report: &report)
         XCTAssertGreaterThan(contexts.count, 400)
-        XCTAssertTrue(report.failures.isEmpty, report.summary)
-    }
-
-    func testGlassAndFrostedKeepThePR5Coverage() {
-        for mode in AtticDesignContext.Mode.allCases {
-            for surface in [PanelSurfaceStyle.glass, .frosted] {
-                let panel = AtticDesignContext(mode: mode, surface: surface).tokens.panel
-                XCTAssertLessThan(panel.foundationOpacity, 0.9, "\(mode) \(surface) lost its transparency")
-                let increased = AtticDesignContext(mode: mode, surface: surface, increaseContrast: true).tokens.panel
-                XCTAssertGreaterThanOrEqual(increased.foundationOpacity, panel.foundationOpacity)
+        let remaining = Phase0AccentException.remaining(Phase0TranslucentException.remaining(report.failures))
+        XCTAssertTrue(remaining.isEmpty, remaining.map { "\($0.key.specimen): \($0.key.detail) in \($0.value.joined(separator: " | "))" }.joined(separator: "\n"))
+        // The exceptions are only ever the panel surface's text: menus and
+        // cards keep the rule everywhere.
+        for failure in report.failures.keys {
+            XCTAssertEqual(failure.specimen, "Panel surface", "\(failure)")
+        }
+        // The accent exception is only the tags' accent text.
+        for context in contexts where Phase0AccentException.covers(caption: context.caption) && !Phase0TranslucentException.covers(context) {
+            let tokens = context.tokens
+            let pairs = AtticSurfaceModel.readabilityPairs(
+                inks: tokens.inks, hover: tokens.hover, selected: tokens.selected, pressed: tokens.pressed,
+                controlFace: tokens.controlFace, glassFace: tokens.glassFace, glassDisabled: tokens.glassDisabled, glassPressed: tokens.glassPressed, chipSelected: tokens.chipSelected, chipHover: tokens.chipHover, doneDisc: tokens.doneDisc,
+                recessed: tokens.recessed, tagFill: tokens.tagFill, tagFillSelected: tokens.tagFillSelected
+            )
+            for pair in pairs where tokens.panel.worstMargin([pair]) < 0.999 {
+                XCTAssertEqual(pair.ink, .accentText, context.caption)
             }
         }
+    }
+
+    /// Owner, 2026-09-26: Glass and Frosted are Phase 0's surfaces exactly
+    /// (its foundation colour and opacity, Tint, Frosted wash, bright
+    /// native material under Original's shade, and hairline edge), in
+    /// both modes; Reduce Transparency still makes the surface Solid.
+    func testGlassAndFrostedArePhase0s() {
+        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid {
+            let appearance: AtticPanelThemeAppearance = context.mode == .dark ? .dark : .light
+            let treatment = context.palette.surfaceTreatment(
+                appearance: appearance, contrast: context.increaseContrast ? .increased : .standard,
+                surface: PanelSurfaceStyle(context.effectiveSurface), tint: context.tint,
+                tintLength: AtticDesignContext.quantisedTintLength(context.tintLength), reduceTransparency: false
+            )
+            let panel = context.tokens.panel
+            XCTAssertEqual(panel, AtticSurfaceModel.phase0(treatment, increaseContrast: context.increaseContrast), context.caption)
+        }
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
-        // The PR #5 coverage, exactly (softening secondary text must not move it).
+        // Phase 0's Original coverage (far more see-through than PR #5's 67 / 80 / 66 / 82).
         let measured = [
             AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, surface: .frosted),
             AtticDesignContext(mode: .dark, surface: .glass), AtticDesignContext(mode: .dark, surface: .frosted)
         ].map { Int(($0.tokens.panel.foundationOpacity * 100).rounded()) }
-        XCTAssertEqual(measured, [67, 80, 66, 82])
+        XCTAssertEqual(measured, [1, 16, 10, 32])
+        // Text on them is not stepped up: Original and Dark keep the ladder.
+        for mode in AtticDesignContext.Mode.allCases {
+            let solid = AtticDesignContext(mode: mode, palette: .amethyst).tokens
+            for surface in [PanelSurfaceStyle.glass, .frosted] where mode == .dark {
+                let tokens = AtticDesignContext(mode: mode, palette: .amethyst, surface: surface).tokens
+                XCTAssertEqual(tokens.ink(.body), solid.ink(.body), "\(mode) \(surface)")
+            }
+        }
+    }
+
+    /// Owner, 2026-09-26: the Light palettes are Phase 0's: its surface,
+    /// primary and secondary text (also the placeholder) and accent
+    /// colours, exactly, on every surface; the page button's current page
+    /// in the accent. Original's Light stays pure white with neutral greys.
+    func testLightPalettesArePhase0s() {
+        for palette in AtticPanelTheme.allCases where palette != .original {
+            let p0 = palette.palette(for: AtticPanelThemeAppearance.light)
+            for surface in PanelSurfaceStyle.allCases {
+                let tokens = AtticDesignContext(mode: .light, palette: palette, surface: surface).tokens
+                XCTAssertEqual(tokens.panel.base, AtticRGBA(p0.opaqueSurface), "\(palette) \(surface)")
+                XCTAssertEqual(tokens.ink(.heading), AtticRGBA(p0.primaryForeground))
+                XCTAssertEqual(tokens.ink(.body), AtticRGBA(p0.primaryForeground))
+                XCTAssertEqual(tokens.ink(.helper), AtticRGBA(p0.secondaryForeground))
+                XCTAssertEqual(tokens.ink(.placeholder), AtticRGBA(p0.secondaryForeground))
+                XCTAssertEqual(tokens.ink(.accent), AtticRGBA(p0.accent))
+                XCTAssertEqual(tokens.ink(.accentText), AtticRGBA(p0.accent))
+                XCTAssertNotNil(tokens.pageChipAccent)
+            }
+            // Dark keeps the design system's palettes.
+            XCTAssertNil(AtticDesignContext(mode: .dark, palette: palette).tokens.pageChipAccent)
+            XCTAssertNotEqual(AtticDesignContext(mode: .dark, palette: palette).tokens.panel.base, AtticRGBA(palette.palette(for: AtticPanelThemeAppearance.dark).opaqueSurface))
+        }
+        XCTAssertEqual(AtticDesignContext(mode: .light).tokens.panel.base.hexString, "#FFFFFF")
+        XCTAssertNil(AtticDesignContext(mode: .light).tokens.pageChipAccent)
     }
 
     func testDisabledTextAndIconsMeetTheRule() {
@@ -325,7 +390,9 @@ final class AtticDesignSystemTests: XCTestCase {
                 AtticSurfaceModel.Pair(ink: .disabledText, foreground: text, overlays: []),
                 AtticSurfaceModel.Pair(ink: .disabledIcon, foreground: icon, overlays: [])
             ]
-            XCTAssertGreaterThanOrEqual(tokens.panel.worstMargin(pairs), 0.999, context.caption)
+            if !Phase0TranslucentException.covers(context) {
+                XCTAssertGreaterThanOrEqual(tokens.panel.worstMargin(pairs), 0.999, context.caption)
+            }
         }
         // Still a ghost: never louder than the helper grey.
         for context in [AtticDesignContext(mode: .light), AtticDesignContext(mode: .dark)] {
@@ -439,10 +506,14 @@ final class AtticDesignSystemTests: XCTestCase {
         print(summary)
         XCTAssertGreaterThan(report.glyphsMeasured, 1_000)
         XCTAssertEqual(report.contrastPairsChecked, report.eligibleProbes, "Every eligible probe's background was measured")
-        XCTAssertEqual(report.glyphsMeasured, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
+        // Glyphs too faint to find over Phase 0's Glass and Frosted are
+        // reported as unmeasured failures, which the named exception covers.
+        let unmeasuredInException = report.failures.filter { $0.key.kind == .unmeasured }
+            .flatMap(\.value).filter(Phase0TranslucentException.covers(caption:)).count
+        XCTAssertEqual(report.glyphsMeasured + unmeasuredInException, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
         XCTAssertEqual(report.eligibleGlyphs, report.eligibleProbes, "At 2× every eligible probe is a glyph check")
         XCTAssertGreaterThanOrEqual(report.geometryMeasured, 15)
-        XCTAssertTrue(report.failures.isEmpty, report.summary)
+        XCTAssertTrue(Phase0TranslucentException.remaining(report.failures).isEmpty, report.summary)
     }
 
     /// Renders `view` in capture mode at 2× on a flat panel background and
@@ -653,5 +724,58 @@ private extension AtticRGBA {
         let high = max(red, green, blue)
         let low = min(red, green, blue)
         return high == 0 ? 0 : (high - low) / high
+    }
+}
+
+/// The named contrast exception (owner, 2026-09-26; the owner decides):
+/// Phase 0's Glass and Frosted surfaces are kept exactly as Phase 0 draws
+/// them. Phase 0 solved their foundation to its own floor (its primary and
+/// secondary text at 3 : 1 on Glass, 3.5 : 1 on Frosted, over the measured
+/// worst desktop), which is far more see-through than the design system's
+/// rule allows (4.5 : 1 for text, 3 : 1 for secondary text and icons over
+/// the worst desktop): Original's foundation is 1 % (Light Glass), 16 %
+/// (Light Frosted), 10 % (Dark Glass) and 32 % (Dark Frosted), against the
+/// 67 / 80 / 66 / 82 % the rule needs. So text and icons on the panel
+/// surface, and labels on Liquid Glass controls over it, miss the rule over
+/// the worst desktops on Glass and Frosted. The rule is unchanged
+/// everywhere else, and menus and cards keep it on these surfaces too.
+enum Phase0TranslucentException {
+    static let name = "Phase 0's Glass and Frosted transparency"
+
+    static func covers(_ context: AtticDesignContext) -> Bool {
+        context.effectiveSurface != .solid
+    }
+
+    static func covers(caption: String) -> Bool {
+        caption.contains(" · Glass") || caption.contains(" · Frosted")
+    }
+
+    /// The failures left once the exception's combinations are taken out.
+    static func remaining(_ failures: [AtticAppearanceCheck.Failure: [String]]) -> [AtticAppearanceCheck.Failure: [String]] {
+        failures.compactMapValues { combinations in
+            let rest = combinations.filter { !covers(caption: $0) }
+            return rest.isEmpty ? nil : rest
+        }
+    }
+}
+
+/// The second named contrast exception (owner, 2026-09-26; the owner
+/// decides): Phase 0's Light palette accents are kept exactly. As tag text
+/// on the tag fills they reach 3 : 1 (the secondary-text floor) but not the
+/// 4.5 : 1 every text needs under Increase Contrast, in some palettes
+/// (Amethyst, Electric Blue, Porcelain Vapor, Sea Glass, Smoked Umber; worst
+/// Electric Blue with the Bold Tint, 0.69 of the floor).
+enum Phase0AccentException {
+    static let name = "Phase 0's Light accents as tag text under Increase Contrast"
+
+    static func covers(caption: String) -> Bool {
+        caption.hasPrefix("Light") && !caption.contains("Original") && caption.contains("Increase contrast")
+    }
+
+    static func remaining(_ failures: [AtticAppearanceCheck.Failure: [String]]) -> [AtticAppearanceCheck.Failure: [String]] {
+        failures.compactMapValues { combinations in
+            let rest = combinations.filter { !covers(caption: $0) }
+            return rest.isEmpty ? nil : rest
+        }
     }
 }
