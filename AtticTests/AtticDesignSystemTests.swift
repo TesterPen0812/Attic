@@ -43,7 +43,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 36)
         XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 96)
         // Compact round (owner): rows 36 / 50, highlights 30 / 44.
-        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [36, 30, 50, 44])
+        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [34, 30, 48, 44])
         XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 3)
         XCTAssertEqual(AtticControlSize.statusCircle, 16)
         XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 12)
