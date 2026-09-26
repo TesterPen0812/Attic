@@ -388,6 +388,14 @@ final class TasksPageModel: ObservableObject {
         return newSubtaskParentID != nil && !newSubtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    #if DEBUG
+    /// Capture seam (`ATTIC_UI_TEST_TASKS_TAB`): open on `tab` for this reveal.
+    func openForCapture(_ tab: TasksTab) {
+        self.tab = tab
+        revealTab = tab
+    }
+    #endif
+
     /// Where the current reveal opened the page (Search, an agent's `show`);
     /// nil opens on Now. Cleared when the panel hides or the person moves.
     private var revealTab: TasksTab?

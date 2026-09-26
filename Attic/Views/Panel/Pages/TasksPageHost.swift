@@ -82,6 +82,18 @@ struct TasksPageHost: View {
             handleSearchRequest(model)
             showItemIfNeeded(model)
             syncDraftLock(model)
+            #if DEBUG
+            // Capture seams (UI testing only): open on a tab, or with
+            // Completed today open.
+            let environment = ProcessInfo.processInfo.environment
+            if environment["ATTIC_UI_TESTING"] == "1" {
+                if let raw = environment["ATTIC_UI_TEST_TASKS_TAB"],
+                   let tab = TasksTab.allCases.first(where: { $0.identifier == raw }) {
+                    model.openForCapture(tab)
+                }
+                if environment["ATTIC_UI_TEST_COMPLETED_OPEN"] == "1" { model.completedTodayExpanded = true }
+            }
+            #endif
         }
         // Search (the menu-bar item): the Done page's search, focused.
         .onChange(of: uiState.searchRequest) { _, _ in handleSearchRequest(model) }
