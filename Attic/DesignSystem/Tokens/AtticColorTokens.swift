@@ -234,6 +234,15 @@ struct AtticColorTokens: Equatable, Sendable {
     /// them apart from the page switch's chip on the default surface).
     let tabSelected: AtticRGBA
     let tabHover: AtticRGBA
+    /// Phase 0's Light palettes: the page button's current page in the
+    /// accent (its fill and hairline at the palette's selected opacities);
+    /// nil draws the neutral chip.
+    let pageChipAccent: PageChipAccent?
+
+    struct PageChipAccent: Equatable, Sendable {
+        let fill: AtticRGBA
+        let stroke: AtticRGBA
+    }
     let skeleton: AtticRGBA
     /// A done task's quiet disc: opaque, a step off the surface, not a
     /// colour of meaning (the `doneCheck` on it is what must read).
@@ -318,6 +327,14 @@ struct AtticColorTokens: Equatable, Sendable {
         // Solid without a Tint. Other palettes, Tints, Glass and Frosted keep
         // their recipes; the drawn control material is Calm everywhere.
         let calm = key.palette == .original && key.surface == .solid && key.tint == .off
+        // Phase 0's surfaces and Light palettes (owner, 2026-09-26).
+        let phase0Treatment = key.palette.surfaceTreatment(
+            appearance: appearance, contrast: ic ? .increased : .standard,
+            surface: PanelSurfaceStyle(key.surface), tint: key.tint, tintLength: key.tintLength,
+            reduceTransparency: false
+        )
+        let phase0LightPalette = !dark && key.palette != .original
+        let usesPhase0Surface = key.surface != .solid || phase0LightPalette
         let basePanel = calm ? Calm.panel(dark: dark) : (dark ? AtticRGBA(0x2C2C2D) : AtticRGBA(0xFAFAFA))
         let baseChrome = dark ? Ladder.darkChrome : AtticRGBA(0xF3F3F3)
         let panelBase = AtticSurfaceModel.hued(basePanel, palette: key.palette, themePalette: themePalette, dark: dark)
@@ -570,12 +587,18 @@ struct AtticColorTokens: Equatable, Sendable {
         // The surfaces: the PR #5 coverage (set by the base ladder) and the
         // designed tint. The chrome is a sidebar material, modelled as
         // Frosted when the panel is translucent, and never tinted.
-        let panel = AtticSurfaceModel.solve(
-            base: panelBase, kind: key.surface, appearance: appearance,
-            palette: key.palette, themePalette: themePalette,
-            tint: key.tint, tintLength: key.tintLength, increaseContrast: ic,
-            lookPairs: coveragePairs(panelPairs())
-        )
+        // Phase 0's surfaces (owner, 2026-09-26): Glass and Frosted in both
+        // modes, and the palettes' Light Solid, are Phase 0's recipe
+        // exactly. Original's Light Solid (pure white) and every Dark Solid
+        // keep the design system's own.
+        let panel = usesPhase0Surface
+            ? AtticSurfaceModel.phase0(phase0Treatment, increaseContrast: ic)
+            : AtticSurfaceModel.solve(
+                base: panelBase, kind: key.surface, appearance: appearance,
+                palette: key.palette, themePalette: themePalette,
+                tint: key.tint, tintLength: key.tintLength, increaseContrast: ic,
+                lookPairs: coveragePairs(panelPairs())
+            )
         let chrome = AtticSurfaceModel.solve(
             base: chromeBase, kind: key.surface == .solid ? .solid : .frosted, appearance: appearance,
             palette: key.palette, themePalette: themePalette,
@@ -588,7 +611,11 @@ struct AtticColorTokens: Equatable, Sendable {
         // (`AtticSurfaceModel.floor`): the ladder steps stronger only where
         // a role would otherwise miss its floor, and a role already passing
         // is left exactly as it is.
-        let translucentOrTinted = key.surface != .solid || key.tint != .off
+        // Phase 0's Glass and Frosted keep their text as Phase 0 drew it (the
+        // palettes' inks, or the ladder for Original and Dark): the owner's
+        // named exception, not a stepped-up ladder (`phase0Translucent`).
+        let phase0Translucent = key.surface != .solid
+        let translucentOrTinted = !phase0Translucent && (key.tint != .off || usesPhase0Surface)
         // Twice: the second pass sees the tag fills of a retuned accent.
         for _ in 0..<(translucentOrTinted ? 2 : 0) {
             for (model, pairs) in [(panel, panelPairs()), (chrome, chromePairs())] {
@@ -598,6 +625,18 @@ struct AtticColorTokens: Equatable, Sendable {
                     inks[ink] = inks[ink]!.tuned(toContrast: target, against: backgrounds, lighten: dark)
                 }
             }
+        }
+        // Phase 0's Light palettes (owner, 2026-09-26): their text and accent
+        // colours exactly, whatever the surface (named exceptions in
+        // `AtticDesignSystemTests.phase0ContrastExceptions` if one misses a
+        // floor).
+        if phase0LightPalette {
+            let p0 = phase0Treatment.palette
+            for ink in [AtticInk.heading, .body, .label] { inks[ink] = AtticRGBA(p0.primaryForeground) }
+            inks[.helper] = AtticRGBA(p0.secondaryForeground)
+            inks[.placeholder] = AtticRGBA(p0.secondaryForeground)
+            inks[.accent] = AtticRGBA(p0.accent)
+            inks[.accentText] = AtticRGBA(p0.accent)
         }
         // The surface tuning can bring the priority greys together (each
         // stops at the floor): keep Low and Medium a step beyond None.
@@ -624,6 +663,10 @@ struct AtticColorTokens: Equatable, Sendable {
             chipHover: chipHover,
             tabSelected: tabSelected,
             tabHover: tabHover,
+            pageChipAccent: phase0LightPalette ? PageChipAccent(
+                fill: AtticRGBA(phase0Treatment.palette.accent).withAlpha(phase0Treatment.palette.selectedFillOpacity),
+                stroke: AtticRGBA(phase0Treatment.palette.accent).withAlpha(min(phase0Treatment.palette.selectedStrokeOpacity + (ic ? 0.14 : 0), 1))
+            ) : nil,
             skeleton: dark ? .white(0.08) : .black(0.06),
             doneDisc: doneDisc,
             controlBase: basePanel,

@@ -486,14 +486,19 @@ struct AtticPageButton<Page: Hashable>: View {
                 Button { select(item.page) } label: {
                     ZStack {
                         let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
-                        if isSelected {
+                        let accent = design.tokens.pageChipAccent
+                        if isSelected, let accent {
+                            // Phase 0's Light palettes: the current page in the accent.
+                            shape.fill(accent.fill.color)
+                            shape.inset(by: M.accentStrokeWidth / 2).stroke(accent.stroke.color, lineWidth: M.accentStrokeWidth)
+                        } else if isSelected {
                             shape.fill(design.tokens.chipSelected.color)
                         } else if hoveredPage == item.page {
                             shape.fill(design.tokens.chipHover.color)
                         }
                         AtticIcon(systemName: item.systemName, size: M.iconSize,
                                   weight: isSelected ? .regular : AtticIconWeight.outline,
-                                  ink: isSelected ? .glyph : .icon)
+                                  ink: isSelected ? (accent == nil ? .glyph : .accent) : .icon)
                     }
                     .frame(width: M.segment, height: M.segment)
                     .contentShape(Rectangle())

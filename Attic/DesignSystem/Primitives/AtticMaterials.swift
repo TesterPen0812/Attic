@@ -434,21 +434,28 @@ struct AtticSurfaceBackground<S: Shape>: View {
                 // The wallpaper as the native surface renders it: blurred,
                 // then each channel mapped through the measured black and
                 // white renders of this surface kind (a linear model).
-                let endpoints = AtticSurfaceModel.renderEndpoints(kind: model.kind, appearance: model.appearance) ?? (0, 255)
+                let endpoints = AtticSurfaceModel.renderEndpoints(kind: model.kind, appearance: model.nativeAppearance) ?? (0, 255)
                 AtticStandInWallpaper(tone: tone, dark: model.appearance == .dark)
                     .blur(radius: model.kind == .frosted ? 28 : 16, opaque: true)
                     .colorMultiply(Color(.sRGB, white: (endpoints.white - endpoints.black) / 255))
                     .overlay(Color(.sRGB, white: endpoints.black / 255, opacity: 1).blendMode(BlendMode.plusLighter))
                     .compositingGroup()
                     .clipShape(shape)
+                shape.fill(model.materialWash.color)
             }
         } else if isChrome {
             AtticVisualEffect(material: .sidebar)
                 .clipShape(shape)
         } else if model.kind == .glass {
             shape.fill(Color.clear).glassEffect(.regular, in: shape)
+                .environment(\.colorScheme, model.nativeAppearance == .dark ? .dark : .light)
         } else {
-            shape.fill(.ultraThinMaterial)
+            ZStack {
+                shape.fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, model.nativeAppearance == .dark ? .dark : .light)
+                // Phase 0: the palette's wash over the Frosted material.
+                shape.fill(model.materialWash.color)
+            }
         }
     }
 }
@@ -536,7 +543,11 @@ struct AtticPanelRim: View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         let dark = design.mode == .dark
         ZStack {
-            if design.tokens.panel.porcelain {
+            if let edge = design.tokens.panel.edge {
+                // Phase 0's hairline: the palette's edge colour on the shape's
+                // edge (half of it shows inside the clip).
+                shape.stroke(edge.color.color, lineWidth: edge.width)
+            } else if design.tokens.panel.porcelain {
                 // Visual A: one 0.5 pt inside edge (black 6 % / white 8 %).
                 shape.inset(by: AtticHairline.width / 2)
                     .stroke((dark ? AtticRGBA.white(0.08) : AtticRGBA.black(0.06)).color, lineWidth: AtticHairline.width)

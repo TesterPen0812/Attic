@@ -207,6 +207,8 @@ enum AtticPageButtonMetrics {
     static let segment: CGFloat = 28
     static let gap: CGFloat = 2
     static let iconSize: CGFloat = 13
+    /// Phase 0's hairline around an accented current page.
+    static let accentStrokeWidth: CGFloat = 0.75
 }
 
 /// The page pill above the add bar (v9, owner 2026-09-26): three dots

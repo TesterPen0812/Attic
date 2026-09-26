@@ -47,6 +47,22 @@ struct AtticSurfaceModel: Equatable, Sendable {
     /// light top edge. Never darker than `base`, so every ink tuned on the
     /// base keeps its contrast.
     var porcelain = false
+    /// Phase 0's surface recipe (owner, 2026-09-26): Frosted's palette wash
+    /// over the material, under the foundation (`surfaceTint` at its
+    /// `frostedTintOpacity`); clear elsewhere.
+    var materialWash: AtticRGBA = .clear
+    /// Phase 0 draws the native material in its Light appearance when
+    /// Original's neutral shade carries readability (the Siri panel).
+    var brightNative = false
+    /// Phase 0's hairline edge: the colour (with its opacity) and width,
+    /// stroked on the shape's edge (half shows inside the clip). Nil keeps
+    /// the design system's own rim.
+    var edge: Edge?
+
+    struct Edge: Equatable, Sendable {
+        let color: AtticRGBA
+        let width: CGFloat
+    }
 
     /// Visual A: the default surface's top sheen, within the first 24 pt.
     static let calmSheenHeight: CGFloat = 24
@@ -86,6 +102,33 @@ struct AtticSurfaceModel: Equatable, Sendable {
 
     // MARK: Composite
 
+    /// Phase 0's surface, exactly (owner, 2026-09-26: "port the look"):
+    /// its foundation colour and opacity, its Tint stops and wash, Frosted's
+    /// palette wash, the bright native material under Original's shade, and
+    /// the palette's hairline edge.
+    static func phase0(_ treatment: AtticPanelSurfaceTreatment, increaseContrast: Bool) -> AtticSurfaceModel {
+        let edgeColor: AtticRGBA = treatment.usesSystemOpaqueSurface
+            ? (treatment.appearance == .dark ? .white(1) : .black(1))
+            : AtticRGBA(treatment.palette.edgeTint)
+        let contrast: ColorSchemeContrast = increaseContrast ? .increased : .standard
+        return AtticSurfaceModel(
+            kind: treatment.kind, appearance: treatment.appearance,
+            base: AtticRGBA(treatment.palette.opaqueSurface),
+            foundationOpacity: treatment.foundationOpacity,
+            washColor: AtticRGBA(treatment.washColor),
+            tintStops: treatment.tintStops,
+            increaseContrast: increaseContrast,
+            porcelain: false,
+            materialWash: AtticRGBA(treatment.palette.surfaceTint).withAlpha(treatment.materialTintOpacity),
+            brightNative: treatment.usesShadeAsFoundation,
+            edge: Edge(color: edgeColor.withAlpha(treatment.surfaceEdgeOpacity(for: contrast)),
+                       width: treatment.surfaceEdgeLineWidth(for: contrast))
+        )
+    }
+
+    /// The appearance the native material is drawn (and measured) in.
+    var nativeAppearance: AtticPanelThemeAppearance { brightNative ? .light : appearance }
+
     /// The measured native render of a grey desktop (`desktop` 0 = black,
     /// 1 = white) under this surface kind, before the foundation.
     static func underlay(kind: AtticPanelSurfaceTreatment.Kind, appearance: AtticPanelThemeAppearance, desktop: Double) -> AtticRGBA {
@@ -108,7 +151,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
     }
 
     func underlay(_ desktop: Desktop) -> AtticRGBA {
-        Self.underlay(kind: kind, appearance: appearance, desktop: desktop.level)
+        materialWash.over(Self.underlay(kind: kind, appearance: nativeAppearance, desktop: desktop.level))
     }
 
     /// The desktop that fights the text most.

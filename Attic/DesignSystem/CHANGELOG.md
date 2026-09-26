@@ -227,3 +227,21 @@ visual A's text and surface colours, the priority marks and Completed today stay
 - **Completed today is a disclosure:** its chevron on the circles' line (› / ⌄), its text on the
   titles' line; the component lays itself out across the row. Empty messages start on the tab
   labels' line (x 28); under an empty message Completed today is the next row.
+
+### Phase 0's surfaces and Light palettes (owner, 2026-09-26)
+
+The look ported, not the code: the design system's surface model now carries Phase 0's recipe.
+
+- **Glass and Frosted, Light and Dark, all palettes and Tints:** `AtticSurfaceModel.phase0(_:)` —
+  Phase 0's foundation colour (the palette's `opaqueSurface`) and opacity, its Tint stops and wash,
+  Frosted's palette wash over `ultraThinMaterial` (`materialWash`), the native material drawn in
+  Light under Original's shade (`brightNative`), and the palette's 0.75 pt hairline (`edge`,
+  drawn by `AtticPanelRim`). Text on them is not stepped up (the palettes' or the ladder's inks).
+- **Light palettes (all but Original), every surface:** Phase 0's Light surface, primary text
+  (`heading`, `body`, `label`), secondary text (`helper`, `placeholder`) and accent (`accent`,
+  `accentText`), exactly; the page button's current page in the accent (`pageChipAccent`: the
+  palette's selected fill and hairline).
+- **Unchanged:** Original's Light Solid (pure white, neutral greys) and every Dark Solid.
+- **Named contrast exceptions** (tests, the owner decides): `Phase0TranslucentException` (Glass
+  and Frosted are far more see-through than the rule allows) and `Phase0AccentException` (the Light
+  accents as tag text under Increase Contrast).
