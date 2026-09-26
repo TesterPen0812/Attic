@@ -110,7 +110,7 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(AtticStyle.controlHitSize, 42)
         XCTAssertEqual(AtticStyle.composerControlHeight, 42)
         XCTAssertEqual(AtticStyle.composerActionSize, 34)
-        XCTAssertEqual(AtticStyle.chromeMinimumInset, 16)
+        XCTAssertEqual(AtticStyle.chromeMinimumInset, 18)
         XCTAssertEqual(AtticStyle.chromeCornerClearance, 7)
         XCTAssertEqual(AtticStyle.chromeWorkspaceSpacing, 24)
         XCTAssertEqual(AtticStyle.taskScrollTopPadding, 22)
