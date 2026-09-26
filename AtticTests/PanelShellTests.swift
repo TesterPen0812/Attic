@@ -33,8 +33,9 @@ final class PanelShellTests: XCTestCase {
             let total = (0..<3).map { geometry.width(of: $0, selected: selected) }.reduce(0, +) + 2 * geometry.spacing
             XCTAssertEqual(total, geometry.innerWidth, accuracy: 0.001, "the switch is the same width whichever page is selected")
         }
-        XCTAssertEqual(PanelHeaderLayout.height, 32)
-        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 36, height: 32))
+        // v9 (owner, 2026-09-26): the header's controls are 34 tall.
+        XCTAssertEqual(PanelHeaderLayout.height, 34)
+        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 38, height: 34))
     }
 
     func testPageLayoutUsesTheCornerAwareInsetsAndPlacesTheHeaderBand() {
@@ -43,8 +44,12 @@ final class PanelShellTests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: corner, panelSize: size)
             XCTAssertEqual(layout.contentInsets, PanelGeometry.contentInsets(cornerSize: corner, panelSize: size))
             XCTAssertEqual(layout.chromeInsets, PanelGeometry.chromeInsets(cornerSize: corner, panelSize: size))
-            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 32)
+            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 34)
         }
+        // v9: the controls sit 12 from every edge at the default corner,
+        // and move inward with larger corners.
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 12)
+        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 12)
     }
 
     // MARK: Key window
