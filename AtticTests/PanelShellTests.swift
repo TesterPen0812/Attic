@@ -46,10 +46,10 @@ final class PanelShellTests: XCTestCase {
             XCTAssertEqual(layout.chromeInsets, PanelGeometry.chromeInsets(cornerSize: corner, panelSize: size))
             XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 34)
         }
-        // v9: the controls sit 12 from every edge at the default corner,
+        // Owner, 2026-09-26: the controls sit 18 from every edge at the default corner,
         // and move inward with larger corners.
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 12)
-        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 12)
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 18)
+        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 18)
     }
 
     // MARK: Key window
