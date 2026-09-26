@@ -91,7 +91,11 @@ enum AtticControlSize {
     /// The panel's raised buttons (pin, All notes, New note): 32 × 32 (visual
     /// A, "Calm": a smaller header); radius 13.5, or a circle with the
     /// temporary Round controls switch (visual C).
-    static let panelButton = CGSize(width: 32, height: 32)
+    static let panelButton = CGSize(width: headerControl, height: headerControl)
+    /// The header's controls (Phase 0's qualities, 2026-09-26): the pin and
+    /// the page button are equal 36 pt squares, radius 15 by the 42 % rule
+    /// (circles with the temporary Round controls switch).
+    static let headerControl: CGFloat = 36
     static let settingsBackButton = CGSize(width: 38, height: 34)
     /// The page switch: 32 tall (visual A), chips 24 inside a 4 pt inset.
     static let capsuleHeight: CGFloat = 32
@@ -118,8 +122,8 @@ enum AtticControlSize {
     static let tagHeight: CGFloat = 18
     /// Minimum hit target for any control (glyphs can be smaller).
     static let minimumHitTarget: CGFloat = 28
-    /// Visual A: 14 pt outer diameter (the hit area stays 28).
-    static let statusCircle: CGFloat = 14
+    /// 16 pt (Phase 0's confident circles; the hit area stays 28).
+    static let statusCircle: CGFloat = 16
     static let subtaskCheckbox: CGFloat = 14
     static let glyph: CGFloat = 14
     /// Icon-only raised buttons: the page switch's icon size (v9), so the
@@ -132,10 +136,11 @@ enum AtticLayout {
     static let panelSize = CGSize(width: 320, height: 520)
     /// Rows are 36 pt, 52 with a details line (visual A, "Calm"): the
     /// highlight is 2 pt shorter than the pitch (1 pt inset top and bottom).
-    static let rowPitch: CGFloat = 36
-    static let rowHighlightHeight: CGFloat = 34
-    static let detailRowPitch: CGFloat = 52
-    static let detailRowHighlightHeight: CGFloat = 50
+    /// Phase 0's room (2026-09-26): 44 pt, 56 with a second line.
+    static let rowPitch: CGFloat = 44
+    static let rowHighlightHeight: CGFloat = 42
+    static let detailRowPitch: CGFloat = 56
+    static let detailRowHighlightHeight: CGFloat = 54
     /// The panel's lines (v9): row highlights 12 from the panel's edges,
     /// status circles (and the page title) at 20, task titles at 46, and
     /// the right-hand meta 20 from the right edge.
@@ -148,8 +153,12 @@ enum AtticLayout {
     static let rowHighlightInset: CGFloat = 8
     /// Owner, 2026-09-26: tasks sit under the page tabs' text — circles at
     /// 31 from the panel edge (23 in the page), titles at 55 (47).
-    static let circleX: CGFloat = 23
-    static let textX: CGFloat = 47
+    /// Phase 0's room (2026-09-26, supersedes the two above): the page sits
+    /// 12 inside the panel's 24 pt margin, so circles' left edge is at 28
+    /// (16 in the page, centre 36) and titles at 56 (44); highlights 20
+    /// from the panel's edges; dates 28 from the right.
+    static let circleX: CGFloat = 16
+    static let textX: CGFloat = 44
     /// Settings' sidebar keeps its own highlight inset.
     static let sidebarHighlightInset: CGFloat = 8
     static let subtaskPitch: CGFloat = 28
@@ -169,9 +178,12 @@ enum AtticLayout {
     /// Direction A's page tabs ("Now · Later · Done") in place of the
     /// title: the chip row on the panel's 18 pt line (12 inside the page),
     /// 14 below the header, the list 10 below the chips.
-    static let pageTabsX: CGFloat = 12
+    /// The "Now" label starts on the circles' line (Phase 0's qualities).
+    static let pageTabsX: CGFloat = circleX
     /// Visual A: 20 below the header; the list 14 below the tabs (owner, 2026-09-26; the review had 8).
     static let pageTabsTop: CGFloat = 20
+    /// The quiet label row's line box (Phase 0's qualities).
+    static let pageTabsHeight: CGFloat = 16
     static let pageTabsToList: CGFloat = 14
     /// The least room between the list's last content and the add bar.
     static let contentToAddBar: CGFloat = 16
@@ -250,9 +262,10 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
         case .rowMetaEmphasis: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
         case .priorityMark: Spec(size: 11, weight: .semibold, italic: false, monospacedDigits: false)
-        case .pageTab: Spec(size: 12, weight: .regular, italic: false, monospacedDigits: false)
+        // Phase 0's qualities: quiet labels, 11.5 medium whether selected or not.
+        case .pageTab: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
         case .sectionToggle: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
-        case .pageTabSelected: Spec(size: 12, weight: .semibold, italic: false, monospacedDigits: false)
+        case .pageTabSelected: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
         case .hint: Spec(size: 12.5, weight: .regular, italic: true, monospacedDigits: false)
         case .statusTab: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .statusTabSelected: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)

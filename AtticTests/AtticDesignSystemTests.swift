@@ -31,25 +31,25 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual([AtticRadius.menu, AtticRadius.groupCard, AtticRadius.contentCard, AtticRadius.image, AtticRadius.highlight], [20, 17, 10, 8, 10])
     }
 
-    /// Visual A ("Calm"): the panel's buttons are 32 × 32 (radius 13.5),
-    /// the page switch 144 × 32 with a 76 pt selected chip and 28 pt
-    /// others; Settings' back button keeps 38 × 34. Rows are 36 / 52 with
-    /// highlights 2 shorter, and circle → title is 10 on the 24 → 48 lines.
-    func testControlSizesFollowVisualA() {
-        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 32, height: 32))
+    /// Phase 0's qualities in Direction A (2026-09-26): the pin and the
+    /// page button are equal 36 pt squares (radius 15; the page button opens
+    /// to 96); Settings' back button keeps 38 × 34. Rows are 44 / 56 with
+    /// highlights 2 shorter, text blocks centred; circles 16 at 28, titles
+    /// at 56 (12 apart).
+    func testControlSizesFollowPhase0Room() {
+        XCTAssertEqual(AtticControlSize.panelButton, CGSize(width: 36, height: 36))
+        XCTAssertEqual(AtticRadius.control(height: AtticControlSize.headerControl), 15)
         XCTAssertEqual(AtticControlSize.settingsBackButton, CGSize(width: 38, height: 34))
-        XCTAssertEqual(AtticControlSize.capsuleHeight, 32)
-        XCTAssertEqual(AtticControlSize.chipHeight, 24)
-        XCTAssertEqual(AtticControlSize.chipIconWidth, 28)
-        let geometry = AtticPageSwitch<Int>.Geometry(titles: AtticGallerySamples.pages.map(\.title))
-        XCTAssertEqual(geometry.selectedWidth, 76)
-        XCTAssertEqual(geometry.innerWidth + 2 * AtticControlSize.capsuleInset, 144)
-        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [36, 34, 52, 50])
-        XCTAssertEqual(AtticLayout.textX, AtticLayout.circleX + AtticControlSize.statusCircle + AtticSpacing.gap10)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: false, count: 3), 36)
+        XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 96)
+        XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [44, 42, 56, 54])
+        XCTAssertEqual(AtticControlSize.statusCircle, 16)
+        XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 12)
         let m = AtticTaskRowMetrics.self
-        XCTAssertEqual(m.titleTop + m.titleLineHeight + 10, AtticLayout.rowPitch, "8 + 18 + 10")
-        XCTAssertEqual(m.titleTop + m.titleLineHeight + m.titleToDetails + m.detailsLineHeight + 8, AtticLayout.detailRowPitch, "8 + 18 + 2 + 16 + 8")
-        XCTAssertEqual(m.circleCentreY, 17)
+        XCTAssertEqual(m.titleTop(twoLine: false), 13, "18 pt title centred in 44")
+        XCTAssertEqual(m.titleTop(twoLine: true), 10, "18 + 2 + 16 centred in 56")
+        XCTAssertEqual(m.circleCentreY(twoLine: false), 22)
+        XCTAssertEqual(m.circleCentreY(twoLine: true), 19)
     }
 
     func testMotionPresetsAreCalmSpringsWithReduceMotionFallbacks() {
@@ -87,8 +87,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.selected.over(light.panel.base).hexString, "#E5E8E2")
         XCTAssertEqual(light.tabSelected.over(light.panel.base).hexString, "#ECEEE9")
         XCTAssertEqual(light.tabHover.over(light.panel.base).hexString, "#F6F6F3")
-        XCTAssertEqual(light.chipSelected.over(Calm.controlBody(dark: false)).hexString, "#E7E9E5")
-        XCTAssertEqual(light.controlFace.hexString, "#F6F6F3")
+        // Phase 0's drawn control look (as before visual A) over this surface.
+        XCTAssertEqual(light.controlFace.hexString, "#F5F4F3")
         XCTAssertEqual(light.addBarFlat.face.hexString, "#F6F6F3")
         XCTAssertEqual(light.contentCard.hexString, "#FBFBFB")
         XCTAssertEqual(light.groupCard.hexString, "#F2F2F2")
@@ -105,8 +105,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#414641")
         XCTAssertEqual(dark.tabSelected.over(dark.panel.base).hexString, "#3D413D")
         XCTAssertEqual(dark.tabHover.over(dark.panel.base).hexString, "#333633")
-        XCTAssertEqual(dark.chipSelected.over(Calm.controlBody(dark: true)).hexString, "#4A4D4B")
-        XCTAssertEqual(dark.controlFace.hexString, "#373938")
+        XCTAssertEqual(dark.controlFace.hexString, "#3D3F3E")
         XCTAssertEqual(dark.addBarFlat.face.hexString, "#323433")
         XCTAssertEqual(dark.contentCard.hexString, "#2E2E2E")
         XCTAssertEqual(dark.groupCard.hexString, "#333333")
@@ -187,11 +186,12 @@ final class AtticDesignSystemTests: XCTestCase {
                                pair.onGlass ? "glass" : "Craft", tokens.panel.worstMargin([pair])))
             }
         }
-        // The drawn control body (visual A): #F6F6F3 Light, #373938 Dark.
+        // The drawn control face: Phase 0's (pre-visual-A) recipe, 7 below
+        // the Light surface and 17 above the Dark one.
         let light = AtticDesignContext(mode: .light).tokens.controlFace
         let dark = AtticDesignContext(mode: .dark).tokens.controlFace
-        XCTAssertEqual(light.hexString, "#F6F6F3")
-        XCTAssertEqual(dark.hexString, "#373938")
+        XCTAssertEqual(light.hexString, "#F5F4F3")
+        XCTAssertEqual(dark.hexString, "#3D3F3E")
     }
 
     func testScrollEdgeVeilFollowsItsRamp() {
@@ -500,23 +500,22 @@ final class AtticDesignSystemTests: XCTestCase {
 
     // MARK: Status circle
 
-    /// Direction A: every open ring is one grey at one weight (priority is
-    /// a mark after the title); the working ring is a step darker. High's
-    /// "!!" is an orange at least as readable as secondary text, and red
-    /// is left to overdue dates.
-    func testStatusRingIsOneGreyAndPriorityIsAMark() {
+    /// Direction A with Phase 0's confident circles: every open ring is one
+    /// ink (the task text's) at one weight, 1.6 pt (2 under Increase
+    /// Contrast); priority is a mark after the title. High's "!!" is an
+    /// orange at least as readable as secondary text, and red is left to
+    /// overdue dates.
+    func testStatusRingIsOneInkAndPriorityIsAMark() {
         let m = AtticStatusCircleMetrics.self
-        XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.25, "visual A")
-        XCTAssertEqual(m.ringWidth(increaseContrast: true), 1.5, accuracy: 1e-9)
-        XCTAssertEqual(AtticStatusCircle.ringInk, .priorityNone)
+        XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.6)
+        XCTAssertEqual(m.ringWidth(increaseContrast: true), 2)
+        XCTAssertEqual(AtticStatusCircle.ringInk, .body)
+        XCTAssertEqual(AtticStatusCircle.activeInk, .body)
         for context in AtticAppearanceCheck.allContexts() {
             let tokens = context.tokens
             let base = tokens.panel.base
             let ring = tokens.ink(AtticStatusCircle.ringInk).contrast(on: base)
-            let active = tokens.ink(AtticStatusCircle.activeInk).contrast(on: base)
-            XCTAssertGreaterThanOrEqual(ring, 3, context.caption)
-            XCTAssertLessThan(ring, active, "working is a step darker · \(context.caption)")
-            XCTAssertLessThan(tokens.ink(.priorityNone).saturation, 0.12, "the ring is a grey · \(context.caption)")
+            XCTAssertGreaterThanOrEqual(ring, 4.5, "a confident ring · \(context.caption)")
             let mark = tokens.ink(.priorityMark)
             XCTAssertGreaterThanOrEqual(mark.contrast(on: base), context.increaseContrast ? 4.5 : 3, context.caption)
             XCTAssertGreaterThan(mark.saturation, 0.3, "High's mark is orange · \(context.caption)")

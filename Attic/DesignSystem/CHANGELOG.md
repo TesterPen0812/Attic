@@ -179,3 +179,25 @@ From Astra's visual review (`phase0/runs/p1-astra-visual.md`, variant A). Appear
 - **Panel:** one 0.5 pt inside edge (black 6 % / white 8 %) on the default surface; elevation
   10 % / 24 %, y 4, radius 12 plus a 3 % / 8 % contact shadow, so the window margin grew to 28.
 - The Done search field's placeholder uses the helper grey (it failed 3 : 1 on Frosted).
+
+### Phase 0's qualities in Direction A (redesign/p1-direction-a, owner 2026-09-26)
+
+Supersedes visual A's spacing, header and drawn material (and the owner's two tweaks after it);
+visual A's text and surface colours, the priority marks and Completed today stay.
+
+- **Symmetrical header:** new `AtticPageButton` (Phase 0's mode dock): a 36 pt square like the
+  pin showing the current page's icon on the selected chip; under the pointer or keyboard focus
+  it opens leftward to all three pages (28 pt segments, 2 apart, 96 open), each with a tooltip;
+  ⌘1–⌘3 stay; one VoiceOver control ("Pages", valued by the page, a named action per page,
+  adjustable). The pin is 36 × 36 (`AtticControlSize.headerControl`); radius 15 by the 42 % rule,
+  circles with the temporary Round controls switch. `AtticPageSwitch` stays in the gallery.
+- **Quiet tabs:** `AtticPageTabs` are plain labels, 11.5 medium (`pageTab`, `pageTabSelected`),
+  selected in the strong ink, others secondary, hover in the task text's ink, 16 apart, no chips;
+  "Now" starts on the circles' line.
+- **Room:** margins 24; rows 44 / 56 (text block centred, 2 pt between lines;
+  `AtticTaskRowMetrics.titleTop(twoLine:)`); circles' left edge 28, titles 56, dates 28 from the
+  right; labels 20 under the header, the list 14 under them; the add bar's plus at x 36, text 56.
+- **Confident circles:** 16 pt, 1.6 pt ring (2 with Increase Contrast) in the task text's ink
+  (`body`), in progress dot 5, Later dashed in the same ink; the done disc as before visual A.
+- **Out of focus:** the drawn controls and the add bar use the Craft-style recipe again (as before
+  visual A); visual A's flat recipe (`Calm.controlRecipes`, `addBarFlat`) is kept but unused.

@@ -86,7 +86,7 @@ struct SettingsPanelMiniature: View {
                 HStack(spacing: 0) {
                     AtticRaisedButton(systemName: "pin", label: "Pin") {}
                     Spacer(minLength: AtticSpacing.betweenControls)
-                    AtticPageSwitch(items: Self.pages, selection: .constant(0))
+                    AtticPageButton(items: Self.pages, selection: .constant(0), pinnedOpen: false)
                 }
             }
             .padding(AtticStyle.chromeMinimumInset)

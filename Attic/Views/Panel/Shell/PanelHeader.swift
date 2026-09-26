@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// The panel's header: Pin on the left, the page switch (Tasks · Notes ·
-/// Canvas, icons with the current page's label) on the right. Both are
-/// raised Liquid Glass controls sharing one glass container. The switch
-/// always says which page you are on; ⌘1, ⌘2 and ⌘3 select a page and
-/// ⇧⌘P pins.
+/// The panel's header (Phase 0's qualities, 2026-09-26): a symmetrical
+/// top, the pin on the left and the page button on the right, equal 36 pt
+/// squares. The page button shows the current page's icon and opens into
+/// all three under the pointer or keyboard focus. Both are raised Liquid
+/// Glass controls sharing one glass container (the drawn material while
+/// the panel is not key); ⌘1, ⌘2 and ⌘3 select a page and ⇧⌘P pins.
 struct PanelHeader: View {
     let isPinned: Bool
     let page: PanelPage
@@ -30,12 +31,12 @@ struct PanelHeader: View {
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .accessibilityIdentifier("panel-pin-button")
                 Spacer(minLength: AtticSpacing.betweenControls)
-                AtticPageSwitch(
+                AtticPageButton(
                     items: PanelPage.switchItems,
-                    selection: Binding(get: { page }, set: onSelectPage)
+                    selection: Binding(get: { page }, set: onSelectPage),
+                    onApproach: onApproachPageSwitch
                 )
                 .accessibilityIdentifier("panel-section-picker")
-                .onHover { if $0 { onApproachPageSwitch() } }
             }
         }
         .frame(height: PanelHeaderLayout.height)

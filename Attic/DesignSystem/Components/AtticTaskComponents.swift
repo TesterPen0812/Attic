@@ -208,11 +208,12 @@ struct AtticRowTitleEditor: View {
 /// 2026-09-26: the circle is for completion; priority is a mark after the
 /// title):
 ///
-/// - **To do:** one grey ring at one weight, whatever the priority.
-/// - **In progress:** the same ring, a step darker, with a small filled
-///   centre dot ("working on it"): never a share of anything.
+/// - **To do:** one confident ring (16 pt, 1.6 pt, the task text's ink),
+///   whatever the priority.
+/// - **In progress:** the same ring with a 5 pt filled centre dot
+///   ("working on it"): never a share of anything.
 /// - **Done:** a quiet grey disc with a darker grey check.
-/// - **Backlog (Later):** a dashed grey ring.
+/// - **Backlog (Later):** the same ring, dashed.
 ///
 /// Completing: the done disc sweeps in from 12 o'clock, then the check
 /// draws and the haptic tick lands (springs, so a change of mind mid-way
@@ -234,9 +235,10 @@ struct AtticStatusCircle: View {
     @State private var probeID = UUID()
     @State private var checkProbeID = UUID()
 
-    /// The open ring's grey, and the working ring's (a step darker).
-    static let ringInk: AtticInk = .priorityNone
-    static let activeInk: AtticInk = .priorityMedium
+    /// Phase 0's confident circles: the ring is the task text's ink, open
+    /// or working (the working one adds its centre dot).
+    static let ringInk: AtticInk = .body
+    static let activeInk: AtticInk = .body
 
     var body: some View {
         let tokens = design.tokens
@@ -607,14 +609,13 @@ private struct AtticStatusTab<Tab: Hashable>: View {
 // MARK: - Page tabs
 
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
-/// place of a page title and the page pill: 12 pt chips, 24 tall; the
-/// selected one semibold on the page switch's chip fill, the others medium
-/// in the secondary grey (the body colour and the chip hover fill under
-/// the pointer). Each chip reserves its semibold width, so selecting one
-/// never shifts its neighbours.
+/// place of a page title and the page pill. Phase 0's qualities
+/// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
+/// page in the strong ink, the others in the secondary grey, a hovered one
+/// in the task text's ink. The weight never changes, so nothing shifts.
 ///
 /// One control for the keyboard: it takes focus once, and ← → move between
-/// the pages while it has it (the ring on the selected chip, only while
+/// the pages while it has it (a ring around the selected label, only while
 /// the keyboard drives). VoiceOver reads one group, "Pages", with a named,
 /// selectable choice per page.
 struct AtticPageTabs<Page: Hashable>: View {
@@ -640,7 +641,6 @@ struct AtticPageTabs<Page: Hashable>: View {
 
     var body: some View {
         let m = AtticPageTabsMetrics.self
-        let radius = AtticRadius.control(height: m.height)
         let selected = items.firstIndex { $0.page == selection } ?? 0
         HStack(spacing: m.spacing) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -648,21 +648,21 @@ struct AtticPageTabs<Page: Hashable>: View {
                 let pinned = statePinnedPage == item.page ? forced : nil
                 let hovered = !isSelected && (pinned == .hover || (pinned == nil && hoveredPage == item.page))
                 let ringed = pinned == .focused || (capture == nil && isSelected && focused && keyboardFocusVisible)
-                let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
                 Button { select(item.page) } label: {
-                    ZStack {
-                        // Reserves the selected (semibold) width in every state.
-                        Text(verbatim: item.title).font(AtticTextStyle.pageTabSelected.font).hidden()
-                            .accessibilityHidden(true)
-                        AtticText(verbatim: item.title, style: isSelected ? .pageTabSelected : .pageTab,
-                                  ink: isSelected ? .heading : (hovered ? .body : .helper))
-                    }
-                    .padding(.horizontal, m.horizontalPadding)
-                    .frame(height: m.height)
-                    .background(shape.fill((isSelected ? design.tokens.tabSelected : (hovered ? design.tokens.tabHover : .clear)).color))
-                    .atticFocusRing(ringed, cornerRadius: radius)
-                    .contentShape(shape)
-                    .transaction { $0.animation = nil }
+                    AtticText(verbatim: item.title, style: isSelected ? .pageTabSelected : .pageTab,
+                              ink: isSelected ? .heading : (hovered ? .body : .helper))
+                        .fixedSize()
+                        .frame(height: AtticLayout.pageTabsHeight)
+                        .background {
+                            if ringed {
+                                Color.clear
+                                    .atticFocusRing(true, cornerRadius: m.focusRadius)
+                                    .padding(.horizontal, -m.focusOutset)
+                            }
+                        }
+                        // A comfortable target around the small label.
+                        .contentShape(Rectangle().inset(by: -m.hitOutset))
+                        .transaction { $0.animation = nil }
                 }
                 .buttonStyle(.plain)
                 .focusable(false)
@@ -846,7 +846,7 @@ struct AtticTaskRow: View {
             AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false, onToggle: actions.toggleDone)
                 .atticForcedState(nil)
                 .padding(.leading, AtticLayout.circleX + AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2)
-                .padding(.top, m.circleCentreY - m.pitchTopInset - AtticControlSize.minimumHitTarget / 2)
+                .padding(.top, m.circleCentreY(twoLine: twoLine) - m.pitchTopInset - AtticControlSize.minimumHitTarget / 2)
 
             // The title line (title, priority mark, and the date on the
             // title's baseline), then the details line.
@@ -879,7 +879,7 @@ struct AtticTaskRow: View {
             }
             .padding(.leading, AtticLayout.textX)
             .padding(.trailing, AtticLayout.rowHighlightInset + m.dateInset)
-            .padding(.top, m.titleTop - m.pitchTopInset)
+            .padding(.top, m.titleTop(twoLine: twoLine) - m.pitchTopInset)
         }
         // The highlight and the content sit 1 pt below the row's top; the
         // row is exactly its pitch (no half-point centring).

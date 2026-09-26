@@ -329,10 +329,9 @@ struct AtticColorTokens: Equatable, Sendable {
         let selected: AtticRGBA = calmStates ? .overlay(reaching: Calm.rowSelection(dark: dark), on: basePanel)
             : (dark ? .white(ic ? 0.14 : 0.07) : .black(ic ? 0.12 : 0.06))
         let pressed: AtticRGBA = dark ? .white(ic ? 0.18 : 0.10) : .black(ic ? 0.16 : 0.085)
-        // The page switch's selected chip sits on the drawn control body,
-        // which is Calm everywhere.
-        let chipSelected: AtticRGBA = calmStates ? .overlay(reaching: Calm.pageChip(dark: dark), on: Calm.controlBody(dark: dark))
-            : (dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06))
+        // The selected chip inside a raised control (Phase 0's drawn look,
+        // as before visual A).
+        let chipSelected: AtticRGBA = dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06)
         let chipHover: AtticRGBA = dark ? .white(0.04) : .black(0.03)
         let tabSelected: AtticRGBA = calmStates ? .overlay(reaching: Calm.tabSelected(dark: dark), on: basePanel)
             : (dark ? .white(ic ? 0.16 : 0.08) : .black(ic ? 0.12 : 0.06))
@@ -661,7 +660,6 @@ struct AtticColorTokens: Equatable, Sendable {
     /// the bottom, with no dark outer edge. Increase Contrast keeps the
     /// fill and strengthens the edge.
     private static func recipes(dark: Bool, ic: Bool, base: AtticRGBA) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
-        if !ic { return Calm.controlRecipes(dark: dark) }
         if dark {
             func recipe(fill: Double, top: Double, middle: Double, bottom: Double) -> AtticRaisedRecipe {
                 AtticRaisedRecipe(
@@ -860,7 +858,8 @@ enum Calm {
     static func doneDisc(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0x424841) : AtticRGBA(0xE1E5DE) }
     static func doneCheck(dark: Bool) -> AtticRGBA { dark ? AtticRGBA(0xB3BAB3) : AtticRGBA(0x737B73) }
 
-    /// The drawn header material: the control body, one 0.5 pt outline
+    /// Visual A's drawn header material (not used while Direction A shows
+    /// Phase 0's drawn look, 2026-09-26; kept for comparison): the control body, one 0.5 pt outline
     /// (black 7 % / white 10 %), a top highlight (white 65 % / 8 %) fading
     /// out over the upper 8 pt of the 32 pt header, and one shadow (y 1,
     /// radius 2, black 4 % / 12 %). Hover a step lighter, pressed a step

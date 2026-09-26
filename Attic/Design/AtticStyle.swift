@@ -39,11 +39,10 @@ enum AtticStyle {
     /// edge. Larger squircles can require more room where the corner curve
     /// moves inward, so PanelGeometry adds curve-aware clearance to this
     /// minimum rather than treating it as a fixed position.
-    /// 12 pt from every edge at the default corner size (v9, owner
-    /// 2026-09-26); larger corners still push the controls inward.
-    /// Visual A ("Calm", 2026-09-26): 20 pt, the panel's principal outer
-    /// alignment (header, tabs and add bar).
-    static let chromeMinimumInset: CGFloat = 20
+    /// 24 pt from every edge at the default corner size (Phase 0's room,
+    /// brought into Direction A, 2026-09-26); larger corners still push the
+    /// controls inward.
+    static let chromeMinimumInset: CGFloat = 24
     static let chromeCornerClearance: CGFloat = 7
     static let chromeWorkspaceSpacing: CGFloat = 24
     static let taskScrollTopPadding: CGFloat = 22

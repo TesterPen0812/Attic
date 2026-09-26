@@ -70,15 +70,13 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 /// The header's geometry, shared by the SwiftUI header and AppKit's hit
 /// testing (which must know where the controls are before SwiftUI does).
 enum PanelHeaderLayout {
-    /// The header's controls are one row, 32 tall.
-    static let height = AtticControlSize.capsuleHeight
+    /// The header's controls are one row, 36 tall.
+    static let height = AtticControlSize.headerControl
     static var pinSize: CGSize { AtticControlSize.panelButton }
 
-    /// The page switch's width: fixed whichever page is selected.
-    static let pageSwitchWidth: CGFloat = {
-        let geometry = AtticPageSwitch<PanelPage>.Geometry(titles: PanelPage.allCases.map(\.title))
-        return geometry.innerWidth + AtticControlSize.capsuleInset * 2
-    }()
+    /// The page button's width when open (the region its controls may
+    /// take; shut it is the pin's width).
+    static let pageSwitchWidth: CGFloat = AtticPageButton<PanelPage>.width(open: true, count: PanelPage.allCases.count)
 
     /// The bottom of the header, measured from the panel's top edge.
     static func bottom(chromeInsets: EdgeInsets) -> CGFloat {

@@ -26,18 +26,14 @@ final class PanelShellTests: XCTestCase {
         XCTAssertEqual(items.map(\.accessibilityIdentifier), ["panel-section-tasks", "panel-section-notes", "panel-section-canvas"])
     }
 
-    func testPageSwitchWidthIsFixedAndMatchesTheDesignSystemGeometry() {
-        let geometry = AtticPageSwitch<PanelPage>.Geometry(titles: PanelPage.allCases.map(\.title))
-        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, geometry.innerWidth + 2 * AtticControlSize.capsuleInset)
-        for selected in 0..<3 {
-            let total = (0..<3).map { geometry.width(of: $0, selected: selected) }.reduce(0, +) + 2 * geometry.spacing
-            XCTAssertEqual(total, geometry.innerWidth, accuracy: 0.001, "the switch is the same width whichever page is selected")
-        }
-        // Visual A ("Calm"): the header's controls are 32 tall, the pin 32 × 32,
-        // the switch 144 wide.
-        XCTAssertEqual(PanelHeaderLayout.height, 32)
-        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 32, height: 32))
-        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 144)
+    /// Phase 0's symmetrical top: the pin and the page button are equal
+    /// 36 pt squares; the page button opens leftward to 96, the region the
+    /// header's hit testing keeps for it.
+    func testHeaderIsTwoEqualSquaresAndThePageButtonOpensTo96() {
+        XCTAssertEqual(PanelHeaderLayout.height, 36)
+        XCTAssertEqual(PanelHeaderLayout.pinSize, CGSize(width: 36, height: 36))
+        XCTAssertEqual(AtticPageButton<PanelPage>.width(open: false, count: PanelPage.allCases.count), PanelHeaderLayout.pinSize.width)
+        XCTAssertEqual(PanelHeaderLayout.pageSwitchWidth, 96)
     }
 
     func testPageLayoutUsesTheCornerAwareInsetsAndPlacesTheHeaderBand() {
@@ -46,13 +42,13 @@ final class PanelShellTests: XCTestCase {
             let layout = PanelPageLayout(cornerSize: corner, panelSize: size)
             XCTAssertEqual(layout.contentInsets, PanelGeometry.contentInsets(cornerSize: corner, panelSize: size))
             XCTAssertEqual(layout.chromeInsets, PanelGeometry.chromeInsets(cornerSize: corner, panelSize: size))
-            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 32)
+            XCTAssertEqual(layout.headerBottom, layout.chromeInsets.top + 36)
         }
-        // Visual A: the controls sit 20 from every edge at the default corner
-        // (the header 20–52), and move inward with larger corners.
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 20)
-        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).headerBottom, 52)
-        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 20)
+        // Phase 0's room: the controls sit 24 from every edge at the default
+        // corner (the header 24–60), and move inward with larger corners.
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).chromeInsets.top, 24)
+        XCTAssertEqual(PanelPageLayout(cornerSize: 52, panelSize: size).headerBottom, 60)
+        XCTAssertGreaterThan(PanelPageLayout(cornerSize: 140, panelSize: size).chromeInsets.top, 24)
     }
 
     // MARK: Key window

@@ -348,7 +348,7 @@ struct AtticGalleryPanelComposition: View {
 
     /// Above the list: the header's margin and controls, then the page tabs.
     private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.pageTabsTop
-        + AtticPageTabsMetrics.height + AtticLayout.pageTabsToList
+        + AtticLayout.pageTabsHeight + AtticLayout.pageTabsToList
     /// Below the list: the add bar and its margins.
     private static let footerZone = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
 
@@ -426,7 +426,7 @@ struct AtticGalleryPanelComposition: View {
             HStack(spacing: 0) {
                 AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)", action: demo.record("Pin"))
                 Spacer(minLength: AtticSpacing.betweenControls)
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: $demo.page)
+                AtticPageButton(items: AtticGallerySamples.pages, selection: $demo.page)
             }
         }
     }
@@ -508,6 +508,18 @@ private struct PageSwitchBoard: View {
     @Bindable var demo: AtticGalleryDemo
 
     var body: some View {
+        BoardHeading(title: "Page button (Phase 0's mode dock) · 36 × 36, opens to 96")
+        SpecimenRow {
+            AtticSpecimen("Shut: the current page") {
+                AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(0), pinnedOpen: false)
+            }
+            AtticSpecimen("Open: every page") {
+                AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(1), pinnedOpen: true)
+            }
+            AtticSpecimen("Live (hover to open)") {
+                AtticPageButton(items: AtticGallerySamples.pages, selection: $demo.page)
+            }
+        }
         BoardHeading(title: "Group capsule · 32 tall, chips 24, radius 9.5, inset 4")
         ForEach(0..<3, id: \.self) { page in
             SpecimenRow {

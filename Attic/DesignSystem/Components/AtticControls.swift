@@ -428,6 +428,143 @@ private struct AtticPageChipButton<Page: Hashable>: View {
     }
 }
 
+// MARK: - Page button (collapsed page dock)
+
+/// The header's page button (Phase 0's mode dock, brought into Direction
+/// A, 2026-09-26): at rest a square the size and shape of the pin, showing
+/// only the current page's icon on the selected inner chip. Under the
+/// pointer or keyboard focus it opens leftward into all the pages' icons
+/// (the current one on the chip, each with a tooltip and its shortcut); a
+/// click goes there, and it folds back when the pointer leaves. 36 pt,
+/// inset 4, 28 pt segments 2 apart: 36 wide shut, 96 open.
+///
+/// One control for the keyboard (← → move between pages while it has
+/// focus; ⌘1–⌘3 work from anywhere) and for VoiceOver: "Pages", valued by
+/// the current page, with a named action per page and increment/decrement.
+struct AtticPageButton<Page: Hashable>: View {
+    typealias Item = AtticPageSwitch<Page>.Item
+
+    let items: [Item]
+    @Binding var selection: Page
+    /// The gallery and captures pin it open (or shut); nil follows the
+    /// pointer and focus.
+    var pinnedOpen: Bool?
+    /// The pointer arrived: the caller can build the other pages early.
+    var onApproach: () -> Void = {}
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @FocusState private var focused: Bool
+    @State private var hovering = false
+    @State private var hoveredPage: Page?
+    @State private var probeID = UUID()
+
+    private typealias M = AtticPageButtonMetrics
+
+    private var isOpen: Bool {
+        pinnedOpen ?? (hovering || (focused && keyboardFocusVisible))
+    }
+
+    var body: some View {
+        let open = isOpen
+        let selected = items.firstIndex { $0.page == selection } ?? 0
+        let size = AtticControlSize.headerControl
+        let radius = AtticRadius.control(height: size)
+        let chipRadius = AtticRadius.nested(outer: radius, gap: M.inset) ?? radius
+        HStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                let isSelected = index == selected
+                let visible = open || isSelected
+                if index > 0 {
+                    Color.clear.frame(width: open ? M.gap : 0, height: M.segment)
+                }
+                Button { select(item.page) } label: {
+                    ZStack {
+                        let shape = RoundedRectangle(cornerRadius: chipRadius, style: .continuous)
+                        if isSelected {
+                            shape.fill(design.tokens.chipSelected.color)
+                        } else if hoveredPage == item.page {
+                            shape.fill(design.tokens.chipHover.color)
+                        }
+                        AtticIcon(systemName: item.systemName, size: M.iconSize,
+                                  weight: isSelected ? .regular : AtticIconWeight.outline,
+                                  ink: isSelected ? .glyph : .icon)
+                    }
+                    .frame(width: M.segment, height: M.segment)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .keyboardShortcut(item.keyEquivalent.map { KeyboardShortcut($0, modifiers: .command) })
+                .help("\(item.title) (\(item.shortcut))")
+                .onHover { inside in
+                    if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
+                }
+                .frame(width: visible ? M.segment : 0, height: M.segment, alignment: .trailing)
+                .opacity(visible ? 1 : 0)
+                .clipped()
+                .allowsHitTesting(visible)
+                .transformEnvironment(\.atticProbesDisabled) { if !visible { $0 = true } }
+            }
+        }
+        .padding(M.inset)
+        .frame(height: size)
+        .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+        .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: radius)
+        .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .onHover { inside in
+            hovering = inside
+            if inside { onApproach() } else { hoveredPage = nil }
+        }
+        .animation(design.reduceMotion ? nil : .spring(duration: AtticMotionPreset.expand.duration, bounce: 0), value: open)
+        .focusable(capture == nil)
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(phases: .down) { press in
+            guard press.modifiers.intersection([.command, .option, .control, .shift]).isEmpty else { return .ignored }
+            let step: Int
+            switch press.key {
+            case .leftArrow: step = -1
+            case .rightArrow: step = 1
+            default: return .ignored
+            }
+            let next = min(max(selected + step, 0), items.count - 1)
+            guard next != selected else { return .handled }
+            select(items[next].page)
+            return .handled
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "Pages"))
+        .accessibilityValue(items[selected].title)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAdjustableAction { direction in
+            let step = direction == .increment ? 1 : -1
+            let next = min(max(selected + step, 0), items.count - 1)
+            if next != selected { select(items[next].page) }
+        }
+        .accessibilityActions {
+            ForEach(items) { item in
+                Button(item.title) { select(item.page) }
+            }
+        }
+        .atticControlProbe("Page button", id: probeID, expectedSize: open ? nil : CGSize(width: size, height: size),
+                           radius: radius, expectedRadius: AtticRadius.control(height: size))
+    }
+
+    private func select(_ page: Page) {
+        withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: design.reduceMotion)) {
+            selection = page
+        }
+    }
+
+    /// The width it takes shut and open (the header's hit testing).
+    static func width(open: Bool, count: Int) -> CGFloat {
+        let segments = open ? CGFloat(count) : 1
+        return M.inset * 2 + segments * M.segment + (open ? CGFloat(max(count - 1, 0)) * M.gap : 0)
+    }
+}
+
 // MARK: - Page pill
 
 /// The page pill (v9): a small pill of dots, the dark one the current page,
@@ -744,7 +881,7 @@ struct AtticAddBar: View {
         .padding(.leading, m.leadingPadding)
         .padding(.trailing, AtticControlSize.sendInset)
         .frame(height: height)
-        .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false, flat: true)
+        .atticRaisedMaterial(cornerRadius: radius, state: state == .hover ? .rest : state, interactive: false)
         .atticFocusRing(state == .focused, cornerRadius: radius)
         .onHover { hovered = $0 }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: hasText)
