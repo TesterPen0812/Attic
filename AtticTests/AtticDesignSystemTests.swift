@@ -44,14 +44,14 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticPageButton<Int>.width(open: true, count: 3), 96)
         // Compact round (owner): rows 36 / 50, highlights 30 / 44.
         XCTAssertEqual([AtticLayout.rowPitch, AtticLayout.rowHighlightHeight, AtticLayout.detailRowPitch, AtticLayout.detailRowHighlightHeight], [34, 30, 48, 44])
-        XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 3)
+        XCTAssertEqual(AtticTaskRowMetrics.pitchTopInset, 2)
         XCTAssertEqual(AtticControlSize.statusCircle, 16)
         XCTAssertEqual(AtticLayout.textX - AtticLayout.circleX - AtticControlSize.statusCircle, 12)
         let m = AtticTaskRowMetrics.self
-        XCTAssertEqual(m.titleTop(twoLine: false), 9, "18 pt title centred in 36")
-        XCTAssertEqual(m.titleTop(twoLine: true), 7, "18 + 2 + 16 centred in 50")
-        XCTAssertEqual(m.circleCentreY(twoLine: false), 18)
-        XCTAssertEqual(m.circleCentreY(twoLine: true), 16)
+        XCTAssertEqual(m.titleTop(twoLine: false), 8, "18 pt title centred in 34")
+        XCTAssertEqual(m.titleTop(twoLine: true), 6, "18 + 2 + 16 centred in 48")
+        XCTAssertEqual(m.circleCentreY(twoLine: false), 17)
+        XCTAssertEqual(m.circleCentreY(twoLine: true), 15)
     }
 
     func testMotionPresetsAreCalmSpringsWithReduceMotionFallbacks() {

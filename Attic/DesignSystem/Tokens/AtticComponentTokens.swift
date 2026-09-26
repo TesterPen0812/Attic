@@ -122,7 +122,7 @@ enum AtticTaskRowMetrics {
     }
     /// The circle's centre below the row's top: the title line's centre.
     static func circleCentreY(twoLine: Bool) -> CGFloat { titleTop(twoLine: twoLine) + titleLineHeight / 2 }
-    /// The highlight sits 3 pt below the row's top (3 pt clear above and
+    /// The highlight sits 2 pt below the row's top (2 pt clear above and
     /// below, owner 2026-09-26).
     static var pitchTopInset: CGFloat { (AtticLayout.rowPitch - AtticLayout.rowHighlightHeight) / 2 }
     /// The least room between a title (or its priority mark) and the date.
