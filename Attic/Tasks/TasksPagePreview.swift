@@ -65,6 +65,21 @@ enum TasksPagePreview {
         }
     }
 
+    /// Capture seam: nothing open, six tasks finished today.
+    static func seedCaughtUp(in container: ModelContainer) throws {
+        let context = ModelContext(container)
+        let now = Date()
+        var order: Int64 = 100 * 1_024
+        for title in ["Renew domain", "Send invoice", "Water the plants", "Book dentist", "Email beta testers", "Call the plumber"] {
+            order -= 1_024
+            let item = TaskItem(title: title, status: .done, priority: .none, createdAt: now.addingTimeInterval(-86_400),
+                                completedAt: now, manualOrder: order, parentID: nil)
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            context.insert(item)
+        }
+        try context.save()
+    }
+
     /// The v9 mockup's tasks, plus a backlog and a few days of the Done log.
     static func seedDemo(in container: ModelContainer) throws {
         let context = ModelContext(container)

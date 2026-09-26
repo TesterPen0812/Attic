@@ -485,6 +485,10 @@ final class AppCoordinator: ObservableObject {
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" {
             try? TasksPagePreview.seedDemo(in: container)
         }
+        // Everything finished today: the caught-up Now page.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
+            try? TasksPagePreview.seedCaughtUp(in: container)
+        }
         #endif
         let (store, noteStore) = runtime.makeItemStores(container: container, performanceRoot: performanceRoot)
         let canvasStore = CanvasStore(container: container)
