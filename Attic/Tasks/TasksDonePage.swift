@@ -2,19 +2,34 @@ import SwiftUI
 
 /// The Done log (spec § Now, Backlog and Done): everything finished, kept
 /// indefinitely, grouped by the day it was finished (Today, Yesterday,
-/// Mon 21 Sep…), searchable from the bottom bar, each task restorable to
+/// Mon 21 Sep…), searchable from the field at the top of its list
+/// (Direction A: the add bar below always adds), each task restorable to
 /// Now (its circle, or right-click). Loaded a page at a time as it scrolls,
 /// so 5,000 finished tasks never load at once.
 struct TasksDonePage<Cell: View>: View {
     @ObservedObject var model: TasksPageModel
     @ObservedObject var store: TaskStore
     let footerZone: CGFloat
+    /// The search field's keyboard focus (Search from the menu bar sets it).
+    @Binding var searchFocused: Bool
     let cell: (TasksListRow) -> Cell
 
     static var space: NamedCoordinateSpace { .named("AtticTasksDone") }
 
     var body: some View {
         let days = model.doneDays()
+        VStack(alignment: .leading, spacing: 0) {
+            AtticListSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch, isFocused: $searchFocused)
+                .accessibilityIdentifier("tasks-done-search")
+                .padding(.horizontal, AtticLayout.pageTabsX)
+            list(days)
+        }
+        .onAppear { model.loadDoneLogIfNeeded() }
+        .onChange(of: model.doneSearch) { _, _ in model.loadDoneLogIfNeeded() }
+        .onChange(of: store.revision) { _, _ in model.loadDoneLogIfNeeded() }
+    }
+
+    private func list(_ days: [TasksDoneDay]) -> some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(days) { day in
@@ -43,8 +58,5 @@ struct TasksDonePage<Cell: View>: View {
         .contentMargins(.bottom, footerZone, for: .scrollContent)
         .scrollEdgeEffectHidden(true, for: .all)
         .coordinateSpace(Self.space)
-        .onAppear { model.loadDoneLogIfNeeded() }
-        .onChange(of: model.doneSearch) { _, _ in model.loadDoneLogIfNeeded() }
-        .onChange(of: store.revision) { _, _ in model.loadDoneLogIfNeeded() }
     }
 }

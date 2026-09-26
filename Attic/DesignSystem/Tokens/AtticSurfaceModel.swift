@@ -320,7 +320,7 @@ struct AtticSurfaceModel: Equatable, Sendable {
             p(.icon, [pressed]), p(.icon, [recessed, hover]),
             p(.chevron, [pressed]), p(.chevron, [recessed, hover]),
             p(.accent, [selected]), p(.accentText, [tagFill]), p(.accentText, [recessed, tagFillSelected]),
-            p(.dueText, [selected]), p(.warningText, []),
+            p(.dueText, [selected]), p(.warningText, []), p(.priorityMark, [pressed]), p(.priorityMark, [recessed, hover]),
             p(.priorityHigh, [pressed]), p(.priorityMedium, [pressed]),
             p(.priorityLow, [pressed]), p(.priorityNone, [pressed]), p(.doneFill, [pressed]),
             p(.priorityHigh, [recessed, hover]), p(.priorityMedium, [recessed, hover]),

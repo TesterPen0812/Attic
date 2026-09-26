@@ -2,26 +2,20 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Where the Tasks page is: Now (in progress, to do, and today's done),
-/// Backlog, or the Done log.
+/// Where the Tasks page is: Now (in progress and to do, then "Completed
+/// today"), Later (the backlog), or the Done log. Direction A shows them as
+/// tabs; "Later" is only the display name: the model, storage and agent
+/// tools still call it `backlog`.
 enum TasksTab: Int, CaseIterable, Hashable, Identifiable {
     case now, backlog, done
 
     var id: Int { rawValue }
 
+    /// The tab's name ("Now · Later · Done").
     var title: String {
         switch self {
         case .now: String(localized: "Now")
-        case .backlog: String(localized: "Backlog")
-        case .done: String(localized: "Done")
-        }
-    }
-
-    /// The page's one title (v9): the Now list is the Tasks page itself.
-    var pageTitle: String {
-        switch self {
-        case .now: String(localized: "Tasks")
-        case .backlog: String(localized: "Backlog")
+        case .backlog: String(localized: "Later")
         case .done: String(localized: "Done")
         }
     }
@@ -32,15 +26,6 @@ enum TasksTab: Int, CaseIterable, Hashable, Identifiable {
         case .now: "now"
         case .backlog: "backlog"
         case .done: "done"
-        }
-    }
-
-    /// The page pill's icon: the status circle's state for the page.
-    var pillIcon: AtticPagePillIcon {
-        switch self {
-        case .now: .open
-        case .backlog: .dashed
-        case .done: .done
         }
     }
 }
@@ -79,6 +64,14 @@ struct TasksListRow: Identifiable, Equatable {
             && lhs.subtasks.map(\.isDone) == rhs.subtasks.map(\.isDone)
             && lhs.subtasks.map(\.title) == rhs.subtasks.map(\.title)
     }
+}
+
+/// A list as the page shows it: the open rows (with any finished row still
+/// held in place), and on Now the rows finished today, which show under
+/// "Completed today" when it is open.
+struct TasksSections: Equatable {
+    var open: [TasksListRow] = []
+    var done: [TasksListRow] = []
 }
 
 /// A day of the Done log.
@@ -125,8 +118,27 @@ final class TasksPageModel: ObservableObject {
     @Published private(set) var newSubtaskParentID: UUID?
     @Published var newSubtaskTitle = ""
     /// Finished rows held where they were for about a second, with the
-    /// index they held (spec: "stays in place, then slides").
-    @Published private(set) var held: [UUID: Int] = [:]
+    /// list and index they held (spec: "stays in place, then slides").
+    @Published private(set) var held: [UUID: HeldPlace] = [:]
+
+    struct HeldPlace: Equatable {
+        let tab: TasksTab
+        let index: Int
+    }
+
+    /// Whether Now's "Completed today" shows its rows (remembered for the
+    /// session: the model lives as long as the panel).
+    @Published var completedTodayExpanded = false
+    /// What a task was before the circle finished it, so un-completing
+    /// puts it back (in progress, or Later); to do when unknown.
+    private var statusBeforeDone: [UUID: TaskStatus] = [:]
+    /// The undo step each completion recorded: un-completing while that is
+    /// still the latest step undoes it, so the task returns exactly where
+    /// it was (its place, its subtasks).
+    private var completionSteps: [UUID: UUID] = [:]
+    /// Search (the menu-bar item) asked for the Done page's search field;
+    /// the page puts the keyboard there and clears it.
+    @Published var pendingSearchFocus = false
     /// What is typed in the add bar, kept apart from the page's published
     /// state: typing redraws the bar, not the list.
     let addBarState = TasksAddBarState()
@@ -193,34 +205,56 @@ final class TasksPageModel: ObservableObject {
     private struct RowsKey: Equatable {
         let tab: TasksTab
         let revision: UInt64
-        let held: [UUID: Int]
+        let held: [UUID: HeldPlace]
         let expanded: Set<UUID>
+        let completedExpanded: Bool
         let today: DueDay
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
     /// for them many times per change.
-    private var rowsCache: [TasksTab: (key: RowsKey, rows: [TasksListRow])] = [:]
+    private var rowsCache: [TasksTab: (key: RowsKey, sections: TasksSections, rows: [TasksListRow])] = [:]
 
-    /// Now: in progress, then to do, then today's done; Backlog: its tasks.
-    /// Empty groups take no space. A task just finished holds its place.
+    /// The rows a list shows, in order (the keyboard walks them): Now's
+    /// open rows (in progress, then to do), then today's done rows when
+    /// "Completed today" is open; Later's tasks. A task just finished
+    /// holds its place for about a second.
     func rows(for tab: TasksTab) -> [TasksListRow] {
-        let key = RowsKey(tab: tab, revision: store.revision, held: tab == .now ? held : [:], expanded: expanded, today: today)
-        if let cached = rowsCache[tab], cached.key == key { return cached.rows }
-        let rows = buildRows(for: tab)
-        rowsCache[tab] = (key, rows)
-        return rows
+        cached(tab).rows
+    }
+
+    /// The open rows and today's done rows, apart (the page draws
+    /// "Completed today" between them).
+    func sections(for tab: TasksTab) -> TasksSections {
+        cached(tab).sections
+    }
+
+    private func cached(_ tab: TasksTab) -> (key: RowsKey, sections: TasksSections, rows: [TasksListRow]) {
+        let key = RowsKey(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+                          completedExpanded: tab == .now && completedTodayExpanded, today: today)
+        if let cached = rowsCache[tab], cached.key == key { return cached }
+        let all = buildRows(for: tab)
+        var sections = TasksSections()
+        for row in all {
+            if row.status == .done, held[row.id]?.tab != tab { sections.done.append(row) } else { sections.open.append(row) }
+        }
+        let rows = key.completedExpanded ? sections.open + sections.done : sections.open
+        let entry = (key, sections, rows)
+        rowsCache[tab] = entry
+        return entry
     }
 
     private func buildRows(for tab: TasksTab) -> [TasksListRow] {
         let scope: TaskScope = tab == .backlog ? .backlog : .tasks
         var tasks = store.snapshot(for: scope).sections.flatMap(\.tasks)
-        if tab == .now, !held.isEmpty {
-            let holding = held.sorted { $0.value < $1.value }
-            let heldTasks = holding.compactMap { id, _ in tasks.first { $0.id == id } }
-            tasks.removeAll { held[$0.id] != nil }
+        let holding = held.filter { $0.value.tab == tab }.sorted { $0.value.index < $1.value.index }
+        if !holding.isEmpty {
+            // A task finished on Later has left the backlog list: the held
+            // row is the task as it is now.
+            let heldTasks = holding.compactMap { id, _ in tasks.first { $0.id == id } ?? store.task(withID: id) }
+            tasks.removeAll { held[$0.id]?.tab == tab }
             for task in heldTasks {
-                tasks.insert(task, at: min(held[task.id] ?? 0, tasks.count))
+                tasks.insert(task, at: min(held[task.id]?.index ?? 0, tasks.count))
             }
         }
         return tasks.map(rowModel(for:))
@@ -229,6 +263,23 @@ final class TasksPageModel: ObservableObject {
     var nowCount: Int { store.snapshot(for: .tasks).activeCount }
     var backlogCount: Int { store.snapshot(for: .backlog).visibleCount }
     var hasDoneToday: Bool { store.snapshot(for: .tasks).sections.contains { $0.status == .done } }
+    /// "Completed today · N": the done rows no longer held in place.
+    var completedTodayCount: Int { sections(for: .now).done.count }
+
+    func toggleCompletedToday() {
+        completedTodayExpanded.toggle()
+    }
+
+    /// What an empty list says (Direction A): Now with nothing open is
+    /// caught up when something was finished today, points to Later when
+    /// Later has tasks, and otherwise invites the first task.
+    var emptyMessage: [TasksTab: String] {
+        [
+            .now: hasDoneToday ? String(localized: "You’re caught up")
+                : (backlogCount > 0 ? String(localized: "Nothing active. Choose from Later.") : String(localized: "Add your first task")),
+            .backlog: String(localized: "Nothing for later")
+        ]
+    }
 
     // MARK: - Done log
 
@@ -359,13 +410,14 @@ final class TasksPageModel: ObservableObject {
         self.tab = tab
     }
 
-    /// Search (the menu-bar item): the Done page, whose bottom bar searches
-    /// the Done log. The caller puts the keyboard in that bar.
+    /// Search (the menu-bar item): the Done page, with the keyboard in the
+    /// search field at the top of its list.
     func beginSearch() {
         cancelEditing()
         selection = []
         tab = .done
         revealTab = .done
+        pendingSearchFocus = true
     }
 
     /// An agent's `show` of a task: the tab that lists it, the row selected
@@ -448,29 +500,78 @@ final class TasksPageModel: ObservableObject {
 
     // MARK: - State changes
 
-    /// The circle's click and Space (spec § The status circle): to do →
-    /// in progress → done; done → to do; backlog → Now as to do.
-    func advance(_ id: UUID) {
+    /// The circle's click and Space (Direction A: one-click completion):
+    /// an open task (to do, in progress or Later) is done; a done task goes
+    /// back to what it was.
+    func toggleDone(_ id: UUID) {
         guard let task = store.listedTask(withID: id) else { return }
-        switch task.status {
-        case .todo: library.updateTask(id, status: .inProgress)
-        case .inProgress: complete(id)
-        case .done: restoreToNow(id)
-        case .backlog: library.updateTask(id, status: .todo)
+        if task.status == .done { reopen(id) } else { complete(id) }
+    }
+
+    /// The right-click menu on several tasks: all done, or (when all are
+    /// done already) all back.
+    func toggleDone(_ ids: [UUID]) {
+        let tasks = ids.compactMap { store.listedTask(withID: $0) }
+        if !tasks.isEmpty, tasks.allSatisfy({ $0.status == .done }) {
+            tasks.forEach { reopen($0.id) }
+        } else if ids.count == 1 {
+            complete(ids[0])
+        } else {
+            let open = tasks.filter { $0.status != .done }
+            for task in open { statusBeforeDone[task.id] = task.status }
+            library.updateTasks(open.map(\.id), status: .done)
         }
     }
 
-    /// Option-click, ⇧Space (and ⌥Space): done in one step, with any open
-    /// subtasks. The row holds its place for about a second, then slides.
-    func complete(_ id: UUID) {
-        guard let task = store.task(withID: id), task.status != .done else { return }
-        let index = rows(for: .now).firstIndex { $0.id == id }
-        guard library.completeTask(id) else { return }
-        if tab == .now, let index { hold(id, at: index) }
+    /// ⇧Space and the right-click menu: start working on the tasks (the
+    /// circle's centre dot), or stop when every one is already started.
+    func toggleWorking(_ ids: [UUID]) {
+        let tasks = ids.compactMap { store.task(withID: $0) }
+        guard !tasks.isEmpty else { return }
+        let target: TaskStatus = tasks.allSatisfy { $0.status == .inProgress } ? .todo : .inProgress
+        setStatus(target, for: tasks.map(\.id))
     }
 
-    private func hold(_ id: UUID, at index: Int) {
-        held[id] = index
+    /// Done in one step, with any open subtasks. The row holds its place
+    /// for about a second, then slides into "Completed today".
+    func complete(_ id: UUID) {
+        guard let task = store.task(withID: id), task.status != .done else { return }
+        let before = task.status
+        let holdTab: TasksTab? = tab == .done ? nil : tab
+        let index = holdTab.flatMap { holdTab in rows(for: holdTab).firstIndex { $0.id == id } }
+        guard library.completeTask(id) else { return }
+        statusBeforeDone[id] = before
+        completionSteps[id] = library.undo.undoStepID(in: .tasks)
+        if let holdTab, let index { hold(id, tab: holdTab, at: index) }
+    }
+
+    /// A done task back to what it was before the circle finished it. Right
+    /// after finishing (the completion is still the latest step), that step
+    /// is undone, so the task keeps its place and its subtasks their state;
+    /// later it goes back to its earlier state (to do when unknown).
+    func reopen(_ id: UUID) {
+        let previous = statusBeforeDone.removeValue(forKey: id) ?? .todo
+        let step = completionSteps.removeValue(forKey: id)
+        cancelHold(id)
+        if let step, library.undo.undoStepID(in: .tasks) == step, store.task(withID: id)?.status == .done {
+            _ = library.undo.undo(in: .tasks)
+            return
+        }
+        if previous != .todo, store.task(withID: id)?.status == .done {
+            library.updateTask(id, status: previous, allowingUnfinishedSubtasks: true)
+        } else {
+            restoreToNow(id)
+        }
+    }
+
+    private func cancelHold(_ id: UUID) {
+        holdTasks[id]?.cancel()
+        holdTasks[id] = nil
+        held[id] = nil
+    }
+
+    private func hold(_ id: UUID, tab: TasksTab, at index: Int) {
+        held[id] = HeldPlace(tab: tab, index: index)
         holdTasks[id]?.cancel()
         let delay = services.doneHold
         holdTasks[id] = Task { @MainActor [weak self] in
@@ -519,7 +620,7 @@ final class TasksPageModel: ObservableObject {
         library.updateTasks(ids, addingTag: tag)
     }
 
-    /// ⌘B and the menu: to Backlog, with an Undo toast (a move).
+    /// ⌘B and the menu: to Later (the backlog), with an Undo toast (a move).
     func moveToBacklog(_ ids: [UUID]) {
         let movable = ids.filter { store.task(withID: $0).map { $0.status != .backlog } == true }
         guard !movable.isEmpty else { return }
@@ -528,10 +629,10 @@ final class TasksPageModel: ObservableObject {
             : library.updateTasks(movable, status: .backlog)
         guard succeeded else { return }
         selection.subtract(movable)
-        showToast(movable.count == 1 ? String(localized: "Moved to Backlog") : String(localized: "Moved \(movable.count) tasks to Backlog"))
+        showToast(movable.count == 1 ? String(localized: "Moved to Later") : String(localized: "Moved \(movable.count) tasks to Later"))
     }
 
-    /// Back to Now as to do (from Backlog), with an Undo toast.
+    /// Back to Now as to do (from Later), with an Undo toast.
     func moveToNow(_ ids: [UUID]) {
         let movable = ids.filter { store.task(withID: $0)?.status == .backlog }
         guard !movable.isEmpty else { return }
@@ -673,15 +774,19 @@ final class TasksPageModel: ObservableObject {
 
     // MARK: - Add bar
 
+    /// The add bar always adds (Direction A): to Later on Later, to Now on
+    /// Now and on Done.
     var addStatus: TaskStatus { tab == .backlog ? .backlog : .todo }
 
     var addPlaceholder: String {
         switch tab {
-        case .now: String(localized: "Add a task")
-        case .backlog: String(localized: "Add to backlog")
-        case .done: String(localized: "Search done tasks")
+        case .now, .done: String(localized: "Add a task")
+        case .backlog: String(localized: "Add to later")
         }
     }
+
+    /// The Done page's search field.
+    var searchPlaceholder: String { String(localized: "Search done tasks") }
 
     var addBarChips: [NSRange] {
         addBar.chips(parser: parser, caret: addBarCaret)
@@ -696,6 +801,8 @@ final class TasksPageModel: ObservableObject {
         addBar.clear()
         if openingPage { services.openPage(task.id) }
         selectOnly(nil)
+        // Added from Done, the task goes to Now, out of sight: say where.
+        if tab == .done, !openingPage { showToast(String(localized: "Added to Now")) }
         return task.id
     }
 

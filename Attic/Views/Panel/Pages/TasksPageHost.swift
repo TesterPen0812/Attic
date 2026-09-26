@@ -101,8 +101,8 @@ struct TasksPageHost: View {
     private func handleSearchRequest(_ model: TasksPageModel) {
         guard uiState.searchRequest != state.handledSearchRequest else { return }
         state.handledSearchRequest = uiState.searchRequest
+        // The page puts the keyboard in the Done page's search field.
         model.beginSearch()
-        addBarFocused = true
     }
 
     private func showItemIfNeeded(_ model: TasksPageModel) {

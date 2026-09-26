@@ -6,48 +6,48 @@ import SwiftUI
 /// control that is drawn is always wired: Phase 1 passes the store's
 /// operations, the gallery records which one fired.
 struct AtticTaskActions {
-    /// The circle's click and Space: to do → in progress → done.
-    let advance: () -> Void
-    /// VoiceOver "Start".
-    let start: () -> Void
-    /// ⌥Space and VoiceOver "Complete": done in one step, whatever the state.
-    let complete: () -> Void
+    /// The circle's click, Space (and ⌥Space): done, or a done task back to
+    /// what it was (Direction A: one-click completion).
+    let toggleDone: () -> Void
+    /// ⇧Space, the right-click menu and VoiceOver: start or stop working
+    /// on the task (the circle's centre dot).
+    let toggleWorking: () -> Void
     /// A click on the row, ⌘Return and VoiceOver "Open page".
     let openPage: () -> Void
-    /// ⌘B and VoiceOver "Move to Backlog".
+    /// ⌘B and VoiceOver "Move to Later" (or "Move to Now" on Later).
     let moveToBacklog: () -> Void
     /// Delete and VoiceOver "Delete".
     let delete: () -> Void
 
-    /// The VoiceOver actions a task offers (spec § Accessibility: "Start,
-    /// Complete, Open page, Move to Backlog, Delete"), in that order.
-    var accessibilityActions: [(name: String, handler: () -> Void)] {
+    /// The VoiceOver actions a task offers, named for its state: Complete
+    /// (or Mark as not done), Start working (or Stop working), Open page,
+    /// Move to Later, Delete.
+    func accessibilityActions(for state: AtticTaskState) -> [(name: String, handler: () -> Void)] {
         [
-            (String(localized: "Start"), start),
-            (String(localized: "Complete"), complete),
+            (state == .done ? String(localized: "Mark as not done") : String(localized: "Complete"), toggleDone),
+            (state == .inProgress ? String(localized: "Stop working") : String(localized: "Start working"), toggleWorking),
             (String(localized: "Open page"), openPage),
-            (String(localized: "Move to Backlog"), moveToBacklog),
+            (state == .backlog ? String(localized: "Move to Now") : String(localized: "Move to Later"), moveToBacklog),
             (String(localized: "Delete"), delete)
         ]
     }
 }
 
-/// The task keys a focused row or card answers (spec § Keyboard map):
-/// Space starts or completes, ⇧Space (and ⌥Space) completes, ⌘Return opens the page;
-/// rows also take ⌘B (Backlog) and Delete. ↑ ↓ and ⌘↑ ⌘↓ belong to the
-/// list, and Return (edit title) to the row's title editor, in Phase 1.
+/// The task keys a focused row or card answers (spec § Keyboard map, as
+/// Direction A changes it): Space (and ⌥Space) completes or un-completes,
+/// ⇧Space starts or stops working, ⌘Return opens the page; rows also take
+/// ⌘B (Later) and Delete. ↑ ↓ and ⌘↑ ⌘↓ belong to the list, and Return
+/// (edit title) to the row's title editor.
 enum AtticTaskKeys {
-    enum Command: Equatable { case advance, complete, openPage, moveToBacklog, delete }
+    enum Command: Equatable { case toggleDone, toggleWorking, openPage, moveToBacklog, delete }
 
     /// The command for a key, or nil when the key is not a task key.
     static func command(key: KeyEquivalent, characters: String, modifiers: EventModifiers, listCommands: Bool) -> Command? {
         let relevant = modifiers.intersection([.command, .option, .control, .shift])
         // ⌥Space types a non-breaking space, so match the characters too.
-        // ⇧Space also completes (Phase 1): launchers such as Raycast and
-        // ChatGPT take ⌥Space on many Macs, so it never reaches Attic there.
         if key == .space || characters == " " || characters == "\u{A0}" {
-            if relevant == [] { return .advance }
-            if relevant == .option || relevant == .shift { return .complete }
+            if relevant == [] || relevant == .option { return .toggleDone }
+            if relevant == .shift { return .toggleWorking }
             return nil
         }
         if key == .return, relevant == .command { return .openPage }
@@ -61,8 +61,8 @@ enum AtticTaskKeys {
 
     static func perform(_ command: Command, _ actions: AtticTaskActions) {
         switch command {
-        case .advance: actions.advance()
-        case .complete: actions.complete()
+        case .toggleDone: actions.toggleDone()
+        case .toggleWorking: actions.toggleWorking()
         case .openPage: actions.openPage()
         case .moveToBacklog: actions.moveToBacklog()
         case .delete: actions.delete()
@@ -88,9 +88,9 @@ private extension View {
     }
 
     /// The task's VoiceOver actions.
-    func atticTaskAccessibilityActions(_ actions: AtticTaskActions) -> some View {
+    func atticTaskAccessibilityActions(_ actions: AtticTaskActions, state: AtticTaskState) -> some View {
         accessibilityActions {
-            ForEach(Array(actions.accessibilityActions.enumerated()), id: \.offset) { _, action in
+            ForEach(Array(actions.accessibilityActions(for: state).enumerated()), id: \.offset) { _, action in
                 Button(action.name, action: action.handler)
             }
         }
@@ -204,51 +204,47 @@ struct AtticRowTitleEditor: View {
 
 // MARK: - Status circle
 
-/// The status circle shows and changes a task's state (spec § The status
-/// circle, owner-approved hybrid 2026-09-25):
+/// The status circle shows and changes a task's state (Direction A,
+/// 2026-09-26: the circle is for completion; priority is a mark after the
+/// title):
 ///
-/// - **To do:** a grey ring whose weight shows priority (None the lightest
-///   and faintest, Medium the heaviest and darkest); only High is red.
-/// - **In progress:** the same ring and a wedge from 12 o'clock, clockwise:
-///   the share of subtasks ticked, at least a quarter (a quarter when the
-///   task has none, meaning "started").
-/// - **Done:** a quiet grey disc with a darker grey check, whatever the
-///   priority.
-/// - **Backlog:** a dashed grey ring.
+/// - **To do:** one grey ring at one weight, whatever the priority.
+/// - **In progress:** the same ring, a step darker, with a small filled
+///   centre dot ("working on it"): never a share of anything.
+/// - **Done:** a quiet grey disc with a darker grey check.
+/// - **Backlog (Later):** a dashed grey ring.
 ///
-/// Completing: the wedge sweeps to a full disc, then the check draws and
-/// the haptic tick lands (springs, so a change of mind mid-way reverses
-/// smoothly); Reduce Motion fades the done disc in. Disabled, the ring and
-/// wedge take the disabled icon colour (3 : 1), never faded below it.
+/// Completing: the done disc sweeps in from 12 o'clock, then the check
+/// draws and the haptic tick lands (springs, so a change of mind mid-way
+/// reverses smoothly); Reduce Motion fades the done disc in. Disabled, the
+/// ring takes the disabled icon colour (3 : 1), never faded below it.
 struct AtticStatusCircle: View {
     let state: AtticTaskState
-    let priority: AtticPriority
-    /// In progress: the share of subtasks ticked (0…1), or nil when the
-    /// task has none. Also where completing sweeps from.
-    var progress: Double?
     /// Pin the check's drawing progress (gallery); nil animates live.
     var checkProgress: Double?
-    /// Pin the completion sweep, 0 (the wedge) to 1 (the full disc)
+    /// Pin the completion sweep, 0 (nothing) to 1 (the full disc)
     /// (gallery); nil animates live.
     var completionProgress: Double?
     var isDisabled = false
 
     @Environment(\.atticDesign) private var design
     @State private var completion: Double = 1
-    @State private var completionStart: Double = 0
     @State private var drawnCheck: Double = 1
     @State private var discOpacity: Double = 1
     @State private var probeID = UUID()
     @State private var checkProbeID = UUID()
 
+    /// The open ring's grey, and the working ring's (a step darker).
+    static let ringInk: AtticInk = .priorityNone
+    static let activeInk: AtticInk = .priorityMedium
+
     var body: some View {
         let tokens = design.tokens
         let m = AtticStatusCircleMetrics.self
-        let ringInk: AtticInk = isDisabled ? .disabledIcon : Self.ink(for: priority)
+        let ringInk: AtticInk = isDisabled ? .disabledIcon : (state == .inProgress ? Self.activeInk : Self.ringInk)
         let colour = tokens.color(ringInk)
-        let width = m.ringWidth(priority, increaseContrast: design.increaseContrast, differentiateWithoutColor: design.differentiateWithoutColor)
+        let width = m.ringWidth(increaseContrast: design.increaseContrast)
         let size = AtticControlSize.statusCircle
-        let sweep = m.wedgeSweep(progress)
         let motion = AtticMotionPreset.complete.animation(reduceMotion: design.reduceMotion)
         ZStack {
             switch state {
@@ -258,14 +254,12 @@ struct AtticStatusCircle: View {
             case .inProgress:
                 Circle().inset(by: m.edgeInset + width / 2).stroke(colour, lineWidth: width)
                     .atticRingProbe(id: probeID, ink: ringInk, tokens: tokens)
-                AtticWedge(sweep: sweep, inset: m.wedgeInset(ringWidth: width))
-                    .fill(colour)
-                    .animation(motion, value: sweep)
+                Circle().fill(colour)
+                    .frame(width: m.activeDotDiameter, height: m.activeDotDiameter)
             case .done:
                 AtticCompletionMark(
                     completion: completionProgress ?? completion,
-                    start: completionProgress == nil ? completionStart : (progress == nil ? 0 : sweep),
-                    ring: colour, ringWidth: width, disc: tokens.doneDisc.color
+                    ring: tokens.color(isDisabled ? .disabledIcon : Self.ringInk), ringWidth: width, disc: tokens.doneDisc.color
                 )
                 .opacity(discOpacity)
                 AtticCheckShape()
@@ -276,7 +270,7 @@ struct AtticStatusCircle: View {
                     .opacity(discOpacity)
             case .backlog:
                 let dashed = design.increaseContrast ? m.backlogLineWidthIncreased : m.backlogLineWidth
-                let backlogInk: AtticInk = isDisabled ? .disabledIcon : .priorityNone
+                let backlogInk: AtticInk = isDisabled ? .disabledIcon : Self.ringInk
                 Circle().inset(by: m.edgeInset + dashed / 2)
                     .stroke(tokens.color(backlogInk), style: StrokeStyle(lineWidth: dashed, dash: m.backlogDash))
                     .atticRingProbe(id: probeID, ink: backlogInk, tokens: tokens)
@@ -289,7 +283,6 @@ struct AtticStatusCircle: View {
                 AtticHaptics.tick(enabled: design.hapticsEnabled)
                 return
             }
-            completionStart = old == .inProgress ? sweep : 0
             if design.reduceMotion {
                 completion = 1
                 drawnCheck = 1
@@ -311,34 +304,17 @@ struct AtticStatusCircle: View {
         .accessibilityHidden(true)
     }
 
-    static func ink(for priority: AtticPriority) -> AtticInk {
-        switch priority {
-        case .none: .priorityNone
-        case .low: .priorityLow
-        case .medium: .priorityMedium
-        case .high: .priorityHigh
-        }
-    }
-
     /// The spoken state: "in progress, 1 of 3 subtasks".
     static func spokenState(_ state: AtticTaskState, subtasks: (done: Int, total: Int)?) -> String {
         guard state == .inProgress, let subtasks, subtasks.total > 0 else { return state.spokenName }
         return state.spokenName + ", " + String(localized: "\(subtasks.done) of \(subtasks.total) subtasks")
     }
-
-    /// The share of subtasks ticked, or nil when there are none.
-    static func progress(_ subtasks: (done: Int, total: Int)?) -> Double? {
-        guard let subtasks, subtasks.total > 0 else { return nil }
-        return Double(subtasks.done) / Double(subtasks.total)
-    }
 }
 
-/// Completing: the wedge (in the ring's colour) sweeps from where it was to
-/// the full disc while the ring fades and the quiet done grey takes over.
-/// At 1 it is the done disc alone.
+/// Completing: the done disc sweeps in from 12 o'clock while the ring
+/// fades. At 1 it is the done disc alone.
 private struct AtticCompletionMark: View, Animatable {
     var completion: Double
-    let start: Double
     let ring: Color
     let ringWidth: CGFloat
     let disc: Color
@@ -351,14 +327,12 @@ private struct AtticCompletionMark: View, Animatable {
     var body: some View {
         let m = AtticStatusCircleMetrics.self
         let c = min(1, max(0, completion))
-        let sweep = start + (1 - start) * c
         let inset = m.wedgeInset(ringWidth: ringWidth) * (1 - c) + m.edgeInset * c
         ZStack {
             if c < 1 {
                 Circle().inset(by: m.edgeInset + ringWidth / 2).stroke(ring, lineWidth: ringWidth).opacity(1 - c)
-                AtticWedge(sweep: sweep, inset: inset).fill(ring).opacity(1 - c)
             }
-            AtticWedge(sweep: sweep, inset: inset).fill(disc).opacity(c)
+            AtticWedge(sweep: c, inset: inset).fill(disc)
         }
     }
 }
@@ -388,7 +362,7 @@ extension View {
     }
 }
 
-/// A wedge of a disc from 12 o'clock, clockwise (in progress), inset from
+/// A wedge of a disc from 12 o'clock, clockwise (the completion sweep), inset from
 /// its frame; a full disc at 1.
 struct AtticWedge: Shape {
     var sweep: Double
@@ -436,16 +410,18 @@ struct AtticCheckShape: Shape {
 /// row to row instead of stopping twice per task.
 struct AtticStatusButton: View {
     let state: AtticTaskState
+    /// Spoken with the state ("to do, high priority"); not drawn.
     let priority: AtticPriority
-    /// Ticked and total subtasks: the in-progress wedge and "1 of 3 subtasks".
+    /// Ticked and total subtasks: "in progress, 1 of 3 subtasks".
     var subtasks: (done: Int, total: Int)?
     var isDisabled = false
     var isTabStop = true
-    let onAdvance: () -> Void
+    /// A click: done, or back from done.
+    let onToggle: () -> Void
 
     var body: some View {
-        Button(action: onAdvance) {
-            AtticStatusCircle(state: state, priority: priority, progress: AtticStatusCircle.progress(subtasks), isDisabled: isDisabled)
+        Button(action: onToggle) {
+            AtticStatusCircle(state: state, isDisabled: isDisabled)
                 .frame(width: AtticControlSize.minimumHitTarget, height: AtticControlSize.minimumHitTarget)
                 .contentShape(Rectangle())
         }
@@ -454,6 +430,7 @@ struct AtticStatusButton: View {
         .focusEffectDisabled()
         .atticOwnFocusRing(.circle(diameter: AtticControlSize.statusCircle))
         .disabled(isDisabled)
+        .help(state == .done ? String(localized: "Mark as not done") : String(localized: "Complete"))
         .accessibilityLabel(String(localized: "Status"))
         .accessibilityValue([AtticStatusCircle.spokenState(state, subtasks: subtasks), priority.spokenName].compactMap { $0 }.joined(separator: ", "))
     }
@@ -627,15 +604,115 @@ private struct AtticStatusTab<Tab: Hashable>: View {
     }
 }
 
+// MARK: - Page tabs
+
+/// Direction A's page tabs under the header ("Now · Later · Done"), in
+/// place of a page title and the page pill: 12 pt chips, 24 tall; the
+/// selected one semibold on the page switch's chip fill, the others medium
+/// in the secondary grey (the body colour and the chip hover fill under
+/// the pointer). Each chip reserves its semibold width, so selecting one
+/// never shifts its neighbours.
+///
+/// One control for the keyboard: it takes focus once, and ← → move between
+/// the pages while it has it (the ring on the selected chip, only while
+/// the keyboard drives). VoiceOver reads one group, "Pages", with a named,
+/// selectable choice per page.
+struct AtticPageTabs<Page: Hashable>: View {
+    struct Item: Identifiable {
+        let page: Page
+        let title: String
+        /// For UI tests and automation.
+        var accessibilityIdentifier: String?
+        var id: String { title }
+    }
+
+    let items: [Item]
+    @Binding var selection: Page
+    /// The gallery pins a state (hover, focus) on one tab only.
+    var statePinnedPage: Page?
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+    @Environment(\.atticForcedState) private var forced
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @FocusState private var focused: Bool
+    @State private var hoveredPage: Page?
+
+    var body: some View {
+        let m = AtticPageTabsMetrics.self
+        let radius = AtticRadius.control(height: m.height)
+        let selected = items.firstIndex { $0.page == selection } ?? 0
+        HStack(spacing: m.spacing) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                let isSelected = index == selected
+                let pinned = statePinnedPage == item.page ? forced : nil
+                let hovered = !isSelected && (pinned == .hover || (pinned == nil && hoveredPage == item.page))
+                let ringed = pinned == .focused || (capture == nil && isSelected && focused && keyboardFocusVisible)
+                let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+                Button { select(item.page) } label: {
+                    ZStack {
+                        // Reserves the selected (semibold) width in every state.
+                        Text(verbatim: item.title).font(AtticTextStyle.pageTabSelected.font).hidden()
+                            .accessibilityHidden(true)
+                        AtticText(verbatim: item.title, style: isSelected ? .pageTabSelected : .pageTab,
+                                  ink: isSelected ? .heading : (hovered ? .body : .helper))
+                    }
+                    .padding(.horizontal, m.horizontalPadding)
+                    .frame(height: m.height)
+                    .background(shape.fill((isSelected ? design.tokens.chipSelected : (hovered ? design.tokens.chipHover : .clear)).color))
+                    .atticFocusRing(ringed, cornerRadius: radius)
+                    .contentShape(shape)
+                    .transaction { $0.animation = nil }
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .onHover { inside in
+                    if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
+                }
+                .accessibilityLabel(item.title)
+                .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
+                .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+            }
+        }
+        .focusable(capture == nil)
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(phases: .down) { press in
+            guard press.modifiers.intersection([.command, .option, .control, .shift]).isEmpty else { return .ignored }
+            let step: Int
+            switch press.key {
+            case .leftArrow: step = -1
+            case .rightArrow: step = 1
+            default: return .ignored
+            }
+            let next = min(max(selected + step, 0), items.count - 1)
+            guard next != selected else { return .handled }
+            select(items[next].page)
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Pages"))
+    }
+
+    private func select(_ page: Page) {
+        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
+            selection = page
+        }
+    }
+}
+
 // MARK: - Task row
 
 /// What a task row shows. The design system's own model: Phase 1 fills it
 /// from the store.
 struct AtticTaskRowModel: Identifiable, Sendable {
     struct Due: Sendable {
+        /// Direction A: red only for overdue; today reads in the body
+        /// colour, medium weight; the rest is the quiet secondary grey.
+        enum Tone: Sendable, Equatable { case quiet, today, overdue }
+
         let text: String
-        /// Overdue and today are red; tomorrow, this week and later are quiet.
-        let isUrgent: Bool
+        var tone: Tone = .quiet
     }
 
     var id = UUID()
@@ -651,17 +728,16 @@ struct AtticTaskRowModel: Identifiable, Sendable {
     /// The task has a page (notes written into it).
     var hasPage = false
 
-    /// A second line only when the task has tags, a page, files or links
-    /// (or is open in a window); the due date then moves into that line
-    /// ("Today · #launch"). Otherwise the date sits at the right end of the
-    /// title line, as in v4.
+    /// A second line only when the task has tags or subtasks (or a page,
+    /// files or links, or is open in a window); done rows never have one.
+    /// The due date always stays at the right end of the title line.
     var hasDetails: Bool {
-        state != .done && (!tags.isEmpty || hasPage || attachments > 0 || links > 0 || inWindow)
+        state != .done && (!tags.isEmpty || subtasks != nil || hasPage || attachments > 0 || links > 0 || inWindow)
     }
 
-    /// The due date shown at the right end of the title line.
+    /// The due date at the right end of the title line (none once done).
     var trailingDue: Due? {
-        hasDetails || state == .done ? nil : due
+        state == .done ? nil : due
     }
 
     var accessibilityDescription: String {
@@ -674,11 +750,35 @@ struct AtticTaskRowModel: Identifiable, Sendable {
     }
 }
 
+/// The priority mark after a task's title (Direction A): High "!!" in the
+/// orange mark colour, Medium "!" in the secondary grey, Low and None
+/// nothing. Done rows show none.
+struct AtticPriorityMark: View {
+    let priority: AtticPriority
+    var disabled = false
+
+    var body: some View {
+        switch priority {
+        case .high:
+            AtticText(verbatim: "!!", style: .priorityMark, ink: disabled ? .disabledText : .priorityMark)
+                .fixedSize()
+                .accessibilityHidden(true)
+        case .medium:
+            AtticText(verbatim: "!", style: .priorityMark, ink: disabled ? .disabledText : .helper)
+                .fixedSize()
+                .accessibilityHidden(true)
+        case .low, .none:
+            EmptyView()
+        }
+    }
+}
+
 /// A task row: 34 pt (32 highlight + 2), 48 pt with a details line; the
-/// circle at x = 20 and the title at x = 46; highlight inset 12, radius 10.
-/// Three click targets: the circle (advance), the subtask count (quick
-/// look), and the rest (open the page). Keyboard focusable: a focused row
-/// draws the 2 pt accent ring and answers the task keys (`AtticTaskKeys`).
+/// circle at x = 16 and the title at x = 42; highlight inset 8, radius 10.
+/// Three click targets: the circle (done, or back), the subtask checklist
+/// on the details line (quick look), and the rest (select). Keyboard
+/// focusable: a focused row draws the 2 pt accent ring and answers the
+/// task keys (`AtticTaskKeys`).
 struct AtticTaskRow: View {
     let model: AtticTaskRowModel
     var isSelected = false
@@ -743,7 +843,7 @@ struct AtticTaskRow: View {
             .padding(.horizontal, AtticLayout.rowHighlightInset)
 
             HStack(alignment: .top, spacing: 0) {
-                AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false, onAdvance: actions.advance)
+                AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false, onToggle: actions.toggleDone)
                     .atticForcedState(nil)
                     .padding(.leading, AtticLayout.circleX - hitInset)
                     .padding(.top, (AtticLayout.rowHighlightHeight - AtticControlSize.minimumHitTarget) / 2 - (twoLine ? m.twoLineCircleLift : 0))
@@ -752,25 +852,30 @@ struct AtticTaskRow: View {
                         if let titleEditing, capture == nil {
                             AtticRowTitleEditor(editing: titleEditing)
                         } else {
-                            AtticText(
-                                verbatim: model.title,
-                                style: .rowTitle,
-                                // Done fades the title, without a strike (v9).
-                                ink: disabled ? .disabledText : (done ? .helper : .body),
-                                truncates: true
-                            )
+                            HStack(spacing: AtticPriorityMarkMetrics.titleGap) {
+                                AtticText(
+                                    verbatim: model.title,
+                                    style: .rowTitle,
+                                    // Done fades the title, without a strike (v9).
+                                    ink: disabled ? .disabledText : (done ? .helper : .body),
+                                    truncates: true
+                                )
+                                if !done {
+                                    AtticPriorityMark(priority: model.priority, disabled: disabled)
+                                }
+                            }
                         }
                     }
                     .frame(height: twoLine ? m.titleLineHeight : AtticLayout.rowHighlightHeight)
                     if twoLine {
-                        AtticTaskDetails(model: model, disabled: disabled)
+                        AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded)
                             .frame(height: m.detailsLineHeight)
                     }
                 }
                 .padding(.leading, AtticLayout.textX - AtticLayout.circleX - AtticControlSize.minimumHitTarget + hitInset)
                 .padding(.top, twoLine ? m.twoLineTextTop : 0)
                 Spacer(minLength: m.trailingMinGap)
-                trailing(disabled: disabled)
+                trailing(disabled: disabled, twoLine: twoLine)
             }
         }
         .frame(height: pitch, alignment: .top)
@@ -794,7 +899,7 @@ struct AtticTaskRow: View {
         .accessibilityLabel(model.accessibilityDescription)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityAction { actions.openPage() }
-        .atticTaskAccessibilityActions(actions)
+        .atticTaskAccessibilityActions(actions, state: model.state)
         .accessibilityActions {
             if model.subtasks != nil, model.state != .done {
                 Button(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"), action: onToggleExpanded)
@@ -806,34 +911,51 @@ struct AtticTaskRow: View {
         )
     }
 
+    /// The right-hand meta: the due date, always here, on the title line.
     @ViewBuilder
-    private func trailing(disabled: Bool) -> some View {
-        if let dropLabel {
-            AtticText(verbatim: dropLabel, style: .dropLabel, ink: .accentText, allowsOverlap: true)
-                .frame(height: AtticLayout.rowHighlightHeight)
-                .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dropLabelInset)
-        } else {
-            let count = model.state == .done ? nil : model.subtasks
-            HStack(spacing: AtticTaskRowMetrics.trailingGap) {
-                if let due = model.trailingDue {
-                    AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : (due.isUrgent ? .dueText : .helper))
-                        .frame(height: AtticLayout.rowHighlightHeight)
-                        .padding(.trailing, count == nil ? AtticTaskRowMetrics.dateInset : 0)
-                }
-                if let count {
-                    AtticSubtaskCountButton(done: count.done, total: count.total, isExpanded: isExpanded, disabled: disabled, action: onToggleExpanded)
-                        .padding(.trailing, AtticTaskRowMetrics.countInset)
-                }
+    private func trailing(disabled: Bool, twoLine: Bool) -> some View {
+        let lineHeight = twoLine ? AtticTaskRowMetrics.titleLineHeight : AtticLayout.rowHighlightHeight
+        Group {
+            if let dropLabel {
+                AtticText(verbatim: dropLabel, style: .dropLabel, ink: .accentText, allowsOverlap: true)
+                    .frame(height: lineHeight)
+                    .padding(.trailing, AtticTaskRowMetrics.dropLabelInset)
+            } else if let due = model.trailingDue {
+                AtticDueText(due: due, disabled: disabled)
+                    .frame(height: lineHeight)
+                    .padding(.trailing, AtticTaskRowMetrics.dateInset)
             }
-            .padding(.trailing, AtticLayout.rowHighlightInset)
+        }
+        .padding(.top, twoLine ? AtticTaskRowMetrics.twoLineTextTop : 0)
+        .padding(.trailing, AtticLayout.rowHighlightInset)
+    }
+}
+
+/// A due date as rows and cards show it: overdue red, today the body
+/// colour in medium weight, the rest the quiet secondary grey.
+struct AtticDueText: View {
+    let due: AtticTaskRowModel.Due
+    var disabled = false
+
+    var body: some View {
+        switch due.tone {
+        case .overdue:
+            AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : .dueText)
+        case .today:
+            AtticText(verbatim: due.text, style: .rowMetaEmphasis, ink: disabled ? .disabledText : .body)
+        case .quiet:
+            AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : .helper)
         }
     }
 }
 
-/// The details line: due date, tags, files and links, only when present.
+/// The details line: tags, then the subtask checklist (a control: it opens
+/// the quick look), then a page, files and links, only when present.
 private struct AtticTaskDetails: View {
     let model: AtticTaskRowModel
     let disabled: Bool
+    let isExpanded: Bool
+    let onToggleExpanded: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -858,11 +980,13 @@ private struct AtticTaskDetails: View {
                 AtticText("In window", style: .rowMeta, ink: text)
             }))
         }
-        if let due = model.due {
-            parts.append(AnyView(AtticText(verbatim: due.text, style: .rowMeta, ink: disabled ? .disabledText : (due.isUrgent ? .dueText : .helper))))
-        }
         for tag in model.tags {
             parts.append(AnyView(AtticText(verbatim: "#" + tag, style: .rowMeta, ink: disabled ? .disabledText : .accentText)))
+        }
+        if let subtasks = model.subtasks {
+            parts.append(AnyView(AtticSubtaskChecklistButton(
+                done: subtasks.done, total: subtasks.total, isExpanded: isExpanded, disabled: disabled, action: onToggleExpanded
+            )))
         }
         if model.hasPage {
             parts.append(AnyView(HStack(spacing: m.detailsIconGap) {
@@ -883,9 +1007,10 @@ private struct AtticTaskDetails: View {
     }
 }
 
-/// "1/3": the second click target, which opens and closes the quick look.
-/// No chevron (v4): the count alone, with a hover fill.
-private struct AtticSubtaskCountButton: View {
+/// "☑ 1/3" on the details line: the second click target, which opens and
+/// closes the quick look. A checklist glyph and the count, with a hover
+/// fill so it reads as a control; its text stays on the details line.
+private struct AtticSubtaskChecklistButton: View {
     let done: Int
     let total: Int
     let isExpanded: Bool
@@ -893,31 +1018,79 @@ private struct AtticSubtaskCountButton: View {
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
+    @Environment(\.atticForcedState) private var forced
     @State private var hovered = false
 
     var body: some View {
-        let m = AtticSubtaskCountMetrics.self
+        let m = AtticSubtaskChecklistMetrics.self
         let radius = AtticRadius.control(height: m.height)
+        let hover = !disabled && (forced == .hover || hovered)
         Button(action: action) {
-            AtticText(verbatim: "\(done)/\(total)", style: .count, ink: disabled ? .disabledText : .helper)
-                .padding(.horizontal, m.horizontalPadding)
-                .frame(height: m.height)
-                .background(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill((hovered && !disabled ? design.tokens.chipHover : .clear).color)
-                )
-                .frame(height: AtticLayout.rowHighlightHeight)
-                .contentShape(Rectangle())
+            HStack(spacing: m.iconGap) {
+                AtticIcon(systemName: "checkmark.square", size: m.iconSize, weight: .regular, ink: disabled ? .disabledIcon : .icon)
+                AtticText(verbatim: "\(done)/\(total)", style: .count, ink: disabled ? .disabledText : .helper)
+            }
+            .padding(.horizontal, m.horizontalPadding)
+            .frame(height: m.height)
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill((hover ? design.tokens.chipHover : .clear).color)
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .atticOwnFocusRing(.rounded(radius: radius, height: m.height))
         .disabled(disabled)
         .onHover { hovered = $0 }
+        .padding(.horizontal, -m.horizontalPadding)
+        .frame(height: AtticTaskRowMetrics.detailsLineHeight)
         .help(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"))
         .accessibilityLabel(String(localized: "\(done) of \(total) subtasks"))
         .accessibilityValue(isExpanded ? String(localized: "expanded") : String(localized: "collapsed"))
         .accessibilityHint(isExpanded ? String(localized: "Collapses the quick look") : String(localized: "Expands the quick look"))
+    }
+}
+
+/// "Completed today · N ›" (Direction A): the Now list's done section, a
+/// quiet toggle after the open tasks. The chevron turns down while the
+/// done rows show under it.
+struct AtticCompletedLine: View {
+    let title: String
+    let count: Int
+    let isExpanded: Bool
+    let action: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticForcedState) private var forced
+    @State private var hovered = false
+
+    var body: some View {
+        let m = AtticCompletedLineMetrics.self
+        let radius = AtticRadius.control(height: m.height)
+        let hover = forced == .hover || hovered
+        Button(action: action) {
+            HStack(spacing: m.gap) {
+                AtticText(verbatim: title, style: .sectionToggle, ink: hover ? .body : .helper)
+                AtticText(verbatim: "·", style: .sectionToggle, ink: .helper)
+                AtticText(verbatim: "\(count)", style: .sectionToggle, ink: hover ? .body : .helper)
+                AtticIcon(systemName: "chevron.right", size: m.chevronSize, weight: .semibold, ink: .chevron)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
+            .padding(.horizontal, m.horizontalPadding)
+            .frame(height: m.height)
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill((hover ? design.tokens.chipHover : .clear).color))
+            .padding(.horizontal, -m.horizontalPadding)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: isExpanded)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), \(count)")
+        .accessibilityValue(isExpanded ? String(localized: "expanded") : String(localized: "collapsed"))
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -1117,7 +1290,7 @@ struct AtticTaskCard: View {
         let hitInset = (AtticControlSize.minimumHitTarget - AtticControlSize.statusCircle) / 2
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
-                AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isTabStop: false, onAdvance: actions.advance)
+                AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isTabStop: false, onToggle: actions.toggleDone)
                     .atticForcedState(nil)
                     .padding(.leading, m.leadingInset - hitInset)
                     .padding(.top, m.circleTop)
@@ -1182,7 +1355,7 @@ struct AtticTaskCard: View {
         .accessibilityActions {
             Button(isExpanded ? String(localized: "Collapse") : String(localized: "Expand"), action: cardActions.toggleExpanded)
         }
-        .atticTaskAccessibilityActions(actions)
+        .atticTaskAccessibilityActions(actions, state: model.state)
         .accessibilityActions {
             Button(String(localized: "Open in Tasks"), action: cardActions.openInTasks)
         }
@@ -1204,8 +1377,8 @@ private struct AtticCardDetails: View {
         HStack(spacing: m.detailsGap) {
             if let due = model.due {
                 HStack(spacing: m.detailsIconGap) {
-                    AtticIcon(systemName: "calendar", size: AtticTaskRowMetrics.detailsIconSize, ink: due.isUrgent ? .priorityHigh : .icon)
-                    AtticText(verbatim: due.text, style: .rowMeta, ink: due.isUrgent ? .dueText : .helper)
+                    AtticIcon(systemName: "calendar", size: AtticTaskRowMetrics.detailsIconSize, ink: due.tone == .overdue ? .priorityHigh : .icon)
+                    AtticDueText(due: due)
                 }
             }
             ForEach(model.tags, id: \.self) { AtticTagChip(name: $0) }

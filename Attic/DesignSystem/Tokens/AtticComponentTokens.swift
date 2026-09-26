@@ -66,27 +66,19 @@ enum AtticHairline {
 enum AtticStatusCircleMetrics {
     /// Keeps the ring's outer edge half a point inside the 16 pt frame.
     static let edgeInset: CGFloat = 0.5
-    /// Priority is the ring's weight (only High is also red), softer since
-    /// v9: None and Low thin rings (1.25 pt), Medium and High heavier (1.7).
-    /// Under Differentiate Without Colour High is heavier still (2.4 pt),
-    /// so it never relies on its red; Increase Contrast adds 0.4 pt to
-    /// every ring.
-    static func ringWidth(_ priority: AtticPriority, increaseContrast: Bool, differentiateWithoutColor: Bool) -> CGFloat {
-        let width: CGFloat = switch priority {
-        case .none: 1.25
-        case .low: 1.25
-        case .medium: 1.7
-        case .high: differentiateWithoutColor ? 2.4 : 1.7
-        }
-        return width + (increaseContrast ? 0.4 : 0)
+    /// Direction A (2026-09-26): every open ring is one grey at one weight
+    /// (1.4 pt); priority is a mark after the title, not the ring.
+    /// Increase Contrast adds 0.4 pt.
+    static func ringWidth(increaseContrast: Bool) -> CGFloat {
+        1.4 + (increaseContrast ? 0.4 : 0)
     }
-    /// In progress: the wedge's inset from the frame, and the least gap it
-    /// keeps inside a heavy ring.
+    /// In progress: the ring with a filled centre dot ("working on it"),
+    /// never a share of anything.
+    static let activeDotDiameter: CGFloat = 4.8
+    /// Completing: the done disc sweeps in from 12 o'clock, starting this
+    /// far inside the frame, and the least gap it keeps inside the ring.
     static let wedgeInset: CGFloat = 3.2
     static let wedgeGap: CGFloat = 0.7
-    /// The least wedge: a quarter, meaning "started" (no subtasks, or none
-    /// ticked yet).
-    static let minimumWedge = 0.25
     static let checkLineWidth: CGFloat = 1.6
     /// Inset of the check inside the done disc.
     static let checkInset: CGFloat = 4.25
@@ -97,12 +89,6 @@ enum AtticStatusCircleMetrics {
 
     static func wedgeInset(ringWidth: CGFloat) -> CGFloat {
         max(wedgeInset, edgeInset + ringWidth + wedgeGap)
-    }
-
-    /// The wedge's share of the disc: the share of subtasks ticked, at
-    /// least a quarter; a quarter when the task has no subtasks.
-    static func wedgeSweep(_ progress: Double?) -> Double {
-        min(1, max(minimumWedge, progress ?? 0))
     }
 }
 
@@ -139,19 +125,8 @@ enum AtticTaskRowMetrics {
     static let attachmentIconGap: CGFloat = 2
     /// "Add to page" sits this far inside the highlight's trailing edge.
     static let dropLabelInset: CGFloat = 10
-    /// The subtask count sits this far inside the highlight's trailing edge.
-    static let countInset: CGFloat = 2
-    /// A date alone at the right end sits where the count's text would end.
+    /// The date at the right end sits this far inside the highlight.
     static let dateInset: CGFloat = 8
-    /// Between the date and the count at the right end.
-    static let trailingGap: CGFloat = 4
-}
-
-/// "1/3 ›": the subtask count button in a row.
-enum AtticSubtaskCountMetrics {
-    static let height: CGFloat = 22
-    static let horizontalPadding: CGFloat = 6
-    static let gap: CGFloat = 3
 }
 
 /// Quiet text actions inside content ("Add subtask", "Open page").
@@ -287,6 +262,46 @@ enum AtticStatusTabMetrics {
     /// A task dragged over a tab outlines it in this shape.
     static let dropOutlineHeight: CGFloat = 26
     static let dropOutlineOutset: CGFloat = 7
+}
+
+/// Direction A's page tabs ("Now · Later · Done") under the header: chips
+/// 24 tall, 10 pt of padding, 2 apart, in the page switch's chip fill.
+enum AtticPageTabsMetrics {
+    static let height: CGFloat = 24
+    static let horizontalPadding: CGFloat = 10
+    static let spacing: CGFloat = 2
+}
+
+/// The row's priority mark ("!!" High, "!" Medium) after the title.
+enum AtticPriorityMarkMetrics {
+    static let titleGap: CGFloat = 6
+}
+
+/// The subtask count on a row's details line: a checklist glyph and
+/// "1/3", with a hover fill that reads as a control.
+enum AtticSubtaskChecklistMetrics {
+    static let iconSize: CGFloat = 10
+    static let iconGap: CGFloat = 4
+    static let horizontalPadding: CGFloat = 4
+    static let height: CGFloat = 18
+}
+
+/// "Completed today · N ›": the Now list's done section toggle.
+enum AtticCompletedLineMetrics {
+    static let height: CGFloat = 24
+    static let top: CGFloat = 8
+    static let gap: CGFloat = 6
+    static let chevronSize: CGFloat = 9
+    static let horizontalPadding: CGFloat = 6
+}
+
+/// The Done page's search field (`AtticListSearchField`): 28 tall, radius 9, the chip fill.
+enum AtticListSearchFieldMetrics {
+    static let height: CGFloat = 28
+    static let radius: CGFloat = 9
+    static let leadingPadding: CGFloat = 9
+    static let iconSize: CGFloat = 12
+    static let gap: CGFloat = 7
 }
 
 /// Title menus and Attic's own pop-overs (radius 20).

@@ -10,12 +10,12 @@ struct TasksPageChrome {
     var typingLock: (Bool) -> Void = { _ in }
 }
 
-/// The Tasks page (spec § Tasks, v9): one title (Tasks, Backlog or Done),
-/// one list sorted by state with status circles, the row quick look, the
-/// selection bar, the page pill and the add bar that follows the page.
-/// Built only from the design system. Swiping between Tasks, Backlog and
-/// Done follows the trackpad 1:1 (a paging scroll view, the title moving
-/// with its list), and the list stays lazy.
+/// The Tasks page (spec § Tasks, Direction A): the page tabs (Now · Later ·
+/// Done) under the header, one list with status circles that complete in
+/// one click, "Completed today" after Now's open tasks, the row quick look,
+/// the selection bar, and the add bar, which always adds. Built only from
+/// the design system. Swiping between the pages follows the trackpad 1:1
+/// (a paging scroll view under the tabs), and the list stays lazy.
 struct TasksPage: View {
     @ObservedObject var model: TasksPageModel
     @ObservedObject var store: TaskStore
@@ -29,25 +29,29 @@ struct TasksPage: View {
     @FocusState private var focusedRow: UUID?
     @State private var drag: TasksDrag?
     @State private var fileDropRow: UUID?
+    /// The Done page's search field has the keyboard.
+    @State private var searchFocused = false
     /// The bottom stack's height: the add bar, plus the selection bar, a
     /// paste offer or an error line while they show.
     @State private var bottomControlsHeight: CGFloat = AtticControlSize.addBarHeight
 
     static let space = NamedCoordinateSpace.named("AtticTasksPage")
 
-    /// The title's line box: 16 below the header, which moves inward with
-    /// larger corners, so the gap under the header stays the same.
-    private var titleTop: CGFloat { layout.headerBottom + AtticLayout.pageTitleTop }
+    /// The tabs sit 14 below the header, which moves inward with larger
+    /// corners, so the gap under the header stays the same.
+    private var tabsTop: CGFloat { layout.headerBottom + AtticLayout.pageTabsTop }
 
     /// Room under the list for the add bar and its margins.
     static let footerZone: CGFloat = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
     private var footerZone: CGFloat { Self.footerZone }
-    /// The list also clears the page pill above the add bar.
-    static let listFooter: CGFloat = footerZone + AtticPagePillMetrics.collapsedHeight + AtticPagePillMetrics.toAddBar
+    static let listFooter: CGFloat = footerZone
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            pager
+            VStack(alignment: .leading, spacing: 0) {
+                tabs
+                pager
+            }
             bottomControls
         }
         .coordinateSpace(Self.space)
@@ -60,8 +64,17 @@ struct TasksPage: View {
             chrome.bottomControlsHeight(footerZone)
         }
 
-        .onChange(of: addBarFocused) { _, focused in chrome.typingLock(focused || model.editingTitleID != nil) }
-        .onChange(of: model.editingTitleID) { _, id in chrome.typingLock(addBarFocused || id != nil) }
+        .onChange(of: addBarFocused) { _, focused in chrome.typingLock(focused || searchFocused || model.editingTitleID != nil) }
+        .onChange(of: searchFocused) { _, focused in chrome.typingLock(focused || addBarFocused || model.editingTitleID != nil) }
+        .onChange(of: model.editingTitleID) { _, id in chrome.typingLock(addBarFocused || searchFocused || id != nil) }
+        // Search (the menu-bar item): the keyboard goes to the Done page's
+        // search field, not the add bar.
+        .onChange(of: model.pendingSearchFocus, initial: true) { _, pending in
+            guard pending else { return }
+            model.pendingSearchFocus = false
+            addBarFocused = false
+            searchFocused = true
+        }
         // The shell's toast and notices sit above everything in the bottom
         // stack, so a selection bar or paste offer never hides under them.
         .preference(key: PanelPageNoticeClearancePreferenceKey.self,
@@ -69,30 +82,22 @@ struct TasksPage: View {
 
     }
 
-    // MARK: - Title and page pill
+    // MARK: - Tabs
 
-    /// The page's one title. It belongs to its page, so a swipe carries it
-    /// with the list.
-    private func title(_ tab: TasksTab) -> some View {
-        AtticText(verbatim: tab.pageTitle, style: .pageHeading, ink: .heading)
-            .frame(height: AtticLayout.pageTitleHeight)
-            .padding(.leading, AtticLayout.pageTitleX)
-            .padding(.top, titleTop)
-            .padding(.bottom, AtticLayout.pageTitleToList)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityIdentifier("tasks-page-title")
-    }
-
-    private var pagePill: some View {
-        AtticPagePill(
+    /// Now · Later · Done under the header, in place of a title and the
+    /// page pill. The tabs stay put while the pages swipe under them.
+    private var tabs: some View {
+        AtticPageTabs(
             items: TasksTab.allCases.map { tab in
-                AtticPagePill.Item(page: tab, title: tab.pageTitle, icon: tab.pillIcon,
-                                   accessibilityIdentifier: "tasks-page-\(tab.identifier)")
+                AtticPageTabs.Item(page: tab, title: tab.title, accessibilityIdentifier: "tasks-page-\(tab.identifier)")
             },
             selection: Binding(get: { model.tab }, set: { model.select(tab: $0) })
         )
-        .accessibilityIdentifier("tasks-page-pill")
+        .accessibilityIdentifier("tasks-page-tabs")
+        .padding(.leading, AtticLayout.pageTabsX)
+        .padding(.top, tabsTop)
+        .padding(.bottom, AtticLayout.pageTabsToList)
+        .padding(.horizontal, cornerInset)
     }
 
     // MARK: - Pages
@@ -120,16 +125,16 @@ struct TasksPage: View {
 
     private func page(_ tab: TasksTab) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            title(tab)
             switch tab {
             case .now, .backlog:
                 listPage(tab)
             case .done:
-                TasksDonePage(model: model, store: store, footerZone: Self.listFooter, cell: { row in cell(row, tab: .done, group: []) })
+                TasksDonePage(model: model, store: store, footerZone: Self.listFooter, searchFocused: $searchFocused,
+                              cell: { row in cell(row, tab: .done, group: []) })
             }
         }
-        // Larger corners move the pin (and the add bar) inward; the title
-        // and the list follow, so the title stays on the pin's edge.
+        // Larger corners move the pin (and the add bar) inward; the tabs
+        // and the list follow, so the tabs stay on the pin's edge.
         .padding(.horizontal, cornerInset)
     }
 
@@ -142,21 +147,39 @@ struct TasksPage: View {
 
     private func listPage(_ tab: TasksTab) -> some View {
         let rows = model.rows(for: tab)
+        let sections = model.sections(for: tab)
         let groups = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(rows) { row in
+                    ForEach(sections.open) { row in
                         cell(row, tab: tab, group: groups[row.status] ?? [])
                             .id(row.id)
                     }
-                    if rows.isEmpty {
-                        AtticEmptyLine(text: tab == .now
-                            ? String(localized: "Nothing here yet. Add a task below.")
-                            : String(localized: "Nothing in the backlog. Park ideas here for later."))
-                    } else if tab == .now, model.hasDoneToday {
-                        AtticEmptyLine(text: String(localized: "Done tasks move to Done tomorrow"), isFootnote: true)
-                            .modifier(AtticScrollEdgeFade(space: listSpace(tab), top: Self.listTopFade, bottom: AtticEdgeBlur.panelBottom))
+                    if sections.open.isEmpty, let message = model.emptyMessage[tab] {
+                        AtticEmptyLine(text: message)
+                            .accessibilityIdentifier("tasks-empty-line")
+                    }
+                    // Done tasks recede into one quiet line; a click shows
+                    // them under it (and hides them again).
+                    if tab == .now, !sections.done.isEmpty {
+                        AtticCompletedLine(title: String(localized: "Completed today"), count: sections.done.count,
+                                           isExpanded: model.completedTodayExpanded) {
+                            withAnimation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion)) {
+                                model.toggleCompletedToday()
+                            }
+                        }
+                        .accessibilityIdentifier("tasks-completed-today")
+                        .padding(.leading, AtticLayout.circleX)
+                        .padding(.top, AtticCompletedLineMetrics.top)
+                        .padding(.bottom, model.completedTodayExpanded ? AtticSpacing.s4 : 0)
+                        .modifier(AtticScrollEdgeFade(space: listSpace(tab), top: Self.listTopFade, bottom: AtticEdgeBlur.panelBottom))
+                        if model.completedTodayExpanded {
+                            ForEach(sections.done) { row in
+                                cell(row, tab: tab, group: groups[row.status] ?? [])
+                                    .id(row.id)
+                            }
+                        }
                     }
                 }
                 .animation(AtticMotionPreset.settle.animation(reduceMotion: design.reduceMotion), value: rows.map(\.id))
@@ -293,18 +316,10 @@ struct TasksPage: View {
 
     private func actions(for id: UUID) -> AtticTaskActions {
         AtticTaskActions(
-            advance: {
-                // Option-click on the circle completes (spec § The status
-                // circle); a plain click, or Space, advances.
-                if let event = NSApp.currentEvent, [.leftMouseUp, .leftMouseDown].contains(event.type),
-                   event.modifierFlags.contains(.option) {
-                    model.complete(id)
-                } else {
-                    model.advance(id)
-                }
-            },
-            start: { model.setStatus(.inProgress, for: [id]) },
-            complete: { model.targets(for: id).forEach(model.complete) },
+            // The circle's click and Space: done, or back (Direction A).
+            toggleDone: { model.toggleDone(id) },
+            // ⇧Space and the menu: start or stop working.
+            toggleWorking: { model.toggleWorking(model.targets(for: id)) },
             openPage: { model.openPage(id) },
             moveToBacklog: {
                 let targets = model.targets(for: id)
@@ -338,18 +353,17 @@ struct TasksPage: View {
                 .keyboardShortcut(.return, modifiers: .command)
             }
         } else {
+            let allDone = targets.allSatisfy { store.listedTask(withID: $0)?.status == .done }
+            let allWorking = targets.allSatisfy { store.task(withID: $0)?.status == .inProgress }
             Section {
-                ForEach([TaskStatus.todo, .inProgress, .done, .backlog], id: \.self) { status in
-                    Button {
-                        model.setStatus(status, for: targets)
-                    } label: {
-                        if single, row.status == status {
-                            Label(status.menuTitle, systemImage: "checkmark")
-                        } else {
-                            Text(status.menuTitle)
-                        }
-                    }
+                Button(allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete")) {
+                    model.toggleDone(targets)
                 }
+                .keyboardShortcut(.space, modifiers: [])
+                Button(allWorking ? String(localized: "Stop Working") : String(localized: "Start Working")) {
+                    model.toggleWorking(targets)
+                }
+                .keyboardShortcut(.space, modifiers: .shift)
             }
             Menu(String(localized: "Priority")) {
                 ForEach(TaskPriority.allCases.reversed(), id: \.self) { priority in
@@ -369,7 +383,7 @@ struct TasksPage: View {
                 Button(String(localized: "Move to Now")) { model.moveToNow(targets) }
                     .keyboardShortcut("b", modifiers: .command)
             } else {
-                Button(String(localized: "Move to Backlog")) { model.moveToBacklog(targets) }
+                Button(String(localized: "Move to Later")) { model.moveToBacklog(targets) }
                     .keyboardShortcut("b", modifiers: .command)
             }
             if single {
@@ -509,8 +523,6 @@ struct TasksPage: View {
 
     private var bottomControls: some View {
         VStack(spacing: AtticSpacing.s8) {
-            pagePill
-                .padding(.bottom, AtticPagePillMetrics.toAddBar - AtticSpacing.s8)
             if model.failedSave == .paste {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { model.retryPaste() })
             }
@@ -530,37 +542,13 @@ struct TasksPage: View {
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.pasteOffer)
     }
 
-    @ViewBuilder
+    /// The add bar always adds (Direction A): on Done it adds to Now; the
+    /// Done log's search is a field at the top of its list.
     private var addBar: some View {
-        if model.tab == .done {
-            // The Done log's search: the same native field (no chips), so
-            // Search from the menu bar can put the keyboard in it and Esc
-            // leaves it like the add bar.
-            AtticAddBar(
-                placeholder: model.addPlaceholder, text: $model.doneSearch, systemImage: "magnifyingglass",
-                showsSend: false,
-                tokens: AtticAddBar.Tokens(
-                    chips: [],
-                    isFocused: $addBarFocused,
-                    actions: AtticTokenFieldActions(
-                        submit: { _ in },
-                        dismissChip: { _ in },
-                        multilinePaste: { _ in false },
-                        escape: { leaveAddBar() },
-                        undoFallback: { model.undo() },
-                        redoFallback: { model.redo() },
-                        edited: { _, _ in },
-                        caretMoved: { _ in }
-                    )
-                ),
-                onSubmit: {}
-            )
-        } else {
-            TasksAddBar(model: model, text: model.addBarState, isFocused: $addBarFocused, leave: leaveAddBar)
-        }
+        TasksAddBar(model: model, text: model.addBarState, isFocused: $addBarFocused, leave: leaveAddBar)
     }
 
-    /// Esc in the add bar (or the Done search) with nothing of its own to
+    /// Esc in the add bar with nothing of its own to
     /// close: the keyboard leaves the field. The next Esc reaches the panel,
     /// which hides (spec § Keyboard map).
     private func leaveAddBar() -> Bool {
@@ -600,7 +588,7 @@ struct TasksPage: View {
                 : tags.map { tag in AtticMenuCommand("#\(tag)") { model.addTag(tag, to: ids) } }),
             model.tab == .backlog
                 ? .init(systemName: "tray.and.arrow.up", label: "Move to Now", handler: { model.moveToNow(ids) })
-                : .init(systemName: "tray.and.arrow.down", label: "Move to Backlog", handler: { model.moveToBacklog(ids) }),
+                : .init(systemName: "tray.and.arrow.down", label: "Move to Later", handler: { model.moveToBacklog(ids) }),
             .init(systemName: "trash", label: "Delete", handler: { deleteAndMoveFocus(ids) })
         ])
     }
@@ -671,7 +659,7 @@ extension TaskStatus {
         case .todo: "To Do"
         case .inProgress: "In Progress"
         case .done: "Done"
-        case .backlog: "Backlog"
+        case .backlog: "Later"
         }
     }
 }

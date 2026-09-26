@@ -159,6 +159,13 @@ enum AtticLayout {
     static let pageTitleHeight: CGFloat = 13
     static let pageTitleToList: CGFloat = 14
 
+    /// Direction A's page tabs ("Now · Later · Done") in place of the
+    /// title: the chip row on the panel's 18 pt line (12 inside the page),
+    /// 14 below the header, the list 10 below the chips.
+    static let pageTabsX: CGFloat = 12
+    static let pageTabsTop: CGFloat = 14
+    static let pageTabsToList: CGFloat = 10
+
     static let statusTabsGap: CGFloat = 14
     static let statusTabsTop: CGFloat = 12
     static let statusTabsToList: CGFloat = 8
@@ -207,6 +214,9 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     // Panel
     case noteTitle, pageHeading, panelHeading, body, noteBody, rowTitle, rowMeta, helper, hint
     case statusTab, statusTabSelected, statusCount
+    // Direction A: page tabs, today's date, the priority mark, the
+    // "Completed today" line.
+    case pageTab, pageTabSelected, rowMetaEmphasis, priorityMark, sectionToggle
     case controlLabel, chipLabel, menuRow, shortcut, toast, tag, count, dropLabel
     // Settings
     case pageTitle, sectionHeading, sidebarHeading, sidebarRow, groupLabel, groupValue
@@ -228,6 +238,10 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .noteBody: Spec(size: 14, weight: .regular, italic: false, monospacedDigits: false)
         case .rowMeta, .helper: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
+        case .rowMetaEmphasis: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
+        case .priorityMark: Spec(size: 11.5, weight: .bold, italic: false, monospacedDigits: false)
+        case .pageTab, .sectionToggle: Spec(size: 12, weight: .medium, italic: false, monospacedDigits: false)
+        case .pageTabSelected: Spec(size: 12, weight: .semibold, italic: false, monospacedDigits: false)
         case .hint: Spec(size: 12.5, weight: .regular, italic: true, monospacedDigits: false)
         case .statusTab: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .statusTabSelected: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)

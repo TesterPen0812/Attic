@@ -111,3 +111,40 @@ or type style changed.
   (the copy's guard). No visual change.
 - `Squircle` (Attic/Design) is now an `InsettableShape`, so the recipe's
   inner rim can sit inside it. No visual change for existing callers.
+
+### Direction A trial (redesign/p1-direction-a)
+
+A trial the owner compares with the Phase 1 preview (brief: phase1/direction-a-brief.md,
+mockup v11-direction-a). Unlike the streams above, these change existing looks.
+
+- **Status circle: one grey, one weight.** Every open ring is `priorityNone` at
+  1.4 pt (1.8 with Increase Contrast); `ringWidth(increaseContrast:)` replaces the
+  per-priority widths, and the circle no longer takes a priority or a progress.
+  In progress is the ring a step darker (`priorityMedium`) with a filled centre dot
+  (`activeDotDiameter` 4.8); the pie, `minimumWedge` and `wedgeSweep` are gone.
+  Completing sweeps the done disc in from 12 o'clock as before.
+- **Priority is a mark** (`AtticPriorityMark`): High "!!" in the new `priorityMark`
+  ink (orange, Light #D9822B / Dark #F0A04E tuned; secondary text, 3 : 1, 4.5 : 1
+  under Increase Contrast), Medium "!" in `helper`, Low and None nothing. New text
+  style `priorityMark` (11.5 bold).
+- **Due tones** (`AtticTaskRowModel.Due.tone`: quiet, today, overdue) replace
+  `isUrgent`: only overdue is red; Today is `body` in the new `rowMetaEmphasis`
+  (11.5 medium). New `AtticDueText`.
+- **Row anatomy:** the date always sits at the right of the title line; the second
+  line holds tags and the subtask checklist ("☑ 1/3", a button with a hover fill,
+  `AtticSubtaskChecklistMetrics`), plus a page, files and links when present. The
+  trailing "1/3" button and `AtticSubtaskCountMetrics` are gone.
+- **Task actions and keys:** `AtticTaskActions` is `toggleDone`, `toggleWorking`,
+  `openPage`, `moveToBacklog`, `delete`. Space (and ⌥Space) toggles done, as the
+  circle does; ⇧Space starts or stops working. VoiceOver names follow the state
+  ("Complete" / "Mark as not done", "Start working" / "Stop working", "Move to Later").
+- **New `AtticPageTabs`** (Now · Later · Done chips: 12 pt, 24 tall, `pageTab` /
+  `pageTabSelected` styles, the chip fill; one keyboard control, ← →), with
+  `AtticLayout.pageTabsX/Top/ToList` (12, 14, 10).
+- **New `AtticCompletedLine`** ("Completed today · N ›", `sectionToggle` 12 medium,
+  the chevron turns down when open).
+- **New `AtticListSearchField`** (28 tall, radius 9, the chip fill): the Done page's
+  search at the top of its list.
+- **`AtticEmptyLine` is upright 13 pt** (`body` style, `helper` ink); `isFootnote` is gone.
+- The page pill (`AtticPagePill`) and the status tabs stay in the design system and
+  the gallery, unused by the Tasks page.

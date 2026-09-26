@@ -57,40 +57,88 @@ final class TasksPageModelTests: XCTestCase {
         let c = try XCTUnwrap(add("C"))
         _ = try XCTUnwrap(add("Idea", tab: .backlog))
         model.select(tab: .now)
-        model.advance(a)            // to do → in progress
-        model.complete(c)           // done (held in place for now)
+        model.toggleWorking([a])    // to do → in progress (⇧Space, the menu)
+        model.toggleDone(c)         // done (held in place for now)
         XCTAssertEqual(titles(.now), ["A", "C", "B"], "a finished row holds its place")
+        XCTAssertEqual(model.completedTodayCount, 0, "it joins Completed today once it moves")
         model.releaseHold(c)
-        XCTAssertEqual(titles(.now), ["A", "B", "C"])
+        XCTAssertEqual(titles(.now), ["A", "B"], "done rows recede into Completed today")
+        XCTAssertEqual(model.sections(for: .now).done.map(\.model.title), ["C"])
+        XCTAssertEqual(model.completedTodayCount, 1)
+        model.toggleCompletedToday()
+        XCTAssertEqual(titles(.now), ["A", "B", "C"], "open, the done rows follow the open ones")
         XCTAssertEqual(model.rows(for: .now).map(\.model.state), [.inProgress, .todo, .done])
+        model.resetForReveal()
+        XCTAssertTrue(model.completedTodayExpanded, "Completed today stays open for the session")
         XCTAssertEqual(titles(.backlog), ["Idea"])
         XCTAssertEqual(model.nowCount, 2)
         XCTAssertEqual(model.backlogCount, 1)
         XCTAssertTrue(model.hasDoneToday)
     }
 
-    /// The model's side of the circle (the click and Option-click
-    /// themselves are driven in `TasksPageUITests`).
-    func testAdvanceAndCompleteFollowTheStatusCircleRules() throws {
+    /// The model's side of the circle (Direction A: one click completes,
+    /// another puts the task back as it was; ⇧Space starts and stops).
+    func testTheCircleCompletesInOneClickAndRestoresThePreviousState() throws {
         let id = try XCTUnwrap(add("Task"))
-        model.advance(id)
+        _ = try XCTUnwrap(add("Other"))
+        XCTAssertEqual(titles(.now), ["Other", "Task"])
+        model.toggleDone(id)
+        XCTAssertEqual(store.task(withID: id)?.status, .done, "one click completes")
+        model.toggleDone(id)
+        XCTAssertEqual(store.task(withID: id)?.status, .todo, "a second click puts it back")
+        XCTAssertEqual(titles(.now), ["Other", "Task"], "right after finishing, it keeps its place")
+
+        model.toggleWorking([id])
         XCTAssertEqual(store.task(withID: id)?.status, .inProgress)
-        model.advance(id)
-        XCTAssertEqual(store.task(withID: id)?.status, .done)
-        model.advance(id)
-        XCTAssertEqual(store.task(withID: id)?.status, .todo, "done → back to to do")
-        model.complete(id)
-        XCTAssertEqual(store.task(withID: id)?.status, .done, "complete (Option-click, ⇧Space) finishes from to do")
+        model.toggleWorking([id])
+        XCTAssertEqual(store.task(withID: id)?.status, .todo, "⇧Space again stops working")
+        model.toggleWorking([id])
+        model.toggleDone(id)
+        model.releaseHold(id)
+        _ = try XCTUnwrap(add("Later step"))   // the completion is no longer the latest step
+        model.toggleDone(id)
+        XCTAssertEqual(store.task(withID: id)?.status, .inProgress, "a finished task goes back to what it was")
+
         let idea = try XCTUnwrap(add("Idea", tab: .backlog))
-        model.advance(idea)
-        XCTAssertEqual(store.task(withID: idea)?.status, .todo, "backlog → Now as to do")
+        model.toggleDone(idea)
+        XCTAssertEqual(store.task(withID: idea)?.status, .done, "Later's circle completes too")
+        XCTAssertEqual(titles(.backlog), ["Idea"], "and the row holds its place on Later")
+        model.releaseHold(idea)
+        XCTAssertEqual(titles(.backlog), [])
+        model.select(tab: .now)
+        model.toggleDone(idea)
+        XCTAssertEqual(store.task(withID: idea)?.status, .backlog, "back to Later, where it was")
+    }
+
+    /// The right-click menu on several tasks: all done, then all back.
+    func testCompletingSeveralTasksFromTheMenu() throws {
+        let a = try XCTUnwrap(add("A"))
+        let b = try XCTUnwrap(add("B"))
+        model.toggleWorking([a])
+        model.toggleDone([a, b])
+        XCTAssertEqual(store.task(withID: a)?.status, .done)
+        XCTAssertEqual(store.task(withID: b)?.status, .done)
+        model.toggleDone([a, b])
+        XCTAssertEqual(store.task(withID: a)?.status, .inProgress)
+        XCTAssertEqual(store.task(withID: b)?.status, .todo)
+    }
+
+    /// Direction A's empty states: Now says why it is empty; Later has its own.
+    func testEmptyListsSayWhyTheyAreEmpty() throws {
+        XCTAssertEqual(model.emptyMessage[.now], "Add your first task")
+        XCTAssertEqual(model.emptyMessage[.backlog], "Nothing for later")
+        _ = try XCTUnwrap(add("Idea", tab: .backlog))
+        XCTAssertEqual(model.emptyMessage[.now], "Nothing active. Choose from Later.")
+        let done = try XCTUnwrap(add("Water plants"))
+        model.complete(done)
+        XCTAssertEqual(model.emptyMessage[.now], "You’re caught up")
     }
 
     func testMovesAndDeletesShowAnUndoToastAndUndoPutsThemBack() throws {
         let a = try XCTUnwrap(add("A"))
         let b = try XCTUnwrap(add("B"))
         model.moveToBacklog([a])
-        XCTAssertEqual(model.toasts.current?.message, "Moved to Backlog")
+        XCTAssertEqual(model.toasts.current?.message, "Moved to Later")
         XCTAssertEqual(titles(.backlog), ["A"])
         model.undo()
         XCTAssertNil(model.toasts.current)
@@ -177,13 +225,21 @@ final class TasksPageModelTests: XCTestCase {
 
         let idea = try XCTUnwrap(add("Paint the fence", tab: .backlog))
         XCTAssertEqual(store.task(withID: idea)?.status, .backlog)
-        XCTAssertEqual(model.addPlaceholder, "Add to backlog")
+        XCTAssertEqual(model.addPlaceholder, "Add to later")
         XCTAssertNil(add("   "), "blank text adds nothing")
 
         model.select(tab: .now)
         model.addBar.text = "Ship it"
         let opened = try XCTUnwrap(model.submitAddBar(openingPage: true))
         XCTAssertEqual(self.opened, [opened], "⌘Return adds and opens the task's page")
+
+        // On Done the bar still adds, to Now, and says so.
+        model.select(tab: .done)
+        XCTAssertEqual(model.addPlaceholder, "Add a task")
+        model.addBar.text = "From Done"
+        let fromDone = try XCTUnwrap(model.submitAddBar())
+        XCTAssertEqual(store.task(withID: fromDone)?.status, .todo)
+        XCTAssertEqual(model.toasts.current?.message, "Added to Now")
     }
 
     func testChipsFormOnceAWordIsFinishedAndBackspaceTurnsOneBackIntoText() throws {
@@ -270,13 +326,13 @@ final class TasksPageModelTests: XCTestCase {
             TaskRowPresentation.due(DueDay(year: year, month: month, day: day)!, today: today, calendar: calendar, locale: locale)
         }
         XCTAssertEqual(due(21).text, "Today")
-        XCTAssertTrue(due(21).isUrgent)
+        XCTAssertEqual(due(21).tone, .today, "today reads in the body colour, not red")
         XCTAssertEqual(due(20).text, "Yesterday")
-        XCTAssertTrue(due(20).isUrgent)
+        XCTAssertEqual(due(20).tone, .overdue)
         XCTAssertTrue(due(14).text.hasPrefix("14 Sep"), due(14).text)
-        XCTAssertTrue(due(14).isUrgent, "overdue is red")
+        XCTAssertEqual(due(14).tone, .overdue, "only overdue is red")
         XCTAssertEqual(due(22).text, "Tomorrow")
-        XCTAssertFalse(due(22).isUrgent)
+        XCTAssertEqual(due(22).tone, .quiet)
         XCTAssertEqual(due(25).text, "Fri")
         XCTAssertEqual(due(27).text, "Sun")
         XCTAssertTrue(due(28).text.hasPrefix("28 Sep"), "a week or more away is a short date")
@@ -312,7 +368,7 @@ final class TasksPageModelTests: XCTestCase {
         let page = TasksPageModel(library: library, toasts: toasts)
         let a = try XCTUnwrap(add("A"))
         page.moveToBacklog([a])
-        XCTAssertEqual(toasts.current?.message, "Moved to Backlog")
+        XCTAssertEqual(toasts.current?.message, "Moved to Later")
         XCTAssertEqual(toasts.current?.actionTitle, "Undo")
         toasts.performAction()
         XCTAssertNil(toasts.current)
@@ -329,13 +385,15 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertEqual(model.tab, .now)
     }
 
-    /// Search (the menu-bar item) opens the Done page's search; the reveal
-    /// that follows keeps it there until the panel hides, and the next
-    /// reveal opens on Now again.
+    /// Search (the menu-bar item) opens the Done page's search field (the
+    /// add bar keeps adding); the reveal that follows keeps it there until
+    /// the panel hides, and the next reveal opens on Now again.
     func testSearchOpensTheDonePageUntilThePanelHides() {
         model.beginSearch()
         XCTAssertEqual(model.tab, .done)
-        XCTAssertEqual(model.addPlaceholder, "Search done tasks")
+        XCTAssertTrue(model.pendingSearchFocus, "the keyboard goes to the search field")
+        XCTAssertEqual(model.searchPlaceholder, "Search done tasks")
+        XCTAssertEqual(model.addPlaceholder, "Add a task")
         model.resetForReveal()
         XCTAssertEqual(model.tab, .done, "the reveal that Search caused keeps the search")
         model.pageDidHide()

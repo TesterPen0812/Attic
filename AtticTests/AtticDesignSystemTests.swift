@@ -309,9 +309,9 @@ final class AtticDesignSystemTests: XCTestCase {
         func command(_ key: KeyEquivalent, _ characters: String, _ modifiers: EventModifiers, list: Bool = true) -> AtticTaskKeys.Command? {
             AtticTaskKeys.command(key: key, characters: characters, modifiers: modifiers, listCommands: list)
         }
-        XCTAssertEqual(command(.space, " ", []), .advance)
-        XCTAssertEqual(command(.space, "\u{A0}", .option), .complete)
-        XCTAssertEqual(command(.space, " ", .shift), .complete, "⇧Space completes where launchers take ⌥Space (Phase 1)")
+        XCTAssertEqual(command(.space, " ", []), .toggleDone, "Space does what the circle does: complete, or un-complete")
+        XCTAssertEqual(command(.space, "\u{A0}", .option), .toggleDone, "⌥Space stays an alias")
+        XCTAssertEqual(command(.space, " ", .shift), .toggleWorking, "⇧Space starts or stops working (Direction A)")
         XCTAssertEqual(command(.return, "\r", .command), .openPage)
         XCTAssertNil(command(.return, "\r", []), "Return edits the title (Phase 1), it never opens the page")
         XCTAssertEqual(command(KeyEquivalent("b"), "b", .command), .moveToBacklog)
@@ -445,70 +445,56 @@ final class AtticDesignSystemTests: XCTestCase {
             // The pixels: a drawn check is measured and passes. Done's fill
             // (the task's disc, the subtask's square) is decoration: the
             // check is judged.
-            let drawn = try pixelReport(HStack { AtticStatusCircle(state: .done, priority: .high); AtticSubtaskCheckbox(isDone: true) }, context: context)
+            let drawn = try pixelReport(HStack { AtticStatusCircle(state: .done); AtticSubtaskCheckbox(isDone: true) }, context: context)
             XCTAssertEqual(drawn.eligibleGlyphs, 2, "Two check marks")
             XCTAssertEqual(drawn.glyphsMeasured, 2)
             XCTAssertTrue(drawn.failures.isEmpty, drawn.summary)
         }
         // A deliberately absent check (not yet drawn) fails: its probe finds
         // no glyph pixels on the fill.
-        let absent = try pixelReport(AtticStatusCircle(state: .done, priority: .high, checkProgress: 0))
+        let absent = try pixelReport(AtticStatusCircle(state: .done, checkProgress: 0))
         XCTAssertTrue(absent.failures.keys.contains { $0.kind == .unmeasured && $0.detail.contains("check mark") }, absent.summary)
     }
 
     // MARK: Status circle
 
-    /// Priority is the ring's weight and a grey that deepens with it; only
-    /// High is red, and under Differentiate Without Colour High is heavier
-    /// than Medium, so it never relies on the red.
-    func testStatusRingShowsPriorityByWeightAndGrey() {
+    /// Direction A: every open ring is one grey at one weight (priority is
+    /// a mark after the title); the working ring is a step darker. High's
+    /// "!!" is an orange at least as readable as secondary text, and red
+    /// is left to overdue dates.
+    func testStatusRingIsOneGreyAndPriorityIsAMark() {
         let m = AtticStatusCircleMetrics.self
-        for ic in [false, true] {
-            let widths = AtticPriority.allCases.map { m.ringWidth($0, increaseContrast: ic, differentiateWithoutColor: false) }
-            XCTAssertEqual(widths, widths.sorted(), "Weight never falls as priority rises")
-            // v9: None and Low are the same thin ring (Low's grey is
-            // deeper); Medium and High are heavier.
-            XCTAssertEqual(widths[0], widths[1])
-            XCTAssertLessThan(widths[1], widths[2])
-            XCTAssertGreaterThan(
-                m.ringWidth(.high, increaseContrast: ic, differentiateWithoutColor: true),
-                m.ringWidth(.medium, increaseContrast: ic, differentiateWithoutColor: true) + 0.5,
-                "Without colour, High is clearly heavier than Medium"
-            )
-        }
+        XCTAssertEqual(m.ringWidth(increaseContrast: false), 1.4)
+        XCTAssertEqual(m.ringWidth(increaseContrast: true), 1.8, accuracy: 1e-9)
+        XCTAssertEqual(AtticStatusCircle.ringInk, .priorityNone)
         for context in AtticAppearanceCheck.allContexts() {
             let tokens = context.tokens
             let base = tokens.panel.base
-            let none = tokens.ink(.priorityNone).contrast(on: base)
-            let low = tokens.ink(.priorityLow).contrast(on: base)
-            let medium = tokens.ink(.priorityMedium).contrast(on: base)
-            XCTAssertGreaterThanOrEqual(none, 3, context.caption)
-            XCTAssertLessThan(none, low, context.caption)
-            XCTAssertLessThan(low, medium, context.caption)
-            for ink in [AtticInk.priorityNone, .priorityLow, .priorityMedium] {
-                XCTAssertLessThan(tokens.ink(ink).saturation, 0.12, "\(ink) is a grey · \(context.caption)")
-            }
-            XCTAssertGreaterThan(tokens.ink(.priorityHigh).saturation, 0.4, "High is red · \(context.caption)")
+            let ring = tokens.ink(AtticStatusCircle.ringInk).contrast(on: base)
+            let active = tokens.ink(AtticStatusCircle.activeInk).contrast(on: base)
+            XCTAssertGreaterThanOrEqual(ring, 3, context.caption)
+            XCTAssertLessThan(ring, active, "working is a step darker · \(context.caption)")
+            XCTAssertLessThan(tokens.ink(.priorityNone).saturation, 0.12, "the ring is a grey · \(context.caption)")
+            let mark = tokens.ink(.priorityMark)
+            XCTAssertGreaterThanOrEqual(mark.contrast(on: base), context.increaseContrast ? 4.5 : 3, context.caption)
+            XCTAssertGreaterThan(mark.saturation, 0.3, "High's mark is orange · \(context.caption)")
+            XCTAssertNotEqual(mark, tokens.ink(.dueText), "orange, not the overdue red · \(context.caption)")
         }
+        XCTAssertTrue(AtticInk.priorityMark.isSecondaryText)
     }
 
-    /// In progress is a wedge of the share of subtasks ticked, at least a
-    /// quarter, and a quarter ("started") with no subtasks; VoiceOver says
-    /// how many are ticked.
-    func testInProgressWedgeFollowsTheSubtasks() {
+    /// In progress is a ring with a centre dot, never a share: VoiceOver
+    /// still says how many subtasks are ticked.
+    func testInProgressIsADotAndCompletionSweepsTheDisc() {
         let m = AtticStatusCircleMetrics.self
-        XCTAssertEqual(m.wedgeSweep(nil), 0.25)
-        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((0, 3))), 0.25)
-        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((1, 3))), 1.0 / 3, accuracy: 1e-9)
-        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((2, 3))), 2.0 / 3, accuracy: 1e-9)
-        XCTAssertEqual(m.wedgeSweep(AtticStatusCircle.progress((3, 3))), 1)
-        XCTAssertNil(AtticStatusCircle.progress((0, 0)))
-        XCTAssertNil(AtticStatusCircle.progress(nil))
+        XCTAssertGreaterThan(m.activeDotDiameter, 0)
+        XCTAssertLessThan(m.activeDotDiameter, AtticControlSize.statusCircle - 2 * (m.edgeInset + m.ringWidth(increaseContrast: true)) - 2,
+                          "the dot keeps clear of the ring")
         XCTAssertEqual(AtticStatusCircle.spokenState(.inProgress, subtasks: (1, 3)), "in progress, 1 of 3 subtasks")
         XCTAssertEqual(AtticStatusCircle.spokenState(.inProgress, subtasks: nil), "in progress")
         XCTAssertEqual(AtticStatusCircle.spokenState(.todo, subtasks: (1, 3)), "to do")
-        // The wedge keeps clear of the heaviest ring.
-        let heaviest = m.ringWidth(.high, increaseContrast: true, differentiateWithoutColor: true)
+        // The completion sweep keeps clear of the heaviest ring.
+        let heaviest = m.ringWidth(increaseContrast: true)
         XCTAssertGreaterThanOrEqual(m.wedgeInset(ringWidth: heaviest), m.edgeInset + heaviest + m.wedgeGap)
         // The wedge's path grows with the sweep and is a full disc at 1.
         let rect = CGRect(x: 0, y: 0, width: 16, height: 16)

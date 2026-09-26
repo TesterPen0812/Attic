@@ -41,34 +41,41 @@ struct SettingsPanelMiniature: View {
     /// Sample tasks (the approved v4 mockup's).
     private static let rows: [AtticTaskRowModel] = [
         .init(title: String(localized: "Finalize launch checklist"), state: .inProgress, priority: .high,
-              due: .init(text: String(localized: "Today"), isUrgent: true), tags: ["launch"], subtasks: (1, 3)),
+              due: .init(text: String(localized: "Today"), tone: .today), tags: ["launch"], subtasks: (1, 3)),
         .init(title: String(localized: "Ship appearance PR"), state: .todo, priority: .high, subtasks: (2, 4)),
         .init(title: String(localized: "Email beta testers"), state: .todo, priority: .medium,
-              due: .init(text: String(localized: "Fri"), isUrgent: false)),
+              due: .init(text: String(localized: "Fri"))),
         .init(title: String(localized: "Book dentist"), state: .todo,
-              due: .init(text: String(localized: "Tomorrow"), isUrgent: false)),
-        .init(title: String(localized: "Renew domain"), state: .done, priority: .low)
+              due: .init(text: String(localized: "Tomorrow")))
+    ]
+
+    private static let tabs: [AtticPageTabs<Int>.Item] = [
+        .init(page: 0, title: String(localized: "Now")),
+        .init(page: 1, title: String(localized: "Later")),
+        .init(page: 2, title: String(localized: "Done"))
     ]
 
     private static let noActions = AtticTaskActions(
-        advance: {}, start: {}, complete: {}, openPage: {}, moveToBacklog: {}, delete: {}
+        toggleDone: {}, toggleWorking: {}, openPage: {}, moveToBacklog: {}, delete: {}
     )
 
-    /// Above the page title: the header's margin, controls and gap.
-    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.pageTitleTop
+    /// The page tabs' top: the header's margin and controls, then the gap.
+    private static let tabsTop = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.pageTabsTop
 
     var body: some View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
         ZStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: Self.headerZone)
-                AtticText(verbatim: String(localized: "Tasks"), style: .pageHeading, ink: .heading)
-                    .frame(height: AtticLayout.pageTitleHeight)
-                    .padding(.leading, AtticLayout.circleX)
-                Color.clear.frame(height: AtticLayout.pageTitleToList)
+                Color.clear.frame(height: Self.tabsTop)
+                AtticPageTabs(items: Self.tabs, selection: .constant(0))
+                    .padding(.leading, AtticSpacing.panelMargin)
+                    .padding(.bottom, AtticLayout.pageTabsToList)
                 ForEach(Self.rows) { row in
                     AtticTaskRow(model: row, actions: Self.noActions, onToggleExpanded: {})
                 }
+                AtticCompletedLine(title: String(localized: "Completed today"), count: 1, isExpanded: false) {}
+                    .padding(.leading, AtticLayout.circleX)
+                    .padding(.top, AtticCompletedLineMetrics.top)
                 Spacer(minLength: 0)
             }
             AtticControlGroup {

@@ -17,6 +17,10 @@ enum AtticInk: String, CaseIterable, Sendable {
     /// Priority is the status ring's weight and a grey that deepens with
     /// it (None the faintest, Medium the darkest); only High is red.
     case priorityNone, priorityLow, priorityMedium, priorityHigh
+    /// Direction A: High's "!!" after the title, in orange (red is kept
+    /// for overdue). Secondary text, like a tag: 3 : 1, 4.5 : 1 under
+    /// Increase Contrast.
+    case priorityMark
     /// The old filled Done and its white check. Nothing draws them since the
     /// quiet Done (`doneDisc` and `doneCheck`); they stay only because the
     /// PR #5 surface coverage was measured with them.
@@ -52,7 +56,7 @@ enum AtticInk: String, CaseIterable, Sendable {
         switch self {
         case .heading, .body, .label, .helper, .muted, .placeholder,
              .chromeHeading, .chromeBody, .chromeHint,
-             .accentText, .dueText, .warningText, .onInverse, .disabledText:
+             .accentText, .dueText, .warningText, .onInverse, .disabledText, .priorityMark:
             .text
         case .icon, .chromeIcon, .glyph, .chevron, .accent,
              .priorityNone, .priorityLow, .priorityMedium, .priorityHigh,
@@ -69,7 +73,7 @@ enum AtticInk: String, CaseIterable, Sendable {
     /// Contrast every text keeps 4.5 : 1.
     var isSecondaryText: Bool {
         switch self {
-        case .helper, .muted, .placeholder, .chromeHint, .disabledText, .accentText: true
+        case .helper, .muted, .placeholder, .chromeHint, .disabledText, .accentText, .priorityMark: true
         default: false
         }
     }
@@ -436,6 +440,7 @@ struct AtticColorTokens: Equatable, Sendable {
             inks[ink] = inks[.priorityNone]!.tuned(toContrast: noneOnBase * step, against: [basePanel], lighten: dark)
         }
         inks[.dueText] = pri.high.tuned(toContrast: textTarget, against: meaning, lighten: dark)
+        inks[.priorityMark] = (dark ? AtticRGBA(0xF0A04E) : AtticRGBA(0xD9822B)).tuned(toContrast: target(.priorityMark), against: meaning, lighten: dark)
         inks[.warningText] = (dark ? AtticRGBA(0xFFB35C) : AtticRGBA(0xC2570C)).tuned(toContrast: textTarget, against: meaning, lighten: dark)
         // Done is faded as in v4 (#C9CBCE / a dim fill), held at 3 : 1.
         inks[.doneFill] = (dark ? AtticRGBA(0x6E6F72) : AtticRGBA(0xC9CBCE)).tuned(toContrast: nonTextTarget, against: meaning, lighten: dark)

@@ -811,6 +811,58 @@ struct AtticAddBar: View {
     }
 }
 
+// MARK: - Search field
+
+/// A search field that sits at the top of the list it searches (Direction
+/// A: the Done page), not in the add bar: 28 tall, radius 9, the chip
+/// fill, a magnifier and the placeholder. Its focus is a binding, so
+/// Search from the menu bar can put the keyboard in it; Esc clears the
+/// text, then leaves the field.
+struct AtticListSearchField: View {
+    let placeholder: String
+    @Binding var text: String
+    var isFocused: Binding<Bool>?
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.atticCapture) private var capture
+    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let m = AtticListSearchFieldMetrics.self
+        let shape = RoundedRectangle(cornerRadius: m.radius, style: .continuous)
+        HStack(spacing: m.gap) {
+            AtticIcon(systemName: "magnifyingglass", size: m.iconSize, weight: AtticIconWeight.outline, ink: .icon)
+            if capture == nil {
+                TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(design.tokens.color(.placeholder)))
+                    .textFieldStyle(.plain)
+                    .font(AtticTextStyle.body.font)
+                    .foregroundStyle(design.tokens.color(.body))
+                    .focused($focused)
+                    .onExitCommand {
+                        if text.isEmpty { focused = false } else { text = "" }
+                    }
+                    .accessibilityLabel(placeholder)
+            } else {
+                AtticText(verbatim: text.isEmpty ? placeholder : text, style: .body, ink: text.isEmpty ? .placeholder : .body, truncates: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, m.leadingPadding)
+        .padding(.trailing, m.leadingPadding)
+        .frame(height: m.height)
+        .background(shape.fill(design.tokens.chipSelected.color))
+        .atticFocusRing(capture == nil && focused && keyboardFocusVisible, cornerRadius: m.radius)
+        .contentShape(shape)
+        .onTapGesture { focused = true }
+        .onAppear { if isFocused?.wrappedValue == true { focused = true } }
+        .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }
+        .onChange(of: isFocused?.wrappedValue) { _, wanted in
+            if let wanted, wanted != focused { focused = wanted }
+        }
+    }
+}
+
 // MARK: - Small controls
 
 /// A 28 pt control (radius 12) for the selection bar and other tight spots.

@@ -21,28 +21,29 @@ enum TaskRowPresentation {
         }
     }
 
-    /// A due day as the row shows it: overdue and today in red; tomorrow,
-    /// and the rest of this week, as the day's name; later as a short date
-    /// (with the year only when it isn't this year).
+    /// A due day as the row shows it (Direction A): overdue in red, today in
+    /// the body colour; tomorrow, and the rest of this week, as the day's
+    /// name; later as a short date (with the year only when it isn't this
+    /// year).
     static func due(_ day: DueDay, today: DueDay, calendar: Calendar, locale: Locale) -> AtticTaskRowModel.Due {
         let gregorian = DueDay.storageCalendar(matching: calendar)
         guard let start = day.startDate(in: gregorian), let now = today.startDate(in: gregorian),
               let offset = gregorian.dateComponents([.day], from: now, to: start).day else {
-            return AtticTaskRowModel.Due(text: day.rawValue, isUrgent: false)
+            return AtticTaskRowModel.Due(text: day.rawValue)
         }
         switch offset {
         case ..<(-1):
-            return AtticTaskRowModel.Due(text: shortDate(start, sameYear: day.year == today.year, calendar: gregorian, locale: locale), isUrgent: true)
+            return AtticTaskRowModel.Due(text: shortDate(start, sameYear: day.year == today.year, calendar: gregorian, locale: locale), tone: .overdue)
         case -1:
-            return AtticTaskRowModel.Due(text: String(localized: "Yesterday"), isUrgent: true)
+            return AtticTaskRowModel.Due(text: String(localized: "Yesterday"), tone: .overdue)
         case 0:
-            return AtticTaskRowModel.Due(text: String(localized: "Today"), isUrgent: true)
+            return AtticTaskRowModel.Due(text: String(localized: "Today"), tone: .today)
         case 1:
-            return AtticTaskRowModel.Due(text: String(localized: "Tomorrow"), isUrgent: false)
+            return AtticTaskRowModel.Due(text: String(localized: "Tomorrow"))
         case 2...6:
-            return AtticTaskRowModel.Due(text: format(start, template: "EEE", calendar: gregorian, locale: locale), isUrgent: false)
+            return AtticTaskRowModel.Due(text: format(start, template: "EEE", calendar: gregorian, locale: locale))
         default:
-            return AtticTaskRowModel.Due(text: shortDate(start, sameYear: day.year == today.year, calendar: gregorian, locale: locale), isUrgent: false)
+            return AtticTaskRowModel.Due(text: shortDate(start, sameYear: day.year == today.year, calendar: gregorian, locale: locale))
         }
     }
 
@@ -66,7 +67,7 @@ enum TaskRowPresentation {
     private nonisolated(unsafe) static let formatters = NSCache<NSString, DateFormatter>()
 
     /// The row model for a main task. `subtasks` are its children in
-    /// display order (the pie and "1/3" count), or empty.
+    /// display order (the "1/3" checklist count), or empty.
     static func row(
         for task: TaskItem,
         subtasks: [TaskItem],
