@@ -716,10 +716,19 @@ struct AtticAddBar: View {
                 .frame(width: m.iconSlot)
             field(disabled: state == .disabled)
                 .atticControlProbe("Add bar field", id: fieldProbeID, expectedSize: nil, radius: 0, expectedRadius: 0)
+            // Built with the bar and only shown when there is text: the
+            // first keystroke changes an opacity and an offset instead of
+            // building the button (spec: one frame per keystroke).
             ZStack {
-                if hasText, showsSend {
+                if showsSend {
+                    let shown = hasText
                     sendButton(radius: radius)
-                        .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: .bottom))
+                        .opacity(shown ? 1 : 0)
+                        .offset(y: shown || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
+                        .allowsHitTesting(shown)
+                        .disabled(!shown)
+                        .accessibilityHidden(!shown)
+                        .transformEnvironment(\.atticProbesDisabled) { if !shown { $0 = true } }
                 }
             }
             .frame(width: send.width, height: send.height)

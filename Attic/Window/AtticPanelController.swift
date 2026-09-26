@@ -375,6 +375,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         // Build the pages now, before the first frame is shown, so the panel
         // never slides in empty; the reveal signpost includes it.
         buildPagesIfNeeded()
+        defer { buildKeptPagesAfterReveal() }
         // A reveal always supersedes an in-flight hide, even when its frame
         // already matches. This prevents that hide's completion from ordering
         // out a panel the user has just asked to see again.
@@ -1210,6 +1211,34 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self, !self.panel.isVisible, !self.uiState.isPageContentLoaded,
                       !Self.releasesWhenHidden(self.uiState.selectedSection) else { return }
                 self.buildPagesIfNeeded()
+            }
+        }
+    }
+
+    /// Once the panel has been shown for a moment: build the pages the
+    /// switch leads to (Canvas, and Tasks from another page) behind the
+    /// current one, one per main-thread turn, so a first ⌘1–⌘3 or click
+    /// only shows them. A hidden Canvas decodes no images until it shows
+    /// (`atticPanelPageIsCurrent`), and the hidden release frees them.
+    /// A one-shot per reveal, not a timer.
+    static var keptPagesBuildDelay: TimeInterval = 0.6
+
+    private func buildKeptPagesAfterReveal() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.keptPagesBuildDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.panel.isVisible, self.uiState.isPageContentLoaded else { return }
+                let current = PanelPage(self.uiState.selectedSection)
+                let pending = PanelPage.allCases.filter {
+                    $0 != current && PanelUIState.keepsBuilt($0) && !self.uiState.builtPages.contains($0)
+                }
+                for (index, page) in pending.enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(index)) { [weak self] in
+                        MainActor.assumeIsolated {
+                            guard let self, self.panel.isVisible else { return }
+                            self.uiState.prepareBuiltPage(page)
+                        }
+                    }
+                }
             }
         }
     }
