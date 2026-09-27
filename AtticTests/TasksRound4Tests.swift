@@ -386,4 +386,46 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertEqual(step(900), 14, "bounded at the bottom")
         XCTAssertLessThan(abs(step(145)), abs(step(115)), "faster deeper into the edge")
     }
+
+    // MARK: - Must fix 9: the ⌘Z crash's own path
+
+    /// The crash (AtticCUReview, 2026-09-27): EXC_BAD_ACCESS in
+    /// `-[_NSUndoStack popAndInvoke]` from `-[NSUndoManager undoNestedGroup]`,
+    /// from `-[NSApplication sendAction:to:from:]`, from the Edit menu item's
+    /// key equivalent. Here: a real text view types into the panel's undo
+    /// manager, is removed while it still has the keyboard (never resigned),
+    /// is released, and the Edit menu's Undo item then performs its action
+    /// on the panel through `NSMenu.performKeyEquivalent`.
+    func testTheEditMenusUndoAfterAFieldWasRemovedWithoutResigning() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 320, height: 520), styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        let manager = try XCTUnwrap(panel.undoManager)
+        weak var gone: NSTextView?
+        autoreleasepool {
+            let field = NSTextView(frame: CGRect(x: 0, y: 0, width: 200, height: 20))
+            field.allowsUndo = true
+            panel.contentView?.addSubview(field)
+            XCTAssertTrue(panel.makeFirstResponder(field))
+            field.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
+            XCTAssertTrue(manager.canUndo, "typing registered with the window's undo manager")
+            gone = field
+            // Removed while it has the keyboard: no resign, no focus change.
+            field.removeFromSuperview()
+        }
+        XCTAssertNil(gone?.window, "the field has left the panel")
+
+        let menu = NSMenu(title: "Edit")
+        let undoItem = NSMenuItem(title: "Undo", action: #selector(AtticPanel.undo(_:)), keyEquivalent: "z")
+        undoItem.target = panel
+        menu.addItem(undoItem)
+        let commandZ = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+                                                      windowNumber: panel.windowNumber, context: nil, characters: "z",
+                                                      charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
+        // The menu first, as the crash's route did: nothing of the removed
+        // field is invoked, and nothing crashes.
+        XCTAssertTrue(menu.performKeyEquivalent(with: commandZ))
+        XCTAssertFalse(manager.canUndo, "the removed field's registrations were dropped")
+        XCTAssertEqual(gone?.string ?? "typed", "typed", "and never invoked")
+        panel.close()
+    }
 }

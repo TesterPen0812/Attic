@@ -124,6 +124,21 @@ final class AtticPanel: NSPanel {
         return super.performKeyEquivalent(with: event)
     }
 
+    /// The Edit menu's Undo and Redo, whichever route sent them (a key
+    /// equivalent matched by the menu before or after this window, a click
+    /// on the menu, the responder chain from a removed field): the window's
+    /// undo manager never invokes a registration of a text view that has
+    /// left the panel (round 4, the ⌘Z crash in `popAndInvoke`).
+    @objc func undo(_ sender: Any?) {
+        removeDepartedUndoParticipants()
+        if undoManager?.canUndo == true { undoManager?.undo() }
+    }
+
+    @objc func redo(_ sender: Any?) {
+        removeDepartedUndoParticipants()
+        if undoManager?.canRedo == true { undoManager?.redo() }
+    }
+
     static func isUndoKey(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         return event.charactersIgnoringModifiers?.lowercased() == "z" && (flags == .command || flags == [.command, .shift])
