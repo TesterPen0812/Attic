@@ -2142,7 +2142,12 @@ final class TaskStore: ObservableObject {
                 )
                 for row in rows {
                     cursor.rowOffset += 1
-                    guard let winner = winners[row.id], winner.doneLoggedAt != nil, winner.deletedAt == nil,
+                    // A task is admitted where its shown replica's own row
+                    // falls in the walk (round 4): a stale copy finished
+                    // later never pulls an older task ahead of a newer one
+                    // on another page.
+                    guard let winner = winners[row.id], winner.persistentModelID == row.persistentModelID,
+                          winner.doneLoggedAt != nil, winner.deletedAt == nil,
                           winner.parentID == nil,
                           trimmed.isEmpty || winner.title.localizedStandardContains(trimmed),
                           seen.insert(row.id).inserted else { continue }

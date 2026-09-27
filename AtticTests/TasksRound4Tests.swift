@@ -428,4 +428,33 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertEqual(gone?.string ?? "typed", "typed", "and never invoked")
         panel.close()
     }
+
+    // MARK: - Should fix: canonical Done order across pages
+
+    func testTheDoneLogPagesByTheShownReplicasOrder() throws {
+        let older = try XCTUnwrap(store.create(title: "Older"))
+        XCTAssertTrue(library.completeTask(older.id).isApplied)            // Mon
+        clock.value = clock.value.addingTimeInterval(86_400)
+        let newer = try XCTUnwrap(store.create(title: "Newer"))
+        XCTAssertTrue(library.completeTask(newer.id).isApplied)            // Tue
+        clock.value = clock.value.addingTimeInterval(2 * 86_400)
+        _ = store.moveCompletedToDoneLog(before: calendar.startOfDay(for: clock.value))
+        // A stale physical copy of Older, finished later but superseded
+        // (older updatedAt), as a sync import can leave.
+        let shown = try XCTUnwrap(store.listedTask(withID: older.id))
+        let context = ModelContext(store.container)
+        let stale = TaskItem(id: shown.id, title: shown.title, status: .done, priority: shown.priority,
+                             createdAt: shown.createdAt, updatedAt: shown.updatedAt.addingTimeInterval(-600),
+                             completedAt: clock.value, manualOrder: shown.manualOrder, parentID: nil)
+        stale.doneLoggedAt = shown.doneLoggedAt
+        context.insert(stale)
+        try context.save()
+        store.refresh()
+        XCTAssertEqual(store.listedTask(withID: older.id)?.completedAt, shown.completedAt, "the shown copy is unchanged")
+
+        let first = store.doneLogPage(limit: 1)
+        XCTAssertEqual(first.tasks.map(\.title), ["Newer"], "the newest shown task leads, across pages")
+        let second = store.doneLogPage(from: first.next, limit: 1, excluding: Set(first.tasks.map(\.id)))
+        XCTAssertEqual(second.tasks.map(\.title), ["Older"])
+    }
 }
