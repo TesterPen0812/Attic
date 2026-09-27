@@ -388,35 +388,44 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.activity, .idle)
     }
 
-    func testBlockedWritingToolsKeepsFinishedImportAndDoesNotBlameItForRewrite() {
-        let (engine, _) = makeEngine()
-        let image = StagedNoteAttachment(id: UUID(), filename: "import.png", contentTypeIdentifier: "public.png",
+    func testImportedBatchIsOneUndoStepAndAnchorFollowsTyping() {
+        let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("Body")]))
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        engine.beginImageImport()
+        type(" plus", textView)
+        let first = StagedNoteAttachment(id: UUID(), filename: "one.png", contentTypeIdentifier: "public.png",
                                          byteCount: 1, digest: String(repeating: "a", count: 64), data: Data([1]))
-        engine.insertImage(image, pixelSize: nil)
-        var notices: [String] = []
-        engine.onNotice = { notices.append($0) }
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        engine.completeImageImport([image])
-        engine.writingToolsDidEnd()
-        XCTAssertTrue(engine.document().attachmentIDs.contains(image.id))
-        XCTAssertEqual(engine.writingToolsRecoveries, 0)
-        XCTAssertFalse(notices.contains { $0.contains("changed this note without approval") })
+        let second = StagedNoteAttachment(id: UUID(), filename: "two.png", contentTypeIdentifier: "public.png",
+                                          byteCount: 1, digest: String(repeating: "b", count: 64), data: Data([2]))
+        XCTAssertTrue(engine.insertImportedImages([(first, nil), (second, nil)]))
+        XCTAssertEqual(engine.document().title, "Title plus")
+        XCTAssertEqual(engine.document().attachmentIDs, [first.id, second.id])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().title, "Title plus")
+        XCTAssertTrue(engine.document().attachmentIDs.isEmpty)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document().attachmentIDs, [first.id, second.id])
     }
 
-    func testBlockedWritingToolsBypassKeepsImportCompletedDuringSession() {
-        let (engine, _) = makeEngine()
-        let image = StagedNoteAttachment(id: UUID(), filename: "import.png", contentTypeIdentifier: "public.png",
+    func testImportAnchorClampsWhenItsParagraphIsDeleted() {
+        let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("Middle"), .text("After")]))
+        let middle = location(of: "Middle", in: engine)
+        textView.setSelectedRange(NSRange(location: middle + 3, length: 0))
+        engine.beginImageImport()
+        XCTAssertTrue(engine.performEdit(NSRange(location: middle, length: 6),
+                                         with: NSAttributedString(string: ""), name: "Delete Middle"))
+        let image = StagedNoteAttachment(id: UUID(), filename: "image.png", contentTypeIdentifier: "public.png",
                                          byteCount: 1, digest: String(repeating: "a", count: 64), data: Data([1]))
-        engine.insertImage(image, pixelSize: nil)
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        engine.completeImageImport([image])
-        engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "Rewrite")
-        engine.writingToolsDidEnd()
-        XCTAssertEqual(engine.document().title, "Title")
-        XCTAssertTrue(engine.document().attachmentIDs.contains(image.id))
-        XCTAssertEqual(engine.staged[image.id]?.data, image.data)
+        XCTAssertTrue(engine.insertImportedImages([(image, nil)]))
+        let blocks = engine.document().blocks
+        let imageIndex = try? XCTUnwrap(blocks.firstIndex { $0.attachmentID == image.id })
+        let afterIndex = try? XCTUnwrap(blocks.firstIndex { $0.text == "After" })
+        XCTAssertNotNil(imageIndex)
+        XCTAssertNotNil(afterIndex)
+        if let imageIndex, let afterIndex { XCTAssertLessThan(imageIndex, afterIndex) }
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.document().attachmentIDs.isEmpty)
+        XCTAssertFalse(engine.document().blocks.contains { $0.text == "Middle" })
     }
 
     // MARK: Object identity

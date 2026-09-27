@@ -54,6 +54,12 @@ enum NoteStatusItem: Equatable {
 
 private struct DamagedNoteRecovery: Error {}
 
+fileprivate struct NoteImportBatch {
+    let id: UUID
+    let urls: [URL]
+    var loaded: [(StagedNoteAttachment, CGSize?)]? = nil
+}
+
 /// One open note: its engine (text, undo, staged images) and where it
 /// stands against the store. Lives outside any view.
 @MainActor
@@ -117,7 +123,7 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var selection = NSRange(location: 0, length: 0)
     fileprivate(set) var scrollOffset: CGFloat = 0
     fileprivate var recoverySourceID: UUID?
-    fileprivate var pendingImportIDs = Set<UUID>()
+    @Published fileprivate var importBatch: NoteImportBatch?
     fileprivate var importTask: Task<Void, Never>?
     fileprivate var blocksAutomaticRekey = false
     fileprivate var refusedWritingToolsSinceSave = false
@@ -145,11 +151,11 @@ final class NoteSession: ObservableObject, Identifiable {
     }
 
     var isReadOnly: Bool { readOnlyReason != nil }
-    var isImporting: Bool { !pendingImportIDs.isEmpty }
+    var isImporting: Bool { importBatch != nil }
 
     /// Untouched: never saved, no text, no objects.
     var isUntouchedDraft: Bool {
-        !isPersisted && pendingImportIDs.isEmpty && engine.document().isEmpty && engine.objectIDs().isEmpty
+        !isPersisted && importBatch == nil && engine.document().isEmpty && engine.objectIDs().isEmpty
     }
 }
 
@@ -168,7 +174,6 @@ final class NotesPageController: ObservableObject {
     @Published private(set) var active: NoteSession?
     /// A legacy note the page shows in the old editor.
     @Published private(set) var legacyNoteID: UUID?
-    @Published private(set) var legacyNotice: String?
     @Published var isLibraryPresented = false
     @Published private(set) var design: AtticDesignContext = .default
     @Published private(set) var recoveryWarnings: [String] = []
@@ -184,7 +189,6 @@ final class NotesPageController: ObservableObject {
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []
     private var proposalStatusCache: [UUID: (revision: UInt64, agent: String?)] = [:]
-    private var navigationNotice: String?
     private let cacheLimit = 8
     private var didStart = false
     private var isPageVisible = false
@@ -213,7 +217,7 @@ final class NotesPageController: ObservableObject {
         store.openDocumentNoteIDs = { [weak self] in
             guard let self else { return [] }
             var ids = Set(self.cache.values.filter {
-                $0.isPersisted && ($0.isDirty || $0.problem != nil || !$0.pendingImportIDs.isEmpty)
+                $0.isPersisted && ($0.isDirty || $0.problem != nil || $0.isImporting)
             }.map(\.noteID))
             if self.isPageVisible, !self.isLibraryPresented, let active = self.active, active.isPersisted {
                 ids.insert(active.noteID)
@@ -362,8 +366,6 @@ final class NotesPageController: ObservableObject {
         if !note.usesDocumentFormat {
             active = nil
             legacyNoteID = noteID
-            legacyNotice = navigationNotice
-            navigationNotice = nil
             remember(noteID)
             return true
         }
@@ -391,7 +393,9 @@ final class NotesPageController: ObservableObject {
         if let cached = cache[note.id] {
             // A clean cached session whose note moved on (an agent's edit
             // applied, a restore) is rebuilt from the store.
-            if cached.isDirty || cached.problem != nil || cached.baseRevisionID == note.revisionID { return cached }
+            if cached.isDirty || cached.problem != nil || cached.isImporting || cached.baseRevisionID == note.revisionID {
+                return cached
+            }
             cache[note.id] = nil
         }
         let load = store.loadDocument(noteID: note.id)
@@ -420,12 +424,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func activate(_ session: NoteSession) {
-        legacyNotice = nil
         wire(session)
-        if let navigationNotice {
-            session.notice = navigationNotice
-            self.navigationNotice = nil
-        }
         cache[session.noteID] = session
         touch(session.noteID)
         active = session
@@ -433,7 +432,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func reconcileActive() {
-        guard let current = active, current.isPersisted, !current.isDirty, current.problem == nil,
+        guard let current = active, current.isPersisted, !current.isDirty, current.problem == nil, !current.isImporting,
               !current.engine.isWritingToolsSessionActive,
               let note = store.note(withID: current.noteID),
               current.baseRevisionID != note.revisionID || cache[current.noteID] !== current,
@@ -454,6 +453,7 @@ final class NotesPageController: ObservableObject {
         engine.onActivityChanged = { [weak self, weak session] old, new in
             guard let self, let session else { return }
             if old != .idle && new == .idle {
+                self.completeImportIfPossible(in: session)
                 if session.isDirty || session.problem != nil {
                     _ = self.preserve(session)
                 } else {
@@ -501,18 +501,20 @@ final class NotesPageController: ObservableObject {
         defaults?.set(noteID.uuidString, forKey: Self.lastViewedKey)
     }
 
-    func dismissLegacyNotice() { legacyNotice = nil }
-
     private func touch(_ noteID: UUID) {
         recency.removeAll { $0 == noteID }
         recency.append(noteID)
         // Evict the least recently used clean sessions only.
         while cache.count > cacheLimit, let evict = recency.first(where: { id in
             guard let session = cache[id] else { return true }
-            return !session.isDirty && session.problem == nil && !session.engine.isWritingToolsSessionActive
-                && session !== active
+            let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
+                ? .onScreen : .background
+            return NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
+                                              hasBatch: session.isImporting, presence: presence)
         }) {
             recency.removeAll { $0 == evict }
+            cache[evict]?.saveTask?.cancel()
+            cache[evict]?.pauseTask?.cancel()
             cache[evict]?.engine.detachView()
             cache[evict] = nil
         }
@@ -532,13 +534,6 @@ final class NotesPageController: ObservableObject {
         guard canLeaveComposition(in: session) else { return false }
         captureViewState(session)
         guard preserve(session) else { return false }
-        if !session.pendingImportIDs.isEmpty {
-            cancelImport(in: session)
-            let notice = String(localized: "The image import was cancelled when you left this note.")
-            session.notice = notice
-            navigationNotice = notice
-            if !save(session) { _ = preserve(session) }
-        }
         if session.isPersisted, !session.isDirty, !session.engine.isWritingToolsSessionActive {
             store.recordVersion(noteID: session.noteID, reason: .leave)
             if store.applyPendingEdits(noteID: session.noteID) > 0 {
@@ -561,14 +556,9 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
-    /// A hidden panel still owns a running import; its session and reserved
-    /// anchors stay alive until the batch commits or fails visibly.
+    /// A hidden panel still owns a running import; its batch can finish in
+    /// the cached session without changing the document while it loads.
     func preserveForHide() -> Bool {
-        if active?.pendingImportIDs.isEmpty == false {
-            guard preserveAll() else { return false }
-            isPageVisible = false
-            return true
-        }
         return leaveForNavigation()
     }
 
@@ -630,23 +620,6 @@ final class NotesPageController: ObservableObject {
             return checkpoint(session, silent: true)
         }
         guard session.isDirty || session.problem != nil else { return true }
-        if !session.pendingImportIDs.isEmpty {
-            // Reservations have no bytes yet. Checkpoint the durable text,
-            // keeping the live import and its anchors in memory.
-            guard let journal else {
-                session.problem = .onlyInMemory("The import is still running and this draft has no recovery copy.")
-                return false
-            }
-            do {
-                let document = checkpointDocument(for: session)
-                try journal.write(journalEntry(for: session, document: document),
-                                  staged: session.engine.stagedAttachments(for: document))
-                return true
-            } catch {
-                session.problem = .onlyInMemory("The recovery copy failed: \(error.localizedDescription)")
-                return false
-            }
-        }
         if save(session) { return true }
         guard let journal else {
             session.problem = .onlyInMemory(storeMessage())
@@ -690,10 +663,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func checkpointDocument(for session: NoteSession) -> NoteDocument {
-        var document = session.engine.checkpointDocument()
-        document.blocks.removeAll { $0.kind == .image && $0.attachmentID.map(session.pendingImportIDs.contains) == true }
-        if document.blocks.isEmpty { document.blocks = [.text("")] }
-        return document
+        session.engine.checkpointDocument()
     }
 
     private func journalEntry(for session: NoteSession, document: NoteDocument) -> NoteDraftJournalEntry {
@@ -717,7 +687,7 @@ final class NotesPageController: ObservableObject {
     /// All paths that replace a stored document or rekey a draft use this gate.
     private func canCommit(_ session: NoteSession, resolvingConflict: Bool = false) -> Bool {
         NoteSessionPolicy.canWriteStore(resolvingConflict ? .dirty : session.state,
-            activity: session.engine.activity) && session.pendingImportIDs.isEmpty
+            activity: session.engine.activity)
             && session.engine.textView?.hasMarkedText() != true
     }
 
@@ -740,7 +710,6 @@ final class NotesPageController: ObservableObject {
                 _ = self.checkpoint(session, silent: true)
                 return
             }
-            guard session.pendingImportIDs.isEmpty else { _ = self.preserve(session); return }
             let generation = session.editGeneration
             let noteID = session.noteID
             let document = session.engine.document()
@@ -814,7 +783,8 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func keepAsNewNote() -> Bool {
         guard let session = active, session.problem == .changedElsewhere,
-              canCommit(session, resolvingConflict: true),
+              NoteSessionPolicy.keepAsNewAllowed(session.state, activity: session.engine.activity,
+                                                 hasBatch: session.isImporting),
               preserve(session) else { return false }
         let document = checkpointDocument(for: session)
         return saveAsNewNote(session, document: document,
@@ -1055,81 +1025,81 @@ final class NotesPageController: ObservableObject {
         active?.engine.refreshRelativeDates(today: NoteDay(date: now()))
     }
 
-    /// Reserves all positions synchronously, then loads the batch off actor.
-    /// A failed item cancels the whole batch without changing typed text.
+    /// Reads every file before making one undoable document change.
     func importImages(_ urls: [URL]) {
         guard let session = active, !session.isReadOnly, !urls.isEmpty else { return }
-        guard session.pendingImportIDs.isEmpty else {
+        guard NoteSessionPolicy.commandAllowed(session.engine.activity) else {
+            session.notice = String(localized: "Finish Writing Tools or composing text before adding images.")
+            return
+        }
+        guard session.importBatch == nil else {
             session.notice = String(localized: "Finish the current image import before adding more images.")
             return
         }
-        let originID = session.noteID
-        let reservations = urls.map { url in
-            StagedNoteAttachment(id: UUID(), filename: url.lastPathComponent,
-                                 contentTypeIdentifier: "public.image", byteCount: 0,
-                                 digest: "", data: Data())
-        }
-        let ids = Set(reservations.map(\.id))
-        session.pendingImportIDs.formUnion(ids)
-        session.engine.history.beginGroup()
-        var reservedAll = true
-        for item in reservations where reservedAll {
-            reservedAll = session.engine.insertImage(item, pixelSize: nil)
-        }
-        session.engine.history.endGroup()
-        guard reservedAll else {
-            cancelImport(in: session)
-            session.notice = String(localized: "The image positions changed, so the import was cancelled.")
-            _ = preserve(session)
-            return
-        }
+        let batchID = UUID()
+        session.engine.beginImageImport()
+        session.importBatch = NoteImportBatch(id: batchID, urls: urls)
         let loader = imageLoader
         session.importTask = Task { @MainActor [weak self, session] in
             guard let self else { return }
-            var loaded: [StagedNoteAttachment] = []
-            for (url, reserved) in zip(urls, reservations) {
-                guard !Task.isCancelled, let (item, _) = await loader(url) else {
-                    self.cancelImport(in: session)
-                    session.notice = String(localized: "The image batch could not be read, so none of its images were added.")
-                    _ = self.preserve(session)
+            var loaded: [(StagedNoteAttachment, CGSize?)] = []
+            for url in urls {
+                guard !Task.isCancelled, let (item, pixelSize) = await loader(url) else {
+                    if !Task.isCancelled {
+                        self.dropImport(in: session, batchID: batchID,
+                            notice: String(localized: "The image batch could not be read, so none of its images were added."))
+                    }
                     return
                 }
-                loaded.append(StagedNoteAttachment(id: reserved.id, filename: item.filename,
-                                                   contentTypeIdentifier: item.contentTypeIdentifier,
-                                                   byteCount: item.byteCount, digest: item.digest, data: item.data))
+                loaded.append((StagedNoteAttachment(id: UUID(), filename: item.filename,
+                    contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
+                    digest: item.digest, data: item.data), pixelSize))
             }
-            guard !Task.isCancelled, session.noteID == originID else {
-                self.cancelImport(in: session)
-                return
-            }
-            if session.isPersisted && self.store.note(withID: originID) == nil {
-                session.blocksAutomaticRekey = true
-                self.cancelImport(in: session)
-                session.notice = String(localized: "This note was deleted while images were loading. The draft remains in recovery; Retry saves it as a new note.")
-                _ = self.preserve(session)
-                return
-            }
-            session.pendingImportIDs.subtract(ids)
+            guard !Task.isCancelled, var batch = session.importBatch, batch.id == batchID else { return }
+            batch.loaded = loaded
+            session.importBatch = batch
             session.importTask = nil
-            session.engine.completeImageImport(loaded)
-            if !self.save(session) { _ = self.preserve(session) }
+            self.completeImportIfPossible(in: session)
+        }
+    }
+
+    private func completeImportIfPossible(in session: NoteSession) {
+        guard let batch = session.importBatch, let loaded = batch.loaded else { return }
+        guard session.engine.activity == .idle else { return }
+        if session.isPersisted && store.note(withID: session.noteID) == nil {
+            session.state = .conflict(.deleted)
+            _ = checkpoint(session, silent: true)
+        }
+        switch NoteSessionPolicy.importCompletion(session.state, activity: session.engine.activity) {
+        case .deferUntilIdle:
+            return
+        case .drop:
+            dropImport(in: session, batchID: batch.id,
+                notice: String(localized: "The note was deleted or is read only, so the images were not added."))
+        case .insert:
+            session.importBatch = nil
+            session.importTask = nil
+            guard session.engine.insertImportedImages(loaded) else {
+                session.notice = String(localized: "The images could not be added to this note.")
+                return
+            }
+            _ = preserve(session)
         }
     }
 
     func cancelActiveImport() {
-        guard let session = active, session.isImporting, preserve(session) else { return }
-        cancelImport(in: session)
-        session.notice = String(localized: "The image import was cancelled.")
-        if !save(session) { _ = preserve(session) }
+        guard let session = active, let batch = session.importBatch else { return }
+        dropImport(in: session, batchID: batch.id,
+            notice: String(localized: "The image import was cancelled."))
     }
 
-    private func cancelImport(in session: NoteSession) {
-        guard !session.pendingImportIDs.isEmpty else { return }
+    private func dropImport(in session: NoteSession, batchID: UUID, notice: String) {
+        guard session.importBatch?.id == batchID else { return }
         session.importTask?.cancel()
         session.importTask = nil
-        let ids = session.pendingImportIDs
-        session.pendingImportIDs = []
-        session.engine.cancelImageImport(ids)
+        session.importBatch = nil
+        session.engine.cancelImageImport()
+        session.notice = notice
     }
 
     nonisolated private static func loadImageFile(_ url: URL) async -> (StagedNoteAttachment, CGSize?)? {

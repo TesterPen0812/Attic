@@ -761,7 +761,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(try store.attachmentRows(forNoteID: destination.noteID).first?.id, newImageID)
     }
 
-    func testDelayedImageBatchReservesOrderDuringTypingAndCommitsTogether() async throws {
+    func testDelayedImageBatchLoadsFirstAndCommitsTogether() async throws {
         let image = try realImage()
         let loader = DelayedImageLoader()
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
@@ -772,30 +772,28 @@ final class NotesPageControllerTests: XCTestCase {
         type("Start", into: draft)
         XCTAssertTrue(controller.preserveAll())
         controller.importImages([URL(fileURLWithPath: "/tmp/one.png"), URL(fileURLWithPath: "/tmp/two.png")])
-        let reserved = draft.engine.document().attachmentIDs
-        XCTAssertEqual(reserved.count, 2)
+        XCTAssertTrue(draft.engine.document().attachmentIDs.isEmpty, "loading never edits the document")
         type(" while loading", into: draft)
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.preserveAll())
-        XCTAssertNil(draft.problem, "a normal import is waiting, not a failed save")
-        draft.engine.writingToolsWillBegin()
-        XCTAssertTrue(draft.notice?.contains("safety copy") == true)
-        draft.engine.writingToolsDidEnd()
+        XCTAssertNil(draft.problem)
         await loader.releaseNext(success: true)
         await waitForImageRequests(loader, count: 2)
-        XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty,
-                      "a partial batch must not commit")
+        XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty)
         await loader.releaseNext(success: true)
         for _ in 0..<60 {
             if (try? store.attachmentRows(forNoteID: draft.noteID).count) == 2 { break }
             try await Task.sleep(for: .milliseconds(20))
         }
+        let stored = try XCTUnwrap(store.loadDocument(noteID: draft.noteID)?.content.document)
+        XCTAssertEqual(stored.attachmentIDs.count, 2)
+        XCTAssertEqual(stored.title, "Start while loading")
         XCTAssertEqual(try store.attachmentRows(forNoteID: draft.noteID).count, 2)
-        XCTAssertEqual(store.loadDocument(noteID: draft.noteID)?.content.document?.attachmentIDs, reserved)
-        XCTAssertTrue(store.loadDocument(noteID: draft.noteID)?.content.document?.blocks.last?.text.contains("while loading") == true)
+        XCTAssertTrue(draft.engine.history.undo(), "both images are one Undo step")
+        XCTAssertTrue(draft.engine.document().attachmentIDs.isEmpty)
     }
 
-    func testImageBatchNavigationCancelsLateResultsAndKeepsTypedText() async throws {
+    func testImageBatchNavigationKeepsBackgroundBatchAndTypedText() async throws {
         let image = try realImage()
         let loader = DelayedImageLoader()
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
@@ -810,35 +808,17 @@ final class NotesPageControllerTests: XCTestCase {
         type(" after", into: draft)
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.newNote())
-        XCTAssertTrue(draft.notice?.contains("cancelled") == true)
-        XCTAssertTrue(controller.active?.notice?.contains("cancelled") == true,
-                      "the notice follows the person to the destination")
+        XCTAssertTrue(draft.isImporting)
         await loader.releaseNext(success: true)
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.attachmentIDs, [])
-        XCTAssertTrue(store.loadDocument(noteID: id)?.content.document?.blocks.last?.text.contains("after") == true)
-        XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
+        for _ in 0..<60 {
+            if (try? store.attachmentRows(forNoteID: id).count) == 1 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(try store.attachmentRows(forNoteID: id).count, 1)
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.title, "Before after")
+        XCTAssertFalse(draft.isImporting)
     }
 
-    func testImportCancellationNoticeFollowsNavigationToLegacyNote() async throws {
-        let image = try realImage()
-        let loader = DelayedImageLoader()
-        let legacy = try XCTUnwrap(store.create(title: "Old", body: "Body"))
-        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
-            saveDelay: .seconds(60), imageLoader: { url in await loader.load(url, template: image) })
-        controller.start()
-        let draft = try XCTUnwrap(controller.active)
-        type("New", into: draft)
-        XCTAssertTrue(controller.preserveAll())
-        controller.importImages([URL(fileURLWithPath: "/tmp/legacy.png")])
-        await waitForImageRequests(loader, count: 1)
-        XCTAssertTrue(controller.open(noteID: legacy.id))
-        XCTAssertEqual(controller.legacyNoteID, legacy.id)
-        XCTAssertTrue(controller.legacyNotice?.contains("cancelled") == true)
-        controller.dismissLegacyNotice()
-        XCTAssertNil(controller.legacyNotice)
-        await loader.releaseNext(success: true)
-    }
 
     func testStatusCancelBatchKeepsTypedTextAndIgnoresLateImage() async throws {
         let image = try realImage()
@@ -855,6 +835,7 @@ final class NotesPageControllerTests: XCTestCase {
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.statusItems(for: draft).contains(.importing))
         controller.cancelActiveImport()
+        XCTAssertTrue(controller.preserveAll())
         XCTAssertFalse(controller.statusItems(for: draft).contains(.importing))
         XCTAssertTrue(draft.notice?.contains("cancelled") == true)
         await loader.releaseNext(success: true)
@@ -887,23 +868,6 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(controller.active?.engine.document().attachmentIDs.count, 1)
     }
 
-    func testHideRefusedWhenRunningImportHasNoRecoveryJournal() async throws {
-        let image = try realImage()
-        let loader = DelayedImageLoader()
-        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60),
-            imageLoader: { url in await loader.load(url, template: image) })
-        controller.start()
-        let draft = try XCTUnwrap(controller.active)
-        type("Before", into: draft)
-        XCTAssertTrue(controller.preserveAll())
-        controller.importImages([URL(fileURLWithPath: "/tmp/no-journal.png")])
-        type(" after", into: draft)
-        await waitForImageRequests(loader, count: 1)
-        XCTAssertFalse(controller.preserveForHide())
-        guard case .onlyInMemory = draft.problem else { return XCTFail("the failed hide must be visible") }
-        XCTAssertTrue(controller.active === draft)
-        await loader.releaseNext(success: true)
-    }
 
     func testImageBatchDeletedDestinationStaysInRecoveryWithoutResurrection() async throws {
         let image = try realImage()
@@ -942,9 +906,33 @@ final class NotesPageControllerTests: XCTestCase {
         await waitForImageRequests(loader, count: 2)
         await loader.releaseNext(success: false)
         try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(controller.preserveAll())
         XCTAssertEqual(draft.engine.document().attachmentIDs, [])
         XCTAssertEqual(store.note(withID: draft.noteID)?.title, "Text")
         XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty)
+    }
+
+    func testImportCompletionWaitsForWritingToolsToEnd() async throws {
+        let image = try realImage()
+        let loader = DelayedImageLoader()
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            saveDelay: .seconds(60), imageLoader: { url in await loader.load(url, template: image) })
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Title", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        controller.importImages([URL(fileURLWithPath: "/tmp/deferred.png")])
+        await waitForImageRequests(loader, count: 1)
+        draft.engine.writingToolsWillBegin()
+        XCTAssertEqual(draft.engine.activity, .writingToolsSafe)
+        await loader.releaseNext(success: true)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(draft.isImporting)
+        XCTAssertTrue(draft.engine.document().attachmentIDs.isEmpty)
+        XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty)
+        draft.engine.writingToolsDidEnd()
+        XCTAssertFalse(draft.isImporting)
+        XCTAssertEqual(try store.attachmentRows(forNoteID: draft.noteID).count, 1)
     }
 
     func testWritingToolsRefusesRewriteWhenVersionCannotCommit() throws {

@@ -94,6 +94,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private(set) var documentExtractionCount = 0
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
     private var pendingImageLoads = Set<ObjectIdentifier>()
+    private var importAnchor: Int?
 
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
          design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date()),
@@ -603,31 +604,34 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return inserted
     }
 
-    /// Import placeholders reserve their final positions before the file
-    /// reads yield. The store never sees them until every file has bytes.
-    func completeImageImport(_ items: [StagedNoteAttachment]) {
-        for item in items { staged[item.id] = item }
-        renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
+    func beginImageImport() {
+        importAnchor = textView?.selectedRange().location ?? textStorage.length
     }
 
-    func cancelImageImport(_ ids: Set<UUID>) {
-        var ranges: [NSRange] = []
-        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
-            guard let image = value as? NoteImageAttachment, ids.contains(image.attachmentID) else { return }
-            let start = range.location > 0 && (textStorage.string as NSString).character(at: range.location - 1) == 0x0A
-                ? range.location - 1 : range.location
-            ranges.append(NSRange(location: start, length: NSMaxRange(range) - start))
+    func cancelImageImport() { importAnchor = nil }
+
+    /// The complete batch is one document change and one Undo step.
+    @discardableResult
+    func insertImportedImages(_ items: [(StagedNoteAttachment, CGSize?)]) -> Bool {
+        guard let anchor = importAnchor, !items.isEmpty else { return false }
+        importAnchor = nil
+        let at = NSMaxRange(lineRange(at: min(anchor, textStorage.length)))
+        let insertion = NSMutableAttributedString(string: "")
+        for (item, pixelSize) in items {
+            staged[item.id] = item
+            let image = NoteImageAttachment(attachmentID: item.id, preferredWidthFraction: 1, pixelSize: pixelSize)
+            image.filename = item.filename
+            insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
+            insertion.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
         }
-        for range in ranges.sorted(by: { $0.location > $1.location }) {
-            history.performUnrecorded {
-                engineEditDepth += 1
-                textStorage.replaceCharacters(in: range, with: "")
-                textView?.didChangeText()
-                engineEditDepth -= 1
-            }
-            history.rebase(editAt: range, newLength: 0)
+        if at == textStorage.length {
+            insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
-        for id in ids { staged[id] = nil }
+        let inserted = performEdit(NSRange(location: at, length: 0), with: insertion,
+                                   name: String(localized: "Add Images"),
+                                   selection: NSRange(location: at + insertion.length, length: 0))
+        if !inserted { for (item, _) in items { staged[item.id] = nil } }
+        return inserted
     }
 
     // MARK: Keys with object rules
@@ -882,6 +886,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
+        if let anchor = importAnchor {
+            let oldLength = max(0, editedRange.length - delta)
+            let oldEnd = editedRange.location + oldLength
+            if oldLength == 0, editedRange.location <= anchor {
+                importAnchor = max(0, anchor + delta)
+            } else if oldEnd <= anchor {
+                importAnchor = max(0, anchor + delta)
+            } else if editedRange.location <= anchor {
+                importAnchor = editedRange.location
+            }
+        }
         if var cached = documentCache {
             let string = textStorage.string as NSString
             let newline = string.range(of: "\n", options: .backwards)

@@ -145,14 +145,6 @@ private struct NoteStatusSlot: View {
     var body: some View {
         if let session {
             SessionSlot(controller: controller, store: noteStore, session: session)
-        } else if controller.legacyNoteID != nil, let notice = controller.legacyNotice {
-            Button { controller.dismissLegacyNotice() } label: {
-                AtticText(verbatim: notice, style: .rowMeta, ink: .heading, truncates: true)
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: 200)
-            .help(notice)
-            .accessibilityIdentifier("notes-legacy-notice")
         }
     }
 
