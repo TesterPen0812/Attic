@@ -101,7 +101,9 @@ final class PanelShellUITests: XCTestCase {
         let item = app.statusItems.firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "the menu-bar item is there", file: file, line: line)
         item.click()
-        let search = app.menuItems["Search"]
+        // "Search Done Tasks…" with the Explicit Phase 1 Labels switch on
+        // (its default), "Search" with it off.
+        let search = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "Search")).firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 3), file: file, line: line)
         search.click()
 
