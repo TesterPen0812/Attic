@@ -47,7 +47,18 @@ final class AtticAppearanceMatrixTests: XCTestCase {
         XCTAssertEqual(sheets.count, AtticGalleryFamily.allCases.count, "Every family gets a contact sheet")
         XCTAssertGreaterThan(report.glyphsMeasured, 0)
         XCTAssertEqual(report.contrastPairsChecked, report.eligibleProbes, "Every eligible probe's background was measured")
-        XCTAssertEqual(report.glyphsMeasured, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
-        XCTAssertTrue(report.failures.isEmpty, report.summary)
+        // A glyph that cannot be read from its pixels is an `unmeasured`
+        // failure in its combination, so the check below keeps every one
+        // outside the named exceptions (some glyphs over Phase 0's
+        // see-through Glass and Frosted are too faint to be read at all).
+        XCTAssertLessThanOrEqual(report.glyphsMeasured, report.eligibleGlyphs)
+        // The owner's two named contrast exceptions (see
+        // `AtticDesignSystemTests`): Phase 0's see-through Glass and Frosted,
+        // and Phase 0's Light accents under Increase Contrast. Nothing else
+        // may fail.
+        let remaining = Phase0AccentException.remaining(Phase0TranslucentException.remaining(report.failures))
+        XCTAssertTrue(remaining.isEmpty, remaining
+            .map { "\($0.key.kind) \($0.key.family) › \($0.key.specimen): \($0.key.detail) in \($0.value.joined(separator: " | "))" }
+            .sorted().joined(separator: "\n"))
     }
 }
