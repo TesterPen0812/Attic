@@ -71,7 +71,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(store.notes.isEmpty)
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(store.notes.first?.title, "Quick")
-        XCTAssertFalse(session.isDirty)
+        XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
     }
 
     func testTypingDuringOffActorAutosaveRejectsTheStaleProjection() async throws {
@@ -94,7 +94,7 @@ final class NotesPageControllerTests: XCTestCase {
         print("NOTE_TYPING_OVERLAP_AUTOSAVE_MS=\(typingMilliseconds)")
         try await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(store.notes.first?.title, "First second")
-        XCTAssertFalse(session.isDirty)
+        XCTAssertFalse(NoteSessionPolicy.hasPendingWork(session.state))
     }
 
     func testMeasuredMainActorSaveOnFiveThousandLineNote() throws {
@@ -147,7 +147,7 @@ final class NotesPageControllerTests: XCTestCase {
         type("Draft one", into: first)
         gate.shouldFail = true
         XCTAssertTrue(controller.newNote(), "a checkpoint lets navigation go on")
-        guard case .notSaved = first.problem else { return XCTFail("slot says Not saved") }
+        guard case .notSaved = first.state else { return XCTFail("slot says Not saved") }
         XCTAssertTrue(store.notes.isEmpty)
         XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
         XCTAssertTrue(controller.failedDrafts.contains { $0 === first })
@@ -157,7 +157,7 @@ final class NotesPageControllerTests: XCTestCase {
 
         gate.shouldFail = false
         XCTAssertTrue(controller.preserve(first), "Retry")
-        XCTAssertNil(first.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(first.state))
         XCTAssertEqual(store.notes.map(\.title), ["Draft one"])
         XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty, "the checkpoint goes once saved")
     }
@@ -171,12 +171,16 @@ final class NotesPageControllerTests: XCTestCase {
         gate.shouldFail = true
         XCTAssertFalse(controller.newNote())
         XCTAssertTrue(controller.active === session, "the session is never replaced")
-        guard case .onlyInMemory = session.problem else { return XCTFail("slot says Only in memory") }
+        guard case .onlyInMemory = session.state else { return XCTFail("slot says Only in memory") }
         XCTAssertFalse(controller.preserveAll(), "hide and quit are refused")
+        XCTAssertFalse(controller.prepareToLeave(.hide))
+        XCTAssertFalse(controller.prepareToLeave(.quit))
+        XCTAssertFalse(NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
+            hasBatch: session.isImporting, presence: .background))
         XCTAssertTrue(session.engine.plainText.contains("Precious"))
         gate.shouldFail = false
         controller.retry()
-        XCTAssertNil(session.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
         XCTAssertTrue(controller.newNote())
     }
 
@@ -205,7 +209,7 @@ final class NotesPageControllerTests: XCTestCase {
         view.selectSection(.tasks)
         XCTAssertEqual(state.selectedSection, .notes)
         XCTAssertTrue(noteDraft.pages.active === draft)
-        guard case .onlyInMemory = draft.problem else { return XCTFail("both saves failed") }
+        guard case .onlyInMemory = draft.state else { return XCTFail("both saves failed") }
         XCTAssertEqual(draft.engine.document().title, "Only in memory")
     }
 
@@ -242,7 +246,7 @@ final class NotesPageControllerTests: XCTestCase {
         let recovered = try XCTUnwrap(relaunched.active)
         XCTAssertEqual(recovered.noteID, noteID)
         XCTAssertEqual(recovered.notice, "Restored unsaved text.")
-        XCTAssertNil(recovered.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(recovered.state))
         XCTAssertEqual(store.note(withID: noteID)?.title, "Saved text and more")
         XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
     }
@@ -431,7 +435,7 @@ final class NotesPageControllerTests: XCTestCase {
         let controller = makeController(journal: journal)
         controller.start()
         let session = try XCTUnwrap(controller.active)
-        XCTAssertEqual(session.problem, .changedElsewhere)
+        XCTAssertEqual(session.state, .conflict(.changed))
         XCTAssertEqual(controller.statusItems(for: session).first, .changedElsewhere)
         XCTAssertEqual(controller.conflictComparison(for: session)?.current, "Agent")
         XCTAssertEqual(controller.conflictComparison(for: session)?.proposed, "Person")
@@ -442,7 +446,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertNotEqual(session.noteID, id)
         XCTAssertEqual(store.note(withID: id)?.title, "Agent")
         XCTAssertEqual(store.note(withID: session.noteID)?.title, "Person")
-        XCTAssertNil(session.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
         XCTAssertTrue(try journal.entries().isEmpty)
     }
 
@@ -463,7 +467,7 @@ final class NotesPageControllerTests: XCTestCase {
             return XCTFail()
         }
         XCTAssertTrue(controller.preserveAll())
-        XCTAssertEqual(draft.problem, .changedElsewhere)
+        XCTAssertEqual(draft.state, .conflict(.changed))
         controller.importImages([URL(fileURLWithPath: "/tmp/pending.png")])
         await waitForImageRequests(loader, count: 1)
         XCTAssertFalse(controller.keepAsNewNote())
@@ -576,7 +580,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(secondStore.note(withID: id)?.title, "Agent")
         XCTAssertTrue(secondStore.pendingEdits(noteID: id).isEmpty)
         XCTAssertTrue(try journal.entries().isEmpty)
-        XCTAssertNil(controller.active?.problem)
+        XCTAssertFalse(controller.active.map { NoteSessionPolicy.needsAttention($0.state) } ?? true)
     }
 
     func testRecoveredFirstSaveCheckpointConflictsWithAlreadyCommittedAgentWrite() throws {
@@ -602,7 +606,7 @@ final class NotesPageControllerTests: XCTestCase {
         let controller = NotesPageController(store: secondStore, journal: journal)
         controller.start()
         XCTAssertEqual(secondStore.note(withID: id)?.title, "Agent")
-        XCTAssertEqual(controller.active?.problem, .changedElsewhere)
+        XCTAssertEqual(controller.active?.state, .conflict(.changed))
         XCTAssertEqual(controller.active?.engine.document().title, "Person")
         XCTAssertEqual(try journal.entries().count, 1)
     }
@@ -628,7 +632,7 @@ final class NotesPageControllerTests: XCTestCase {
             staged: [], savedAt: Date()), staged: [])
         let relaunched = makeController(journal: journal)
         relaunched.start()
-        XCTAssertNil(relaunched.active?.problem)
+        XCTAssertFalse(relaunched.active.map { NoteSessionPolicy.needsAttention($0.state) } ?? true)
         XCTAssertEqual(store.note(withID: id)?.title, "Saved again")
         XCTAssertTrue(try journal.entries().isEmpty)
     }
@@ -763,9 +767,11 @@ final class NotesPageControllerTests: XCTestCase {
         source.engine.insertImage(image, pixelSize: CGSize(width: 2, height: 2))
         gate.shouldFail = true
         XCTAssertTrue(controller.preserveAll(), "the failed source stays in recovery")
+        let savesBeforeCopy = gate.saveCount
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-failed-source-\(UUID().uuidString)"))
         XCTAssertTrue(source.engine.writeSelection(NSRange(location: 0, length: source.engine.textStorage.length),
                                                    to: pasteboard, types: [NoteEditorEngine.fragmentType]))
+        XCTAssertEqual(gate.saveCount, savesBeforeCopy, "copy does not save the source")
         let fragment = try XCTUnwrap(pasteboard.data(forType: NoteEditorEngine.fragmentType))
         XCTAssertTrue(controller.newNote())
         let destination = try XCTUnwrap(controller.active)
@@ -792,7 +798,7 @@ final class NotesPageControllerTests: XCTestCase {
         type(" while loading", into: draft)
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.preserveAll())
-        XCTAssertNil(draft.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(draft.state))
         await loader.releaseNext(success: true)
         await waitForImageRequests(loader, count: 2)
         XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty)
@@ -873,7 +879,7 @@ final class NotesPageControllerTests: XCTestCase {
         controller.importImages([URL(fileURLWithPath: "/tmp/hidden.png")])
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.prepareToLeave(.hide))
-        XCTAssertNil(draft.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(draft.state))
         await loader.releaseNext(success: true)
         for _ in 0..<60 {
             if (try? store.attachmentRows(forNoteID: id).count) == 1 { break }
@@ -987,7 +993,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(NoteContentCodec.decode(entry.content).document, before)
         draft.engine.writingToolsDidEnd()
         XCTAssertEqual(draft.engine.document(), before)
-        XCTAssertNil(draft.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(draft.state))
     }
 
     func testImportStartIsRefusedDuringWritingTools() throws {
@@ -1043,7 +1049,7 @@ final class NotesPageControllerTests: XCTestCase {
                                                     to: NSPasteboard(name: NSPasteboard.Name(UUID().uuidString)),
                                                     types: [.string]))
         XCTAssertEqual(store.note(withID: draft.noteID)?.revisionID, revision)
-        XCTAssertEqual(draft.problem, nil)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(draft.state))
         let recovery = try XCTUnwrap(NoteDraftJournal(directory: directory).entries().first?.0)
         XCTAssertEqual(NoteContentCodec.decode(recovery.content).document?.title, "Original")
         XCTAssertEqual(NoteContentCodec.decode(recovery.content).document?.blocks.flatMap(\.inlines).count, 0)
@@ -1299,11 +1305,11 @@ final class NotesPageControllerTests: XCTestCase {
                                                      with: " after")
         session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
         try await Task.sleep(for: .milliseconds(100))
-        XCTAssertNil(session.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
         XCTAssertEqual(store.note(withID: session.noteID)?.revisionID, revision)
         XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
         session.engine.writingToolsDidEnd()
-        XCTAssertNil(session.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
         XCTAssertNotEqual(store.note(withID: session.noteID)?.revisionID, revision)
         XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
     }
@@ -1320,11 +1326,11 @@ final class NotesPageControllerTests: XCTestCase {
                                replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(textView.hasMarkedText())
         try await Task.sleep(for: .milliseconds(100))
-        XCTAssertNil(session.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
         XCTAssertEqual(store.note(withID: session.noteID)?.revisionID, revision)
         textView.unmarkText()
         XCTAssertTrue(controller.preserveAll())
-        XCTAssertNil(session.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
     }
 
     func testBackgroundPreserveDoesNotCancelAnotherSessionAutosave() async throws {
@@ -1341,7 +1347,7 @@ final class NotesPageControllerTests: XCTestCase {
         gate.shouldFail = false
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(store.note(withID: second.noteID)?.title, "Second")
-        XCTAssertNil(second.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(second.state))
     }
 
     func testHideAndQuitRefuseActiveWritingToolsWithAccurateNotice() throws {
@@ -1352,11 +1358,44 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(controller.preserveAll())
         session.engine.writingToolsWillBegin()
         XCTAssertFalse(controller.prepareToLeave(.hide))
+        XCTAssertFalse(controller.prepareToLeave(.quit))
         XCTAssertFalse(controller.prepareToLeave(.pageSwitch))
         XCTAssertEqual(session.notice, "Finish Writing Tools first.")
-        XCTAssertNil(session.problem)
+        XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
         session.engine.writingToolsDidEnd()
         XCTAssertTrue(controller.prepareToLeave(.hide))
+    }
+
+    func testWritingToolsReturnsAfterTheNextSuccessfulStoreSave() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let (_, textView) = session.engine.makeView()
+        gate.shouldFail = true
+        session.engine.writingToolsWillBegin()
+        XCTAssertEqual(session.engine.activity, .writingToolsRefused)
+        session.engine.writingToolsDidEnd()
+        gate.shouldFail = false
+        XCTAssertEqual(textView.writingToolsBehavior, .none)
+        type(" after", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(textView.writingToolsBehavior, .complete)
+    }
+
+    func testLeaveSelfHealsWhenWritingToolsViewAlreadyEnded() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let (_, textView) = session.engine.makeView()
+        session.engine.textViewWritingToolsWillBegin(textView)
+        XCTAssertEqual(session.engine.activity, .writingToolsSafe)
+        XCTAssertFalse(textView.isWritingToolsActive)
+        XCTAssertTrue(controller.prepareToLeave(.hide))
+        XCTAssertEqual(session.engine.activity, .idle)
     }
 
     func testDeletedNoteKeepsItsIDAndDraftUntilExplicitKeep() throws {
@@ -1450,29 +1489,32 @@ final class NoteSessionPolicyTests: XCTestCase {
                 let idle = activity == .idle
                 let conflict: Bool = if case .conflict = state { true } else { false }
                 let readOnly: Bool = if case .readOnly = state { true } else { false }
-                XCTAssertEqual(NoteSessionPolicy.canWriteStore(state, activity: activity), idle && !conflict && !readOnly)
-                XCTAssertEqual(NoteSessionPolicy.dueSaveAction(state, activity: activity),
-                               idle && !conflict ? .preserve : .checkpointOnly)
-                XCTAssertEqual(NoteSessionPolicy.canLeave(activity), idle)
-                XCTAssertEqual(NoteSessionPolicy.commandAllowed(activity), idle)
-                for refused in [false, true] {
-                    let available = idle && !refused && (state == .clean || state == .dirty)
-                    XCTAssertEqual(NoteSessionPolicy.writingToolsAvailable(state, activity: activity,
-                                                                           refusedSinceLastStoreSave: refused), available)
-                }
-                for hasBatch in [false, true] {
-                    for presence in [NoteSessionPolicy.Presence.onScreen, .background, .released] {
-                        let evictable = state == .untouched || state == .clean || state == .readOnly
-                        XCTAssertEqual(NoteSessionPolicy.canEvict(state, activity: activity,
-                                                                 hasBatch: hasBatch, presence: presence),
-                                       idle && !hasBatch && presence != .onScreen && evictable)
-                        let disposition: NoteSessionPolicy.AgentDisposition = presence == .onScreen ? .proposal
-                            : hasBatch ? .refuseImport : (state == .clean || state == .readOnly ? .direct : .flush)
-                        XCTAssertEqual(NoteSessionPolicy.agentDisposition(presence, state: state, hasBatch: hasBatch),
-                                       disposition)
+                for marked in [false, true] {
+                    XCTAssertEqual(NoteSessionPolicy.canWriteStore(state, activity: activity, hasMarkedText: marked),
+                                   idle && !marked && !conflict && !readOnly)
+                    XCTAssertEqual(NoteSessionPolicy.dueSaveAction(state, activity: activity, hasMarkedText: marked),
+                                   idle && !marked && !conflict ? .preserve : .checkpointOnly)
+                    XCTAssertEqual(NoteSessionPolicy.canLeave(activity, hasMarkedText: marked), idle && !marked)
+                    XCTAssertEqual(NoteSessionPolicy.commandAllowed(activity, hasMarkedText: marked), idle && !marked)
+                    for refused in [false, true] {
+                        let available = idle && !marked && !refused && (state == .clean || state == .dirty)
+                        XCTAssertEqual(NoteSessionPolicy.writingToolsAvailable(state, activity: activity,
+                            refusedSinceLastStoreSave: refused, hasMarkedText: marked), available)
                     }
-                    XCTAssertEqual(NoteSessionPolicy.keepAsNewAllowed(state, activity: activity, hasBatch: hasBatch),
-                                   idle && !hasBatch && conflict)
+                    for hasBatch in [false, true] {
+                        for presence in [NoteSessionPolicy.Presence.onScreen, .background, .released] {
+                            let evictable = state == .untouched || state == .clean || state == .readOnly
+                            XCTAssertEqual(NoteSessionPolicy.canEvict(state, activity: activity,
+                                                                     hasBatch: hasBatch, presence: presence),
+                                           idle && !hasBatch && presence != .onScreen && evictable)
+                            let disposition: NoteSessionPolicy.AgentDisposition = presence == .onScreen ? .proposal
+                                : hasBatch ? .refuseImport : (state == .clean || state == .readOnly ? .direct : .flush)
+                            XCTAssertEqual(NoteSessionPolicy.agentDisposition(presence, state: state, hasBatch: hasBatch),
+                                           disposition)
+                        }
+                        XCTAssertEqual(NoteSessionPolicy.keepAsNewAllowed(state, activity: activity,
+                            hasBatch: hasBatch, hasMarkedText: marked), idle && !marked && !hasBatch && conflict)
+                    }
                 }
                 let completion: NoteSessionPolicy.ImportCompletion = !idle ? .deferUntilIdle
                     : (state == .conflict(.deleted) || readOnly ? .drop : .insert)
@@ -1480,5 +1522,515 @@ final class NoteSessionPolicyTests: XCTestCase {
             }
         }
         XCTAssertEqual(NoteSessionPolicy.agentDisposition(.released, state: nil, hasBatch: false), .direct)
+    }
+}
+
+/// One fresh, real controller/engine/store fixture per transition. The table
+/// covers every column and event in session-lifecycle.md §1.6; the focused
+/// tests above assert the detailed text and version outcomes of each route.
+@MainActor
+final class NoteSessionMatrixTests: XCTestCase {
+    private enum Column: String, CaseIterable {
+        case u, c, d, n, m, x, r, k, w, z, b, bp, cBatch, bBatch
+        var isBackground: Bool { self == .b || self == .bp || self == .bBatch }
+        var hasBatch: Bool { self == .cBatch || self == .bBatch }
+    }
+
+    private enum Event: String, CaseIterable {
+        case edit, command, timerOK, timerStoreFails, timerBothFail
+        case leaveOK, leaveBothFail, present, agentWrite
+        case importStart, importComplete, importFail
+        case writingToolsBeginOK, writingToolsBeginFails, writingToolsBypass, writingToolsEnd
+        case compositionBegin, compositionEnd, externalChange, externalDelete
+        case retry, keepAsNew, launchRecovery, evict
+    }
+
+    /// A = handled, R = refused, N = not applicable, P = proposal,
+    /// D = direct, J = journal checkpoint, S = store path.
+    /// Each row is in Column.allCases order, including both batch variants.
+    private let expected: [(Event, String)] = [
+        (.edit,                    "AAAAAARRRRNNAN"),
+        (.command,                 "AAAAAARRRRNNAN"),
+        (.timerOK,                 "NNSSSJ N JJJNNNN"),
+        (.timerStoreFails,         "NNSSSJ N JJJNNNN"),
+        (.timerBothFail,           "NNSSSJ N JJJNNNN"),
+        (.leaveOK,                 "AAAAAAARRRAAAA"),
+        (.leaveBothFail,           "AARRRRARRRARAA"),
+        (.present,                 "AAAAAAAAAAAAAA"),
+        (.agentWrite,              "RPPPPPRPPPD DP R"),
+        (.importStart,             "AAAAAARRRRNNRN"),
+        (.importComplete,          "NNNNNNNNNNNNAA"),
+        (.importFail,              "NNNNNNNNNNNNAA"),
+        (.writingToolsBeginOK,     "RAARRRRRNNNNAN"),
+        (.writingToolsBeginFails,  "RRRRRRRRNNNNRN"),
+        (.writingToolsBypass,      "NNNNNNNN AANNNN"),
+        (.writingToolsEnd,         "NNNNNNNN AANNNN"),
+        (.compositionBegin,        "AAAAAARNNNNNAN"),
+        (.compositionEnd,          "NNNNNNNANNNNNN"),
+        (.externalChange,          "NAAAAARAAAAAAA"),
+        (.externalDelete,          "NAAAAAAAAAAAAA"),
+        (.retry,                   "NNAAARNNNNNNNN"),
+        (.keepAsNew,               "NNNNNANNNNNNNN"),
+        (.launchRecovery,          "NNNANANNNNNANN"),
+        (.evict,                   "NNNNNNNNNNANNN")
+    ]
+
+    func testEveryStateEventPair() async throws {
+        XCTAssertEqual(expected.map(\.0), Event.allCases)
+        XCTAssertEqual(Column.allCases.count, 14)
+        for (event, row) in expected {
+            let cells = Array(row.filter { !$0.isWhitespace })
+            XCTAssertEqual(cells.count, Column.allCases.count, "\(event)")
+            guard cells.count == Column.allCases.count else { continue }
+            for (column, cell) in zip(Column.allCases, cells) {
+                let fixture = try await MatrixFixture.make(column)
+                defer { fixture.cleanup() }
+                let initialState = fixture.session.state
+                let initialActivity = fixture.session.engine.activity
+                let priorCommits = fixture.committedPairs.count
+                let priorJournalWrites = fixture.journal.writeCount
+                let priorProposals = fixture.store.pendingEdits(noteID: fixture.session.noteID).count
+                let observed = try await fixture.perform(event)
+                XCTAssertEqual(observed, cell, "\(column.rawValue) × \(event.rawValue)")
+                try fixture.assertInvariants(after: event, decision: observed,
+                    initialState: initialState, initialActivity: initialActivity,
+                    priorCommits: priorCommits, priorJournalWrites: priorJournalWrites,
+                    priorProposals: priorProposals)
+            }
+        }
+    }
+
+    func testStaleBaseNeverCommitsAcrossExternalEvents() async throws {
+        for column in [Column.d, .n, .m] {
+            for event in [Event.externalChange, .externalDelete] {
+                let fixture = try await MatrixFixture.make(column)
+                defer { fixture.cleanup() }
+                let decision = try await fixture.perform(event)
+                XCTAssertEqual(decision, "A")
+                let committed = fixture.committedPairs.count
+                _ = fixture.controller.preserve(fixture.session)
+                XCTAssertEqual(fixture.committedPairs.count, committed, "\(column) × \(event)")
+                XCTAssertEqual(fixture.session.state,
+                    event == .externalDelete ? .conflict(.deleted) : .conflict(.changed))
+            }
+        }
+    }
+
+    @MainActor
+    private final class MatrixJournal: NoteDraftJournaling {
+        struct Failure: Error {}
+        let base: NoteDraftJournal
+        var failWrites = false
+        private(set) var writeCount = 0
+        init(directory: URL) { base = NoteDraftJournal(directory: directory) }
+        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+            if failWrites { throw Failure() }
+            try base.write(entry, staged: staged)
+            writeCount += 1
+        }
+        func remove(noteID: UUID) throws { try base.remove(noteID: noteID) }
+        func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
+        func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
+    }
+
+    @MainActor
+    private final class MatrixFixture {
+        let column: Column
+        let directory: URL
+        let gate: PersistenceGate
+        let journal: MatrixJournal
+        let store: NoteStore
+        let controller: NotesPageController
+        let loader: DelayedImageLoader
+        let session: NoteSession
+        let window: NSWindow
+        let textView: NoteEditorTextView
+        let startingText: NoteDocument
+        let startingCanUndo: Bool
+        var visible: Bool
+        var attemptPairs: [(UUID?, UUID?)] = []
+        var committedPairs: [(UUID?, UUID?)] = []
+
+        private init(column: Column, directory: URL, gate: PersistenceGate, journal: MatrixJournal,
+                     store: NoteStore, controller: NotesPageController, loader: DelayedImageLoader,
+                     session: NoteSession, window: NSWindow, textView: NoteEditorTextView) {
+            self.column = column
+            self.directory = directory
+            self.gate = gate
+            self.journal = journal
+            self.store = store
+            self.controller = controller
+            self.loader = loader
+            self.session = session
+            self.window = window
+            self.textView = textView
+            self.startingText = session.engine.document()
+            self.startingCanUndo = !session.engine.history.undoOps.isEmpty
+            self.visible = !column.isBackground
+            store.documentSaveAttempt = { [weak self] base, presented in
+                self?.attemptPairs.append((base, presented))
+            }
+            store.documentSaveCommitted = { [weak self] base, presented in
+                self?.committedPairs.append((base, presented))
+            }
+        }
+
+        static func make(_ column: Column) async throws -> MatrixFixture {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticMatrix-\(UUID().uuidString)")
+            let gate = PersistenceGate()
+            let store = try makeTestNoteStore(persist: { try gate.save($0) },
+                                              attachmentFileStore: makeTestAttachmentFileStore())
+            let journal = MatrixJournal(directory: directory)
+            let loader = DelayedImageLoader()
+            let image = try pixel()
+            let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(600),
+                pauseVersionDelay: .seconds(600), imageLoader: { url in await loader.load(url, template: image) })
+            controller.start()
+            var session = try XCTUnwrap(controller.active)
+            if column != .u {
+                type("Start", in: session)
+                XCTAssertTrue(controller.preserveAll())
+            }
+            switch column {
+            case .d, .n, .m, .x, .bp:
+                if column == .x, let note = store.note(withID: session.noteID) {
+                    _ = store.agentWrite(noteID: session.noteID, baseRevisionToken: note.revisionToken,
+                        document: NoteDocument(blocks: [.text("Elsewhere")]), agentName: "Matrix", disposition: .direct)
+                }
+                type(" draft", in: session)
+                if column == .n || column == .m || column == .bp { gate.shouldFail = true }
+                if column == .m { journal.failWrites = true }
+                if column != .d { _ = controller.preserve(session) }
+                journal.failWrites = false
+                if column == .bp {
+                    XCTAssertTrue(controller.newNote())
+                }
+                gate.shouldFail = false
+            case .r:
+                guard case let .success((id, _)) = store.createDocumentNote(id: UUID(),
+                    document: NoteDocument(blocks: [.text("Read only")])) else { throw MatrixJournal.Failure() }
+                for row in try store.modelContext.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { $0.id == id })) {
+                    row.content = Data("broken bytes".utf8)
+                }
+                try store.modelContext.save()
+                XCTAssertTrue(controller.open(noteID: id))
+                session = try XCTUnwrap(controller.active)
+            case .b, .bBatch:
+                break
+            default: break
+            }
+            let (scroll, textView) = session.engine.makeView()
+            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 440, height: 300),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = scroll
+            switch column {
+            case .k:
+                textView.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0))
+                session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+            case .w:
+                session.engine.writingToolsWillBegin()
+            case .z:
+                gate.shouldFail = true
+                session.engine.writingToolsWillBegin()
+                gate.shouldFail = false
+            case .cBatch, .bBatch:
+                controller.importImages([URL(fileURLWithPath: "/tmp/matrix.png")])
+                for _ in 0..<100 where await loader.started == 0 { await Task.yield() }
+                XCTAssertTrue(session.isImporting)
+            default: break
+            }
+            if column == .b || column == .bBatch { XCTAssertTrue(controller.newNote()) }
+            return MatrixFixture(column: column, directory: directory, gate: gate, journal: journal,
+                                 store: store, controller: controller, loader: loader,
+                                 session: session, window: window, textView: textView)
+        }
+
+        private static func pixel() throws -> StagedNoteAttachment {
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            bitmap.setColor(.red, atX: 0, y: 0)
+            let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            return StagedNoteAttachment(id: UUID(), filename: "matrix.png", contentTypeIdentifier: "public.png",
+                byteCount: Int64(data.count), digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                data: data)
+        }
+
+        private static func type(_ value: String, in session: NoteSession) {
+            session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                with: NSAttributedString(string: value), name: "Typing")
+        }
+
+        func cleanup() {
+            window.contentView = nil
+            window.close()
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        func perform(_ event: Event) async throws -> Character {
+            let onScreen = visible && controller.active === session && !controller.isLibraryPresented
+            switch event {
+            case .edit, .command:
+                guard onScreen else { return "N" }
+                if session.isReadOnly { return "R" }
+                if event == .edit && session.engine.activity == .writingToolsSafe { return "R" }
+                let before = session.engine.document()
+                if event == .edit { Self.type("!", in: session) }
+                else { session.engine.insertDate(NoteDay(year: 2026, month: 10, day: 1)!) }
+                return session.engine.document() == before ? "R" : "A"
+            case .timerOK, .timerStoreFails, .timerBothFail:
+                guard onScreen else { return "N" }
+                let state = session.state
+                let checkpoint = NoteSessionPolicy.dueSaveAction(state, activity: session.engine.activity,
+                    hasMarkedText: textView.hasMarkedText()) == .checkpointOnly
+                gate.shouldFail = event != .timerOK
+                journal.failWrites = event == .timerBothFail
+                await controller.runDueSave(session)
+                gate.shouldFail = false
+                journal.failWrites = false
+                if checkpoint { return "J" }
+                switch state {
+                case .dirty, .notSaved, .onlyInMemory: return "S"
+                default: return "N"
+                }
+            case .leaveOK, .leaveBothFail:
+                gate.shouldFail = event == .leaveBothFail
+                journal.failWrites = event == .leaveBothFail
+                let accepted = controller.prepareToLeave(.hide)
+                if accepted { visible = false }
+                gate.shouldFail = false
+                journal.failWrites = false
+                return accepted ? "A" : "R"
+            case .present:
+                if column.isBackground {
+                    guard controller.open(noteID: session.noteID) else { return "R" }
+                } else { controller.present() }
+                visible = true
+                return "A"
+            case .agentWrite:
+                guard let note = store.note(withID: session.noteID) else { return "R" }
+                let token = note.revisionToken
+                let disposition = store.agentWriteDisposition(session.noteID)
+                if case .refuse = disposition { return "R" }
+                let result = store.agentWrite(noteID: session.noteID, baseRevisionToken: token,
+                    document: NoteDocument(blocks: [.text("Agent")]), agentName: "Matrix", disposition: disposition)
+                switch result {
+                case .success(.pending): return "P"
+                case .success(.applied): return "D"
+                case .failure(.staleRevision): return "D" // flush succeeded; the agent must re-read
+                case .failure: return "R"
+                }
+            case .importStart:
+                guard onScreen else { return "N" }
+                let before = session.isImporting
+                controller.importImages([URL(fileURLWithPath: "/tmp/another-matrix.png")])
+                return !before && session.isImporting ? "A" : "R"
+            case .importComplete, .importFail:
+                guard column.hasBatch else { return "N" }
+                await loader.releaseNext(success: event == .importComplete)
+                for _ in 0..<100 where session.isImporting { await Task.yield() }
+                return session.isImporting ? "R" : "A"
+            case .writingToolsBeginOK, .writingToolsBeginFails:
+                guard onScreen else { return "N" }
+                guard session.engine.activity != .writingToolsSafe && session.engine.activity != .writingToolsRefused else { return "N" }
+                gate.shouldFail = event == .writingToolsBeginFails
+                session.engine.writingToolsWillBegin()
+                gate.shouldFail = false
+                return session.engine.activity == .writingToolsSafe ? "A" : "R"
+            case .writingToolsBypass:
+                guard session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused else { return "N" }
+                session.engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 1), with: "Z")
+                session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+                return "A"
+            case .writingToolsEnd:
+                guard session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused else { return "N" }
+                session.engine.writingToolsDidEnd()
+                return "A"
+            case .compositionBegin:
+                guard onScreen else { return "N" }
+                guard session.engine.activity == .idle else { return "N" }
+                guard !session.isReadOnly else { return "R" }
+                textView.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: 0))
+                session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+                return session.engine.activity == .composing ? "A" : "R"
+            case .compositionEnd:
+                guard session.engine.activity == .composing else { return "N" }
+                textView.unmarkText()
+                session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+                return "A"
+            case .externalChange:
+                guard let note = store.note(withID: session.noteID) else { return "N" }
+                let result = store.agentWrite(noteID: session.noteID, baseRevisionToken: note.revisionToken,
+                    document: NoteDocument(blocks: [.text("Elsewhere again")]), agentName: "Matrix", disposition: .direct)
+                if case .success = result { return "A" }
+                return "R"
+            case .externalDelete:
+                guard let note = store.note(withID: session.noteID) else { return "N" }
+                return store.delete(note) ? "A" : "R"
+            case .retry:
+                guard onScreen else { return "N" }
+                guard session.engine.activity == .idle else { return "N" }
+                guard NoteSessionPolicy.hasPendingWork(session.state) else { return "N" }
+                if session.isConflict { return "R" }
+                controller.retry()
+                return "A"
+            case .keepAsNew:
+                guard onScreen, session.isConflict else { return "N" }
+                return controller.keepAsNewNote() ? "A" : "R"
+            case .launchRecovery:
+                guard !(try journal.entries()).isEmpty else { return "N" }
+                let recovered = NotesPageController(store: store, journal: journal, saveDelay: .seconds(600))
+                recovered.recoverAtLaunch()
+                return "A"
+            case .evict:
+                let presence: NoteSessionPolicy.Presence = onScreen ? .onScreen : .background
+                return NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
+                    hasBatch: session.isImporting, presence: presence) ? "A" : "N"
+            }
+        }
+
+        func assertInvariants(after event: Event, decision: Character,
+                              initialState: NoteSession.State, initialActivity: NoteEditorEngine.Activity,
+                              priorCommits: Int, priorJournalWrites: Int, priorProposals: Int) throws {
+            let context = "\(column) × \(event)"
+            let committed = committedPairs.count - priorCommits
+            let checkpoints = journal.writeCount - priorJournalWrites
+            let proposals = store.pendingEdits(noteID: session.noteID).count - priorProposals
+            if event == .agentWrite {
+                XCTAssertEqual(proposals, decision == "P" ? 1 : 0, context)
+                if decision == "P" { XCTAssertEqual(committed, 0, context) }
+            }
+            if event == .timerOK || event == .timerStoreFails || event == .timerBothFail {
+                let onScreen = !column.isBackground
+                let checkpointOnly = NoteSessionPolicy.dueSaveAction(initialState, activity: initialActivity,
+                    hasMarkedText: column == .k) == .checkpointOnly
+                if onScreen && checkpointOnly {
+                    XCTAssertEqual(committed, 0, context)
+                    XCTAssertEqual(checkpoints, event == .timerBothFail ? 0 : 1, context)
+                    if event == .timerBothFail {
+                        if case .onlyInMemory = session.state {} else { XCTFail(context + ": checkpoint failure must be visible") }
+                    } else {
+                        XCTAssertEqual(session.state, initialState, context)
+                    }
+                } else if onScreen && initialState.needsStoreSave {
+                    XCTAssertEqual(committed, event == .timerOK ? 1 : 0, context)
+                    XCTAssertEqual(checkpoints, event == .timerStoreFails ? 1 : 0, context)
+                    switch event {
+                    case .timerOK: XCTAssertEqual(session.state, .clean, context)
+                    case .timerStoreFails:
+                        if case .notSaved = session.state {} else { XCTFail(context + ": failed store needs a checkpoint") }
+                    case .timerBothFail:
+                        if case .onlyInMemory = session.state {} else { XCTFail(context + ": both failures must remain visible") }
+                    default: break
+                    }
+                }
+            }
+            if event == .agentWrite && decision == "P" {
+                XCTAssertEqual(session.state, initialState, context)
+            }
+            if event == .importStart && decision == "A" {
+                XCTAssertTrue(session.isImporting, context)
+                XCTAssertEqual(session.state, initialState, context)
+                XCTAssertEqual(committed, 0, context)
+                XCTAssertEqual(checkpoints, 0, context)
+            }
+            if (event == .importComplete || event == .importFail) && decision == "A" {
+                XCTAssertFalse(session.isImporting, context)
+                if event == .importComplete { XCTAssertEqual(session.state, .clean, context) }
+                else { XCTAssertEqual(session.state, initialState, context) }
+            }
+            if event == .writingToolsBeginOK && decision == "A" {
+                XCTAssertEqual(session.engine.activity, .writingToolsSafe, context)
+            }
+            if event == .writingToolsBeginFails && decision == "R", initialActivity == .idle,
+               !column.isBackground {
+                XCTAssertEqual(session.engine.activity, .writingToolsRefused, context)
+            }
+            if event == .writingToolsEnd && decision == "A" {
+                XCTAssertEqual(session.engine.activity, .idle, context)
+            }
+            if event == .compositionBegin && decision == "A" {
+                XCTAssertEqual(session.engine.activity, .composing, context)
+            }
+            if event == .compositionEnd && decision == "A" {
+                XCTAssertEqual(session.engine.activity, .idle, context)
+            }
+            if event == .keepAsNew && decision == "A" {
+                XCTAssertEqual(session.state, .clean, context)
+            }
+            if event == .retry && decision == "A" { XCTAssertEqual(session.state, .clean, context) }
+            if (event == .externalChange || event == .externalDelete) && decision == "A" {
+                XCTAssertEqual(session.state, initialState, context)
+            }
+            if event == .leaveOK && decision == "A" && initialState.needsStoreSave {
+                XCTAssertEqual(session.state, .clean, context)
+            }
+            if event == .leaveBothFail && decision == "R" && initialState.needsStoreSave
+                && initialActivity == .idle {
+                if case .onlyInMemory = session.state {} else { XCTFail(context + ": leave lost its recovery path") }
+            }
+            // I1: a persisted clean session at its base has the stored text.
+            if case .clean = session.state, session.engine.activity == .idle,
+               !textView.hasMarkedText(),
+               let loaded = store.loadDocument(noteID: session.noteID),
+               loaded.revisionID == session.baseRevisionID,
+               controller.active === session, visible {
+                XCTAssertEqual(session.engine.document(), loaded.content.document, context)
+            }
+            if session.engine.activity == .idle,
+               (session.state.isJournalProblem),
+               event != .edit && event != .command && event != .compositionBegin,
+               let entry = try journal.entries().first(where: { $0.0.noteID == session.noteID })?.0 {
+                XCTAssertEqual(NoteContentCodec.decode(entry.content).document,
+                               session.engine.checkpointDocument(), context)
+            }
+            if case .onlyInMemory = session.state {
+                XCTAssertEqual(controller.statusItems(for: session).first?.label, "Only in memory")
+                XCTAssertFalse(NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
+                    hasBatch: session.isImporting, presence: .background))
+            }
+            // I2: every committed editor save used the revision it saw.
+            XCTAssertLessThanOrEqual(committedPairs.count, attemptPairs.count, context)
+            for (base, presented) in committedPairs { XCTAssertEqual(base, presented, context) }
+            // I4: the refused Writing Tools end rewinds text and Undo.
+            if column == .z && event == .writingToolsEnd {
+                XCTAssertEqual(session.engine.document(), startingText)
+                XCTAssertEqual(session.engine.history.canUndo, startingCanUndo)
+            }
+            // I5: an on-screen stored note is always offered as a proposal.
+            if event != .launchRecovery, visible && controller.active === session && !controller.isLibraryPresented,
+               store.note(withID: session.noteID) != nil {
+                XCTAssertEqual(store.agentWriteDisposition(session.noteID), .proposal, context)
+            }
+            // I7: neither durable location may reference missing image bytes.
+            for note in store.notes {
+                guard let document = store.loadDocument(noteID: note.id)?.content.document else { continue }
+                let rows = try store.attachmentRows(forNoteID: note.id)
+                for id in document.attachmentIDs { XCTAssertTrue(rows.contains { $0.id == id && $0.payload != nil }) }
+            }
+            for (entry, staged) in try journal.entries() {
+                let ids = Set(staged.map(\.id))
+                for id in entry.staged.map(\.id) { XCTAssertTrue(ids.contains(id)) }
+            }
+        }
+    }
+}
+
+private extension NoteSession.State {
+    var needsStoreSave: Bool {
+        switch self {
+        case .dirty, .notSaved, .onlyInMemory: true
+        default: false
+        }
+    }
+
+    var isJournalProblem: Bool {
+        switch self {
+        case .notSaved, .conflict: true
+        default: false
+        }
     }
 }

@@ -16,18 +16,6 @@ enum NotesEditorSetting {
     }
 }
 
-/// A problem the status slot shows, most urgent first (plan §3.12).
-enum NoteSaveProblem: Equatable {
-    /// Neither the store nor the recovery checkpoint took the draft: it is
-    /// only in memory and is never released.
-    case onlyInMemory(String)
-    /// The store refused; the recovery checkpoint holds the draft.
-    case notSaved(String)
-    /// The canonical stored note moved on; the draft remains in recovery.
-    case changedElsewhere
-    case deletedElsewhere
-}
-
 enum NoteStatusItem: Equatable {
     case onlyInMemory(String), notSaved(String), changedElsewhere, deletedElsewhere
     case proposal(String), importing, notice(String), readOnly(String)
@@ -83,52 +71,16 @@ final class NoteSession: ObservableObject, Identifiable {
     @Published fileprivate(set) var state: State {
         didSet {
             engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(state,
-                activity: engine.activity, refusedSinceLastStoreSave: refusedWritingToolsSinceSave))
-        }
-    }
-    fileprivate(set) var isDirty: Bool {
-        get {
-            switch state {
-            case .dirty, .notSaved, .onlyInMemory, .conflict: true
-            default: false
-            }
-        }
-        set {
-            if newValue {
-                if case .clean = state { state = .dirty }
-                if case .untouched = state { state = .dirty }
-            } else if case .dirty = state {
-                state = isPersisted ? .clean : .untouched
-            }
+                activity: engine.activity, refusedSinceLastStoreSave: refusedWritingToolsSinceSave,
+                hasMarkedText: engine.textView?.hasMarkedText() == true))
         }
     }
     fileprivate var editGeneration: UInt64 = 0
-    fileprivate(set) var problem: NoteSaveProblem? {
-        get {
-            switch state {
-            case let .notSaved(reason): .notSaved(reason)
-            case let .onlyInMemory(reason): .onlyInMemory(reason)
-            case .conflict(.changed): .changedElsewhere
-            case .conflict(.deleted): .deletedElsewhere
-            default: nil
-            }
-        }
-        set {
-            switch newValue {
-            case let .notSaved(reason): state = .notSaved(reason)
-            case let .onlyInMemory(reason): state = .onlyInMemory(reason)
-            case .changedElsewhere: state = .conflict(.changed)
-            case .deletedElsewhere: state = .conflict(.deleted)
-            case nil: state = isPersisted ? .clean : .untouched
-            }
-        }
-    }
     /// Information for the slot (lowest priority), such as a refused change.
     @Published var notice: String?
     fileprivate(set) var lastEditAt: Date?
     fileprivate(set) var selection = NSRange(location: 0, length: 0)
     fileprivate(set) var scrollOffset: CGFloat = 0
-    fileprivate var recoverySourceID: UUID?
     @Published fileprivate var importBatch: NoteImportBatch?
     fileprivate var importTask: Task<Void, Never>?
     fileprivate var refusedWritingToolsSinceSave = false
@@ -269,7 +221,7 @@ final class NotesPageController: ObservableObject {
 
     /// Failed sessions are listed even when no note row was ever committed.
     var failedDrafts: [NoteSession] {
-        recency.reversed().compactMap { cache[$0] }.filter { $0.problem != nil }
+        recency.reversed().compactMap { cache[$0] }.filter { NoteSessionPolicy.needsAttention($0.state) }
     }
 
     func proposalComparison(for session: NoteSession) -> (agent: String, current: String, proposed: String)? {
@@ -294,12 +246,12 @@ final class NotesPageController: ObservableObject {
 
     func statusItems(for session: NoteSession) -> [NoteStatusItem] {
         var items: [NoteStatusItem] = []
-        switch session.problem {
+        switch session.state {
         case let .onlyInMemory(reason): items.append(.onlyInMemory(reason))
         case let .notSaved(reason): items.append(.notSaved(reason))
-        case .changedElsewhere: items.append(.changedElsewhere)
-        case .deletedElsewhere: items.append(.deletedElsewhere)
-        case nil: break
+        case .conflict(.changed): items.append(.changedElsewhere)
+        case .conflict(.deleted): items.append(.deletedElsewhere)
+        default: break
         }
         if let agent = proposalAgent(for: session) { items.append(.proposal(agent)) }
         if session.isImporting { items.append(.importing) }
@@ -462,7 +414,7 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return }
             if old != .idle && new == .idle {
                 self.completeImportIfPossible(in: session)
-                if session.isDirty || session.problem != nil {
+                if NoteSessionPolicy.hasPendingWork(session.state) {
                     _ = self.preserve(session)
                 } else {
                     self.clearRecoveryCopy(noteID: session.noteID)
@@ -474,7 +426,8 @@ final class NotesPageController: ObservableObject {
         engine.onWritingToolsWillBegin = { [weak self, weak session] in
             guard let self, let session else { return false }
             guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
-                    refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave) else {
+                    refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave,
+                    hasMarkedText: engine.textView?.hasMarkedText() == true) else {
                 engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
                 return false
             }
@@ -494,7 +447,8 @@ final class NotesPageController: ObservableObject {
 
     private func updateWritingToolsAvailability(for session: NoteSession) {
         session.engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(session.state,
-            activity: session.engine.activity, refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave))
+            activity: session.engine.activity, refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave,
+            hasMarkedText: session.engine.textView?.hasMarkedText() == true))
     }
 
     private func remember(_ noteID: UUID) {
@@ -546,7 +500,7 @@ final class NotesPageController: ObservableObject {
         if let session = active {
             captureViewState(session)
             guard preserve(session) else { return false }
-            if session.isPersisted, !session.isDirty {
+            if session.isPersisted, !NoteSessionPolicy.hasPendingWork(session.state) {
                 store.recordVersion(noteID: session.noteID, reason: .leave)
                 if store.applyPendingEdits(noteID: session.noteID) > 0 {
                     cache[session.noteID] = nil
@@ -570,6 +524,12 @@ final class NotesPageController: ObservableObject {
            textView.isWritingToolsActive,
            let coordinator = textView.writingToolsCoordinator {
             coordinator.stopWritingTools()
+            // The coordinator may finish through AppKit's delegate later.
+            // Keep the panel visible until the text view reports it inactive.
+            if textView.isWritingToolsActive {
+                session.notice = String(localized: "Finish Writing Tools first.")
+                return false
+            }
             if session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused {
                 session.engine.writingToolsDidEnd()
             }
@@ -579,8 +539,8 @@ final class NotesPageController: ObservableObject {
            session.engine.textView?.isWritingToolsActive == false {
             session.engine.writingToolsDidEnd()
         }
-        guard NoteSessionPolicy.canLeave(session.engine.activity),
-              session.engine.textView?.hasMarkedText() != true else {
+        guard NoteSessionPolicy.canLeave(session.engine.activity,
+                hasMarkedText: session.engine.textView?.hasMarkedText() == true) else {
             session.notice = session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused
                 ? String(localized: "Finish Writing Tools first.")
                 : String(localized: "Finish composing text before leaving this note.")
@@ -608,7 +568,7 @@ final class NotesPageController: ObservableObject {
         if let active, !canLeaveComposition(in: active) { return false }
         if let active { captureViewState(active) }
         var ok = true
-        for session in cache.values where session.isDirty || session.problem != nil {
+        for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) {
             ok = preserve(session) && ok
         }
         return ok
@@ -618,13 +578,14 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func preserve(_ session: NoteSession) -> Bool {
         session.saveTask?.cancel()
-        if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity) == .checkpointOnly {
+        if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
+                hasMarkedText: session.engine.textView?.hasMarkedText() == true) == .checkpointOnly {
             return checkpoint(session, silent: true)
         }
-        guard session.isDirty || session.problem != nil else { return true }
+        guard NoteSessionPolicy.hasPendingWork(session.state) else { return true }
         if save(session) { return true }
         guard let journal else {
-            session.problem = .onlyInMemory(storeMessage())
+            session.state = .onlyInMemory(storeMessage())
             return false
         }
         do {
@@ -634,11 +595,11 @@ final class NotesPageController: ObservableObject {
             if case .conflict = session.state {
                 // Conflicted text stays a conflict while its recovery copy is updated.
             } else if !(session.engine.isWritingToolsSessionActive && session.engine.isWritingToolsBlocked) {
-                session.problem = .notSaved(storeMessage())
+                session.state = .notSaved(storeMessage())
             }
             return true
         } catch {
-            session.problem = .onlyInMemory("\(storeMessage()) The recovery copy failed too: \(error.localizedDescription)")
+            session.state = .onlyInMemory("\(storeMessage()) The recovery copy failed too: \(error.localizedDescription)")
             return false
         }
     }
@@ -646,17 +607,17 @@ final class NotesPageController: ObservableObject {
     /// An activity can defer a store write without making the status say it failed.
     private func checkpoint(_ session: NoteSession, silent: Bool) -> Bool {
         guard let journal else {
-            session.problem = .onlyInMemory(String(localized: "There is no recovery copy for this note."))
+            session.state = .onlyInMemory(String(localized: "There is no recovery copy for this note."))
             return false
         }
         do {
             let document = checkpointDocument(for: session)
             try journal.write(journalEntry(for: session, document: document),
                               staged: session.engine.stagedAttachments(for: document))
-            if !silent, session.problem == nil { session.problem = .notSaved(storeMessage()) }
+            if !silent, !NoteSessionPolicy.needsAttention(session.state) { session.state = .notSaved(storeMessage()) }
             return true
         } catch {
-            session.problem = .onlyInMemory("The recovery copy failed: \(error.localizedDescription)")
+            session.state = .onlyInMemory("The recovery copy failed: \(error.localizedDescription)")
             return false
         }
     }
@@ -690,13 +651,13 @@ final class NotesPageController: ObservableObject {
     /// All paths that replace a stored document or rekey a draft use this gate.
     private func canCommit(_ session: NoteSession, resolvingConflict: Bool = false) -> Bool {
         NoteSessionPolicy.canWriteStore(resolvingConflict ? .dirty : session.state,
-            activity: session.engine.activity)
-            && session.engine.textView?.hasMarkedText() != true
+            activity: session.engine.activity,
+            hasMarkedText: session.engine.textView?.hasMarkedText() == true)
     }
 
     private func textDidChange(in session: NoteSession) {
         guard !session.isReadOnly else { return }
-        if !session.isDirty { session.isDirty = true }
+        if !NoteSessionPolicy.hasPendingWork(session.state) { session.state = .dirty }
         session.editGeneration &+= 1
         session.lastEditAt = now()
         updateWritingToolsAvailability(for: session)
@@ -709,20 +670,27 @@ final class NotesPageController: ObservableObject {
         session.saveTask = Task { @MainActor [weak self, weak session] in
             do { try await Task.sleep(for: delay) } catch { return }
             guard let self, let session, !Task.isCancelled else { return }
-            if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity) == .checkpointOnly {
-                _ = self.checkpoint(session, silent: true)
-                return
-            }
-            let generation = session.editGeneration
-            let noteID = session.noteID
-            let document = session.engine.document()
-            let staged = session.engine.stagedAttachments(for: document)
-            let prepared = await self.prepareDocument(document)
-            guard !Task.isCancelled, generation == session.editGeneration, noteID == session.noteID else { return }
-            guard let prepared else { _ = self.preserve(session); return }
-            if !self.save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared) {
-                _ = self.preserve(session)
-            }
+            await self.runDueSave(session)
+        }
+    }
+
+    /// The timer body is separate so the lifecycle matrix can fire it without
+    /// wall-clock waits; production still waits for the coalescing delay.
+    func runDueSave(_ session: NoteSession) async {
+        if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
+                hasMarkedText: session.engine.textView?.hasMarkedText() == true) == .checkpointOnly {
+            _ = checkpoint(session, silent: true)
+            return
+        }
+        let generation = session.editGeneration
+        let noteID = session.noteID
+        let document = session.engine.document()
+        let staged = session.engine.stagedAttachments(for: document)
+        let prepared = await prepareDocument(document)
+        guard !Task.isCancelled, generation == session.editGeneration, noteID == session.noteID else { return }
+        guard let prepared else { _ = preserve(session); return }
+        if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared) {
+            _ = preserve(session)
         }
     }
 
@@ -732,21 +700,20 @@ final class NotesPageController: ObservableObject {
     func save(_ session: NoteSession, snapshot: NoteDocument? = nil,
               stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil) -> Bool {
         guard canCommit(session) else { return false }
-        guard session.isDirty || session.problem != nil else { return true }
+        guard NoteSessionPolicy.hasPendingWork(session.state) else { return true }
         guard !session.isReadOnly else { return true }
         let engine = session.engine
         let document = snapshot ?? engine.document()
         let staged = stagedSnapshot ?? engine.stagedAttachments(for: document)
         if !session.isPersisted {
             guard !document.isEmpty || !document.objectIDs.isEmpty else {
-                session.isDirty = false
-                session.problem = nil
+                session.state = .untouched
                 return true
             }
             switch store.createDocumentNote(id: session.noteID, document: document, staged: staged, prepared: prepared) {
             case let .success((noteID, revisionID)):
+                let formerID = noteID == session.noteID ? nil : session.noteID
                 if noteID != session.noteID {
-                    session.recoverySourceID = session.noteID
                     cache[session.noteID] = nil
                     session.adopt(noteID: noteID)
                     cache[noteID] = session
@@ -754,11 +721,11 @@ final class NotesPageController: ObservableObject {
                 }
                 session.isPersisted = true
                 session.baseRevisionID = revisionID
-                didSave(session, staged: staged)
+                didSave(session, staged: staged, clearOldCheckpoint: formerID)
                 remember(noteID)
                 return true
             case .failure(.staleRevision):
-                session.problem = .changedElsewhere
+                session.state = .conflict(.changed)
                 return false
             case .failure:
                 return false
@@ -774,7 +741,7 @@ final class NotesPageController: ObservableObject {
             session.state = .conflict(.deleted)
             return false
         case .failure(.staleRevision):
-            session.problem = .changedElsewhere
+            session.state = .conflict(.changed)
             return false
         case .failure:
             return false
@@ -786,7 +753,8 @@ final class NotesPageController: ObservableObject {
     func keepAsNewNote() -> Bool {
         guard let session = active,
               NoteSessionPolicy.keepAsNewAllowed(session.state, activity: session.engine.activity,
-                                                 hasBatch: session.isImporting),
+                                                 hasBatch: session.isImporting,
+                                                 hasMarkedText: session.engine.textView?.hasMarkedText() == true),
               preserve(session) else { return false }
         let document = checkpointDocument(for: session)
         let notice = session.state == .conflict(.deleted)
@@ -808,7 +776,6 @@ final class NotesPageController: ObservableObject {
         guard case let .success((newID, revisionID)) = store.createDocumentNote(id: UUID(), document: replacement,
                                                                                   staged: images) else { return false }
         cache[oldID] = nil
-        session.recoverySourceID = oldID
         session.adopt(noteID: newID)
         session.replaceEngine(makeEngine(noteID: newID, document: replacement, readOnly: false))
         wire(session)
@@ -817,23 +784,20 @@ final class NotesPageController: ObservableObject {
         touch(newID)
         session.baseRevisionID = revisionID
         session.notice = successNotice
-        didSave(session, staged: images)
+        didSave(session, staged: images, clearOldCheckpoint: oldID)
         remember(newID)
         return true
     }
 
-    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment]) {
+    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment],
+                         clearOldCheckpoint oldID: UUID? = nil) {
         captureViewState(session)
-        session.isDirty = false
-        if session.problem != nil { session.problem = nil }
+        session.state = .clean
         session.refusedWritingToolsSinceSave = false
         updateWritingToolsAvailability(for: session)
         session.engine.forgetStaged(Set(staged.map(\.id)))
         clearRecoveryCopy(noteID: session.noteID)
-        if let source = session.recoverySourceID {
-            clearRecoveryCopy(noteID: source)
-            session.recoverySourceID = nil
-        }
+        if let oldID { clearRecoveryCopy(noteID: oldID) }
         schedulePauseVersion(session)
     }
 
@@ -865,7 +829,8 @@ final class NotesPageController: ObservableObject {
         let delay = pauseVersionDelay
         session.pauseTask = Task { @MainActor [weak self, weak session] in
             do { try await Task.sleep(for: delay) } catch { return }
-            guard let self, let session, !Task.isCancelled, session.isPersisted, !session.isDirty else { return }
+            guard let self, let session, !Task.isCancelled, session.isPersisted,
+                  !NoteSessionPolicy.hasPendingWork(session.state) else { return }
             self.store.recordVersion(noteID: session.noteID, reason: .pause)
         }
     }
@@ -1036,7 +1001,8 @@ final class NotesPageController: ObservableObject {
     /// Reads every file before making one undoable document change.
     func importImages(_ urls: [URL]) {
         guard let session = active, !session.isReadOnly, !urls.isEmpty else { return }
-        guard NoteSessionPolicy.commandAllowed(session.engine.activity) else {
+        guard NoteSessionPolicy.commandAllowed(session.engine.activity,
+                hasMarkedText: session.engine.textView?.hasMarkedText() == true) else {
             session.notice = String(localized: "Finish Writing Tools or composing text before adding images.")
             return
         }
@@ -1162,22 +1128,42 @@ enum NoteSessionPolicy {
     enum AgentDisposition: Equatable { case proposal, direct, flush, refuseImport }
     enum ImportCompletion: Equatable { case insert, deferUntilIdle, drop }
 
-    static func canWriteStore(_ state: NoteSession.State, activity: NoteEditorEngine.Activity) -> Bool {
-        guard activity == .idle else { return false }
+    static func hasPendingWork(_ state: NoteSession.State) -> Bool {
+        switch state {
+        case .dirty, .notSaved, .onlyInMemory, .conflict: true
+        default: false
+        }
+    }
+
+    static func needsAttention(_ state: NoteSession.State) -> Bool {
+        switch state {
+        case .notSaved, .onlyInMemory, .conflict: true
+        default: false
+        }
+    }
+
+    static func canWriteStore(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
+                              hasMarkedText: Bool = false) -> Bool {
+        guard activity == .idle, !hasMarkedText else { return false }
         switch state {
         case .conflict, .readOnly: return false
         default: return true
         }
     }
 
-    static func dueSaveAction(_ state: NoteSession.State, activity: NoteEditorEngine.Activity) -> DueSaveAction {
-        guard activity == .idle else { return .checkpointOnly }
+    static func dueSaveAction(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
+                              hasMarkedText: Bool = false) -> DueSaveAction {
+        guard activity == .idle, !hasMarkedText else { return .checkpointOnly }
         if case .conflict = state { return .checkpointOnly }
         return .preserve
     }
 
-    static func canLeave(_ activity: NoteEditorEngine.Activity) -> Bool { activity == .idle }
-    static func commandAllowed(_ activity: NoteEditorEngine.Activity) -> Bool { activity == .idle }
+    static func canLeave(_ activity: NoteEditorEngine.Activity, hasMarkedText: Bool = false) -> Bool {
+        activity == .idle && !hasMarkedText
+    }
+    static func commandAllowed(_ activity: NoteEditorEngine.Activity, hasMarkedText: Bool = false) -> Bool {
+        activity == .idle && !hasMarkedText
+    }
 
     static func canEvict(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
                          hasBatch: Bool, presence: Presence) -> Bool {
@@ -1189,8 +1175,8 @@ enum NoteSessionPolicy {
     }
 
     static func writingToolsAvailable(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
-                                      refusedSinceLastStoreSave: Bool) -> Bool {
-        guard activity == .idle, !refusedSinceLastStoreSave else { return false }
+                                      refusedSinceLastStoreSave: Bool, hasMarkedText: Bool = false) -> Bool {
+        guard activity == .idle, !refusedSinceLastStoreSave, !hasMarkedText else { return false }
         switch state {
         case .clean, .dirty: return true
         default: return false
@@ -1215,8 +1201,8 @@ enum NoteSessionPolicy {
     }
 
     static func keepAsNewAllowed(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
-                                 hasBatch: Bool) -> Bool {
-        guard activity == .idle, !hasBatch else { return false }
+                                 hasBatch: Bool, hasMarkedText: Bool = false) -> Bool {
+        guard activity == .idle, !hasBatch, !hasMarkedText else { return false }
         if case .conflict = state { return true }
         return false
     }

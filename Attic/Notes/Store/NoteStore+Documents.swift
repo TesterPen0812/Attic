@@ -232,8 +232,10 @@ extension NoteStore {
         // arriving later may become the preflight's sorting winner before the
         // page refreshes, but it does not make that presented base stale.
         let main = note(withID: noteID) ?? preflight.canonical
+        let presentedRevisionID = main.revisionID
+        documentSaveAttempt?(baseRevisionID, presentedRevisionID)
         guard replicas.contains(where: { $0 === main }),
-              main.usesDocumentFormat, main.revisionID == baseRevisionID else {
+              main.usesDocumentFormat, presentedRevisionID == baseRevisionID else {
             return .failure(.staleRevision(expected: baseRevisionID?.uuidString ?? NoteItem.initialRevisionToken,
                                            current: main.revisionToken))
         }
@@ -249,6 +251,7 @@ extension NoteStore {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
             refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+            documentSaveCommitted?(baseRevisionID, presentedRevisionID)
             return .success(revisionID)
         } catch let error as NoteDocumentStoreError {
             context.rollback()

@@ -175,6 +175,9 @@ final class NoteStore: ObservableObject {
     let container: ModelContainer
     /// The Notes page decides whether an agent edit can reach this note.
     var agentWriteDisposition: (UUID) -> NoteAgentWriteDisposition = { _ in .direct }
+    /// Observes the editor's revision check in unit tests; absent in normal use.
+    var documentSaveAttempt: ((UUID?, UUID?) -> Void)?
+    var documentSaveCommitted: ((UUID?, UUID?) -> Void)?
     /// Recovery checkpoints can reference image rows after the note itself
     /// disappears. A failed read must stop purging rather than guess.
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }

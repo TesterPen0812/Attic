@@ -57,8 +57,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// Called before a Writing Tools session starts (the session saves and
     /// keeps a version first).
     var onWritingToolsWillBegin: (() -> Bool)?
-    /// Called before a copy or cut, so staged images become stored rows
-    /// another note can copy.
+    /// The controller keeps the caret position with its session.
     var onSelectionChange: ((NSRange) -> Void)?
 
     /// Images imported in this session but not yet saved.

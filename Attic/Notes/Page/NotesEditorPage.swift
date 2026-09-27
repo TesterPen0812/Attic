@@ -287,10 +287,10 @@ private struct NotesPlainLibrary: View {
                     }
                 }
                 ForEach(failedDrafts) { draft in
-                    let status = switch draft.problem {
-                    case .some(.onlyInMemory): String(localized: "Only in memory")
-                    case .some(.changedElsewhere): String(localized: "Changed elsewhere")
-                    case .some(.deletedElsewhere): String(localized: "Deleted elsewhere")
+                    let status = switch draft.state {
+                    case .onlyInMemory: String(localized: "Only in memory")
+                    case .conflict(.changed): String(localized: "Changed elsewhere")
+                    case .conflict(.deleted): String(localized: "Deleted elsewhere")
                     default: String(localized: "Not saved · Recovery copy")
                     }
                     Button { onOpenDraft(draft.id) } label: {
