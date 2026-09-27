@@ -56,7 +56,8 @@ final class AtticAppearanceMatrixTests: XCTestCase {
         // `AtticDesignSystemTests`): Phase 0's see-through Glass and Frosted,
         // and Phase 0's Light accents under Increase Contrast. Nothing else
         // may fail.
-        let remaining = Phase0AccentException.remaining(Phase0TranslucentException.remaining(report.failures))
+        // Owner fix 1 adds a third: the quiet open task ring.
+        let remaining = OpenRingException.remaining(Phase0AccentException.remaining(Phase0TranslucentException.remaining(report.failures)))
         XCTAssertTrue(remaining.isEmpty, remaining
             .map { "\($0.key.kind) \($0.key.family) › \($0.key.specimen): \($0.key.detail) in \($0.value.joined(separator: " | "))" }
             .sorted().joined(separator: "\n"))

@@ -1385,6 +1385,42 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         return durations
     }
 
+    /// Performance seam (probe only): scrolls the tallest visible vertical
+    /// list down `steps` times by `step` points, drawing each step before
+    /// the next, and returns each step's time in milliseconds.
+    func scrollForPerformanceProbe(steps: Int, step: CGFloat) -> [Double] {
+        guard panel.isVisible, let scrollView = Self.tallestScrollView(in: panel.contentView) else { return [] }
+        let clip = scrollView.contentView
+        var durations: [Double] = []
+        for _ in 0..<steps {
+            let start = DispatchTime.now().uptimeNanoseconds
+            var origin = clip.bounds.origin
+            let maxY = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            origin.y = min(origin.y + step, maxY)
+            clip.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clip)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            durations.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        }
+        return durations
+    }
+
+    private static func tallestScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view, !view.isHiddenOrHasHiddenAncestor else { return nil }
+        var best: NSScrollView?
+        if let scroll = view as? NSScrollView, scroll.hasVerticalScroller || (scroll.documentView?.frame.height ?? 0) > scroll.frame.height,
+           scroll.visibleRect.width > 0 {
+            best = scroll
+        }
+        for subview in view.subviews {
+            if let found = tallestScrollView(in: subview),
+               (found.documentView?.frame.height ?? 0) > (best?.documentView?.frame.height ?? 0) { best = found }
+        }
+        return best
+    }
+
     private static func firstTokenField(in view: NSView?) -> AtticTokenTextView? {
         guard let view else { return nil }
         if let field = view as? AtticTokenTextView, !field.isHiddenOrHasHiddenAncestor { return field }

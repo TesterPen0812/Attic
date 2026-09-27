@@ -208,7 +208,7 @@ final class TasksPageModel: ObservableObject {
             model: TaskRowPresentation.row(for: task, subtasks: subtasks, today: today,
                                            calendar: services.calendar(), locale: services.locale),
             status: task.status,
-            subtasks: open ? subtasks.map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : []
+            subtasks: open ? quickLookSubtasks(of: task.id, subtasks).map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) } : []
         )
     }
 
@@ -433,19 +433,30 @@ final class TasksPageModel: ObservableObject {
     /// fails, the page stays with the text and Retry (Esc discards it).
     func select(tab: TasksTab) {
         guard tab != self.tab else { return }
-        if hasUnsavedEdit {
-            guard commitTitle(), commitNewSubtask() else { return }
-        }
+        guard finishEditing() else { return }
         revealTab = nil
-        cancelEditing()
         selection = []
         self.tab = tab
+    }
+
+    /// One "finish or keep the current edit" for every way out of it
+    /// (review 2): a title or new subtask with changes is saved; a failed
+    /// save keeps the editor, its text and "Not saved · Retry", and the
+    /// caller stays put (returns false). Nothing typed is ever dropped
+    /// here; Esc in the field is the only discard.
+    @discardableResult
+    func finishEditing() -> Bool {
+        if hasUnsavedEdit {
+            guard commitTitle(), commitNewSubtask() else { return false }
+        }
+        cancelEditing()
+        return true
     }
 
     /// Search (the menu-bar item): the Done page, with the keyboard in the
     /// search field at the top of its list.
     func beginSearch() {
-        cancelEditing()
+        guard finishEditing() else { return }
         selection = []
         tab = .done
         revealTab = .done
@@ -462,7 +473,9 @@ final class TasksPageModel: ObservableObject {
         let task = parent ?? found
         let target: TasksTab = task.status == .backlog ? .backlog
             : (store.task(withID: task.id) == nil ? .done : .now)
-        cancelEditing()
+        // An edit that can't be saved keeps the page where it is: the
+        // request is deferred (review 2).
+        guard finishEditing() else { return false }
         tab = target
         revealTab = target
         if parent != nil { expanded.insert(task.id) }
@@ -616,8 +629,10 @@ final class TasksPageModel: ObservableObject {
     func releaseHold(_ id: UUID) {
         holdTasks[id] = nil
         guard held[id] != nil else { return }
+        // Reduce Motion: no travel at all (review 22); a shorter slide is
+        // still a slide.
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        withAnimation(AtticMotionPreset.doneSlide.animation(reduceMotion: reduceMotion)) {
+        withAnimation(reduceMotion ? nil : AtticMotionPreset.doneSlide.animation(reduceMotion: false)) {
             _ = held.removeValue(forKey: id)
         }
     }
@@ -721,8 +736,9 @@ final class TasksPageModel: ObservableObject {
     // MARK: - Title and subtasks
 
     func beginEditingTitle(_ id: UUID) {
-        guard let task = store.task(withID: id) else { return }
-        newSubtaskParentID = nil
+        guard let task = store.task(withID: id), editingTitleID != id else { return }
+        // Another editor's changes are saved first (review 2).
+        guard finishEditing() else { return }
         // The words the title already has stay words: only shorthand typed
         // now applies (review 17: a rename never re-reads "today").
         var edit = TaskAddBarText(text: task.title)
@@ -793,11 +809,35 @@ final class TasksPageModel: ObservableObject {
 
     func toggleExpanded(_ id: UUID) {
         if expanded.contains(id) {
+            // Closing the quick look saves a subtask being written; if that
+            // fails it stays open with the text and Retry (review 2).
+            if newSubtaskParentID == id {
+                guard commitNewSubtask() else { return }
+                newSubtaskParentID = nil
+                newSubtaskTitle = ""
+            }
             expanded.remove(id)
-            if newSubtaskParentID == id { newSubtaskParentID = nil }
+            quickLookOrder[id] = nil
         } else {
             expanded.insert(id)
         }
+    }
+
+    /// While a quick look is open its subtasks keep the order they had when
+    /// it opened (review 21): ticking several never moves one away from the
+    /// pointer. New ones join at the end; closing it lets the order settle.
+    private var quickLookOrder: [UUID: [UUID]] = [:]
+
+    func quickLookSubtasks(of id: UUID, _ subtasks: [TaskItem]) -> [TaskItem] {
+        guard let order = quickLookOrder[id] else {
+            quickLookOrder[id] = subtasks.map(\.id)
+            return subtasks
+        }
+        let known = subtasks.filter { order.contains($0.id) }
+            .sorted { (order.firstIndex(of: $0.id) ?? 0) < (order.firstIndex(of: $1.id) ?? 0) }
+        let new = subtasks.filter { !order.contains($0.id) }
+        if !new.isEmpty { quickLookOrder[id] = order + new.map(\.id) }
+        return known + new
     }
 
     func setExpanded(_ id: UUID, _ open: Bool) {
@@ -805,8 +845,9 @@ final class TasksPageModel: ObservableObject {
     }
 
     func beginAddingSubtask(to id: UUID) {
+        guard newSubtaskParentID != id else { return }
+        guard finishEditing() else { return }
         expanded.insert(id)
-        editingTitleID = nil
         newSubtaskTitle = ""
         newSubtaskParentID = id
     }

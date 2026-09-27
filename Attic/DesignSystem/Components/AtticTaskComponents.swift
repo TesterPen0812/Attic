@@ -225,7 +225,8 @@ struct AtticRowTitleEditor: View {
                     caretMoved: tokens.caretMoved
                 ),
                 style: .rowTitle,
-                ink: .heading
+                ink: .heading,
+                accessibilityIdentifier: "AtticTitleField"
             )
             .frame(height: AtticTaskRowMetrics.titleLineHeight)
             .onAppear { appearedAt = Date(); tokenFocused = true }
@@ -973,6 +974,11 @@ struct AtticTaskRow: View {
         .accessibilityActions {
             if model.subtasks != nil, model.state != .done {
                 Button(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"), action: onToggleExpanded)
+            }
+            // The date and tags controls, for VoiceOver (review 17).
+            if let meta, capture == nil {
+                Button(String(localized: "Change date"), action: meta.onDate)
+                Button(String(localized: "Change tags"), action: meta.onTags)
             }
         }
         .atticControlProbe(

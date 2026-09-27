@@ -516,12 +516,15 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(report.contrastPairsChecked, report.eligibleProbes, "Every eligible probe's background was measured")
         // Glyphs too faint to find over Phase 0's Glass and Frosted are
         // reported as unmeasured failures, which the named exception covers.
-        let unmeasuredInException = report.failures.filter { $0.key.kind == .unmeasured }
-            .flatMap(\.value).filter(Phase0TranslucentException.covers(caption:)).count
+        let unmeasured = report.failures.filter { $0.key.kind == .unmeasured }
+        let unmeasuredInException = unmeasured.flatMap { failure, combinations in
+            combinations.filter { Phase0TranslucentException.covers(caption: $0)
+                || (OpenRingException.covers(failure) && !$0.contains("Increase contrast")) }
+        }.count
         XCTAssertEqual(report.glyphsMeasured + unmeasuredInException, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
         XCTAssertEqual(report.eligibleGlyphs, report.eligibleProbes, "At 2× every eligible probe is a glyph check")
         XCTAssertGreaterThanOrEqual(report.geometryMeasured, 15)
-        XCTAssertTrue(Phase0TranslucentException.remaining(report.failures).isEmpty, report.summary)
+        XCTAssertTrue(OpenRingException.remaining(Phase0TranslucentException.remaining(report.failures)).isEmpty, report.summary)
     }
 
     /// Renders `view` in capture mode at 2× on a flat panel background and
@@ -764,6 +767,33 @@ enum Phase0TranslucentException {
             let rest = combinations.filter { !covers(caption: $0) }
             return rest.isEmpty ? nil : rest
         }
+    }
+}
+
+/// The third named contrast exception (owner fix 1, 2026-09-27; the owner
+/// decides): an open task's ring (to do, and Later's dashed ring) is the
+/// primary ink at low opacity, the owner's reference grey (v15 card B,
+/// about 1.6 : 1 on white), below the 3 : 1 icon floor on purpose, so the
+/// title carries the row. Only that ring, and never under Increase
+/// Contrast, where it is the primary ink and keeps 3 : 1. Hover and
+/// keyboard focus step it up; a disabled ring keeps the disabled icon's
+/// 3 : 1; the subtask checkbox, the working ring and the done check keep
+/// the rule.
+enum OpenRingException {
+    static let name = "Owner fix 1: the quiet open task ring"
+
+    static func covers(_ failure: AtticAppearanceCheck.Failure) -> Bool {
+        failure.detail.hasPrefix(AtticStatusCircle.openRingProbeName)
+            && (failure.kind == .contrast || failure.kind == .glyphContrast || failure.kind == .unmeasured)
+    }
+
+    static func remaining(_ failures: [AtticAppearanceCheck.Failure: [String]]) -> [AtticAppearanceCheck.Failure: [String]] {
+        var rest = failures
+        for (failure, combinations) in failures where covers(failure) {
+            let kept = combinations.filter { $0.contains("Increase contrast") }
+            rest[failure] = kept.isEmpty ? nil : kept
+        }
+        return rest
     }
 }
 

@@ -1203,6 +1203,13 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.captureViewState()
         coordinator.parent.onViewStateCommit()
+        // Its typing undo was registered with the window's undo manager,
+        // which outlives this editor: an action left there crashes ⌘Z
+        // once the editor is gone (round 3, the computer-use review).
+        if let textView = coordinator.textView, let undoManager = textView.undoManager {
+            undoManager.removeAllActions(withTarget: textView)
+            if let storage = textView.textStorage { undoManager.removeAllActions(withTarget: storage) }
+        }
         coordinator.textView?.textStorage?.delegate = nil
         coordinator.textView?.delegate = nil
     }

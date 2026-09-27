@@ -482,8 +482,8 @@ final class AppCoordinator: ObservableObject {
         #if DEBUG
         // Capture seam: the in-memory UI-test store holds the design mockup's
         // tasks (`TasksPagePreview.seedDemo`), never anything of the owner's.
-        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" {
-            try? TasksPagePreview.seedDemo(in: container)
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" || environment["ATTIC_UI_TEST_SEED"] == "long" {
+            try? TasksPagePreview.seedDemo(in: container, long: environment["ATTIC_UI_TEST_SEED"] == "long")
         }
         // Everything finished today: the caught-up Now page.
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
@@ -683,7 +683,7 @@ final class AppCoordinator: ObservableObject {
                     // five sampled phases stay exactly as Baselines A and B.
                     let extra = ProcessInfo.processInfo.environment["ATTIC_PERF_EXTRA"] == "1"
                     let phases = ["hidden_idle", "tasks_open", "canvas_open", "after_hide", "hidden_idle_final"]
-                        + (extra ? ["warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open"] : [])
+                        + (extra ? ["warm_open", "switches_done", "typing_done", "tasks_hidden", "tasks_warm_open", "scroll_done"] : [])
                     source.setEventHandler { [weak self] in
                         guard let self, self.performancePhaseIndex < phases.count else { return }
                         write(phases[self.performancePhaseIndex] + "_end")
@@ -723,6 +723,15 @@ final class AppCoordinator: ObservableObject {
                                 PerformanceSignposts.timingLabel = "warmTasks"
                                 self.hoverMonitor.revealForPerformanceProbe(section: .tasks)
                                 later(1) { PerformanceSignposts.timingLabel = nil; write("tasks_warm_open") }
+                            }
+                        case 10:
+                            // Round 3: scrolling the 500-task Now list, one
+                            // 40 pt step at a time, each drawn before the next.
+                            later(1) {
+                                for duration in self.panelController.scrollForPerformanceProbe(steps: 120, step: 40) {
+                                    PerformanceSignposts.recordProbeTiming("ListScrollStep", milliseconds: duration)
+                                }
+                                write("scroll_done")
                             }
                         case 1:
                             self.hoverMonitor.revealForPerformanceProbe(section: .tasks)

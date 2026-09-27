@@ -59,11 +59,12 @@ struct TaskDateChoices {
         }
     }
 
-    /// The day a quick choice shows on its right: the weekday ("Wed") this
-    /// week, the weekday and date ("Mon 5 Oct") beyond it.
+    /// The day a quick choice shows on its right (v17): the weekday for
+    /// today and tomorrow ("Wed", "Thu"), the weekday and date further on
+    /// ("Mon 5 Oct").
     func detail(for day: DueDay) -> String {
         guard let date = day.startDate(in: calendar), let offset = offset(to: day) else { return day.rawValue }
-        let template = (0...6).contains(offset) ? "EEE" : (day.year == today.year ? "EEEdMMM" : "EEEdMMMy")
+        let template = (0...1).contains(offset) ? "EEE" : (day.year == today.year ? "EEEdMMM" : "EEEdMMMy")
         return TaskRowPresentation.format(date, template: template, calendar: calendar, locale: parser.locale)
     }
 

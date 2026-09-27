@@ -165,7 +165,7 @@ final class TasksPageUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         // The title editor takes the keyboard on the next turn: wait for it
         // before ⌘A, or the list's select-all takes the key instead.
-        let editor = window.textFields.matching(NSPredicate(format: "identifier != %@", "AtticTokenField")).firstMatch
+        let editor = window.descendants(matching: .any).matching(identifier: "AtticTitleField").firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 3), "Return opens the title editor")
         XCTAssertEqual(editor.value as? String, "Email beta testers")
         waitFor((editor.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the editor has the keyboard")
@@ -204,7 +204,8 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertLessThan(row("Ship appearance PR").frame.minY, row("Book dentist").frame.minY)
         let from = row("Book dentist").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
         let to = row("Ship appearance PR").coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.3))
-        from.press(forDuration: 0.2, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+        // An ordinary drag: no hold before it moves (owner fix 6).
+        from.press(forDuration: 0.01, thenDragTo: to, withVelocity: .default, thenHoldForDuration: 0.1)
         waitFor(row("Book dentist").frame.minY < row("Ship appearance PR").frame.minY, "Book dentist now sits above Ship appearance PR")
         // One step: ⌘Z puts it back.
         app.typeKey("z", modifierFlags: .command)
@@ -358,5 +359,104 @@ final class TasksPageUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    // MARK: - Round 3: date, tags and priority without the shorthand
+
+    private func menuItem(_ title: String) -> XCUIElement { app.menuItems[title] }
+
+    /// The strip over the add bar (owner fix 5 A2): it shows with a draft;
+    /// Date and Priority open their pickers, and a pick becomes the same
+    /// chip typing makes.
+    func testTheStripAddsADateAndAPriority() throws {
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        let date = window.buttons["composer-date"]
+        XCTAssertFalse(date.exists, "no strip while the bar is empty")
+        addBar.click()
+        addBar.typeText("Pay rent")
+        XCTAssertTrue(date.waitForExistence(timeout: 3), "the strip shows with the first keystroke")
+        date.click()
+        let tomorrow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
+        XCTAssertTrue(tomorrow.waitForExistence(timeout: 3), "the date picker opens")
+        tomorrow.click()
+        window.buttons["composer-priority"].click()
+        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers None, Medium and High")
+        high.click()
+        waitFor((addBar.value as? String)?.contains("tomorrow") == true, "the pick is in the draft as its words")
+        addBar.typeText("\r")
+        waitFor(row("Pay rent").exists, "the task is added")
+        XCTAssertTrue(label("Pay rent").contains("due Tomorrow"), label("Pay rent"))
+        XCTAssertTrue(label("Pay rent").contains("high priority"), label("Pay rent"))
+        waitFor(!date.exists, "the strip goes with the draft")
+    }
+
+    /// Suggestions while typing (owner fix 5 B, review 15): Tab takes the
+    /// highlighted tag and keeps editing; the next Return adds the task.
+    func testSuggestionsTakeATagAndADateWithTab() throws {
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        addBar.click()
+        addBar.typeText("Buy stamps #lau")
+        app.typeKey(XCUIKeyboardKey.tab, modifierFlags: [])
+        waitFor((addBar.value as? String) == "Buy stamps #launch ", "Tab takes the suggested tag")
+        addBar.typeText("tom")
+        app.typeKey(XCUIKeyboardKey.tab, modifierFlags: [])
+        waitFor((addBar.value as? String) == "Buy stamps #launch tomorrow ", "and the day a date word means")
+        XCTAssertFalse(row("Buy stamps").exists, "taking a suggestion never adds the task")
+        addBar.typeText("\r")
+        waitFor(row("Buy stamps").exists, "Return adds it")
+        XCTAssertTrue(label("Buy stamps").contains("tagged launch"), label("Buy stamps"))
+        XCTAssertTrue(label("Buy stamps").contains("due Tomorrow"), label("Buy stamps"))
+    }
+
+    /// Date and Tags in the right-click menu (owner fixes 3 and 5 D).
+    func testTheRightClickMenuSetsTheDateAndTags() throws {
+        row("Call the plumber").rightClick()
+        XCTAssertTrue(menuItem("Date").waitForExistence(timeout: 3))
+        menuItem("Date").hover()
+        XCTAssertTrue(menuItem("Tomorrow").waitForExistence(timeout: 3), "Today, Tomorrow, Next Week")
+        XCTAssertTrue(menuItem("Pick a Date…").exists)
+        menuItem("Tomorrow").click()
+        waitFor(label("Call the plumber").contains("due Tomorrow"), "the date is set")
+        row("Call the plumber").rightClick()
+        XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
+        menuItem("Tags").hover()
+        XCTAssertTrue(menuItem("#launch").waitForExistence(timeout: 3), "the library's tags")
+        XCTAssertTrue(menuItem("New Tag…").exists)
+        menuItem("#launch").click()
+        waitFor(label("Call the plumber").contains("tagged launch"), "the tag is added")
+        row("Call the plumber").rightClick()
+        menuItem("Date").hover()
+        XCTAssertTrue(menuItem("Remove Date").waitForExistence(timeout: 3))
+        menuItem("Remove Date").click()
+        waitFor(!label("Call the plumber").contains("due"), "Remove Date takes it away")
+    }
+
+    /// A row's date is a button (owner fix 5 C): it opens the same picker,
+    /// with Remove date.
+    func testARowsDateOpensThePicker() throws {
+        // The date sits at the row's right end, on the title line.
+        let row = row("Book dentist")
+        row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
+        let remove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 3), "the picker offers Remove date")
+        remove.click()
+        waitFor(!label("Book dentist").contains("due"), "the date is removed")
+        let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Date removed")).firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 3), "with an Undo toast")
+    }
+
+    /// Edit Title understands the shorthand as a patch (owner fix 4).
+    func testEditTitleUnderstandsTheShorthand() throws {
+        select("Call the plumber")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let editor = window.descendants(matching: .any).matching(identifier: "AtticTitleField").firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 3), "Return opens the title editor")
+        waitFor((editor.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the editor has the keyboard")
+        app.typeKey(XCUIKeyboardKey.rightArrow, modifierFlags: .command)
+        app.typeText(" #launch tomorrow !!\r")
+        waitFor(label("Call the plumber").contains("tagged launch"), "the tag applies")
+        XCTAssertTrue(label("Call the plumber").contains("due Tomorrow"), label("Call the plumber"))
+        XCTAssertTrue(label("Call the plumber").contains("high priority"), label("Call the plumber"))
     }
 }

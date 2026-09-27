@@ -101,6 +101,8 @@ struct AtticTokenField: NSViewRepresentable {
     var ink: AtticInk = .body
     /// Edits made as typing (strip picks, suggestions).
     var editor: AtticTokenFieldEditor?
+    /// For UI tests and automation.
+    var accessibilityIdentifier = "AtticTokenField"
 
     @Environment(\.atticDesign) private var design
 
@@ -133,6 +135,7 @@ struct AtticTokenField: NSViewRepresentable {
         ))
         view.textView.isEditable = isEnabled
         view.textView.setAccessibilityLabel(accessibilityLabel)
+        view.textView.setAccessibilityIdentifier(accessibilityIdentifier)
         if view.textView.string != text {
             coordinator.isApplyingModel = true
             // The owner replaced the text (a task was added, the bar was
@@ -147,16 +150,32 @@ struct AtticTokenField: NSViewRepresentable {
             coordinator.isApplyingModel = false
         }
         view.setChips(chips)
-        // Focus follows the binding: the shell's quick capture sets it.
+        // Focus follows the binding: the shell's quick capture sets it. The
+        // binding is read when the block runs, not when it was queued: a
+        // click that focused the field in between wins (a stale "not
+        // focused" must never take the keyboard back out of the field).
+        let focusBinding = $isFocused
+        let enabled = isEnabled
         DispatchQueue.main.async { [weak view] in
             guard let view, let window = view.window else { return }
+            let wanted = focusBinding.wrappedValue
             let hasFocus = window.firstResponder === view.textView
-            if isFocused, !hasFocus, isEnabled {
+            if wanted, !hasFocus, enabled {
                 window.makeFirstResponder(view.textView)
-            } else if !isFocused, hasFocus {
+            } else if !wanted, hasFocus {
                 window.makeFirstResponder(nil)
             }
         }
+    }
+
+    /// The field's typing undo lives in the field (its own undo manager),
+    /// so nothing it registered outlives it: a window-wide undo manager
+    /// holding a torn-down field's text storage crashed on ⌘Z (the
+    /// computer-use review's blocker).
+    static func dismantleNSView(_ view: AtticTokenFieldView, coordinator: Coordinator) {
+        view.textView.fieldUndoManager.removeAllActions()
+        view.textView.owner = nil
+        view.textView.delegate = nil
     }
 
     @MainActor
@@ -342,6 +361,11 @@ final class AtticChipLayoutManager: NSLayoutManager {
 /// typing first, then the page.
 final class AtticTokenTextView: NSTextView {
     weak var owner: AtticTokenField.Coordinator?
+    /// The field's own undo history (typing, a pick, a taken suggestion):
+    /// never the window's, which outlives the field.
+    let fieldUndoManager = UndoManager()
+
+    override var undoManager: UndoManager? { fieldUndoManager }
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()

@@ -17,6 +17,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     let mask: Mask
     /// The search field's keyboard focus (Search from the menu bar sets it).
     @Binding var searchFocused: Bool
+    /// A row the keyboard moved to: brought into the visible area (review 8).
+    @Binding var reveal: TasksPageModel.ScrollRequest?
     let cell: (TasksListRow) -> Cell
 
     static var space: NamedCoordinateSpace { .named("AtticTasksDone") }
@@ -30,6 +32,7 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     }
 
     private func list(_ days: [TasksDoneDay]) -> some View {
+        ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 AtticListSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch, isFocused: $searchFocused)
@@ -66,5 +69,10 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         .scrollEdgeEffectHidden(true, for: .all)
         .mask { mask }
         .coordinateSpace(Self.space)
+        .onChange(of: reveal) { _, request in
+            guard let request else { return }
+            proxy.scrollTo(request.id)
+        }
+        }
     }
 }
