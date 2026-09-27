@@ -278,3 +278,52 @@ same-run regression verdict.
   Interest, Time Profiler, SwiftUI, and Core Animation for offscreen work or a
   blocked main thread. A numeric pass alone cannot satisfy the separate
   no-waste-in-profiling gate; the hidden corner timer is already a finding.
+
+## Phase 0 note typing trace (requirement 11)
+
+Recorded 2026-09-27 for the Phase 2 Notes rebuild, before any Phase 2 code
+ran, on the Phase 0 build (`fb45082`, the merge of PR #7).
+
+- **Build:** `Scripts/launch_local_preview.zsh --bundle-id
+  com.taha.Attic.preview.p2baseline --executable-name AtticP2Baseline
+  --build-only` from a detached `fb45082` checkout (local-only, ad hoc
+  signed, Local configuration).
+- **Machine:** Apple M4, macOS 27.0 (26A5425a), built-in 3024 × 1964 Retina
+  display. Not the macOS 26 Air: that run is still owed.
+- **Launch:** `open -n --env ATTIC_UI_TESTING=1 <app> --args -selectedCorner
+  bottomLeft` (in-memory store, panel pinned visible). ⌘3 to Notes, New Note,
+  a click in the body.
+- **Input:** 84 characters of plain prose typed into the body at one key
+  every 110 ms, as real key events posted to the app's process
+  (`CGEvent.postToPid`; helper kept beside the trace in the Phase 2 worktree
+  under `.build/traces/post.swift`).
+- **Recording:** `xcrun xctrace record --no-prompt --instrument os_signpost
+  --all-processes --time-limit 20s` (12 MB). Do **not** use the Animation
+  Hitches template with `--all-processes`: its kernel trace filled the disk
+  (more than 10 GB in 25 s) on the first attempt.
+- **Reading:** `xctrace export --xpath …/table[@schema="os-signpost"]`, then
+  begin/end pairs of `NoteKeystrokeToDraw` matched by signpost identifier
+  (`.build/traces/parse_sp.py`).
+
+| Interval | n | median | p95 | max | min |
+| --- | --- | --- | --- | --- | --- |
+| `NoteKeystrokeToDraw` | 75 | 3.11 ms | 4.14 ms | 6.03 ms | 0.88 ms |
+| `StoreSave` (note autosaves in the same window) | 3 | 1.71 ms | 4.28 ms | 4.28 ms | 1.17 ms |
+
+- The end marker **does fire**: the combined review's open question (whether
+  `NoteAttachmentTray.swift`'s draw-callback marker is reached) is answered
+  yes; 75 of 84 keys produced a closed interval. The other keys began while an
+  interval was still open (the probe keeps one interval at a time) and were
+  not counted.
+- What it measures: the text view's `keyDown` to its `draw(_:)` callback in the
+  same process (TextKit 1 in the Phase 0 editor). It excludes event dispatch
+  before `keyDown` and window-server compositing after `draw`, so it is a lower
+  bound on keystroke-to-screen, not the photon time. The spec's 16 ms budget is
+  judged against it with that caveat.
+- Canvas ink (`CanvasDragToDraw`) was not recorded in this run; it is Phase 4's
+  baseline and still owed.
+- The Phase 2 editor ends the same interval at the Core Animation commit that
+  carries the change (TextKit 2 draws through layout-fragment layers, so a
+  view `draw(_:)` callback is not the moment the text reaches the screen).
+  Its numbers are reported against this baseline in the Phase 2 slice
+  reports.
