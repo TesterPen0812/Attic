@@ -34,7 +34,7 @@ final class NoteUndoHistory {
 
         fileprivate init(range: NSRange, current: NSAttributedString, other: NSAttributedString, name: String, group: Int) {
             self.range = range
-            self.current = current
+            self.current = NSMutableAttributedString(attributedString: current)
             self.other = other
             self.name = name
             self.group = group
@@ -213,16 +213,27 @@ final class NoteUndoHistory {
         for entry in pending {
             let now = storage.attributedSubstring(from: entry.newRange)
             if let op = entry.coalesceInto {
-                let old = NSMutableAttributedString()
-                if let pre = entry.pre { old.append(pre) }
-                old.append(op.other)
-                if let post = entry.post { old.append(post) }
+                if entry.pre != nil || entry.post != nil {
+                    let old = NSMutableAttributedString()
+                    if let pre = entry.pre { old.append(pre) }
+                    old.append(op.other)
+                    if let post = entry.post { old.append(post) }
+                    op.other = old
+                }
                 let start = min(entry.range.location, op.range.location)
                 let endBefore = max(NSMaxRange(entry.range), NSMaxRange(op.range))
                 let delta = entry.newRange.length - entry.range.length
+                if let current = op.current as? NSMutableAttributedString,
+                   entry.range.location >= op.range.location,
+                   NSMaxRange(entry.range) <= NSMaxRange(op.range) {
+                    let local = NSRange(location: entry.range.location - op.range.location,
+                                        length: entry.range.length)
+                    current.replaceCharacters(in: local, with: now)
+                } else {
+                    op.current = storage.attributedSubstring(from: NSRange(location: start,
+                                                                           length: endBefore + delta - start))
+                }
                 op.range = NSRange(location: start, length: endBefore + delta - start)
-                op.other = old
-                op.current = storage.attributedSubstring(from: op.range)
             } else {
                 append(Op(range: entry.newRange, current: now, other: entry.old, name: name, group: groupID ?? nextOwnGroup()))
                 open = (pending.count == 1 && groupID == nil) ? undoOps.last : nil
@@ -289,8 +300,14 @@ final class NoteUndoHistory {
             pending[0].pre = nil
             pending[0].post = nil
             let delta = newRange.length - preRange.length
+            if let current = op.current as? NSMutableAttributedString {
+                let local = NSRange(location: preRange.location - op.range.location, length: preRange.length)
+                current.replaceCharacters(in: local, with: storage.attributedSubstring(from: newRange))
+            } else {
+                op.current = storage.attributedSubstring(from: NSRange(location: op.range.location,
+                                                                       length: op.range.length + delta))
+            }
             op.range = NSRange(location: op.range.location, length: op.range.length + delta)
-            op.current = storage.attributedSubstring(from: op.range)
             pending.removeAll()
             return
         }

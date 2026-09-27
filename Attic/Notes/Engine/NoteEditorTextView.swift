@@ -188,9 +188,19 @@ final class NoteEditorTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
-    private func checkboxLocation(at point: NSPoint) -> Int? {
+    func checkboxLocation(at point: NSPoint) -> Int? {
         guard let engine else { return nil }
-        for (object, range) in engine.objects() where object is NoteChecklistAttachment {
+        if let range = engine.checkboxRange(near: point), let rect = engine.rect(for: range) {
+            let hit = NSRect(x: rect.minX - 4, y: rect.minY - 4,
+                             width: NoteChecklistAttachment.boxSize + 8, height: rect.height + 8)
+            if hit.contains(point) { return range.location }
+        }
+        let index = characterIndexForInsertion(at: point)
+        let candidates = [index, max(0, index - 1)]
+        for location in candidates {
+            let line = engine.lineRange(at: location)
+            guard engine.checklistBox(inParagraphAt: location) != nil else { continue }
+            let range = NSRange(location: line.location, length: 1)
             guard let rect = engine.rect(for: range) else { continue }
             let hit = NSRect(x: rect.minX - 4, y: rect.minY - 4,
                              width: NoteChecklistAttachment.boxSize + 8, height: rect.height + 8)

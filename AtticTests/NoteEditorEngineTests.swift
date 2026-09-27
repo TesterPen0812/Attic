@@ -103,6 +103,31 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.last?.text, "End of note")
     }
 
+    func testLongUninterruptedTypingRemainsOneUndoStep() {
+        let (engine, textView) = makeEngine()
+        textView.setSelectedRange(NSRange(location: location(of: "End", in: engine) + 3, length: 0))
+        let started = DispatchTime.now().uptimeNanoseconds
+        type(String(repeating: "x", count: 2_000), textView)
+        print("NOTE_LONG_TYPING_MS=\(Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)")
+        XCTAssertEqual(engine.history.undoOps.count, 1)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document(), sample())
+    }
+
+    func testCheckboxHitTestingDeepInALargeDocument() throws {
+        var blocks = [NoteBlock.text("Title")]
+        blocks += (0..<2_000).map { NoteBlock.text("Line \($0)") }
+        blocks.append(.checklist("Deep item"))
+        let (engine, textView) = makeEngine(NoteDocument(blocks: blocks))
+        let index = (engine.textStorage.string as NSString).range(of: "\u{FFFC}Deep item").location
+        XCTAssertNotEqual(index, NSNotFound)
+        let range = NSRange(location: index, length: 1)
+        engine.contentStorage.primaryTextLayoutManager?.ensureLayout(for: engine.contentStorage.documentRange)
+        let rect = try XCTUnwrap(engine.rect(for: range))
+        let point = NSPoint(x: rect.minX + 4, y: rect.midY)
+        XCTAssertEqual(textView.checkboxLocation(at: point), index)
+    }
+
     /// Finding D: a composition that replaces a selection undoes back to the
     /// selected text, and redoes to the committed text.
     func testCompositionReplacingASelectionUndoesAndRedoes() {
@@ -238,13 +263,29 @@ final class NoteEditorEngineTests: XCTestCase {
         textView.setSelectedRange(world)
         perform(.replace)
         XCTAssertFalse(engine.textStorage.string.contains("world"), "control: Replace ran")
-        textView.setSelectedRange(date)
+        let movedDate = NSRange(location: location(of: "\u{FFFC} for", in: engine), length: 1)
+        XCTAssertEqual((engine.textStorage.string as NSString).substring(with: movedDate), "\u{FFFC}")
+        textView.setSelectedRange(movedDate)
         perform(.setSearchString)        // ⌘E with the date selected: the find string is its U+FFFC
-        textView.setSelectedRange(date)
+        textView.setSelectedRange(movedDate)
+        XCTAssertEqual((engine.textStorage.string as NSString).substring(with: textView.selectedRange()), "\u{FFFC}")
         perform(.replace)                // single Replace (empty replacement)
         perform(.replaceAll)
         perform(.replaceAndFind)
         XCTAssertEqual(engine.objectIDs(), [checklistID, dateID, imageID], "no object removed by Find")
+    }
+
+    func testNativeRichTextCommandsAreDisabledUntilTheFormatStoresMarks() {
+        let (engine, textView) = makeEngine()
+        XCTAssertFalse(textView.isRichText)
+        XCTAssertEqual(engine.objectIDs(), [checklistID, dateID, imageID])
+    }
+
+    func testImageWidthFollowsTheTextColumn() {
+        let image = NoteImageAttachment(attachmentID: UUID(), preferredWidthFraction: 0.5,
+                                        pixelSize: CGSize(width: 2_000, height: 1_000))
+        XCTAssertEqual(image.displaySize(columnWidth: 200).width, 100)
+        XCTAssertEqual(image.displaySize(columnWidth: 400).width, 200)
     }
 
     func testPersonsOwnEditingMayRemoveObjectsAndUndoRestoresTheSameIDs() {

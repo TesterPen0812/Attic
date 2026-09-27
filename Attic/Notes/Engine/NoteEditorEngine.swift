@@ -51,7 +51,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onNotice: ((String) -> Void)?
     /// Called before a Writing Tools session starts (the session saves and
     /// keeps a version first).
-    var onWritingToolsWillBegin: (() -> Void)?
+    var onWritingToolsWillBegin: (() -> Bool)?
     /// Called before a copy or cut, so staged images become stored rows
     /// another note can copy.
     var onBeforeCopy: (() -> Void)?
@@ -64,6 +64,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var userEditDepth = 0
     private var engineEditDepth = 0
     private(set) var isWritingToolsSessionActive = false
+    private var writingToolsBlocked = false
     private var writingToolsSnapshot: NSAttributedString?
     private var writingToolsHistory: NoteUndoHistory.Checkpoint?
     private var writingToolsObjectsBefore = Set<UUID>()
@@ -76,13 +77,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var pendingImageLoads = Set<ObjectIdentifier>()
 
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
-         design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date())) {
+         design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date()),
+         imageProvider: NoteImageProviding? = nil,
+         stagedAttachments: [StagedNoteAttachment] = []) {
         self.noteID = noteID
         self.isReadOnly = readOnly
         self.style = NoteTextStyle(design: design)
         self.renderer = NoteObjectRenderer(design: design)
         self.today = today
         self.template = document
+        self.imageProvider = imageProvider
+        self.staged = Dictionary(uniqueKeysWithValues: stagedAttachments.map { ($0.id, $0) })
         contentStorage = NSTextContentStorage()
         textStorage = contentStorage.textStorage ?? NSTextStorage()
         history = NoteUndoHistory(storage: textStorage)
@@ -160,7 +165,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.delegate = self
         textView.isEditable = !isReadOnly
         textView.isSelectable = true
-        textView.isRichText = true
+        // Native font/color commands would create attributes format 1 cannot
+        // store. The engine still owns its styled attributed storage and
+        // object attachments; only native rich-text editing is disabled.
+        textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = false
         textView.usesFindBar = true
@@ -279,6 +287,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private func loadImage(_ image: NoteImageAttachment) {
         let key = ObjectIdentifier(image)
         guard !pendingImageLoads.contains(key) else { return }
+        if let reserved = staged[image.attachmentID], reserved.byteCount == 0, reserved.digest.isEmpty {
+            image.isMissing = false
+            image.renderedImage = renderer.placeholder(
+                size: image.displaySize(columnWidth: textView?.textContainer?.size.width ?? 320),
+                text: String(localized: "Loading image…")
+            )
+            return
+        }
         pendingImageLoads.insert(key)
         image.filename = staged[image.attachmentID]?.filename
             ?? imageProvider?.filename(forAttachment: image.attachmentID) ?? image.filename
@@ -299,6 +315,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }.value
             guard let self, let image else { return }
             self.pendingImageLoads.remove(ObjectIdentifier(image))
+            if self.staged[attachmentID]?.data != stagedData {
+                self.loadImage(image)
+                return
+            }
             self.finishImageLoad(image, cgImage: decoded.0, pixelSize: decoded.1)
         }
     }
@@ -398,6 +418,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return textStorage.attribute(.attachment, at: line.location, effectiveRange: nil) as? NoteChecklistAttachment
     }
 
+    /// Finds only the layout fragment under a click, then checks its line.
+    /// No document-wide object enumeration or per-checkbox layout is needed.
+    func checkboxRange(near point: NSPoint) -> NSRange? {
+        guard let layoutManager, let textView else { return nil }
+        let origin = textView.textContainerOrigin
+        let containerPoint = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        guard let fragment = layoutManager.textLayoutFragment(for: containerPoint) else { return nil }
+        let location = contentStorage.offset(from: contentStorage.documentRange.location,
+                                             to: fragment.rangeInElement.location)
+        guard location >= 0, checklistBox(inParagraphAt: location) != nil else { return nil }
+        return NSRange(location: lineRange(at: location).location, length: 1)
+    }
+
     private func attributes(forParagraphAt location: Int) -> [NSAttributedString.Key: Any] {
         paragraphRange(at: location).location == 0 ? style.titleAttributes : style.bodyAttributes
     }
@@ -490,7 +523,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         staged[item.id] = item
         let selection = textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         let line = lineRange(at: selection.location)
-        let image = NoteImageAttachment(attachmentID: item.id, pixelSize: pixelSize)
+        let image = NoteImageAttachment(attachmentID: item.id, preferredWidthFraction: 1, pixelSize: pixelSize)
         image.filename = item.filename
         let insertion = NSMutableAttributedString(string: "\n", attributes: style.bodyAttributes)
         insertion.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
@@ -501,6 +534,31 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         performEdit(NSRange(location: at, length: 0), with: insertion, name: String(localized: "Insert Image"),
                     selection: NSRange(location: at + insertion.length, length: 0))
+    }
+
+    /// Import placeholders reserve their final positions before the file
+    /// reads yield. The store never sees them until every file has bytes.
+    func completeImageImport(_ items: [StagedNoteAttachment]) {
+        for item in items { staged[item.id] = item }
+        renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
+    }
+
+    func cancelImageImport(_ ids: Set<UUID>) {
+        var ranges: [NSRange] = []
+        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
+            guard let image = value as? NoteImageAttachment, ids.contains(image.attachmentID) else { return }
+            let start = range.location > 0 && (textStorage.string as NSString).character(at: range.location - 1) == 0x0A
+                ? range.location - 1 : range.location
+            ranges.append(NSRange(location: start, length: NSMaxRange(range) - start))
+        }
+        for range in ranges.sorted(by: { $0.location > $1.location }) {
+            history.performUnrecorded {
+                textStorage.replaceCharacters(in: range, with: "")
+                textView?.didChangeText()
+            }
+            history.rebase(editAt: range, newLength: 0)
+        }
+        for id in ids { staged[id] = nil }
     }
 
     // MARK: Keys with object rules
@@ -596,6 +654,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// the editor's own commands may remove an object.
     func allowsChange(ranges: [NSRange]) -> Bool {
         if history.isReplaying || engineEditDepth > 0 { return true }
+        if writingToolsBlocked, isWritingToolsSessionActive || (textView?.isWritingToolsActive ?? false) {
+            return refuse(String(localized: "Writing Tools can’t change this note until a recovery version is saved. Retry after saving the note."))
+        }
         guard ranges.contains(where: rangeContainsObject) else { return true }
         if isWritingToolsSessionActive || (textView?.isWritingToolsActive ?? false) {
             return refuse(String(localized: "Writing Tools can’t change images, checklists or dates, so that change was not made."))
@@ -683,8 +744,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func writingToolsWillBegin() {
-        onWritingToolsWillBegin?()
+        let preserved = onWritingToolsWillBegin?() ?? true
+        writingToolsBlocked = !preserved
         isWritingToolsSessionActive = true
+        guard preserved else {
+            onNotice?(String(localized: "Writing Tools can’t change this note until a recovery version is saved."))
+            return
+        }
         writingToolsSnapshot = NSAttributedString(attributedString: textStorage)
         writingToolsHistory = history.checkpoint()
         writingToolsObjectsBefore = Set(objectIDs())
@@ -695,6 +761,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// leave the history: Undo can't return to the loss, Redo has nothing.
     func writingToolsDidEnd() {
         isWritingToolsSessionActive = false
+        writingToolsBlocked = false
         guard let snapshot = writingToolsSnapshot else { return }
         writingToolsSnapshot = nil
         let lost = writingToolsObjectsBefore.subtracting(objectIDs())
