@@ -461,4 +461,30 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(label("Call the plumber").contains("due Tomorrow"), label("Call the plumber"))
         XCTAssertTrue(label("Call the plumber").contains("high priority"), label("Call the plumber"))
     }
+
+    /// The owner's blocker (round 5): Backspace in "Find or add a tag"
+    /// deleted the task. A field that is typing keeps every key: Backspace,
+    /// Space and Return edit the query, never the row.
+    func testKeysTypedInTheTagPickerStayInItsField() throws {
+        row("Call the plumber").rightClick()
+        XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
+        menuItem("Tags").hover()
+        XCTAssertTrue(menuItem("New Tag…").waitForExistence(timeout: 3))
+        menuItem("New Tag…").click()
+        let field = app.descendants(matching: .textField)
+            .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens with its field")
+        field.click()
+        field.typeText("gardn")
+        field.typeKey(.delete, modifierFlags: [])
+        field.typeKey(.delete, modifierFlags: [])
+        waitFor((field.value as? String) == "gar", "Backspace edited the query: \(String(describing: field.value))")
+        field.typeText(" x")
+        field.typeKey(.delete, modifierFlags: [])
+        field.typeKey(.delete, modifierFlags: [])
+        XCTAssertTrue(row("Call the plumber").exists, "the task is still there")
+        XCTAssertFalse(label("Call the plumber").contains("completed"), "Space in the field did not complete it")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(row("Call the plumber").exists)
+    }
 }

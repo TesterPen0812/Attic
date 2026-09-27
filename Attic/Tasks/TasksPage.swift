@@ -537,8 +537,6 @@ struct TasksPage: View {
                     var shown = model.titleEdit
                     if shown.markShown(parser: model.parser, caret: caret) { model.titleEdit = shown }
                 },
-                undoFallback: { model.undo() },
-                redoFallback: { model.redo() },
                 undoDraft: { model.undoTitleEdit() },
                 redoDraft: { model.redoTitleEdit() },
                 selectionMoved: { model.titleEditSelection = $0 }
@@ -764,8 +762,11 @@ struct TasksPage: View {
                 Button(String(localized: "Restore to Now")) { restore() }
             }
             if single {
-                Button(detailsMenuTitle(for: id)) { actions.openPage() }
-                    .keyboardShortcut(.return, modifiers: .command)
+                Button(detailsMenuTitle(for: id)) {
+                    guard !AtticTextInput.ownsCurrentKey else { return }
+                    actions.openPage()
+                }
+                .keyboardShortcut(.return, modifiers: .command)
             }
         } else {
             let allDone = targets.allSatisfy { store.listedTask(withID: $0)?.status == .done }
@@ -843,6 +844,7 @@ struct TasksPage: View {
             }
             if single {
                 Button(String(localized: "Edit Title")) {
+                    guard !AtticTextInput.ownsCurrentKey else { return }
                     let id = menuRowID(row.id)
                     model.selectOnly(id)
                     model.beginEditingTitle(id)
@@ -851,11 +853,17 @@ struct TasksPage: View {
                 if store.task(withID: id)?.status != .done {
                     Button(String(localized: "Add Subtask")) { model.beginAddingSubtask(to: menuRowID(row.id)) }
                 }
-                Button(AtticPhase1Labels.openLiveTask(design.variants)) { model.openPage(menuRowID(row.id)) }
+                Button(AtticPhase1Labels.openLiveTask(design.variants)) {
+                    guard !AtticTextInput.ownsCurrentKey else { return }
+                    model.openPage(menuRowID(row.id))
+                }
                     .keyboardShortcut(.return, modifiers: .command)
             }
             Divider()
             Button(role: .destructive) {
+                // A menu's Delete key equivalent never reaches past a
+                // field that is typing (round 5, the owner's blocker).
+                guard !AtticTextInput.ownsCurrentKey else { return }
                 deleteAndMoveFocus(menuTargets(row.id))
             } label: {
                 Text(single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"))
@@ -894,6 +902,7 @@ struct TasksPage: View {
     /// row with Retry (round 4: outcomes reach the UI). The command ends
     /// the binding: the next menu is bound by its own opening.
     private func menuCommand(_ row: UUID, _ command: @escaping ([UUID]) -> CommandOutcome) {
+        guard !AtticTextInput.ownsCurrentKey else { return }
         let targets = menuTargets(row)
         pointer.endInvocation()
         model.report(command(targets), on: row) { command(targets) }
@@ -918,13 +927,13 @@ struct TasksPage: View {
     /// ⌘Z and ⇧⌘Z undo and redo. Space, ⇧Space, ⌘B, Delete and ⌘Return are
     /// the row's own (`AtticTaskKeys`).
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
+        // A field that is typing keeps every key, ⌘Z included (round 5:
+        // the owner's Backspace in the tag picker deleted the task).
+        guard !AtticTextInput.hasKeyboard else { return .ignored }
         let modifiers = press.modifiers.intersection([.command, .shift, .option, .control])
         if press.key == KeyEquivalent("z") || press.characters.lowercased() == "z" {
-            // ⌘Z reaches the page only when the field being edited had
-            // nothing of its own to undo (the Edit menu's Undo, a key
-            // equivalent, takes a field's typing first): the Tasks history
-            // then (Astra 23). The window's undo manager is never called
-            // from here.
+            // ⌘Z with no field typing: the Tasks history (Astra 23). The
+            // window's undo manager is never called from here.
             if modifiers == .command { model.undo(); return .handled }
             if modifiers == [.command, .shift] { model.redo(); return .handled }
         }
@@ -1355,8 +1364,6 @@ private struct TasksAddBar: View {
                             if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
                             return leave()
                         },
-                        undoFallback: { model.undo() },
-                        redoFallback: { model.redo() },
                         edited: { range, replacement in
                             text.history.willEdit(text.text, selection: text.currentSelection, range: range, replacement: replacement)
                             text.text.edited(range, replacement: replacement)

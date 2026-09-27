@@ -218,7 +218,7 @@ enum AtticGallerySamples {
             chips: [NSRange(location: 9, length: 3), NSRange(location: 13, length: 7), NSRange(location: 21, length: 2)],
             isFocused: .constant(false),
             actions: AtticTokenFieldActions(submit: { _ in }, dismissChip: { _ in }, multilinePaste: { _ in false },
-                                            escape: { false }, undoFallback: {}, redoFallback: {},
+                                            escape: { false },
                                             edited: { _, _ in }, caretMoved: { _ in })
         )
     }

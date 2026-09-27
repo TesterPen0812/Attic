@@ -151,6 +151,8 @@ final class AtticPanel: NSPanel {
             redo ? manager.redo() : manager.undo()
             return
         }
+        // A field that is typing keeps ⌘Z: never the page's history (round 5).
+        guard !AtticTextInput.isTyping(firstResponder) else { return }
         onUnhandledUndo?(redo)
     }
 
@@ -175,7 +177,7 @@ final class AtticPanel: NSPanel {
         }
         removeDepartedUndoParticipants()
         if let manager = undoManager, redo ? manager.canRedo : manager.canUndo { return true }
-        return canPerformUnhandledUndo?(redo) == true
+        return !AtticTextInput.isTyping(firstResponder) && canPerformUnhandledUndo?(redo) == true
     }
 
     static func isUndoKey(_ event: NSEvent) -> Bool {
@@ -190,7 +192,7 @@ final class AtticPanel: NSPanel {
             onUnhandledEscape?()
             return
         }
-        if Self.isUndoKey(event), !(firstResponder is NSTextView), let onUnhandledUndo {
+        if Self.isUndoKey(event), !AtticTextInput.isTyping(firstResponder), let onUnhandledUndo {
             onUnhandledUndo(event.modifierFlags.contains(.shift))
             return
         }

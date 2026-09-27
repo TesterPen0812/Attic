@@ -60,6 +60,31 @@ struct AtticTaskActions {
     }
 }
 
+/// Whether a text field is typing (round 5, the owner's blocker: Backspace
+/// in the tag picker's field deleted the task). SwiftUI offers a key to the
+/// focused view's ancestors before the field sees it, and a popover's field
+/// is a descendant of the row that opened it, so without this a row or the
+/// page could take Delete, Space, Return, ⌘B, arrows or ⌘Z from a field.
+/// While an editable text view (a field's editor, the add bar, a title or
+/// subtask editor, the Done search, a picker's search) has the keyboard in
+/// the key window, no page or row command answers a key: the field does.
+enum AtticTextInput {
+    /// An editable text view is the key window's first responder.
+    @MainActor static var hasKeyboard: Bool {
+        isTyping(NSApp.keyWindow?.firstResponder)
+    }
+
+    static func isTyping(_ responder: NSResponder?) -> Bool {
+        (responder as? NSTextView)?.isEditable == true
+    }
+
+    /// A command reached by a key (a menu's key equivalent included) while
+    /// a field has the keyboard: it belongs to the field, not the command.
+    @MainActor static var ownsCurrentKey: Bool {
+        NSApp.currentEvent?.type == .keyDown && hasKeyboard
+    }
+}
+
 /// The task keys a focused row or card answers (spec § Keyboard map, as
 /// Direction A changes it): Space (and ⌥Space) completes or un-completes,
 /// ⇧Space starts or stops working, ⌘Return opens the page; rows also take
@@ -147,7 +172,7 @@ private struct AtticTaskFocusModifier: ViewModifier {
             .focusEffectDisabled()
             .onChange(of: focused) { _, now in isFocused = now }
             .onKeyPress(phases: .down) { press in
-                guard enabled, let command = AtticTaskKeys.command(
+                guard enabled, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
                     key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
                 ) else { return .ignored }
                 AtticTaskKeys.perform(command, actions)
@@ -191,7 +216,7 @@ private struct AtticListTaskFocusModifier: ViewModifier {
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in
-                guard enabled, answersKeys, let command = AtticTaskKeys.command(
+                guard enabled, answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
                     key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
                 ) else { return .ignored }
                 AtticTaskKeys.perform(command, actions)
@@ -221,8 +246,6 @@ struct AtticTitleEditing {
         let dismissChip: (NSRange) -> Void
         let edited: (NSRange, String) -> Void
         let caretMoved: (Int) -> Void
-        let undoFallback: () -> Void
-        let redoFallback: () -> Void
         /// The title's own undo history (text and pieces together).
         var undoDraft: (() -> (text: String, selection: NSRange)?)? = nil
         var redoDraft: (() -> (text: String, selection: NSRange)?)? = nil
@@ -255,8 +278,6 @@ struct AtticRowTitleEditor: View {
                     dismissChip: tokens.dismissChip,
                     multilinePaste: { _ in false },
                     escape: { finish(commit: false); return true },
-                    undoFallback: tokens.undoFallback,
-                    redoFallback: tokens.redoFallback,
                     edited: tokens.edited,
                     caretMoved: tokens.caretMoved,
                     undoDraft: tokens.undoDraft,

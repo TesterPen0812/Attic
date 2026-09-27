@@ -101,7 +101,7 @@ final class TasksRound4Tests: XCTestCase {
         let coordinator: AtticTokenField.Coordinator
     }
 
-    private func liveBar(undoFallback: @escaping () -> Void = {}, escape: @escaping () -> Bool = { false },
+    private func liveBar(escape: @escaping () -> Bool = { false },
                          in host: NSWindow? = nil) -> LiveBar {
         let state = model.addBarState
         let actions = AtticTokenFieldActions(
@@ -113,8 +113,6 @@ final class TasksRound4Tests: XCTestCase {
             },
             multilinePaste: { _ in false },
             escape: escape,
-            undoFallback: undoFallback,
-            redoFallback: {},
             edited: { range, replacement in
                 state.history.willEdit(state.text, selection: state.currentSelection, range: range, replacement: replacement)
                 state.text.edited(range, replacement: replacement)
@@ -185,9 +183,10 @@ final class TasksRound4Tests: XCTestCase {
         bar.window.close()
     }
 
-    func testBlurKeepsTheDraftsUndoAndChipDismissalUndoes() {
-        var pageUndos = 0
-        let bar = liveBar(undoFallback: { pageUndos += 1 })
+    func testBlurKeepsTheDraftsUndoAndChipDismissalUndoes() throws {
+        let done = try XCTUnwrap(store.create(title: "Ring the bank"))
+        XCTAssertTrue(library.completeTask(done.id).isApplied)
+        let bar = liveBar()
         type("Call fri ", into: bar)
         XCTAssertNotNil(model.addBar.parts(parser: model.parser).dueDay)
         // The keyboard leaves (a picker opens) and comes back.
@@ -208,16 +207,16 @@ final class TasksRound4Tests: XCTestCase {
         while !model.addBar.text.isEmpty, steps < 8 { bar.view.textView.undo(nil); steps += 1 }
         XCTAssertEqual(model.addBar.text, "")
         XCTAssertEqual(steps, 4, "fri, the space, Call's space, Call")
-        XCTAssertEqual(pageUndos, 0, "the draft's own steps came first")
+        // With nothing left in the draft, ⌘Z stays with the field that is
+        // typing: it never reaches the Tasks history (round 5).
         bar.view.textView.undo(nil)
-        XCTAssertEqual(pageUndos, 1, "with nothing left in the draft, ⌘Z reaches the Tasks history")
+        XCTAssertEqual(store.task(withID: done.id)?.status, .done, "the Tasks history was not touched")
         bar.window.close()
     }
 
     func testAnInputMethodsMarkedTextKeepsEscBackspaceAndUndo() {
         var escapes = 0
-        var pageUndos = 0
-        let bar = liveBar(undoFallback: { pageUndos += 1 }, escape: { escapes += 1; return true })
+        let bar = liveBar(escape: { escapes += 1; return true })
         let textView = bar.view.textView
         // "fri" is a chip right before the caret: Backspace would dismiss it.
         type("Call fri ", into: bar)
@@ -234,7 +233,6 @@ final class TasksRound4Tests: XCTestCase {
         textView.undo(nil)
         textView.redo(nil)
         XCTAssertEqual(escapes, 0, "Esc cancels the composition, not the field")
-        XCTAssertEqual(pageUndos, 0, "⌘Z did not reach the Tasks history")
         XCTAssertTrue(textView.hasMarkedText())
         // Backspace deletes inside the composition, never the chip.
         textView.deleteBackward(nil)
@@ -594,8 +592,7 @@ final class TasksRound4Tests: XCTestCase {
         // A Tasks step to undo later, then a draft being typed.
         let added = try XCTUnwrap(store.create(title: "Ring the bank"))
         XCTAssertTrue(library.completeTask(added.id).isApplied)
-        var pageUndos = 0
-        let bar = liveBar(undoFallback: { pageUndos += 1 }, in: panel)
+        let bar = liveBar(in: panel)
         type("Buy milk", into: bar)
 
         // With the field there, the Edit menu's Undo is the draft's.
@@ -604,7 +601,6 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertTrue(first.sent)
         XCTAssertEqual(model.addBar.text, "Buy ", "one word run undone")
         XCTAssertEqual(store.task(withID: added.id)?.status, .done, "the Tasks history was not touched")
-        XCTAssertEqual(pageUndos, 0)
 
         // The field leaves the panel while it has the keyboard.
         bar.view.removeFromSuperview()
@@ -619,6 +615,44 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertEqual(store.task(withID: added.id)?.status, .done, "and redone")
         // Nothing left to redo: the menu item is disabled, not swallowed.
         XCTAssertFalse(sendEditMenu(#selector(AtticPanel.redo(_:)), in: panel).enabled)
+    }
+
+    // MARK: - Round 5: a field that is typing keeps its keys
+
+    func testATypingFieldIsRecognisedAndKeepsCommandZFromTheTasksHistory() throws {
+        let editable = NSTextView(frame: .zero)
+        XCTAssertTrue(AtticTextInput.isTyping(editable))
+        editable.isEditable = false
+        XCTAssertFalse(AtticTextInput.isTyping(editable), "a read-only text is not typing")
+        XCTAssertFalse(AtticTextInput.isTyping(nil))
+        XCTAssertFalse(AtticTextInput.isTyping(NSView(frame: .zero)))
+
+        // A plain field with nothing of its own to undo has the keyboard:
+        // the Edit menu's Undo is disabled and never reaches the Tasks
+        // history (the owner's rule: no page command from a field's keys).
+        let panel = AtticPanel(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 120),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.onUnhandledUndo = { [library] redo in _ = redo ? library!.redo(in: .tasks) : library!.undo(in: .tasks) }
+        panel.canPerformUnhandledUndo = { [library] redo in
+            redo ? library!.undo.canRedo(in: .tasks) : library!.undo.canUndo(in: .tasks)
+        }
+        defer { panel.orderOut(nil); panel.close() }
+        let done = try XCTUnwrap(store.create(title: "Ring the bank"))
+        XCTAssertTrue(library.completeTask(done.id).isApplied)
+        let field = NSTextView(frame: CGRect(x: 0, y: 0, width: 200, height: 20))
+        panel.contentView?.addSubview(field)
+        XCTAssertTrue(panel.makeFirstResponder(field))
+        let undo = sendEditMenu(#selector(AtticPanel.undo(_:)), in: panel)
+        XCTAssertFalse(undo.enabled, "Undo is not offered for the Tasks history while a field types")
+        panel.undo(nil)
+        XCTAssertEqual(store.task(withID: done.id)?.status, .done, "the Tasks history was not touched")
+        if ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" {
+            XCTAssertTrue(AtticTextInput.hasKeyboard, "the key window's field has the keyboard")
+        }
+        // The field gone, the same Undo reaches the Tasks history.
+        field.removeFromSuperview()
+        XCTAssertTrue(sendEditMenu(#selector(AtticPanel.undo(_:)), in: panel).sent)
+        XCTAssertEqual(store.task(withID: done.id)?.status, .todo)
     }
 
     // MARK: - Should fix: canonical Done order across pages
