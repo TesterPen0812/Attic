@@ -511,11 +511,11 @@ final class AtticDesignSystemHostedTests: XCTestCase {
     /// The page button and the page tabs each read as one "Pages" group
     /// with a named button per page, the current one selected; pressing a
     /// button selects its page. The tabs take ← → while they have focus.
-    func testThePagesReadAsNamedButtonsAndTheTabsTakeArrows() throws {
+    func testThePagesReadAsNamedButtonsAndTakeArrows() throws {
         final class Record { var tab = 0; var page = 0 }
         let record = Record()
         let harness = PagesHarness(onTab: { record.tab = $0 }, onPage: { record.page = $0 })
-        let (window, _) = host(harness, size: CGSize(width: 320, height: 90), key: true)
+        _ = host(harness, size: CGSize(width: 320, height: 90), key: true)
 
         let items = accessibilityItems()
         XCTAssertEqual(items.filter { $0.description == "Pages" }.count, 2, "one group for the button, one for the tabs")
@@ -537,15 +537,13 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         spin()
         XCTAssertEqual(record.page, 2, "pressing Canvas selects it, even with the button shut")
 
-        // The tabs are one key view; ← → move between the pages.
-        for _ in 0..<4 where record.tab == 0 {
-            window.selectNextKeyView(nil)
-            spin()
-            key(window, "\u{F703}", code: 124)
-        }
-        XCTAssertEqual(record.tab, 1, "→ moves to Later")
-        key(window, "\u{F702}", code: 123)
-        XCTAssertEqual(record.tab, 0, "← moves back to Now")
+        // ← → while the tabs or the page button have keyboard focus (a Tab
+        // stop when keyboard navigation is on, like any button).
+        XCTAssertEqual(AtticPageArrows.next(from: 0, key: .rightArrow, modifiers: [], count: 3), 1)
+        XCTAssertEqual(AtticPageArrows.next(from: 1, key: .leftArrow, modifiers: [], count: 3), 0)
+        XCTAssertEqual(AtticPageArrows.next(from: 2, key: .rightArrow, modifiers: [], count: 3), 2, "the last page stays")
+        XCTAssertNil(AtticPageArrows.next(from: 0, key: .rightArrow, modifiers: .command, count: 3))
+        XCTAssertNil(AtticPageArrows.next(from: 0, key: .downArrow, modifiers: [], count: 3))
         let done = try XCTUnwrap(accessibilityItems().first { $0.description == "Done" })
         AXUIElementPerformAction(done.element, kAXPressAction as CFString)
         spin()

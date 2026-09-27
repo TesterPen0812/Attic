@@ -292,16 +292,9 @@ struct AtticPageButton<Page: Hashable>: View {
         .focused($focused)
         .focusEffectDisabled()
         .onKeyPress(phases: .down) { press in
-            guard press.modifiers.intersection([.command, .option, .control, .shift]).isEmpty else { return .ignored }
-            let step: Int
-            switch press.key {
-            case .leftArrow: step = -1
-            case .rightArrow: step = 1
-            default: return .ignored
-            }
-            let next = min(max(selected + step, 0), items.count - 1)
-            guard next != selected else { return .handled }
-            select(items[next].page)
+            guard let next = AtticPageArrows.next(from: selected, key: press.key, modifiers: press.modifiers, count: items.count)
+            else { return .ignored }
+            if next != selected { select(items[next].page) }
             return .handled
         }
         .accessibilityElement(children: .contain)

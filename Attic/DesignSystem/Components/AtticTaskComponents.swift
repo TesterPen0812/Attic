@@ -77,11 +77,12 @@ private extension View {
     /// focus system, so they get none of it.
     @ViewBuilder
     func atticTaskFocus(_ isFocused: Binding<Bool>, enabled: Bool, actions: AtticTaskActions, listCommands: Bool, live: Bool,
-                        external: AtticRowFocus? = nil) -> some View {
+                        external: AtticRowFocus? = nil, answersKeys: Bool = true) -> some View {
         if live, let external {
-            modifier(AtticListTaskFocusModifier(enabled: enabled, actions: actions, listCommands: listCommands, focus: external))
+            modifier(AtticListTaskFocusModifier(enabled: enabled, answersKeys: answersKeys, actions: actions,
+                                                listCommands: listCommands, focus: external))
         } else if live {
-            modifier(AtticTaskFocusModifier(isFocused: isFocused, enabled: enabled, actions: actions, listCommands: listCommands))
+            modifier(AtticTaskFocusModifier(isFocused: isFocused, enabled: enabled && answersKeys, actions: actions, listCommands: listCommands))
         } else {
             self
         }
@@ -110,7 +111,7 @@ private struct AtticTaskFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .focusable(enabled)
+            .focusable(enabled, interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
             .onChange(of: focused) { _, now in isFocused = now }
@@ -137,17 +138,21 @@ struct AtticRowFocus {
 /// The same keys as `AtticTaskFocusModifier`, with focus held by the list.
 private struct AtticListTaskFocusModifier: ViewModifier {
     let enabled: Bool
+    /// Off while the row's title is edited: the row stays focusable (so
+    /// its focus never jumps elsewhere as the editor appears), but the
+    /// editor, not the row, takes the keys.
+    let answersKeys: Bool
     let actions: AtticTaskActions
     let listCommands: Bool
     let focus: AtticRowFocus
 
     func body(content: Content) -> some View {
         content
-            .focusable(enabled)
+            .focusable(enabled, interactions: .edit)
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in
-                guard enabled, let command = AtticTaskKeys.command(
+                guard enabled, answersKeys, let command = AtticTaskKeys.command(
                     key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
                 ) else { return .ignored }
                 AtticTaskKeys.perform(command, actions)
@@ -182,7 +187,12 @@ struct AtticRowTitleEditor: View {
             .focused($focused)
             .onSubmit { finish(commit: true) }
             .onExitCommand { finish(commit: false) }
-            .onAppear { focused = true }
+            .onAppear {
+                focused = true
+                // Again once the list has settled its own focus for this
+                // change, so the field keeps the keyboard.
+                DispatchQueue.main.async { if !finished { focused = true } }
+            }
             .onChange(of: focused) { _, now in if !now { finish(commit: true) } }
             // A field that stays for the next entry (a new subtask) is
             // ready again once its text is cleared or changed.
@@ -530,6 +540,22 @@ extension View {
 
 // MARK: - Page tabs
 
+/// ← and → between pages, for the page tabs and the page button while one
+/// has keyboard focus: the page to show, clamped to the ends (the same
+/// page at an end, still handled), or nil for any other key.
+enum AtticPageArrows {
+    static func next(from selected: Int, key: KeyEquivalent, modifiers: EventModifiers, count: Int) -> Int? {
+        guard modifiers.intersection([.command, .option, .control, .shift]).isEmpty, count > 0 else { return nil }
+        let step: Int
+        switch key {
+        case .leftArrow: step = -1
+        case .rightArrow: step = 1
+        default: return nil
+        }
+        return min(max(selected + step, 0), count - 1)
+    }
+}
+
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
 /// place of a page title and the page pill. Phase 0's qualities
 /// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
@@ -604,20 +630,13 @@ struct AtticPageTabs<Page: Hashable>: View {
                 .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
         }
-        .focusable(capture == nil)
+        .focusable(capture == nil, interactions: .activate)
         .focused($focused)
         .focusEffectDisabled()
         .onKeyPress(phases: .down) { press in
-            guard press.modifiers.intersection([.command, .option, .control, .shift]).isEmpty else { return .ignored }
-            let step: Int
-            switch press.key {
-            case .leftArrow: step = -1
-            case .rightArrow: step = 1
-            default: return .ignored
-            }
-            let next = min(max(selected + step, 0), items.count - 1)
-            guard next != selected else { return .handled }
-            select(items[next].page)
+            guard let next = AtticPageArrows.next(from: selected, key: press.key, modifiers: press.modifiers, count: items.count)
+            else { return .ignored }
+            if next != selected { select(items[next].page) }
             return .handled
         }
         .accessibilityElement(children: .contain)
@@ -830,8 +849,8 @@ struct AtticTaskRow: View {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .onTapGesture { if isEnabled { (onSelect ?? actions.openPage)() } }
-        .atticTaskFocus($focused, enabled: isEnabled && titleEditing == nil, actions: actions, listCommands: true,
-                        live: capture == nil, external: focus)
+        .atticTaskFocus($focused, enabled: isEnabled, actions: actions, listCommands: true,
+                        live: capture == nil, external: focus, answersKeys: titleEditing == nil)
         // While the title is edited, its field is its own element, so
         // VoiceOver (and a UI test) reaches the text being typed.
         .accessibilityElement(children: titleEditing == nil ? .combine : .contain)

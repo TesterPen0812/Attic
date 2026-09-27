@@ -447,7 +447,11 @@ struct TasksPage: View {
         }
         guard model.editingTitleID == nil, model.newSubtaskParentID == nil, !addBarFocused else { return .ignored }
         let visible = visibleIDs()
-        let current = focusedRow.flatMap { visible.contains($0) ? $0 : nil }
+        // The focused row, or the one selected row when the keyboard is
+        // elsewhere in the page (a click on a row in a panel that was not
+        // key yet can leave focus on the page's first control).
+        let current = (focusedRow ?? (model.selection.count == 1 ? model.selection.first : nil))
+            .flatMap { visible.contains($0) ? $0 : nil }
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
