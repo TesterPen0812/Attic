@@ -1987,20 +1987,40 @@ final class TaskStore: ObservableObject {
         var rowOffset = 0
     }
 
+    /// One page of the Done log (`doneLogPage`).
+    struct DoneLogPage {
+        /// Main tasks, the replica each shows, most recently finished first.
+        var tasks: [TaskItem]
+        /// Where the next page starts.
+        var next: DoneLogCursor
+        /// More rows remain (or, after a failure, may remain).
+        var hasMore: Bool
+        /// Set when a read failed part-way (Astra 18): `tasks` holds what
+        /// was read before it, `next` resumes after them, and the page must
+        /// say it could not load more, never that there is nothing more.
+        var failure: String?
+    }
+
     /// One page of the Done log's main tasks, most recently completed first,
     /// optionally only those whose title contains `query`. The walk is over
     /// physical rows (a raw cursor): each row read moves the cursor on,
     /// whether it shows a task, repeats one already shown (another copy of
-    /// it), or is superseded by a newer copy that is live or deleted; so a
-    /// run of duplicates can never stall the walk, and it goes on until it
-    /// has `limit` new tasks or runs out of rows. `excluding` holds tasks
-    /// already shown. Each id is resolved over all its replicas.
+    /// it), or is superseded by a newer copy; so a run of duplicates can
+    /// never stall the walk, and it goes on until it has `limit` new tasks
+    /// or runs out of rows. `excluding` holds tasks already shown.
+    ///
+    /// Each id is resolved over all its replicas, and the replica shown
+    /// (the canonical winner) decides everything (Astra 18): it must be in
+    /// the log, not deleted, a main task, and match the search itself; a
+    /// stale copy with an old matching title never lets in a task whose
+    /// title no longer matches. The page is ordered by the winners'
+    /// completion times. A read failure keeps what was read and says so.
     func doneLogPage(
         from cursor: DoneLogCursor = DoneLogCursor(),
         limit: Int,
         matching query: String? = nil,
         excluding shown: Set<UUID> = []
-    ) -> (tasks: [TaskItem], next: DoneLogCursor, hasMore: Bool) {
+    ) -> DoneLogPage {
         let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         func descriptor(offset: Int, limit: Int) -> FetchDescriptor<TaskItem> {
             let order = [SortDescriptor(\TaskItem.completedAt, order: .reverse),
@@ -2018,12 +2038,15 @@ final class TaskStore: ObservableObject {
         var seen = shown
         var result: [TaskItem] = []
         let batch = max(limit, 32)
+        func ordered(_ tasks: [TaskItem]) -> [TaskItem] {
+            tasks.sorted(by: Self.doneLogOrder)
+        }
         do {
             walk: while result.count < limit {
-                let rows = try context.fetch(descriptor(offset: cursor.rowOffset, limit: batch))
+                let rows = try readDoneLog(descriptor(offset: cursor.rowOffset, limit: batch))
                 guard !rows.isEmpty else { break }
                 let ids = Array(Set(rows.map(\.id)))
-                let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+                let replicas = try readDoneLog(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
                 let winners = Dictionary(
                     Self.canonicalReplicas(from: replicas).map { ($0.id, $0) },
                     uniquingKeysWith: { first, _ in first }
@@ -2031,17 +2054,79 @@ final class TaskStore: ObservableObject {
                 for row in rows {
                     cursor.rowOffset += 1
                     guard let winner = winners[row.id], winner.doneLoggedAt != nil, winner.deletedAt == nil,
+                          winner.parentID == nil,
+                          trimmed.isEmpty || winner.title.localizedStandardContains(trimmed),
                           seen.insert(row.id).inserted else { continue }
                     result.append(winner)
                     if result.count == limit { break walk }
                 }
                 if rows.count < batch { break }
             }
-            let hasMore = try !context.fetch(descriptor(offset: cursor.rowOffset, limit: 1)).isEmpty
-            return (result, cursor, hasMore)
+            let hasMore = try !readDoneLog(descriptor(offset: cursor.rowOffset, limit: 1)).isEmpty
+            return DoneLogPage(tasks: ordered(result), next: cursor, hasMore: hasMore)
         } catch {
             report(error.localizedDescription, owner: nil)
-            return (result, cursor, false)
+            return DoneLogPage(tasks: ordered(result), next: cursor, hasMore: true, failure: error.localizedDescription)
+        }
+    }
+
+    /// The Done log's order: most recently finished first (the shown
+    /// replica's completion time), then newest created, then id.
+    static func doneLogOrder(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
+        let left = lhs.completedAt ?? lhs.updatedAt
+        let right = rhs.completedAt ?? rhs.updatedAt
+        if left != right { return left > right }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.id.uuidString < rhs.id.uuidString
+    }
+
+    /// Every Done log read goes through here, so tests can make one fail
+    /// (`failDoneLogReads`).
+    private func readDoneLog(_ descriptor: FetchDescriptor<TaskItem>) throws -> [TaskItem] {
+        if doneLogReadFailures > 0 {
+            doneLogReadFailures -= 1
+            throw DoneLogReadFailure()
+        }
+        return try context.fetch(descriptor)
+    }
+
+    private struct DoneLogReadFailure: LocalizedError {
+        var errorDescription: String? { "The Done log could not be read." }
+    }
+
+    /// Test seam: the next `count` Done log reads fail.
+    var doneLogReadFailures = 0
+
+    /// The subtasks of several Done log tasks, read together (one page's
+    /// rows, Astra 19), each list in `doneLogSubtasks`' order. A parent
+    /// whose read fails is left out (reported); its row shows no checklist.
+    func doneLogSubtasks(ofParents parentIDs: [UUID]) -> [UUID: [TaskItem]] {
+        guard !parentIDs.isEmpty else { return [:] }
+        let wanted = Set(parentIDs)
+        do {
+            let optionalIDs: [UUID?] = parentIDs.map { $0 }
+            let children: [TaskItem]
+            do {
+                children = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { optionalIDs.contains($0.parentID) }))
+            } catch {
+                // A runtime that rejects the optional membership test: one
+                // small query per parent instead.
+                children = try parentIDs.flatMap { parentID in
+                    try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == parentID }))
+                }
+            }
+            let ids = Array(Set(children.map(\.id)))
+            guard !ids.isEmpty else { return [:] }
+            let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+            var result: [UUID: [TaskItem]] = [:]
+            for child in Self.canonicalReplicas(from: replicas) {
+                guard let parentID = child.parentID, wanted.contains(parentID), child.deletedAt == nil else { continue }
+                result[parentID, default: []].append(child)
+            }
+            return result.mapValues { $0.sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) } }
+        } catch {
+            report(error.localizedDescription, owner: nil)
+            return [:]
         }
     }
 

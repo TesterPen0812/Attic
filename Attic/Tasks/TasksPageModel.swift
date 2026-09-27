@@ -155,6 +155,13 @@ final class TasksPageModel: ObservableObject {
     /// Loaded pages of the Done log (lazily, a page at a time).
     @Published private(set) var doneLogTasks: [TaskItem] = []
     @Published private(set) var doneLogHasMore = false
+    /// A Done log read failed (Astra 18): what was loaded stays, and the
+    /// page offers "Couldn't load more · Retry" instead of claiming there
+    /// is nothing more.
+    @Published private(set) var doneLogFailure: String?
+    /// The loaded Done log tasks' subtasks, read with their page (Astra 19):
+    /// an archived row shows its checklist from its archived family.
+    private var doneLogChildren: [UUID: [TaskItem]] = [:]
     private var doneLogQuery: String?
     private var doneLogRevision: UInt64?
     private var doneLogCursor = TaskStore.DoneLogCursor()
@@ -189,7 +196,15 @@ final class TasksPageModel: ObservableObject {
     private var today: DueDay { DueDay(date: services.now(), calendar: services.calendar()) }
 
     func rowModel(for task: TaskItem) -> TasksListRow {
-        let subtasks = store.parent(of: task) == nil ? store.subtasks(of: task.id) : []
+        let subtasks: [TaskItem]
+        if store.parent(of: task) != nil {
+            subtasks = []
+        } else if store.task(withID: task.id) != nil {
+            subtasks = store.subtasks(of: task.id)
+        } else {
+            // A Done log task: its family left the list with it.
+            subtasks = doneLogChildren[task.id] ?? []
+        }
         let open = expanded.contains(task.id)
         return TasksListRow(
             id: task.id,
@@ -336,22 +351,53 @@ final class TasksPageModel: ObservableObject {
         let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard doneLogQuery != query || doneLogRevision != store.revision else { return }
         let page = store.doneLogPage(limit: max(Self.doneLogPageSize, doneLogTasks.count), matching: query)
+        if let failure = page.failure {
+            // Keep what the page showed for this search; a new search shows
+            // what was read. Not marked as loaded, so Retry reads again.
+            if doneLogQuery != query { setDoneLog(page.tasks) }
+            doneLogCursor = page.next
+            doneLogHasMore = true
+            doneLogFailure = failure
+            return
+        }
         doneLogQuery = query
         doneLogRevision = store.revision
-        doneLogTasks = page.tasks
+        setDoneLog(page.tasks)
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
+        doneLogFailure = nil
     }
 
     /// The next page, when the last loaded row comes on screen. The cursor
     /// walks physical rows, so duplicates and superseded copies never stop it.
+    /// A failed read keeps what loaded and stops until Retry.
     func loadMoreDoneLog() {
-        guard doneLogHasMore else { return }
+        guard doneLogHasMore, doneLogFailure == nil else { return }
         let page = store.doneLogPage(from: doneLogCursor, limit: Self.doneLogPageSize, matching: doneLogQuery,
                                      excluding: Set(doneLogTasks.map(\.id)))
-        doneLogTasks += page.tasks
+        setDoneLog(doneLogTasks + page.tasks)
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
+        doneLogFailure = page.failure
+    }
+
+    /// "Couldn't load more · Retry": the same read again, from where it
+    /// stopped (or the first page, when that was what failed).
+    func retryDoneLog() {
+        doneLogFailure = nil
+        if doneLogQuery != doneSearch.trimmingCharacters(in: .whitespacesAndNewlines) || doneLogRevision != store.revision {
+            loadDoneLogIfNeeded()
+        } else {
+            loadMoreDoneLog()
+        }
+    }
+
+    /// Loaded Done log tasks, in the log's order by the replica each shows
+    /// (pages are merged, so a divergent copy never splits a day), with
+    /// their families read in one go.
+    private func setDoneLog(_ tasks: [TaskItem]) {
+        doneLogTasks = tasks.sorted(by: TaskStore.doneLogOrder)
+        doneLogChildren = store.doneLogSubtasks(ofParents: doneLogTasks.map(\.id))
     }
 
     // MARK: - Tabs
@@ -916,7 +962,7 @@ final class TasksPageModel: ObservableObject {
         let finished = task.completedAt.map {
             String(localized: "Finished \(TaskRowPresentation.doneDayTitle($0, today: services.now(), calendar: calendar, locale: services.locale))")
         } ?? String(localized: "Finished")
-        let children = store.task(withID: id) != nil ? store.subtasks(of: id) : store.doneLogSubtasks(of: id)
+        let children = store.task(withID: id) != nil ? store.subtasks(of: id) : (doneLogChildren[id] ?? store.doneLogSubtasks(of: id))
         return DoneDetail(
             title: task.title,
             finished: finished,
