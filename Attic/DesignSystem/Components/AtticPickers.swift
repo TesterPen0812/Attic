@@ -381,34 +381,147 @@ private struct AtticPickerFieldBackground: View {
 // MARK: - Composer strip
 
 /// The labelled buttons above the add bar (owner fix 5 A2, v17a): Date ·
-/// Tag · Priority, the design system's small buttons, 28 tall, 8 above the
-/// bar. The first icon sits on the circles' line. The host shows it for a
-/// non-empty draft and keeps it while one of its pickers is open.
-struct AtticComposerStrip<DateContent: View, PriorityContent: View>: View {
+/// Tag · Priority, 28 tall, 8 above the bar, the first icon on the circles'
+/// line. The host shows it for a non-empty draft and keeps it while one of
+/// its pickers is open.
+///
+/// Each button shows what the new task will get, typed or picked (owner
+/// item 18, v19): its value on a filled pill (`Tomorrow`, `#home +1`,
+/// `!!` in High's orange) with a clear ×; empty, its name. A button whose
+/// picker is open takes the pressed fill. VoiceOver reads the button's
+/// name and value and offers Clear.
+struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: View>: View {
+    typealias Value = AtticStripValue
+
     @Binding var datePresented: Bool
+    @Binding var tagsPresented: Bool
     @Binding var priorityPresented: Bool
-    let onTag: () -> Void
+    var date: Value?
+    var tags: Value?
+    var priority: Value?
+    let onClearDate: () -> Void
+    let onClearTags: () -> Void
+    let onClearPriority: () -> Void
     @ViewBuilder let datePicker: () -> DateContent
+    @ViewBuilder let tagPicker: () -> TagContent
     @ViewBuilder let priorityPicker: () -> PriorityContent
 
     var body: some View {
         HStack(spacing: AtticPickerMetrics.stripSpacing) {
-            AtticSmallButton(systemName: "calendar", title: "Date", label: "Date") { datePresented = true }
+            AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
+                             identifier: "composer-date",
+                             clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
                 .atticPopover(isPresented: $datePresented, arrowEdge: .top) {
                     datePicker().atticPickerSurface()
                 }
-                .accessibilityIdentifier("composer-date")
-            AtticSmallButton(systemName: "tag", title: "Tag", label: "Tag", action: onTag)
-                .accessibilityIdentifier("composer-tag")
-            AtticSmallButton(systemName: "flag", title: "Priority", label: "Priority") { priorityPresented = true }
+            AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
+                             identifier: "composer-tag",
+                             clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
+                .atticPopover(isPresented: $tagsPresented, arrowEdge: .top) {
+                    tagPicker().atticPickerSurface()
+                }
+            AtticStripButton(systemName: "flag", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
+                             identifier: "composer-priority",
+                             clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
                 .atticPopover(isPresented: $priorityPresented, arrowEdge: .top) {
                     priorityPicker().atticPickerSurface()
                 }
-                .accessibilityIdentifier("composer-priority")
         }
         .frame(height: AtticControlSize.smallHeight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Date, tag and priority"))
+    }
+}
+
+/// A strip button's value: the words it shows, their ink and style, and
+/// how VoiceOver says it.
+struct AtticStripValue: Equatable {
+    let text: String
+    var ink: AtticInk = .heading
+    var style: AtticTextStyle = .controlLabel
+    let spoken: String
+}
+
+/// One strip button: the small button's face (icon, then its name) until
+/// it has a value; then the value on a filled pill, with a clear × at its
+/// end (v19: 9 pt before the icon, 7 after the ×).
+private struct AtticStripButton: View {
+    let systemName: String
+    let title: String
+    let value: AtticStripValue?
+    let isOpen: Bool
+    /// For UI tests: the button's; its × adds "-clear".
+    let identifier: String
+    let clearLabel: String
+    let open: () -> Void
+    let clear: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovered = false
+    @State private var clearHovered = false
+
+    var body: some View {
+        let m = AtticSmallControlMetrics.self
+        let height = AtticControlSize.smallHeight
+        let radius = AtticRadius.control(height: height)
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let tokens = design.tokens
+        let fill: AtticRGBA = if isOpen {
+            tokens.chipSelected
+        } else if value != nil {
+            hovered ? tokens.chipHover.over(tokens.recessed) : tokens.recessed
+        } else {
+            hovered ? tokens.chipHover : .clear
+        }
+        HStack(spacing: 0) {
+            Button(action: open) {
+                HStack(spacing: m.iconLabelGap) {
+                    AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: isEnabled ? .glyph : .disabledIcon)
+                    if let value {
+                        AtticText(verbatim: value.text, style: value.style, ink: isEnabled ? value.ink : .disabledText)
+                    } else {
+                        AtticText(verbatim: title, style: .controlLabel, ink: isEnabled ? .heading : .disabledText)
+                    }
+                }
+                .padding(.leading, m.labelPadding)
+                .padding(.trailing, value == nil ? m.labelPadding : AtticPickerMetrics.stripClearGap)
+                .frame(minWidth: value == nil ? AtticControlSize.smallMinWidth : 0, minHeight: height, maxHeight: height)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .atticOwnFocusRing(.rounded(radius: radius, height: height))
+            .help(value.map { "\(title): \($0.spoken)" } ?? title)
+            .accessibilityLabel(title)
+            .accessibilityValue(value?.spoken ?? "")
+            .accessibilityIdentifier(identifier)
+            .accessibilityActions {
+                if value != nil { Button(String(localized: "Clear"), action: clear) }
+            }
+            if value != nil {
+                Button(action: clear) {
+                    AtticIcon(systemName: "xmark", size: AtticPickerMetrics.stripClearGlyph, weight: .semibold,
+                              ink: isEnabled ? .icon : .disabledIcon)
+                        .frame(width: AtticPickerMetrics.stripClearSize, height: AtticPickerMetrics.stripClearSize)
+                        .background(Circle().fill((clearHovered ? tokens.chipSelected : .clear).color))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .atticOwnFocusRing(.circle(diameter: AtticPickerMetrics.stripClearSize))
+                .onHover { clearHovered = $0 }
+                .help(clearLabel)
+                .accessibilityLabel(clearLabel)
+                .accessibilityIdentifier(identifier + "-clear")
+                .padding(.trailing, AtticPickerMetrics.stripValueTrailing)
+            }
+        }
+        .frame(height: height)
+        .background(shape.fill(fill.color))
+        .contentShape(shape)
+        .onHover { hovered = $0 }
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: value)
     }
 }
 

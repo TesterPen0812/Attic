@@ -285,3 +285,175 @@ private final class Hosted {
         return places
     }
 }
+
+/// Round 6: the strip shows picked values (owner item 18), typed pieces
+/// look like option H (item 15), Low leaves the menus (item 19).
+@MainActor
+final class TasksRound6ComposerTests: XCTestCase {
+    private let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
+    private var store: TaskStore!
+    private var model: TasksPageModel!
+    /// Not live: the page's edits apply to the draft as typing would.
+    private let editor = AtticTokenFieldEditor()
+
+    override func setUp() async throws {
+        store = try makeTestStore(now: { [clock] in clock.value })
+        let library = AtticLibrary(tasks: store, now: { [clock] in clock.value })
+        model = TasksPageModel(library: library, services: TasksPageServices(
+            now: { [clock] in clock.value },
+            calendar: { Calendar(identifier: .gregorian) },
+            locale: Locale(identifier: "en_GB")
+        ))
+    }
+
+    override func tearDown() {
+        model = nil
+        store = nil
+    }
+
+    private func day(_ raw: String) -> DueDay { DueDay(rawValue: raw)! }
+    private var parts: TaskAddBarText.Parts { model.addBar.parts(parser: model.parser) }
+
+    private func draft(_ text: String) {
+        model.addBarState.clearDraft()
+        model.addBar = TaskAddBarText(text: text)
+        model.addBarCaret = (text as NSString).length
+    }
+
+    // MARK: Picks sit on the buttons
+
+    func testAPickNeverTouchesTheTextAndPickingAgainReplacesIt() {
+        draft("Pay rent")
+        model.pickDate(day("2026-10-01"), editor: editor)
+        XCTAssertEqual(model.addBar.text, "Pay rent", "picking never inserts text")
+        XCTAssertEqual(parts.dueDay, day("2026-10-01"))
+        model.pickDate(day("2026-10-05"), editor: editor)
+        XCTAssertEqual(parts.dueDay, day("2026-10-05"), "picking again replaces the value")
+        model.pickPriority(.high, editor: editor)
+        model.pickPriority(.medium, editor: editor)
+        XCTAssertEqual(parts.priority, .medium)
+        model.pickPriority(.none, editor: editor)
+        XCTAssertNil(parts.priority, "No Priority clears it")
+        XCTAssertEqual(model.addBar.text, "Pay rent")
+    }
+
+    /// A pick while a typed date or priority exists replaces it: the typed
+    /// words leave the text (with one space), as one undo step.
+    func testAPickReplacesTheTypedPieceAsOneUndoStep() {
+        draft("Pay rent tomorrow #home !")
+        XCTAssertEqual(parts.priority, .medium)
+        model.pickDate(day("2026-10-09"), editor: editor)
+        XCTAssertEqual(model.addBar.text, "Pay rent #home !")
+        XCTAssertEqual(parts.dueDay, day("2026-10-09"))
+        model.pickPriority(.high, editor: editor)
+        XCTAssertEqual(model.addBar.text, "Pay rent #home")
+        XCTAssertEqual(parts.priority, .high)
+        XCTAssertEqual(parts.tags, ["home"], "the other typed pieces stay")
+        // One ⌘Z each: the priority pick (and its words), then the date's.
+        XCTAssertEqual(model.addBarState.undoDraft()?.text, "Pay rent #home !")
+        XCTAssertEqual(parts.priority, .medium)
+        XCTAssertEqual(parts.dueDay, day("2026-10-09"))
+        XCTAssertEqual(model.addBarState.undoDraft()?.text, "Pay rent tomorrow #home !")
+        XCTAssertNotEqual(parts.dueDay, day("2026-10-09"), "the typed date is back")
+        XCTAssertEqual(model.addBarState.redoDraft()?.text, "Pay rent #home !")
+        XCTAssertEqual(parts.dueDay, day("2026-10-09"))
+    }
+
+    func testTagsTickAndUntickTypedOrPicked() {
+        draft("Pay rent #home")
+        XCTAssertEqual(model.composerTagState("home"), .on)
+        XCTAssertEqual(model.composerTagChoices.first, "home", "the draft's tags first")
+        model.toggleComposerTag("work", editor: editor)
+        XCTAssertEqual(parts.tags, ["home", "work"])
+        XCTAssertEqual(model.addBar.text, "Pay rent #home")
+        XCTAssertEqual(TasksComposerValues.tags(parts.tags)?.text, "#home +1")
+        XCTAssertEqual(TasksComposerValues.tags(parts.tags)?.spoken, "home and 1 more")
+        model.toggleComposerTag("#HOME", editor: editor)
+        XCTAssertEqual(model.addBar.text, "Pay rent", "a typed tag unticked leaves the text")
+        XCTAssertEqual(parts.tags, ["work"])
+        model.toggleComposerTag("work", editor: editor)
+        XCTAssertEqual(parts.tags, [])
+        XCTAssertNil(TasksComposerValues.tags([]))
+    }
+
+    /// × clears the button's value, typed pieces of its kind included.
+    func testClearTakesTypedAndPickedValues() {
+        draft("Call mom fri #family !! #home")
+        model.toggleComposerTag("work", editor: editor)
+        model.clearComposer(.tags, editor: editor)
+        XCTAssertEqual(parts.tags, [])
+        XCTAssertEqual(model.addBar.text, "Call mom fri !!")
+        model.clearComposer(.priority, editor: editor)
+        XCTAssertEqual(model.addBar.text, "Call mom fri")
+        model.clearComposer(.date, editor: editor)
+        XCTAssertEqual(model.addBar.text, "Call mom")
+        XCTAssertNil(parts.dueDay)
+        let steps = model.addBarState.history.undoStack.count
+        model.clearComposer(.date, editor: editor)
+        XCTAssertEqual(model.addBarState.history.undoStack.count, steps, "clearing nothing is no step")
+    }
+
+    /// The buttons show what the new task gets, and it gets it.
+    func testTheTaskGetsWhatTheButtonsShow() throws {
+        draft("Pay rent #home")
+        model.pickDate(day("2026-10-01"), editor: editor)
+        model.pickPriority(.high, editor: editor)
+        model.toggleComposerTag("bills", editor: editor)
+        XCTAssertEqual(model.dueText(day("2026-10-01")), "1 Oct", "the words a row shows for that day")
+        XCTAssertEqual(TasksComposerValues.priority(parts.priority)?.text, "!!")
+        XCTAssertEqual(TasksComposerValues.priority(parts.priority)?.ink, .priorityMark)
+        XCTAssertEqual(TasksComposerValues.priority(.medium)?.ink, .helper)
+        let id = try XCTUnwrap(model.submitAddBar())
+        let task = try XCTUnwrap(store.task(withID: id))
+        XCTAssertEqual(task.title, "Pay rent")
+        XCTAssertEqual(task.dueDay, day("2026-10-01"))
+        XCTAssertEqual(task.priority, .high)
+        XCTAssertEqual(Set(task.tags), ["home", "bills"])
+        XCTAssertEqual(model.addBar, TaskAddBarText(), "the draft and its picks are gone")
+    }
+
+    // MARK: Typed pieces (option H)
+
+    func testTypedPiecesDrawByKind() {
+        let text = TaskAddBarText(text: "Pay rent tomorrow #home ! and !!")
+        let kinds = text.tokenChips(parser: model.parser, caret: nil).map(\.kind)
+        XCTAssertEqual(kinds.first, .date)
+        XCTAssertTrue(kinds.contains(.piece))
+        let chips = text.tokenChips(parser: model.parser, caret: nil)
+        XCTAssertEqual(chips.map(\.range), text.chips(parser: model.parser, caret: nil))
+    }
+
+    /// The field draws a date's icon in room kerned before it, fading in;
+    /// the text stays exactly as typed, `!!` in High's orange.
+    func testTheFieldKeepsRoomForADatesIcon() throws {
+        let view = AtticTokenFieldView(frame: NSRect(x: 0, y: 0, width: 280, height: 20))
+        view.apply(style: .init(font: AtticTextStyle.listBody.nsFont, text: .black, piece: .gray, high: .orange,
+                                caret: .black, reduceMotion: false))
+        view.textView.string = "Pay rent fri !!"
+        view.setChips([AtticTokenChip(range: NSRange(location: 9, length: 3), kind: .date),
+                       AtticTokenChip(range: NSRange(location: 13, length: 2), kind: .high)])
+        let storage = try XCTUnwrap(view.textView.textStorage)
+        XCTAssertEqual(storage.string, "Pay rent fri !!", "no character is added")
+        RunLoop.current.run(until: Date().addingTimeInterval(AtticTokenFieldMetrics.iconFade + 0.2))
+        let kern = try XCTUnwrap(storage.attribute(.kern, at: 8, effectiveRange: nil) as? CGFloat)
+        XCTAssertEqual(kern, AtticChipLayoutManager.iconRoom, accuracy: 0.01, "the room is open once the fade ends")
+        XCTAssertEqual(storage.attribute(.atticDateIcon, at: 9, effectiveRange: nil) as? CGFloat, 1)
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: 13, effectiveRange: nil) as? NSColor, .orange)
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: 10, effectiveRange: nil) as? NSColor, .gray)
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .black)
+        // A date at the start opens its room with the line's indent.
+        view.textView.string = "fri call"
+        view.setChips([AtticTokenChip(range: NSRange(location: 0, length: 3), kind: .date)])
+        let paragraph = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertNotNil(paragraph)
+    }
+
+    // MARK: Low priority (owner item 19)
+
+    func testLowIsOfferedOnlyWhileATaskHasIt() {
+        XCTAssertEqual(TaskPriority.choices(keeping: []), [.none, .medium, .high])
+        XCTAssertEqual(TaskPriority.choices(keeping: [.high, .medium]), [.none, .medium, .high])
+        XCTAssertEqual(TaskPriority.choices(keeping: [.low]), [.none, .low, .medium, .high], "ticked until changed")
+        XCTAssertEqual(TaskPriority.none.pickerTitle, "No Priority")
+    }
+}

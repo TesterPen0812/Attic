@@ -476,7 +476,14 @@ enum AtticPickerMetrics {
     static let todayRing: CGFloat = 1.2
     static let gridInset: CGFloat = 4
     static let gridBottom: CGFloat = 2
-    /// The strip's buttons touch (their padding is the gap), 8 above the bar.
-    static let stripSpacing: CGFloat = 2
+    /// The strip's buttons 4 apart (v19, so two filled pills never touch),
+    /// 8 above the bar.
+    static let stripSpacing: CGFloat = 4
     static let stripToBar: CGFloat = 8
+    /// A set strip button (v19): its value, 7 pt, the clear × (14 pt, its
+    /// glyph 8), then 7 pt to the pill's end.
+    static let stripClearGap: CGFloat = 7
+    static let stripClearSize: CGFloat = 14
+    static let stripClearGlyph: CGFloat = 8
+    static let stripValueTrailing: CGFloat = 7
 }

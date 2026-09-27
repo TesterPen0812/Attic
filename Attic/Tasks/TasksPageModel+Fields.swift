@@ -81,7 +81,12 @@ extension TasksPageModel {
 
     // MARK: - The add bar's strip and suggestions
 
-    /// A pick or a taken suggestion is one undo step, with its value: the
+    /// The day's words as a row shows them ("Tomorrow", "Tue", "30 Sep").
+    func dueText(_ day: DueDay) -> String {
+        TaskRowPresentation.due(day, today: dateChoices.today, calendar: services.calendar(), locale: services.locale).text
+    }
+
+    /// A taken suggestion is one undo step, with its value: the
     /// state before it is the checkpoint, its text edits are not steps of
     /// their own, and the pin that follows belongs to the same step.
     @discardableResult
@@ -93,47 +98,89 @@ extension TasksPageModel {
         return edit()
     }
 
-    /// A day picked from the strip: into the draft as its words, holding
-    /// the exact day, in place of a date already there (review 16).
-    func pickDate(_ day: DueDay, editor: AtticTokenFieldEditor) {
-        insertPiece(dateChoices.shorthand(for: day), value: .dueDay(day), kind: .date, editor: editor)
+    // MARK: The strip's values (owner item 18)
+
+    /// Which of the strip's buttons.
+    enum ComposerField: Equatable {
+        case date, tags, priority
     }
 
-    /// Priority from the strip: "!" or "!!" (or none: the typed one goes).
-    func pickPriority(_ priority: TaskPriority, editor: AtticTokenFieldEditor) {
-        let existing = addBar.range(of: .priority, parser: parser)
-        guard let words = priority.shorthand else {
-            guard let existing else { return }
-            // Remove the mark and one space beside it.
-            let ns = addBar.text as NSString
-            var range = existing
-            if NSMaxRange(range) < ns.length, ns.character(at: NSMaxRange(range)) == 32 { range.length += 1 }
-            else if range.location > 0, ns.character(at: range.location - 1) == 32 { range.location -= 1; range.length += 1 }
-            programmaticEdit(editor) { editor.replace([(range, "")]) }
-            return
+    /// A pick or a clear on the strip: one undo step. Typed pieces it
+    /// replaces leave the text (with a space beside each) in the same step;
+    /// the text is otherwise the person's own. Returns whether anything
+    /// changed.
+    @discardableResult
+    private func composerChange(_ editor: AtticTokenFieldEditor, removing pieces: [NSRange],
+                                _ change: (inout TaskAddBarText.Picks) -> Void) -> Bool {
+        var picks = addBar.picked
+        change(&picks)
+        guard !pieces.isEmpty || picks != addBar.picked else { return false }
+        let selection = editor.selection ?? addBarState.currentSelection
+        addBarState.history.checkpoint(addBar, selection: selection)
+        if !pieces.isEmpty {
+            let edits = addBar.removals(of: pieces)
+            let caret = TaskAddBarText.caret(selection?.location ?? (addBar.text as NSString).length, after: edits)
+            addBarState.history.isSuspended = true
+            if !editor.replace(edits, caretAfter: caret) {
+                var text = addBar
+                text.apply(edits)
+                addBar = text
+                addBarCaret = caret
+            }
+            addBarState.history.isSuspended = false
         }
-        insertPiece(words, value: .priority(priority), kind: .priority, editor: editor)
-    }
-
-    private func insertPiece(_ words: String, value: ParsedTaskToken.Value, kind: TaskAddBarText.PieceKind, editor: AtticTokenFieldEditor) {
-        let existing = addBar.range(of: kind, parser: parser)
-        let plan = addBar.insertion(of: words, replacing: existing, caret: editor.caret ?? addBarCaret)
-        let caretAfter = plan.range.location + (plan.string as NSString).length
-        guard programmaticEdit(editor, { editor.replace([(plan.range, plan.string)], caretAfter: caretAfter) }) else { return }
         var text = addBar
-        text.pin(plan.piece, value: value)
+        text.picked = picks
         addBar = text
+        return true
     }
 
-    /// The strip's Tag: types "#" where the caret is (a space first when
-    /// it follows a word), which opens the tag suggestions.
-    func startTag(editor: AtticTokenFieldEditor) {
-        let ns = addBar.text as NSString
-        let caret = min(editor.caret ?? ns.length, ns.length)
-        let needsSpace = caret > 0 && ns.character(at: caret - 1) != 32
-        let string = needsSpace ? " #" : "#"
-        programmaticEdit(editor) { editor.replace([(NSRange(location: caret, length: 0), string)], caretAfter: caret + (string as NSString).length) }
-        editor.focus()
+    /// A day picked from the strip: it sits on the Date button; a typed
+    /// date leaves the text.
+    func pickDate(_ day: DueDay, editor: AtticTokenFieldEditor) {
+        composerChange(editor, removing: addBar.ranges(of: .date, parser: parser)) { $0.day = day }
+    }
+
+    /// Priority from the strip; No Priority clears it (typed marks go too).
+    func pickPriority(_ priority: TaskPriority, editor: AtticTokenFieldEditor) {
+        composerChange(editor, removing: addBar.ranges(of: .priority, parser: parser)) {
+            $0.priority = priority == .none ? nil : priority
+        }
+    }
+
+    /// The strip's tag list ticks and unticks: a tag the task would get
+    /// (typed or picked) goes, typed words included; another is added.
+    func toggleComposerTag(_ tag: String, editor: AtticTokenFieldEditor) {
+        guard let tag = AtticTag.normalize(tag) else { return }
+        let has = addBar.parts(parser: parser).tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+        if has {
+            composerChange(editor, removing: addBar.ranges(of: .tag, tag: tag, parser: parser)) { picks in
+                picks.tags.removeAll { $0.caseInsensitiveCompare(tag) == .orderedSame }
+            }
+        } else {
+            composerChange(editor, removing: []) { $0.tags.append(tag) }
+        }
+    }
+
+    /// × on a strip button: the new task gets no date (tags, priority);
+    /// typed pieces of that kind leave the text too.
+    func clearComposer(_ field: ComposerField, editor: AtticTokenFieldEditor) {
+        switch field {
+        case .date: composerChange(editor, removing: addBar.ranges(of: .date, parser: parser)) { $0.day = nil }
+        case .priority: composerChange(editor, removing: addBar.ranges(of: .priority, parser: parser)) { $0.priority = nil }
+        case .tags: composerChange(editor, removing: addBar.ranges(of: .tag, parser: parser)) { $0.tags = [] }
+        }
+    }
+
+    /// The tag list's state for the new task, and its tags: the task's
+    /// first (typed or picked), then the library's.
+    func composerTagState(_ tag: String) -> AtticCheckState {
+        addBar.parts(parser: parser).tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } ? .on : .off
+    }
+
+    var composerTagChoices: [String] {
+        let own = addBar.parts(parser: parser).tags
+        return own + allTags.filter { tag in !own.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }
     }
 
     /// Takes a suggestion: a tag ("#home ") or a date's words, pinned to

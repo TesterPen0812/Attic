@@ -1375,6 +1375,7 @@ private struct TasksAddBar: View {
 
     @Environment(\.atticDesign) private var design
     @State private var datePresented = false
+    @State private var tagsPresented = false
     @State private var priorityPresented = false
 
     private var hasDraft: Bool { !text.text.text.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -1387,24 +1388,48 @@ private struct TasksAddBar: View {
 
     var body: some View {
         let suggestion = suggestion
-        let stripShown = showsStrip && (hasDraft || datePresented || priorityPresented)
+        let anyPicker = datePresented || tagsPresented || priorityPresented
+        let stripShown = showsStrip && (hasDraft || anyPicker)
+        // What the new task will get, typed or picked (owner item 18): the
+        // strip's buttons show it, and its pickers tick it.
+        let parts = text.text.parts(parser: model.parser)
         VStack(alignment: .leading, spacing: AtticPickerMetrics.stripToBar) {
                 AtticComposerStrip(
                     datePresented: $datePresented,
+                    tagsPresented: $tagsPresented,
                     priorityPresented: $priorityPresented,
-                    onTag: { model.startTag(editor: editor) },
+                    date: parts.dueDay.map { day in
+                        let words = model.dueText(day)
+                        return AtticStripValue(text: words, spoken: words)
+                    },
+                    tags: TasksComposerValues.tags(parts.tags),
+                    priority: TasksComposerValues.priority(parts.priority),
+                    onClearDate: { model.clearComposer(.date, editor: editor); editor.focus() },
+                    onClearTags: { model.clearComposer(.tags, editor: editor); editor.focus() },
+                    onClearPriority: { model.clearComposer(.priority, editor: editor); editor.focus() },
                     datePicker: {
-                        TaskDatePickerView(choices: model.dateChoices, selected: currentDay, onPick: { day in
+                        TaskDatePickerView(choices: model.dateChoices, selected: parts.dueDay, onPick: { day in
                             datePresented = false
                             model.pickDate(day, editor: editor)
-                            editor.focus()
                         })
                     },
+                    tagPicker: {
+                        // Ticks and unticks, and stays open (as a row's).
+                        TaskTagPickerView(
+                            allTags: model.composerTagChoices,
+                            state: { model.composerTagState($0) },
+                            onToggle: { model.toggleComposerTag($0, editor: editor) },
+                            onCreate: { name, _ in
+                                model.toggleComposerTag(name, editor: editor)
+                                return true
+                            },
+                            focusField: true
+                        )
+                    },
                     priorityPicker: {
-                        TaskPriorityPickerView(current: currentPriority, onPick: { priority in
+                        TaskPriorityPickerView(current: parts.priority, onPick: { priority in
                             priorityPresented = false
                             model.pickPriority(priority, editor: editor)
-                            editor.focus()
                         })
                     }
                 )
@@ -1483,23 +1508,12 @@ private struct TasksAddBar: View {
             }
         }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: stripShown)
-        .onChange(of: datePresented || priorityPresented) { _, open in
+        .onChange(of: datePresented || tagsPresented || priorityPresented) { _, open in
             pickerOpen = open
             // A closed picker hands the keyboard back to the draft, where
             // its insertion point was (review 14).
             if !open { editor.focus() }
         }
-    }
-
-    private var currentDay: DueDay? {
-        if case let .dueDay(day)? = text.text.activeTokens(parser: model.parser).first(where: { TaskAddBarText.PieceKind.date.matches($0.value) })?.value {
-            return day
-        }
-        return nil
-    }
-
-    private var currentPriority: TaskPriority? {
-        text.text.parts(parser: model.parser).priority
     }
 
     private func submit(openingPage: Bool) {
@@ -1534,6 +1548,29 @@ private struct TasksAddBar: View {
         case let .date(_, _, title, day):
             return [AtticSuggestionList.Item(id: day.rawValue, title: title, systemName: "calendar",
                                              detail: model.dateChoices.longDetail(for: day))]
+        }
+    }
+}
+
+/// What the strip's buttons show for the new task (owner item 18).
+enum TasksComposerValues {
+    /// The Tag button's value: the first tag, and how many more.
+    static func tags(_ tags: [String]) -> AtticStripValue? {
+        guard let first = tags.first else { return nil }
+        let more = tags.count - 1
+        return AtticStripValue(
+            text: more > 0 ? "#\(first) +\(more)" : "#\(first)",
+            spoken: more > 0 ? String(localized: "\(first) and \(more) more") : first
+        )
+    }
+
+    /// The Priority button's value: its mark, `!!` in High's orange.
+    static func priority(_ priority: TaskPriority?) -> AtticStripValue? {
+        switch priority {
+        case .high?: AtticStripValue(text: "!!", ink: .priorityMark, style: .priorityMark, spoken: String(localized: "High"))
+        case .medium?: AtticStripValue(text: "!", ink: .helper, style: .priorityMark, spoken: String(localized: "Medium"))
+        case .low?: AtticStripValue(text: String(localized: "Low"), spoken: String(localized: "Low"))
+        case .none?, nil: nil
         }
     }
 }

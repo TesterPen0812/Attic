@@ -21,6 +21,16 @@ struct TaskAddBarText: Equatable {
     var pinned: [Pinned] = []
     /// Pieces that have been drawn as chips (their word was finished).
     var shown: [NSRange] = []
+    /// What was picked from the strip (owner item 18): it sits on the
+    /// strip's buttons, never in the text, and wins over a typed date or
+    /// priority (picking one takes the typed words out).
+    var picked = Picks()
+
+    struct Picks: Equatable {
+        var day: DueDay?
+        var priority: TaskPriority?
+        var tags: [String] = []
+    }
 
     struct Pinned: Equatable {
         var range: NSRange
@@ -122,6 +132,8 @@ struct TaskAddBarText: Equatable {
         var priority: TaskPriority?
     }
 
+    /// The strip's buttons show these too: the new task's values, typed or
+    /// picked (a pick wins; tags from both).
     func parts(parser: TaskTextParser) -> Parts {
         let tokens = activeTokens(parser: parser)
         var parts = Parts(title: TaskTextParser.title(text, removing: tokens.map(\.range)))
@@ -131,6 +143,11 @@ struct TaskAddBarText: Equatable {
             case let .dueDay(day): parts.dueDay = parts.dueDay ?? day
             case let .priority(level): parts.priority = parts.priority ?? level
             }
+        }
+        if let day = picked.day { parts.dueDay = day }
+        if let priority = picked.priority { parts.priority = priority }
+        for tag in picked.tags where !parts.tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+            parts.tags.append(tag)
         }
         return parts
     }
@@ -193,6 +210,7 @@ struct TaskAddBarText: Equatable {
         dismissed = []
         pinned = []
         shown = []
+        picked = Picks()
     }
 
     // MARK: - Where a pick goes
@@ -204,13 +222,65 @@ struct TaskAddBarText: Equatable {
     }
 
     enum PieceKind {
-        case date, priority
+        case date, priority, tag
 
         func matches(_ value: ParsedTaskToken.Value) -> Bool {
             switch (self, value) {
-            case (.date, .dueDay), (.priority, .priority): true
+            case (.date, .dueDay), (.priority, .priority), (.tag, .tag): true
             default: false
             }
+        }
+    }
+
+    // MARK: - Taking typed pieces out (the strip, owner item 18)
+
+    /// Every active piece of a kind (a tag's only when it is `tag`, in any
+    /// case), as UTF-16 ranges.
+    func ranges(of kind: PieceKind, tag: String? = nil, parser: TaskTextParser) -> [NSRange] {
+        activeTokens(parser: parser).filter { token in
+            guard kind.matches(token.value) else { return false }
+            if let tag, case let .tag(name) = token.value { return name.caseInsensitiveCompare(tag) == .orderedSame }
+            return true
+        }
+        .map { $0.utf16Range(in: text) }
+    }
+
+    /// The edits that take `pieces` out of the text, each with one space
+    /// beside it so no double space is left, overlapping ones merged.
+    func removals(of pieces: [NSRange]) -> [(range: NSRange, string: String)] {
+        let ns = text as NSString
+        func isSpace(_ index: Int) -> Bool { index >= 0 && index < ns.length && ns.character(at: index) == 32 }
+        let extended = pieces.map { piece -> NSRange in
+            var range = piece
+            if isSpace(NSMaxRange(range)) { range.length += 1 } else if isSpace(range.location - 1) { range.location -= 1; range.length += 1 }
+            return range
+        }.sorted { $0.location < $1.location }
+        var merged: [NSRange] = []
+        for range in extended {
+            if let last = merged.last, range.location <= NSMaxRange(last) {
+                merged[merged.count - 1] = NSUnionRange(last, range)
+            } else {
+                merged.append(range)
+            }
+        }
+        return merged.reversed().map { ($0, "") }
+    }
+
+    /// Where the insertion point lands once `edits` are made.
+    static func caret(_ caret: Int, after edits: [(range: NSRange, string: String)]) -> Int {
+        var result = caret
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) where edit.range.location < caret {
+            let removedBefore = min(NSMaxRange(edit.range), caret) - edit.range.location
+            result += (edit.string as NSString).length - removedBefore
+        }
+        return max(result, 0)
+    }
+
+    /// The edits as typing makes them, without a live field (last first).
+    mutating func apply(_ edits: [(range: NSRange, string: String)]) {
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) where NSMaxRange(edit.range) <= (text as NSString).length {
+            edited(edit.range, replacement: edit.string)
+            text = (text as NSString).replacingCharacters(in: edit.range, with: edit.string)
         }
     }
 

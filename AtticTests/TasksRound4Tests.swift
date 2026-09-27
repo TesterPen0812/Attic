@@ -165,15 +165,16 @@ final class TasksRound4Tests: XCTestCase {
     func testAPickedPastDaySurvivesUndoAndRedoWithItsValue() {
         let bar = liveBar()
         type("Pay rent", into: bar)
-        // 1 Sep has passed: typed, it would mean next year; picked, it is 2026.
+        // 1 Sep has passed: typed, it would mean next year; picked, it is
+        // 2026. The pick sits on the strip's button (round 6), not the text.
         model.pickDate(day("2026-09-01"), editor: bar.editor)
-        XCTAssertTrue(model.addBar.text.hasPrefix("Pay rent 1 Sep"), model.addBar.text)
+        XCTAssertEqual(model.addBar.text, "Pay rent", "a pick never touches the text")
         XCTAssertEqual(model.addBar.parts(parser: model.parser).dueDay, day("2026-09-01"))
-        // One ⌘Z undoes the pick (text and value); the typing is still there.
+        // One ⌘Z undoes the pick; the typing is still there.
         bar.view.textView.undo(nil)
         XCTAssertEqual(model.addBar.text, "Pay rent")
-        XCTAssertTrue(model.addBar.pinned.isEmpty)
-        // Redo brings the exact day back, not "1 Sep" read afresh (2027).
+        XCTAssertNil(model.addBar.parts(parser: model.parser).dueDay)
+        // Redo brings the exact day back.
         bar.view.textView.redo(nil)
         XCTAssertEqual(model.addBar.parts(parser: model.parser).dueDay, day("2026-09-01"))
         XCTAssertEqual(bar.view.textView.string, model.addBar.text, "the field shows the model's text")
