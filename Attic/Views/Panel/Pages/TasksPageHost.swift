@@ -111,6 +111,11 @@ struct TasksPageHost: View {
         .onReceive(uiState.$hideCount.dropFirst()) { _ in model.pageDidHide() }
         // An agent's `show` of a task: its tab, the row selected in view.
         .onReceive(uiState.$shownItem) { item in showItemIfNeeded(model, item) }
+        // A deferred `show` runs once the edit that blocked it has ended.
+        .onReceive(model.$editingTitleID.combineLatest(model.$newSubtaskParentID)) { title, subtask in
+            guard title == nil, subtask == nil else { return }
+            DispatchQueue.main.async { showItemIfNeeded(model, uiState.shownItem) }
+        }
         // Quick capture (the global shortcut) and the shell's own focus
         // requests put the insertion point in the add bar.
         .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused { addBarFocused = true } }
@@ -133,8 +138,10 @@ struct TasksPageHost: View {
 
     private func showItemIfNeeded(_ model: TasksPageModel, _ item: AtticItemRef?) {
         guard let ref = item, ref.kind == .task else { return }
+        // Acknowledged only once handled (round 4): a request an unsaved
+        // edit blocks stays, and is tried again when the edit ends.
+        guard model.show(ref.id) || model.store.listedTask(withID: ref.id) == nil else { return }
         // Cleared after this change is delivered, not inside it.
         DispatchQueue.main.async { if uiState.shownItem == ref { uiState.showItem(nil) } }
-        model.show(ref.id)
     }
 }

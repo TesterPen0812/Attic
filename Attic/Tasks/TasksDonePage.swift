@@ -80,6 +80,11 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
             guard let request else { return }
             proxy.scrollTo(request.id)
         }
+        // An agent's `show` of a finished task (the model loaded its page).
+        .onChange(of: model.scrollRequest) { _, request in
+            guard let request, model.tab == .done else { return }
+            DispatchQueue.main.async { proxy.scrollTo(request.id, anchor: .center) }
+        }
         }
     }
 }

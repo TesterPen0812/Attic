@@ -625,20 +625,44 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func show(_ id: UUID) -> Bool {
         guard let found = store.listedTask(withID: id) else { return false }
-        // A subtask shows in its parent's quick look.
-        let parent = store.task(withID: id).flatMap { store.parent(of: $0) }
+        // A subtask shows in its parent's quick look (live) or its parent's
+        // details (in the Done log).
+        let parent = found.parentID.flatMap { store.listedTask(withID: $0) }
         let task = parent ?? found
-        let target: TasksTab = task.status == .backlog ? .backlog
-            : (store.task(withID: task.id) == nil ? .done : .now)
+        let archived = store.task(withID: task.id) == nil
+        let target: TasksTab = task.status == .backlog ? .backlog : (archived ? .done : .now)
         // An edit that can't be saved keeps the page where it is: the
-        // request is deferred (review 2).
+        // request is deferred (review 2) and the caller keeps it.
         guard finishEditing() else { return false }
         tab = target
         revealTab = target
-        if parent != nil { expanded.insert(task.id) }
+        // Establish what the destination needs before revealing it (round
+        // 4): an open Completed today, no Done search that hides it, its
+        // page of the Done log loaded, its parent's quick look or details.
+        if target == .now, task.status == .done { completedTodayExpanded = true }
+        if target == .done {
+            let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
+            revealInDoneLog(task.id)
+            if parent != nil { doneDetailID = task.id }
+        } else if parent != nil {
+            expanded.insert(task.id)
+        }
         selectOnly(task.id)
         scrollRequest = ScrollRequest(id: task.id)
         return true
+    }
+
+    /// Loads the Done log until `id`'s page is in (bounded by the log's
+    /// own end), so a task finished long ago can be shown.
+    private func revealInDoneLog(_ id: UUID) {
+        loadDoneLogIfNeeded()
+        let isTodays = store.task(withID: id) != nil
+        var pages = 0
+        while !isTodays, !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil, pages < 200 {
+            loadMoreDoneLog()
+            pages += 1
+        }
     }
 
     /// A row to bring into view (an agent's `show`); each request is new.

@@ -304,4 +304,53 @@ final class TasksRound4Tests: XCTestCase {
         clamp.move(days: -60, in: choices)
         XCTAssertEqual(clamp.month(in: choices).month, 12, "arrows past the month's edge show the new month")
     }
+
+    // MARK: - Must fix 6: show reveals its destination, or waits
+
+    func testShowOpensCompletedTodayAndClearsAnExcludingDoneSearch() throws {
+        let done = try XCTUnwrap(store.create(title: "Renew domain"))
+        XCTAssertTrue(library.completeTask(done.id).isApplied)
+        XCTAssertFalse(model.completedTodayExpanded)
+        XCTAssertTrue(model.show(done.id))
+        XCTAssertEqual(model.tab, .now)
+        XCTAssertTrue(model.completedTodayExpanded, "Completed today opens to show it")
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == done.id })
+
+        // A Done log task behind a search that excludes it, beyond the
+        // first loaded page.
+        let old = try XCTUnwrap(store.create(title: "Old invoice"))
+        let oldChild = try XCTUnwrap(store.create(title: "Send it", parentID: old.id))
+        XCTAssertTrue(library.completeTask(old.id).isApplied)
+        clock.value = clock.value.addingTimeInterval(2 * 86_400)
+        for index in 0..<(TasksPageModel.doneLogPageSize + 5) {
+            let filler = try XCTUnwrap(store.create(title: "Filler \(index)"))
+            XCTAssertTrue(library.completeTask(filler.id).isApplied)
+        }
+        clock.value = clock.value.addingTimeInterval(86_400)
+        _ = store.moveCompletedToDoneLog(before: calendar.startOfDay(for: clock.value))
+        model.select(tab: .done)
+        model.doneSearch = "Filler"
+        model.loadDoneLogIfNeeded()
+        XCTAssertFalse(model.doneLogTasks.contains { $0.id == old.id })
+        XCTAssertTrue(model.show(oldChild.id), "an archived subtask shows its parent")
+        XCTAssertEqual(model.tab, .done)
+        XCTAssertEqual(model.doneSearch, "", "the search that hid it is cleared")
+        XCTAssertTrue(model.doneLogTasks.contains { $0.id == old.id }, "its page of the log is loaded")
+        XCTAssertEqual(model.doneDetailID, old.id, "its parent's details open")
+        XCTAssertEqual(model.selection, [old.id])
+    }
+
+    func testAShowThatAnUnsavedEditBlocksIsNotConsumed() throws {
+        let a = try XCTUnwrap(store.create(title: "A"))
+        let b = try XCTUnwrap(store.create(title: "B"))
+        model.beginEditingTitle(a.id)
+        model.titleEdit.text = "A renamed"
+        gate.shouldFail = true
+        XCTAssertFalse(model.show(b.id), "the edit could not save: the request is deferred")
+        XCTAssertEqual(model.editingTitleID, a.id, "the edit and its text stay")
+        gate.shouldFail = false
+        XCTAssertTrue(model.show(b.id), "tried again, it goes through")
+        XCTAssertEqual(store.task(withID: a.id)?.title, "A renamed")
+        XCTAssertEqual(model.selection, [b.id])
+    }
 }
