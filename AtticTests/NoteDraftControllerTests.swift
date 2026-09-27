@@ -1047,6 +1047,40 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertEqual(draft.title, "")
         XCTAssertEqual(draft.body, "")
     }
+
+    @MainActor
+    func testHideKeepsLegacyDraftLiveForMoreTyping() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Legacy", body: "First"))
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        XCTAssertTrue(draft.beginEditing(note))
+        draft.body += " second"
+        XCTAssertTrue(draft.preserveForHide())
+        XCTAssertTrue(draft.isActive)
+        XCTAssertEqual(draft.activeNoteID, note.id)
+        draft.pages.panelDidShow()
+        draft.body += " third"
+        XCTAssertTrue(draft.flush())
+        XCTAssertEqual(store.note(withID: note.id)?.body, "First second third")
+    }
+
+    @MainActor
+    func testHideKeepsLegacyNoteInsideNewPageVisibleAndLive() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let note = try XCTUnwrap(store.create(title: "Legacy", body: "First"))
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        draft.pages.start()
+        XCTAssertTrue(draft.pages.open(noteID: note.id))
+        XCTAssertTrue(draft.beginEditing(note))
+        draft.body += " second"
+        XCTAssertTrue(draft.preserveForHide())
+        draft.pages.panelDidShow()
+        XCTAssertEqual(draft.pages.legacyNoteID, note.id)
+        XCTAssertEqual(draft.activeNoteID, note.id)
+        draft.body += " third"
+        XCTAssertTrue(draft.flush())
+        XCTAssertEqual(store.note(withID: note.id)?.body, "First second third")
+    }
 }
 
 @MainActor

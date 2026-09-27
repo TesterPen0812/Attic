@@ -490,7 +490,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let screen = panel.screen ?? currentScreen else {
             return .rejected(.missingUsableScreen)
         }
-        guard noteDraft.leaveForNavigation() else {
+        guard noteDraft.preserveForHide() else {
             return .rejected(.draftFlushFailed)
         }
         clearInteractiveDismissal()

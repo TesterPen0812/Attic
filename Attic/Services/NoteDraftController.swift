@@ -420,6 +420,13 @@ final class NoteDraftController: ObservableObject {
         return pages.leaveForNavigation()
     }
 
+    /// Hiding keeps the visible composer paired with its live draft.
+    @discardableResult
+    func preserveForHide() -> Bool {
+        guard flushLegacy() else { return false }
+        return pages.preserveForHide()
+    }
+
     /// Persists pending text without closing the editor. The current store
     /// snapshot is compared with the snapshot loaded into the editor before a
     /// write, preventing autosave from silently overwriting a CloudKit change.
