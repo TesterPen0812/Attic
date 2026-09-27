@@ -25,16 +25,19 @@ enum NoteSaveProblem: Equatable {
     case notSaved(String)
     /// The canonical stored note moved on; the draft remains in recovery.
     case changedElsewhere
+    case deletedElsewhere
 }
 
 enum NoteStatusItem: Equatable {
-    case onlyInMemory(String), notSaved(String), changedElsewhere, proposal(String), importing, notice(String), readOnly(String)
+    case onlyInMemory(String), notSaved(String), changedElsewhere, deletedElsewhere
+    case proposal(String), importing, notice(String), readOnly(String)
 
     var label: String {
         switch self {
         case .onlyInMemory: String(localized: "Only in memory")
         case .notSaved: String(localized: "Not saved")
         case .changedElsewhere: String(localized: "Changed elsewhere")
+        case .deletedElsewhere: String(localized: "Deleted elsewhere")
         case let .proposal(agent): "\(agent) has changes"
         case .importing: String(localized: "Adding images")
         case let .notice(message): message
@@ -46,6 +49,7 @@ enum NoteStatusItem: Equatable {
         switch self {
         case let .onlyInMemory(reason), let .notSaved(reason), let .notice(reason), let .readOnly(reason): reason
         case .changedElsewhere: String(localized: "This note changed outside this editor. Your text is kept in recovery.")
+        case .deletedElsewhere: String(localized: "This note was deleted elsewhere. Your text is kept in recovery. Keep as new note to save it under a new ID.")
         case .proposal: String(localized: "An agent suggested changes to this note.")
         case .importing: String(localized: "Images are still being added to this note.")
         }
@@ -104,7 +108,8 @@ final class NoteSession: ObservableObject, Identifiable {
             switch state {
             case let .notSaved(reason): .notSaved(reason)
             case let .onlyInMemory(reason): .onlyInMemory(reason)
-            case .conflict: .changedElsewhere
+            case .conflict(.changed): .changedElsewhere
+            case .conflict(.deleted): .deletedElsewhere
             default: nil
             }
         }
@@ -113,6 +118,7 @@ final class NoteSession: ObservableObject, Identifiable {
             case let .notSaved(reason): state = .notSaved(reason)
             case let .onlyInMemory(reason): state = .onlyInMemory(reason)
             case .changedElsewhere: state = .conflict(.changed)
+            case .deletedElsewhere: state = .conflict(.deleted)
             case nil: state = isPersisted ? .clean : .untouched
             }
         }
@@ -125,7 +131,6 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var recoverySourceID: UUID?
     @Published fileprivate var importBatch: NoteImportBatch?
     fileprivate var importTask: Task<Void, Never>?
-    fileprivate var blocksAutomaticRekey = false
     fileprivate var refusedWritingToolsSinceSave = false
     fileprivate var saveTask: Task<Void, Never>?
     fileprivate var pauseTask: Task<Void, Never>?
@@ -151,6 +156,7 @@ final class NoteSession: ObservableObject, Identifiable {
     }
 
     var isReadOnly: Bool { readOnlyReason != nil }
+    var isConflict: Bool { if case .conflict = state { true } else { false } }
     var isImporting: Bool { importBatch != nil }
 
     /// Untouched: never saved, no text, no objects.
@@ -306,6 +312,7 @@ final class NotesPageController: ObservableObject {
         case let .onlyInMemory(reason): items.append(.onlyInMemory(reason))
         case let .notSaved(reason): items.append(.notSaved(reason))
         case .changedElsewhere: items.append(.changedElsewhere)
+        case .deletedElsewhere: items.append(.deletedElsewhere)
         case nil: break
         }
         if let agent = proposalAgent(for: session) { items.append(.proposal(agent)) }
@@ -316,9 +323,11 @@ final class NotesPageController: ObservableObject {
     }
 
     func conflictComparison(for session: NoteSession) -> (agent: String, current: String, proposed: String)? {
-        guard session.problem == .changedElsewhere,
-              let current = store.loadDocument(noteID: session.noteID)?.content.document else { return nil }
-        return (String(localized: "Changed elsewhere"), NoteTextExport.plainText(current),
+        guard case .conflict = session.state else { return nil }
+        let current = store.loadDocument(noteID: session.noteID)?.content.document
+        return (session.state == .conflict(.deleted) ? String(localized: "Deleted elsewhere")
+                : String(localized: "Changed elsewhere"),
+                current.map(NoteTextExport.plainText) ?? "",
                 NoteTextExport.plainText(session.engine.document()))
     }
 
@@ -465,14 +474,10 @@ final class NotesPageController: ObservableObject {
         engine.onNotice = { [weak session] message in session?.notice = message }
         engine.onBeforeCopy = { [weak self, weak session] in
             guard let self, let session else { return }
-            session.blocksAutomaticRekey = true
-            defer { session.blocksAutomaticRekey = false }
             _ = self.save(session)
         }
         engine.onWritingToolsWillBegin = { [weak self, weak session] in
             guard let self, let session else { return false }
-            session.blocksAutomaticRekey = true
-            defer { session.blocksAutomaticRekey = false }
             guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
                     refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave) else {
                 engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
@@ -629,8 +634,9 @@ final class NotesPageController: ObservableObject {
             let document = checkpointDocument(for: session)
             try journal.write(journalEntry(for: session, document: document),
                               staged: session.engine.stagedAttachments(for: document))
-            if session.problem != .changedElsewhere,
-               !(session.engine.isWritingToolsSessionActive && session.engine.isWritingToolsBlocked) {
+            if case .conflict = session.state {
+                // Conflicted text stays a conflict while its recovery copy is updated.
+            } else if !(session.engine.isWritingToolsSessionActive && session.engine.isWritingToolsBlocked) {
                 session.problem = .notSaved(storeMessage())
             }
             return true
@@ -768,9 +774,8 @@ final class NotesPageController: ObservableObject {
             didSave(session, staged: staged)
             return true
         case .failure(.noteMissing):
-            guard !session.blocksAutomaticRekey else { return false }
-            return saveAsNewNote(session, document: document, staged: staged,
-                successNotice: String(localized: "The note was deleted elsewhere, so your text was kept as a new note."))
+            session.state = .conflict(.deleted)
+            return false
         case .failure(.staleRevision):
             session.problem = .changedElsewhere
             return false
@@ -782,14 +787,17 @@ final class NotesPageController: ObservableObject {
     /// The explicit escape from a stale base. The original note is untouched.
     @discardableResult
     func keepAsNewNote() -> Bool {
-        guard let session = active, session.problem == .changedElsewhere,
+        guard let session = active,
               NoteSessionPolicy.keepAsNewAllowed(session.state, activity: session.engine.activity,
                                                  hasBatch: session.isImporting),
               preserve(session) else { return false }
         let document = checkpointDocument(for: session)
+        let notice = session.state == .conflict(.deleted)
+            ? String(localized: "Your text was kept as a new note. The deleted note remains in Recently Deleted.")
+            : String(localized: "Your text was kept as a new note. The changed note is still available.")
         return saveAsNewNote(session, document: document,
             staged: session.engine.stagedAttachments(for: document),
-            successNotice: String(localized: "Your text was kept as a new note. The changed note is still available."))
+            successNotice: notice)
     }
 
     private func saveAsNewNote(_ session: NoteSession, document: NoteDocument,
@@ -868,8 +876,7 @@ final class NotesPageController: ObservableObject {
     /// Retry from the slot.
     func retry() {
         guard let active else { return }
-        guard active.problem != .changedElsewhere else { return }
-        active.blocksAutomaticRekey = false
+        if case .conflict = active.state { return }
         _ = preserve(active)
     }
 

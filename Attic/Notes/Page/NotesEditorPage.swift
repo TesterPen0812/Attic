@@ -193,10 +193,9 @@ private struct NoteStatusSlot: View {
                 .accessibilityIdentifier("notes-status-details")
             }
             .sheet(isPresented: $showingProposal) {
-                if let comparison = session.problem == .changedElsewhere
+                if let comparison = session.isConflict
                     ? controller.conflictComparison(for: session) : controller.proposalComparison(for: session) {
-                    NoteProposalComparison(title: session.problem == .changedElsewhere
-                                           ? String(localized: "Changed elsewhere") : "\(comparison.agent) has changes",
+                    NoteProposalComparison(title: session.isConflict ? comparison.agent : "\(comparison.agent) has changes",
                                            current: comparison.current,
                                            proposed: comparison.proposed)
                 }
@@ -214,7 +213,7 @@ private struct NoteStatusSlot: View {
                 }
             case .notSaved:
                 Button("Retry", action: controller.retry)
-            case .changedElsewhere:
+            case .changedElsewhere, .deletedElsewhere:
                 HStack {
                     Button("Keep as new note") { _ = controller.keepAsNewNote() }
                         .accessibilityIdentifier("notes-keep-as-new")
@@ -290,6 +289,8 @@ private struct NotesPlainLibrary: View {
                 ForEach(failedDrafts) { draft in
                     let status = switch draft.problem {
                     case .some(.onlyInMemory): String(localized: "Only in memory")
+                    case .some(.changedElsewhere): String(localized: "Changed elsewhere")
+                    case .some(.deletedElsewhere): String(localized: "Deleted elsewhere")
                     default: String(localized: "Not saved · Recovery copy")
                     }
                     Button { onOpenDraft(draft.id) } label: {

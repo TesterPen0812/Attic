@@ -888,6 +888,8 @@ final class NotesPageControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(store.notes.isEmpty)
         XCTAssertEqual(draft.noteID, id)
+        XCTAssertEqual(draft.state, .conflict(.deleted))
+        XCTAssertTrue(controller.failedDrafts.contains { $0 === draft })
         XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
     }
 
@@ -1234,8 +1236,13 @@ final class NotesPageControllerTests: XCTestCase {
         second.start()
         XCTAssertEqual(try NoteDraftJournal(directory: journalDirectory).entries().count, 1,
                        "a second failed save must not retire the original checkpoint")
+        XCTAssertEqual(second.active?.noteID, oldID)
+        XCTAssertTrue(second.failedDrafts.contains { $0.id == second.active?.id })
         persistence.shouldFail = false
         second.retry()
+        XCTAssertEqual(second.active?.state, .conflict(.deleted))
+        XCTAssertEqual(second.active?.noteID, oldID, "Retry cannot silently assign a new ID")
+        XCTAssertTrue(second.keepAsNewNote())
         let newID = try XCTUnwrap(second.active?.noteID)
         XCTAssertNotEqual(newID, oldID)
         XCTAssertTrue(try NoteDraftJournal(directory: journalDirectory).entries().isEmpty)
@@ -1332,6 +1339,27 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertNil(session.problem)
         session.engine.writingToolsDidEnd()
         XCTAssertTrue(controller.preserveForHide())
+    }
+
+    func testDeletedNoteKeepsItsIDAndDraftUntilExplicitKeep() throws {
+        let controller = makeController()
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Original", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        let oldID = draft.noteID
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: oldID))))
+        type(" later", into: draft)
+        XCTAssertTrue(controller.preserve(draft))
+        XCTAssertEqual(draft.state, .conflict(.deleted))
+        XCTAssertEqual(draft.noteID, oldID)
+        XCTAssertEqual(controller.statusItems(for: draft).first, .deletedElsewhere)
+        XCTAssertTrue(controller.failedDrafts.contains { $0 === draft })
+        controller.retry()
+        XCTAssertEqual(draft.noteID, oldID)
+        XCTAssertTrue(controller.keepAsNewNote())
+        XCTAssertNotEqual(draft.noteID, oldID)
+        XCTAssertEqual(store.note(withID: draft.noteID)?.title, "Original later")
     }
 }
 
