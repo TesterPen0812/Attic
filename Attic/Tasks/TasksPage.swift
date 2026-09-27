@@ -47,6 +47,10 @@ struct TasksPage: View {
     /// The drag in progress, outside view state (round 4).
     @State private var dragSession = TasksDragSession()
     @State private var rightClickMonitor: Any?
+    /// ⌘F on Done, before any menu sees it (CI run 3: the Edit menu's Find
+    /// sent it to whichever text view had the keyboard, the add bar or a
+    /// field editor left behind, and the search never opened).
+    @State private var findMonitor: Any?
     /// The add bar's text, edited the way typing does (the strip, suggestions).
     @State private var addBarEditor = AtticTokenFieldEditor()
 
@@ -116,6 +120,11 @@ struct TasksPage: View {
                 }
             }
             #endif
+            if findMonitor == nil {
+                findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    findPressed(event) ? nil : event
+                }
+            }
             if rightClickMonitor == nil {
                 // Every mouse press: a secondary click or a Control-click
                 // binds the menu about to open to its row; any other press
@@ -129,6 +138,8 @@ struct TasksPage: View {
         .onDisappear {
             if let rightClickMonitor { NSEvent.removeMonitor(rightClickMonitor) }
             rightClickMonitor = nil
+            if let findMonitor { NSEvent.removeMonitor(findMonitor) }
+            findMonitor = nil
         }
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
@@ -251,8 +262,7 @@ struct TasksPage: View {
                     Spacer(minLength: 0)
                     if model.tab == .done {
                         // Its glyph ends where the rows' dates end. ⌘F too.
-                        AtticSmallButton(systemName: "magnifyingglass", label: "Search done tasks", action: beginSearch)
-                            .keyboardShortcut("f", modifiers: .command)
+                        AtticSmallButton(systemName: "magnifyingglass", label: "Search done tasks (⌘F)", action: beginSearch)
                             .accessibilityIdentifier("tasks-done-search-button")
                             .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
                                 - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))
@@ -284,6 +294,17 @@ struct TasksPage: View {
         focusedRow = nil
         model.clearSelection()
         searchFocused = true
+    }
+
+    /// ⌘F in this page's window while Done is shown (and no pop-over has
+    /// the keyboard): the search takes the tabs' line. True when it took
+    /// the key.
+    private func findPressed(_ event: NSEvent) -> Bool {
+        guard model.tab == .done, event.window != nil, event.window === pointer.view?.window,
+              event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "f" else { return false }
+        beginSearch()
+        return true
     }
 
     /// Esc (or the field's "Esc"): the search ends, the tabs return, and the

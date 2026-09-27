@@ -165,6 +165,18 @@ final class TasksRound6Tests: XCTestCase {
     /// opens): the search takes the tabs' line with the keyboard in it
     /// (CI run 1: the field showed without it).
     func testCommandFOnDoneGivesTheSearchTheKeyboard() throws {
+        // The apps' Edit menu has Find on ⌘F, sent to the text view with
+        // the keyboard (CI run 3: it took ⌘F from the page).
+        let saved = NSApp.mainMenu
+        let menu = NSMenu()
+        let edit = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        edit.submenu = NSMenu(title: "Edit")
+        let find = NSMenuItem(title: "Find…", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "f")
+        find.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        edit.submenu?.addItem(find)
+        menu.addItem(edit)
+        NSApp.mainMenu = menu
+        defer { NSApp.mainMenu = saved }
         let hosted = try Hosted(height: 520, addBarFocused: true)
         defer { hosted.close() }
         XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the add bar has the keyboard")
@@ -177,6 +189,14 @@ final class TasksRound6Tests: XCTestCase {
         hosted.press("\u{1B}", keyCode: 53)
         XCTAssertEqual(hosted.model.doneSearch, "", "Esc ends the search")
         XCTAssertFalse(hosted.searchHasKeyboard)
+        // Right after Esc, ⌘F opens it again.
+        hosted.press("f", keyCode: 3, modifiers: .command)
+        XCTAssertTrue(hosted.searchHasKeyboard, "⌘F again after Esc: \(String(describing: hosted.window.firstResponder))")
+        hosted.press("\u{1B}", keyCode: 53)
+        // Not on Now: ⌘F there is the menu's.
+        hosted.go(to: .now)
+        hosted.press("f", keyCode: 3, modifiers: .command)
+        XCTAssertFalse(hosted.searchHasKeyboard, "⌘F is Done's")
     }
 
     /// A click on Done's magnifier, with the add bar holding the keyboard:
