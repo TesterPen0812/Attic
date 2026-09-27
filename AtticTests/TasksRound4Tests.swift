@@ -484,6 +484,31 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertEqual(model.scrollRequest?.id, old.id, "it is scrolled to (and the page focuses it)")
     }
 
+    /// Round 5: a person who goes to another page drops a `show` still
+    /// waiting for its page; coming back and scrolling never jumps to it.
+    func testAPendingShowIsDroppedWhenThePersonChangesPage() throws {
+        let old = try XCTUnwrap(store.create(title: "Old invoice"))
+        XCTAssertTrue(library.completeTask(old.id).isApplied)
+        clock.value = clock.value.addingTimeInterval(86_400)
+        for index in 0..<(TasksPageModel.doneLogPageSize + 5) {
+            let filler = try XCTUnwrap(store.create(title: "Filler \(index)"))
+            XCTAssertTrue(library.completeTask(filler.id).isApplied)
+        }
+        clock.value = clock.value.addingTimeInterval(2 * 86_400)
+        _ = store.moveCompletedToDoneLog(before: calendar.startOfDay(for: clock.value))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        store.doneLogReadFailures = 1
+        XCTAssertEqual(model.show(old.id), .pending)
+        model.select(tab: .now)
+        XCTAssertNil(model.pendingReveal, "going elsewhere drops the request")
+        model.select(tab: .done)
+        model.retryDoneLog()
+        XCTAssertNil(model.doneLogFailure)
+        XCTAssertTrue(model.selection.isEmpty, "nothing is selected by a dropped request")
+        XCTAssertNil(model.scrollRequest, "and nothing is scrolled to")
+    }
+
     // MARK: - Must fix 7: cancellation, controls, edge scrolling
 
     func testACancelledDragCommitsNothingUntilTheButtonIsUp() {

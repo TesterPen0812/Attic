@@ -628,6 +628,9 @@ final class TasksPageModel: ObservableObject {
         guard tab != self.tab else { return }
         guard finishEditing() else { return }
         revealTab = nil
+        // The person went elsewhere: a `show` still waiting for its Done log
+        // page is dropped, never finished later by a scroll (round 5, F3).
+        pendingReveal = nil
         selection = []
         self.tab = tab
     }
