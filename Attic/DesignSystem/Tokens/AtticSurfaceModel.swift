@@ -62,6 +62,20 @@ struct AtticSurfaceModel: Equatable, Sendable {
     struct Edge: Equatable, Sendable {
         let color: AtticRGBA
         let width: CGFloat
+        /// A faint line just inside the edge (Defined Dark Edge), or nil.
+        var innerHighlight: AtticRGBA?
+    }
+
+    /// Defined Dark Edge (review switch, CU review visual 4): on Dark Glass
+    /// and Frosted, the palette's edge colour at a clearer strength and a
+    /// full point wide, with a faint white line inside it, so the surface
+    /// never merges into a grey desktop. Unchanged when `enabled` is false.
+    func definedDarkEdge(_ enabled: Bool) -> AtticSurfaceModel {
+        guard enabled, kind != .solid, appearance == .dark, let edge else { return self }
+        var copy = self
+        copy.edge = Edge(color: edge.color.withAlpha(min(edge.color.alpha * 1.9 + 0.04, 1)), width: 1,
+                         innerHighlight: .white(increaseContrast ? 0.14 : 0.07))
+        return copy
     }
 
     /// Visual A: the default surface's top sheen, within the first 24 pt.

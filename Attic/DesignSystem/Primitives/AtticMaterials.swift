@@ -542,6 +542,12 @@ struct AtticPanelRim: View {
                 // Phase 0's hairline: the palette's edge colour on the shape's
                 // edge (half of it shows inside the clip).
                 shape.stroke(edge.color.color, lineWidth: edge.width)
+                if let highlight = edge.innerHighlight {
+                    // Defined Dark Edge: a faint line just inside it.
+                    Squircle(cornerRadius: max(cornerSize - edge.width, 0), exponent: AtticStyle.panelSquircleExponent)
+                        .stroke(highlight.color, lineWidth: 0.5)
+                        .padding(edge.width)
+                }
             } else if design.tokens.panel.porcelain {
                 // Visual A: one 0.5 pt inside edge (black 6 % / white 8 %).
                 shape.inset(by: AtticHairline.width / 2)

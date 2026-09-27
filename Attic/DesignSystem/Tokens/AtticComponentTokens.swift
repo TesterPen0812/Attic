@@ -389,6 +389,8 @@ enum AtticSettingsMetrics {
     static let previewHeight: CGFloat = 156
     static let previewScale: CGFloat = 0.62
     static let previewTop: CGFloat = 18
+    /// The miniature fades out over the preview card's last 36 pt.
+    static let previewBottomFade: CGFloat = 36
     static let previewShadow = AtticShadowSpec(radius: 8, y: 3)
     static let previewShadowAlphaLight: Double = 0.14
     static let previewShadowAlphaDark: Double = 0.35

@@ -18,7 +18,7 @@ final class AtticReviewVariantsTests: XCTestCase {
         }
         XCTAssertEqual(AtticDesignContext().variants, .defaults)
         XCTAssertEqual(AtticReviewVariant.allCases.map(\.title),
-                       ["Readable Glass", "Quiet Inactive Controls", "Compact Appearance", "Explicit Phase 1 Labels"])
+                       ["Readable Glass", "Quiet Inactive Controls", "Compact Appearance", "Explicit Phase 1 Labels", "Defined Dark Edge"])
     }
 
     func testSwitchesPersistOnlyWhereTheyDifferFromTheirDefault() throws {
@@ -55,7 +55,7 @@ final class AtticReviewVariantsTests: XCTestCase {
         var checked = 0
         for context in AtticAppearanceCheck.allContexts() where context.isTranslucent && context.colourKey.readableGlass {
             var off = context
-            off.variants = .decided
+            off.variants = context.variants.with(.readableGlass, false)
             let panel = context.tokens.panel
             let decided = off.tokens.panel
             XCTAssertEqual(panel.withFoundation(decided.foundationOpacity), decided, "only the foundation changes: \(context.caption)")
@@ -208,6 +208,27 @@ final class AtticReviewVariantsTests: XCTestCase {
             let icQuiet = AtticDesignContext(mode: mode, increaseContrast: true).tokens.raised
             let icDecided = AtticDesignContext(mode: mode, increaseContrast: true, variants: .decided).tokens.raised
             XCTAssertEqual(icQuiet, icDecided, "\(mode)")
+        }
+    }
+
+    // MARK: Defined Dark Edge (CU review, visual 4)
+
+    func testDefinedDarkEdgeIsAClearerPaletteEdgeOnDarkGlassOnly() throws {
+        for palette in AtticPanelTheme.allCases {
+            for surface in [PanelSurfaceStyle.glass, .frosted] {
+                let on = AtticDesignContext(mode: .dark, palette: palette, surface: surface).tokens.panel
+                let off = AtticDesignContext(mode: .dark, palette: palette, surface: surface, variants: AtticReviewVariants.defaults.with(.definedDarkEdge, false)).tokens.panel
+                let edgeOn = try XCTUnwrap(on.edge), edgeOff = try XCTUnwrap(off.edge)
+                XCTAssertGreaterThan(edgeOn.color.alpha, edgeOff.color.alpha, "\(palette) \(surface)")
+                XCTAssertEqual(edgeOn.color.withAlpha(1), edgeOff.color.withAlpha(1), "the palette's own edge colour")
+                XCTAssertNotNil(edgeOn.innerHighlight)
+                XCTAssertNil(edgeOff.innerHighlight)
+                var copy = on; copy.edge = off.edge
+                XCTAssertEqual(copy, off, "only the edge changes")
+            }
+            // Light, and Dark Solid, are untouched.
+            XCTAssertEqual(AtticDesignContext(mode: .light, palette: palette, surface: .frosted).tokens.panel.edge,
+                           AtticDesignContext(mode: .light, palette: palette, surface: .frosted, variants: AtticReviewVariants.defaults.with(.definedDarkEdge, false)).tokens.panel.edge)
         }
     }
 

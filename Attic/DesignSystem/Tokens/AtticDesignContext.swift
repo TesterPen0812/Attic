@@ -61,7 +61,8 @@ struct AtticDesignContext: Hashable, Sendable {
             // Only the switches that change a colour, and Readable Glass
             // only where there is glass.
             readableGlass: variants.isOn(.readableGlass) && isTranslucent,
-            quietControls: variants.isOn(.quietInactiveControls)
+            quietControls: variants.isOn(.quietInactiveControls),
+            definedDarkEdge: variants.isOn(.definedDarkEdge) && isTranslucent && mode == .dark
         )
     }
 
@@ -85,6 +86,7 @@ struct AtticDesignContext: Hashable, Sendable {
         let increaseContrast: Bool
         var readableGlass = false
         var quietControls = false
+        var definedDarkEdge = false
     }
 
     /// The resolved tokens for this context (cached).
@@ -100,7 +102,11 @@ struct AtticDesignContext: Hashable, Sendable {
         if increaseContrast { parts.append("Increase contrast") }
         if reduceTransparency { parts.append("Reduce transparency") }
         if !reduceTransparency, controls == .craft { parts.append("Craft-style controls") }
+        // The review switches that change a colour, so the appearance check
+        // keeps both states of each apart.
         if colourKey.readableGlass { parts.append("Readable Glass") }
+        if colourKey.quietControls { parts.append("Quiet controls") }
+        if colourKey.definedDarkEdge { parts.append("Defined dark edge") }
         return parts.joined(separator: " · ")
     }
 }

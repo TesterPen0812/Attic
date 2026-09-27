@@ -316,7 +316,8 @@ final class AtticDesignSystemTests: XCTestCase {
     func testGlassAndFrostedArePhase0s() {
         // The decided design (Readable Glass off; the switch's own test is
         // `AtticReviewVariantsTests`).
-        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid && !context.colourKey.readableGlass {
+        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid && !context.colourKey.readableGlass
+            && !context.colourKey.definedDarkEdge {
             let appearance: AtticPanelThemeAppearance = context.mode == .dark ? .dark : .light
             let treatment = context.palette.surfaceTreatment(
                 appearance: appearance, contrast: context.increaseContrast ? .increased : .standard,

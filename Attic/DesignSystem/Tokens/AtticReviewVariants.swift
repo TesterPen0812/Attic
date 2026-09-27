@@ -28,6 +28,11 @@ enum AtticReviewVariant: String, CaseIterable, Identifiable, Hashable, Sendable 
     /// task). Shortcuts and identifiers are unchanged. Off: "Search", "Open
     /// Page".
     case explicitPhase1Labels
+    /// CU review, visual 4: Dark Glass and Frosted panels get a clearer
+    /// palette-coloured edge and a faint inner highlight, so the surface
+    /// stays separate from what is behind it (Dark Porcelain Vapor on
+    /// Frosted read as one flat grey). Off: Phase 0's 0.75 pt hairline.
+    case definedDarkEdge
 
     var id: String { rawValue }
 
@@ -38,6 +43,7 @@ enum AtticReviewVariant: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .quietInactiveControls: String(localized: "Quiet Inactive Controls")
         case .compactAppearance: String(localized: "Compact Appearance")
         case .explicitPhase1Labels: String(localized: "Explicit Phase 1 Labels")
+        case .definedDarkEdge: String(localized: "Defined Dark Edge")
         }
     }
 
@@ -52,6 +58,8 @@ enum AtticReviewVariant: String, CaseIterable, Identifiable, Hashable, Sendable 
             String(localized: "On: Appearance starts closer to the header, with Surface and tint before Palette. Off: today’s spacing and order.")
         case .explicitPhase1Labels:
             String(localized: "On: “Search Done Tasks…”, “Open Files…” and “Show Details”. Off: “Search” and “Open Page”.")
+        case .definedDarkEdge:
+            String(localized: "On: Dark Glass and Frosted panels keep a clearer edge in the palette’s colour. Off: Phase 0’s faint hairline.")
         }
     }
 
