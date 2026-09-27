@@ -327,13 +327,71 @@ final class MCPRequestHandlerTests: XCTestCase {
         let (noteStore, handler) = try makeNoteHandler()
         let note = try XCTUnwrap(noteStore.create(title: "Title", body: "old"))
 
+        let listed = try callNoteTool(handler, "list_notes", [:])
+        let revision = try XCTUnwrap((listed["notes"] as? [[String: Any]])?.first?["revision"] as? String)
         let payload = try callNoteTool(handler, "update_note", [
             "id": note.id.uuidString,
+            "base_revision": revision,
             "body": "new body"
         ])
         let updated = try XCTUnwrap(payload["note"] as? [String: Any])
+        XCTAssertEqual(payload["status"] as? String, "applied")
         XCTAssertEqual(updated["body"] as? String, "new body")
-        XCTAssertEqual(note.body, "new body")
+        XCTAssertNotEqual(updated["revision"] as? String, revision)
+        XCTAssertEqual(noteStore.note(withID: note.id)?.body, "new body")
+        XCTAssertTrue(noteStore.versions(noteID: note.id).contains { $0.reason == .beforeAgentEdit && $0.body == "old" },
+                      "the note as it was is kept as a version")
+    }
+
+    /// Requirement 5: an explicit base revision, an existing note, and a
+    /// write that changes a row; anything else is an error, never "applied".
+    func testUpdateNoteNeedsAnExistingNoteAndItsCurrentRevision() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let note = try XCTUnwrap(noteStore.create(title: "Title", body: "old"))
+        XCTAssertEqual(try noteToolError(handler, ["id": note.id.uuidString, "body": "x"]),
+                       "base_revision is required: pass the note's revision from list_notes.")
+        XCTAssertTrue(try noteToolError(handler, ["id": note.id.uuidString, "base_revision": "stale", "body": "x"])
+            .hasPrefix("The note changed since revision stale"))
+        XCTAssertTrue(try noteToolError(handler, ["id": UUID().uuidString, "base_revision": "initial", "body": "x"])
+            .hasPrefix("No note exists"))
+        XCTAssertEqual(noteStore.note(withID: note.id)?.body, "old")
+    }
+
+    func testUpdateNoteInTheNewFormatKeepsObjectsAndWaitsWhileTheNoteIsOpen() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let checklistID = UUID()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(),
+            document: NoteDocument(blocks: [.text("Plan"), .checklist("Buy cake", id: checklistID), .text("prose")])
+        ) else { return XCTFail() }
+        let listed = try callNoteTool(handler, "list_notes", [:])
+        let row = try XCTUnwrap((listed["notes"] as? [[String: Any]])?.first)
+        XCTAssertEqual(row["body"] as? String, "- [ ] Buy cake\nprose")
+        let revision = try XCTUnwrap(row["revision"] as? String)
+
+        noteStore.openDocumentNoteIDs = { [id] }
+        let pending = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": revision,
+                                                                "body": "- [x] Buy cake\nnew prose"])
+        XCTAssertEqual(pending["status"] as? String, "pending")
+        XCTAssertEqual(noteStore.note(withID: id)?.plainText, "Plan\n[ ] Buy cake\nprose", "an open note is not written")
+
+        noteStore.openDocumentNoteIDs = { [] }
+        XCTAssertEqual(noteStore.applyPendingEdits(noteID: id), 1)
+        guard case let .editable(document)? = noteStore.loadDocument(noteID: id)?.content else { return XCTFail() }
+        XCTAssertEqual(document.blocks[1].id, checklistID, "the kept checklist line keeps its id")
+        XCTAssertTrue(document.blocks[1].checked)
+        XCTAssertEqual(document.blocks[2].text, "new prose")
+    }
+
+    private func noteToolError(_ handler: MCPRequestHandler, _ arguments: [String: Any]) throws -> String {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": ["name": "update_note", "arguments": arguments]
+        ])
+        let response = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(handler.handle(body: body).body)) as? [String: Any])
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        return try XCTUnwrap((result["content"] as? [[String: Any]])?.first?["text"] as? String)
     }
 
     func testUpdateNoteRejectsBlankingWithAnAccurateMessage() throws {
@@ -345,7 +403,7 @@ final class MCPRequestHandlerTests: XCTestCase {
             "method": "tools/call",
             "params": [
                 "name": "update_note",
-                "arguments": ["id": note.id.uuidString, "title": "  ", "body": "\n"]
+                "arguments": ["id": note.id.uuidString, "base_revision": note.revisionToken, "title": "  ", "body": "\n"]
             ]
         ])
         let response = try XCTUnwrap(

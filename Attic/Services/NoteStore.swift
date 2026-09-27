@@ -48,6 +48,12 @@ private struct NoteReplicaSnapshot: Equatable {
     let deletedAt: Date?
     let deletedAttachmentIDsRaw: String?
     let tagsRaw: String
+    let content: Data?
+    let contentFormat: Int
+    let plainText: String
+    let taskID: UUID?
+    let revision: Int64
+    let revisionID: UUID?
 
     init(_ note: NoteItem) {
         id = note.id
@@ -58,6 +64,12 @@ private struct NoteReplicaSnapshot: Equatable {
         deletedAt = note.deletedAt
         deletedAttachmentIDsRaw = note.deletedAttachmentIDsRaw
         tagsRaw = note.tagsRaw
+        content = note.content
+        contentFormat = note.contentFormat
+        plainText = note.plainText
+        taskID = note.taskID
+        revision = note.revision
+        revisionID = note.revisionID
     }
 }
 
@@ -161,6 +173,9 @@ final class NoteStore: ObservableObject {
 #endif
 
     let container: ModelContainer
+    /// Notes open in the new editor right now (set by the Notes page). An
+    /// agent's write to one of them waits as a pending edit.
+    var openDocumentNoteIDs: () -> Set<UUID> = { [] }
 #if os(macOS)
     private let attachmentFileStore: AttachmentFileStore
     private let attachmentImporter: any NoteAttachmentFileImporting
@@ -239,6 +254,7 @@ final class NoteStore: ObservableObject {
             createdAt: timestamp,
             updatedAt: timestamp
         )
+        note.plainText = Self.legacyPlainText(title: normalizedTitle, body: body)
         context.insert(note)
         notes.append(note)
         guard save() else { return nil }
@@ -255,7 +271,25 @@ final class NoteStore: ObservableObject {
         body: String? = nil,
         bodyEditBatch: NoteBodyEditBatch? = nil
     ) -> Bool {
+        update(note, title: title, body: body, bodyEditBatch: bodyEditBatch, beforeWrite: nil)
+    }
+
+    /// `beforeWrite` stages rows that must commit with the change (a
+    /// version of the note as it was), given the replica shown now.
+    func update(
+        _ note: NoteItem,
+        title: String?,
+        body: String?,
+        bodyEditBatch: NoteBodyEditBatch?,
+        beforeWrite: ((NoteItem) -> Void)?
+    ) -> Bool {
         guard let note = notes.first(where: { $0.id == note.id }) else { return false }
+        // A note in the new format belongs to the new editor: writing its
+        // derived title or body here would silently lose its content.
+        guard !note.usesDocumentFormat else {
+            lastErrorMessage = Self.documentFormatRefusal
+            return false
+        }
         let replicas: [NoteItem]
         do {
             replicas = try storedNotes(matching: note.id)
@@ -304,6 +338,12 @@ final class NoteStore: ObservableObject {
                 return false
             }
         }
+        // Every stored field goes to every replica (requirement 8), with one
+        // new revision for the whole logical note.
+        let contentChanged = titleChanged || bodyChanged
+        if contentChanged { beforeWrite?(note) }
+        let revision = replicas.map(\.revision).max() ?? 0
+        let revisionID = contentChanged ? UUID() : note.revisionID
         for replica in replicas {
             replica.title = destinationTitle
             replica.body = destinationBody
@@ -312,8 +352,21 @@ final class NoteStore: ObservableObject {
             replica.deletedAt = nil
             replica.deletedAttachmentIDsRaw = nil
             replica.updatedAt = timestamp
+            replica.content = nil
+            replica.contentFormat = 0
+            replica.plainText = Self.legacyPlainText(title: destinationTitle, body: destinationBody)
+            replica.taskID = note.taskID
+            replica.revision = contentChanged ? revision &+ 1 : revision
+            replica.revisionID = revisionID
         }
         return save()
+    }
+
+    static let documentFormatRefusal =
+        "This note is stored in the new format. Edit it in the new Notes editor."
+
+    static func legacyPlainText(title: String, body: String) -> String {
+        body.isEmpty ? title : title + "\n" + body
     }
 
     /// Tags are metadata: setting them does not move the note in the
@@ -533,6 +586,10 @@ final class NoteStore: ObservableObject {
                 replicas.forEach(context.delete)
                 purgedIDs.insert(id)
             }
+#if os(macOS)
+            // A purged note's versions and pending agent edits go with it.
+            if !purgedIDs.isEmpty { try stageRemovalOfHistory(forNoteIDs: purgedIDs) }
+#endif
             if !purgedIDs.isEmpty { try alongside?(context, purgedIDs) }
         } catch {
             context.rollback()
@@ -925,7 +982,11 @@ final class NoteStore: ObservableObject {
                 predicate: #Predicate { $0.deletedAt != nil }
             ))
             let ids = Set(removed.filter { ($0.deletedAt ?? .distantFuture) < cutoff }.map(\.id))
-            for id in ids {
+            // Reference-aware retention: a row a note's document, a kept
+            // version or a pending agent edit still shows is never purged
+            // (a failed read keeps everything).
+            let retained = ids.isEmpty ? [] : try documentReferencedAttachmentIDs()
+            for id in ids where !retained.contains(id) {
                 let replicas = try storedAttachments(matching: id)
                 // Every replica identical (same note, same removal, same
                 // bytes, not just the same stored digest) and removed before
@@ -1165,6 +1226,43 @@ final class NoteStore: ObservableObject {
         }
         #endif
     }
+
+    // MARK: - Hooks for the note-format store (NoteStore+Documents.swift)
+
+    /// The long-lived context mutations stage into.
+    var modelContext: ModelContext { context }
+    var currentDate: Date { now() }
+
+    /// Saves staged changes; on failure rolls back, reloads and records the
+    /// error (the same rule every mutation here follows).
+    func commitStagedChanges() -> Bool { save() }
+
+    func recordError(_ message: String) { lastErrorMessage = message }
+
+    /// Presents a note row inserted and saved by the note-format store.
+    func present(_ note: NoteItem) {
+        guard !notes.contains(where: { $0.id == note.id }) else { return }
+        notes.append(note)
+    }
+
+    /// Every physical row of a live note (throws when none).
+    func liveReplicas(of id: UUID, in sourceContext: ModelContext? = nil) throws -> [NoteItem] {
+        try storedNotes(matching: id, in: sourceContext)
+    }
+
+    func replicasIncludingDeleted(of id: UUID) throws -> [NoteItem] {
+        try storedNotesIncludingDeleted(matching: id)
+    }
+
+    /// Replaces the presented models with a fresh read of the store.
+    func reloadPresentation() throws { try reloadModels() }
+
+#if os(macOS)
+    /// Every attachment row (shown or removed) a note owns.
+    func attachmentRows(forNoteID noteID: UUID) throws -> [NoteAttachment] {
+        try storedAttachments(forNoteID: noteID)
+    }
+#endif
 
     // MARK: - Persistence
 
@@ -1743,6 +1841,8 @@ final class NoteStore: ObservableObject {
             String(note.updatedAt.timeIntervalSinceReferenceDate.bitPattern),
             note.deletedAt.map { String($0.timeIntervalSinceReferenceDate.bitPattern) } ?? "",
             note.tagsRaw,
+            String(note.contentFormat),
+            note.revisionID?.uuidString ?? "",
             String(reflecting: note.persistentModelID)
         ].joined(separator: "\u{1F}")
     }

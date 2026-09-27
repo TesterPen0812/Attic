@@ -22,6 +22,29 @@ final class NoteItem {
     /// Normalised tags (see `AtticTag`), space-separated and sorted.
     var tagsRaw: String = ""
 
+    // MARK: Phase 2 note format (`attic.note/1`, see `NoteDocument`)
+    //
+    // All defaulted or optional, no uniqueness (CloudKit rules). A note with
+    // `contentFormat == 0` is legacy: `title` and `body` are its content.
+    // From format 1 on, `content` is the truth and `title`, `body` and
+    // `plainText` are derived from it on every save, on every replica.
+
+    /// The stored document; nil while the note is legacy. Kept byte for byte
+    /// when this build can only read it (a newer format).
+    @Attribute(.externalStorage) var content: Data? = nil
+    /// 0 legacy title/body, 1 `attic.note/1`, higher = written by a newer Attic.
+    var contentFormat: Int = 0
+    /// Derived search and agent text (title, then one line per block).
+    var plainText: String = ""
+    /// This note is that task's page (phase 3); nil for ordinary notes.
+    var taskID: UUID? = nil
+    /// +1 per content save (ordering).
+    var revision: Int64 = 0
+    /// A new random value per content save: "unchanged since an agent read
+    /// it" is exact even across divergent replicas. nil until the first
+    /// save that records one.
+    var revisionID: UUID? = nil
+
     init(
         id: UUID = UUID(),
         title: String = "",
@@ -49,4 +72,12 @@ final class NoteItem {
         get { AtticTag.decode(tagsRaw) }
         set { tagsRaw = AtticTag.encode(newValue) }
     }
+
+    /// Stored in the new format (editable or not): the new editor owns it.
+    var usesDocumentFormat: Bool { contentFormat >= 1 }
+
+    /// The token agents read and must send back with a write.
+    var revisionToken: String { revisionID?.uuidString ?? NoteItem.initialRevisionToken }
+
+    static let initialRevisionToken = "initial"
 }

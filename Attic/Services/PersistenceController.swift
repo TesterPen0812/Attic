@@ -32,7 +32,10 @@ enum PersistenceController {
             CanvasStrokeItem.self,
             CanvasImageItem.self,
             CanvasSemanticObjectItem.self,
-            ItemLink.self
+            ItemLink.self,
+            // Phase 2: note versions and agents' pending note edits.
+            NoteVersion.self,
+            NotePendingEdit.self
         ]
         #else
         [

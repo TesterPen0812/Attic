@@ -152,6 +152,10 @@ final class NoteDraftController: ObservableObject {
     /// panel shell.
     let noteStore: NoteStore
     let bodyEditLedger = NoteBodyEditLedger()
+    /// The Phase 2 editor's sessions. The shell's flush points (hide, quit,
+    /// page switch) reach them through `flush()`, so both editors' drafts
+    /// are preserved at the same boundaries.
+    let pages: NotesPageController
     private let autosaveDelay: Duration
     private let maximumAutosaveDelay: Duration
     private let sessionDefaults: UserDefaults?
@@ -189,6 +193,14 @@ final class NoteDraftController: ObservableObject {
         self.sessionDefaults = sessionDefaults
         self.recoveryFile = recoveryURL.map(NoteDraftRecoveryFile.init(url:))
         self.recoveryMayExist = recoveryURL != nil
+        self.pages = NotesPageController(
+            store: noteStore,
+            journal: recoveryURL.map {
+                NoteDraftJournal(directory: $0.deletingLastPathComponent().appendingPathComponent("NoteDrafts", isDirectory: true))
+            },
+            defaults: sessionDefaults
+        )
+        pages.leaveLegacyNote = { [weak self] in self?.close() ?? true }
         if let data = sessionDefaults?.data(forKey: Self.sessionKey),
            let saved = try? JSONDecoder().decode(StoredEditorSession.self, from: data) {
             lastEditedNoteID = saved.noteID
@@ -388,11 +400,21 @@ final class NoteDraftController: ObservableObject {
         }
     }
 
+    /// Persists pending text in both editors without closing them. False
+    /// when a draft could be neither saved nor checkpointed (the shell then
+    /// refuses to hide or quit).
+    @discardableResult
+    func flush() -> Bool {
+        let legacy = flushLegacy()
+        let current = pages.preserveAll()
+        return legacy && current
+    }
+
     /// Persists pending text without closing the editor. The current store
     /// snapshot is compared with the snapshot loaded into the editor before a
     /// write, preventing autosave from silently overwriting a CloudKit change.
     @discardableResult
-    func flush() -> Bool {
+    private func flushLegacy() -> Bool {
         cancelAutosave()
         defer {
             persistEditorSession()
@@ -636,7 +658,7 @@ final class NoteDraftController: ObservableObject {
                 do { try await Task.sleep(for: maximumDelay) } catch { return }
                 guard let self, !Task.isCancelled,
                       self.editorSession == expectedSession else { return }
-                _ = self.flush()
+                _ = self.flushLegacy()
             }
         }
 
@@ -653,7 +675,7 @@ final class NoteDraftController: ObservableObject {
                   scheduledGeneration == self.generation else {
                 return
             }
-            _ = flush()
+            _ = flushLegacy()
         }
     }
 

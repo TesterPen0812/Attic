@@ -257,7 +257,7 @@ final class AgentTaskTools {
         [
             "name": "update_note",
             "title": "Update Attic Note",
-            "description": "Update a Attic note directly without using its graphical interface. Change its title, body, or both; a title or body must remain non-empty.",
+            "description": "Replace an Attic note's title, body, or both. Pass the `revision` that list_notes returned as `base_revision`: the write fails if the note changed since, or doesn't exist. A title or body must remain non-empty. In a note stored in the new format, keep checklist (`- [ ] …`), image (`![image](attic://image/…)`) and date (`[date:YYYY-MM-DD]`) lines you want to keep exactly as returned. If the person has the note open, the change waits (status \"pending\") and applies when they leave it unchanged; the note's previous text is kept as a version.",
             "annotations": [
                 "readOnlyHint": false,
                 "destructiveHint": false,
@@ -271,10 +271,14 @@ final class AgentTaskTools {
                         "type": "string",
                         "description": "Note id returned by list_notes or create_note."
                     ],
+                    "base_revision": [
+                        "type": "string",
+                        "description": "The note's `revision` from list_notes or create_note."
+                    ],
                     "title": ["type": "string"],
                     "body": ["type": "string"]
                 ],
-                "required": ["id"],
+                "required": ["id", "base_revision"],
                 "additionalProperties": false
             ]
         ],
@@ -702,6 +706,22 @@ final class AgentTaskTools {
         guard !trimmedTitle.isEmpty || !trimmedBody.isEmpty else {
             throw AgentToolError.invalidArguments("A non-empty title or body is required.")
         }
+        if NotesEditorSetting.isEnabled() {
+            // The new editor is on: agents write the new format too.
+            let document: NoteDocument
+            do {
+                document = try NoteAgentTextParser.document(title: title, body: body, base: .blank)
+            } catch {
+                throw AgentToolError.invalidArguments(error.localizedDescription)
+            }
+            switch noteStore.createDocumentNote(id: UUID(), document: document) {
+            case let .success((noteID, _)):
+                guard let note = noteStore.note(withID: noteID) else { throw AgentToolError.storeFailure("The note could not be read back.") }
+                return try encode(["note": serializeNote(note)])
+            case let .failure(error):
+                throw AgentToolError.storeFailure(error.localizedDescription)
+            }
+        }
         guard let note = noteStore.create(title: title, body: body) else {
             throw AgentToolError.storeFailure(noteStore.lastErrorMessage ?? "Unknown error.")
         }
@@ -728,15 +748,63 @@ final class AgentTaskTools {
         guard newTitle != nil || newBody != nil else {
             throw AgentToolError.invalidArguments("Provide a title or body to update.")
         }
+        // Requirement 5: an explicit base revision, always.
+        guard let baseRevision = arguments["base_revision"] as? String, !baseRevision.isEmpty else {
+            throw AgentToolError.invalidArguments("base_revision is required: pass the note's revision from list_notes.")
+        }
+        guard baseRevision == note.revisionToken else {
+            throw AgentToolError.notPerformed(
+                "The note changed since revision \(baseRevision) (now \(note.revisionToken)). Read it again with list_notes and retry."
+            )
+        }
+        if note.usesDocumentFormat {
+            return try updateDocumentNote(note, title: newTitle, body: newBody, baseRevision: baseRevision, noteStore: noteStore)
+        }
         let destinationTitle = newTitle.map(NoteStore.normalizedTitle) ?? note.title
         let destinationBody = newBody ?? note.body
         guard !destinationTitle.isEmpty || NoteStore.hasMeaningfulBody(destinationBody) else {
             throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
         }
         try performNote {
-            noteStore.update(note, title: newTitle, body: newBody)
+            noteStore.agentUpdateLegacy(note, title: newTitle, body: newBody)
         }
-        return try encode(["note": serializeNote(note)])
+        let updated = noteStore.note(withID: note.id) ?? note
+        return try encode(["status": "applied", "note": serializeNote(updated)])
+    }
+
+    private func updateDocumentNote(_ note: NoteItem, title: String?, body: String?, baseRevision: String,
+                                    noteStore: NoteStore) throws -> String {
+        guard let load = noteStore.loadDocument(noteID: note.id), case let .editable(current) = load.content else {
+            throw AgentToolError.notPerformed("This note was saved by a newer version of Attic and is read-only here.")
+        }
+        let document: NoteDocument
+        do {
+            document = try NoteAgentTextParser.document(
+                title: title ?? NoteTextExport.agentLine(current.blocks.first ?? .text(""), index: 0),
+                body: body ?? NoteTextExport.agentBody(current),
+                base: current
+            )
+        } catch {
+            throw AgentToolError.invalidArguments(error.localizedDescription)
+        }
+        guard !document.isEmpty || !document.objectIDs.isEmpty else {
+            throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
+        }
+        switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
+                                    agentName: "Agent", noteIsOpen: noteStore.openDocumentNoteIDs().contains(note.id)) {
+        case .success(.applied):
+            let updated = noteStore.note(withID: note.id) ?? note
+            return try encode(["status": "applied", "note": serializeNote(updated)])
+        case let .success(.pending(editID)):
+            return try encode([
+                "status": "pending",
+                "pending_edit": editID.uuidString,
+                "message": "The note is open in Attic; the change applies when the person leaves it, if they haven't changed it.",
+                "note": serializeNote(note)
+            ])
+        case let .failure(error):
+            throw AgentToolError.notPerformed(error.localizedDescription)
+        }
     }
 
     private func deleteNote(_ arguments: [String: Any]) throws -> String {
@@ -764,14 +832,24 @@ final class AgentTaskTools {
     }
 
     private func serializeNote(_ note: NoteItem) -> [String: Any] {
-        [
+        var payload: [String: Any] = [
             "id": note.id.uuidString,
             "title": note.title,
             "body": note.body,
             "createdAt": Self.dateFormatter.string(from: note.createdAt),
             "updatedAt": Self.dateFormatter.string(from: note.updatedAt),
-            "tags": note.tags
+            "tags": note.tags,
+            "revision": note.revisionToken
         ]
+        if note.usesDocumentFormat, let data = note.content {
+            switch NoteContentCodec.decode(data) {
+            case let .editable(document):
+                payload["body"] = NoteTextExport.agentBody(document)
+            case .readOnly:
+                payload["read_only"] = true
+            }
+        }
+        return payload
     }
 
     private func serialize(_ task: TaskItem) -> [String: Any] {

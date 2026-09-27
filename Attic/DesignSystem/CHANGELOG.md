@@ -3,6 +3,18 @@
 The design system was frozen when the owner signed off the Phase 0 gallery.
 Every later change is recorded here: what changed, why, and who asked.
 
+## Phase 2
+
+### Notes rebuild, slice 1 (redesign/phase-2)
+
+- **New `AtticDateChip`** (and `AtticDateChipMetrics`: a 10 pt calendar glyph,
+  4 pt gap): a date inside note text. It reuses the tag chip's pill (18 tall,
+  radius 7.5, `tagFill`, `AtticTagMetrics.horizontalPadding`) and the
+  `chipLabel` style in body ink; no new colour, radius or type style. The note
+  editor renders it (and `AtticSubtaskCheckbox`, for checklist lines) into
+  images for its text attachments, so notes draw only design-system parts.
+  Requested by the Phase 2 slice 1 brief (one inline date object).
+
 ## Phase 1
 
 Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
