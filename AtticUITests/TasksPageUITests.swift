@@ -62,8 +62,23 @@ final class TasksPageUITests: XCTestCase {
         window.descendants(matching: .any)["tasks-completed-today"]
     }
 
+    /// The Done search's field: on the tabs' line while searching.
     private var searchField: XCUIElement {
         window.textFields.matching(NSPredicate(format: "label == %@", "Search done tasks")).firstMatch
+    }
+
+    /// The magnifier at the end of the tabs' line on Done.
+    private var searchButton: XCUIElement {
+        window.buttons["tasks-done-search-button"]
+    }
+
+    /// The row lies inside the window (the page shown), not on a page
+    /// beside it that is built for the swipe.
+    private func isOnScreen(_ title: String) -> Bool {
+        let element = row(title)
+        guard element.exists else { return false }
+        let frame = element.frame
+        return window.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
     }
 
     private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 5, _ message: String,
@@ -273,22 +288,42 @@ final class TasksPageUITests: XCTestCase {
         waitFor(row("Try the paper sketch idea").exists, "back on Later, where it came from")
     }
 
-    /// The Done page's search is the row at the top of its list: typing
-    /// filters the log, Esc clears the text, the next Esc leaves the field.
-    func testTheDoneSearchFiltersAndEscapeClearsThenLeaves() throws {
+    /// Round 6 (owner item 17, card B of v22): the Done search lives on
+    /// the tabs' line. A magnifier at its end; clicking it, ⌘F or typing on
+    /// the Done page turns the line into the field; the results mark the
+    /// match and end with "N of M done tasks"; Esc returns the tabs.
+    func testTheDoneSearchTakesTheTabsLineAndEscReturnsThem() throws {
+        XCTAssertFalse(searchButton.exists, "the magnifier is Done's alone")
         tab("done").click()
-        waitFor(row("Pay rent").isHittable, "the Done log shows")
-        XCTAssertTrue(searchField.waitForExistence(timeout: 3))
-        searchField.click()
-        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "a click puts the keyboard in the search")
+        waitFor(isOnScreen("Pay rent"), "the Done log shows")
+        XCTAssertFalse(searchField.exists, "no search row: the log starts with its days")
+        XCTAssertTrue(searchButton.waitForExistence(timeout: 3), "a magnifier at the end of the tabs' line")
+        searchButton.click()
+        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the field takes the line, with the keyboard")
+        XCTAssertFalse(tab("now").exists, "the field is where the tabs were")
         app.typeText("invoice")
         waitFor(!row("Pay rent").exists, "typing filters the log")
         XCTAssertTrue(row("Send invoice").exists)
+        let count = window.descendants(matching: .any)["tasks-done-search-count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 3), "a quiet count under the results")
+        XCTAssertTrue(count.label.hasPrefix("1 of "), count.label)
         app.typeKey(.escape, modifierFlags: [])
-        waitFor(row("Pay rent").exists, "Esc clears the search")
-        XCTAssertEqual((searchField.value as? String) ?? "", "")
+        waitFor(row("Pay rent").exists, "Esc ends the search")
+        waitFor(tab("now").exists, "and the tabs return")
+        XCTAssertFalse(searchField.exists)
+
+        // ⌘F, and a letter typed with a row focused, open it too.
+        app.typeKey("f", modifierFlags: .command)
+        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "⌘F puts the keyboard in the search")
         app.typeKey(.escape, modifierFlags: [])
-        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) != true, "the next Esc leaves the field")
+        waitFor(tab("now").exists, "Esc returns the tabs")
+        waitForSettled(row("Pay rent"))
+        select("Pay rent")
+        app.typeText("inv")
+        waitFor((searchField.value as? String) == "inv", "typing on the Done page searches: \(String(describing: searchField.value))")
+        waitFor(!row("Pay rent").exists, "and filters")
+        app.typeKey(.escape, modifierFlags: [])
+        waitFor(tab("done").exists && row("Pay rent").exists, "Esc returns the tabs and the whole log")
     }
 
     // MARK: - In progress: the dot, then the pie
@@ -365,29 +400,60 @@ final class TasksPageUITests: XCTestCase {
 
     private func menuItem(_ title: String) -> XCUIElement { app.menuItems[title] }
 
-    /// The strip over the add bar (owner fix 5 A2): it shows with a draft;
-    /// Date and Priority open their pickers, and a pick becomes the same
-    /// chip typing makes.
-    func testTheStripAddsADateAndAPriority() throws {
+    /// The strip over the add bar (owner fix 5 A2; round 6, item 18): it
+    /// shows with a draft; each button shows what the task will get, picked
+    /// or typed, on its button (never in the text), with a clear ×; the Tag
+    /// button opens the tag list.
+    func testTheStripShowsPickedValuesOnItsButtons() throws {
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
         let date = window.buttons["composer-date"]
+        let tag = window.buttons["composer-tag"]
+        let priority = window.buttons["composer-priority"]
         XCTAssertFalse(date.exists, "no strip while the bar is empty")
         addBar.click()
-        addBar.typeText("Pay rent")
+        addBar.typeText("Water the ferns")
         XCTAssertTrue(date.waitForExistence(timeout: 3), "the strip shows with the first keystroke")
         date.click()
         let tomorrow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tomorrow")).firstMatch
         XCTAssertTrue(tomorrow.waitForExistence(timeout: 3), "the date picker opens")
         tomorrow.click()
-        window.buttons["composer-priority"].click()
+        waitFor((date.value as? String) == "Tomorrow", "the Date button shows the pick: \(String(describing: date.value))")
+        XCTAssertEqual(addBar.value as? String, "Water the ferns", "picking never inserts text")
+        XCTAssertTrue(window.buttons["composer-date-clear"].exists, "a set button has its ×")
+
+        tag.click()
+        let launch = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        XCTAssertTrue(launch.waitForExistence(timeout: 3), "the Tag button opens the tag list (it types no #)")
+        launch.click()
+        waitFor((tag.value as? String) == "launch", "the Tag button shows the tag: \(String(describing: tag.value))")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertEqual(addBar.value as? String, "Water the ferns")
+
+        priority.click()
         let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
-        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers None, Medium and High")
+        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers No Priority, Medium and High")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label == %@", "Low")).firstMatch.exists, "no Low")
         high.click()
-        waitFor((addBar.value as? String)?.contains("tomorrow") == true, "the pick is in the draft as its words")
+        waitFor((priority.value as? String) == "High", "the Priority button shows High")
+
+        // A typed piece shows on its button too; the × clears it, words and all.
+        addBar.click()
+        addBar.typeKey(.rightArrow, modifierFlags: .command)
+        addBar.typeText(" next week ")
+        waitFor((date.value as? String)?.isEmpty == false && (date.value as? String) != "Tomorrow",
+                "a date typed after the pick replaces it: \(String(describing: date.value))")
+        window.buttons["composer-date-clear"].click()
+        waitFor((date.value as? String ?? "").isEmpty, "× clears the date")
+        waitFor((addBar.value as? String)?.contains("week") == false, "and its typed words")
+
+        addBar.click()
+        addBar.typeKey(.rightArrow, modifierFlags: .command)
         addBar.typeText("\r")
-        waitFor(row("Pay rent").exists, "the task is added")
-        XCTAssertTrue(label("Pay rent").contains("due Tomorrow"), label("Pay rent"))
-        XCTAssertTrue(label("Pay rent").contains("high priority"), label("Pay rent"))
+        waitFor(row("Water the ferns").exists, "the task is added")
+        let spoken = label("Water the ferns")
+        XCTAssertTrue(spoken.contains("high priority"), spoken)
+        XCTAssertTrue(spoken.contains("tagged launch"), spoken)
+        XCTAssertFalse(spoken.contains("due "), spoken)
         waitFor(!date.exists, "the strip goes with the draft")
     }
 
@@ -557,10 +623,11 @@ final class TasksPageUITests: XCTestCase {
     /// never restored or un-completed by them.
     func testKeysTypedInTheDoneSearchStayInIt() throws {
         tab("done").click()
-        waitFor(row("Pay rent").isHittable, "the Done log shows")
+        waitFor(isOnScreen("Pay rent"), "the Done log shows")
+        waitForSettled(row("Pay rent"))
         select("Pay rent")
-        XCTAssertTrue(searchField.waitForExistence(timeout: 3))
-        searchField.click()
+        XCTAssertTrue(searchButton.waitForExistence(timeout: 3))
+        searchButton.click()
         waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the search has the keyboard")
         app.typeText("pay")
         app.typeKey(.delete, modifierFlags: [])
@@ -632,8 +699,88 @@ final class TasksPageUITests: XCTestCase {
         waitForSettled(row("Pay rent"))
         select("Pay rent")
         waitFor(row("Pay rent").isSelected, "a click selects it")
-        searchField.click()
-        waitFor(!row("Pay rent").isSelected, "a click in the search clears it")
+        searchButton.click()
+        waitFor(!row("Pay rent").isSelected, "starting a search clears it")
         XCTAssertFalse(row("Send invoice").isSelected)
+    }
+
+    // MARK: - Round 6: Done rows take clicks (owner item 23)
+
+    /// Done rows are selected by a click, ⇧-click extends and ⌘-click
+    /// adds, as on Now and Later; Restore acts on the selection as one
+    /// step, and one ⌘Z puts them all back.
+    func testDoneRowsAreClickSelectableAndRestoreTogether() throws {
+        tab("done").click()
+        waitFor(isOnScreen("Pay rent"), "the Done log shows")
+        waitForSettled(row("Pay rent"))
+        select("Call the bank")
+        waitFor(row("Call the bank").isSelected, "a click selects a Done row")
+        XCUIElement.perform(withKeyModifiers: .shift) { select("Pay rent") }
+        waitFor(row("Pay rent").isSelected && row("Call the bank").isSelected, "⇧-click extends the selection")
+        XCUIElement.perform(withKeyModifiers: .command) { select("Send invoice") }
+        waitFor(row("Send invoice").isSelected, "⌘-click adds a row")
+        XCTAssertTrue(row("Pay rent").isSelected)
+        XCTAssertFalse(row("Water the plants").isSelected, "⌘-click adds only that row")
+        row("Pay rent").rightClick()
+        let restore = menuItem("Restore 3 Tasks to Now")
+        XCTAssertTrue(restore.waitForExistence(timeout: 3), "the menu restores the selection")
+        restore.click()
+        waitFor(!row("Pay rent").exists && !row("Call the bank").exists && !row("Send invoice").exists,
+                "all three leave the Done log")
+        app.typeKey("z", modifierFlags: .command)
+        waitFor(row("Pay rent").exists && row("Call the bank").exists && row("Send invoice").exists,
+                "one ⌘Z puts all three back")
+    }
+
+    // MARK: - Round 6: pages (owner items 21 and 22)
+
+    /// Each page's own row, to tell which page is shown.
+    private func landmark(_ page: String) -> String {
+        switch page {
+        case "now": "Call the plumber"
+        case "backlog": "Plan the spring trip"
+        default: "Pay rent"
+        }
+    }
+
+    private func waitForPage(_ page: String, _ message: String, file: StaticString = #filePath, line: UInt = #line) {
+        waitFor(tab(page).isSelected && isOnScreen(landmark(page)), message, file: file, line: line)
+        for other in ["now", "backlog", "done"] where other != page {
+            XCTAssertFalse(isOnScreen(landmark(other)), "\(message): \(other) is not shown", file: file, line: line)
+        }
+    }
+
+    /// A click on a tab lands on that page from every other page (round 5
+    /// landed on Later when Done was clicked from Now).
+    func testEveryTabClickLandsOnItsPageFromEveryOther() throws {
+        let pages = ["now", "backlog", "done"]
+        for from in pages {
+            for to in pages where to != from {
+                tab(from).click()
+                waitForPage(from, "on \(from)")
+                tab(to).click()
+                waitForPage(to, "a click on \(to) from \(from) lands on \(to)")
+            }
+        }
+    }
+
+    /// One hard swipe from Now stops at Later, never Done (owner item 21).
+    /// The scroll's sign differs between Xcode versions: if the first
+    /// swipe goes the other way (Now stays), the second is the same swipe
+    /// forwards.
+    func testAHardSwipeFromNowStopsAtLater() throws {
+        waitForPage("now", "the panel opens on Now")
+        let point = row("Call the plumber").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        point.hover()
+        for delta in [-2_000.0, 2_000.0] {
+            point.scroll(byDeltaX: delta, deltaY: 0)
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline, tab("now").isSelected { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+            // Let any momentum finish before judging where it stopped.
+            RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+            if !tab("now").isSelected { break }
+        }
+        XCTAssertFalse(tab("done").isSelected, "a hard swipe never crosses two pages")
+        waitForPage("backlog", "a hard swipe from Now stops at Later")
     }
 }

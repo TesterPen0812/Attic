@@ -152,6 +152,25 @@ struct TaskAddBarText: Equatable {
         return parts
     }
 
+    /// A date or priority typed after one was picked replaces the pick (the
+    /// latest wins, as picking replaces a typed one). Returns whether a
+    /// pick went.
+    @discardableResult
+    mutating func typedReplacesPicks(parser: TaskTextParser) -> Bool {
+        guard picked.day != nil || picked.priority != nil else { return false }
+        let tokens = activeTokens(parser: parser)
+        var changed = false
+        if picked.day != nil, tokens.contains(where: { PieceKind.date.matches($0.value) }) {
+            picked.day = nil
+            changed = true
+        }
+        if picked.priority != nil, tokens.contains(where: { PieceKind.priority.matches($0.value) }) {
+            picked.priority = nil
+            changed = true
+        }
+        return changed
+    }
+
     /// Backspace on a chip: the piece stays, as plain text (a picked piece
     /// loses its value too).
     mutating func dismiss(_ range: NSRange) {

@@ -280,7 +280,9 @@ struct TasksPage: View {
     /// Search: the keyboard goes to the search field on the tabs' line.
     private func beginSearch() {
         addBarFocused = false
+        // No row stays lit behind the search (round 5, the owner's item 16).
         focusedRow = nil
+        model.clearSelection()
         searchFocused = true
     }
 
@@ -1543,7 +1545,10 @@ private struct TasksAddBar: View {
                             if text.caret != caret { text.caret = caret }
                             // Assign only a change: every assignment redraws the bar.
                             var shown = text.text
-                            if shown.markShown(parser: model.parser, caret: caret) { text.text = shown }
+                            let marked = shown.markShown(parser: model.parser, caret: caret)
+                            // A date or priority typed after a pick replaces it.
+                            let replaced = shown.typedReplacesPicks(parser: model.parser)
+                            if marked || replaced { text.text = shown }
                         },
                         suggestionKey: { key in suggestionKey(key) },
                         undoDraft: { text.undoDraft() },

@@ -412,6 +412,20 @@ final class TasksRound6ComposerTests: XCTestCase {
         XCTAssertEqual(model.addBar, TaskAddBarText(), "the draft and its picks are gone")
     }
 
+    /// A date or priority typed after a pick replaces it (the latest wins).
+    func testATypedPieceAfterAPickReplacesIt() {
+        draft("Pay rent")
+        model.pickDate(day("2026-10-01"), editor: editor)
+        model.pickPriority(.high, editor: editor)
+        var text = model.addBar
+        text.text = "Pay rent fri !"
+        XCTAssertTrue(text.typedReplacesPicks(parser: model.parser))
+        XCTAssertNil(text.picked.day)
+        XCTAssertNil(text.picked.priority)
+        XCTAssertEqual(text.parts(parser: model.parser).priority, .medium)
+        XCTAssertFalse(text.typedReplacesPicks(parser: model.parser), "nothing left to replace")
+    }
+
     // MARK: Typed pieces (option H)
 
     func testTypedPiecesDrawByKind() {

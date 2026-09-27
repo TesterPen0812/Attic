@@ -108,7 +108,8 @@ final class PanelShellUITests: XCTestCase {
         let field = app.textFields.matching(NSPredicate(format: "label == %@", "Search done tasks")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the Done page's search shows", file: file, line: line)
         waitFor(app.buttons["panel-section-tasks"].isSelected, "on the Tasks page")
-        waitFor(app.buttons["tasks-page-done"].isSelected, "on its Done tab")
+        // The field takes Done's tabs' line (round 6).
+        waitFor(!app.buttons["tasks-page-now"].exists, "the search is on Done's tabs' line")
         waitForFocus(true, on: field, file: file, line: line)
         app.typeText("invoice")
         XCTAssertEqual(field.value as? String, "invoice", file: file, line: line)
