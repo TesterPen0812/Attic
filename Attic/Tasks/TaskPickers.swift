@@ -95,7 +95,8 @@ struct TaskTagPickerView: View {
     let allTags: [String]
     let state: (String) -> AtticCheckState
     let onToggle: (String) -> Void
-    let onCreate: (String) -> Void
+    /// Adds a new tag; false when it did not save, so what was typed stays.
+    let onCreate: (String) -> Bool
     /// Opened by "New Tag…": the field has the keyboard at once.
     var focusField = true
 
@@ -113,7 +114,7 @@ struct TaskTagPickerView: View {
             create: create,
             highlighted: highlighted,
             onToggle: onToggle,
-            onCreate: { name in onCreate(name); query = "" },
+            onCreate: { name in if onCreate(name) { query = "" } },
             fieldFocused: $fieldFocused
         )
         .onAppear { if focusField { fieldFocused = true } }
@@ -133,8 +134,7 @@ struct TaskTagPickerView: View {
                 if let highlighted, highlighted < filtered.count {
                     onToggle(filtered[highlighted])
                 } else if let create {
-                    onCreate(create)
-                    query = ""
+                    if onCreate(create) { query = "" }
                 } else {
                     return .ignored
                 }
@@ -188,6 +188,16 @@ struct TaskPriorityPickerView: View {
 }
 
 extension TaskPriority {
+    /// The toast's wording: "High priority", "Priority removed".
+    var spokenTitle: String {
+        switch self {
+        case .none: String(localized: "Priority removed")
+        case .low: String(localized: "Low priority")
+        case .medium: String(localized: "Medium priority")
+        case .high: String(localized: "High priority")
+        }
+    }
+
     /// The strip's and menu's wording: "None", "!  Medium", "!!  High".
     var pickerTitle: String {
         switch self {

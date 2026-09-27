@@ -20,10 +20,13 @@ extension TasksPageModel {
 
     /// Date ▸ in the menu, a row's date popover: the targets' due day set
     /// (or removed) as one step, with an Undo toast.
-    func setDueDay(_ day: DueDay?, for ids: [UUID]) {
+    @discardableResult
+    func setDueDay(_ day: DueDay?, for ids: [UUID]) -> CommandOutcome {
         let live = ids.filter { store.task(withID: $0) != nil }
-        guard !live.isEmpty, live.contains(where: { store.task(withID: $0)?.dueDay != day }) else { return }
-        guard library.updateTaskFields(live, dueDay: .some(day)).isApplied else { return }
+        guard !live.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }
+        guard live.contains(where: { store.task(withID: $0)?.dueDay != day }) else { return .applied }
+        let outcome = library.updateTaskFields(live, dueDay: .some(day))
+        guard outcome.isApplied else { return outcome }
         let message: String
         if let day {
             let text = TaskRowPresentation.due(day, today: dateChoices.today, calendar: services.calendar(), locale: services.locale).text
@@ -32,6 +35,7 @@ extension TasksPageModel {
             message = live.count == 1 ? String(localized: "Date removed") : String(localized: "Dates removed from \(live.count) tasks")
         }
         showToast(message)
+        return outcome
     }
 
     /// How many of the targets have `tag`: all (ticked), some (mixed), none.
@@ -45,13 +49,16 @@ extension TasksPageModel {
     /// A click on a tag in the tag list (review 17's bulk rule): ticked
     /// (every target has it) removes it from all; empty or mixed adds it to
     /// all. One step, with an Undo toast.
-    func toggleTag(_ tag: String, for ids: [UUID]) {
-        guard let tag = AtticTag.normalize(tag) else { return }
+    @discardableResult
+    func toggleTag(_ tag: String, for ids: [UUID]) -> CommandOutcome {
+        guard let tag = AtticTag.normalize(tag) else { return .applied }
         let live = ids.filter { store.task(withID: $0) != nil }
-        guard !live.isEmpty else { return }
+        guard !live.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }
         let removing = tagState(tag, for: live) == .on
-        guard library.updateTaskFields(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil).isApplied else { return }
+        let outcome = library.updateTaskFields(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil)
+        guard outcome.isApplied else { return outcome }
         showToast(removing ? String(localized: "Removed #\(tag)") : String(localized: "Tagged #\(tag)"))
+        return outcome
     }
 
     /// The tags the tag list shows for these targets: theirs first, then

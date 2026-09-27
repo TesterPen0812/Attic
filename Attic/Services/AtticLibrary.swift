@@ -288,26 +288,38 @@ final class AtticLibrary {
     /// over its replicas and family (`TaskStore.undoRestoreToNow`, Astra 4).
     @discardableResult
     func restoreToNow(_ id: UUID, in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        restoreToNow([id], in: history)
+    }
+
+    /// Restore to Now for one or several finished tasks as one step and one
+    /// save (round 4): undo puts every one back where it was (today's done
+    /// group, or the Done log with its family) in one save; redo restores
+    /// them all again.
+    @discardableResult
+    func restoreToNow(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> CommandOutcome {
         var succeeded = false
         let serial = tasks.errorSerial
         undo.perform(in: history) {
-            guard let before = tasks.listedEditableState(of: id) else { return nil }
-            let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt
-            guard tasks.restoreToNow(taskID: id), let after = tasks.editableState(of: id) else { return nil }
+            let before = ids.compactMap(tasks.listedEditableState(of:))
+            guard before.count == ids.count else { return nil }
+            var logging: [UUID: Date] = [:]
+            for id in ids { if let loggedAt = tasks.listedTask(withID: id)?.doneLoggedAt { logging[id] = loggedAt } }
+            guard tasks.restoreToNow(taskIDs: ids) else { return nil }
+            let after = ids.compactMap(tasks.editableState(of:))
             succeeded = true
-            let tasks = self.tasks
+            let store = self.tasks
             return UndoStep(
-                name: "Restore Task",
+                name: ids.count == 1 ? "Restore Task" : "Restore \(ids.count) Tasks",
                 undoOutcome: {
-                    tasks.undoRestoreToNow(taskID: id, from: [after], to: [before], loggedAt: loggedAt)
+                    store.undoReturnFromDoneLog(from: after, to: before, logging: logging)
                 },
                 redoOutcome: {
-                    guard tasks.listedTask(withID: id) != nil else { return .obsolete }
-                    return tasks.restoreToNow(taskID: id) ? .applied : .failed
+                    guard ids.allSatisfy({ store.listedTask(withID: $0) != nil }) else { return .obsolete }
+                    return store.restoreToNow(taskIDs: ids) ? .applied : .failed
                 }
             )
         }
-        return taskOutcome(succeeded, since: serial, ids: [id])
+        return taskOutcome(succeeded, since: serial, ids: ids)
     }
 
     /// Reopens finished tasks (the circle, Space, "Mark as Not Done"),

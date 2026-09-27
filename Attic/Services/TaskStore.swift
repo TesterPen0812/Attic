@@ -2270,36 +2270,53 @@ final class TaskStore: ObservableObject {
     /// written, on every replica, in one save.
     @discardableResult
     func restoreToNow(taskID: UUID) -> Bool {
-        if let shown = task(withID: taskID) {
-            guard shown.status == .done else { return true }
-            return update(shown, status: .todo, allowingUnfinishedSubtasks: true)
-        }
-        guard let logged = listedTask(withID: taskID) else {
-            report("The task is no longer in the Done log.", owner: nil)
-            return false
-        }
+        restoreToNow(taskIDs: [taskID])
+    }
+
+    /// Restore to Now for several finished tasks (round 4, Astra's final
+    /// review 1): every task, its replicas and any family coming back from
+    /// the Done log are staged in one context and written in one save, so
+    /// all come back or none does. A task that is no longer listed refuses
+    /// the whole command.
+    @discardableResult
+    func restoreToNow(taskIDs: [UUID]) -> Bool {
+        guard !taskIDs.isEmpty else { return true }
         let timestamp = now()
+        var returning = Set<UUID>()
         do {
-            let replicas = try storedTasks(matching: taskID)
-            let order = try nextManualOrder(status: .todo, updatedAt: timestamp)
-            let shownCopy = TaskContentSnapshot(logged)
-            let agreeing = Set(replicas.filter { $0 === logged || TaskContentSnapshot($0) == shownCopy }
-                .map(\.persistentModelID))
-            for replica in replicas {
-                replica.status = .todo
-                replica.completedAt = nil
-                replica.completedFromRaw = nil
-                replica.completedFromOrder = nil
-                replica.manualOrder = order
-                replica.listOrderVersion = TaskItem.currentListOrderVersion
-                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+            for taskID in taskIDs {
+                if let shown = task(withID: taskID) {
+                    guard shown.status == .done else { continue }
+                    _ = try stageUpdate(shown, status: .todo, allowingUnfinishedSubtasks: true)
+                    continue
+                }
+                guard let logged = listedTask(withID: taskID) else {
+                    throw TaskEditRefusal("The task is no longer in the Done log.")
+                }
+                let replicas = try storedTasks(matching: taskID)
+                let order = try nextManualOrder(status: .todo, updatedAt: timestamp)
+                let shownCopy = TaskContentSnapshot(logged)
+                let agreeing = Set(replicas.filter { $0 === logged || TaskContentSnapshot($0) == shownCopy }
+                    .map(\.persistentModelID))
+                for replica in replicas {
+                    replica.status = .todo
+                    replica.completedAt = nil
+                    replica.completedFromRaw = nil
+                    replica.completedFromOrder = nil
+                    replica.manualOrder = order
+                    replica.listOrderVersion = TaskItem.currentListOrderVersion
+                    if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+                }
+                returning.insert(logged.parentID ?? taskID)
             }
-            try returnFamiliesFromDoneLog([logged.parentID ?? taskID])
+            try returnFamiliesFromDoneLog(returning)
         } catch {
             context.rollback()
-            report(error.localizedDescription, owner: nil)
+            try? reloadTasks()
+            report(error, owner: nil)
             return false
         }
+        guard context.hasChanges else { return true }
         guard save(owner: nil) else { return false }
         do {
             try reloadTasks()

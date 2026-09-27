@@ -512,6 +512,38 @@ final class TasksPageModel: ObservableObject {
         rowRetry = nil
     }
 
+    /// A change made in an open picker (a row's date or tag list) that did
+    /// not save: the picker stays open with what was chosen and shows
+    /// "Not saved · Retry" inside itself (round 4).
+    @Published private(set) var pickerFailure: RowFailure?
+    private var pickerRetry: (() -> CommandOutcome)?
+
+    /// Runs a picker's change; true when it saved (the caller may close).
+    @discardableResult
+    func pickerChange(on id: UUID, _ change: @escaping () -> CommandOutcome) -> Bool {
+        let outcome = change()
+        if let failure = outcome.failure {
+            pickerFailure = RowFailure(id: id, message: failure.message, canRetry: failure.canRetry)
+            pickerRetry = failure.canRetry ? change : nil
+            return false
+        }
+        pickerFailure = nil
+        pickerRetry = nil
+        return true
+    }
+
+    /// Retry in the picker; true when it saved.
+    @discardableResult
+    func retryPickerChange() -> Bool {
+        guard let failure = pickerFailure, let retry = pickerRetry else { clearPickerFailure(); return false }
+        return pickerChange(on: failure.id, retry)
+    }
+
+    func clearPickerFailure() {
+        pickerFailure = nil
+        pickerRetry = nil
+    }
+
     /// Moving to another page saves an open edit first; if that save
     /// fails, the page stays with the text and Retry (Esc discards it).
     func select(tab: TasksTab) {
@@ -653,11 +685,12 @@ final class TasksPageModel: ObservableObject {
 
     /// ⇧Space and the right-click menu: start working on the tasks (the
     /// circle's centre dot), or stop when every one is already started.
-    func toggleWorking(_ ids: [UUID]) {
+    @discardableResult
+    func toggleWorking(_ ids: [UUID]) -> CommandOutcome {
         let tasks = ids.compactMap { store.task(withID: $0) }
-        guard !tasks.isEmpty else { return }
+        guard !tasks.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }
         let target: TaskStatus = tasks.allSatisfy { $0.status == .inProgress } ? .todo : .inProgress
-        setStatus(target, for: tasks.map(\.id))
+        return setStatus(target, for: tasks.map(\.id))
     }
 
     /// Done in one step, with any open subtasks. The row holds its place
@@ -724,29 +757,35 @@ final class TasksPageModel: ObservableObject {
         }
     }
 
-    func setStatus(_ status: TaskStatus, for ids: [UUID]) {
+    @discardableResult
+    func setStatus(_ status: TaskStatus, for ids: [UUID]) -> CommandOutcome {
         if status == .done {
-            if ids.count == 1 { complete(ids[0]) } else { library.updateTasks(ids, status: .done) }
-            return
+            return ids.count == 1 ? complete(ids[0]) : library.updateTasks(ids, status: .done)
         }
         let loggedOrDone = ids.filter { store.task(withID: $0)?.status == .done || store.task(withID: $0) == nil }
-        if ids.count == 1, loggedOrDone == ids, status == .todo {
-            restoreToNow(ids[0])
-            return
+        if loggedOrDone == ids, status == .todo {
+            return restoreToNow(ids)
         }
         if ids.count == 1 {
-            library.updateTask(ids[0], status: status, allowingUnfinishedSubtasks: true)
-        } else {
-            library.updateTasks(ids, status: status)
+            return library.updateTask(ids[0], status: status, allowingUnfinishedSubtasks: true)
         }
+        return library.updateTasks(ids, status: status)
     }
 
-    func setPriority(_ priority: TaskPriority, for ids: [UUID]) {
-        if ids.count == 1 {
-            library.updateTask(ids[0], priority: priority)
-        } else {
-            library.updateTasks(ids, priority: priority)
-        }
+    /// Priority from the menu or the selection bar: one step, and an Undo
+    /// toast once it saved (owner fix 5: every change to existing tasks has
+    /// one). Nothing to change is not a change.
+    @discardableResult
+    func setPriority(_ priority: TaskPriority, for ids: [UUID]) -> CommandOutcome {
+        let changing = ids.filter { store.task(withID: $0).map { $0.priority != priority } == true }
+        guard !changing.isEmpty else { return .applied }
+        let outcome = changing.count == 1
+            ? library.updateTask(changing[0], priority: priority)
+            : library.updateTasks(changing, priority: priority)
+        guard outcome.isApplied else { return outcome }
+        let name = priority.spokenTitle
+        showToast(changing.count == 1 ? name : String(localized: "\(changing.count) tasks: \(name)"))
+        return outcome
     }
 
     func addTag(_ tag: String, to ids: [UUID]) {
@@ -755,35 +794,51 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// ⌘B and the menu: to Later (the backlog), with an Undo toast (a move).
-    func moveToBacklog(_ ids: [UUID]) {
+    @discardableResult
+    func moveToBacklog(_ ids: [UUID]) -> CommandOutcome {
         let movable = ids.filter { store.task(withID: $0).map { $0.status != .backlog } == true }
-        guard !movable.isEmpty else { return }
+        guard !movable.isEmpty else { return .applied }
         let succeeded = movable.count == 1
             ? library.updateTask(movable[0], status: .backlog, allowingUnfinishedSubtasks: true)
             : library.updateTasks(movable, status: .backlog)
-        guard succeeded.isApplied else { return }
+        guard succeeded.isApplied else { return succeeded }
         selection.subtract(movable)
         showToast(movable.count == 1 ? String(localized: "Moved to Later") : String(localized: "Moved \(movable.count) tasks to Later"))
+        return succeeded
     }
 
     /// Back to Now as to do (from Later), with an Undo toast.
-    func moveToNow(_ ids: [UUID]) {
+    @discardableResult
+    func moveToNow(_ ids: [UUID]) -> CommandOutcome {
         let movable = ids.filter { store.task(withID: $0)?.status == .backlog }
-        guard !movable.isEmpty else { return }
+        guard !movable.isEmpty else { return .applied }
         let succeeded = movable.count == 1
             ? library.updateTask(movable[0], status: .todo)
             : library.updateTasks(movable, status: .todo)
-        guard succeeded.isApplied else { return }
+        guard succeeded.isApplied else { return succeeded }
         selection.subtract(movable)
         showToast(movable.count == 1 ? String(localized: "Moved to Now") : String(localized: "Moved \(movable.count) tasks to Now"))
+        return succeeded
     }
 
     /// A finished task (today's or the Done log's) back to Now as to do.
     @discardableResult
     func restoreToNow(_ id: UUID) -> CommandOutcome {
-        let outcome = library.restoreToNow(id)
+        restoreToNow([id])
+    }
+
+    /// Restore to Now for the menu's targets: one step, one save, one
+    /// count-aware toast, and the restored rows leave the selection, only
+    /// once it saved (round 4).
+    @discardableResult
+    func restoreToNow(_ ids: [UUID]) -> CommandOutcome {
+        guard !ids.isEmpty else { return .applied }
+        let outcome = library.restoreToNow(ids)
         guard outcome.isApplied else { return outcome }
-        if tab == .done { showToast(String(localized: "Restored to Now")) }
+        selection.subtract(ids)
+        if tab == .done {
+            showToast(ids.count == 1 ? String(localized: "Restored to Now") : String(localized: "Restored \(ids.count) tasks to Now"))
+        }
         doneLogRevision = nil
         loadDoneLogIfNeeded()
         return outcome
