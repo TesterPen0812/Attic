@@ -461,7 +461,12 @@ final class TasksPageModel: ObservableObject {
         doneLogCursor = page.next
         doneLogHasMore = page.hasMore
         doneLogFailure = page.failure
+        // Scrolling on reaches a `show` the paging bound held back.
+        if !isRevealing, pendingReveal != nil, doneLogFailure == nil { resumePendingReveal() }
     }
+
+    /// While `revealInDoneLog` pages, loading a page does not resume it again.
+    private var isRevealing = false
 
     /// "Couldn't load more · Retry": the same read again, from where it
     /// stopped (or the first page, when that was what failed).
@@ -472,6 +477,8 @@ final class TasksPageModel: ObservableObject {
         } else {
             loadMoreDoneLog()
         }
+        // A `show` the failed read held goes on from here.
+        if doneLogFailure == nil { resumePendingReveal() }
     }
 
     /// Loaded Done log tasks, in the log's order by the replica each shows
@@ -640,11 +647,26 @@ final class TasksPageModel: ObservableObject {
         pendingSearchFocus = true
     }
 
-    /// An agent's `show` of a task: the tab that lists it, the row selected
-    /// and scrolled into view. Returns false when no list shows it.
+    /// What became of a `show` request.
+    enum ShowOutcome: Equatable {
+        /// The row is selected, scrolled to and given the keyboard.
+        case shown
+        /// Its Done log page could not be read yet (a failed read, or the
+        /// paging bound): the page holds the request and finishes it when
+        /// that page loads (Retry, or scrolling on) (round 5, F3).
+        case pending
+        /// An edit that can't be saved kept the page where it is: the
+        /// caller keeps the request and asks again (review 2).
+        case blocked
+        /// No list shows the task.
+        case missing
+    }
+
+    /// An agent's `show` of a task: the tab that lists it, the row selected,
+    /// scrolled into view and focused.
     @discardableResult
-    func show(_ id: UUID) -> Bool {
-        guard let found = store.listedTask(withID: id) else { return false }
+    func show(_ id: UUID) -> ShowOutcome {
+        guard let found = store.listedTask(withID: id) else { return .missing }
         // A subtask shows in its parent's quick look (live) or its parent's
         // details (in the Done log).
         let parent = found.parentID.flatMap { store.listedTask(withID: $0) }
@@ -653,7 +675,8 @@ final class TasksPageModel: ObservableObject {
         let target: TasksTab = task.status == .backlog ? .backlog : (archived ? .done : .now)
         // An edit that can't be saved keeps the page where it is: the
         // request is deferred (review 2) and the caller keeps it.
-        guard finishEditing() else { return false }
+        guard finishEditing() else { return .blocked }
+        pendingReveal = nil
         tab = target
         revealTab = target
         // Establish what the destination needs before revealing it (round
@@ -663,26 +686,54 @@ final class TasksPageModel: ObservableObject {
         if target == .done {
             let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
             if !query.isEmpty, !task.title.localizedStandardContains(query) { doneSearch = "" }
-            revealInDoneLog(task.id)
             if parent != nil { doneDetailID = task.id }
+            guard revealInDoneLog(task.id) else {
+                // Not loaded: nothing is selected or scrolled to until it is.
+                selection = []
+                pendingReveal = task.id
+                return .pending
+            }
         } else if parent != nil {
             expanded.insert(task.id)
         }
-        selectOnly(task.id)
-        scrollRequest = ScrollRequest(id: task.id)
-        return true
+        reveal(task.id)
+        return .shown
     }
 
-    /// Loads the Done log until `id`'s page is in (bounded by the log's
-    /// own end), so a task finished long ago can be shown.
-    private func revealInDoneLog(_ id: UUID) {
+    private func reveal(_ id: UUID) {
+        pendingReveal = nil
+        selectOnly(id)
+        scrollRequest = ScrollRequest(id: id)
+    }
+
+    /// Loads the Done log until `id`'s page is in, and says whether it is.
+    /// A failed read or the paging bound (200 pages) is an incomplete
+    /// result, never taken for success.
+    private func revealInDoneLog(_ id: UUID) -> Bool {
+        isRevealing = true
+        defer { isRevealing = false }
         loadDoneLogIfNeeded()
-        let isTodays = store.task(withID: id) != nil
         var pages = 0
-        while !isTodays, !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil, pages < 200 {
+        while !doneLogTasks.contains(where: { $0.id == id }), doneLogHasMore, doneLogFailure == nil, pages < 200 {
             loadMoreDoneLog()
             pages += 1
         }
+        return doneLogTasks.contains { $0.id == id }
+    }
+
+    /// A `show` whose Done log page had not loaded (round 5, F3).
+    private(set) var pendingReveal: UUID?
+
+    /// A Done log page loaded: a pending `show` whose task it holds is
+    /// finished now; one still out of reach keeps paging towards it.
+    private func resumePendingReveal() {
+        guard let id = pendingReveal else { return }
+        guard store.listedTask(withID: id) != nil, tab == .done else {
+            pendingReveal = nil
+            return
+        }
+        guard revealInDoneLog(id) else { return }
+        reveal(id)
     }
 
     /// A row to bring into view (an agent's `show`); each request is new.

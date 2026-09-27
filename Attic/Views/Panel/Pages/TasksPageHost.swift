@@ -142,8 +142,10 @@ struct TasksPageHost: View {
     private func showItemIfNeeded(_ model: TasksPageModel, _ item: AtticItemRef?) {
         guard let ref = item, ref.kind == .task else { return }
         // Acknowledged only once handled (round 4): a request an unsaved
-        // edit blocks stays, and is tried again when the edit ends.
-        guard model.show(ref.id) || model.store.listedTask(withID: ref.id) == nil else { return }
+        // edit blocks stays, and is tried again when the edit ends. One
+        // whose Done log page could not be read is held by the page, which
+        // finishes it once the page loads (round 5, F3).
+        guard model.show(ref.id) != .blocked else { return }
         // Cleared after this change is delivered, not inside it.
         DispatchQueue.main.async { if uiState.shownItem == ref { uiState.showItem(nil) } }
     }

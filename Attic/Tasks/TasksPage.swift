@@ -153,6 +153,12 @@ struct TasksPage: View {
             updateTypingLock()
             if id != nil { focusedRow = nil }
         }
+        // An agent's `show`: the row it brought into view takes the
+        // keyboard (round 5, F3), once the list has it.
+        .onChange(of: model.scrollRequest) { _, request in
+            guard let request else { return }
+            DispatchQueue.main.async { focusedRow = request.id }
+        }
         // A page or tab change ends a drag, closes a row's pickers and ends
         // a menu's binding.
         .onChange(of: model.hides) { _, _ in cancelTransientState() }

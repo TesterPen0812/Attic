@@ -412,7 +412,7 @@ final class TasksRound4Tests: XCTestCase {
         let done = try XCTUnwrap(store.create(title: "Renew domain"))
         XCTAssertTrue(library.completeTask(done.id).isApplied)
         XCTAssertFalse(model.completedTodayExpanded)
-        XCTAssertTrue(model.show(done.id))
+        XCTAssertEqual(model.show(done.id), .shown)
         XCTAssertEqual(model.tab, .now)
         XCTAssertTrue(model.completedTodayExpanded, "Completed today opens to show it")
         XCTAssertTrue(model.rows(for: .now).contains { $0.id == done.id })
@@ -433,7 +433,7 @@ final class TasksRound4Tests: XCTestCase {
         model.doneSearch = "Filler"
         model.loadDoneLogIfNeeded()
         XCTAssertFalse(model.doneLogTasks.contains { $0.id == old.id })
-        XCTAssertTrue(model.show(oldChild.id), "an archived subtask shows its parent")
+        XCTAssertEqual(model.show(oldChild.id), .shown, "an archived subtask shows its parent")
         XCTAssertEqual(model.tab, .done)
         XCTAssertEqual(model.doneSearch, "", "the search that hid it is cleared")
         XCTAssertTrue(model.doneLogTasks.contains { $0.id == old.id }, "its page of the log is loaded")
@@ -447,12 +447,43 @@ final class TasksRound4Tests: XCTestCase {
         model.beginEditingTitle(a.id)
         model.titleEdit.text = "A renamed"
         gate.shouldFail = true
-        XCTAssertFalse(model.show(b.id), "the edit could not save: the request is deferred")
+        XCTAssertEqual(model.show(b.id), .blocked, "the edit could not save: the request is deferred")
         XCTAssertEqual(model.editingTitleID, a.id, "the edit and its text stay")
         gate.shouldFail = false
-        XCTAssertTrue(model.show(b.id), "tried again, it goes through")
+        XCTAssertEqual(model.show(b.id), .shown, "tried again, it goes through")
         XCTAssertEqual(store.task(withID: a.id)?.title, "A renamed")
         XCTAssertEqual(model.selection, [b.id])
+    }
+
+    func testAShowWhosePageCouldNotBeReadWaitsForRetry() throws {
+        // The oldest of more tasks than one page holds, all in the Done log.
+        let old = try XCTUnwrap(store.create(title: "Old invoice"))
+        XCTAssertTrue(library.completeTask(old.id).isApplied)
+        clock.value = clock.value.addingTimeInterval(86_400)
+        for index in 0..<(TasksPageModel.doneLogPageSize + 5) {
+            let filler = try XCTUnwrap(store.create(title: "Filler \(index)"))
+            XCTAssertTrue(library.completeTask(filler.id).isApplied)
+        }
+        clock.value = clock.value.addingTimeInterval(2 * 86_400)
+        _ = store.moveCompletedToDoneLog(before: calendar.startOfDay(for: clock.value))
+        model.select(tab: .done)
+        model.loadDoneLogIfNeeded()
+        XCTAssertFalse(model.doneLogTasks.contains { $0.id == old.id })
+
+        // The next page's read fails: nothing is shown as if it had been.
+        store.doneLogReadFailures = 1
+        XCTAssertEqual(model.show(old.id), .pending, "a failed read is not success")
+        XCTAssertNotNil(model.doneLogFailure)
+        XCTAssertEqual(model.pendingReveal, old.id, "the page holds the request")
+        XCTAssertTrue(model.selection.isEmpty)
+        XCTAssertNil(model.scrollRequest)
+
+        // Retry reads the page and finishes the show.
+        model.retryDoneLog()
+        XCTAssertNil(model.doneLogFailure)
+        XCTAssertNil(model.pendingReveal)
+        XCTAssertEqual(model.selection, [old.id])
+        XCTAssertEqual(model.scrollRequest?.id, old.id, "it is scrolled to (and the page focuses it)")
     }
 
     // MARK: - Must fix 7: cancellation, controls, edge scrolling

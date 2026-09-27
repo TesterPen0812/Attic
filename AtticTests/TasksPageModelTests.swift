@@ -412,7 +412,7 @@ final class TasksPageModelTests: XCTestCase {
     /// quick look.
     func testShowingATaskSelectsItOnItsTab() throws {
         let parked = try XCTUnwrap(add("Parked", tab: .backlog))
-        XCTAssertTrue(model.show(parked))
+        XCTAssertEqual(model.show(parked), .shown)
         XCTAssertEqual(model.tab, .backlog)
         XCTAssertEqual(model.selection, [parked])
         XCTAssertEqual(model.scrollRequest?.id, parked)
@@ -422,11 +422,11 @@ final class TasksPageModelTests: XCTestCase {
 
         let parent = try XCTUnwrap(add("Plan"))
         let child = try XCTUnwrap(store.create(title: "Step", parentID: parent)?.id)
-        XCTAssertTrue(model.show(child))
+        XCTAssertEqual(model.show(child), .shown)
         XCTAssertEqual(model.tab, .now)
         XCTAssertEqual(model.selection, [parent])
         XCTAssertTrue(model.expanded.contains(parent))
-        XCTAssertFalse(model.show(UUID()))
+        XCTAssertEqual(model.show(UUID()), .missing)
     }
 
     /// Only a swipe moves the page: the pager's reports while it is idle (a
