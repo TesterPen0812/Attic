@@ -363,6 +363,11 @@ final class PanelEditHold {
 
     private(set) var isHeld = false
     private var release: Task<Void, Never>?
+    /// What the page last said is open, kept while suspended.
+    private var wantsHold = false
+    /// The page is kept built behind another page (or has gone): its open
+    /// editor never holds the panel for that page (round 5).
+    private(set) var isSuspended = false
 
     init(grace: Duration = PanelEditHold.defaultGrace, apply: @escaping (Bool) -> Void = { _ in }) {
         self.grace = grace
@@ -371,6 +376,8 @@ final class PanelEditHold {
 
     /// Whether anything that is edit mode is open now.
     func set(_ editing: Bool) {
+        wantsHold = editing
+        guard !isSuspended else { return }
         if editing {
             release?.cancel()
             release = nil
@@ -387,6 +394,15 @@ final class PanelEditHold {
                 self.apply(false)
             }
         }
+    }
+
+    /// The page stopped (true) or started again (false) being the one
+    /// shown: a suspended page's editor holds nothing, and on its return
+    /// whatever is still open holds the panel again.
+    func setSuspended(_ suspended: Bool) {
+        guard suspended != isSuspended else { return }
+        isSuspended = suspended
+        if suspended { end() } else if wantsHold { set(true) }
     }
 
     /// The panel hid or the page went away: no grace is owed.
