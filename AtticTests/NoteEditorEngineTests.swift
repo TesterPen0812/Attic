@@ -78,6 +78,22 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.objectIDs(), [checklistID, dateID, imageID])
     }
 
+    func testCachedFinalParagraphMatchesFullExtractionAndInvalidatesForObjectsAndNewlines() {
+        let document = NoteDocument(blocks: (0..<500).map { .text("Line \($0)") })
+        let (engine, _) = makeEngine(document)
+        XCTAssertEqual(engine.document(), NoteTextCodec.document(from: engine.textStorage))
+        for _ in 0..<10 {
+            engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                               with: NSAttributedString(string: "x"), name: "Typing")
+            XCTAssertEqual(engine.document(), NoteTextCodec.document(from: engine.textStorage))
+        }
+        engine.insertDate(NoteDay(year: 2026, month: 10, day: 2)!)
+        XCTAssertEqual(engine.document(), NoteTextCodec.document(from: engine.textStorage))
+        engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+                           with: NSAttributedString(string: "\nAnother line"), name: "Typing")
+        XCTAssertEqual(engine.document(), NoteTextCodec.document(from: engine.textStorage))
+    }
+
     func testTitleStyleFollowsTheFirstParagraph() {
         let (engine, textView) = makeEngine()
         textView.setSelectedRange(NSRange(location: 2, length: 0))
@@ -347,6 +363,56 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks.last?.text, "End")
         engine.history.redo()
         XCTAssertEqual(engine.document(), before)
+    }
+
+    func testBlockedWritingToolsRestoresOnlyBypassAndKeepsApprovedObjectCommands() {
+        let (engine, textView) = makeEngine()
+        engine.onWritingToolsWillBegin = { false }
+        engine.writingToolsWillBegin()
+        // The refusal guard is bypassed by a direct storage rewrite.
+        let title = NSRange(location: 0, length: 5)
+        engine.textStorage.replaceCharacters(in: title, with: "Rewrite")
+        engine.toggleCheckbox(atLineOf: location(of: "Buy", in: engine))
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        engine.insertDate(NoteDay(year: 2026, month: 10, day: 2)!)
+        engine.writingToolsDidEnd()
+        let result = engine.document()
+        XCTAssertEqual(result.title, "Title")
+        XCTAssertTrue(result.blocks[2].checked)
+        XCTAssertEqual(result.blocks.flatMap(\.inlines).count, 2)
+        XCTAssertEqual(engine.writingToolsRecoveries, 1)
+        XCTAssertFalse(engine.history.canRedo)
+    }
+
+    func testBlockedWritingToolsKeepsFinishedImportAndDoesNotBlameItForRewrite() {
+        let (engine, _) = makeEngine()
+        let image = StagedNoteAttachment(id: UUID(), filename: "import.png", contentTypeIdentifier: "public.png",
+                                         byteCount: 1, digest: String(repeating: "a", count: 64), data: Data([1]))
+        engine.insertImage(image, pixelSize: nil)
+        var notices: [String] = []
+        engine.onNotice = { notices.append($0) }
+        engine.onWritingToolsWillBegin = { false }
+        engine.writingToolsWillBegin()
+        engine.completeImageImport([image])
+        engine.writingToolsDidEnd()
+        XCTAssertTrue(engine.document().attachmentIDs.contains(image.id))
+        XCTAssertEqual(engine.writingToolsRecoveries, 0)
+        XCTAssertFalse(notices.contains { $0.contains("changed this note without approval") })
+    }
+
+    func testBlockedWritingToolsBypassKeepsImportCompletedDuringSession() {
+        let (engine, _) = makeEngine()
+        let image = StagedNoteAttachment(id: UUID(), filename: "import.png", contentTypeIdentifier: "public.png",
+                                         byteCount: 1, digest: String(repeating: "a", count: 64), data: Data([1]))
+        engine.insertImage(image, pixelSize: nil)
+        engine.onWritingToolsWillBegin = { false }
+        engine.writingToolsWillBegin()
+        engine.completeImageImport([image])
+        engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "Rewrite")
+        engine.writingToolsDidEnd()
+        XCTAssertEqual(engine.document().title, "Title")
+        XCTAssertTrue(engine.document().attachmentIDs.contains(image.id))
+        XCTAssertEqual(engine.staged[image.id]?.data, image.data)
     }
 
     // MARK: Object identity
