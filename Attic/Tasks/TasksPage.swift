@@ -512,11 +512,11 @@ struct TasksPage: View {
             tokens: AtticTitleEditing.Tokens(
                 chips: model.titleEdit.chips(parser: model.parser, caret: model.titleEditCaret),
                 dismissChip: { range in
-                    model.titleHistory.checkpoint(model.titleEdit, caret: model.titleEditCaret)
+                    model.titleHistory.checkpoint(model.titleEdit, selection: model.titleEditCurrentSelection)
                     model.titleEdit.dismiss(range)
                 },
                 edited: { range, replacement in
-                    model.titleHistory.willEdit(model.titleEdit, caret: model.titleEditCaret, range: range, replacement: replacement)
+                    model.titleHistory.willEdit(model.titleEdit, selection: model.titleEditCurrentSelection, range: range, replacement: replacement)
                     model.titleEdit.edited(range, replacement: replacement)
                 },
                 caretMoved: { caret in
@@ -527,7 +527,8 @@ struct TasksPage: View {
                 undoFallback: { model.undo() },
                 redoFallback: { model.redo() },
                 undoDraft: { model.undoTitleEdit() },
-                redoDraft: { model.redoTitleEdit() }
+                redoDraft: { model.redoTitleEdit() },
+                selectionMoved: { model.titleEditSelection = $0 }
             )
         )
     }
@@ -1331,7 +1332,7 @@ private struct TasksAddBar: View {
                         dismissChip: { range in
                             // Turning a chip into text is a step of its own:
                             // ⌘Z makes it a chip again (round 4).
-                            text.history.checkpoint(text.text, caret: text.caret)
+                            text.history.checkpoint(text.text, selection: text.currentSelection)
                             text.text.dismiss(range)
                         },
                         multilinePaste: { pasted in
@@ -1346,7 +1347,7 @@ private struct TasksAddBar: View {
                         undoFallback: { model.undo() },
                         redoFallback: { model.redo() },
                         edited: { range, replacement in
-                            text.history.willEdit(text.text, caret: text.caret, range: range, replacement: replacement)
+                            text.history.willEdit(text.text, selection: text.currentSelection, range: range, replacement: replacement)
                             text.text.edited(range, replacement: replacement)
                             text.hiddenSuggestion = nil
                             text.highlighted = 0
@@ -1359,7 +1360,8 @@ private struct TasksAddBar: View {
                         },
                         suggestionKey: { key in suggestionKey(key) },
                         undoDraft: { text.undoDraft() },
-                        redoDraft: { text.redoDraft() }
+                        redoDraft: { text.redoDraft() },
+                        selectionMoved: { text.selection = $0 }
                     ),
                     editor: editor
                 ),

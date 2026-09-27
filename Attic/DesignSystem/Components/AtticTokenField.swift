@@ -38,8 +38,11 @@ struct AtticTokenFieldActions {
     /// to show, or nil when the draft has nothing to undo (then ⌘Z reaches
     /// `undoFallback`). The field keeps no undo of its own: nothing it
     /// registers can outlive it in a window's undo manager.
-    var undoDraft: (() -> (text: String, caret: Int)?)? = nil
-    var redoDraft: (() -> (text: String, caret: Int)?)? = nil
+    var undoDraft: (() -> (text: String, selection: NSRange)?)? = nil
+    var redoDraft: (() -> (text: String, selection: NSRange)?)? = nil
+    /// The whole selection (UTF-16) whenever it changes, so the owner's
+    /// draft history can select replaced text again on undo.
+    var selectionMoved: ((NSRange) -> Void)? = nil
 }
 
 /// The keys a suggestion list answers while the field has the keyboard.
@@ -77,6 +80,7 @@ final class AtticTokenFieldEditor {
 
     /// The insertion point (UTF-16), or nil when the field is not live.
     var caret: Int? { textView?.selectedRange().location }
+    var selection: NSRange? { textView?.selectedRange() }
 
     /// Gives the field the keyboard again (after a picker closes).
     func focus() {
@@ -211,22 +215,30 @@ struct AtticTokenField: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !isApplyingModel, let textView = view?.textView else { return }
             if parent.text != textView.string { parent.text = textView.string }
-            parent.actions.caretMoved(textView.selectedRange().location)
+            reportSelection(of: textView)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView = view?.textView else { return }
-            parent.actions.caretMoved(textView.selectedRange().location)
+            reportSelection(of: textView)
+        }
+
+        private func reportSelection(of textView: NSTextView) {
+            let selection = textView.selectedRange()
+            parent.actions.selectionMoved?(selection)
+            parent.actions.caretMoved(selection.location)
         }
 
         /// Shows a state the owner's draft history returned: the text and
-        /// the insertion point, as the model's own (no edit is reported).
-        func show(_ state: (text: String, caret: Int), in textView: NSTextView) {
+        /// its selection, as the model's own (no edit is reported).
+        func show(_ state: (text: String, selection: NSRange), in textView: NSTextView) {
             isApplyingModel = true
             textView.string = state.text
-            textView.setSelectedRange(NSRange(location: min(state.caret, (state.text as NSString).length), length: 0))
+            let length = (state.text as NSString).length
+            let location = min(state.selection.location, length)
+            textView.setSelectedRange(NSRange(location: location, length: min(state.selection.length, length - location)))
             isApplyingModel = false
-            parent.actions.caretMoved(textView.selectedRange().location)
+            reportSelection(of: textView)
         }
 
         func undo(_ textView: NSTextView) {

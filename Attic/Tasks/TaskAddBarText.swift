@@ -337,9 +337,12 @@ struct TaskPasteOffer: Equatable {
 /// is one step); a pick, a taken suggestion and a chip turned into text are
 /// steps of their own. Pure: tested directly.
 struct TaskDraftHistory: Equatable {
+    /// A state to return to: the text with its pieces, and the selection
+    /// (a caret is a zero-length selection), so undoing a replacement of
+    /// selected text selects that text again (Astra round 4 check, F1).
     struct Entry: Equatable {
         var text: TaskAddBarText
-        var caret: Int
+        var selection: NSRange
     }
 
     private(set) var undoStack: [Entry] = []
@@ -360,13 +363,27 @@ struct TaskDraftHistory: Equatable {
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 
-    /// An edit is about to replace `range` with `replacement` in `before`.
-    mutating func willEdit(_ before: TaskAddBarText, caret: Int?, range: NSRange, replacement: String) {
+    /// The owner's selection when it still agrees with its caret (the
+    /// field reports both together), else the caret alone.
+    static func selection(_ selection: NSRange?, caret: Int?) -> NSRange? {
+        guard let caret else { return selection }
+        if let selection, selection.location == caret { return selection }
+        return NSRange(location: caret, length: 0)
+    }
+
+    /// The selection to remember: the one given, or the end of the text.
+    private static func entry(_ text: TaskAddBarText, _ selection: NSRange?) -> Entry {
+        Entry(text: text, selection: selection ?? NSRange(location: (text.text as NSString).length, length: 0))
+    }
+
+    /// An edit is about to replace `range` with `replacement` in `before`,
+    /// whose selection is `selection`.
+    mutating func willEdit(_ before: TaskAddBarText, selection: NSRange?, range: NSRange, replacement: String) {
         guard !isSuspended else { return }
         let length = (replacement as NSString).length
         let kind: Run.Kind? = if range.length == 0, length == 1, replacement.first.map({ !$0.isWhitespace }) == true {
             .insert
-        } else if range.length == 1, length == 0 {
+        } else if range.length == 1, length == 0, selection?.length ?? 0 == 0 {
             .delete
         } else {
             nil
@@ -377,29 +394,29 @@ struct TaskDraftHistory: Equatable {
             run?.end = kind == .insert ? range.location + 1 : range.location
             return
         }
-        push(Entry(text: before, caret: caret ?? (before.text as NSString).length))
+        push(Self.entry(before, selection))
         run = kind.map { Run(kind: $0, end: $0 == .insert ? range.location + 1 : range.location) }
     }
 
     /// A step of its own is about to happen (a pick, a chip turned into
     /// text): `before` is what undo returns to.
-    mutating func checkpoint(_ before: TaskAddBarText, caret: Int?) {
+    mutating func checkpoint(_ before: TaskAddBarText, selection: NSRange?) {
         redoStack.removeAll()
-        push(Entry(text: before, caret: caret ?? (before.text as NSString).length))
+        push(Self.entry(before, selection))
         run = nil
     }
 
     /// Steps back: returns the state to show, remembering `current` for redo.
-    mutating func undo(current: TaskAddBarText, caret: Int?) -> Entry? {
+    mutating func undo(current: TaskAddBarText, selection: NSRange?) -> Entry? {
         guard let entry = undoStack.popLast() else { return nil }
-        redoStack.append(Entry(text: current, caret: caret ?? (current.text as NSString).length))
+        redoStack.append(Self.entry(current, selection))
         run = nil
         return entry
     }
 
-    mutating func redo(current: TaskAddBarText, caret: Int?) -> Entry? {
+    mutating func redo(current: TaskAddBarText, selection: NSRange?) -> Entry? {
         guard let entry = redoStack.popLast() else { return nil }
-        undoStack.append(Entry(text: current, caret: caret ?? (current.text as NSString).length))
+        undoStack.append(Self.entry(current, selection))
         run = nil
         return entry
     }

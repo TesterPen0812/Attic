@@ -86,7 +86,8 @@ extension TasksPageModel {
     /// their own, and the pin that follows belongs to the same step.
     @discardableResult
     private func programmaticEdit(_ editor: AtticTokenFieldEditor, _ edit: () -> Bool) -> Bool {
-        addBarState.history.checkpoint(addBar, caret: editor.caret ?? addBarCaret)
+        let selection = editor.selection ?? addBarState.currentSelection
+        addBarState.history.checkpoint(addBar, selection: selection)
         addBarState.history.isSuspended = true
         defer { addBarState.history.isSuspended = false }
         return edit()

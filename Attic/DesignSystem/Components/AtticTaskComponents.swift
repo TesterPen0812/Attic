@@ -224,8 +224,9 @@ struct AtticTitleEditing {
         let undoFallback: () -> Void
         let redoFallback: () -> Void
         /// The title's own undo history (text and pieces together).
-        var undoDraft: (() -> (text: String, caret: Int)?)? = nil
-        var redoDraft: (() -> (text: String, caret: Int)?)? = nil
+        var undoDraft: (() -> (text: String, selection: NSRange)?)? = nil
+        var redoDraft: (() -> (text: String, selection: NSRange)?)? = nil
+        var selectionMoved: ((NSRange) -> Void)? = nil
     }
 }
 
@@ -259,7 +260,8 @@ struct AtticRowTitleEditor: View {
                     edited: tokens.edited,
                     caretMoved: tokens.caretMoved,
                     undoDraft: tokens.undoDraft,
-                    redoDraft: tokens.redoDraft
+                    redoDraft: tokens.redoDraft,
+                    selectionMoved: tokens.selectionMoved
                 ),
                 style: .rowTitle,
                 ink: .heading,

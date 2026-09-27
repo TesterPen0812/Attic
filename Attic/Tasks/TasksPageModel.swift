@@ -86,6 +86,9 @@ struct TasksDoneDay: Identifiable, Equatable {
 final class TasksAddBarState: ObservableObject {
     @Published var text = TaskAddBarText()
     @Published var caret: Int?
+    /// The whole selection, for the draft history (not observed: only
+    /// undo reads it).
+    var selection: NSRange?
     /// The suggestion list's highlighted choice (owner fix 5 B).
     @Published var highlighted = 0
     /// The piece whose suggestions Esc hid; the next edit shows them again.
@@ -95,24 +98,33 @@ final class TasksAddBarState: ObservableObject {
 
     /// The owner's side of the token field's undo: text and pieces step
     /// back together; nil when the draft has nothing to undo.
-    func undoDraft() -> (text: String, caret: Int)? {
-        guard let entry = history.undo(current: text, caret: caret) else { return nil }
-        text = entry.text
-        caret = entry.caret
-        return (entry.text.text, entry.caret)
+    /// The selection now: the field's last report while it agrees with
+    /// the caret, else the caret alone.
+    var currentSelection: NSRange? { TaskDraftHistory.selection(selection, caret: caret) }
+
+    func undoDraft() -> (text: String, selection: NSRange)? {
+        guard let entry = history.undo(current: text, selection: currentSelection) else { return nil }
+        apply(entry)
+        return (entry.text.text, entry.selection)
     }
 
-    func redoDraft() -> (text: String, caret: Int)? {
-        guard let entry = history.redo(current: text, caret: caret) else { return nil }
+    func redoDraft() -> (text: String, selection: NSRange)? {
+        guard let entry = history.redo(current: text, selection: currentSelection) else { return nil }
+        apply(entry)
+        return (entry.text.text, entry.selection)
+    }
+
+    private func apply(_ entry: TaskDraftHistory.Entry) {
         text = entry.text
-        caret = entry.caret
-        return (entry.text.text, entry.caret)
+        caret = entry.selection.location
+        selection = entry.selection
     }
 
     /// The draft is gone (added, or cleared on purpose).
     func clearDraft() {
         text.clear()
         history.reset()
+        selection = nil
         hiddenSuggestion = nil
         highlighted = 0
     }
@@ -142,18 +154,26 @@ final class TasksPageModel: ObservableObject {
     /// The title editor's undo history, text and pieces together (round 4).
     var titleHistory = TaskDraftHistory()
 
-    func undoTitleEdit() -> (text: String, caret: Int)? {
-        guard let entry = titleHistory.undo(current: titleEdit, caret: titleEditCaret) else { return nil }
-        titleEdit = entry.text
-        titleEditCaret = entry.caret
-        return (entry.text.text, entry.caret)
+    /// The title editor's whole selection (for its undo history only).
+    var titleEditSelection: NSRange?
+    var titleEditCurrentSelection: NSRange? { TaskDraftHistory.selection(titleEditSelection, caret: titleEditCaret) }
+
+    func undoTitleEdit() -> (text: String, selection: NSRange)? {
+        guard let entry = titleHistory.undo(current: titleEdit, selection: titleEditCurrentSelection) else { return nil }
+        applyTitle(entry)
+        return (entry.text.text, entry.selection)
     }
 
-    func redoTitleEdit() -> (text: String, caret: Int)? {
-        guard let entry = titleHistory.redo(current: titleEdit, caret: titleEditCaret) else { return nil }
+    func redoTitleEdit() -> (text: String, selection: NSRange)? {
+        guard let entry = titleHistory.redo(current: titleEdit, selection: titleEditCurrentSelection) else { return nil }
+        applyTitle(entry)
+        return (entry.text.text, entry.selection)
+    }
+
+    private func applyTitle(_ entry: TaskDraftHistory.Entry) {
         titleEdit = entry.text
-        titleEditCaret = entry.caret
-        return (entry.text.text, entry.caret)
+        titleEditCaret = entry.selection.location
+        titleEditSelection = entry.selection
     }
     /// The plain text being edited.
     var editingTitle: String {
@@ -963,6 +983,7 @@ final class TasksPageModel: ObservableObject {
         edit.dismissAllRecognised(parser: parser)
         titleEdit = edit
         titleEditCaret = nil
+        titleEditSelection = nil
         titleHistory.reset()
         editingTitleID = id
     }

@@ -101,13 +101,14 @@ final class TasksRound4Tests: XCTestCase {
         let coordinator: AtticTokenField.Coordinator
     }
 
-    private func liveBar(undoFallback: @escaping () -> Void = {}, escape: @escaping () -> Bool = { false }) -> LiveBar {
+    private func liveBar(undoFallback: @escaping () -> Void = {}, escape: @escaping () -> Bool = { false },
+                         in host: NSWindow? = nil) -> LiveBar {
         let state = model.addBarState
         let actions = AtticTokenFieldActions(
             submit: { _ in },
             dismissChip: { range in
                 self.chipDismissals += 1
-                state.history.checkpoint(state.text, caret: state.caret)
+                state.history.checkpoint(state.text, selection: state.currentSelection)
                 state.text.dismiss(range)
             },
             multilinePaste: { _ in false },
@@ -115,7 +116,7 @@ final class TasksRound4Tests: XCTestCase {
             undoFallback: undoFallback,
             redoFallback: {},
             edited: { range, replacement in
-                state.history.willEdit(state.text, caret: state.caret, range: range, replacement: replacement)
+                state.history.willEdit(state.text, selection: state.currentSelection, range: range, replacement: replacement)
                 state.text.edited(range, replacement: replacement)
             },
             caretMoved: { caret in
@@ -124,7 +125,8 @@ final class TasksRound4Tests: XCTestCase {
                 if shown.markShown(parser: self.model.parser, caret: caret) { state.text = shown }
             },
             undoDraft: { state.undoDraft() },
-            redoDraft: { state.redoDraft() }
+            redoDraft: { state.redoDraft() },
+            selectionMoved: { state.selection = $0 }
         )
         let field = AtticTokenField(
             text: Binding(get: { state.text.text }, set: { state.text.text = $0 }),
@@ -136,7 +138,7 @@ final class TasksRound4Tests: XCTestCase {
         view.textView.delegate = coordinator
         view.textView.owner = coordinator
         coordinator.view = view
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = host ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView?.addSubview(view)
         window.makeFirstResponder(view.textView)
@@ -266,6 +268,23 @@ final class TasksRound4Tests: XCTestCase {
         bar.window.close()
     }
 
+    func testUndoingAReplacementSelectsTheReplacedTextAgain() {
+        let bar = liveBar()
+        let textView = bar.view.textView
+        type("Call the office", into: bar)
+        // Select "the" and type over it.
+        textView.setSelectedRange(NSRange(location: 5, length: 3))
+        textView.insertText("x", replacementRange: textView.selectedRange())
+        XCTAssertEqual(model.addBar.text, "Call x office")
+        textView.undo(nil)
+        XCTAssertEqual(model.addBar.text, "Call the office")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 5, length: 3), "the replaced text is selected again")
+        textView.redo(nil)
+        XCTAssertEqual(model.addBar.text, "Call x office")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 6, length: 0), "redo puts the caret after the replacement")
+        bar.window.close()
+    }
+
     func testAddingTheTaskEndsTheDraftsHistory() {
         let bar = liveBar()
         type("Buy milk", into: bar)
@@ -280,19 +299,19 @@ final class TasksRound4Tests: XCTestCase {
         var text = TaskAddBarText()
         func typeChar(_ c: String) {
             let at = (text.text as NSString).length
-            history.willEdit(text, caret: at, range: NSRange(location: at, length: 0), replacement: c)
+            history.willEdit(text, selection: NSRange(location: at, length: 0), range: NSRange(location: at, length: 0), replacement: c)
             text.text += c
         }
         "ab".forEach { typeChar(String($0)) }
         typeChar(" ")
         "cd".forEach { typeChar(String($0)) }
         XCTAssertEqual(history.undoStack.map(\.text.text), ["", "ab", "ab "], "a word, the space, the next word")
-        history.checkpoint(text, caret: 5)
+        history.checkpoint(text, selection: NSRange(location: 5, length: 0))
         text.dismiss(NSRange(location: 3, length: 2))
-        let back = history.undo(current: text, caret: 5)
+        let back = history.undo(current: text, selection: NSRange(location: 5, length: 0))
         XCTAssertEqual(back?.text.dismissed, [])
         XCTAssertTrue(history.canRedo)
-        history.willEdit(text, caret: 5, range: NSRange(location: 5, length: 0), replacement: "e")
+        history.willEdit(text, selection: NSRange(location: 5, length: 0), range: NSRange(location: 5, length: 0), replacement: "e")
         XCTAssertFalse(history.canRedo, "a new edit ends the redo")
         history.reset()
         XCTAssertFalse(history.canUndo)
@@ -483,6 +502,66 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertFalse(manager.canUndo, "the removed field's registrations were dropped")
         XCTAssertEqual(gone?.string ?? "typed", "typed", "and never invoked")
         panel.close()
+    }
+
+    /// The Edit menu's Undo and Redo as AppKit sends them: no target, so
+    /// they go to the key window's responder chain. With
+    /// `ATTIC_KEY_WINDOW_TESTS` (CI) the panel is made key and AppKit
+    /// resolves the target itself; elsewhere (a person's Mac, where taking
+    /// the keyboard would steal their typing) the same chain is walked from
+    /// the panel's first responder, as AppKit's resolution does for a key
+    /// window.
+    private func sendEditMenu(_ action: Selector, in panel: NSWindow) -> (target: AnyObject?, enabled: Bool, sent: Bool) {
+        let item = NSMenuItem(title: "Edit", action: action, keyEquivalent: "")
+        if ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" {
+            panel.makeKeyAndOrderFront(nil)
+            XCTAssertTrue(NSApp.keyWindow === panel, "the panel is the key window")
+            let target = NSApp.target(forAction: action, to: nil, from: item) as AnyObject?
+            let enabled = (target as? NSMenuItemValidation)?.validateMenuItem(item) ?? (target != nil)
+            return (target, enabled, enabled && NSApp.sendAction(action, to: nil, from: item))
+        }
+        var responder: NSResponder? = panel.firstResponder
+        while let current = responder, !current.responds(to: action) { responder = current.nextResponder }
+        let enabled = (responder as? NSMenuItemValidation)?.validateMenuItem(item) ?? (responder != nil)
+        return (responder, enabled, enabled && NSApp.sendAction(action, to: responder, from: item))
+    }
+
+    func testTheEditMenuUndoesTheDraftThenTheTasksHistoryAfterTheFieldIsRemoved() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: -4_000, y: -4_000, width: 320, height: 120),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.onUnhandledUndo = { [library] redo in _ = redo ? library!.redo(in: .tasks) : library!.undo(in: .tasks) }
+        panel.canPerformUnhandledUndo = { [library] redo in
+            redo ? library!.undo.canRedo(in: .tasks) : library!.undo.canUndo(in: .tasks)
+        }
+        defer { panel.orderOut(nil); panel.close() }
+        // A Tasks step to undo later, then a draft being typed.
+        let added = try XCTUnwrap(store.create(title: "Ring the bank"))
+        XCTAssertTrue(library.completeTask(added.id).isApplied)
+        var pageUndos = 0
+        let bar = liveBar(undoFallback: { pageUndos += 1 }, in: panel)
+        type("Buy milk", into: bar)
+
+        // With the field there, the Edit menu's Undo is the draft's.
+        let first = sendEditMenu(#selector(AtticPanel.undo(_:)), in: panel)
+        XCTAssertTrue(first.target === bar.view.textView, "the field answers first")
+        XCTAssertTrue(first.sent)
+        XCTAssertEqual(model.addBar.text, "Buy ", "one word run undone")
+        XCTAssertEqual(store.task(withID: added.id)?.status, .done, "the Tasks history was not touched")
+        XCTAssertEqual(pageUndos, 0)
+
+        // The field leaves the panel while it has the keyboard.
+        bar.view.removeFromSuperview()
+        let undo = sendEditMenu(#selector(AtticPanel.undo(_:)), in: panel)
+        XCTAssertTrue(undo.target === panel, "the panel answers once the field is gone")
+        XCTAssertTrue(undo.enabled, "Undo is enabled for the Tasks history")
+        XCTAssertTrue(undo.sent)
+        XCTAssertEqual(store.task(withID: added.id)?.status, .todo, "the Tasks history's step was undone")
+        XCTAssertEqual(model.addBar.text, "Buy ", "the draft is as it was")
+        let redo = sendEditMenu(#selector(AtticPanel.redo(_:)), in: panel)
+        XCTAssertTrue(redo.enabled && redo.sent)
+        XCTAssertEqual(store.task(withID: added.id)?.status, .done, "and redone")
+        // Nothing left to redo: the menu item is disabled, not swallowed.
+        XCTAssertFalse(sendEditMenu(#selector(AtticPanel.redo(_:)), in: panel).enabled)
     }
 
     // MARK: - Should fix: canonical Done order across pages

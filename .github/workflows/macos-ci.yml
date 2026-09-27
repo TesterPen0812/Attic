@@ -121,6 +121,10 @@ jobs:
         id: unit_tests
         continue-on-error: true
         timeout-minutes: 20
+        env:
+          # The runner has no person at it: unit tests may make a window key
+          # and let AppKit resolve targetless menu actions for real.
+          TEST_RUNNER_ATTIC_KEY_WINDOW_TESTS: "1"
         run: |
           rm -rf "$RUNNER_TEMP/AtticUnitTests.xcresult"
           xcodebuild \
