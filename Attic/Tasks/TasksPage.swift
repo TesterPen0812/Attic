@@ -276,7 +276,10 @@ struct TasksPage: View {
             }
             .scrollTargetLayout()
         }
-        .scrollTargetBehavior(.paging)
+        // One swipe moves one page at most (round 5, the owner's item 4:
+        // a hard swipe's momentum crossed all three).
+        .scrollTargetBehavior(TasksPagerBehavior(current: TasksTab.allCases.firstIndex(of: model.tab) ?? 0,
+                                                 count: TasksTab.allCases.count))
         // Only a swipe moves the page: the position the pager reports while
         // no one is scrolling (a reveal laying out, a resize) never selects
         // a neighbour, so the panel always opens on the page the model says.
@@ -1978,5 +1981,31 @@ enum TasksViewport {
             last = location
         }
         return result
+    }
+}
+
+/// The pager's paging: it lands on a whole page, and never more than one
+/// page from the one the swipe started on, however hard the swipe (the
+/// momentum's projected target is clamped to the current page ± 1).
+struct TasksPagerBehavior: ScrollTargetBehavior {
+    /// The page shown when the swipe began (the model's tab: it changes
+    /// only once a swipe settles).
+    let current: Int
+    let count: Int
+
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        let width = context.containerSize.width
+        guard width > 0 else { return }
+        let page = Self.page(proposed: target.rect.minX, width: width, current: current, count: count)
+        target.rect.origin.x = CGFloat(page) * width
+    }
+
+    /// The page a swipe lands on: the nearest to where it would come to
+    /// rest, at most one away from `current`, within the pages there are.
+    static func page(proposed x: CGFloat, width: CGFloat, current: Int, count: Int) -> Int {
+        guard width > 0, count > 0 else { return current }
+        let nearest = Int((x / width).rounded())
+        let clamped = min(max(nearest, current - 1), current + 1)
+        return min(max(clamped, 0), count - 1)
     }
 }
