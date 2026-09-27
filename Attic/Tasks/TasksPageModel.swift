@@ -1133,6 +1133,7 @@ final class TasksPageModel: ObservableObject {
         addBarState.clearDraft()
         if openingPage { services.openPage(task.id) }
         selectOnly(nil)
+        addedRequest = ScrollRequest(id: task.id)
         // Added from Done, the task goes to Now, out of sight: say where.
         if tab == .done, !openingPage { showToast(String(localized: "Added to Now")) }
         return task.id
@@ -1144,14 +1145,27 @@ final class TasksPageModel: ObservableObject {
         guard let offer = pasteOffer else { return }
         let builder = TaskDraftBuilder(parser: parser, status: addStatus)
         let drafts = builder.drafts(from: offer.text, mode: asOne ? .single : .onePerLine)
-        guard library.createTasks(drafts) != nil else {
+        guard let created = library.createTasks(drafts) else {
             failedSave = .paste
             lastPasteAsOne = asOne
             return
         }
         clearFailure(.paste)
         pasteOffer = nil
+        // The same observable success as a single add (round 4): the first
+        // new row comes into view; from Done, a toast says where they went;
+        // VoiceOver hears how many were added.
+        if let first = created.first { addedRequest = ScrollRequest(id: first.id) }
+        let message = created.count == 1
+            ? (tab == .done ? String(localized: "Added to Now") : String(localized: "Added 1 task"))
+            : (tab == .done ? String(localized: "Added \(created.count) tasks to Now") : String(localized: "Added \(created.count) tasks"))
+        if tab == .done { showToast(message) }
+        AccessibilityNotification.Announcement(message).post()
     }
+
+    /// A task (or the first of pasted tasks) just added: the list brings it
+    /// into view without selecting it.
+    @Published private(set) var addedRequest: ScrollRequest?
 
     private var lastPasteAsOne = false
 

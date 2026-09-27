@@ -36,8 +36,6 @@ struct TasksPage: View {
     /// "Started tasks stay together" (review 10), while it shows.
     @State private var boundaryHint = false
     @State private var boundaryHintTask: Task<Void, Never>?
-    /// A row just added from the add bar, to bring into view.
-    @State private var revealRequest: TasksPageModel.ScrollRequest?
     /// A Done row the keyboard moved to, to bring into view.
     @State private var doneReveal: TasksPageModel.ScrollRequest?
     /// Where the pointer is and where the rows are (not observed: it
@@ -374,7 +372,7 @@ struct TasksPage: View {
                 guard let request, rows.contains(where: { $0.id == request.id }) else { return }
                 withAnimation(travel) { proxy.scrollTo(request.id, anchor: .center) }
             }
-            .onChange(of: revealRequest) { _, request in
+            .onChange(of: model.addedRequest) { _, request in
                 guard let request, tab == model.tab else { return }
                 // The row exists once the store's change reaches the list.
                 DispatchQueue.main.async {
@@ -1172,7 +1170,7 @@ struct TasksPage: View {
         TasksAddBar(model: model, text: model.addBarState, isFocused: $addBarFocused, editor: addBarEditor,
                     showsStrip: model.pasteOffer == nil,
                     pickerOpen: $composerPickerOpen, leave: leaveAddBar,
-                    added: { id in revealRequest = TasksPageModel.ScrollRequest(id: id) })
+                    added: { _ in })
     }
 
     /// Esc in the add bar with nothing of its own to

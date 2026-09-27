@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Actions
@@ -237,9 +238,9 @@ struct AtticRowTitleEditor: View {
     @FocusState private var focused: Bool
     @State private var tokenFocused = true
     @State private var finished = false
-    /// When the field appeared: a focus loss in its first moments is the
-    /// list settling its own focus, not the person leaving the field.
-    @State private var appearedAt: Date?
+    /// How often the editor took the keyboard back from a loss no input
+    /// caused (the list settling as the editor appears).
+    @State private var reclaims = 0
 
     var body: some View {
         if let tokens = editing.tokens {
@@ -265,7 +266,7 @@ struct AtticRowTitleEditor: View {
                 accessibilityIdentifier: "AtticTitleField"
             )
             .frame(height: AtticTaskRowMetrics.titleLineHeight)
-            .onAppear { appearedAt = Date(); tokenFocused = true }
+            .onAppear { tokenFocused = true }
             .onChange(of: tokenFocused) { _, now in lost(now) { tokenFocused = true } }
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
         } else {
@@ -277,7 +278,6 @@ struct AtticRowTitleEditor: View {
                 .onSubmit { finish(commit: true) }
                 .onExitCommand { finish(commit: false) }
                 .onAppear {
-                    appearedAt = Date()
                     focused = true
                     // Again once the list has settled its own focus for this
                     // change, so the field keeps the keyboard.
@@ -291,14 +291,26 @@ struct AtticRowTitleEditor: View {
         }
     }
 
-    /// The field lost the keyboard: in its first moments that is the list
-    /// settling (take it back); later, the person left it (save).
+    /// The field lost the keyboard. A person's departure (a click, a key)
+    /// saves; a loss no input caused is the list settling its own focus as
+    /// the editor is presented, and the editor takes the keyboard back, a
+    /// couple of times at most (round 4: no timing guess, and a click
+    /// elsewhere is never overridden).
     private func lost(_ now: Bool, refocus: @escaping () -> Void) {
         guard !now else { return }
-        if let appearedAt, Date().timeIntervalSince(appearedAt) < 0.5 {
-            DispatchQueue.main.async { if !finished { refocus() } }
-        } else {
+        if Self.isPersonsDeparture(NSApp.currentEvent?.type) || reclaims >= 2 {
             finish(commit: true)
+        } else {
+            reclaims += 1
+            DispatchQueue.main.async { if !finished { refocus() } }
+        }
+    }
+
+    /// Input a person makes to leave a field.
+    static func isPersonsDeparture(_ type: NSEvent.EventType?) -> Bool {
+        switch type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown: true
+        default: false
         }
     }
 

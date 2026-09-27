@@ -457,4 +457,33 @@ final class TasksRound4Tests: XCTestCase {
         let second = store.doneLogPage(from: first.next, limit: 1, excluding: Set(first.tasks.map(\.id)))
         XCTAssertEqual(second.tasks.map(\.title), ["Older"])
     }
+
+    // MARK: - Should fix: pasted tasks, focus reclaim, one tick
+
+    func testAcceptedPasteIsRevealedAndSaysWhereItWent() throws {
+        model.select(tab: .done)
+        model.pasteOffer = TaskPasteOffer("Buy milk\nCall mum")
+        model.acceptPaste(asOne: false)
+        XCTAssertNil(model.pasteOffer)
+        XCTAssertEqual(model.toasts.current?.message, "Added 2 tasks to Now")
+        let first = try XCTUnwrap(model.addedRequest?.id)
+        XCTAssertEqual(store.task(withID: first)?.title, "Buy milk", "the first new row comes into view")
+    }
+
+    func testOnlyAPersonsInputEndsATitleEdit() {
+        XCTAssertTrue(AtticRowTitleEditor.isPersonsDeparture(.leftMouseDown))
+        XCTAssertTrue(AtticRowTitleEditor.isPersonsDeparture(.keyDown))
+        XCTAssertFalse(AtticRowTitleEditor.isPersonsDeparture(nil), "a loss no input caused: the list settling")
+        XCTAssertFalse(AtticRowTitleEditor.isPersonsDeparture(.appKitDefined))
+    }
+
+    func testOneTickForTomorrowAndNextWeekOnTheSameDay() throws {
+        // Sunday 27 Sep 2026: Tomorrow and Next week are both Monday 28.
+        clock.value = Date(timeIntervalSince1970: 1_790_518_400)
+        let choices = model.dateChoices
+        XCTAssertEqual(choices.today, day("2026-09-27"))
+        let same = choices.quick.filter { $0.day == day("2026-09-28") }
+        XCTAssertEqual(same.map(\.kind), [.tomorrow, .nextWeek])
+        XCTAssertEqual(choices.quick.first { $0.day == day("2026-09-28") }?.kind, .tomorrow, "only the first is ticked")
+    }
 }

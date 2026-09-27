@@ -14,7 +14,9 @@ import Foundation
 enum AtticReviewVariant: String, CaseIterable, Identifiable, Hashable, Sendable {
     /// Astra 11: Glass and Frosted keep enough of their own surface colour
     /// behind the text that titles keep 4.5 : 1 and secondary text 3 : 1
-    /// over any desktop. Off: Phase 0's see-through surfaces, exactly.
+    /// over the black, mid-grey and white desktops it is solved against
+    /// (the primary and secondary greys; tag accents keep their named
+    /// exceptions). Off: Phase 0's see-through surfaces, exactly.
     case readableGlass
     /// Astra 27: out-of-focus drawn controls keep one readable edge instead
     /// of the nested inner rim and the lower-edge shadow. Off: today's drawn
@@ -51,7 +53,7 @@ enum AtticReviewVariant: String, CaseIterable, Identifiable, Hashable, Sendable 
     var summary: String {
         switch self {
         case .readableGlass:
-            String(localized: "On: Glass and Frosted keep enough backing that text stays readable over any desktop. Off: Phase 0’s surfaces exactly.")
+            String(localized: "On: Glass and Frosted keep enough backing that titles and secondary text keep their contrast over black, grey and white desktops (tag accents excepted). Off: Phase 0’s surfaces exactly.")
         case .quietInactiveControls:
             String(localized: "On: out-of-focus controls on Solid keep one quiet edge. Off: the nested rim and heavier shadow.")
         case .compactAppearance:
