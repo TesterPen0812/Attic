@@ -62,6 +62,9 @@ enum AtticSettingsRowMetrics {
 /// last content scrolls clear of the bottom zone.
 struct AtticSettingsScrollPage<Content: View>: View {
     var identifier: String?
+    /// The gap under the header: 52 pt (spec), or 24 on a compact page
+    /// (the Compact Appearance review switch).
+    var compact = false
     @ViewBuilder let content: Content
 
     @Environment(\.atticCapture) private var capture
@@ -85,7 +88,7 @@ struct AtticSettingsScrollPage<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             content
         }
-        .padding(.top, AtticSettingsPageMetrics.contentTop)
+        .padding(.top, compact ? AtticSettingsPageMetrics.compactContentTop : AtticSettingsPageMetrics.contentTop)
         .padding(.horizontal, AtticSpacing.settingsGroupInset)
         .padding(.bottom, AtticEdgeBlur.settingsBottom)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -96,6 +99,8 @@ enum AtticSettingsPageMetrics {
     /// Below the header: 52 pt from the back button's bottom (spec), less
     /// the 12 pt the header keeps under the button.
     static let contentTop: CGFloat = AtticSpacing.settingsBelowHeader - AtticSpacing.s12
+    /// The same on a compact page: 24 pt from the back button's bottom.
+    static let compactContentTop: CGFloat = AtticSpacing.settingsBelowHeaderCompact - AtticSpacing.s12
     /// The short ease under the header, so scrolled content never meets a
     /// hard line.
     static let topFade: CGFloat = AtticSpacing.s12

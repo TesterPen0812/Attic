@@ -302,7 +302,8 @@ struct AtticPanelView: View {
                 tint: settings.panelTint,
                 tintLength: settings.panelTintLength,
                 hapticsEnabled: settings.panelHapticsEnabled,
-                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey, surface: settings.panelSurfaceStyle)
+                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey, surface: settings.panelSurfaceStyle),
+                variants: settings.reviewVariants
             )
             // Native menus (context menus, pop-ups) follow Attic's chosen
             // appearance, not only the Mac's.

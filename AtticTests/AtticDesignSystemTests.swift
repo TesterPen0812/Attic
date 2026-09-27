@@ -314,7 +314,9 @@ final class AtticDesignSystemTests: XCTestCase {
     /// native material under Original's shade, and hairline edge), in
     /// both modes; Reduce Transparency still makes the surface Solid.
     func testGlassAndFrostedArePhase0s() {
-        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid {
+        // The decided design (Readable Glass off; the switch's own test is
+        // `AtticReviewVariantsTests`).
+        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid && !context.colourKey.readableGlass {
             let appearance: AtticPanelThemeAppearance = context.mode == .dark ? .dark : .light
             let treatment = context.palette.surfaceTreatment(
                 appearance: appearance, contrast: context.increaseContrast ? .increased : .standard,
@@ -327,8 +329,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
         // Phase 0's Original coverage (far more see-through than PR #5's 67 / 80 / 66 / 82).
         let measured = [
-            AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, surface: .frosted),
-            AtticDesignContext(mode: .dark, surface: .glass), AtticDesignContext(mode: .dark, surface: .frosted)
+            AtticDesignContext(mode: .light, surface: .glass, variants: .decided), AtticDesignContext(mode: .light, surface: .frosted, variants: .decided),
+            AtticDesignContext(mode: .dark, surface: .glass, variants: .decided), AtticDesignContext(mode: .dark, surface: .frosted, variants: .decided)
         ].map { Int(($0.tokens.panel.foundationOpacity * 100).rounded()) }
         XCTAssertEqual(measured, [1, 16, 10, 32])
         // Text on them is Phase 0's (owner, 2026-09-26): its primary and

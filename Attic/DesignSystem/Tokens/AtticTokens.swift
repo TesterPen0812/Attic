@@ -32,6 +32,8 @@ enum AtticSpacing {
     static let panelMargin: CGFloat = 12
     /// Settings: below the page header (spec: 52) and between sections (34).
     static let settingsBelowHeader: CGFloat = 52
+    /// Appearance with the Compact Appearance review switch (Astra 26).
+    static let settingsBelowHeaderCompact: CGFloat = 24
     static let settingsBetweenSections: CGFloat = 34
     /// Settings content card inset from the sidebar and window edges.
     static let settingsCardInset: CGFloat = 8

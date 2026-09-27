@@ -127,7 +127,8 @@ final class SettingsPresentationTests: XCTestCase {
     func testSettingsSectionsHaveStableLocalOnlyOrderAndIdentifiers() {
         XCTAssertEqual(
             SettingsSection.allCases,
-            [.general, .panel, .appearance, .recentlyDeleted, .agentAccess, .about]
+            // Compare (temporary): the review switches, last.
+            [.general, .panel, .appearance, .recentlyDeleted, .agentAccess, .about, .compare]
         )
         XCTAssertEqual(SettingsSection.restored(from: "panel"), .panel)
         XCTAssertEqual(SettingsSection.restored(from: "recentlyDeleted"), .recentlyDeleted)
@@ -141,7 +142,8 @@ final class SettingsPresentationTests: XCTestCase {
                 "settings-nav-appearance",
                 "settings-nav-recentlyDeleted",
                 "settings-nav-agentAccess",
-                "settings-nav-about"
+                "settings-nav-about",
+                "settings-nav-compare"
             ]
         )
         // Spec § Settings: App (General, Panel, Appearance, and Recently
@@ -186,8 +188,12 @@ final class SettingsPresentationTests: XCTestCase {
             XCTAssertNil(navigation.neighbour(offset: -1))
             XCTAssertEqual(navigation.neighbour(offset: 1), .panel)
             navigation.select(.about)
-            XCTAssertNil(navigation.neighbour(offset: 1))
+            // Compare (temporary) sits under About while the review
+            // switches exist.
+            XCTAssertEqual(navigation.neighbour(offset: 1), .compare)
             XCTAssertEqual(navigation.neighbour(offset: -1), .agentAccess)
+            navigation.select(.compare)
+            XCTAssertNil(navigation.neighbour(offset: 1))
 
             for _ in 0..<(SettingsNavigation.historyLimit + 10) {
                 navigation.select(navigation.selection == .panel ? .general : .panel)

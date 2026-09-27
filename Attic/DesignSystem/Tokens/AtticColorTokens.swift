@@ -347,7 +347,7 @@ struct AtticColorTokens: Equatable, Sendable {
 
         // The drawn controls sit on a neutral base of the surface's lightness
         // (no warm or green cast in their faces; owner, 2026-09-26).
-        let recipes = Self.recipes(dark: dark, ic: ic, base: calm ? basePanel.neutralGrey : basePanel)
+        let recipes = Self.recipes(dark: dark, ic: ic, base: calm ? basePanel.neutralGrey : basePanel, quiet: key.quietControls)
         let glassFace = AtticGlassModel.worstFace(dark: dark)
         let glassDisabled = AtticGlassModel.disabledFill(dark: dark)
         // Lighter than the selected chip in Light: the outline icons on a
@@ -583,6 +583,8 @@ struct AtticColorTokens: Equatable, Sendable {
         // keep the design system's own.
         let panel = usesPhase0Surface
             ? AtticSurfaceModel.phase0(phase0Treatment, increaseContrast: ic)
+                .readable(key.readableGlass, primary: AtticRGBA(phase0Treatment.palette.primaryForeground),
+                          secondary: AtticRGBA(phase0Treatment.palette.secondaryForeground))
             : AtticSurfaceModel.solve(
                 base: panelBase, kind: key.surface, appearance: appearance,
                 palette: key.palette, themePalette: themePalette,
@@ -730,7 +732,29 @@ struct AtticColorTokens: Equatable, Sendable {
     /// a bright 1 pt rim, about +64 at the top, +37 on the sides and +56 at
     /// the bottom, with no dark outer edge. Increase Contrast keeps the
     /// fill and strengthens the edge.
-    private static func recipes(dark: Bool, ic: Bool, base: AtticRGBA) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
+    ///
+    /// `quiet` (the Quiet Inactive Controls review switch, Astra 27): one
+    /// even edge at the side's strength, with no inner rim and no shadow
+    /// below, so an out-of-focus control is never heavier than a focused
+    /// one. The face, the sheen and the selected chip (the pinned pin) are
+    /// unchanged; Increase Contrast keeps its stronger edge.
+    private static func recipes(dark: Bool, ic: Bool, base: AtticRGBA, quiet: Bool = false) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
+        let recipes = unquietRecipes(dark: dark, ic: ic, base: base)
+        guard quiet, !ic else { return recipes }
+        func quieted(_ recipe: AtticRaisedRecipe) -> AtticRaisedRecipe {
+            var recipe = recipe
+            recipe.edgeTop = recipe.edgeMiddle
+            recipe.edgeBottom = recipe.edgeMiddle
+            recipe.innerRimTop = .clear
+            recipe.innerRimMiddle = .clear
+            recipe.innerRimBottom = .clear
+            recipe.shadow = .clear
+            return recipe
+        }
+        return (quieted(recipes.rest), quieted(recipes.hover), quieted(recipes.pressed), quieted(recipes.disabled))
+    }
+
+    private static func unquietRecipes(dark: Bool, ic: Bool, base: AtticRGBA) -> (rest: AtticRaisedRecipe, hover: AtticRaisedRecipe, pressed: AtticRaisedRecipe, disabled: AtticRaisedRecipe) {
         if dark {
             func recipe(fill: Double, top: Double, middle: Double, bottom: Double) -> AtticRaisedRecipe {
                 AtticRaisedRecipe(
