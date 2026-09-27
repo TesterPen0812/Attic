@@ -84,16 +84,19 @@ final class NotePendingEdit {
     var noteID: UUID = UUID()
     var baseRevisionToken: String = ""
     @Attribute(.externalStorage) var proposedContent: Data? = nil
+    /// The version inserted in the same transaction as this proposal.
+    var baseVersionID: UUID? = nil
     var agentName: String = ""
     var createdAt: Date = Date()
     var needsReview: Bool = false
 
     init(id: UUID = UUID(), noteID: UUID, baseRevisionToken: String, proposedContent: Data,
-         agentName: String, createdAt: Date) {
+         agentName: String, createdAt: Date, baseVersionID: UUID? = nil) {
         self.id = id
         self.noteID = noteID
         self.baseRevisionToken = baseRevisionToken
         self.proposedContent = proposedContent
+        self.baseVersionID = baseVersionID
         self.agentName = agentName
         self.createdAt = createdAt
     }

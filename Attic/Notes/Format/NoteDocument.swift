@@ -16,7 +16,7 @@ import Foundation
 ///     { "kind": "text", "text": "Ship on \u{FFFC}.",
 ///       "inline": [{ "kind": "date", "id": "<uuid>", "offset": 8, "date": "2026-10-01" }] },
 ///     { "kind": "checklist", "id": "<uuid>", "text": "Buy cake", "checked": false },
-///     { "kind": "image", "id": "<placement>", "attachmentID": "<NoteAttachment>", "width": 240 }
+///     { "kind": "image", "id": "<placement>", "attachmentID": "<NoteAttachment>", "widthFraction": 0.75 }
 ///   ] }
 /// ```
 ///
@@ -25,13 +25,13 @@ import Foundation
 ///   build does not know, makes the note **read-only**: the original bytes
 ///   are kept and written back unchanged (`NoteContent.readOnly`).
 /// - A block this build cannot read (an unknown kind, a missing or
-///   mistyped field such as a numeric `id`) is kept **opaquely**: its JSON is
-///   written back verbatim and the editor shows it as one immovable object.
-///   The same holds for an unknown inline object inside a text block.
+///   mistyped field such as a numeric `id`) is kept **opaquely** and makes
+///   the whole document read-only. Its original bytes are retained while the
+///   editor shows a placeholder. The same holds for unknown inline objects.
 /// - Unknown fields on the document, a block or an inline object are kept.
-/// - A newer Attic that adds something an older editor could break by
-///   editing around it must list it in `requires` (or raise `format`); a
-///   self-contained addition may stay optional and is carried opaquely.
+/// - A newer Attic that adds semantics an older editor cannot preserve must
+///   list them in `requires` or raise `format`. Unknown fields on known
+///   blocks remain optional and are carried through unchanged.
 struct NoteDocument: Equatable, Sendable {
     static let currentFormat = 1
     /// What this build can edit. A document requiring anything else opens
@@ -91,6 +91,19 @@ struct NoteDocument: Equatable, Sendable {
             block.kind == .text && block.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
+
+    /// A writer must never turn a preview of unsupported data into new bytes.
+    var isWritableByThisBuild: Bool {
+        guard format == Self.currentFormat,
+              requires.allSatisfy(Self.editableCapabilities.contains) else { return false }
+        return blocks.allSatisfy { block in
+            guard block.kind != .opaque else { return false }
+            return block.inlines.allSatisfy { inline in
+                if case .opaque = inline.kind { return false }
+                return true
+            }
+        }
+    }
 }
 
 enum NoteBlockKind: String, Sendable {
@@ -112,6 +125,9 @@ struct NoteBlock: Equatable, Sendable {
     var style: String?
     var checked = false
     var attachmentID: UUID?
+    /// Fraction of the available text column. Old `width` values remain
+    /// absolute points for compatibility with notes saved before this field.
+    var widthFraction: Double?
     var width: Double?
     /// Images: the pixel size, so layout reserves the space before any
     /// byte is read (optional; measured on import).
@@ -132,8 +148,9 @@ struct NoteBlock: Equatable, Sendable {
     }
 
     static func image(id: UUID = UUID(), attachmentID: UUID, width: Double? = nil,
+                      widthFraction: Double? = nil,
                       pixelWidth: Int? = nil, pixelHeight: Int? = nil) -> NoteBlock {
-        NoteBlock(kind: .image, id: id, attachmentID: attachmentID, width: width,
+        NoteBlock(kind: .image, id: id, attachmentID: attachmentID, widthFraction: widthFraction, width: width,
                   pixelWidth: pixelWidth, pixelHeight: pixelHeight)
     }
 

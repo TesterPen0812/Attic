@@ -25,11 +25,12 @@ enum NoteContent: Equatable, Sendable {
 enum NoteReadOnlyReason: Equatable, Sendable {
     case newerFormat(Int)
     case requiresCapabilities([String])
+    case unsupportedContent
     case unreadable(String)
 
     var message: String {
         switch self {
-        case .newerFormat, .requiresCapabilities:
+        case .newerFormat, .requiresCapabilities, .unsupportedContent:
             "Some content needs a newer Attic, so this note is read-only here."
         case .unreadable:
             "This note’s content can’t be read, so it is kept exactly as it is."
@@ -73,6 +74,15 @@ enum NoteContentCodec {
         let unknown = requires.filter { !NoteDocument.editableCapabilities.contains($0) }
         if !unknown.isEmpty {
             return .readOnly(original: data, reason: .requiresCapabilities(unknown), preview: document)
+        }
+        if document.blocks.contains(where: { block in
+            if block.kind == .opaque { return true }
+            return block.inlines.contains { inline in
+                if case .opaque = inline.kind { return true }
+                return false
+            }
+        }) {
+            return .readOnly(original: data, reason: .unsupportedContent, preview: document)
         }
         return .editable(document)
     }
@@ -155,12 +165,19 @@ enum NoteContentCodec {
             guard let width = rawWidth.numberValue, width.isFinite, width > 0 else { return nil }
             block.width = width
         }
+        if let rawFraction = object["widthFraction"] {
+            guard let fraction = rawFraction.numberValue, fraction.isFinite,
+                  fraction > 0, fraction <= 1 else { return nil }
+            block.widthFraction = fraction
+        }
         for (key, path) in [("pixelWidth", \NoteBlock.pixelWidth), ("pixelHeight", \NoteBlock.pixelHeight)] {
             guard let raw = object[key] else { continue }
             guard let value = raw.intValue, value > 0 else { return nil }
             block[keyPath: path] = value
         }
-        block.extras = object.filter { !["kind", "id", "attachmentID", "width", "pixelWidth", "pixelHeight"].contains($0.key) }
+        block.extras = object.filter {
+            !["kind", "id", "attachmentID", "width", "widthFraction", "pixelWidth", "pixelHeight"].contains($0.key)
+        }
         return block
     }
 
@@ -217,6 +234,7 @@ enum NoteContentCodec {
             object["id"] = block.id.map { .string($0.uuidString) }
             object["attachmentID"] = block.attachmentID.map { .string($0.uuidString) }
             object["width"] = block.width.map(NoteJSON.double)
+            object["widthFraction"] = block.widthFraction.map(NoteJSON.double)
             object["pixelWidth"] = block.pixelWidth.map { .int(Int64($0)) }
             object["pixelHeight"] = block.pixelHeight.map { .int(Int64($0)) }
             return .object(object)

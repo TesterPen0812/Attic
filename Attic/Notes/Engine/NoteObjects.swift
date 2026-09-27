@@ -121,6 +121,7 @@ final class NoteDateAttachment: NoteObjectAttachment {
 final class NoteImageAttachment: NoteObjectAttachment {
     let attachmentID: UUID
     let preferredWidth: Double?
+    let preferredWidthFraction: Double?
     /// Known from the stored block, or read from the file's header once.
     var pixelSize: CGSize?
     let extras: [String: NoteJSON]
@@ -129,9 +130,11 @@ final class NoteImageAttachment: NoteObjectAttachment {
     var isMissing = false
 
     init(objectID: UUID = UUID(), attachmentID: UUID, preferredWidth: Double? = nil,
+         preferredWidthFraction: Double? = nil,
          pixelSize: CGSize? = nil, extras: [String: NoteJSON] = [:]) {
         self.attachmentID = attachmentID
         self.preferredWidth = preferredWidth
+        self.preferredWidthFraction = preferredWidthFraction
         self.pixelSize = pixelSize
         self.extras = extras
         super.init(objectID: objectID)
@@ -144,11 +147,14 @@ final class NoteImageAttachment: NoteObjectAttachment {
     func displaySize(columnWidth: CGFloat) -> CGSize {
         let column = max(40, columnWidth)
         guard let pixelSize, pixelSize.width > 0, pixelSize.height > 0 else {
-            return CGSize(width: column, height: Self.placeholderHeight)
+            let reserved = preferredWidthFraction.map { column * CGFloat($0) }
+                ?? preferredWidth.map { CGFloat($0) } ?? column
+            return CGSize(width: min(column, max(40, reserved)), height: Self.placeholderHeight)
         }
         // Points at 2x, never upscaled past the image's own size.
         let natural = pixelSize.width / 2
-        let wanted = preferredWidth.map { CGFloat($0) } ?? natural
+        let wanted = preferredWidthFraction.map { column * CGFloat($0) }
+            ?? preferredWidth.map { CGFloat($0) } ?? natural
         let width = min(column, max(40, min(wanted, max(natural, 40))))
         return CGSize(width: width.rounded(), height: (width * pixelSize.height / pixelSize.width).rounded())
     }

@@ -176,6 +176,9 @@ final class NoteStore: ObservableObject {
     /// Notes open in the new editor right now (set by the Notes page). An
     /// agent's write to one of them waits as a pending edit.
     var openDocumentNoteIDs: () -> Set<UUID> = { [] }
+    /// Recovery checkpoints can reference image rows after the note itself
+    /// disappears. A failed read must stop purging rather than guess.
+    var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }
 #if os(macOS)
     private let attachmentFileStore: AttachmentFileStore
     private let attachmentImporter: any NoteAttachmentFileImporting
@@ -271,32 +274,28 @@ final class NoteStore: ObservableObject {
         body: String? = nil,
         bodyEditBatch: NoteBodyEditBatch? = nil
     ) -> Bool {
-        update(note, title: title, body: body, bodyEditBatch: bodyEditBatch, beforeWrite: nil)
+        update(note, title: title, body: body, bodyEditBatch: bodyEditBatch,
+               preservationReason: .replacedByDraft)
     }
 
-    /// `beforeWrite` stages rows that must commit with the change (a
-    /// version of the note as it was), given the replica shown now.
+    /// All physical rows are checked before any one of them is changed.
     func update(
         _ note: NoteItem,
         title: String?,
         body: String?,
         bodyEditBatch: NoteBodyEditBatch?,
-        beforeWrite: ((NoteItem) -> Void)?
+        preservationReason: NoteVersionReason
     ) -> Bool {
-        guard let note = notes.first(where: { $0.id == note.id }) else { return false }
-        // A note in the new format belongs to the new editor: writing its
-        // derived title or body here would silently lose its content.
-        guard !note.usesDocumentFormat else {
-            lastErrorMessage = Self.documentFormatRefusal
-            return false
-        }
-        let replicas: [NoteItem]
+        guard notes.contains(where: { $0.id == note.id }) else { return false }
+        let preflight: NoteMutationPreflight
         do {
-            replicas = try storedNotes(matching: note.id)
+            preflight = try noteMutationPreflight(note.id, format: .legacy)
         } catch {
             lastErrorMessage = error.localizedDescription
             return false
         }
+        let replicas = preflight.replicas
+        let note = preflight.canonical
         let destinationTitle = title.map(Self.normalizedTitle) ?? note.title
         let destinationBody = body ?? note.body
         guard !destinationTitle.isEmpty || Self.hasMeaningfulBody(destinationBody) else { return false }
@@ -308,6 +307,7 @@ final class NoteStore: ObservableObject {
         guard titleChanged || bodyChanged || replicasNeedRepair else { return true }
 
         let timestamp = now()
+        stageDisplacedReplicas(replicas, reason: preservationReason, timestamp: timestamp)
         if bodyChanged {
             do {
                 let attachments = try storedAttachments(forNoteID: note.id)
@@ -341,7 +341,6 @@ final class NoteStore: ObservableObject {
         // Every stored field goes to every replica (requirement 8), with one
         // new revision for the whole logical note.
         let contentChanged = titleChanged || bodyChanged
-        if contentChanged { beforeWrite?(note) }
         let revision = replicas.map(\.revision).max() ?? 0
         let revisionID = contentChanged ? UUID() : note.revisionID
         for replica in replicas {
@@ -549,6 +548,8 @@ final class NoteStore: ObservableObject {
                 guard let recordedFamily = first.deletedAttachmentIDs else { continue }
 #if os(macOS)
                 let attachments = try storedAttachments(forNoteID: id)
+                let retainedElsewhere = try documentReferencedAttachmentIDs(excludingNoteID: id)
+                guard Set(attachments.map(\.id)).isDisjoint(with: retainedElsewhere) else { continue }
                 // A file is removed only when no surviving row anywhere holds
                 // the same attachment identity; an attachment id that also
                 // appears under another note makes the purge ambiguous, so the
@@ -1822,7 +1823,7 @@ final class NoteStore: ObservableObject {
         return message
     }
 
-    static func normalizedTitle(_ title: String) -> String {
+    nonisolated static func normalizedTitle(_ title: String) -> String {
         title
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }

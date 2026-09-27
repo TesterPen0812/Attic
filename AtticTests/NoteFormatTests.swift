@@ -31,6 +31,21 @@ final class NoteFormatTests: XCTestCase {
         XCTAssertEqual(decoded.title, "Launch notes")
     }
 
+    func testNewImageWidthUsesAColumnFractionWhileOldPointWidthsStillDecode() throws {
+        let fraction = NoteDocument(blocks: [.text("Images"),
+                                             .image(attachmentID: attachmentID, widthFraction: 0.6)])
+        guard case let .editable(decoded) = NoteContentCodec.decode(try NoteContentCodec.encode(fraction)) else {
+            return XCTFail()
+        }
+        XCTAssertEqual(decoded.blocks[1].widthFraction, 0.6)
+        let old = sampleDocument()
+        guard case let .editable(legacyWidth) = NoteContentCodec.decode(try NoteContentCodec.encode(old)) else {
+            return XCTFail()
+        }
+        XCTAssertEqual(legacyWidth.blocks[3].width, 240)
+        XCTAssertNil(legacyWidth.blocks[3].widthFraction)
+    }
+
     func testUnknownFieldsAndSixtyFourBitIntegersAreKeptAtEveryLevel() throws {
         let json = """
         {"format":1,"future":{"big":9223372036854775807,"huge":18446744073709551615,"odd":9007199254740993},
@@ -80,7 +95,9 @@ final class NoteFormatTests: XCTestCase {
         let badOffset = #"{"kind":"text","text":"a￼","inline":[{"kind":"date","id":"\#(UUID().uuidString)","offset":0,"date":"2026-10-01"}]}"#
         let noKind = #"{"text":"orphan"}"#
         let json = #"{"format":1,"blocks":[{"kind":"text","text":"T"},\#(unknown),\#(numericID),\#(badOffset),\#(noKind),"just a string"]}"#
-        guard case let .editable(document) = NoteContentCodec.decode(Data(json.utf8)) else { return XCTFail() }
+        guard case let .readOnly(original, .unsupportedContent, preview) = NoteContentCodec.decode(Data(json.utf8)),
+              let document = preview else { return XCTFail() }
+        XCTAssertEqual(original, Data(json.utf8))
         XCTAssertEqual(document.blocks.map(\.kind), [.text, .opaque, .opaque, .opaque, .opaque, .opaque])
         let reencoded = try NoteContentCodec.encode(document)
         let originalBlocks = try JSONDecoder().decode(NoteJSON.self, from: Data(json.utf8)).objectValue?["blocks"]
@@ -88,17 +105,14 @@ final class NoteFormatTests: XCTestCase {
         XCTAssertEqual(originalBlocks, newBlocks, "every unreadable block is written back as it was")
     }
 
-    func testUnknownInlineObjectIsKeptAndItsOffsetFollowsTheText() throws {
+    func testUnknownInlineObjectIsReadOnlyAndKeptVerbatim() throws {
         let id = UUID()
         let json = #"{"format":1,"blocks":[{"kind":"text","text":"T"},{"kind":"text","text":"a￼b","inline":[{"kind":"mention","id":"\#(id.uuidString)","offset":1,"who":"sam"}]}]}"#
-        guard case var .editable(document) = NoteContentCodec.decode(Data(json.utf8)) else { return XCTFail() }
-        guard case .opaque = document.blocks[1].inlines.first?.kind else { return XCTFail("opaque inline") }
-        document.blocks[1].text = "xy" + document.blocks[1].text
-        let reencoded = try NoteContentCodec.encode(document)
-        let inline = try JSONDecoder().decode(NoteJSON.self, from: reencoded)
-            .objectValue?["blocks"]?.arrayValue?[1].objectValue?["inline"]?.arrayValue?.first?.objectValue
-        XCTAssertEqual(inline?["offset"], .int(3))
-        XCTAssertEqual(inline?["who"], .string("sam"))
+        guard case let .readOnly(original, .unsupportedContent, preview) = NoteContentCodec.decode(Data(json.utf8)),
+              let document = preview else { return XCTFail() }
+        guard case let .opaque(value) = document.blocks[1].inlines.first?.kind else { return XCTFail("opaque inline") }
+        XCTAssertEqual(original, Data(json.utf8))
+        XCTAssertEqual(value.objectValue?["who"], .string("sam"))
     }
 
     func testPlainTextAndAgentText() {

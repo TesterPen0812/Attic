@@ -9,6 +9,8 @@ struct LegacyNoteSnapshot: Equatable, Sendable {
         let sortIndex: Int64
         let createdAt: Date
         let isImage: Bool
+        /// Actual payload, not only the stored digest (which may be stale).
+        var payload: Data? = nil
     }
 
     let noteID: UUID

@@ -32,6 +32,7 @@ enum NoteTextCodec {
                     objectID: block.id ?? UUID(),
                     attachmentID: block.attachmentID ?? UUID(),
                     preferredWidth: block.width,
+                    preferredWidthFraction: block.widthFraction,
                     pixelSize: pixelSize(block),
                     extras: block.extras
                 )
@@ -195,6 +196,7 @@ enum NoteTextCodec {
                 finishCurrent()
                 var block = NoteBlock.image(id: image.objectID, attachmentID: image.attachmentID,
                                             width: image.preferredWidth,
+                                            widthFraction: image.preferredWidthFraction,
                                             pixelWidth: image.pixelSize.map { Int($0.width) },
                                             pixelHeight: image.pixelSize.map { Int($0.height) })
                 block.extras = image.extras

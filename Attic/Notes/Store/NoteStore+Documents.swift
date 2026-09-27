@@ -14,6 +14,21 @@ struct StagedNoteAttachment: Equatable, Sendable {
     let data: Data
 }
 
+/// Immutable projection prepared away from the main actor for autosave.
+struct PreparedNoteDocument: Sendable {
+    let content: Data
+    let title: String
+    let body: String
+    let plainText: String
+
+    init(_ document: NoteDocument) throws {
+        content = try NoteContentCodec.encode(document)
+        title = NoteStore.normalizedTitle(document.title)
+        body = NoteTextExport.plainBody(document)
+        plainText = NoteTextExport.plainText(document)
+    }
+}
+
 enum NoteDocumentStoreError: LocalizedError, Equatable {
     /// No live row has this id: a write that would change nothing fails.
     case noteMissing(UUID)
@@ -54,12 +69,75 @@ enum NoteAgentWriteOutcome: Equatable {
     case pending(editID: UUID)
 }
 
+enum NoteMutationFormat: Equatable {
+    case legacy
+    case document
+    case editable
+}
+
+struct NoteMutationPreflight {
+    let replicas: [NoteItem]
+    let canonical: NoteItem
+}
+
+private struct NotePreservationState: Hashable {
+    let format: Int
+    let content: Data?
+    let title: String
+    let body: String
+
+    init(_ note: NoteItem) {
+        format = note.contentFormat
+        content = note.content
+        title = note.title
+        body = note.body
+    }
+}
+
 /// The note-format side of `NoteStore`: documents, versions, agents'
 /// pending edits and reference-aware attachment retention. Every write
 /// here stages all of its rows in one context and saves them together, so
 /// a document and the version that preserves what it replaced commit (or
 /// fail) as one transaction.
 extension NoteStore {
+    /// Every writer uses this before touching a physical replica. Format 0
+    /// has no document bytes; format 1 must be fully understood. A future or
+    /// damaged row makes the entire logical note read-only.
+    func noteMutationPreflight(_ noteID: UUID, format: NoteMutationFormat) throws -> NoteMutationPreflight {
+        let replicas = try liveReplicas(of: noteID)
+        guard let selected = canonical(replicas) else { throw NoteDocumentStoreError.noteMissing(noteID) }
+        for replica in replicas {
+            switch replica.contentFormat {
+            case 0:
+                guard replica.content == nil, format != .document || replicas.contains(where: \.usesDocumentFormat) else {
+                    throw NoteDocumentStoreError.invalidDocument("This note has not been moved to the new format.")
+                }
+            case 1:
+                guard format != .legacy else { throw NoteDocumentStoreError.readOnly }
+                guard let data = replica.content, NoteContentCodec.decode(data).isEditable else {
+                    throw NoteDocumentStoreError.readOnly
+                }
+            default:
+                throw NoteDocumentStoreError.readOnly
+            }
+        }
+        return NoteMutationPreflight(replicas: replicas, canonical: selected)
+    }
+
+    /// Preserve each different displaced document, including two physical
+    /// rows with the same revision token but different bytes or legacy text.
+    @discardableResult
+    func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date) -> Int {
+        var seen = Set<NotePreservationState>()
+        var inserted = 0
+        for replica in replicas where seen.insert(NotePreservationState(replica)).inserted {
+            if let latest = latestVersion(noteID: replica.id), isSameState(latest, replica) { continue }
+            stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext)
+            inserted += 1
+        }
+        return inserted
+    }
+
     // MARK: Loading
 
     func loadDocument(noteID: UUID) -> NoteDocumentLoad? {
@@ -75,7 +153,8 @@ extension NoteStore {
     func createDocumentNote(
         id: UUID,
         document: NoteDocument,
-        staged: [StagedNoteAttachment] = []
+        staged: [StagedNoteAttachment] = [],
+        prepared: PreparedNoteDocument? = nil
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
         let context = modelContext
         var resolvedID = id
@@ -84,7 +163,8 @@ extension NoteStore {
                 resolvedID = UUID()
             } else {
                 // Already created (a retried first save): save into it.
-                return saveDocument(noteID: id, document: document, baseRevisionID: existing.first?.revisionID, staged: staged)
+                return saveDocument(noteID: id, document: document, baseRevisionID: canonical(existing)?.revisionID,
+                                    staged: staged, prepared: prepared)
                     .map { (id, $0) }
             }
         }
@@ -92,7 +172,7 @@ extension NoteStore {
         let note = NoteItem(id: resolvedID, createdAt: timestamp, updatedAt: timestamp)
         let revisionID: UUID
         do {
-            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0)
+            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: prepared)
         } catch let error as NoteDocumentStoreError {
             return .failure(error)
         } catch {
@@ -116,35 +196,22 @@ extension NoteStore {
         noteID: UUID,
         document: NoteDocument,
         baseRevisionID: UUID?,
-        staged: [StagedNoteAttachment] = []
+        staged: [StagedNoteAttachment] = [],
+        prepared: PreparedNoteDocument? = nil
     ) -> Result<UUID, NoteDocumentStoreError> {
-        let replicas: [NoteItem]
+        let preflight: NoteMutationPreflight
         do {
-            replicas = try liveReplicas(of: noteID)
+            preflight = try noteMutationPreflight(noteID, format: .document)
         } catch {
-            return .failure(.noteMissing(noteID))
+            return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
-        // A legacy note changes format only through the migration gate. A
-        // stale legacy replica beside new-format ones is overwritten (its
-        // state is kept as a version below).
-        guard replicas.contains(where: \.usesDocumentFormat) else {
-            return .failure(.invalidDocument("This note has not been moved to the new format."))
-        }
-        guard replicas.filter(\.usesDocumentFormat)
-            .allSatisfy({ $0.content.map { NoteContentCodec.decode($0).isEditable } ?? false }) else {
-            return .failure(.readOnly)
-        }
+        let replicas = preflight.replicas
         let timestamp = currentDate
         let context = modelContext
-        // Keep every stored state the draft was not based on.
-        var preserved = Set<UUID?>()
-        for replica in replicas where replica.revisionID != baseRevisionID && !preserved.contains(replica.revisionID) {
-            preserved.insert(replica.revisionID)
-            stageVersion(of: replica, reason: .replacedByDraft, timestamp: timestamp, context: context)
-        }
+        stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp)
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
-                                       revision: replicas.map(\.revision).max() ?? 0)
+                                       revision: replicas.map(\.revision).max() ?? 0, prepared: prepared)
             stageAttachments(staged, referencedBy: document, noteID: noteID, context: context, timestamp: timestamp)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
@@ -162,24 +229,20 @@ extension NoteStore {
 
     /// Writes `document` and its derived columns onto rows (not saved).
     @discardableResult
-    private func stage(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64) throws -> UUID {
-        let data: Data
-        do {
-            data = try NoteContentCodec.encode(document)
-        } catch {
-            throw NoteDocumentStoreError.encodingFailed(error.localizedDescription)
-        }
+    private func stage(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
+                       prepared: PreparedNoteDocument? = nil) throws -> UUID {
+        guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+        let projection: PreparedNoteDocument
+        do { projection = try prepared ?? PreparedNoteDocument(document) }
+        catch { throw NoteDocumentStoreError.encodingFailed(error.localizedDescription) }
         let revisionID = UUID()
-        let canonical = replicas.first
-        let title = Self.normalizedTitle(document.title)
-        let body = NoteTextExport.plainBody(document)
-        let plainText = NoteTextExport.plainText(document)
+        let canonical = canonical(replicas)
         for replica in replicas {
-            replica.content = data
+            replica.content = projection.content
             replica.contentFormat = document.format
-            replica.title = title
-            replica.body = body
-            replica.plainText = plainText
+            replica.title = projection.title
+            replica.body = projection.body
+            replica.plainText = projection.plainText
             replica.revision = revision &+ 1
             replica.revisionID = revisionID
             replica.updatedAt = timestamp
@@ -244,9 +307,9 @@ extension NoteStore {
     /// already holds this exact revision.
     @discardableResult
     func recordVersion(noteID: UUID, reason: NoteVersionReason) -> Bool {
-        guard let replicas = try? liveReplicas(of: noteID), let current = canonical(replicas) else { return false }
-        if let latest = latestVersion(noteID: noteID), isSameState(latest, current) { return true }
-        stageVersion(of: current, reason: reason, timestamp: currentDate, context: modelContext)
+        guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { return false }
+        let inserted = stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate)
+        if inserted == 0 { return true }
         return commitStagedChanges()
     }
 
@@ -265,23 +328,27 @@ extension NoteStore {
     /// Restores a version. What the note holds now is kept as a version
     /// first, in the same save: Restore succeeds only when both commit.
     func restoreVersion(_ versionID: UUID, noteID: UUID) -> Result<String, NoteDocumentStoreError> {
-        let replicas: [NoteItem]
+        let preflight: NoteMutationPreflight
         do {
-            replicas = try liveReplicas(of: noteID)
+            preflight = try noteMutationPreflight(noteID, format: .editable)
         } catch {
-            return .failure(.noteMissing(noteID))
+            return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
+        let replicas = preflight.replicas
         let targetID = versionID
         guard let version = ((try? modelContext.fetch(FetchDescriptor<NoteVersion>(
             predicate: #Predicate { $0.id == targetID }
         ))) ?? []).first, version.noteID == noteID else {
             return .failure(.versionMissing(versionID))
         }
+        guard version.contentFormat == 0 && version.content == nil
+            || (version.contentFormat == NoteDocument.currentFormat
+                && version.content.map { NoteContentCodec.decode($0).isEditable } == true) else {
+            return .failure(.readOnly)
+        }
         let timestamp = currentDate
         let context = modelContext
-        if let current = canonical(replicas) {
-            stageVersion(of: current, reason: .beforeRestore, timestamp: timestamp, context: context)
-        }
+        stageDisplacedReplicas(replicas, reason: .beforeRestore, timestamp: timestamp)
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         let derived = Self.derivedColumns(content: version.content, format: version.contentFormat,
@@ -297,6 +364,11 @@ extension NoteStore {
             replica.updatedAt = timestamp
             replica.deletedAt = nil
             replica.deletedAttachmentIDsRaw = nil
+            if replica !== preflight.canonical {
+                replica.createdAt = preflight.canonical.createdAt
+                replica.tagsRaw = preflight.canonical.tagsRaw
+                replica.taskID = preflight.canonical.taskID
+            }
         }
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The version could not be restored."))
@@ -337,7 +409,6 @@ extension NoteStore {
     }
 
     private func isSameState(_ version: NoteVersion, _ note: NoteItem) -> Bool {
-        if let source = version.sourceRevisionID, source == note.revisionID { return true }
         return version.contentFormat == note.contentFormat && version.content == note.content
             && version.title == note.title && version.body == note.body
     }
@@ -369,20 +440,19 @@ extension NoteStore {
         agentName: String,
         noteIsOpen: Bool
     ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
-        let replicas: [NoteItem]
+        let preflight: NoteMutationPreflight
         do {
-            replicas = try liveReplicas(of: noteID)
+            preflight = try noteMutationPreflight(noteID, format: .editable)
         } catch {
-            return .failure(.noteMissing(noteID))
+            return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
-        guard let current = canonical(replicas) else { return .failure(.noteMissing(noteID)) }
+        let replicas = preflight.replicas
+        let current = preflight.canonical
         guard current.revisionToken == baseRevisionToken else {
             return .failure(.staleRevision(expected: baseRevisionToken, current: current.revisionToken))
         }
-        if current.usesDocumentFormat, let data = current.content, !NoteContentCodec.decode(data).isEditable {
-            return .failure(.readOnly)
-        }
         let data: Data
+        guard document.isWritableByThisBuild else { return .failure(.readOnly) }
         do {
             data = try NoteContentCodec.encode(document)
         } catch {
@@ -390,15 +460,23 @@ extension NoteStore {
         }
         let timestamp = currentDate
         if noteIsOpen {
+            // The proposal and the exact base it compared with commit together.
+            let baseVersionID = UUID()
+            modelContext.insert(NoteVersion(id: baseVersionID, noteID: noteID, createdAt: timestamp,
+                                            reason: .beforeAgentEdit, content: current.content,
+                                            contentFormat: current.contentFormat, title: current.title, body: current.body,
+                                            attachmentIDs: (try? attachmentRows(forNoteID: noteID).map(\.id)) ?? [],
+                                            sourceRevisionID: current.revisionID))
             let edit = NotePendingEdit(noteID: noteID, baseRevisionToken: baseRevisionToken,
-                                       proposedContent: data, agentName: agentName, createdAt: timestamp)
+                                       proposedContent: data, agentName: agentName, createdAt: timestamp,
+                                       baseVersionID: baseVersionID)
             modelContext.insert(edit)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The edit could not be kept."))
             }
             return .success(.pending(editID: edit.id))
         }
-        stageVersion(of: current, reason: .beforeAgentEdit, timestamp: timestamp, context: modelContext)
+        stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0)
@@ -419,11 +497,8 @@ extension NoteStore {
     /// has open by itself): the note as it was is kept as a version in the
     /// same save. The caller has checked the base revision.
     func agentUpdateLegacy(_ note: NoteItem, title: String?, body: String?) -> Bool {
-        let timestamp = currentDate
-        let context = modelContext
-        return update(note, title: title, body: body, bodyEditBatch: nil) { [weak self] current in
-            self?.stageVersion(of: current, reason: .beforeAgentEdit, timestamp: timestamp, context: context)
-        }
+        update(note, title: title, body: body, bodyEditBatch: nil,
+               preservationReason: .beforeAgentEdit)
     }
 
     /// Oldest first, one per id.
@@ -446,7 +521,9 @@ extension NoteStore {
     func applyPendingEdits(noteID: UUID) -> Int {
         var applied = 0
         for edit in pendingEdits(noteID: noteID) {
-            guard let replicas = try? liveReplicas(of: noteID), let current = canonical(replicas) else { break }
+            guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { break }
+            let replicas = preflight.replicas
+            let current = preflight.canonical
             let editRows = pendingEditRows(edit.id)
             guard current.revisionToken == edit.baseRevisionToken,
                   let data = edit.proposedContent,
@@ -458,7 +535,7 @@ extension NoteStore {
                 continue
             }
             let timestamp = currentDate
-            stageVersion(of: current, reason: .beforeAgentEdit, timestamp: timestamp, context: modelContext)
+            stageDisplacedReplicas(replicas, reason: .beforeAgentEdit, timestamp: timestamp)
             do {
                 try stage(document, on: replicas, timestamp: timestamp, revision: replicas.map(\.revision).max() ?? 0)
             } catch {
@@ -482,10 +559,15 @@ extension NoteStore {
 
     /// A legacy note as it is shown today, or why it can't be read as one.
     func legacySnapshot(noteID: UUID) -> Result<LegacyNoteSnapshot, LegacyMigrationRefusal> {
-        guard let replicas = try? liveReplicas(of: noteID), let current = canonical(replicas) else {
+        guard let preflight = try? noteMutationPreflight(noteID, format: .legacy) else {
+            if let replicas = try? liveReplicas(of: noteID),
+               !replicas.isEmpty, replicas.allSatisfy(\.usesDocumentFormat) {
+                return .failure(.alreadyMigrated)
+            }
             return .failure(.changedSincePlanned)
         }
-        guard !current.usesDocumentFormat else { return .failure(.alreadyMigrated) }
+        let replicas = preflight.replicas
+        let current = preflight.canonical
         guard replicas.allSatisfy({ $0.title == current.title && $0.body == current.body }) else {
             return .failure(.replicasDisagree)
         }
@@ -495,7 +577,9 @@ extension NoteStore {
         for row in rows {
             if let seen = byID[row.id] {
                 guard seen.inlineOffset == row.inlineOffset, seen.sortIndex == row.sortIndex,
-                      seen.contentDigest == row.contentDigest else { return .failure(.replicasDisagree) }
+                      seen.createdAt == row.createdAt, seen.isImage == row.isImage,
+                      seen.byteCount == row.byteCount, seen.contentDigest == row.contentDigest,
+                      seen.payload == row.payload else { return .failure(.replicasDisagree) }
             } else {
                 byID[row.id] = row
             }
@@ -504,10 +588,10 @@ extension NoteStore {
             noteID: noteID,
             title: current.title,
             body: current.body,
-            attachments: byID.values.map {
+            attachments: LegacyNoteMigration.displayOrder(byID.values.map {
                 .init(id: $0.id, inlineOffset: $0.inlineOffset, sortIndex: $0.sortIndex,
-                      createdAt: $0.createdAt, isImage: $0.isImage)
-            },
+                      createdAt: $0.createdAt, isImage: $0.isImage, payload: $0.payload)
+            }),
             revisionToken: current.revisionToken
         ))
     }
@@ -522,15 +606,17 @@ extension NoteStore {
         }
         guard now.revisionToken == plan.snapshot.revisionToken, now.title == plan.snapshot.title,
               now.body == plan.snapshot.body,
-              Set(now.attachments.map(\.id)) == Set(plan.snapshot.attachments.map(\.id)) else {
+              now.attachments == plan.snapshot.attachments else {
             return .failure(.changedSincePlanned)
         }
-        guard let replicas = try? liveReplicas(of: plan.snapshot.noteID), let current = canonical(replicas),
+        guard let preflight = try? noteMutationPreflight(plan.snapshot.noteID, format: .legacy),
+              plan.document.isWritableByThisBuild,
               let data = try? NoteContentCodec.encode(plan.document) else {
             return .failure(.changedSincePlanned)
         }
+        let replicas = preflight.replicas
         let timestamp = currentDate
-        stageVersion(of: current, reason: .beforeMigration, timestamp: timestamp, context: modelContext)
+        stageDisplacedReplicas(replicas, reason: .beforeMigration, timestamp: timestamp)
         let revisionID = UUID()
         let revision = (replicas.map(\.revision).max() ?? 0) &+ 1
         for replica in replicas {
@@ -539,6 +625,11 @@ extension NoteStore {
             replica.plainText = NoteTextExport.plainText(plan.document)
             replica.revision = revision
             replica.revisionID = revisionID
+            if replica !== preflight.canonical {
+                replica.createdAt = preflight.canonical.createdAt
+                replica.tagsRaw = preflight.canonical.tagsRaw
+                replica.taskID = preflight.canonical.taskID
+            }
         }
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "unknown error"))
@@ -552,12 +643,13 @@ extension NoteStore {
     /// shows, or a pending agent edit would show. A note whose content this
     /// build can't read keeps all of its rows. Throws on a failed read, so
     /// callers keep everything rather than guess.
-    func documentReferencedAttachmentIDs() throws -> Set<UUID> {
-        var ids = Set<UUID>()
+    func documentReferencedAttachmentIDs(excludingNoteID excluded: UUID? = nil) throws -> Set<UUID> {
+        var ids = try recoveryReferencedAttachmentIDs()
         let notes = try modelContext.fetch(FetchDescriptor<NoteItem>(
             predicate: #Predicate { $0.contentFormat >= 1 }
         ))
         for note in notes {
+            if note.id == excluded { continue }
             if let data = note.content, case let .editable(document) = NoteContentCodec.decode(data) {
                 ids.formUnion(document.attachmentIDs)
             } else {
@@ -565,9 +657,11 @@ extension NoteStore {
             }
         }
         for version in try modelContext.fetch(FetchDescriptor<NoteVersion>()) {
+            if version.noteID == excluded { continue }
             ids.formUnion(version.attachmentIDs)
         }
         for edit in try modelContext.fetch(FetchDescriptor<NotePendingEdit>()) {
+            if edit.noteID == excluded { continue }
             guard let data = edit.proposedContent else { continue }
             if case let .editable(document) = NoteContentCodec.decode(data) {
                 ids.formUnion(document.attachmentIDs)
