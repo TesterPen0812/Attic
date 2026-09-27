@@ -18,8 +18,9 @@ final class AtticAppearanceMatrixTests: XCTestCase {
             ProcessInfo.processInfo.environment["ATTIC_APPEARANCE_FULL"] == "1",
             "The full matrix runs separately: Scripts/run_appearance_matrix.zsh"
         )
-        // Sharded (round 4): the matrix doubled with the review switches
-        // and outgrew one CI job. `ATTIC_APPEARANCE_SHARD=i/n` checks every
+        // Sharded (round 4: the matrix outgrew one CI job; round 6 took the
+        // review switches out, so there is one design again, and the shards
+        // stay for headroom). `ATTIC_APPEARANCE_SHARD=i/n` checks every
         // n-th combination from i; together the shards cover every one.
         // The contact sheets are drawn once, by shard 0.
         let shard = Self.shard(ProcessInfo.processInfo.environment["ATTIC_APPEARANCE_SHARD"])

@@ -188,7 +188,7 @@ struct TaskPriorityPickerView: View {
     @FocusState private var focused: Bool
 
     private var options: [TaskPriority] {
-        current == .low ? [.none, .low, .medium, .high] : [.none, .medium, .high]
+        TaskPriority.choices(keeping: current.map { [$0] } ?? [])
     }
 
     var body: some View {
@@ -223,6 +223,15 @@ struct TaskPriorityPickerView: View {
 }
 
 extension TaskPriority {
+    /// What every priority menu offers (the row menu, the strip, the bulk
+    /// bar, the details panel; owner item 19): No Priority, Medium and
+    /// High. Low has no mark, so it looked like none; it is offered only
+    /// while one of the tasks has it, so it shows ticked until changed. The
+    /// model, storage and agents keep it.
+    static func choices(keeping current: some Sequence<TaskPriority>) -> [TaskPriority] {
+        Array(current).contains(.low) ? [.none, .low, .medium, .high] : [.none, .medium, .high]
+    }
+
     /// The toast's wording: "High priority", "Priority removed".
     var spokenTitle: String {
         switch self {
@@ -233,10 +242,10 @@ extension TaskPriority {
         }
     }
 
-    /// The strip's and menu's wording: "None", "!  Medium", "!!  High".
+    /// The strip's wording: "No Priority", "!  Medium", "!!  High".
     var pickerTitle: String {
         switch self {
-        case .none: String(localized: "None")
+        case .none: String(localized: "No Priority")
         case .low: String(localized: "Low")
         case .medium: String(localized: "!  Medium")
         case .high: String(localized: "!!  High")

@@ -47,15 +47,13 @@ struct AppearanceSettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.atticDesign) private var design
 
     /// Palette tiles keep their size and wrap, 12 pt apart.
 
     var body: some View {
-        // The Compact Appearance review switch (Astra 26): 24 pt under the
-        // header and Surface and tint before Palette. Off: today's page.
-        let compact = design.variants.isOn(.compactAppearance)
-        SettingsPage(section: .appearance, compact: compact) {
+        // Compact (Astra 26, kept by the owner in round 6): 24 pt under the
+        // header, and Surface and tint before Palette.
+        SettingsPage(section: .appearance, compact: true) {
             AtticAppearancePreview(accessibilityLabel: previewDescription) {
                 SettingsPanelMiniature(cornerSize: CGFloat(PanelGeometryCornerSize.sanitised(settings.panelCornerSize)))
             }
@@ -84,13 +82,8 @@ struct AppearanceSettingsView: View {
             .accessibilityIdentifier("setting-appearance")
             .padding(.bottom, AtticSpacing.settingsBetweenSections)
 
-            if compact {
-                surfaceSection
-                paletteSection
-            } else {
-                paletteSection
-                surfaceSection
-            }
+            surfaceSection
+            paletteSection
 
             SettingsGroup(
                 title: String(localized: "Advanced"),

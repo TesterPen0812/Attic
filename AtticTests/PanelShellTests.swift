@@ -135,7 +135,7 @@ final class PanelShellTests: XCTestCase {
             advertisedNewTaskShortcut: KeyboardShortcut("t", modifiers: [.command, .option]),
             showPanel: {}, newTask: {}, newNote: {}, search: {}, openSettings: {}, quit: {}
         )
-        XCTAssertEqual(commands.map(\.title), ["Show Attic", "New task", "New note", "Search", "Settings…", "Quit Attic"])
+        XCTAssertEqual(commands.map(\.title), ["Show Attic", "New task", "New note", "Search Done Tasks…", "Settings…", "Quit Attic"])
         XCTAssertEqual(commands[1].shortcut, KeyboardShortcut("t", modifiers: [.command, .option]))
         XCTAssertEqual(commands[4].shortcut, KeyboardShortcut(",", modifiers: .command))
         XCTAssertEqual(commands[5].shortcut, KeyboardShortcut("q", modifiers: .command))

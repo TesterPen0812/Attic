@@ -309,30 +309,38 @@ final class AtticDesignSystemTests: XCTestCase {
         }
     }
 
-    /// Owner, 2026-09-26: Glass and Frosted are Phase 0's surfaces exactly
-    /// (its foundation colour and opacity, Tint, Frosted wash, bright
-    /// native material under Original's shade, and hairline edge), in
-    /// both modes; Reduce Transparency still makes the surface Solid.
-    func testGlassAndFrostedArePhase0s() {
-        // The decided design (Readable Glass off; the switch's own test is
-        // `AtticReviewVariantsTests`).
-        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid && !context.colourKey.readableGlass
-            && !context.colourKey.definedDarkEdge {
-            let appearance: AtticPanelThemeAppearance = context.mode == .dark ? .dark : .light
-            let treatment = context.palette.surfaceTreatment(
-                appearance: appearance, contrast: context.increaseContrast ? .increased : .standard,
-                surface: PanelSurfaceStyle(context.effectiveSurface), tint: context.tint,
-                tintLength: AtticDesignContext.quantisedTintLength(context.tintLength), reduceTransparency: false
-            )
+    /// Phase 0's surface treatment for a context's colours.
+    static func phase0Treatment(_ context: AtticDesignContext) -> AtticPanelSurfaceTreatment {
+        context.palette.surfaceTreatment(
+            appearance: context.mode == .dark ? .dark : .light, contrast: context.increaseContrast ? .increased : .standard,
+            surface: PanelSurfaceStyle(context.effectiveSurface), tint: context.tint,
+            tintLength: AtticDesignContext.quantisedTintLength(context.tintLength), reduceTransparency: false
+        )
+    }
+
+    /// Owner, 2026-09-26: Glass and Frosted are Phase 0's surfaces (its
+    /// foundation colour, Tint, Frosted wash, bright native material under
+    /// Original's shade, and edge), in both modes, plus the two changes the
+    /// owner kept in round 6: Readable Glass's backing (only the foundation
+    /// opacity grows) and the defined dark edge (Dark only). Reduce
+    /// Transparency still makes the surface Solid.
+    func testGlassAndFrostedArePhase0sPlusTheReadableBacking() {
+        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid {
+            let treatment = Self.phase0Treatment(context)
+            let phase0 = AtticSurfaceModel.phase0(treatment, increaseContrast: context.increaseContrast)
             let panel = context.tokens.panel
-            XCTAssertEqual(panel, AtticSurfaceModel.phase0(treatment, increaseContrast: context.increaseContrast), context.caption)
+            XCTAssertEqual(panel, phase0.readable(primary: AtticRGBA(treatment.palette.primaryForeground),
+                                                  secondary: AtticRGBA(treatment.palette.secondaryForeground)).definedDarkEdge(),
+                           context.caption)
+            XCTAssertEqual(panel.withFoundation(phase0.foundationOpacity), phase0.definedDarkEdge(),
+                           "only the backing and the dark edge differ from Phase 0: \(context.caption)")
         }
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
         // Phase 0's Original coverage (far more see-through than PR #5's 67 / 80 / 66 / 82).
         let measured = [
-            AtticDesignContext(mode: .light, surface: .glass, variants: .decided), AtticDesignContext(mode: .light, surface: .frosted, variants: .decided),
-            AtticDesignContext(mode: .dark, surface: .glass, variants: .decided), AtticDesignContext(mode: .dark, surface: .frosted, variants: .decided)
-        ].map { Int(($0.tokens.panel.foundationOpacity * 100).rounded()) }
+            AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, surface: .frosted),
+            AtticDesignContext(mode: .dark, surface: .glass), AtticDesignContext(mode: .dark, surface: .frosted)
+        ].map { Int((AtticSurfaceModel.phase0(Self.phase0Treatment($0), increaseContrast: false).foundationOpacity * 100).rounded()) }
         XCTAssertEqual(measured, [1, 16, 10, 32])
         // Text on them is Phase 0's (owner, 2026-09-26): its primary and
         // secondary greys, placeholder included, every palette, both modes.

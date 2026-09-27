@@ -387,8 +387,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     # Four shards in parallel, together every combination (round 4: the
-    # whole matrix outgrew one 45-minute job once the review switches
-    # doubled it).
+    # whole matrix outgrew one 45-minute job; round 6 removed the review
+    # switches, and the shards stay for headroom).
     strategy:
       fail-fast: false
       matrix:

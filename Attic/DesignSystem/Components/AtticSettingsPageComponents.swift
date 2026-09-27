@@ -63,7 +63,7 @@ enum AtticSettingsRowMetrics {
 struct AtticSettingsScrollPage<Content: View>: View {
     var identifier: String?
     /// The gap under the header: 52 pt (spec), or 24 on a compact page
-    /// (the Compact Appearance review switch).
+    /// (Appearance, Astra 26: the preview and its choices start closer).
     var compact = false
     @ViewBuilder let content: Content
 

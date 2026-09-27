@@ -107,7 +107,6 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
-        static let reviewVariants = "reviewVariants"
     }
 
     @Published var corner: ScreenCorner {
@@ -153,20 +152,6 @@ final class AppSettings: ObservableObject {
     /// snaps into place (spec § Touch and sound). On by default.
     @Published var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
-    }
-
-    /// The temporary review switches (Settings › Compare (temporary)): the
-    /// suggested changes the owner flips to compare with what they decided.
-    /// Only switches that differ from their default are stored.
-    @Published var reviewVariants: AtticReviewVariants {
-        didSet {
-            let overrides = reviewVariants.storedOverrides
-            if overrides.isEmpty {
-                defaults.removeObject(forKey: Key.reviewVariants)
-            } else {
-                defaults.set(overrides, forKey: Key.reviewVariants)
-            }
-        }
     }
 
     @Published var panelCornerSize: Double {
@@ -317,7 +302,6 @@ final class AppSettings: ObservableObject {
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
-        reviewVariants = AtticReviewVariants(storedOverrides: defaults.dictionary(forKey: Key.reviewVariants))
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,

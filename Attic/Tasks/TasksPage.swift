@@ -760,7 +760,7 @@ struct TasksPage: View {
                 model.selectOnly(id)
                 model.beginEditingTitle(id)
             },
-            names: .init(openPage: AtticPhase1Labels.openLiveTaskAction(design.variants))
+            names: .init(openPage: String(localized: "Open files"))
         )
     }
 
@@ -777,15 +777,13 @@ struct TasksPage: View {
     /// VoiceOver's name for `toggleDetails`.
     private func detailsActionName(for id: UUID) -> String {
         if model.doneDetailID == id { return String(localized: "Close details") }
-        return isArchived(id) ? AtticPhase1Labels.showArchivedDetailsAction(design.variants)
-            : AtticPhase1Labels.openLiveTaskAction(design.variants)
+        return isArchived(id) ? String(localized: "Show details") : String(localized: "Open files")
     }
 
     /// The right-click menu's name for `toggleDetails`.
     private func detailsMenuTitle(for id: UUID) -> String {
         if model.doneDetailID == id { return String(localized: "Close Details") }
-        return isArchived(id) ? AtticPhase1Labels.showArchivedDetails(design.variants)
-            : AtticPhase1Labels.openLiveTask(design.variants)
+        return isArchived(id) ? String(localized: "Show Details") : String(localized: "Open Files…")
     }
 
     private func deleteAndMoveFocus(_ ids: [UUID]) {
@@ -892,7 +890,7 @@ struct TasksPage: View {
             }
             Menu(String(localized: "Priority")) {
                 let priorities = Set(targets.compactMap { store.task(withID: $0)?.priority })
-                ForEach(TaskPriority.allCases.reversed(), id: \.self) { priority in
+                ForEach(TaskPriority.choices(keeping: priorities), id: \.self) { priority in
                     Toggle(isOn: Binding(get: { priorities == [priority] },
                                          set: { _ in menuCommand(row.id) { model.setPriority(priority, for: $0) } })) {
                         Text(priority.menuTitle)
@@ -918,7 +916,7 @@ struct TasksPage: View {
                 if store.task(withID: id)?.status != .done {
                     Button(String(localized: "Add Subtask")) { model.beginAddingSubtask(to: menuRowID(row.id)) }
                 }
-                Button(AtticPhase1Labels.openLiveTask(design.variants)) {
+                Button(String(localized: "Open Files…")) {
                     guard !AtticTextInput.ownsCurrentKey else { return }
                     model.openPage(menuRowID(row.id))
                 }
@@ -1298,6 +1296,7 @@ struct TasksPage: View {
         let ids = model.orderedSelection()
         let count = ids.count
         let tags = model.library.tags.counts().prefix(12).map(\.name)
+        let priorities = Set(ids.compactMap { store.task(withID: $0)?.priority })
         // Moving off the page ends the selection (computer-use bug 5):
         // Later and Now go through the moves, which clear it and confirm
         // with an Undo toast.
@@ -1317,8 +1316,11 @@ struct TasksPage: View {
             .init(systemName: "checkmark.circle", label: "Set state of \(count) tasks", handler: {}, menu: [TaskStatus.todo, .inProgress, .done, .backlog].map { status in
                 AtticMenuCommand(status.menuLocalization) { move(status) }
             }),
-            .init(systemName: "exclamationmark", label: "Set priority of \(count) tasks", handler: {}, menu: TaskPriority.allCases.reversed().map { priority in
-                AtticMenuCommand(priority.menuLocalization) { run { model.setPriority(priority, for: ids) } }
+            .init(systemName: "exclamationmark", label: "Set priority of \(count) tasks", handler: {}, menu: TaskPriority.choices(keeping: priorities).map { priority in
+                // Ticked when every selected task has it, as the tags are.
+                AtticMenuCommand(priority.menuLocalization, systemImage: priorities == [priority] ? "checkmark" : nil) {
+                    run { model.setPriority(priority, for: ids) }
+                }
             }),
             .init(systemName: "number", label: "Tag \(count) tasks", handler: {}, menu: tags.isEmpty
                 ? [AtticMenuCommand("No tags yet: type #tag in a title", isDisabled: true) {}]

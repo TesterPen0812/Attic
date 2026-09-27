@@ -233,12 +233,10 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(tab("done").isSelected)
         XCTAssertTrue(window.descendants(matching: .any)["Yesterday"].exists, "grouped by day")
 
-        // "Open Page" on a Done log task opens its details, which offer
+        // "Show Details" on a Done log task opens its details, which offer
         // Restore to Now; the right-click menu restores too.
         row("Send invoice").rightClick()
-        // "Show Details" with the Explicit Phase 1 Labels switch on (its
-        // default), "Open Page" with it off.
-        let open = app.menuItems.matching(NSPredicate(format: "title == %@ OR title == %@", "Show Details", "Open Page")).firstMatch
+        let open = app.menuItems["Show Details"]
         XCTAssertTrue(open.waitForExistence(timeout: 3))
         open.click()
         XCTAssertTrue(window.buttons["Restore to Now"].waitForExistence(timeout: 3), "the details offer Restore to Now")

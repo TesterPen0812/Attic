@@ -1536,9 +1536,8 @@ struct AtticQuickLook: View {
             } else {
                 AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
             }
-            // "Open files" with Explicit Phase 1 Labels (a live task's files
-            // and details panel until task pages arrive).
-            AtticQuietAction(systemName: nil, title: AtticPhase1Labels.openLiveTaskAction(design.variants), trailingChevron: true, emphasised: true, action: onOpenPage)
+            // A live task's files and details panel, until task pages arrive.
+            AtticQuietAction(systemName: nil, title: String(localized: "Open files"), trailingChevron: true, emphasised: true, action: onOpenPage)
         }
         .padding(.leading, AtticLayout.textX)
         .padding(.trailing, AtticLayout.rowHighlightInset)
@@ -1676,7 +1675,7 @@ struct AtticTaskCard: View {
                     HStack {
                         AtticQuietAction(systemName: nil, title: String(localized: "Open in Tasks"), emphasised: true, action: cardActions.openInTasks)
                         Spacer()
-                        AtticQuietAction(systemName: "doc.text", title: AtticPhase1Labels.openLiveTaskAction(design.variants), emphasised: true, action: actions.openPage)
+                        AtticQuietAction(systemName: "doc.text", title: String(localized: "Open files"), emphasised: true, action: actions.openPage)
                     }
                     .padding(.top, m.actionsTop)
                 }
