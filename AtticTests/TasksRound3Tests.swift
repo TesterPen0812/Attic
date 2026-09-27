@@ -273,6 +273,25 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(store.task(withID: b)?.tags, ["home"], "one step for both")
     }
 
+    // MARK: - A failed change shows where it was made (review 6)
+
+    func testARowFailureShowsUnderItsRowAndRetryReplacesIt() throws {
+        let id = try add("A")
+        var attempts = 0
+        let failing = CommandOutcome.failed(CommandFailure("Couldn’t save.", canRetry: true))
+        model.report(failing, on: id) { attempts += 1; return .applied }
+        XCTAssertEqual(model.rowFailure?.id, id)
+        XCTAssertEqual(model.rowFailure?.canRetry, true)
+        model.retryRowFailure()
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNil(model.rowFailure, "an applied retry clears it")
+        model.report(.failed(.taskGone), on: id) { .applied }
+        XCTAssertEqual(model.rowFailure?.canRetry, false, "a gone task offers no Retry")
+        XCTAssertEqual(model.rowFailure?.message, CommandFailure.taskGone.message)
+        model.report(.applied, on: id) { .applied }
+        XCTAssertNil(model.rowFailure, "a later success on the row clears it")
+    }
+
     // MARK: - Drag to reorder (owner fix 6, review 10)
 
     func testReorderTargetsAndNeighboursFollowTheRowsHeights() {
