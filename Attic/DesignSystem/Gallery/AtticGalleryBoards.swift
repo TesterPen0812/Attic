@@ -733,7 +733,7 @@ private struct TaskRowsBoard: View {
         AtticSpecimen("Keyboard focus", fullWidth: true) { GalleryTaskRow(model: rows[3]).atticForcedState(.focused) }
         AtticSpecimen("Disabled (while saving)", fullWidth: true) { GalleryTaskRow(model: rows[3]).atticForcedState(.disabled) }
         AtticSpecimen("Done: struck through, faded", fullWidth: true) { GalleryTaskRow(model: rows[4]) }
-        AtticSpecimen("Backlog", fullWidth: true) {
+        AtticSpecimen("Later", fullWidth: true) {
             GalleryTaskRow(model: .init(title: "Plan Friday retro", state: .backlog, priority: .low))
         }
         AtticSpecimen("Touching selected rows merge", fullWidth: true) {
@@ -844,7 +844,7 @@ private struct FeedbackBoard: View {
             AtticUndoToast(message: String(localized: "Task deleted"), onUndo: demo.record("Undo")).padding(.horizontal, 16)
         }
         AtticSpecimen("Undo hover", fullWidth: true) {
-            AtticUndoToast(message: String(localized: "Moved to Backlog"), onUndo: demo.record("Undo")).padding(.horizontal, 16).atticForcedState(.hover)
+            AtticUndoToast(message: String(localized: "Moved to Later"), onUndo: demo.record("Undo")).padding(.horizontal, 16).atticForcedState(.hover)
         }
         AtticSpecimen("Live: slides up, fades under Reduce Motion", fullWidth: true) {
             VStack(alignment: .leading, spacing: 8) {

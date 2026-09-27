@@ -434,14 +434,14 @@ enum AtticTaskState: String, CaseIterable, Sendable {
         case .todo: String(localized: "to do")
         case .inProgress: String(localized: "in progress")
         case .done: String(localized: "done")
-        case .backlog: String(localized: "backlog")
+        case .backlog: String(localized: "later")
         }
     }
 }
 
-/// Priority is shown only by the status ring: its weight and a grey that
-/// deepens with it, with High alone in red (and heavier still under
-/// Differentiate Without Colour, so it never relies on the red).
+/// Priority is a mark after the title (Direction A): High "!!" in the
+/// orange mark ink, Medium "!" in the secondary grey, Low and None nothing;
+/// every open ring is the same grey. VoiceOver reads it with the task.
 enum AtticPriority: String, CaseIterable, Sendable {
     case none, low, medium, high
 
