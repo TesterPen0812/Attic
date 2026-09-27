@@ -360,7 +360,7 @@ struct AtticPanelView: View {
         // A refused Notes close must leave every other state untouched, so
         // the refusal is decided before any focus or lock changes.
         if uiState.selectedSection.isNotes {
-            guard noteDraft.leaveForNavigation() else { return }
+            guard noteDraft.prepareToLeave(.pageSwitch) else { return }
         }
         PerformanceSignposts.beginPageSwitch()
         isQuickEntryFocused = false
@@ -371,7 +371,7 @@ struct AtticPanelView: View {
         let selection = {
             uiState.selectSection(section)
             if section.isNotes {
-                noteDraft.pages.panelDidShow()
+                noteDraft.pages.present()
                 openMostRecentNoteIfNeeded()
             }
         }

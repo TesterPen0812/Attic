@@ -12,11 +12,11 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertTrue(draft.beginNew())
         draft.title = "Composing"
         draft.legacyHasActiveComposition = { true }
-        XCTAssertFalse(draft.leaveForNavigation())
+        XCTAssertFalse(draft.prepareToLeave(.pageSwitch))
         XCTAssertNotNil(draft.saveErrorMessage)
         XCTAssertTrue(store.notes.isEmpty)
         draft.legacyHasActiveComposition = { false }
-        XCTAssertTrue(draft.leaveForNavigation())
+        XCTAssertTrue(draft.prepareToLeave(.pageSwitch))
     }
 
     @MainActor
@@ -1055,10 +1055,10 @@ final class NoteDraftControllerTests: XCTestCase {
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
         XCTAssertTrue(draft.beginEditing(note))
         draft.body += " second"
-        XCTAssertTrue(draft.preserveForHide())
+        XCTAssertTrue(draft.prepareToLeave(.hide))
         XCTAssertTrue(draft.isActive)
         XCTAssertEqual(draft.activeNoteID, note.id)
-        draft.pages.panelDidShow()
+        draft.pages.present()
         draft.body += " third"
         XCTAssertTrue(draft.flush())
         XCTAssertEqual(store.note(withID: note.id)?.body, "First second third")
@@ -1073,8 +1073,8 @@ final class NoteDraftControllerTests: XCTestCase {
         XCTAssertTrue(draft.pages.open(noteID: note.id))
         XCTAssertTrue(draft.beginEditing(note))
         draft.body += " second"
-        XCTAssertTrue(draft.preserveForHide())
-        draft.pages.panelDidShow()
+        XCTAssertTrue(draft.prepareToLeave(.hide))
+        draft.pages.present()
         XCTAssertEqual(draft.pages.legacyNoteID, note.id)
         XCTAssertEqual(draft.activeNoteID, note.id)
         draft.body += " third"

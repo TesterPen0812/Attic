@@ -177,6 +177,7 @@ final class NoteSession: ObservableObject, Identifiable {
 /// - a never-saved draft with no content is discarded, nothing else is.
 @MainActor
 final class NotesPageController: ObservableObject {
+    enum LeaveReason { case openNote, newNote, library, pageSwitch, hide, quit, exitToOldPage }
     @Published private(set) var active: NoteSession?
     /// A legacy note the page shows in the old editor.
     @Published private(set) var legacyNoteID: UUID?
@@ -202,7 +203,7 @@ final class NotesPageController: ObservableObject {
     private var isPageVisible = false
     /// Saves and closes the old editor's draft before the page moves on
     /// from a legacy note (set by `NoteDraftController`).
-    var leaveLegacyNote: () -> Bool = { true }
+    var leaveLegacyNote: (LeaveReason) -> Bool = { _ in true }
     private static let lastViewedKey = "notes.lastViewedNote.v2"
 
     private static func viewStateKey(_ id: UUID) -> String { "notes.viewState.\(id.uuidString)" }
@@ -319,7 +320,7 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func openFailedDraft(sessionID: UUID) -> Bool {
         guard let draft = cache.values.first(where: { $0.id == sessionID }) else { return false }
-        if active !== draft { guard leaveActive() else { return false } }
+        if active !== draft { guard prepareToLeave(.openNote) else { return false } }
         legacyNoteID = nil
         activate(draft)
         isLibraryPresented = false
@@ -337,8 +338,10 @@ final class NotesPageController: ObservableObject {
         pruneObsoleteViewState()
         if let recovered = newestRecovered {
             newestRecovered = nil
-            activate(recovered)
-            return
+            if let shown = presentSession(recovered) {
+                activate(shown)
+                return
+            }
         }
         if let last = lastViewedNoteID, store.note(withID: last) != nil, open(noteID: last) {
             if !recoveryWarnings.isEmpty { active?.notice = recoveryWarnings.joined(separator: " ") }
@@ -354,11 +357,11 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func open(noteID: UUID) -> Bool {
         if let active, active.noteID == noteID, legacyNoteID == nil {
-            reconcileActive()
+            present()
             return true
         }
         guard let note = store.note(withID: noteID) else { return false }
-        guard leaveActive() else { return false }
+        guard prepareToLeave(.openNote) else { return false }
         if !note.usesDocumentFormat {
             active = nil
             legacyNoteID = noteID
@@ -366,7 +369,7 @@ final class NotesPageController: ObservableObject {
             return true
         }
         legacyNoteID = nil
-        guard let session = session(for: note) else { return false }
+        guard let session = session(for: note).flatMap(presentSession) else { return false }
         activate(session)
         return true
     }
@@ -375,7 +378,7 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func newNote() -> Bool {
         if let active, active.isUntouchedDraft, legacyNoteID == nil { return true }
-        guard leaveActive() else { return false }
+        guard prepareToLeave(.newNote) else { return false }
         legacyNoteID = nil
         let id = UUID()
         let session = NoteSession(noteID: id, isPersisted: false, baseRevisionID: nil,
@@ -386,14 +389,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func session(for note: NoteItem) -> NoteSession? {
-        if let cached = cache[note.id] {
-            // A clean cached session whose note moved on (an agent's edit
-            // applied, a restore) is rebuilt from the store.
-            if cached.isDirty || cached.problem != nil || cached.isImporting || cached.baseRevisionID == note.revisionID {
-                return cached
-            }
-            cache[note.id] = nil
-        }
+        if let cached = cache[note.id] { return cached }
         let load = store.loadDocument(noteID: note.id)
         let document = load?.content.document ?? .blank
         let readOnlyReason: NoteReadOnlyReason? = if let load {
@@ -427,16 +423,32 @@ final class NotesPageController: ObservableObject {
         if session.isPersisted { remember(session.noteID) }
     }
 
-    private func reconcileActive() {
-        guard let current = active, current.isPersisted, !current.isDirty, current.problem == nil, !current.isImporting,
-              !current.engine.isWritingToolsSessionActive,
-              let note = store.note(withID: current.noteID),
-              current.baseRevisionID != note.revisionID || cache[current.noteID] !== current,
-              let replacement = session(for: note) else { return }
-        if replacement !== current {
-            current.engine.detachView()
-            activate(replacement)
+    /// A clean cached session is rebuilt once, at presentation, if its store
+    /// revision moved. A missing clean note is dropped.
+    private func presentSession(_ session: NoteSession) -> NoteSession? {
+        guard case .clean = session.state, session.isPersisted else { return session }
+        guard let note = store.note(withID: session.noteID) else {
+            cache[session.noteID] = nil
+            session.engine.detachView()
+            return nil
         }
+        guard session.baseRevisionID != note.revisionID else { return session }
+        cache[session.noteID] = nil
+        session.engine.detachView()
+        return self.session(for: note)
+    }
+
+    func present() {
+        isPageVisible = true
+        if let current = active {
+            if let shown = presentSession(current) {
+                if shown !== current { activate(shown) }
+            } else {
+                active = nil
+                if didStart { _ = newNote() }
+            }
+        }
+        active?.engine.refreshRelativeDates(today: NoteDay(date: now()))
     }
 
     private func wire(_ session: NoteSession) {
@@ -459,10 +471,6 @@ final class NotesPageController: ObservableObject {
             self.updateWritingToolsAvailability(for: session)
         }
         engine.onNotice = { [weak session] message in session?.notice = message }
-        engine.onBeforeCopy = { [weak self, weak session] in
-            guard let self, let session else { return }
-            _ = self.save(session)
-        }
         engine.onWritingToolsWillBegin = { [weak self, weak session] in
             guard let self, let session else { return false }
             guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
@@ -530,44 +538,30 @@ final class NotesPageController: ObservableObject {
 
     // MARK: Leaving
 
-    /// Preserves the active draft, then runs the "leave" rules: a version
-    /// of the note as left, and any pending agent edit whose base still
-    /// matches applies. Returns false (and keeps the session) when the draft
-    /// could not be preserved anywhere.
-    private func leaveActive(closeLegacy: Bool = true) -> Bool {
-        if closeLegacy, legacyNoteID != nil {
-            guard leaveLegacyNote() else { return false }
-        }
-        guard let session = active else { return true }
-        guard canLeaveComposition(in: session) else { return false }
-        captureViewState(session)
-        guard preserve(session) else { return false }
-        if session.isPersisted, !session.isDirty, !session.engine.isWritingToolsSessionActive {
-            store.recordVersion(noteID: session.noteID, reason: .leave)
-            if store.applyPendingEdits(noteID: session.noteID) > 0 {
-                cache[session.noteID]?.engine.detachView()
-                cache[session.noteID] = nil
-                reconcileActive()
-            }
-        }
-        if session.isUntouchedDraft { cache[session.noteID] = nil }
-        session.pauseTask?.cancel()
-        return true
-    }
-
-    /// Shell adapter for page switch, hide and quit. The legacy controller
-    /// has already flushed before calling this method.
-    func leaveForNavigation() -> Bool {
+    /// The single boundary used by note navigation, the shell, hide and quit.
+    @discardableResult
+    func prepareToLeave(_ reason: LeaveReason) -> Bool {
         if let active, !canLeaveComposition(in: active) { return false }
-        guard preserveAll(), leaveActive(closeLegacy: false) else { return false }
-        isPageVisible = false
+        if legacyNoteID != nil, !leaveLegacyNote(reason) { return false }
+        if let session = active {
+            captureViewState(session)
+            guard preserve(session) else { return false }
+            if session.isPersisted, !session.isDirty {
+                store.recordVersion(noteID: session.noteID, reason: .leave)
+                if store.applyPendingEdits(noteID: session.noteID) > 0 {
+                    cache[session.noteID] = nil
+                }
+            }
+            if session.isUntouchedDraft { cache[session.noteID] = nil }
+            session.pauseTask?.cancel()
+        }
+        if reason == .hide || reason == .quit {
+            guard preserveAll() else { return false }
+        }
+        if reason == .pageSwitch || reason == .hide || reason == .quit || reason == .exitToOldPage {
+            isPageVisible = false
+        }
         return true
-    }
-
-    /// A hidden panel still owns a running import; its batch can finish in
-    /// the cached session without changing the document while it loads.
-    func preserveForHide() -> Bool {
-        return leaveForNavigation()
     }
 
     private func canLeaveComposition(in session: NoteSession) -> Bool {
@@ -596,14 +590,14 @@ final class NotesPageController: ObservableObject {
     }
 
     func showLibrary() -> Bool {
-        guard leaveActive() else { return false }
+        guard prepareToLeave(.library) else { return false }
         isLibraryPresented = true
         return true
     }
 
     func dismissLibrary() {
         isLibraryPresented = false
-        reconcileActive()
+        present()
     }
 
     /// The shell's flush (hide, quit, page switch): every session with
@@ -1037,12 +1031,6 @@ final class NotesPageController: ObservableObject {
         guard design != self.design else { return }
         self.design = design
         for session in cache.values { session.engine.update(design: design) }
-    }
-
-    func panelDidShow() {
-        isPageVisible = true
-        reconcileActive()
-        active?.engine.refreshRelativeDates(today: NoteDay(date: now()))
     }
 
     /// Reads every file before making one undoable document change.

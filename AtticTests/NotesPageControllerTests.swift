@@ -218,10 +218,10 @@ final class NotesPageControllerTests: XCTestCase {
                                replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(textView.hasMarkedText())
         XCTAssertFalse(controller.preserveAll())
-        XCTAssertFalse(controller.leaveForNavigation())
+        XCTAssertFalse(controller.prepareToLeave(.pageSwitch))
         XCTAssertNotNil(session.notice)
         textView.unmarkText()
-        XCTAssertTrue(controller.leaveForNavigation())
+        XCTAssertTrue(controller.prepareToLeave(.pageSwitch))
     }
 
     func testRecoveredDraftOpensFirstAndIsSaved() throws {
@@ -278,7 +278,7 @@ final class NotesPageControllerTests: XCTestCase {
         let id = session.noteID
         type(" draft", into: session)
         gate.shouldFail = true
-        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertTrue(controller.prepareToLeave(.hide))
         gate.shouldFail = false
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         XCTAssertEqual(store.agentWriteDisposition(id), .direct)
@@ -286,7 +286,7 @@ final class NotesPageControllerTests: XCTestCase {
             document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
             disposition: store.agentWriteDisposition(id)) else { return XCTFail() }
         XCTAssertEqual(store.note(withID: id)?.title, "Mine draft")
-        controller.panelDidShow()
+        controller.present()
         type(" and mine", into: session)
         XCTAssertTrue(controller.preserveAll())
         XCTAssertEqual(store.note(withID: id)?.title, "Mine draft and mine")
@@ -342,7 +342,7 @@ final class NotesPageControllerTests: XCTestCase {
         type("Original", into: session)
         XCTAssertTrue(controller.preserveAll())
         let id = session.noteID
-        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertTrue(controller.prepareToLeave(.hide))
         XCTAssertFalse(store.agentWriteDisposition(id) == .proposal)
         for line in ["First", "Second"] {
             let token = try XCTUnwrap(store.note(withID: id)).revisionToken
@@ -353,7 +353,7 @@ final class NotesPageControllerTests: XCTestCase {
                 disposition: store.agentWriteDisposition(id)) else { return XCTFail(line) }
         }
         XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
-        controller.panelDidShow()
+        controller.present()
         XCTAssertEqual(controller.active?.engine.document().blocks.map(\.text), ["Original", "First", "Second"])
         type(" plus mine", into: try XCTUnwrap(controller.active))
         XCTAssertTrue(controller.preserveAll())
@@ -872,14 +872,14 @@ final class NotesPageControllerTests: XCTestCase {
         let id = draft.noteID
         controller.importImages([URL(fileURLWithPath: "/tmp/hidden.png")])
         await waitForImageRequests(loader, count: 1)
-        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertTrue(controller.prepareToLeave(.hide))
         XCTAssertNil(draft.problem)
         await loader.releaseNext(success: true)
         for _ in 0..<60 {
             if (try? store.attachmentRows(forNoteID: id).count) == 1 { break }
             try await Task.sleep(for: .milliseconds(20))
         }
-        controller.panelDidShow()
+        controller.present()
         XCTAssertEqual(try store.attachmentRows(forNoteID: id).count, 1)
         XCTAssertEqual(controller.active?.engine.document().attachmentIDs.count, 1)
     }
@@ -1039,7 +1039,9 @@ final class NotesPageControllerTests: XCTestCase {
         draft.engine.insertDate(NoteDay(year: 2026, month: 10, day: 2)!)
         XCTAssertFalse(controller.save(draft))
         XCTAssertTrue(controller.preserve(draft))
-        draft.engine.onBeforeCopy?()
+        XCTAssertTrue(draft.engine.writeSelection(NSRange(location: 0, length: 8),
+                                                    to: NSPasteboard(name: NSPasteboard.Name(UUID().uuidString)),
+                                                    types: [.string]))
         XCTAssertEqual(store.note(withID: draft.noteID)?.revisionID, revision)
         XCTAssertEqual(draft.problem, nil)
         let recovery = try XCTUnwrap(NoteDraftJournal(directory: directory).entries().first?.0)
@@ -1349,12 +1351,12 @@ final class NotesPageControllerTests: XCTestCase {
         type("Before", into: session)
         XCTAssertTrue(controller.preserveAll())
         session.engine.writingToolsWillBegin()
-        XCTAssertFalse(controller.preserveForHide())
-        XCTAssertFalse(controller.leaveForNavigation())
+        XCTAssertFalse(controller.prepareToLeave(.hide))
+        XCTAssertFalse(controller.prepareToLeave(.pageSwitch))
         XCTAssertEqual(session.notice, "Finish Writing Tools first.")
         XCTAssertNil(session.problem)
         session.engine.writingToolsDidEnd()
-        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertTrue(controller.prepareToLeave(.hide))
     }
 
     func testDeletedNoteKeepsItsIDAndDraftUntilExplicitKeep() throws {

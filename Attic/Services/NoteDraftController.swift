@@ -203,7 +203,12 @@ final class NoteDraftController: ObservableObject {
             },
             defaults: sessionDefaults
         )
-        pages.leaveLegacyNote = { [weak self] in self?.close() ?? true }
+        pages.leaveLegacyNote = { [weak self] reason in
+            guard let self else { return true }
+            guard self.prepareLegacyToLeave(reason) else { return false }
+            if reason != .hide && reason != .quit { self.discardDraft() }
+            return true
+        }
         if let data = sessionDefaults?.data(forKey: Self.sessionKey),
            let saved = try? JSONDecoder().decode(StoredEditorSession.self, from: data) {
             lastEditedNoteID = saved.noteID
@@ -413,18 +418,22 @@ final class NoteDraftController: ObservableObject {
         return legacy && current
     }
 
-    /// Called before navigation can remove the visible Notes editor.
+    /// Called before the shell removes or hides the visible Notes editor.
     @discardableResult
-    func leaveForNavigation() -> Bool {
-        guard close() else { return false }
-        return pages.leaveForNavigation()
+    func prepareToLeave(_ reason: NotesPageController.LeaveReason) -> Bool {
+        let handlesLegacy = pages.legacyNoteID != nil
+        if !handlesLegacy, !prepareLegacyToLeave(reason) { return false }
+        guard pages.prepareToLeave(reason) else { return false }
+        if !handlesLegacy, reason != .hide && reason != .quit { discardDraft() }
+        return true
     }
 
-    /// Hiding keeps the visible composer paired with its live draft.
-    @discardableResult
-    func preserveForHide() -> Bool {
-        guard flushLegacy() else { return false }
-        return pages.preserveForHide()
+    private func prepareLegacyToLeave(_ reason: NotesPageController.LeaveReason) -> Bool {
+        if reason != .hide && reason != .quit && isActive && legacyHasActiveComposition() {
+            saveErrorMessage = String(localized: "Finish composing text before leaving this note.")
+            return false
+        }
+        return flushLegacy()
     }
 
     /// Persists pending text without closing the editor. The current store

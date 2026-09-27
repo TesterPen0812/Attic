@@ -840,7 +840,7 @@ final class AppCoordinator: ObservableObject {
 
     func prepareForTermination() -> Bool {
         let canTerminate = AppTerminationPreparation.prepare(
-            flushNoteDraft: { noteDraft.preserveForHide() },
+            flushNoteDraft: { noteDraft.prepareToLeave(.quit) },
             commitCanvasTermination: {
                 canvasSession.cancelActiveInteraction()
                 canvasSession.flushViewState()

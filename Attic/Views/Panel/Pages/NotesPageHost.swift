@@ -59,7 +59,7 @@ struct NotesPageHost: View {
     }
 
     private func exitToOldPage() {
-        guard noteDraft.leaveForNavigation() else { return }
+        guard noteDraft.prepareToLeave(.exitToOldPage) else { return }
         noteDraft.discardDraft()
         uiState.endAdding()
     }

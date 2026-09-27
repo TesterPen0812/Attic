@@ -34,7 +34,7 @@ struct NotesEditorPage: View {
         .onAppear {
             controller.update(design: design)
             controller.start()
-            controller.panelDidShow()
+            controller.present()
         }
         .onChange(of: design) { _, newValue in controller.update(design: newValue) }
         .onChange(of: controller.legacyNoteID) { _, id in openLegacy(id) }

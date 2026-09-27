@@ -59,7 +59,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onWritingToolsWillBegin: (() -> Bool)?
     /// Called before a copy or cut, so staged images become stored rows
     /// another note can copy.
-    var onBeforeCopy: (() -> Void)?
     var onSelectionChange: ((NSRange) -> Void)?
 
     /// Images imported in this session but not yet saved.
@@ -945,7 +944,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func writeSelection(_ range: NSRange, to pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard range.length > 0 else { return false }
-        onBeforeCopy?()
         let fragment = fragment(for: range)
         pasteboard.declareTypes(types, owner: nil)
         var wrote = false
