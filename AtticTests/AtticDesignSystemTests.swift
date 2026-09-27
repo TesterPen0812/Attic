@@ -548,9 +548,8 @@ final class AtticDesignSystemTests: XCTestCase {
         // Glyphs too faint to find over Phase 0's Glass and Frosted are
         // reported as unmeasured failures, which the named exception covers.
         let unmeasured = report.failures.filter { $0.key.kind == .unmeasured }
-        let unmeasuredInException = unmeasured.flatMap { failure, combinations in
-            combinations.filter { Phase0TranslucentException.covers(caption: $0)
-                || (OpenRingException.covers(failure) && !$0.contains("Increase contrast")) }
+        let unmeasuredInException = unmeasured.flatMap { _, combinations in
+            combinations.filter { Phase0TranslucentException.covers(caption: $0) }
         }.count
         XCTAssertEqual(report.glyphsMeasured + unmeasuredInException, report.eligibleGlyphs, "Every eligible probe's glyph was measured")
         XCTAssertEqual(report.eligibleGlyphs, report.eligibleProbes, "At 2× every eligible probe is a glyph check")
@@ -814,8 +813,10 @@ enum OpenRingException {
     static let name = "Owner fix 1: the quiet open task ring"
 
     static func covers(_ failure: AtticAppearanceCheck.Failure) -> Bool {
+        // Only a ring measured below the icon floor (round 4): a ring that
+        // is missing or cannot be measured still fails.
         failure.detail.hasPrefix(AtticStatusCircle.openRingProbeName)
-            && (failure.kind == .contrast || failure.kind == .glyphContrast || failure.kind == .unmeasured)
+            && (failure.kind == .contrast || failure.kind == .glyphContrast)
     }
 
     static func remaining(_ failures: [AtticAppearanceCheck.Failure: [String]]) -> [AtticAppearanceCheck.Failure: [String]] {
