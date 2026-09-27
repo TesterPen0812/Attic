@@ -487,4 +487,28 @@ final class TasksPageUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(row("Call the plumber").exists)
     }
+
+    /// The tag popover points at the tags that were clicked (round 5, the
+    /// owner's item 3), not the middle of the row.
+    func testTheTagPopoverOpensFromTheClickedTags() throws {
+        row("Call the plumber").rightClick()
+        XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
+        menuItem("Tags").hover()
+        XCTAssertTrue(menuItem("#launch").waitForExistence(timeout: 3))
+        menuItem("#launch").click()
+        waitFor(label("Call the plumber").contains("tagged launch"), "the tag is added")
+        // The tags lead the details line, under the title's start (text at
+        // 44 pt; the details line is the row's lower line).
+        let rowFrame = row("Call the plumber").frame
+        let tagPoint = CGPoint(x: rowFrame.minX + 44 + 16, y: rowFrame.maxY - 14)
+        row("Call the plumber").coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: tagPoint.x - rowFrame.minX, dy: tagPoint.y - rowFrame.minY)).click()
+        let popover = app.popovers.firstMatch
+        XCTAssertTrue(popover.waitForExistence(timeout: 3), "the tag picker opens")
+        // Centred on the tags it came from (a popover centres on its anchor
+        // unless a screen edge pushes it), not on the row's middle.
+        XCTAssertLessThan(abs(popover.frame.midX - tagPoint.x), 40,
+                          "popover \(popover.frame) points at the tags near \(tagPoint), not the row \(rowFrame)")
+        app.typeKey(.escape, modifierFlags: [])
+    }
 }

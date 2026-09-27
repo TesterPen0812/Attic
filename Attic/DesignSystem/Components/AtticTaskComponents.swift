@@ -998,17 +998,22 @@ struct AtticTaskRow: View {
                 }
                 .frame(height: m.titleLineHeight)
                 if twoLine {
+                    // The tag popover points at the tags that were clicked
+                    // (round 5), not the middle of the line.
                     AtticTaskDetails(model: model, disabled: disabled, isExpanded: isExpanded, onToggleExpanded: onToggleExpanded,
-                                     onTags: capture == nil ? meta?.onTags : nil)
+                                     onTags: capture == nil ? meta?.onTags : nil,
+                                     tagsPopover: meta.map { meta in
+                                         AtticAnchoredPopover(isPresented: tagsPresented(twoLine: true), content: meta.tagPicker)
+                                     })
                         .frame(height: m.detailsLineHeight)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .popover(isPresented: tagsPresented(twoLine: true), arrowEdge: .bottom) { meta?.tagPicker() }
                 }
             }
             .padding(.leading, AtticLayout.textX)
             .padding(.trailing, AtticLayout.rowHighlightInset + m.dateInset)
             .padding(.top, m.titleTop(twoLine: twoLine) - m.pitchTopInset)
-            // "New Tag…" on a row with no tags: the list opens under the title.
+            // "New Tag…" on a row with no tags: the list opens from the start
+            // of the text (the details line's start), never the row's centre.
             .background(alignment: .bottomLeading) {
                 if !twoLine || model.tags.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
@@ -1127,6 +1132,12 @@ extension View {
     }
 }
 
+/// A popover and what it shows, handed to the control it must point at.
+struct AtticAnchoredPopover {
+    var isPresented: Binding<Bool>
+    let content: () -> AnyView
+}
+
 /// A row's date and tags as controls (owner fix 5 C): their clicks and the
 /// pickers they open, which the page supplies.
 struct AtticRowMeta {
@@ -1176,6 +1187,9 @@ struct AtticTaskDetails: View {
     let onToggleExpanded: () -> Void
     /// A click on the tags (the row's tag popover); nil draws plain text.
     var onTags: (() -> Void)? = nil
+    /// The row's tag popover, anchored to the tags themselves so its arrow
+    /// points at what was clicked (round 5, the owner's item 3).
+    var tagsPopover: AtticAnchoredPopover? = nil
 
     var body: some View {
         let m = AtticTaskRowMetrics.self
@@ -1191,7 +1205,7 @@ struct AtticTaskDetails: View {
                 .layoutPriority(1)
             }
             if !model.tags.isEmpty {
-                AtticDetailsTags(tags: model.tags, disabled: disabled, onTags: onTags)
+                AtticDetailsTags(tags: model.tags, disabled: disabled, onTags: onTags, popover: tagsPopover)
             }
             if let subtasks = model.subtasks {
                 AtticSubtaskChecklistButton(
@@ -1233,6 +1247,7 @@ private struct AtticDetailsTags: View {
     let tags: [String]
     let disabled: Bool
     let onTags: (() -> Void)?
+    var popover: AtticAnchoredPopover? = nil
 
     @Environment(\.atticDesign) private var design
     @State private var hovered = false
@@ -1262,6 +1277,7 @@ private struct AtticDetailsTags: View {
             .focusEffectDisabled()
             .onHover { hovered = $0 }
             .atticRowControl()
+            .popover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
             .help(tags.map { "#" + $0 }.joined(separator: " "))
             .accessibilityLabel(String(localized: "Tags: \(tags.joined(separator: ", "))"))
             .accessibilityHint(String(localized: "Changes the tags"))
