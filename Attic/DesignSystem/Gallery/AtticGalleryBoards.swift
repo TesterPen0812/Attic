@@ -519,30 +519,7 @@ private struct PageSwitchBoard: View {
                 AtticPageButton(items: AtticGallerySamples.pages, selection: $demo.page)
             }
         }
-        BoardHeading(title: "Group capsule · 32 tall, chips 24, radius 9.5, inset 4")
-        ForEach(0..<3, id: \.self) { page in
-            SpecimenRow {
-                AtticSpecimen(["Tasks selected", "Notes selected", "Canvas selected"][page]) {
-                    AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(page))
-                }
-            }
-        }
-        SpecimenRow {
-            AtticSpecimen("Live (click, or ⌘1–⌘3 in Phase 1)") {
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: $demo.page)
-            }
-        }
-        SpecimenRow {
-            AtticSpecimen("Hover on Notes") {
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(0), statePinnedPage: 1).atticForcedState(.hover)
-            }
-        }
-        SpecimenRow {
-            AtticSpecimen("Keyboard focus on Canvas") {
-                AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(0), statePinnedPage: 2).atticForcedState(.focused)
-            }
-        }
-        BoardHeading(title: "Page tabs (Direction A) · 12 pt chips, 24 tall, the chip fill")
+        BoardHeading(title: "Page tabs · 11.5 pt rounded, the selected page semibold, 16 apart")
         SpecimenRow {
             AtticSpecimen("Now selected") {
                 AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: .constant(0))
@@ -554,19 +531,13 @@ private struct PageSwitchBoard: View {
             }
         }
         SpecimenRow {
+            AtticSpecimen("Keyboard focus (← → move)") {
+                AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: .constant(0), statePinnedPage: 0).atticForcedState(.focused)
+            }
+        }
+        SpecimenRow {
             AtticSpecimen("Live") {
                 AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: $demo.tab)
-            }
-        }
-        BoardHeading(title: "Status tabs · 13 pt, 14 apart, no underline")
-        SpecimenRow {
-            AtticSpecimen("Now selected") {
-                AtticStatusTabs(items: AtticGallerySamples.tabs, selection: .constant(0))
-            }
-        }
-        SpecimenRow {
-            AtticSpecimen("Backlog selected, hover on Done") {
-                AtticStatusTabs(items: AtticGallerySamples.tabs, selection: .constant(1), statePinnedTab: 2).atticForcedState(.hover)
             }
         }
     }
@@ -1070,10 +1041,6 @@ private struct DragBoard: View {
         BoardHeading(title: "Drop target · words only when not obvious")
         AtticSpecimen("File over a row", fullWidth: true) {
             GalleryTaskRow(model: .init(title: "Email beta testers", priority: .medium, due: .init(text: "Fri")), dropLabel: String(localized: "Add to page"))
-        }
-        AtticSpecimen("Task over the Later tab (no words needed)", fullWidth: true) {
-            AtticStatusTabs(items: AtticGallerySamples.tabs, selection: .constant(0), dropTargetTab: 1)
-                .padding(.leading, AtticLayout.circleX)
         }
         AtticSpecimen("Live: settle with the tick, or fail and return", fullWidth: true) {
             DropDemo(demo: demo)

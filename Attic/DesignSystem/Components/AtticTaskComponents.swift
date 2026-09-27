@@ -528,108 +528,14 @@ extension View {
     }
 }
 
-// MARK: - Status tabs
-
-/// The quiet Now · Backlog · Done switch under the header: 13 pt, 14 pt
-/// apart; the selected tab is the body colour in medium weight, with no
-/// underline; counts are set apart from their labels. Each tab reserves
-/// its medium-weight width, so selecting one never shifts its neighbours;
-/// the tab's own look changes instantly (only the list below slides).
-struct AtticStatusTabs<Tab: Hashable>: View {
-    struct Item: Identifiable {
-        let tab: Tab
-        let title: String
-        let count: Int?
-        var id: String { title }
-    }
-
-    let items: [Item]
-    @Binding var selection: Tab
-    /// The gallery pins a state on one tab only; nil pins it on all.
-    var statePinnedTab: Tab?
-    /// A task dragged over a tab moves it there: that tab outlines, with no
-    /// words (the result is obvious).
-    var dropTargetTab: Tab?
-
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        HStack(spacing: AtticLayout.statusTabsGap) {
-            ForEach(items) { item in
-                AtticStatusTab(item: item, isSelected: item.tab == selection, takesPinnedState: statePinnedTab.map { $0 == item.tab } ?? true) {
-                    withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
-                        selection = item.tab
-                    }
-                }
-                .background {
-                    if item.tab == dropTargetTab {
-                        AtticDropOutline(cornerRadius: AtticRadius.control(height: AtticStatusTabMetrics.dropOutlineHeight))
-                            .padding(.horizontal, -AtticStatusTabMetrics.dropOutlineOutset)
-                            .frame(height: AtticStatusTabMetrics.dropOutlineHeight)
-                    }
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-    }
-}
-
-private struct AtticStatusTab<Tab: Hashable>: View {
-    let item: AtticStatusTabs<Tab>.Item
-    let isSelected: Bool
-    let takesPinnedState: Bool
-    let action: () -> Void
-
-    @Environment(\.atticForcedState) private var forced
-    @Environment(\.isFocused) private var isFocused
-    @State private var hovered = false
-
-    var body: some View {
-        let state = AtticStateResolver(forced: takesPinnedState ? forced : nil, isEnabled: true, isHovered: hovered, isPressed: false, isFocused: isFocused).state
-        Button(action: action) {
-            HStack(spacing: AtticStatusTabMetrics.countGap) {
-                ZStack(alignment: .leading) {
-                    // Reserves the selected (medium) width in every state.
-                    Text(verbatim: item.title).font(AtticTextStyle.statusTabSelected.font).hidden()
-                        .accessibilityHidden(true)
-                    AtticText(
-                        verbatim: item.title,
-                        style: isSelected ? .statusTabSelected : .statusTab,
-                        ink: ink(state)
-                    )
-                }
-                if let count = item.count {
-                    // The count reads with its tab (v4: "Now 4", "Backlog 3").
-                    AtticText(verbatim: "\(count)", style: .statusCount, ink: ink(state))
-                }
-            }
-            .frame(height: AtticStatusTabMetrics.height)
-            .contentShape(Rectangle())
-            .transaction { $0.animation = nil }
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .atticFocusRing(state == .focused, cornerRadius: AtticStatusTabMetrics.focusRadius)
-        .onHover { hovered = $0 }
-        .accessibilityLabel(item.title)
-        .accessibilityValue(item.count.map { String(localized: "\($0) tasks") } ?? "")
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-    }
-
-    /// Selected or hovered tabs read in the body colour; the others are the
-    /// quietest grey (secondary text, 3 : 1).
-    private func ink(_ state: AtticControlState) -> AtticInk {
-        isSelected || state == .hover ? .body : .muted
-    }
-}
-
 // MARK: - Page tabs
 
 /// Direction A's page tabs under the header ("Now · Later · Done"), in
 /// place of a page title and the page pill. Phase 0's qualities
 /// (2026-09-26): quiet text labels, no chips: 11.5 pt medium, the selected
-/// page in the strong ink, the others in the secondary grey, a hovered one
-/// in the task text's ink. The weight never changes, so nothing shifts.
+/// page semibold in the strong ink (owner, 2026-09-27), the others in the
+/// secondary grey, a hovered one in the task text's ink. Each label keeps
+/// its semibold width, so nothing shifts when the selection moves.
 ///
 /// One control for the keyboard: it takes focus once, and ← → move between
 /// the pages while it has it (a ring around the selected label, only while
@@ -666,9 +572,16 @@ struct AtticPageTabs<Page: Hashable>: View {
                 let hovered = !isSelected && (pinned == .hover || (pinned == nil && hoveredPage == item.page))
                 let ringed = pinned == .focused || (capture == nil && isSelected && focused && keyboardFocusVisible)
                 Button { select(item.page) } label: {
-                    AtticText(verbatim: item.title, style: isSelected ? .pageTabSelected : .pageTab,
-                              ink: isSelected ? .heading : (hovered ? .body : .helper))
-                        .fixedSize()
+                    ZStack(alignment: .leading) {
+                        // The semibold width, reserved in every state.
+                        AtticText(verbatim: item.title, style: .pageTabSelected, ink: .heading)
+                            .fixedSize()
+                            .hidden()
+                            .accessibilityHidden(true)
+                        AtticText(verbatim: item.title, style: isSelected ? .pageTabSelected : .pageTab,
+                                  ink: isSelected ? .heading : (hovered ? .body : .helper))
+                            .fixedSize()
+                    }
                         .frame(height: AtticLayout.pageTabsHeight)
                         .background {
                             if ringed {

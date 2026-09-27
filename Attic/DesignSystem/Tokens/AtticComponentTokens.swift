@@ -277,16 +277,6 @@ enum AtticSelectionBarMetrics {
     static let countTrailing: CGFloat = 6
 }
 
-/// Status tabs under the header (spec: 13 pt, 14 apart).
-enum AtticStatusTabMetrics {
-    static let height: CGFloat = 22
-    static let countGap: CGFloat = 4
-    static let focusRadius: CGFloat = 4
-    /// A task dragged over a tab outlines it in this shape.
-    static let dropOutlineHeight: CGFloat = 26
-    static let dropOutlineOutset: CGFloat = 7
-}
-
 /// Direction A's page tabs as quiet labels (Phase 0's qualities): 16 pt
 /// apart; the focus ring sits 4 pt around the selected label; the click
 /// target reaches 6 pt past the text.

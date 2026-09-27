@@ -186,10 +186,6 @@ enum AtticLayout {
     /// The least room between the list's last content and the add bar.
     static let contentToAddBar: CGFloat = 16
 
-    static let statusTabsGap: CGFloat = 14
-    static let statusTabsTop: CGFloat = 12
-    static let statusTabsToList: CGFloat = 8
-
     static let settingsSidebarWidth: CGFloat = 232
     static let sidebarRowPitch: CGFloat = 32
     static let sidebarHighlightHeight: CGFloat = 30
@@ -232,8 +228,7 @@ enum AtticEdgeBlur {
 /// colour more than size (spec § Proportions: two densities, one rhythm).
 enum AtticTextStyle: String, CaseIterable, Sendable {
     // Panel
-    case noteTitle, pageHeading, panelHeading, body, noteBody, rowTitle, rowMeta, helper, hint
-    case statusTab, statusTabSelected, statusCount
+    case noteTitle, panelHeading, body, noteBody, rowTitle, rowMeta, helper, hint
     // Direction A: page tabs, today's date, the priority mark, the
     // "Completed today" line.
     case pageTab, pageTabSelected, rowMetaEmphasis, priorityMark, sectionToggle
@@ -273,7 +268,6 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
     private var baseSpec: Spec {
         switch self {
         case .noteTitle: Spec(size: 17, weight: .bold, italic: false, monospacedDigits: false)
-        case .pageHeading: Spec(size: 10.5, weight: .medium, italic: false, monospacedDigits: true)
         case .panelHeading: Spec(size: 13, weight: .semibold, italic: false, monospacedDigits: false)
         case .body, .rowTitle, .listBody, .menuRow, .toast, .sidebarRow: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
         case .rowTitleActive: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
@@ -282,14 +276,13 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         case .count: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: true)
         case .rowMetaEmphasis: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
         case .priorityMark: Spec(size: 11, weight: .semibold, italic: false, monospacedDigits: false)
-        // Phase 0's qualities: quiet labels, 11.5 medium whether selected or not.
+        // Quiet labels, 11.5 medium; the selected page semibold, so the
+        // selection reads on glass where the two greys are close (owner,
+        // 2026-09-27).
         case .pageTab: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
         case .sectionToggle: Spec(size: 11.5, weight: .regular, italic: false, monospacedDigits: false)
-        case .pageTabSelected: Spec(size: 11.5, weight: .medium, italic: false, monospacedDigits: false)
+        case .pageTabSelected: Spec(size: 11.5, weight: .semibold, italic: false, monospacedDigits: false)
         case .hint: Spec(size: 12.5, weight: .regular, italic: true, monospacedDigits: false)
-        case .statusTab: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: false)
-        case .statusTabSelected: Spec(size: 13, weight: .medium, italic: false, monospacedDigits: false)
-        case .statusCount: Spec(size: 13, weight: .regular, italic: false, monospacedDigits: true)
         case .controlLabel: Spec(size: 12.5, weight: .medium, italic: false, monospacedDigits: false)
         case .chipLabel: Spec(size: 12, weight: .medium, italic: false, monospacedDigits: false)
         case .shortcut: Spec(size: 12, weight: .regular, italic: false, monospacedDigits: false)
