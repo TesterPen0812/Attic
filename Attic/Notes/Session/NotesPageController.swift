@@ -222,23 +222,8 @@ final class NotesPageController: ObservableObject {
         self.now = now
         self.imageLoader = imageLoader
         self.prepareDocument = prepareDocument
-        store.openDocumentNoteIDs = { [weak self] in
-            guard let self else { return [] }
-            var ids = Set(self.cache.values.filter {
-                $0.isPersisted && ($0.isDirty || $0.problem != nil || $0.isImporting)
-            }.map(\.noteID))
-            if self.isPageVisible, !self.isLibraryPresented, let active = self.active, active.isPersisted {
-                ids.insert(active.noteID)
-            }
-            if let journal = self.journal, let entries = try? journal.recoveryEntries() {
-                let storedIDs = Set(self.store.notes.map(\.id))
-                for case let .valid(entry, _) in entries {
-                    if entry.isPersisted || storedIDs.contains(entry.noteID) {
-                        ids.insert(entry.noteID)
-                    }
-                }
-            }
-            return ids
+        store.agentWriteDisposition = { [weak self] id in
+            self?.agentDisposition(for: id) ?? .direct
         }
         store.recoveryReferencedAttachmentIDs = { [weak self] in
             guard let self, let journal = self.journal else { return [] }
@@ -524,6 +509,22 @@ final class NotesPageController: ObservableObject {
             cache[evict]?.pauseTask?.cancel()
             cache[evict]?.engine.detachView()
             cache[evict] = nil
+        }
+    }
+
+    private func agentDisposition(for noteID: UUID) -> NoteAgentWriteDisposition {
+        guard let session = cache[noteID] else { return .direct }
+        let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
+            ? .onScreen : .background
+        switch NoteSessionPolicy.agentDisposition(presence, state: session.state, hasBatch: session.isImporting) {
+        case .proposal: return .proposal
+        case .direct: return .direct
+        case .refuseImport: return .refuse("Images are being added to this note. Try again when they finish.")
+        case .flush:
+            guard preserve(session), case .clean = session.state else {
+                return .refuse("Attic has unsaved text for this note. Try again after it is saved.")
+            }
+            return .direct
         }
     }
 

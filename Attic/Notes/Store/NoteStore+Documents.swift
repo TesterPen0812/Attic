@@ -69,6 +69,10 @@ enum NoteAgentWriteOutcome: Equatable {
     case pending(editID: UUID)
 }
 
+enum NoteAgentWriteDisposition: Equatable {
+    case proposal, direct, refuse(String)
+}
+
 enum NoteMutationFormat: Equatable {
     case legacy
     case document
@@ -519,15 +523,15 @@ extension NoteStore {
 
     /// An agent's whole-note edit. The note must exist, `baseRevisionToken`
     /// must be the token the agent read, and the write must change a row;
-    /// anything else fails. A note open in the editor is not written: the
-    /// edit is kept as a pending edit and applies when the note is left.
+    /// anything else fails. A note on screen receives a proposal instead.
     func agentWrite(
         noteID: UUID,
         baseRevisionToken: String,
         document: NoteDocument,
         agentName: String,
-        noteIsOpen: Bool
+        disposition: NoteAgentWriteDisposition
     ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
+        if case let .refuse(reason) = disposition { return .failure(.saveFailed(reason)) }
         let preflight: NoteMutationPreflight
         do {
             preflight = try noteMutationPreflight(noteID, format: .document)
@@ -547,7 +551,7 @@ extension NoteStore {
             return .failure(.encodingFailed(error.localizedDescription))
         }
         let timestamp = currentDate
-        if noteIsOpen {
+        if disposition == .proposal {
             // The proposal and the exact base it compared with commit together.
             let baseVersionID = UUID()
             modelContext.insert(NoteVersion(id: baseVersionID, noteID: noteID, createdAt: timestamp,

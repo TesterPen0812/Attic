@@ -133,7 +133,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         let (id, base) = try create(document("Current"))
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: token,
-            document: document("Agent"), agentName: "Claude", noteIsOpen: false) else { return XCTFail() }
+            document: document("Agent"), agentName: "Claude", disposition: .direct) else { return XCTFail() }
         guard case .failure(.staleRevision) = store.saveDocument(noteID: id,
             document: document("Stale draft"), baseRevisionID: base) else { return XCTFail() }
         XCTAssertEqual(store.note(withID: id)?.title, "Agent")
@@ -146,7 +146,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         let originalToken = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: originalToken,
                                                          document: document("Waiting"), agentName: "Agent",
-                                                         noteIsOpen: true) else { return XCTFail("pending fixture") }
+                                                         disposition: .proposal) else { return XCTFail("pending fixture") }
         let future = NoteItem(id: id, title: "Future", body: "")
         future.contentFormat = 99
         future.content = Data("future bytes".utf8)
@@ -159,7 +159,7 @@ final class NoteDocumentStoreTests: XCTestCase {
                                                             baseRevisionID: revision) else { return XCTFail("document save") }
         guard case .failure(.readOnly) = store.agentWrite(noteID: id, baseRevisionToken: token,
                                                           document: document("Agent"), agentName: "Agent",
-                                                          noteIsOpen: false) else { return XCTFail("agent write") }
+                                                          disposition: .direct) else { return XCTFail("agent write") }
         guard case .failure(.readOnly) = store.restoreVersion(versionID, noteID: id) else {
             return XCTFail("restore")
         }
@@ -215,7 +215,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertTrue(store.setTags(["launch"], for: note))
         XCTAssertEqual(try rows(id).first?.content, newer, "metadata changes keep the bytes")
         guard case .failure(.readOnly) = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
-                                                          document: document("y"), agentName: "Claude", noteIsOpen: false) else {
+                                                          document: document("y"), agentName: "Claude", disposition: .direct) else {
             return XCTFail()
         }
         XCTAssertEqual(try rows(id).first?.content, newer)
@@ -318,18 +318,18 @@ final class NoteDocumentStoreTests: XCTestCase {
 
     func testAgentWriteNeedsAnExistingNoteAndItsCurrentRevision() throws {
         guard case .failure(.noteMissing) = store.agentWrite(noteID: UUID(), baseRevisionToken: NoteItem.initialRevisionToken,
-                                                             document: document("x"), agentName: "Claude", noteIsOpen: false) else {
+                                                             document: document("x"), agentName: "Claude", disposition: .direct) else {
             return XCTFail("a write to no row must fail")
         }
         let (id, _) = try create(document("Plan"))
         guard case .failure(.staleRevision) = store.agentWrite(noteID: id, baseRevisionToken: "not-the-token",
-                                                               document: document("x"), agentName: "Claude", noteIsOpen: false) else {
+                                                               document: document("x"), agentName: "Claude", disposition: .direct) else {
             return XCTFail()
         }
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case let .success(.applied(newToken)) = store.agentWrite(noteID: id, baseRevisionToken: token,
                                                                        document: document("Agent plan"), agentName: "Claude",
-                                                                       noteIsOpen: false) else { return XCTFail() }
+                                                                       disposition: .direct) else { return XCTFail() }
         XCTAssertEqual(store.note(withID: id)?.title, "Agent plan")
         XCTAssertEqual(store.note(withID: id)?.revisionToken, newToken)
         XCTAssertTrue(versions(id).contains { $0.reason == .beforeAgentEdit && $0.title == "Plan" })
@@ -339,7 +339,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         let note = try XCTUnwrap(store.create(title: "Legacy"))
         guard case .failure(.invalidDocument) = store.agentWrite(noteID: note.id,
             baseRevisionToken: note.revisionToken, document: document("New format"),
-            agentName: "Claude", noteIsOpen: false) else { return XCTFail() }
+            agentName: "Claude", disposition: .direct) else { return XCTFail() }
         XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
     }
 
@@ -347,7 +347,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         let (id, _) = try create(document("Plan"))
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token, document: document("Agent"),
-                                                         agentName: "Claude", noteIsOpen: true) else { return XCTFail() }
+                                                         agentName: "Claude", disposition: .proposal) else { return XCTFail() }
         XCTAssertEqual(store.note(withID: id)?.title, "Plan", "an open note is not written")
         XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
         XCTAssertEqual(store.applyPendingEdits(noteID: id), 1)
@@ -358,7 +358,7 @@ final class NoteDocumentStoreTests: XCTestCase {
     func testPendingEditWaitsForReviewWhenTheNoteChanged() throws {
         let (id, revision) = try create(document("Plan"))
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
-        _ = store.agentWrite(noteID: id, baseRevisionToken: token, document: document("Agent"), agentName: "Claude", noteIsOpen: true)
+        _ = store.agentWrite(noteID: id, baseRevisionToken: token, document: document("Agent"), agentName: "Claude", disposition: .proposal)
         guard case .success = store.saveDocument(noteID: id, document: document("Mine"), baseRevisionID: revision) else { return XCTFail() }
         XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
         XCTAssertEqual(store.note(withID: id)?.title, "Mine", "the user's text is never overwritten")
@@ -370,9 +370,9 @@ final class NoteDocumentStoreTests: XCTestCase {
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         gate.shouldFail = true
         guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: token, document: document("Agent"),
-                                               agentName: "Claude", noteIsOpen: true) else { return XCTFail() }
+                                               agentName: "Claude", disposition: .proposal) else { return XCTFail() }
         guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: token, document: document("Agent"),
-                                               agentName: "Claude", noteIsOpen: false) else { return XCTFail() }
+                                               agentName: "Claude", disposition: .direct) else { return XCTFail() }
         gate.shouldFail = false
         XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
         XCTAssertTrue(versions(id).isEmpty)
@@ -433,13 +433,13 @@ final class NoteDocumentStoreTests: XCTestCase {
         gate.shouldFail = true
         guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: token,
                                                document: document("Proposal"), agentName: "Agent",
-                                               noteIsOpen: true) else { return XCTFail() }
+                                               disposition: .proposal) else { return XCTFail() }
         gate.shouldFail = false
         XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
         XCTAssertTrue(versions(id).isEmpty)
         guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
                                                          document: document("Proposal"), agentName: "Agent",
-                                                         noteIsOpen: true) else { return XCTFail() }
+                                                         disposition: .proposal) else { return XCTFail() }
         let edit = try XCTUnwrap(store.pendingEdits(noteID: id).first)
         let base = try XCTUnwrap(versions(id).first { $0.id == edit.baseVersionID })
         XCTAssertEqual(base.title, "Base")
@@ -458,7 +458,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         }
         let token = try XCTUnwrap(first.note(withID: id)).revisionToken
         guard case .success(.pending) = first.agentWrite(noteID: id, baseRevisionToken: token,
-            document: document("Proposal"), agentName: "Agent", noteIsOpen: true) else { return XCTFail() }
+            document: document("Proposal"), agentName: "Agent", disposition: .proposal) else { return XCTFail() }
         let secondContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
                                                                        storeDirectory: directory)
         let second = NoteStore(container: secondContainer, attachmentFileStore: makeTestAttachmentFileStore())
@@ -472,7 +472,7 @@ final class NoteDocumentStoreTests: XCTestCase {
         let (id, _) = try create(document("Base"))
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
-            document: document("Proposal"), agentName: "Agent", noteIsOpen: true) else { return XCTFail() }
+            document: document("Proposal"), agentName: "Agent", disposition: .proposal) else { return XCTFail() }
         let edit = try XCTUnwrap(store.pendingEdits(noteID: id).first)
         gate.shouldFail = true
         XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)

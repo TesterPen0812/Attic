@@ -790,8 +790,9 @@ final class AgentTaskTools {
         guard !document.isEmpty || !document.objectIDs.isEmpty else {
             throw AgentToolError.invalidArguments("A title or body must remain non-empty.")
         }
+        let disposition = noteStore.agentWriteDisposition(note.id)
         switch noteStore.agentWrite(noteID: note.id, baseRevisionToken: baseRevision, document: document,
-                                    agentName: "Agent", noteIsOpen: noteStore.openDocumentNoteIDs().contains(note.id)) {
+                                    agentName: "Agent", disposition: disposition) {
         case .success(.applied):
             let updated = noteStore.note(withID: note.id) ?? note
             return try encode(["status": "applied", "note": serializeNote(updated)])
@@ -799,7 +800,7 @@ final class AgentTaskTools {
             return try encode([
                 "status": "pending",
                 "pending_edit": editID.uuidString,
-                "message": "Attic held this change because the note is visible, has an unsaved draft, or has a recovery copy. It may apply when the person leaves the note; otherwise it will wait for review.",
+                "message": "The note is on screen in Attic. Your edit is waiting as a proposal the person can review.",
                 "note": serializeNote(note)
             ])
         case let .failure(error):

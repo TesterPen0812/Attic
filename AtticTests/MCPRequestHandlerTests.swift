@@ -369,18 +369,55 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(row["body"] as? String, "- [ ] Buy cake\nprose")
         let revision = try XCTUnwrap(row["revision"] as? String)
 
-        noteStore.openDocumentNoteIDs = { [id] }
+        noteStore.agentWriteDisposition = { $0 == id ? .proposal : .direct }
         let pending = try callNoteTool(handler, "update_note", ["id": id.uuidString, "base_revision": revision,
                                                                 "body": "- [x] Buy cake\nnew prose"])
         XCTAssertEqual(pending["status"] as? String, "pending")
+        XCTAssertEqual(pending["message"] as? String,
+                       "The note is on screen in Attic. Your edit is waiting as a proposal the person can review.")
         XCTAssertEqual(noteStore.note(withID: id)?.plainText, "Plan\n[ ] Buy cake\nprose", "an open note is not written")
 
-        noteStore.openDocumentNoteIDs = { [] }
+        noteStore.agentWriteDisposition = { _ in .direct }
         XCTAssertEqual(noteStore.applyPendingEdits(noteID: id), 1)
         guard case let .editable(document)? = noteStore.loadDocument(noteID: id)?.content else { return XCTFail() }
         XCTAssertEqual(document.blocks[1].id, checklistID, "the kept checklist line keeps its id")
         XCTAssertTrue(document.blocks[1].checked)
         XCTAssertEqual(document.blocks[2].text, "new prose")
+    }
+
+    func testBackgroundDocumentAgentWriteReportsApplied() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Before")])) else { return XCTFail() }
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        noteStore.agentWriteDisposition = { _ in .direct }
+        let result = try callNoteTool(handler, "update_note", [
+            "id": id.uuidString, "base_revision": token, "body": "After"])
+        XCTAssertEqual(result["status"] as? String, "applied")
+        XCTAssertEqual(noteStore.note(withID: id)?.title, "Before")
+        XCTAssertEqual(noteStore.note(withID: id)?.body, "After")
+    }
+
+    func testAgentWriteReportsLoadingImagesRefusal() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Before")])) else { return XCTFail() }
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        noteStore.agentWriteDisposition = { _ in .refuse("Images are being added to this note. Try again when they finish.") }
+        XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString, "base_revision": token, "body": "After"]),
+                       "Images are being added to this note. Try again when they finish.")
+        XCTAssertEqual(noteStore.note(withID: id)?.title, "Before")
+    }
+
+    func testAgentWriteReportsUnsavedTextRefusal() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        guard case let .success((id, _)) = noteStore.createDocumentNote(
+            id: UUID(), document: NoteDocument(blocks: [.text("Before")])) else { return XCTFail() }
+        let token = try XCTUnwrap(noteStore.note(withID: id)?.revisionToken)
+        noteStore.agentWriteDisposition = { _ in .refuse("Attic has unsaved text for this note. Try again after it is saved.") }
+        XCTAssertEqual(try noteToolError(handler, ["id": id.uuidString, "base_revision": token, "body": "After"]),
+                       "Attic has unsaved text for this note. Try again after it is saved.")
+        XCTAssertEqual(noteStore.note(withID: id)?.title, "Before")
     }
 
     private func noteToolError(_ handler: MCPRequestHandler, _ arguments: [String: Any]) throws -> String {

@@ -173,9 +173,8 @@ final class NoteStore: ObservableObject {
 #endif
 
     let container: ModelContainer
-    /// Notes open in the new editor right now (set by the Notes page). An
-    /// agent's write to one of them waits as a pending edit.
-    var openDocumentNoteIDs: () -> Set<UUID> = { [] }
+    /// The Notes page decides whether an agent edit can reach this note.
+    var agentWriteDisposition: (UUID) -> NoteAgentWriteDisposition = { _ in .direct }
     /// Recovery checkpoints can reference image rows after the note itself
     /// disappears. A failed read must stop purging rather than guess.
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }
