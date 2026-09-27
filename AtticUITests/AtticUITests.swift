@@ -162,11 +162,22 @@ final class AtticUITests: XCTestCase {
             XCTFail("Settings scroll anchor must be visible and finite")
             return .pinned
         }
-        anchor.coordinate(withNormalizedOffset: .zero)
+        let point = anchor.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: pageFrame.minX + 8 - anchorFrame.minX,
                                  dy: (top + bottom) / 2 - anchorFrame.minY))
-            .scroll(byDeltaX: 0, deltaY: delta)
-        guard let after = settledFrame(of: element, differingFrom: before) else { return .pinned }
+        // A wheel gesture can be lost: the pointer arrives from the sidebar
+        // (its own scroll view) with the gesture, and the page does not move
+        // at all even though it has room (CI runs 36303234568 and
+        // 36305447077: the page never moved, so the reveal took it for a
+        // page at its end). Rest the pointer on the page first, and only
+        // call the page pinned when a second gesture moves nothing either.
+        var settled: CGRect?
+        for _ in 0..<2 where settled == nil {
+            point.hover()
+            point.scroll(byDeltaX: 0, deltaY: delta)
+            settled = settledFrame(of: element, differingFrom: before)
+        }
+        guard let after = settled else { return .pinned }
         let travelled = before.minY - after.minY
         let outcome = Self.outcome(for: towardsTop ? travelled : -travelled)
         if outcome == .backwards {
