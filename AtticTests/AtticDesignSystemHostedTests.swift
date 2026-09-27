@@ -508,6 +508,50 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         }
     }
 
+    /// The page button and the page tabs each read as one "Pages" group
+    /// with a named button per page, the current one selected; pressing a
+    /// button selects its page. The tabs take ← → while they have focus.
+    func testThePagesReadAsNamedButtonsAndTheTabsTakeArrows() throws {
+        final class Record { var tab = 0; var page = 0 }
+        let record = Record()
+        let harness = PagesHarness(onTab: { record.tab = $0 }, onPage: { record.page = $0 })
+        let (window, _) = host(harness, size: CGSize(width: 320, height: 90), key: true)
+
+        let items = accessibilityItems()
+        XCTAssertEqual(items.filter { $0.description == "Pages" }.count, 2, "one group for the button, one for the tabs")
+        for name in ["Tasks", "Notes", "Canvas", "Now", "Later", "Done"] {
+            XCTAssertTrue(items.contains { $0.description == name && $0.role == kAXButtonRole as String },
+                          "\(name) is a named button: \(items.map(\.description))")
+        }
+        func selected(_ name: String) -> Bool {
+            guard let item = accessibilityItems().first(where: { $0.description == name }) else { return false }
+            var value: CFTypeRef?
+            AXUIElementCopyAttributeValue(item.element, kAXSelectedAttribute as CFString, &value)
+            return (value as? Bool) == true
+        }
+        XCTAssertTrue(selected("Tasks") && selected("Now"))
+        XCTAssertFalse(selected("Notes") || selected("Later"))
+
+        let canvas = try XCTUnwrap(accessibilityItems().first { $0.description == "Canvas" })
+        AXUIElementPerformAction(canvas.element, kAXPressAction as CFString)
+        spin()
+        XCTAssertEqual(record.page, 2, "pressing Canvas selects it, even with the button shut")
+
+        // The tabs are one key view; ← → move between the pages.
+        for _ in 0..<4 where record.tab == 0 {
+            window.selectNextKeyView(nil)
+            spin()
+            key(window, "\u{F703}", code: 124)
+        }
+        XCTAssertEqual(record.tab, 1, "→ moves to Later")
+        key(window, "\u{F702}", code: 123)
+        XCTAssertEqual(record.tab, 0, "← moves back to Now")
+        let done = try XCTUnwrap(accessibilityItems().first { $0.description == "Done" })
+        AXUIElementPerformAction(done.element, kAXPressAction as CFString)
+        spin()
+        XCTAssertEqual(record.tab, 2)
+    }
+
     func testTaskCardOffersExpandAndTheTaskActions() throws {
         var fired: [String] = []
         let actions = AtticTaskActions(
@@ -537,4 +581,21 @@ final class AtticDesignSystemHostedTests: XCTestCase {
 private final class KeyTestWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var isKeyWindow: Bool { true }
+}
+
+/// The page button over the page tabs, each with its own selection.
+private struct PagesHarness: View {
+    let onTab: (Int) -> Void
+    let onPage: (Int) -> Void
+    @State private var tab = 0
+    @State private var page = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            AtticPageButton(items: AtticGallerySamples.pages, selection: $page, pinnedOpen: false)
+            AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: $tab)
+        }
+        .onChange(of: tab) { _, value in onTab(value) }
+        .onChange(of: page) { _, value in onPage(value) }
+    }
 }

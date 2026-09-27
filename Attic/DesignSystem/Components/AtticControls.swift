@@ -265,7 +265,9 @@ struct AtticPageButton<Page: Hashable>: View {
                     if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
                 }
                 .frame(width: visible ? M.segment : 0, height: M.segment, alignment: .trailing)
-                .opacity(visible ? 1 : 0)
+                // Folded away, a page is zero wide and all but transparent:
+                // not 0, which would drop it from VoiceOver.
+                .opacity(visible ? 1 : 0.001)
                 .clipped()
                 .allowsHitTesting(visible)
                 .transformEnvironment(\.atticProbesDisabled) { if !visible { $0 = true } }
