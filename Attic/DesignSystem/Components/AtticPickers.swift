@@ -411,18 +411,21 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
             AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
                              identifier: "composer-date",
                              clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
+                .fixedSize(horizontal: true, vertical: false)
                 .atticPopover(isPresented: $datePresented, arrowEdge: .top) {
                     datePicker().atticPickerSurface()
                 }
             AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
                              identifier: "composer-tag",
                              clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
+                .layoutPriority(-1)
                 .atticPopover(isPresented: $tagsPresented, arrowEdge: .top) {
                     tagPicker().atticPickerSurface()
                 }
             AtticStripButton(systemName: "flag", title: String(localized: "Priority"), value: priority, isOpen: priorityPresented,
                              identifier: "composer-priority",
                              clearLabel: String(localized: "Clear priority"), open: { priorityPresented = true }, clear: onClearPriority)
+                .fixedSize(horizontal: true, vertical: false)
                 .atticPopover(isPresented: $priorityPresented, arrowEdge: .top) {
                     priorityPicker().atticPickerSurface()
                 }
@@ -479,7 +482,9 @@ private struct AtticStripButton: View {
                 HStack(spacing: m.iconLabelGap) {
                     AtticIcon(systemName: systemName, size: m.iconSize, weight: .regular, ink: isEnabled ? .glyph : .disabledIcon)
                     if let value {
-                        AtticText(verbatim: value.text, style: value.style, ink: isEnabled ? value.ink : .disabledText)
+                        // A long tag gives way first (the strip keeps to the
+                        // bar's width); the full value is the tooltip.
+                        AtticText(verbatim: value.text, style: value.style, ink: isEnabled ? value.ink : .disabledText, truncates: true)
                     } else {
                         AtticText(verbatim: title, style: .controlLabel, ink: isEnabled ? .heading : .disabledText)
                     }
