@@ -91,6 +91,20 @@ struct TasksPage: View {
         .onAppear {
             model.resetForReveal()
             chrome.bottomControlsHeight(footerZone)
+            #if DEBUG
+            // Capture seam (`ATTIC_UI_TEST_META=date|tags`): a row's date or
+            // tag list opens by itself for hands-off captures.
+            if let kind = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_META"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    let rows = model.rows(for: model.tab)
+                    if kind == "date", let row = rows.first(where: { $0.model.due != nil && $0.model.state != .inProgress }) {
+                        openMeta(.date, on: row.id)
+                    } else if kind == "tags", let row = rows.first(where: { !$0.model.tags.isEmpty }) {
+                        openMeta(.tags, on: row.id)
+                    }
+                }
+            }
+            #endif
             if rightClickMonitor == nil {
                 rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { event in
                     rightClicked(event)
@@ -403,19 +417,19 @@ struct TasksPage: View {
             heights: { rowHeight($0, in: tab) },
             onEnd: finishDrag,
             onPushPastGroup: showBoundaryHint
-        ) {
+        ) { live in
             AtticTaskRow(
                 model: row.model,
                 isSelected: model.selection.contains(id),
                 selectionRun: selectionRun(for: id, in: tab),
                 isExpanded: expanded(),
-                dropLabel: fileDropRow == id ? String(localized: "Add to page") : nil,
+                dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
                 actions: actions(for: id),
                 onToggleExpanded: { toggleExpanded(id) },
                 onSelect: { rowClicked(id, tab: tab) },
-                focus: AtticRowFocus(binding: $focusedRow, id: id),
+                focus: live.focus,
                 titleEditing: model.editingTitleID == id ? titleEditing(for: id) : nil,
-                meta: tab == .done || row.status == .done ? nil : rowMeta(for: id)
+                meta: tab == .done || row.status == .done ? nil : rowMeta(for: id, open: live.metaPopover)
             )
             .contextMenu { rowMenu(row, tab: tab) }
         } below: {
@@ -498,14 +512,18 @@ struct TasksPage: View {
 
     // MARK: - A row's date and tags (owner fix 5 C and D)
 
-    private func rowMeta(for id: UUID) -> AtticRowMeta {
+    /// `open` is the cell's live reading of the open picker: the page's own
+    /// state read from a closure the list kept is not current.
+    private func rowMeta(for id: UUID, open: TasksMetaPopover?) -> AtticRowMeta {
         AtticRowMeta(
             onDate: { openMeta(.date, on: id) },
             onTags: { openMeta(.tags, on: id) },
-            datePresented: metaBinding(.date, id: id),
-            tagsPresented: metaBinding(.tags, id: id),
-            datePicker: { AnyView(datePicker(for: id)) },
-            tagPicker: { AnyView(tagPicker(for: id)) }
+            datePresented: metaBinding(.date, id: id, open: open),
+            tagsPresented: metaBinding(.tags, id: id, open: open),
+            isDateOpen: open?.kind == .date,
+            isTagsOpen: open?.kind == .tags,
+            datePicker: { AnyView(datePicker(for: id, open: open)) },
+            tagPicker: { AnyView(tagPicker(for: id, open: open)) }
         )
     }
 
@@ -516,15 +534,16 @@ struct TasksPage: View {
         metaPopover = TasksMetaPopover(id: id, kind: kind, targets: targets ?? [id], newTag: newTag)
     }
 
-    private func metaBinding(_ kind: TasksMetaPopover.Kind, id: UUID) -> Binding<Bool> {
-        Binding(
-            get: { metaPopover?.id == id && metaPopover?.kind == kind },
-            set: { shown in if !shown, metaPopover?.id == id, metaPopover?.kind == kind { metaPopover = nil } }
+    private func metaBinding(_ kind: TasksMetaPopover.Kind, id: UUID, open: TasksMetaPopover?) -> Binding<Bool> {
+        let shown = open?.id == id && open?.kind == kind
+        return Binding(
+            get: { shown },
+            set: { now in if !now, shown { metaPopover = nil } }
         )
     }
 
-    private func datePicker(for id: UUID) -> some View {
-        let targets = metaPopover?.targets ?? [id]
+    private func datePicker(for id: UUID, open: TasksMetaPopover?) -> some View {
+        let targets = open?.targets ?? [id]
         return TaskDatePickerView(
             choices: model.dateChoices,
             selected: model.commonDueDay(targets),
@@ -542,8 +561,8 @@ struct TasksPage: View {
         .atticDesign(design)
     }
 
-    private func tagPicker(for id: UUID) -> some View {
-        let targets = metaPopover?.targets ?? [id]
+    private func tagPicker(for id: UUID, open: TasksMetaPopover?) -> some View {
+        let targets = open?.targets ?? [id]
         return TaskTagPickerView(
             allTags: model.tagChoices(for: targets),
             state: { model.tagState($0, for: targets) },
@@ -637,15 +656,10 @@ struct TasksPage: View {
             let allDone = targets.allSatisfy { store.listedTask(withID: $0)?.status == .done }
             let allWorking = targets.allSatisfy { store.task(withID: $0)?.status == .inProgress }
             // A menu for several tasks says so (bug 1): "3 Tasks".
-            Section(single ? "" : String(localized: "\(targets.count) Tasks")) {
-                Button(allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete")) {
-                    model.toggleDone(menuTargets(row.id))
-                }
-                .keyboardShortcut(.space, modifiers: [])
-                Button(allWorking ? String(localized: "Stop Working") : String(localized: "Start Working")) {
-                    model.toggleWorking(menuTargets(row.id))
-                }
-                .keyboardShortcut(.space, modifiers: .shift)
+            if single {
+                Section { stateCommands(row.id, allDone: allDone, allWorking: allWorking) }
+            } else {
+                Section(String(localized: "\(targets.count) Tasks")) { stateCommands(row.id, allDone: allDone, allWorking: allWorking) }
             }
             // Date and Tags beside Priority (owner fixes 3 and 5 D): on
             // the menu's targets, a multi-selection too; one step each.
@@ -726,6 +740,18 @@ struct TasksPage: View {
             }
             .keyboardShortcut(.delete, modifiers: [])
         }
+    }
+
+    @ViewBuilder
+    private func stateCommands(_ rowID: UUID, allDone: Bool, allWorking: Bool) -> some View {
+        Button(allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete")) {
+            model.toggleDone(menuTargets(rowID))
+        }
+        .keyboardShortcut(.space, modifiers: [])
+        Button(allWorking ? String(localized: "Stop Working") : String(localized: "Start Working")) {
+            model.toggleWorking(menuTargets(rowID))
+        }
+        .keyboardShortcut(.space, modifiers: .shift)
     }
 
     /// The row the last right-click landed on (the pointer's own record),
@@ -1252,7 +1278,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     let heights: (UUID) -> CGFloat
     let onEnd: (TasksDrag) -> Void
     let onPushPastGroup: () -> Void
-    @ViewBuilder let row: () -> Row
+    @ViewBuilder let row: (TasksCellLive) -> Row
     @ViewBuilder let below: () -> Below
 
     @Environment(\.atticDesign) private var design
@@ -1267,12 +1293,16 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         // Read here, in the cell's own body, so a new target moves the
         // neighbours at once (a list's lazy cells do not re-read the page).
         let offset = drag.map { Self.offset(of: id, in: $0, heights: heights) } ?? 0
-        let _ = (metaPopover?.id == id, fileDropRow == id, focus.wrappedValue == id)
+        let live = TasksCellLive(
+            metaPopover: metaPopover?.id == id ? metaPopover : nil,
+            focus: AtticRowFocus(binding: focus, id: id),
+            isDropTarget: fileDropRow == id
+        )
         VStack(alignment: .leading, spacing: 0) {
             // An ordinary gesture on the row: its buttons (the circle, the
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
-            row()
+            row(live)
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
             below()
         }
@@ -1365,6 +1395,14 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         let room = group[..<start].reduce(0) { $0 + heights($1) }
         return -translation > room + own / 2
     }
+}
+
+/// What a row shows from the page's state, read by its cell as it draws
+/// (the page's state read from a closure the lazy list kept is stale).
+struct TasksCellLive {
+    let metaPopover: TasksMetaPopover?
+    let focus: AtticRowFocus
+    let isDropTarget: Bool
 }
 
 /// A quiet line over the add bar while a drag or ⌘↑ ⌘↓ meets the edge of

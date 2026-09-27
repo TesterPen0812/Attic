@@ -138,8 +138,16 @@ private struct AtticTaskFocusModifier: ViewModifier {
 struct AtticRowFocus {
     let binding: FocusState<UUID?>.Binding
     let id: UUID
+    /// Read when the list builds the row, as a value: the row redraws its
+    /// ring the moment focus moves (a binding alone let it lag a row
+    /// behind, the computer-use review's bug 4).
+    let isFocused: Bool
 
-    var isFocused: Bool { binding.wrappedValue == id }
+    init(binding: FocusState<UUID?>.Binding, id: UUID) {
+        self.binding = binding
+        self.id = id
+        isFocused = binding.wrappedValue == id
+    }
 }
 
 /// The same keys as `AtticTaskFocusModifier`, with focus held by the list.
@@ -1039,6 +1047,10 @@ struct AtticRowMeta {
     let onTags: () -> Void
     var datePresented: Binding<Bool>
     var tagsPresented: Binding<Bool>
+    /// The same as values: SwiftUI compares a row's inputs by value, and a
+    /// binding alone does not tell it the row must redraw its popover.
+    var isDateOpen = false
+    var isTagsOpen = false
     let datePicker: () -> AnyView
     let tagPicker: () -> AnyView
 }
