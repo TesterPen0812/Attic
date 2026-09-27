@@ -174,20 +174,21 @@ struct AtticSelectedChip: View {
     }
 }
 
-// MARK: - Page switch (group capsule with nested chips)
+// MARK: - Page button (collapsed page dock)
 
-/// Icons in one capsule; the selected one also shows its label. Every icon
-/// has a tooltip with its shortcut and a VoiceOver label, and announces its
-/// selected state. The capsule is 34 tall, radius 14.5; chips are 26 tall,
-/// radius 10.5 (nested: 14.5 − 4), inset 4.
+/// The header's page button (Phase 0's mode dock, brought into Direction
+/// A, 2026-09-26): at rest a square the size and shape of the pin, showing
+/// only the current page's icon on the selected inner chip. Under the
+/// pointer or keyboard focus it opens leftward into all the pages' icons
+/// (the current one on the chip, each with a tooltip and its shortcut); a
+/// click goes there, and it folds back when the pointer leaves. 36 pt,
+/// inset 4, 28 pt segments 2 apart: 36 wide shut, 96 open.
 ///
-/// Layout never animates. The capsule reserves the widest label, so its
-/// size is the same whichever page is selected; switching moves the
-/// selection pill and the icons by position and crossfades the labels and
-/// the icons' weight by opacity (spec § Performance: only position and
-/// opacity animate). The buttons that take clicks and focus sit in a
-/// separate, unanimated layer on top.
-struct AtticPageSwitch<Page: Hashable>: View {
+/// One control for the keyboard (← → move between pages while it has
+/// focus; ⌘1–⌘3 work from anywhere). VoiceOver reads one group, "Pages",
+/// with a named button per page (the current one selected), whether the
+/// button is open or shut, like the page tabs under it.
+struct AtticPageButton<Page: Hashable>: View {
     struct Item: Identifiable {
         let page: Page
         let systemName: String
@@ -200,253 +201,6 @@ struct AtticPageSwitch<Page: Hashable>: View {
         var accessibilityIdentifier: String?
         var id: String { title }
     }
-
-    let items: [Item]
-    @Binding var selection: Page
-    /// The gallery pins a state on one chip only; nil pins it on all.
-    var statePinnedPage: Page?
-
-    @Environment(\.atticDesign) private var design
-    @Environment(\.atticForcedState) private var forced
-    @Environment(\.atticCapture) private var capture
-    @FocusState private var focusedPage: Page?
-    @State private var hoveredPage: Page?
-    @State private var probeID = UUID()
-
-    /// The chip geometry for a selection (also used by the tests).
-    struct Geometry: Equatable {
-        let selectedWidth: CGFloat
-        let unselectedWidth: CGFloat
-        let spacing: CGFloat
-        let labelWidths: [CGFloat]
-        let count: Int
-
-        init(titles: [String]) {
-            let m = AtticPageSwitchMetrics.self
-            labelWidths = titles.map { AtticTextStyle.chipLabel.measuredWidth($0) }
-            unselectedWidth = AtticControlSize.chipIconWidth
-            spacing = m.chipSpacing
-            selectedWidth = max(m.selectedMinWidth, (m.selectedPadding * 2 + m.iconSlot + m.iconLabelGap + (labelWidths.max() ?? 0)).rounded(.up))
-            count = titles.count
-        }
-
-        /// The capsule's inner width: the same for every selection.
-        var innerWidth: CGFloat {
-            CGFloat(max(count - 1, 0)) * (unselectedWidth + spacing) + selectedWidth
-        }
-
-        func width(of index: Int, selected: Int) -> CGFloat {
-            index == selected ? selectedWidth : unselectedWidth
-        }
-
-        func x(of index: Int, selected: Int) -> CGFloat {
-            CGFloat(index) * (unselectedWidth + spacing) + (index > selected ? selectedWidth - unselectedWidth : 0)
-        }
-
-        /// Where chip `index`'s icon sits.
-        func iconX(of index: Int, selected: Int) -> CGFloat {
-            let m = AtticPageSwitchMetrics.self
-            if index == selected {
-                let content = m.iconSlot + m.iconLabelGap + labelWidths[index]
-                return x(of: index, selected: selected) + ((selectedWidth - content) / 2).rounded()
-            }
-            return x(of: index, selected: selected) + (unselectedWidth - m.iconSlot) / 2
-        }
-
-        /// Where chip `index`'s label sits: its selected place, always (it
-        /// only fades, never moves).
-        func labelX(of index: Int) -> CGFloat {
-            iconX(of: index, selected: index) + AtticPageSwitchMetrics.iconSlot + AtticPageSwitchMetrics.iconLabelGap
-        }
-    }
-
-    var body: some View {
-        let geometry = Geometry(titles: items.map(\.title))
-        let selected = items.firstIndex { $0.page == selection } ?? 0
-        let chipHeight = AtticControlSize.chipHeight
-        ZStack(alignment: .topLeading) {
-            // FocusState is read here, in the body (and only live: captures
-            // have no focus system), not in the ForEach below.
-            decorations(geometry: geometry, selected: selected, focused: capture == nil ? focusedPage : nil, hovered: hoveredPage)
-                .transaction { $0.animation = nil }
-            RoundedRectangle(cornerRadius: AtticRadius.nestedChip, style: .continuous)
-                .fill(design.tokens.chipSelected.color)
-                .frame(width: geometry.selectedWidth, height: chipHeight)
-                .offset(x: geometry.x(of: selected, selected: selected))
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                AtticPageChipFace(item: item, isSelected: index == selected)
-                    .offset(x: geometry.iconX(of: index, selected: selected))
-                AtticText(verbatim: item.title, style: .chipLabel, ink: .heading)
-                    .fixedSize()
-                    .frame(height: chipHeight)
-                    .opacity(index == selected ? 1 : 0)
-                    .transformEnvironment(\.atticProbesDisabled) { if index != selected { $0 = true } }
-                    .offset(x: geometry.labelX(of: index))
-            }
-            if capture == nil {
-                hitLayer(geometry: geometry, selected: selected)
-                    .transaction { $0.animation = nil }
-            } else {
-                // Captures draw the chips' frames without the live buttons.
-                captureProbes(geometry: geometry, selected: selected)
-            }
-        }
-        .frame(width: geometry.innerWidth, height: chipHeight, alignment: .topLeading)
-        .padding(AtticControlSize.capsuleInset)
-        .frame(height: AtticControlSize.capsuleHeight)
-        .atticRaisedMaterial(cornerRadius: AtticRadius.control(height: AtticControlSize.capsuleHeight), interactive: false)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Pages"))
-        .atticControlProbe(
-            "Page switch", id: probeID, expectedSize: nil,
-            radius: AtticRadius.control(height: AtticControlSize.capsuleHeight),
-            expectedRadius: AtticRadius.control(height: AtticControlSize.capsuleHeight)
-        )
-    }
-
-    private func pinned(_ item: Item) -> AtticControlState? {
-        guard statePinnedPage.map({ $0 == item.page }) ?? true else { return nil }
-        return forced
-    }
-
-    /// Hover fills and focus rings: they follow the chip they belong to,
-    /// never animate, and snap to the new layout.
-    private func decorations(geometry: Geometry, selected: Int, focused focusedPage: Page?, hovered hoveredPage: Page?) -> some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                let pinned = pinned(item)
-                let hovered = pinned == .hover || (pinned == nil && hoveredPage == item.page)
-                let focused = pinned == .focused || (pinned == nil && focusedPage == item.page)
-                let shape = RoundedRectangle(cornerRadius: AtticRadius.nestedChip, style: .continuous)
-                shape
-                    .fill((hovered && index != selected ? design.tokens.chipHover : .clear).color)
-                    .atticFocusRing(focused, cornerRadius: AtticRadius.nestedChip)
-                    .frame(width: geometry.width(of: index, selected: selected), height: AtticControlSize.chipHeight)
-                    .offset(x: geometry.x(of: index, selected: selected))
-            }
-        }
-    }
-
-    /// In captures: the chips' frames, reported to the check.
-    private func captureProbes(geometry: Geometry, selected: Int) -> some View {
-        HStack(spacing: geometry.spacing) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                AtticPageChipFrame(isSelected: index == selected, size: CGSize(width: geometry.width(of: index, selected: selected), height: AtticControlSize.chipHeight))
-            }
-        }
-    }
-
-    /// The buttons: clicks, focus, tooltips and VoiceOver. Transparent.
-    private func hitLayer(geometry: Geometry, selected: Int) -> some View {
-        HStack(spacing: geometry.spacing) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                AtticPageChipButton(
-                    item: item,
-                    isSelected: index == selected,
-                    size: CGSize(width: geometry.width(of: index, selected: selected), height: AtticControlSize.chipHeight),
-                    hoveredPage: $hoveredPage
-                ) {
-                    withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: design.reduceMotion)) {
-                        selection = item.page
-                    }
-                }
-                .focused($focusedPage, equals: item.page)
-            }
-        }
-    }
-}
-
-/// A chip's icon, drawn in both weights and crossfaded (opacity only).
-private struct AtticPageChipFace<Page: Hashable>: View {
-    let item: AtticPageSwitch<Page>.Item
-    let isSelected: Bool
-
-    var body: some View {
-        let m = AtticPageSwitchMetrics.self
-        ZStack {
-            AtticIcon(systemName: item.systemName, size: m.iconSize, weight: .regular, ink: .glyph)
-                .opacity(isSelected ? 1 : 0)
-                .transformEnvironment(\.atticProbesDisabled) { if !isSelected { $0 = true } }
-            AtticIcon(systemName: item.systemName, size: m.iconSize, weight: AtticIconWeight.outline, ink: .icon)
-                .opacity(isSelected ? 0 : 1)
-                .transformEnvironment(\.atticProbesDisabled) { if isSelected { $0 = true } }
-        }
-        .frame(width: m.iconSlot, height: AtticControlSize.chipHeight)
-    }
-}
-
-/// A chip's frame as the check sees it (size and nested radius).
-private struct AtticPageChipFrame: View {
-    let isSelected: Bool
-    let size: CGSize
-    @State private var probeID = UUID()
-
-    var body: some View {
-        Color.clear
-            .frame(width: size.width, height: size.height)
-            .atticPageChipProbe(id: probeID, isSelected: isSelected)
-    }
-}
-
-private extension View {
-    func atticPageChipProbe(id: UUID, isSelected: Bool) -> some View {
-        atticControlProbe(
-            "Page chip", id: id,
-            expectedSize: isSelected ? nil : CGSize(width: AtticControlSize.chipIconWidth, height: AtticControlSize.chipHeight),
-            radius: AtticRadius.nestedChip,
-            expectedRadius: AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.capsuleHeight), gap: AtticControlSize.capsuleInset) ?? 0
-        )
-    }
-}
-
-private struct AtticPageChipButton<Page: Hashable>: View {
-    let item: AtticPageSwitch<Page>.Item
-    let isSelected: Bool
-    let size: CGSize
-    @Binding var hoveredPage: Page?
-    let action: () -> Void
-
-    @State private var probeID = UUID()
-
-    var body: some View {
-        Button(action: action) {
-            Color.clear
-                .frame(width: size.width, height: size.height)
-                .contentShape(RoundedRectangle(cornerRadius: AtticRadius.nestedChip, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .onHover { inside in
-            if inside {
-                hoveredPage = item.page
-            } else if hoveredPage == item.page {
-                hoveredPage = nil
-            }
-        }
-        .keyboardShortcut(item.keyEquivalent.map { KeyboardShortcut($0, modifiers: .command) })
-        .help("\(item.title) (\(item.shortcut))")
-        .accessibilityLabel(item.title)
-        .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        .atticPageChipProbe(id: probeID, isSelected: isSelected)
-    }
-}
-
-// MARK: - Page button (collapsed page dock)
-
-/// The header's page button (Phase 0's mode dock, brought into Direction
-/// A, 2026-09-26): at rest a square the size and shape of the pin, showing
-/// only the current page's icon on the selected inner chip. Under the
-/// pointer or keyboard focus it opens leftward into all the pages' icons
-/// (the current one on the chip, each with a tooltip and its shortcut); a
-/// click goes there, and it folds back when the pointer leaves. 36 pt,
-/// inset 4, 28 pt segments 2 apart: 36 wide shut, 96 open.
-///
-/// One control for the keyboard (← → move between pages while it has
-/// focus; ⌘1–⌘3 work from anywhere) and for VoiceOver: "Pages", valued by
-/// the current page, with a named action per page and increment/decrement.
-struct AtticPageButton<Page: Hashable>: View {
-    typealias Item = AtticPageSwitch<Page>.Item
 
     let items: [Item]
     @Binding var selection: Page
@@ -515,6 +269,9 @@ struct AtticPageButton<Page: Hashable>: View {
                 .clipped()
                 .allowsHitTesting(visible)
                 .transformEnvironment(\.atticProbesDisabled) { if !visible { $0 = true } }
+                .accessibilityLabel(item.title)
+                .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
+                .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
         }
         .padding(M.inset)
@@ -545,20 +302,8 @@ struct AtticPageButton<Page: Hashable>: View {
             select(items[next].page)
             return .handled
         }
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Pages"))
-        .accessibilityValue(items[selected].title)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAdjustableAction { direction in
-            let step = direction == .increment ? 1 : -1
-            let next = min(max(selected + step, 0), items.count - 1)
-            if next != selected { select(items[next].page) }
-        }
-        .accessibilityActions {
-            ForEach(items) { item in
-                Button(item.title) { select(item.page) }
-            }
-        }
         .atticControlProbe("Page button", id: probeID, expectedSize: open ? nil : CGSize(width: size, height: size),
                            radius: radius, expectedRadius: AtticRadius.control(height: size))
     }
@@ -573,223 +318,6 @@ struct AtticPageButton<Page: Hashable>: View {
     static func width(open: Bool, count: Int) -> CGFloat {
         let segments = open ? CGFloat(count) : 1
         return M.inset * 2 + segments * M.segment + (open ? CGFloat(max(count - 1, 0)) * M.gap : 0)
-    }
-}
-
-// MARK: - Page pill
-
-/// The page pill (v9): a small pill of dots, the dark one the current page,
-/// centred above the add bar. Under the pointer (or keyboard focus) it
-/// opens into the pages' icons with the pointed-at page's name above it; a
-/// click goes there, and it folds back when the pointer leaves. Opening is
-/// a spring of position and opacity (the icons slide out from the dots);
-/// Reduce Motion crossfades.
-///
-/// One control for the keyboard: it takes focus once, ← → move between
-/// the pages while it has it. VoiceOver reads one group, "Pages", with a
-/// named, selectable choice per page.
-struct AtticPagePill<Page: Hashable>: View {
-    typealias Icon = AtticPagePillIcon
-
-    struct Item: Identifiable {
-        let page: Page
-        let title: String
-        let icon: Icon
-        var accessibilityIdentifier: String?
-        var id: String { title }
-    }
-
-    let items: [Item]
-    @Binding var selection: Page
-    /// The gallery and captures pin it open (or shut); nil follows the
-    /// pointer and focus.
-    var pinnedOpen: Bool?
-    /// The gallery pins the pointer on one page.
-    var pinnedHover: Page?
-
-    @Environment(\.atticDesign) private var design
-    @Environment(\.atticCapture) private var capture
-    @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
-    @FocusState private var focused: Bool
-    @State private var hovering = false
-    @State private var hoveredPage: Page?
-
-    private typealias M = AtticPagePillMetrics
-
-    private var isOpen: Bool {
-        pinnedOpen ?? (hovering || (focused && keyboardFocusVisible))
-    }
-
-    var body: some View {
-        let count = items.count
-        let selected = items.firstIndex { $0.page == selection } ?? 0
-        let open = isOpen
-        let hovered = pinnedHover ?? hoveredPage
-        ZStack(alignment: .bottom) {
-            collapsed(count: count, selected: selected)
-                .opacity(open ? 0 : 1)
-            expanded(count: count, selected: selected, hovered: hovered, open: open)
-                .opacity(open ? 1 : 0)
-            if capture == nil {
-                hitLayer(count: count)
-            }
-        }
-        .frame(width: M.expandedWidth(count: count), height: M.expandedHeight, alignment: .bottom)
-        .overlay(alignment: .top) {
-            if open, let hovered, let index = items.firstIndex(where: { $0.page == hovered }) {
-                tooltip(items[index].title)
-                    .offset(x: M.segmentCentre(index, count: count), y: -(M.tooltipHeight + M.tooltipGap))
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-            }
-        }
-        .animation(motion, value: open)
-        .animation(AtticMotionPreset.hover.animation(reduceMotion: design.reduceMotion), value: hovered)
-        .contentShape(Rectangle())
-        .onHover { inside in
-            hovering = inside
-            if !inside { hoveredPage = nil }
-        }
-        .focusable(capture == nil)
-        .focused($focused)
-        .focusEffectDisabled()
-        .onKeyPress(phases: .down) { press in
-            guard press.modifiers.intersection([.command, .option, .control, .shift]).isEmpty else { return .ignored }
-            let step: Int
-            switch press.key {
-            case .leftArrow: step = -1
-            case .rightArrow: step = 1
-            default: return .ignored
-            }
-            let next = min(max(selected + step, 0), count - 1)
-            guard next != selected else { return .handled }
-            select(items[next].page)
-            return .handled
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Pages"))
-    }
-
-    private var motion: Animation? {
-        design.reduceMotion
-            ? .easeOut(duration: AtticMotionPreset.popover.duration)
-            : .spring(duration: AtticMotionPreset.expand.duration, bounce: 0)
-    }
-
-    private func select(_ page: Page) {
-        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
-            selection = page
-        }
-    }
-
-    private func pillFill(radius: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        let dark = design.mode == .dark
-        return shape
-            .fill(design.tokens.popoverFill.color)
-            .overlay(shape.strokeBorder(Color.black.opacity(dark ? 0.5 : 0.07), lineWidth: 0.5))
-            .shadow(color: Color.black.opacity(dark ? 0.30 : 0.08), radius: dark ? 4 : 5, y: dark ? 2 : 1.5)
-    }
-
-    private func collapsed(count: Int, selected: Int) -> some View {
-        ZStack {
-            pillFill(radius: M.collapsedHeight / 2)
-                .frame(width: M.collapsedWidth(count: count), height: M.collapsedHeight)
-            ForEach(0..<count, id: \.self) { index in
-                // The current page's dot in the helper grey, the others in
-                // the quiet grey of a done disc (v9).
-                Circle()
-                    .fill(index == selected ? design.tokens.color(.helper) : design.tokens.doneDisc.color)
-                    .frame(width: M.dotSize, height: M.dotSize)
-                    .offset(x: M.dotCentre(index, count: count))
-            }
-        }
-        .frame(height: M.collapsedHeight)
-        .accessibilityHidden(true)
-    }
-
-    private func expanded(count: Int, selected: Int, hovered: Page?, open: Bool) -> some View {
-        let inner = AtticRadius.nested(outer: M.expandedRadius, gap: M.inset) ?? M.expandedRadius
-        return ZStack {
-            pillFill(radius: M.expandedRadius)
-                .frame(width: M.expandedWidth(count: count), height: M.expandedHeight)
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                ZStack {
-                    RoundedRectangle(cornerRadius: inner, style: .continuous)
-                        .fill((item.page == hovered ? design.tokens.hover : .clear).color)
-                    AtticPagePillGlyph(icon: item.icon, ink: index == selected ? .heading : .icon)
-                }
-                .frame(width: M.segment.width, height: M.segment.height)
-                // The icons slide out from the dots as the pill opens.
-                .offset(x: open ? M.segmentCentre(index, count: count) : M.dotCentre(index, count: count))
-            }
-        }
-        .frame(height: M.expandedHeight)
-        .atticFocusRing(focused && keyboardFocusVisible && capture == nil, cornerRadius: M.expandedRadius)
-        .accessibilityHidden(true)
-    }
-
-    /// The buttons: clicks, hover and VoiceOver. Transparent, in the opened
-    /// pill's places whether it is open or not, so a click never lands on
-    /// a moving target.
-    private func hitLayer(count: Int) -> some View {
-        HStack(spacing: M.segmentGap) {
-            ForEach(items) { item in
-                Button { select(item.page) } label: {
-                    Color.clear
-                        .frame(width: M.segment.width, height: M.segment.height)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .onHover { inside in
-                    if inside { hoveredPage = item.page } else if hoveredPage == item.page { hoveredPage = nil }
-                }
-                .accessibilityLabel(item.title)
-                .accessibilityIdentifier(item.accessibilityIdentifier ?? item.title)
-                .accessibilityAddTraits(item.page == selection ? [.isSelected, .isButton] : .isButton)
-            }
-        }
-        .padding(M.inset)
-    }
-
-    private func tooltip(_ title: String) -> some View {
-        AtticText(verbatim: title, style: .rowMeta, ink: .onInverse)
-            .fixedSize()
-            .padding(.horizontal, M.tooltipHorizontalPadding)
-            .frame(height: M.tooltipHeight)
-            .background(RoundedRectangle(cornerRadius: M.tooltipRadius, style: .continuous)
-                .fill(design.tokens.color(.inverseFill)))
-            .accessibilityHidden(true)
-    }
-}
-
-/// The page pill's icons: the status circle's three states.
-enum AtticPagePillIcon: Sendable { case open, dashed, done }
-
-/// The page pill's icons, drawn at 15 pt.
-struct AtticPagePillGlyph: View {
-    let icon: AtticPagePillIcon
-    let ink: AtticInk
-    @Environment(\.atticDesign) private var design
-
-    var body: some View {
-        let m = AtticPagePillMetrics.self
-        let colour = design.tokens.color(ink)
-        ZStack {
-            switch icon {
-            case .open:
-                Circle().inset(by: 2).stroke(colour, lineWidth: m.iconLineWidth)
-            case .dashed:
-                Circle().inset(by: 2).stroke(colour, style: StrokeStyle(lineWidth: m.iconLineWidth, lineCap: .round, dash: m.dash))
-            case .done:
-                Circle().inset(by: 1.3).fill(colour)
-                AtticCheckShape()
-                    .stroke(design.tokens.popoverFill.color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-                    .padding(4.4)
-            }
-        }
-        .frame(width: m.iconSize, height: m.iconSize)
     }
 }
 

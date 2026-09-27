@@ -53,8 +53,8 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 
     var accessibilityIdentifier: String { "panel-section-\(rawValue)" }
 
-    var switchItem: AtticPageSwitch<PanelPage>.Item {
-        AtticPageSwitch.Item(
+    var switchItem: AtticPageButton<PanelPage>.Item {
+        AtticPageButton.Item(
             page: self,
             systemName: systemName,
             title: title,

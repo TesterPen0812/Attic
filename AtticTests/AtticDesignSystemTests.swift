@@ -456,21 +456,23 @@ final class AtticDesignSystemTests: XCTestCase {
 
     // MARK: Motion keeps layout still
 
-    func testPageSwitchKeepsItsSizeForEverySelection() {
-        let titles = AtticGallerySamples.pages.map(\.title)
-        let geometry = AtticPageSwitch<Int>.Geometry(titles: titles)
-        var sizes: Set<String> = []
-        for page in 0..<titles.count {
-            // Every chip's frame and every icon position fits in the same capsule.
-            for index in 0..<titles.count {
-                XCTAssertLessThanOrEqual(geometry.x(of: index, selected: page) + geometry.width(of: index, selected: page), geometry.innerWidth + 0.001)
-            }
-            // The label only fades: its place never depends on the selection.
-            XCTAssertEqual(geometry.labelX(of: page), geometry.iconX(of: page, selected: page) + AtticPageSwitchMetrics.iconSlot + AtticPageSwitchMetrics.iconLabelGap)
-            let host = NSHostingView(rootView: AtticPageSwitch(items: AtticGallerySamples.pages, selection: .constant(page)).atticDesign(.default))
-            sizes.insert("\(host.fittingSize)")
+    func testThePageButtonAndTabsKeepTheirSizeForEverySelection() {
+        var buttonSizes: Set<String> = []
+        var tabSizes: Set<String> = []
+        for page in 0..<AtticGallerySamples.pages.count {
+            let button = NSHostingView(rootView: AtticPageButton(items: AtticGallerySamples.pages, selection: .constant(page), pinnedOpen: false)
+                .atticDesign(.default))
+            buttonSizes.insert("\(button.fittingSize)")
+            // The selected tab is semibold; every label reserves that width,
+            // so moving the selection never shifts the row.
+            let tabs = NSHostingView(rootView: AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: .constant(page))
+                .atticDesign(.default))
+            tabSizes.insert("\(tabs.fittingSize)")
         }
-        XCTAssertEqual(sizes.count, 1, "The capsule is the same size whichever page is selected: \(sizes)")
+        XCTAssertEqual(buttonSizes, ["\(CGSize(width: AtticControlSize.headerControl, height: AtticControlSize.headerControl))"])
+        XCTAssertEqual(tabSizes.count, 1, "The tabs keep their width whichever page is selected: \(tabSizes)")
+        XCTAssertEqual(AtticTextStyle.pageTabSelected.spec.weight, .semibold)
+        XCTAssertEqual(AtticTextStyle.pageTab.spec.weight, .medium)
     }
 
     func testAddBarFieldKeepsItsWidthWhenTheSendButtonAppears() throws {

@@ -186,20 +186,6 @@ enum AtticRaisedButtonMetrics {
     static let labelIconSize: CGFloat = 13
 }
 
-/// The page switch: icons in one capsule, the selected one also showing its
-/// label (visual A: 144 × 32, chips 24, radius 13.5 / 9.5, inset 4; the
-/// selected chip 76 wide, the others 28, 2 apart).
-enum AtticPageSwitchMetrics {
-    static let chipSpacing: CGFloat = 2
-    static let iconSize: CGFloat = 13
-    /// The glyph's slot inside a chip, and the gap to the label.
-    static let iconSlot: CGFloat = 14
-    static let iconLabelGap: CGFloat = 6
-    static let selectedPadding: CGFloat = 6
-    /// The selected chip's width: 76, or wider when a label needs it.
-    static let selectedMinWidth: CGFloat = 76
-}
-
 /// The header's page button (Phase 0's mode dock): 36 pt, inset 4,
 /// 28 pt segments 2 apart (36 shut, 96 open), 13 pt icons.
 enum AtticPageButtonMetrics {
@@ -209,47 +195,6 @@ enum AtticPageButtonMetrics {
     static let iconSize: CGFloat = 13
     /// Phase 0's hairline around an accented current page.
     static let accentStrokeWidth: CGFloat = 0.75
-}
-
-/// The page pill above the add bar (v9, owner 2026-09-26): three dots
-/// that open, under the pointer or the keyboard, into the three pages'
-/// icons (open ring, dashed ring, done disc) with the page's name above.
-enum AtticPagePillMetrics {
-    static let dotSize: CGFloat = 5
-    static let dotGap: CGFloat = 5
-    static let collapsedHeight: CGFloat = 16
-    static let collapsedPadding: CGFloat = 7
-    static let segment = CGSize(width: 30, height: 24)
-    static let segmentGap: CGFloat = 2
-    static let inset: CGFloat = 3
-    /// The opened pill's corner (v9), with the segments nested inside it.
-    static let expandedRadius: CGFloat = 9
-    static let iconSize: CGFloat = 15
-    static let iconLineWidth: CGFloat = 1.4
-    static let dash: [CGFloat] = [1.95, 1.75]
-    /// The name above the pointed-at icon.
-    static let tooltipGap: CGFloat = 6
-    static let tooltipHorizontalPadding: CGFloat = 8
-    static let tooltipHeight: CGFloat = 22
-    static let tooltipRadius: CGFloat = 6
-    /// Between the pill and the add bar.
-    static let toAddBar: CGFloat = 8
-
-    static func expandedWidth(count: Int) -> CGFloat {
-        inset * 2 + segment.width * CGFloat(count) + segmentGap * CGFloat(max(count - 1, 0))
-    }
-    static var expandedHeight: CGFloat { segment.height + inset * 2 }
-    static func collapsedWidth(count: Int) -> CGFloat {
-        collapsedPadding * 2 + dotSize * CGFloat(count) + dotGap * CGFloat(max(count - 1, 0))
-    }
-    /// Where segment `index`'s centre sits, from the opened pill's centre.
-    static func segmentCentre(_ index: Int, count: Int) -> CGFloat {
-        -expandedWidth(count: count) / 2 + inset + CGFloat(index) * (segment.width + segmentGap) + segment.width / 2
-    }
-    /// Where dot `index`'s centre sits, from the pill's centre.
-    static func dotCentre(_ index: Int, count: Int) -> CGFloat {
-        (CGFloat(index) - CGFloat(count - 1) / 2) * (dotSize + dotGap)
-    }
 }
 
 /// The add bar (spec: 36 tall, radius 15; the send button inside).

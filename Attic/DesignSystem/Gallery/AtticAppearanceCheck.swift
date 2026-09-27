@@ -410,7 +410,7 @@ enum AtticAppearanceCheck {
 
     /// Controls whose radius must follow the 42 %-of-height rule.
     static let controlRuleNames: Set<String> = [
-        "Single button", "Label button", "Page switch", "Add bar", "Small control",
+        "Single button", "Label button", "Page button", "Add bar", "Small control",
         "Selection bar", "Toast", "Pop-over row", "Title menu", "Tag"
     ]
 

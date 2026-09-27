@@ -256,28 +256,16 @@ enum AtticGallerySamples {
         .init(title: "Tag the build")
     ]
 
-    static let pages: [AtticPageSwitch<Int>.Item] = [
+    static let pages: [AtticPageButton<Int>.Item] = [
         .init(page: 0, systemName: "checkmark.circle", title: String(localized: "Tasks"), shortcut: "⌘1"),
         .init(page: 1, systemName: "note.text", title: String(localized: "Notes"), shortcut: "⌘2"),
         .init(page: 2, systemName: "scribble.variable", title: String(localized: "Canvas"), shortcut: "⌘3")
-    ]
-
-    static let pillPages: [AtticPagePill<Int>.Item] = [
-        .init(page: 0, title: "Tasks", icon: .open),
-        .init(page: 1, title: "Backlog", icon: .dashed),
-        .init(page: 2, title: "Done", icon: .done)
     ]
 
     static let pageTabs: [AtticPageTabs<Int>.Item] = [
         .init(page: 0, title: String(localized: "Now")),
         .init(page: 1, title: String(localized: "Later")),
         .init(page: 2, title: String(localized: "Done"))
-    ]
-
-    static let tabs: [AtticStatusTabs<Int>.Item] = [
-        .init(tab: 0, title: String(localized: "Now"), count: 4),
-        .init(tab: 1, title: String(localized: "Backlog"), count: 3),
-        .init(tab: 2, title: String(localized: "Done"), count: nil)
     ]
 }
 
