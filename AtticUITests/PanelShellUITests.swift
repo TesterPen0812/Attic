@@ -50,12 +50,23 @@ final class PanelShellUITests: XCTestCase {
 
         // The panel's own menu: Esc closes it and nothing else.
         pin.coordinate(withNormalizedOffset: CGVector(dx: 2.6, dy: 0.5)).rightClick()
-        let settingsItem = app.menuItems["Settings…"]
-        XCTAssertTrue(settingsItem.waitForExistence(timeout: 3))
+        // The panel's own menu item, not the app menu's hidden one.
+        let settingsItems = app.menuItems.matching(NSPredicate(format: "title == %@", "Settings…"))
+        var settingsItem = settingsItems.firstMatch
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if let shown = settingsItems.allElementsBoundByIndex.first(where: { $0.exists && $0.frame.width > 0 }) {
+                settingsItem = shown
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertTrue(settingsItem.exists && settingsItem.frame.width > 0, "the panel's menu is open")
         // To the menu itself: on a runner where Attic is not the active app,
         // an app-level key reaches the front app instead of the open menu.
         settingsItem.typeKey(.escape, modifierFlags: [])
-        XCTAssertTrue(settingsItem.waitForNonExistence(timeout: 3))
+        waitFor(settingsItems.allElementsBoundByIndex.allSatisfy { !$0.exists || $0.frame.width == 0 }, timeout: 3,
+                "Esc closes the menu")
         XCTAssertTrue(pin.exists, "Esc in a menu closes the menu only")
 
         app.typeKey(.escape, modifierFlags: [])

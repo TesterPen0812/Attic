@@ -165,7 +165,9 @@ final class TasksPanelUITests: XCTestCase {
         let add = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Add subtask")).firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 3))
         add.click()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        let field = app.textFields.matching(NSPredicate(format: "label == %@", "Title")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3), "Add subtask opens its field")
+        waitFor((field.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the field has the keyboard")
         app.typeText("Pack the charger\r")
         let added = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Pack the charger")).firstMatch
         waitFor(added.exists, "Return adds the subtask")
@@ -269,7 +271,12 @@ final class TasksPanelUITests: XCTestCase {
         circlePoint.click()                       // where the hidden circle is
         app.typeKey("9", modifierFlags: [])       // a key the hidden field must not take
 
-        app.typeKey("1", modifierFlags: .command)
+        // Back to Tasks through the page button.
+        let pages = app.descendants(matching: .any).matching(identifier: "panel-section-picker").firstMatch
+        pages.hover()
+        let tasks = app.buttons["panel-section-tasks"]
+        waitFor(tasks.isHittable, "the page button opens under the pointer")
+        tasks.click()
         waitFor(row("Book dentist").exists, "Tasks shows again")
         XCTAssertTrue(row("Book dentist").label.contains("to do"), "the click did not reach the hidden circle")
         XCTAssertEqual(addBar.value as? String, "Kept draft", "the key did not reach the hidden add bar")
