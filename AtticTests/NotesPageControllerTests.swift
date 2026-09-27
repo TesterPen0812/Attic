@@ -97,6 +97,44 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertFalse(session.isDirty)
     }
 
+    func testMeasuredMainActorSaveOnFiveThousandLineNote() throws {
+        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0) with ordinary note text") })
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
+            return XCTFail("large note fixture")
+        }
+        let controller = makeController()
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        var milliseconds: [Double] = []
+        var extractionMilliseconds: [Double] = []
+        var preparedCommitMilliseconds: [Double] = []
+        for _ in 0..<8 {
+            type("x", into: session)
+            let start = DispatchTime.now().uptimeNanoseconds
+            XCTAssertTrue(controller.save(session))
+            milliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+
+            type("y", into: session)
+            let extractionStart = DispatchTime.now().uptimeNanoseconds
+            let snapshot = session.engine.document()
+            extractionMilliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - extractionStart) / 1_000_000)
+            let prepared = try PreparedNoteDocument(snapshot)
+            let preparedStart = DispatchTime.now().uptimeNanoseconds
+            XCTAssertTrue(controller.save(session, snapshot: snapshot, stagedSnapshot: [], prepared: prepared))
+            preparedCommitMilliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - preparedStart) / 1_000_000)
+        }
+        let sorted = milliseconds.sorted()
+        let extractionSorted = extractionMilliseconds.sorted()
+        let preparedSorted = preparedCommitMilliseconds.sorted()
+        print("NOTE_SAVE_5000_LINES_MS_MEDIAN=\(sorted[sorted.count / 2])")
+        print("NOTE_SAVE_5000_LINES_MS_MAX=\(sorted.last ?? 0)")
+        print("NOTE_EXTRACT_5000_LINES_MS_MEDIAN=\(extractionSorted[extractionSorted.count / 2])")
+        print("NOTE_EXTRACT_5000_LINES_MS_MAX=\(extractionSorted.last ?? 0)")
+        print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MEDIAN=\(preparedSorted[preparedSorted.count / 2])")
+        print("NOTE_PREPARED_COMMIT_5000_LINES_MS_MAX=\(preparedSorted.last ?? 0)")
+        XCTAssertTrue(store.versions(noteID: id).isEmpty)
+    }
+
     func testFailedSaveIsCheckpointedBeforeNavigationAndRetrySavesIt() throws {
         let controller = makeController()
         controller.start()
@@ -226,6 +264,75 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(controller.active?.engine.document().title, "Agent plan", "the reopened note shows the applied edit")
     }
 
+    func testAgentWriteWhileHiddenBecomesAProposalAndCannotBeOverwrittenByTyping() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Mine", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let id = session.noteID
+        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertTrue(store.openDocumentNoteIDs().contains(id))
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
+            noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
+        controller.panelDidShow()
+        type(" and mine", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(store.note(withID: id)?.title, "Mine and mine")
+        let comparison = try XCTUnwrap(controller.proposalComparison(for: session))
+        XCTAssertEqual(comparison.current, "Mine and mine")
+        XCTAssertEqual(comparison.proposed, "Agent")
+        XCTAssertTrue(controller.showLibrary())
+        let proposal = try XCTUnwrap(store.pendingEdits(noteID: id).first)
+        XCTAssertTrue(proposal.needsReview)
+        XCTAssertEqual(proposal.proposedContent.flatMap { NoteContentCodec.decode($0).document?.title }, "Agent")
+        controller.dismissLibrary()
+        XCTAssertEqual(controller.active?.engine.document().title, "Mine and mine")
+    }
+
+    func testPendingAgentEditAppliedOnLeaveReloadsTheRetainedSession() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Mine", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let id = session.noteID
+        XCTAssertTrue(controller.preserveForHide())
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
+            noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
+        controller.panelDidShow()
+        XCTAssertTrue(controller.showLibrary())
+        controller.dismissLibrary()
+        XCTAssertEqual(controller.active?.engine.document().title, "Agent")
+        let reloaded = try XCTUnwrap(controller.active)
+        type(" plus mine", into: reloaded)
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(store.note(withID: id)?.title, "Agent plus mine")
+    }
+
+    func testAgentWriteInLibraryCannotStaleSaveOnReopen() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Mine", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let id = session.noteID
+        XCTAssertTrue(controller.showLibrary())
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
+            noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
+        XCTAssertTrue(controller.open(noteID: id))
+        controller.dismissLibrary()
+        type(" and mine", into: try XCTUnwrap(controller.active))
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
     func testStagedImageIsCommittedWithTheSaveThatShowsIt() throws {
         let controller = makeController()
         controller.start()
@@ -261,6 +368,29 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertNotNil(loaded.renderedImage)
     }
 
+    func testCrossNotePasteCopiesImageFromFailedSourceDraft() throws {
+        let controller = makeController()
+        controller.start()
+        let source = try XCTUnwrap(controller.active)
+        type("Source", into: source)
+        let image = try realImage()
+        source.engine.insertImage(image, pixelSize: CGSize(width: 2, height: 2))
+        gate.shouldFail = true
+        XCTAssertTrue(controller.preserveAll(), "the failed source stays in recovery")
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("attic-failed-source-\(UUID().uuidString)"))
+        XCTAssertTrue(source.engine.writeSelection(NSRange(location: 0, length: source.engine.textStorage.length),
+                                                   to: pasteboard, types: [NoteEditorEngine.fragmentType]))
+        let fragment = try XCTUnwrap(pasteboard.data(forType: NoteEditorEngine.fragmentType))
+        XCTAssertTrue(controller.newNote())
+        let destination = try XCTUnwrap(controller.active)
+        XCTAssertTrue(destination.engine.paste(fragmentData: fragment, at: NSRange(location: 0, length: 0)))
+        let newImageID = try XCTUnwrap(destination.engine.document().attachmentIDs.first)
+        XCTAssertNotEqual(newImageID, image.id)
+        gate.shouldFail = false
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(try store.attachmentRows(forNoteID: destination.noteID).first?.id, newImageID)
+    }
+
     func testDelayedImageBatchReservesOrderDuringTypingAndCommitsTogether() async throws {
         let image = try realImage()
         let loader = DelayedImageLoader()
@@ -276,6 +406,8 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(reserved.count, 2)
         type(" while loading", into: draft)
         await waitForImageRequests(loader, count: 1)
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertNil(draft.problem, "a normal import is waiting, not a failed save")
         await loader.releaseNext(success: true)
         await waitForImageRequests(loader, count: 2)
         XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty,
@@ -305,11 +437,54 @@ final class NotesPageControllerTests: XCTestCase {
         type(" after", into: draft)
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.newNote())
+        XCTAssertTrue(draft.notice?.contains("cancelled") == true)
         await loader.releaseNext(success: true)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.attachmentIDs, [])
         XCTAssertTrue(store.loadDocument(noteID: id)?.content.document?.blocks.last?.text.contains("after") == true)
         XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
+    }
+
+    func testHiddenImportContinuesAndCommitsToItsOriginalNote() async throws {
+        let image = try realImage()
+        let loader = DelayedImageLoader()
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            saveDelay: .seconds(60), imageLoader: { url in await loader.load(url, template: image) })
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Before", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        let id = draft.noteID
+        controller.importImages([URL(fileURLWithPath: "/tmp/hidden.png")])
+        await waitForImageRequests(loader, count: 1)
+        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertNil(draft.problem)
+        await loader.releaseNext(success: true)
+        for _ in 0..<60 {
+            if (try? store.attachmentRows(forNoteID: id).count) == 1 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        controller.panelDidShow()
+        XCTAssertEqual(try store.attachmentRows(forNoteID: id).count, 1)
+        XCTAssertEqual(controller.active?.engine.document().attachmentIDs.count, 1)
+    }
+
+    func testHideRefusedWhenRunningImportHasNoRecoveryJournal() async throws {
+        let image = try realImage()
+        let loader = DelayedImageLoader()
+        let controller = NotesPageController(store: store, journal: nil, saveDelay: .seconds(60),
+            imageLoader: { url in await loader.load(url, template: image) })
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Before", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        controller.importImages([URL(fileURLWithPath: "/tmp/no-journal.png")])
+        type(" after", into: draft)
+        await waitForImageRequests(loader, count: 1)
+        XCTAssertFalse(controller.preserveForHide())
+        guard case .onlyInMemory = draft.problem else { return XCTFail("the failed hide must be visible") }
+        XCTAssertTrue(controller.active === draft)
+        await loader.releaseNext(success: true)
     }
 
     func testImageBatchDeletedDestinationStaysInRecoveryWithoutResurrection() async throws {
@@ -367,6 +542,25 @@ final class NotesPageControllerTests: XCTestCase {
         draft.engine.writingToolsDidEnd()
         gate.shouldFail = false
         XCTAssertEqual(store.note(withID: draft.noteID)?.title, "Original prose")
+    }
+
+    func testRefusedWritingToolsBypassRestoresTextAndDoesNotAutosave() async throws {
+        let controller = makeController(delay: .milliseconds(20))
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Original prose", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        let savedRevision = store.note(withID: draft.noteID)?.revisionID
+        gate.shouldFail = true
+        draft.engine.writingToolsWillBegin()
+        let whole = NSRange(location: 0, length: draft.engine.textStorage.length)
+        draft.engine.textStorage.replaceCharacters(in: whole, with: NSAttributedString(string: "Unrequested rewrite"))
+        XCTAssertEqual(draft.engine.document().title, "Unrequested rewrite")
+        draft.engine.writingToolsDidEnd()
+        gate.shouldFail = false
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(draft.engine.document().title, "Original prose")
+        XCTAssertEqual(store.note(withID: draft.noteID)?.revisionID, savedRevision)
     }
 
     func testUnreadableDocumentOpensAnExplanatoryReadOnlySession() throws {
@@ -460,6 +654,24 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(controller.active?.noteID, created.noteID)
         XCTAssertEqual(controller.recoveryWarnings.count, 1)
         XCTAssertNotNil(controller.active?.notice)
+    }
+
+    func testDamagedRecoveryBlockingPurgeShowsAWarning() throws {
+        let controller = makeController()
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Saved", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        let row = NoteAttachment(noteID: draft.noteID, originalFilename: "old.bin", byteCount: 1,
+                                 sortIndex: 0, contentDigest: String(repeating: "a", count: 64), payload: Data([1]))
+        store.modelContext.insert(row)
+        try store.modelContext.save()
+        XCTAssertTrue(store.removeAttachment(row))
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("broken".utf8).write(to: directory.appendingPathComponent("corrupt.json"))
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0)
+        XCTAssertTrue(controller.recoveryWarnings.contains { $0.contains("keeping removed images") })
+        XCTAssertTrue(draft.notice?.contains("keeping removed images") == true)
     }
 
     func testBothAttachmentPurgeRoutesRespectRecoveryReferences() throws {

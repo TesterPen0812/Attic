@@ -50,7 +50,7 @@ struct NotesEditorPage: View {
             NotesPlainLibrary(noteStore: noteStore, failedDrafts: controller.failedDrafts,
                               selectedID: controller.active?.noteID ?? controller.legacyNoteID,
                               onOpen: { id in
-                                  if controller.open(noteID: id) { controller.isLibraryPresented = false }
+                                  if controller.open(noteID: id) { controller.dismissLibrary() }
                               }, onOpenDraft: { id in _ = controller.openFailedDraft(sessionID: id) })
             .padding(.top, topInset)
             .padding(.bottom, bottomInset)
@@ -80,7 +80,7 @@ struct NotesEditorPage: View {
             .keyboardShortcut("l", modifiers: [.command, .shift])
             .accessibilityIdentifier("notes-all-notes")
             Spacer(minLength: 0)
-            NoteStatusSlot(controller: controller, session: controller.active)
+            NoteStatusSlot(controller: controller, noteStore: noteStore, session: controller.active)
             Spacer(minLength: 0)
             if let session = controller.active, !session.isReadOnly, !controller.isLibraryPresented {
                 insertMenu(session)
@@ -123,7 +123,7 @@ struct NotesEditorPage: View {
             return
         }
         if controller.isLibraryPresented {
-            controller.isLibraryPresented = false
+            controller.dismissLibrary()
         } else {
             _ = controller.showLibrary()
         }
@@ -138,17 +138,20 @@ struct NotesEditorPage: View {
 /// The status slot: the most urgent state only; nothing when all is well.
 private struct NoteStatusSlot: View {
     @ObservedObject var controller: NotesPageController
+    @ObservedObject var noteStore: NoteStore
     let session: NoteSession?
 
     var body: some View {
         if let session {
-            SessionSlot(controller: controller, session: session)
+            SessionSlot(controller: controller, store: noteStore, session: session)
         }
     }
 
     private struct SessionSlot: View {
         @ObservedObject var controller: NotesPageController
+        @ObservedObject var store: NoteStore
         @ObservedObject var session: NoteSession
+        @State private var showingProposal = false
 
         var body: some View {
             Group {
@@ -171,6 +174,12 @@ private struct NoteStatusSlot: View {
                         AtticText(verbatim: String(localized: "Read only"), style: .rowMeta, ink: .helper)
                             .help(reason.message)
                             .accessibilityIdentifier("notes-read-only")
+                    } else if let comparison = controller.proposalComparison(for: session) {
+                        Button { showingProposal = true } label: {
+                            AtticText(verbatim: "\(comparison.agent) has changes", style: .rowMeta, ink: .heading)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("notes-agent-has-changes")
                     } else if let notice = session.notice {
                         Button {
                             session.notice = nil
@@ -187,7 +196,44 @@ private struct NoteStatusSlot: View {
                 }
             }
             .frame(maxWidth: 200)
+            .sheet(isPresented: $showingProposal) {
+                if let comparison = controller.proposalComparison(for: session) {
+                    NoteProposalComparison(agent: comparison.agent, current: comparison.current,
+                                           proposed: comparison.proposed)
+                }
+            }
         }
+    }
+}
+
+/// The proposal stays read-only until the person deliberately resolves it.
+/// The transactional replacement controls arrive with the review slice.
+private struct NoteProposalComparison: View {
+    let agent: String
+    let current: String
+    let proposed: String
+    @State private var selected = 0
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            AtticText(verbatim: "\(agent) has changes", style: .panelHeading, ink: .heading)
+            Picker("Version", selection: $selected) {
+                Text("Current").tag(0)
+                Text("Proposed").tag(1)
+            }
+            .pickerStyle(.segmented)
+            ScrollView {
+                AtticText(verbatim: selected == 0 ? current : proposed, style: .body, ink: .heading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            Button("Back") { dismiss() }
+                .accessibilityIdentifier("notes-proposal-back")
+        }
+        .padding(20)
+        .frame(width: 440, height: 480)
+        .accessibilityIdentifier("notes-proposal-comparison")
     }
 }
 

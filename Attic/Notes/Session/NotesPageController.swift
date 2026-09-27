@@ -135,16 +135,24 @@ final class NotesPageController: ObservableObject {
         self.imageLoader = imageLoader
         self.prepareDocument = prepareDocument
         store.openDocumentNoteIDs = { [weak self] in
-            guard let self, self.isPageVisible, !self.isLibraryPresented,
-                  let active = self.active, active.isPersisted else { return [] }
-            return [active.noteID]
+            guard let self else { return [] }
+            // A cached session remains an editor authority while hidden or
+            // in All notes, so an agent's write becomes a proposal.
+            return Set(self.cache.values.filter(\.isPersisted).map(\.noteID))
         }
         store.recoveryReferencedAttachmentIDs = { [weak self] in
             guard let self, let journal = self.journal else { return [] }
             var ids = Set<UUID>()
-            for item in try journal.recoveryEntries() {
+            let entries: [NoteDraftRecoveryEntry]
+            do { entries = try journal.recoveryEntries() }
+            catch {
+                self.reportRecoveryRetentionWarning("Recovery copies could not be checked. Removed images are being kept until they can be checked.")
+                throw error
+            }
+            for item in entries {
                 guard case let .valid(entry, _) = item,
                       let document = NoteContentCodec.decode(entry.content).document else {
+                    self.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
                     throw DamagedNoteRecovery()
                 }
                 ids.formUnion(document.attachmentIDs)
@@ -152,6 +160,21 @@ final class NotesPageController: ObservableObject {
             }
             return ids
         }
+        store.recoveryProtectedRevisionIDs = { [weak self] in
+            guard let journal = self?.journal else { return [] }
+            let entries = try journal.recoveryEntries()
+            var bases = Set<UUID>()
+            for item in entries {
+                guard case let .valid(entry, _) = item else { throw DamagedNoteRecovery() }
+                if let base = entry.baseRevisionID { bases.insert(base) }
+            }
+            return bases
+        }
+    }
+
+    private func reportRecoveryRetentionWarning(_ warning: String) {
+        if !recoveryWarnings.contains(warning) { recoveryWarnings.append(warning) }
+        active?.notice = warning
     }
 
     var lastViewedNoteID: UUID? {
@@ -161,6 +184,15 @@ final class NotesPageController: ObservableObject {
     /// Failed sessions are listed even when no note row was ever committed.
     var failedDrafts: [NoteSession] {
         recency.reversed().compactMap { cache[$0] }.filter { $0.problem != nil }
+    }
+
+    func proposalComparison(for session: NoteSession) -> (agent: String, current: String, proposed: String)? {
+        guard session.isPersisted,
+              let edit = store.pendingEdits(noteID: session.noteID).first,
+              let bytes = edit.proposedContent,
+              case let .editable(document) = NoteContentCodec.decode(bytes) else { return nil }
+        return (edit.agentName.isEmpty ? String(localized: "Agent") : edit.agentName,
+                NoteTextExport.plainText(session.engine.document()), NoteTextExport.plainText(document))
     }
 
     @discardableResult
@@ -197,7 +229,10 @@ final class NotesPageController: ObservableObject {
     /// Opens a note. Legacy notes open in the old editor (`legacyNoteID`).
     @discardableResult
     func open(noteID: UUID) -> Bool {
-        if let active, active.noteID == noteID, legacyNoteID == nil { return true }
+        if let active, active.noteID == noteID, legacyNoteID == nil {
+            reconcileActive()
+            return true
+        }
         guard let note = store.note(withID: noteID) else { return false }
         guard leaveActive() else { return false }
         if !note.usesDocumentFormat {
@@ -266,6 +301,17 @@ final class NotesPageController: ObservableObject {
         if session.isPersisted { remember(session.noteID) }
     }
 
+    private func reconcileActive() {
+        guard let current = active, current.isPersisted, !current.isDirty, current.problem == nil,
+              let note = store.note(withID: current.noteID),
+              current.baseRevisionID != note.revisionID || cache[current.noteID] !== current,
+              let replacement = session(for: note) else { return }
+        if replacement !== current {
+            current.engine.detachView()
+            activate(replacement)
+        }
+    }
+
     private func wire(_ session: NoteSession) {
         let engine = session.engine
         engine.imageProvider = self
@@ -276,10 +322,14 @@ final class NotesPageController: ObservableObject {
         engine.onNotice = { [weak session] message in session?.notice = message }
         engine.onBeforeCopy = { [weak self, weak session] in
             guard let self, let session else { return }
+            session.blocksAutomaticRekey = true
+            defer { session.blocksAutomaticRekey = false }
             _ = self.save(session)
         }
         engine.onWritingToolsWillBegin = { [weak self, weak session] in
             guard let self, let session else { return false }
+            session.blocksAutomaticRekey = true
+            defer { session.blocksAutomaticRekey = false }
             // What the note holds before a rewrite is kept as a version.
             return self.save(session) && session.isPersisted
                 && self.store.recordVersion(noteID: session.noteID, reason: .beforeWritingTools)
@@ -318,13 +368,18 @@ final class NotesPageController: ObservableObject {
         guard let session = active else { return true }
         guard canLeaveComposition(in: session) else { return false }
         captureViewState(session)
-        cancelImport(in: session)
         guard preserve(session) else { return false }
+        if !session.pendingImportIDs.isEmpty {
+            cancelImport(in: session)
+            session.notice = String(localized: "The image import was cancelled when you left this note.")
+            if !save(session) { _ = preserve(session) }
+        }
         if session.isPersisted, !session.isDirty {
             store.recordVersion(noteID: session.noteID, reason: .leave)
             if store.applyPendingEdits(noteID: session.noteID) > 0 {
                 cache[session.noteID]?.engine.detachView()
                 cache[session.noteID] = nil
+                reconcileActive()
             }
         }
         if session.isUntouchedDraft { cache[session.noteID] = nil }
@@ -341,6 +396,17 @@ final class NotesPageController: ObservableObject {
         return true
     }
 
+    /// A hidden panel still owns a running import; its session and reserved
+    /// anchors stay alive until the batch commits or fails visibly.
+    func preserveForHide() -> Bool {
+        if active?.pendingImportIDs.isEmpty == false {
+            guard preserveAll() else { return false }
+            isPageVisible = false
+            return true
+        }
+        return leaveForNavigation()
+    }
+
     private func canLeaveComposition(in session: NoteSession) -> Bool {
         guard session.engine.textView?.hasMarkedText() != true else {
             session.notice = String(localized: "Finish composing text before leaving this note.")
@@ -353,6 +419,11 @@ final class NotesPageController: ObservableObject {
         guard leaveActive() else { return false }
         isLibraryPresented = true
         return true
+    }
+
+    func dismissLibrary() {
+        isLibraryPresented = false
+        reconcileActive()
     }
 
     /// The shell's flush (hide, quit, page switch): every session with
@@ -374,7 +445,24 @@ final class NotesPageController: ObservableObject {
     func preserve(_ session: NoteSession) -> Bool {
         saveTask?.cancel()
         guard session.isDirty || session.problem != nil else { return true }
-        if session.pendingImportIDs.isEmpty && save(session) { return true }
+        if !session.pendingImportIDs.isEmpty {
+            // Reservations have no bytes yet. Checkpoint the durable text,
+            // keeping the live import and its anchors in memory.
+            guard let journal else {
+                session.problem = .onlyInMemory("The import is still running and this draft has no recovery copy.")
+                return false
+            }
+            do {
+                let document = checkpointDocument(for: session)
+                try journal.write(journalEntry(for: session, document: document),
+                                  staged: session.engine.stagedAttachments(for: document))
+                return true
+            } catch {
+                session.problem = .onlyInMemory("The recovery copy failed: \(error.localizedDescription)")
+                return false
+            }
+        }
+        if save(session) { return true }
         guard let journal else {
             session.problem = .onlyInMemory(storeMessage())
             return false
@@ -636,7 +724,8 @@ final class NotesPageController: ObservableObject {
                         row.payload.map { data in
                             StagedNoteAttachment(id: row.id, filename: row.originalFilename,
                                                  contentTypeIdentifier: row.contentTypeIdentifier,
-                                                 byteCount: Int64(data.count), digest: row.contentDigest, data: data)
+                                                 byteCount: Int64(data.count),
+                                                 digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), data: data)
                         }
                     }) else { return nil }
                 newID = UUID()
@@ -661,6 +750,7 @@ final class NotesPageController: ObservableObject {
 
     func panelDidShow() {
         isPageVisible = true
+        reconcileActive()
         active?.engine.refreshRelativeDates(today: NoteDay(date: now()))
     }
 
@@ -750,9 +840,13 @@ extension NotesPageController: NoteImageProviding {
     }
 
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
+        // A failed source save leaves its image in the live draft, not in a
+        // store row. Copy from that draft while it is retained in recovery.
+        if let staged = cache.values.lazy.compactMap({ $0.engine.staged[id] }).first { return staged }
         guard let row = attachmentRow(id), let data = row.payload else { return nil }
         return StagedNoteAttachment(id: row.id, filename: row.originalFilename, contentTypeIdentifier: row.contentTypeIdentifier,
-                                    byteCount: row.byteCount, digest: row.contentDigest, data: data)
+                                    byteCount: Int64(data.count),
+                                    digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), data: data)
     }
 
     private func attachmentRow(_ id: UUID) -> NoteAttachment? {

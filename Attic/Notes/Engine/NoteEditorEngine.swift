@@ -677,6 +677,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textDidChange(_ notification: Notification) {
         history.didChange()
+        guard !(writingToolsBlocked && isWritingToolsSessionActive) else { return }
         onTextChange?()
     }
 
@@ -744,6 +745,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func writingToolsWillBegin() {
+        writingToolsSnapshot = NSAttributedString(attributedString: textStorage)
+        writingToolsHistory = history.checkpoint()
+        writingToolsObjectsBefore = Set(objectIDs())
         let preserved = onWritingToolsWillBegin?() ?? true
         writingToolsBlocked = !preserved
         isWritingToolsSessionActive = true
@@ -751,22 +755,23 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             onNotice?(String(localized: "Writing Tools can’t change this note until a recovery version is saved."))
             return
         }
-        writingToolsSnapshot = NSAttributedString(attributedString: textStorage)
-        writingToolsHistory = history.checkpoint()
-        writingToolsObjectsBefore = Set(objectIDs())
     }
 
     /// If an object disappeared anyway (a path that never asked), the text
     /// goes back to how it was before the session and the session's steps
     /// leave the history: Undo can't return to the loss, Redo has nothing.
     func writingToolsDidEnd() {
+        let wasBlocked = writingToolsBlocked
         isWritingToolsSessionActive = false
-        writingToolsBlocked = false
         guard let snapshot = writingToolsSnapshot else { return }
         writingToolsSnapshot = nil
         let lost = writingToolsObjectsBefore.subtracting(objectIDs())
         writingToolsObjectsBefore = []
-        guard !lost.isEmpty else { return }
+        guard (wasBlocked && !snapshot.isEqual(to: textStorage)) || !lost.isEmpty else {
+            writingToolsBlocked = false
+            writingToolsHistory = nil
+            return
+        }
         let whole = NSRange(location: 0, length: textStorage.length)
         history.performUnrecorded {
             engineEditDepth += 1
@@ -783,9 +788,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // rebased around its changes) survives to redo or undo into loss.
         if let checkpoint = writingToolsHistory { history.rewind(to: checkpoint) }
         writingToolsHistory = nil
+        writingToolsBlocked = false
         writingToolsRecoveries += 1
-        onTextChange?()
-        onNotice?(String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept."))
+        if !wasBlocked { onTextChange?() }
+        onNotice?(wasBlocked
+            ? String(localized: "Writing Tools changed this note without approval, so its rewrite was not kept.")
+            : String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept."))
     }
 
     // MARK: NSTextStorageDelegate
