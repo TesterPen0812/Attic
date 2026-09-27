@@ -179,11 +179,17 @@ final class NoteStore: ObservableObject {
     /// Recovery checkpoints can reference image rows after the note itself
     /// disappears. A failed read must stop purging rather than guess.
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }
+    var recoveryProtectedRevisionIDs: () throws -> Set<UUID> = { [] }
 #if os(macOS)
     private let attachmentFileStore: AttachmentFileStore
     private let attachmentImporter: any NoteAttachmentFileImporting
 #endif
     private var context: ModelContext
+    /// A successful save keeps this context alive. Reuse the capability check
+    /// for identical bytes instead of decoding every replica on each autosave.
+    var documentReplicaCapabilityCache: [ObjectIdentifier: (revisionID: UUID?, content: Data, editable: Bool)] = [:]
+    private(set) var documentReplicaDecodeCount = 0
+    func countDocumentReplicaDecode() { documentReplicaDecodeCount += 1 }
     private var presentationIndex: PresentationIndex?
     private let now: () -> Date
     private let persist: (ModelContext) throws -> Void
@@ -307,7 +313,10 @@ final class NoteStore: ObservableObject {
         guard titleChanged || bodyChanged || replicasNeedRepair else { return true }
 
         let timestamp = now()
-        stageDisplacedReplicas(replicas, reason: preservationReason, timestamp: timestamp)
+        let displaced = replicas.filter {
+            preservationReason == .beforeAgentEdit || NoteReplicaSnapshot($0) != visibleSnapshot
+        }
+        stageDisplacedReplicas(displaced, reason: preservationReason, timestamp: timestamp)
         if bodyChanged {
             do {
                 let attachments = try storedAttachments(forNoteID: note.id)
@@ -1326,6 +1335,7 @@ final class NoteStore: ObservableObject {
         using sourceContext: ModelContext
     ) {
         context = sourceContext
+        documentReplicaCapabilityCache.removeAll()
         let uniqueNotes = visibleUniqueNotes(from: presentation.notes)
         notes = uniqueNotes.filter { $0.deletedAt == nil }
         // A deleted note's attachments stay stored (and their files stay
@@ -1380,6 +1390,7 @@ final class NoteStore: ObservableObject {
 
     private func installPresentation(_ fetchedNotes: [NoteItem], using sourceContext: ModelContext) {
         context = sourceContext
+        documentReplicaCapabilityCache.removeAll()
         notes = visibleUniqueNotes(from: fetchedNotes).filter { $0.deletedAt == nil }
         revision &+= 1
     }

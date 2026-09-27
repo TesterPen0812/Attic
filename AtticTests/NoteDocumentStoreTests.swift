@@ -76,6 +76,53 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(Set(try rows(id).map(\.title)), ["Edited"])
     }
 
+    func testHundredDocumentAutosavesDoNotMakeHistoryRowsOrDecodeUnchangedReplicas() throws {
+        let (id, first) = try create(document("Draft"))
+        var revision = first
+        let decodesBefore = store.documentReplicaDecodeCount
+        for number in 0..<100 {
+            guard case let .success(next) = store.saveDocument(noteID: id,
+                document: document("Draft \(number)"), baseRevisionID: revision) else {
+                return XCTFail("Autosave \(number) failed")
+            }
+            revision = next
+        }
+        XCTAssertTrue(versions(id).isEmpty, "only pause, leave and explicit safety boundaries make snapshots")
+        XCTAssertEqual(store.documentReplicaDecodeCount, decodesBefore,
+                       "known bytes must not be decoded again on each save")
+    }
+
+    func testLegacyAutosavesDoNotMakeHistoryRows() throws {
+        let note = try XCTUnwrap(store.create(title: "Draft"))
+        for number in 0..<20 {
+            XCTAssertTrue(store.update(note, body: "Body \(number)"))
+        }
+        XCTAssertTrue(versions(note.id).isEmpty)
+    }
+
+    func testRemovedLegacyAttachmentIsPurgeableAfterOrdinaryEdits() throws {
+        let note = try XCTUnwrap(store.create(title: "Legacy"))
+        let row = NoteAttachment(noteID: note.id, originalFilename: "old.bin", byteCount: 1,
+                                 sortIndex: 0, contentDigest: String(repeating: "a", count: 64),
+                                 payload: Data([1]))
+        store.modelContext.insert(row)
+        try store.modelContext.save()
+        for number in 0..<3 { XCTAssertTrue(store.update(note, body: "Edit \(number)")) }
+        XCTAssertTrue(store.removeAttachment(row))
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1)
+        XCTAssertTrue(try store.attachmentRows(forNoteID: note.id).isEmpty)
+    }
+
+    func testStaleDocumentBaseCannotOverwriteAnAgentEdit() throws {
+        let (id, base) = try create(document("Current"))
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: document("Agent"), agentName: "Claude", noteIsOpen: false) else { return XCTFail() }
+        guard case .failure(.staleRevision) = store.saveDocument(noteID: id,
+            document: document("Stale draft"), baseRevisionID: base) else { return XCTFail() }
+        XCTAssertEqual(store.note(withID: id)?.title, "Agent")
+    }
+
     func testEveryWriterRefusesAFutureReplicaWithoutMutatingTheFamily() throws {
         let (id, revision) = try create(document("Readable"))
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
@@ -167,6 +214,54 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(versions(id).count, 1)
     }
 
+    func testVersionThinningKeepsHourlyAndDailySnapshotsAndProposalBase() throws {
+        let (id, _) = try create(document("Current"))
+        let now = Date()
+        func oldVersion(days: Double, minutes: Double) -> NoteVersion {
+            NoteVersion(noteID: id, createdAt: now.addingTimeInterval(-days * 86_400 + minutes * 60),
+                        reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                        attachmentIDs: [], sourceRevisionID: UUID())
+        }
+        let hourlyFirst = oldVersion(days: 2, minutes: 0)
+        hourlyFirst.createdAt = Date(timeIntervalSince1970:
+            floor(hourlyFirst.createdAt.timeIntervalSince1970 / 3_600) * 3_600 + 60)
+        let hourlySecond = NoteVersion(noteID: id, createdAt: hourlyFirst.createdAt.addingTimeInterval(60),
+            reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+            attachmentIDs: [], sourceRevisionID: UUID())
+        let dailyFirst = oldVersion(days: 8, minutes: 0)
+        dailyFirst.createdAt = Date(timeIntervalSince1970:
+            floor(dailyFirst.createdAt.timeIntervalSince1970 / 86_400) * 86_400 + 60)
+        let dailySecond = NoteVersion(noteID: id, createdAt: dailyFirst.createdAt.addingTimeInterval(60),
+            reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+            attachmentIDs: [], sourceRevisionID: UUID())
+        let expired = oldVersion(days: 31, minutes: 0)
+        let protected = oldVersion(days: 31, minutes: 5)
+        for version in [hourlyFirst, hourlySecond, dailyFirst, dailySecond, expired, protected] {
+            store.modelContext.insert(version)
+        }
+        store.modelContext.insert(NotePendingEdit(noteID: id, baseRevisionToken: "old",
+            proposedContent: Data(), agentName: "Agent", createdAt: now, baseVersionID: protected.id))
+        try store.modelContext.save()
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        let retained = Set(versions(id).map(\.id))
+        XCTAssertEqual(retained.intersection([hourlyFirst.id, hourlySecond.id]).count, 1)
+        XCTAssertEqual(retained.intersection([dailyFirst.id, dailySecond.id]).count, 1)
+        XCTAssertFalse(retained.contains(expired.id))
+        XCTAssertTrue(retained.contains(protected.id))
+    }
+
+    func testUnreadableRecoveryBaseStopsVersionThinning() throws {
+        let (id, _) = try create(document("Current"))
+        let old = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
+                              reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                              attachmentIDs: [], sourceRevisionID: UUID())
+        store.modelContext.insert(old)
+        try store.modelContext.save()
+        store.recoveryProtectedRevisionIDs = { throw NoteDocumentStoreError.invalidDocument("damaged recovery") }
+        XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
+        XCTAssertTrue(versions(id).contains { $0.id == old.id })
+    }
+
     func testRestoreIsTransactional() throws {
         let (id, first) = try create(document("First"))
         store.recordVersion(noteID: id, reason: .pause)
@@ -206,6 +301,14 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(store.note(withID: id)?.title, "Agent plan")
         XCTAssertEqual(store.note(withID: id)?.revisionToken, newToken)
         XCTAssertTrue(versions(id).contains { $0.reason == .beforeAgentEdit && $0.title == "Plan" })
+    }
+
+    func testDirectAgentDocumentWriteCannotBypassLegacyMigrationGate() throws {
+        let note = try XCTUnwrap(store.create(title: "Legacy"))
+        guard case .failure(.invalidDocument) = store.agentWrite(noteID: note.id,
+            baseRevisionToken: note.revisionToken, document: document("New format"),
+            agentName: "Claude", noteIsOpen: false) else { return XCTFail() }
+        XCTAssertEqual(store.note(withID: note.id)?.contentFormat, 0)
     }
 
     func testAgentWriteToAnOpenNoteWaitsAndAppliesOnLeaveWhenUnchanged() throws {

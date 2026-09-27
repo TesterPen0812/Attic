@@ -29,6 +29,9 @@ import Foundation
 ///   the whole document read-only. Its original bytes are retained while the
 ///   editor shows a placeholder. The same holds for unknown inline objects.
 /// - Unknown fields on the document, a block or an inline object are kept.
+/// - Image `widthFraction` is an optional format-1 display hint (fraction of
+///   the text column). Older slice-1 previews ignore it and use the prior
+///   point `width` when present; it does not change image ownership or text.
 /// - A newer Attic that adds semantics an older editor cannot preserve must
 ///   list them in `requires` or raise `format`. Unknown fields on known
 ///   blocks remain optional and are carried through unchanged.

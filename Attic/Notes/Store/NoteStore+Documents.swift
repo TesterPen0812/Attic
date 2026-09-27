@@ -114,7 +114,18 @@ extension NoteStore {
                 }
             case 1:
                 guard format != .legacy else { throw NoteDocumentStoreError.readOnly }
-                guard let data = replica.content, NoteContentCodec.decode(data).isEditable else {
+                guard let data = replica.content else { throw NoteDocumentStoreError.readOnly }
+                let key = ObjectIdentifier(replica)
+                let editable: Bool
+                if let cached = documentReplicaCapabilityCache[key],
+                   cached.revisionID == replica.revisionID, cached.content == data {
+                    editable = cached.editable
+                } else {
+                    editable = NoteContentCodec.decode(data).isEditable
+                    countDocumentReplicaDecode()
+                    documentReplicaCapabilityCache[key] = (replica.revisionID, data, editable)
+                }
+                guard editable else {
                     throw NoteDocumentStoreError.readOnly
                 }
             default:
@@ -127,10 +138,16 @@ extension NoteStore {
     /// Preserve each different displaced document, including two physical
     /// rows with the same revision token but different bytes or legacy text.
     @discardableResult
-    func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date) -> Int {
+    func stageDisplacedReplicas(_ replicas: [NoteItem], reason: NoteVersionReason, timestamp: Date,
+                                excludingUnchangedBase baseRevisionID: UUID? = nil) -> Int {
         var seen = Set<NotePreservationState>()
         var inserted = 0
+        let baseReplicas = replicas.filter { baseRevisionID != nil && $0.revisionID == baseRevisionID }
+        let commonBaseState = Set(baseReplicas.map(NotePreservationState.init)).count == 1
+            ? baseReplicas.first.map(NotePreservationState.init) : nil
         for replica in replicas where seen.insert(NotePreservationState(replica)).inserted {
+            if baseRevisionID != nil, replica.revisionID == baseRevisionID,
+               commonBaseState == NotePreservationState(replica) { continue }
             if let latest = latestVersion(noteID: replica.id), isSameState(latest, replica) { continue }
             stageVersion(of: replica, reason: reason, timestamp: timestamp, context: modelContext)
             inserted += 1
@@ -206,9 +223,17 @@ extension NoteStore {
             return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
         let replicas = preflight.replicas
+        // A late legacy replica can be repaired by this document write. A
+        // different document revision means the draft's base is stale.
+        guard replicas.contains(where: { $0.revisionID == baseRevisionID && $0.usesDocumentFormat }),
+              !replicas.contains(where: { $0.usesDocumentFormat && $0.revisionID != baseRevisionID }) else {
+            return .failure(.staleRevision(expected: baseRevisionID?.uuidString ?? NoteItem.initialRevisionToken,
+                                           current: preflight.canonical.revisionToken))
+        }
         let timestamp = currentDate
         let context = modelContext
-        stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp)
+        stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
+                               excludingUnchangedBase: baseRevisionID)
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0, prepared: prepared)
@@ -248,6 +273,7 @@ extension NoteStore {
             replica.updatedAt = timestamp
             replica.deletedAt = nil
             replica.deletedAttachmentIDsRaw = nil
+            documentReplicaCapabilityCache[ObjectIdentifier(replica)] = (revisionID, projection.content, true)
             if let canonical, canonical !== replica {
                 replica.createdAt = canonical.createdAt
                 replica.tagsRaw = canonical.tagsRaw
@@ -310,7 +336,54 @@ extension NoteStore {
         guard let preflight = try? noteMutationPreflight(noteID, format: .editable) else { return false }
         let inserted = stageDisplacedReplicas(preflight.replicas, reason: reason, timestamp: currentDate)
         if inserted == 0 { return true }
-        return commitStagedChanges()
+        guard commitStagedChanges() else { return false }
+        thinVersions(noteID: noteID)
+        return true
+    }
+
+    /// Keep every snapshot from the last day, then the newest in each hour
+    /// for a week and each day for a month. Proposal bases and recovery bases
+    /// remain until their owner is gone. Safety versions taken at exactly the
+    /// same instant are kept together so divergent replicas are not collapsed.
+    func thinVersions(noteID: UUID) {
+        let all = versions(noteID: noteID)
+        let protectedIDs = Set(pendingEdits(noteID: noteID).compactMap(\.baseVersionID))
+        // If any recovery entry is unreadable, its base is unknown. Keep the
+        // whole history until the entry can be inspected safely.
+        guard let recoveryBases = try? recoveryProtectedRevisionIDs() else { return }
+        let day: TimeInterval = 86_400
+        let hour: TimeInterval = 3_600
+        let now = currentDate
+        var buckets = Set<Int64>()
+        var keptTimes = Set<Date>()
+        var removed = false
+        for version in all {
+            if protectedIDs.contains(version.id) || version.sourceRevisionID.map(recoveryBases.contains) == true
+                || version.reason == nil {
+                keptTimes.insert(version.createdAt)
+                continue
+            }
+            let age = max(0, now.timeIntervalSince(version.createdAt))
+            if age < day { keptTimes.insert(version.createdAt); continue }
+            if keptTimes.contains(version.createdAt) { continue }
+            let bucket: Int64
+            if age < 7 * day {
+                bucket = Int64(version.createdAt.timeIntervalSince1970 / hour)
+            } else if age < 30 * day {
+                bucket = Int64(version.createdAt.timeIntervalSince1970 / day) - 1_000_000_000
+            } else {
+                modelContext.delete(version)
+                removed = true
+                continue
+            }
+            if buckets.insert(bucket).inserted {
+                keptTimes.insert(version.createdAt)
+            } else {
+                modelContext.delete(version)
+                removed = true
+            }
+        }
+        if removed { _ = commitStagedChanges() }
     }
 
     /// Newest first, one per id.
@@ -383,7 +456,8 @@ extension NoteStore {
             attachmentIDs = document.attachmentIDs
         } else {
             // Legacy, newer or unreadable content: keep every row the note has.
-            attachmentIDs = ((try? attachmentRows(forNoteID: replica.id)) ?? []).map(\.id)
+            attachmentIDs = ((try? attachmentRows(forNoteID: replica.id)) ?? [])
+                .filter { $0.deletedAt == nil }.map(\.id)
         }
         context.insert(NoteVersion(
             noteID: replica.id,
@@ -442,7 +516,7 @@ extension NoteStore {
     ) -> Result<NoteAgentWriteOutcome, NoteDocumentStoreError> {
         let preflight: NoteMutationPreflight
         do {
-            preflight = try noteMutationPreflight(noteID, format: .editable)
+            preflight = try noteMutationPreflight(noteID, format: .document)
         } catch {
             return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }

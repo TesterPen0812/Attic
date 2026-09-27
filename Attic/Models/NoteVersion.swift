@@ -3,10 +3,10 @@ import SwiftData
 
 /// A saved version of a note (spec § Notes → Version history): taken on a
 /// 2-minute pause, when the note is left, and before any agent edit,
-/// restore, migration or Writing Tools rewrite. Append-only; duplicates of
-/// one `id` (CloudKit) are identical by construction and deduplicated for
-/// presentation. Phase 2 slice 1 stores them; the history browser comes in
-/// slice 7.
+/// restore, migration or Writing Tools rewrite. Old snapshots are thinned,
+/// except bases held by proposals or recovery. Duplicates of one `id`
+/// (CloudKit) are identical by construction and deduplicated for presentation.
+/// Phase 2 slice 1 stores them; the history browser comes in slice 7.
 @Model
 final class NoteVersion {
     var id: UUID = UUID()
