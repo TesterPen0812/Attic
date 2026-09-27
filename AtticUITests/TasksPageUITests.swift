@@ -483,9 +483,92 @@ final class TasksPageUITests: XCTestCase {
         field.typeKey(.delete, modifierFlags: [])
         field.typeKey(.delete, modifierFlags: [])
         XCTAssertTrue(row("Call the plumber").exists, "the task is still there")
-        XCTAssertFalse(label("Call the plumber").contains("completed"), "Space in the field did not complete it")
+        XCTAssertTrue(label("Call the plumber").contains(", to do"), "Space in the field did not complete it")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(row("Call the plumber").exists)
+    }
+
+    /// The row's keys a person might press while the keyboard is somewhere
+    /// else: Backspace, forward delete, Space, ⇧Space and ⌘B.
+    private func pressRowKeys(in element: XCUIElement? = nil) {
+        let target: XCUIElement = element ?? app
+        target.typeKey(.delete, modifierFlags: [])
+        target.typeKey(.forwardDelete, modifierFlags: [])
+        target.typeKey(.space, modifierFlags: [])
+        target.typeKey(.space, modifierFlags: .shift)
+        target.typeKey("b", modifierFlags: .command)
+    }
+
+    /// Round 5 (the class of the owner's blocker): the date picker has no
+    /// field, and its keys are still its own, never the row's Delete,
+    /// Complete, Start working or Move to Later.
+    func testKeysPressedInTheDatePickerNeverReachTheRow() throws {
+        let row = row("Book dentist")
+        row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.frame.width - 50, dy: 17)).click()
+        let remove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove date")).firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout: 3), "the date picker opens")
+        pressRowKeys()
+        XCTAssertTrue(self.row("Book dentist").exists, "the task is still there")
+        let spoken = label("Book dentist")
+        XCTAssertTrue(spoken.contains(", to do"), "not completed or started: \(spoken)")
+        XCTAssertTrue(spoken.contains("due Tomorrow"), "its date is as it was: \(spoken)")
+        app.typeKey(.escape, modifierFlags: [])
+        waitFor(!remove.exists, "Esc closes the picker")
+        XCTAssertTrue(self.row("Book dentist").exists, "still on Now")
+    }
+
+    /// Round 5: the add bar's suggestion list keeps the keys in the draft.
+    func testKeysTypedWithTheSuggestionsShowingStayInTheDraft() throws {
+        select("Call the plumber")
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        addBar.click()
+        addBar.typeText("Buy #la")
+        let suggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 3), "the suggestions show")
+        addBar.typeKey(.delete, modifierFlags: [])
+        addBar.typeKey(.delete, modifierFlags: [])
+        waitFor((addBar.value as? String) == "Buy #", "Backspace edited the draft: \(String(describing: addBar.value))")
+        addBar.typeKey(.space, modifierFlags: [])
+        addBar.typeKey(.space, modifierFlags: .shift)
+        XCTAssertTrue(row("Call the plumber").exists, "the selected task is still there")
+        XCTAssertTrue(label("Call the plumber").contains(", to do"), label("Call the plumber"))
+        XCTAssertFalse(row("Buy").exists, "nothing was added")
+    }
+
+    /// Round 5: the title editor keeps every key; Esc discards the edit.
+    func testKeysTypedInTheTitleEditorStayInIt() throws {
+        select("Call the plumber")
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        let editor = window.descendants(matching: .any).matching(identifier: "AtticTitleField").firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 3), "Return opens the title editor")
+        waitFor((editor.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the editor has the keyboard")
+        editor.typeKey(.delete, modifierFlags: [])
+        editor.typeKey(.delete, modifierFlags: [])
+        waitFor((editor.value as? String) == "Call the plumb", "Backspace edited the title: \(String(describing: editor.value))")
+        pressRowKeys(in: editor)
+        app.typeKey(.escape, modifierFlags: [])
+        waitFor(row("Call the plumber").exists, "Esc keeps the title as it was, and the task is there")
+        XCTAssertTrue(label("Call the plumber").contains(", to do"), label("Call the plumber"))
+    }
+
+    /// Round 5: Done's search keeps every key; the Done row it filters is
+    /// never restored or un-completed by them.
+    func testKeysTypedInTheDoneSearchStayInIt() throws {
+        tab("done").click()
+        waitFor(row("Pay rent").isHittable, "the Done log shows")
+        select("Pay rent")
+        XCTAssertTrue(searchField.waitForExistence(timeout: 3))
+        searchField.click()
+        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the search has the keyboard")
+        app.typeText("pay")
+        app.typeKey(.delete, modifierFlags: [])
+        waitFor((searchField.value as? String) == "pa", "Backspace edited the search: \(String(describing: searchField.value))")
+        app.typeKey(.space, modifierFlags: [])
+        app.typeKey(.delete, modifierFlags: [])
+        XCTAssertTrue(row("Pay rent").exists, "the Done task is still listed")
+        app.typeKey(.escape, modifierFlags: [])
+        waitFor(row("Send invoice").exists, "Esc clears the search")
+        XCTAssertTrue(row("Pay rent").exists, "still in the Done log")
     }
 
     /// The tag popover points at the tags that were clicked (round 5, the
