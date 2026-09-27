@@ -180,7 +180,6 @@ struct AtticTokenField: NSViewRepresentable {
     /// holding a torn-down field's text storage crashed on ⌘Z (the
     /// computer-use review's blocker).
     static func dismantleNSView(_ view: AtticTokenFieldView, coordinator: Coordinator) {
-        view.textView.fieldUndoManager.removeAllActions()
         view.textView.owner = nil
         view.textView.delegate = nil
     }
@@ -388,11 +387,10 @@ final class AtticChipLayoutManager: NSLayoutManager {
 /// typing first, then the page.
 final class AtticTokenTextView: NSTextView {
     weak var owner: AtticTokenField.Coordinator?
-    /// The field's own undo history (typing, a pick, a taken suggestion):
-    /// never the window's, which outlives the field.
-    let fieldUndoManager = UndoManager()
-
-    override var undoManager: UndoManager? { fieldUndoManager }
+    /// No undo manager at all (round 4): the text view can register
+    /// nothing anywhere (not the window's, which outlives it); ⌘Z and the
+    /// Edit menu reach the owner's draft history through `undo(_:)`.
+    override var undoManager: UndoManager? { nil }
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()

@@ -379,9 +379,16 @@ jobs:
           fi
 
   appearance:
-    name: Design system appearance matrix
+    name: Design system appearance matrix (${{ matrix.shard }} of 4)
     runs-on: macos-26
     timeout-minutes: 45
+    # Four shards in parallel, together every combination (round 4: the
+    # whole matrix outgrew one 45-minute job once the review switches
+    # doubled it).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
@@ -415,13 +422,14 @@ jobs:
           Scripts/run_appearance_matrix.zsh \
             --output "$RUNNER_TEMP/AtticAppearance" \
             --derived-data "$RUNNER_TEMP/AtticAppearanceBuild" \
+            --shard "$(( ${{ matrix.shard }} - 1 ))/4" \
             -- CODE_SIGNING_ALLOWED=NO
 
       - name: Upload contact sheets and report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: appearance-matrix-${{ github.sha }}
+          name: appearance-matrix-${{ github.sha }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/AtticAppearance
           if-no-files-found: ignore
           retention-days: 14

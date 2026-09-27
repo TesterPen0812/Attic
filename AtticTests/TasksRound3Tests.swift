@@ -368,9 +368,8 @@ final class TokenFieldUndoLifetimeTests: XCTestCase {
         // Round 4: the field registers no undo anywhere; its owner's draft
         // history holds typing (see `TasksRound4Tests`).
         XCTAssertFalse(field!.textView.allowsUndo)
-        XCTAssertFalse(field!.textView.undoManager?.canUndo == true)
+        XCTAssertNil(field!.textView.undoManager, "no undo manager to register with")
         XCTAssertFalse(window.undoManager?.canUndo == true, "nothing of the field's is in the window's undo manager")
-        XCTAssertFalse(field!.textView.undoManager === window.undoManager)
         window.makeFirstResponder(nil)
         field!.removeFromSuperview()
         field = nil
