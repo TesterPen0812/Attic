@@ -65,7 +65,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var engineEditDepth = 0
     private(set) var isWritingToolsSessionActive = false
     private var writingToolsSnapshot: NSAttributedString?
-    private var writingToolsMarker = 0
+    private var writingToolsHistory: NoteUndoHistory.Checkpoint?
     private var writingToolsObjectsBefore = Set<UUID>()
     var isPerformingSelfMove = false
     private(set) var refusals: [String] = []
@@ -686,7 +686,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         onWritingToolsWillBegin?()
         isWritingToolsSessionActive = true
         writingToolsSnapshot = NSAttributedString(attributedString: textStorage)
-        writingToolsMarker = history.marker()
+        writingToolsHistory = history.checkpoint()
         writingToolsObjectsBefore = Set(objectIDs())
     }
 
@@ -711,7 +711,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
             engineEditDepth -= 1
         }
-        history.discardSteps(since: writingToolsMarker)
+        // The text is exactly as it was before the session, so the history
+        // goes back exactly too: none of the session's steps (nor any step
+        // rebased around its changes) survives to redo or undo into loss.
+        if let checkpoint = writingToolsHistory { history.rewind(to: checkpoint) }
+        writingToolsHistory = nil
         writingToolsRecoveries += 1
         onTextChange?()
         onNotice?(String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept."))
@@ -719,21 +723,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: NSTextStorageDelegate
 
-    /// Per-edit upkeep, before layout sees the change: only the edited
-    /// paragraphs and their neighbours are restyled.
-    func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
-                     range editedRange: NSRange, changeInLength delta: Int) {
-        guard editedMask.contains(.editedCharacters) else { return }
-        let start = DispatchTime.now().uptimeNanoseconds
-        restyle(paragraphs(around: editedRange))
-        renderObjects(in: NSIntersectionRange(editedRange, NSRange(location: 0, length: textStorage.length)))
-        lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-    }
-
+    /// Records the change, then the per-edit upkeep: only the edited
+    /// paragraphs and their neighbours are restyled (attributes only, which
+    /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
         history.captureUnrecorded(newRange: editedRange, delta: delta)
+        let start = DispatchTime.now().uptimeNanoseconds
+        restyle(paragraphs(around: editedRange))
+        renderObjects(in: NSIntersectionRange(editedRange, NSRange(location: 0, length: textStorage.length)))
+        lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
 
     private func didReplay(_ range: NSRange) {
@@ -798,8 +798,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 block.id = fresh(block.id)
             case .image:
                 guard let attachmentID = block.attachmentID else { continue }
-                let local = sameNote && (staged[attachmentID] != nil || imageProvider?.filename(forAttachment: attachmentID) != nil)
-                if local {
+                // An image from this note keeps its attachment (its row is
+                // retained while any version or text shows it).
+                if sameNote {
                     block.id = fresh(block.id)
                 } else if var copy = imageProvider?.imageBytes(forAttachment: attachmentID) {
                     let newID = UUID()
@@ -828,7 +829,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Inserts a pasted fragment over the selection as one step.
     func paste(fragmentData data: Data, at selection: NSRange) -> Bool {
-        guard case let .editable(decoded) = NoteContentCodec.decode(data) else { return false }
+        guard !isReadOnly, case let .editable(decoded) = NoteContentCodec.decode(data) else { return false }
+        let before = Set(staged.keys)
         let fragment = preparePaste(decoded)
         guard !fragment.blocks.isEmpty else { return false }
         let pasted = NoteTextCodec.attributedString(from: fragment, style: style, firstBlockIsTitle: false)
@@ -844,7 +846,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
            string.character(at: NSMaxRange(selection)) != 0x0A {
             result.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
-        let before = Set(staged.keys)
         guard performEdit(selection, with: result, name: String(localized: "Paste"),
                           selection: NSRange(location: selection.location + result.length, length: 0)) else {
             // Refused: the images copied for it are dropped, so no row appears.

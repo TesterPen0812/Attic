@@ -112,7 +112,44 @@ final class NoteUndoHistory {
         }
     }
 
-    // MARK: Markers (Writing Tools)
+    // MARK: Checkpoints (Writing Tools)
+
+    /// The whole history as it stands, copied (steps are rebased in place,
+    /// so their fields are saved too).
+    struct Checkpoint {
+        fileprivate let undo: [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)]
+        fileprivate let redo: [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)]
+    }
+
+    func checkpoint() -> Checkpoint {
+        open = nil
+        func copy(_ ops: [Op]) -> [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)] {
+            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert) }
+        }
+        return Checkpoint(undo: copy(undoOps), redo: copy(redoOps))
+    }
+
+    /// Puts the history back to a checkpoint taken when the text was what it
+    /// is now (the caller restored the text first).
+    func rewind(to checkpoint: Checkpoint) {
+        func restore(_ saved: [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)]) -> [Op] {
+            saved.map { op, range, current, other, inert in
+                op.range = range
+                op.current = current
+                op.other = other
+                op.isInert = inert
+                return op
+            }
+        }
+        undoOps = restore(checkpoint.undo)
+        redoOps = restore(checkpoint.redo)
+        open = nil
+        pending.removeAll()
+        composition = nil
+        log.append("rewound to a checkpoint")
+    }
+
+    // MARK: Markers
 
     /// Where the history stands now; `discardSteps(since:)` returns to it.
     func marker() -> Int {

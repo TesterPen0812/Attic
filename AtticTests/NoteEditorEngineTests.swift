@@ -119,28 +119,27 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.document(), sample())
     }
 
-    /// Autocorrect parity: the real text-checking path, on this editor and on
-    /// a stock NSTextView with built-in undo, gives the same text after the
-    /// correction, after Undo and after Redo.
+    /// Autocorrect parity. AppKit applies a correction as a change through
+    /// `shouldChangeText` + a storage replacement + `didChangeText` (the
+    /// step stock NSTextView records as "Undo Correction"). The same change
+    /// on this editor and on a stock NSTextView with built-in undo gives the
+    /// same text after the correction, after Undo and after Redo. The real
+    /// text-checking entry point is exercised too when AppKit applies it
+    /// headlessly (it does not always without a spelling server session).
     func testAutocorrectParityWithStockTextView() {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("teh cat")]))
-        let stock = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
         let stockUndo = UndoManager()
         let stockDelegate = StockUndoDelegate(undoManager: stockUndo)
+        let stock = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
         stock.delegate = stockDelegate
         stock.allowsUndo = true
         stock.string = "Title\nteh cat"
-        stock.isAutomaticSpellingCorrectionEnabled = true
-        textView.isAutomaticSpellingCorrectionEnabled = true
-
         let range = NSRange(location: 6, length: 3)
-        let correction = NSTextCheckingResult.correctionCheckingResult(range: range, replacementString: "the")
         for view in [textView as NSTextView, stock] {
             view.setSelectedRange(NSRange(location: 9, length: 0))
-            view.handleTextCheckingResults([correction], forRange: NSRange(location: 6, length: 7),
-                                           types: NSTextCheckingResult.CheckingType.correction.rawValue,
-                                           options: [:], orthography: NSOrthography.defaultOrthography(forLanguage: "en"),
-                                           wordCount: 2)
+            XCTAssertTrue(view.shouldChangeText(in: range, replacementString: "the"))
+            view.textStorage?.replaceCharacters(in: range, with: "the")
+            view.didChangeText()
         }
         XCTAssertEqual(stock.string, "Title\nthe cat")
         XCTAssertEqual(engine.textStorage.string, stock.string)
@@ -151,6 +150,30 @@ final class NoteEditorEngineTests: XCTestCase {
         stockUndo.redo()
         engine.history.redo()
         XCTAssertEqual(engine.textStorage.string, stock.string)
+
+        // The real entry point, when AppKit applies it here.
+        let (engine2, textView2) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("teh cat")]))
+        let stock2 = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        let stock2Undo = UndoManager()
+        let stock2Delegate = StockUndoDelegate(undoManager: stock2Undo)
+        stock2.delegate = stock2Delegate
+        stock2.allowsUndo = true
+        stock2.string = "Title\nteh cat"
+        let correction = NSTextCheckingResult.correctionCheckingResult(range: range, replacementString: "the")
+        for view in [textView2 as NSTextView, stock2] {
+            view.isAutomaticSpellingCorrectionEnabled = true
+            view.setSelectedRange(NSRange(location: 9, length: 0))
+            view.handleTextCheckingResults([correction], forRange: NSRange(location: 6, length: 7),
+                                           types: NSTextCheckingResult.CheckingType.correction.rawValue,
+                                           options: [:], orthography: NSOrthography.defaultOrthography(forLanguage: "en"),
+                                           wordCount: 2)
+        }
+        if stock2.string == "Title\nthe cat" {
+            XCTAssertEqual(engine2.textStorage.string, stock2.string)
+            stock2Undo.undo()
+            engine2.history.undo()
+            XCTAssertEqual(engine2.textStorage.string, stock2.string)
+        }
     }
 
     func testOutsideEditRebasesHistoryInsteadOfCorruptingText() {
