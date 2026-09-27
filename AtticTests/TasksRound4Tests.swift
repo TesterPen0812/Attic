@@ -329,12 +329,13 @@ final class TasksRound4Tests: XCTestCase {
         pointer.view = page
         let a = UUID(), b = UUID()
         pointer.frames = [a: CGRect(x: 0, y: 100, width: 300, height: 34), b: CGRect(x: 0, y: 134, width: 300, height: 34)]
-        func event(_ type: NSEvent.EventType, at y: CGFloat, control: Bool = false, in target: NSWindow? = nil) -> NSEvent {
+        func event(_ type: NSEvent.EventType, at y: CGFloat, control: Bool = false, in target: NSWindow? = nil,
+                   time: TimeInterval = 0) -> NSEvent {
             let target = target ?? window
             // Page coordinates are flipped; the window's are not.
             let location = page.convert(NSPoint(x: 50, y: y), to: nil)
             return NSEvent.mouseEvent(with: type, location: location, modifierFlags: control ? .control : [],
-                                      timestamp: 0, windowNumber: target.windowNumber, context: nil,
+                                      timestamp: time, windowNumber: target.windowNumber, context: nil,
                                       eventNumber: 1, clickCount: 1, pressure: 1)!
         }
         var selected: [UUID] = []
@@ -360,6 +361,31 @@ final class TasksRound4Tests: XCTestCase {
         pointer.press(event(.rightMouseDown, at: 110, in: other), below: 90, select: select)
         XCTAssertNil(pointer.invocation)
         other.close()
+
+        // Round 5 (F2): a binding lives for the menu its press opened, and
+        // only for a menu on the same row.
+        let c = UUID()
+        pointer.press(event(.rightMouseDown, at: 110, time: 10), below: 90) { _ in [a, c] }
+        pointer.menuBegan(with: event(.rightMouseDown, at: 110, time: 10))
+        XCTAssertEqual(pointer.binding(for: a)?.targets, [a, c], "A's menu acts on the selection its press took")
+        XCTAssertNil(pointer.binding(for: b), "a menu on B never inherits A's binding")
+        // A's menu is dismissed; the next menu opens without a press (the
+        // keyboard, VoiceOver): the binding is gone, the row's own targets
+        // (read when its command runs) apply.
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 20,
+                                                 windowNumber: window.windowNumber, context: nil, characters: " ",
+                                                 charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
+        pointer.menuBegan(with: key)
+        XCTAssertNil(pointer.binding(for: a), "a menu no press opened is not bound")
+        pointer.press(event(.rightMouseDown, at: 110, time: 30), below: 90) { _ in [a] }
+        pointer.menuBegan(with: nil)
+        XCTAssertNil(pointer.binding(for: a), "a menu with no current event is not bound either")
+        // A command ends the binding (as do hiding and a tab change).
+        pointer.press(event(.rightMouseDown, at: 110, time: 40), below: 90) { _ in [a] }
+        pointer.menuBegan(with: event(.rightMouseDown, at: 110, time: 40))
+        XCTAssertNotNil(pointer.binding(for: a))
+        pointer.endInvocation()
+        XCTAssertNil(pointer.binding(for: a))
         window.close()
     }
 

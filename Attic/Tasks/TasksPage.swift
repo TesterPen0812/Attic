@@ -153,8 +153,14 @@ struct TasksPage: View {
             updateTypingLock()
             if id != nil { focusedRow = nil }
         }
-        // A page or tab change ends a drag and closes a row's pickers.
+        // A page or tab change ends a drag, closes a row's pickers and ends
+        // a menu's binding.
         .onChange(of: model.hides) { _, _ in cancelTransientState() }
+        // A menu opening decides whether the last press opened it: if not
+        // (the keyboard, VoiceOver, another menu), no earlier binding holds.
+        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
+            pointer.menuBegan(with: NSApp.currentEvent)
+        }
         .onChange(of: model.tab) { _, _ in
             cancelTransientState()
             // The last page's row keeps no claim on the keyboard.
@@ -192,6 +198,7 @@ struct TasksPage: View {
     private func cancelTransientState() {
         cancelDrag()
         if metaPopover != nil { metaPopover = nil }
+        pointer.endInvocation()
     }
 
     // MARK: - Tabs
@@ -867,24 +874,22 @@ struct TasksPage: View {
         .keyboardShortcut(.space, modifiers: .shift)
     }
 
-    /// The row this menu invocation was opened on (bound by the press that
-    /// opened it), or this menu's own row.
-    private func menuRowID(_ fallback: UUID) -> UUID {
-        pointer.invocation?.row ?? fallback
-    }
+    /// The row a menu command acts from: always the menu's own row.
+    private func menuRowID(_ row: UUID) -> UUID { row }
 
-    /// What a menu command acts on: the invocation's targets, taken when
-    /// the menu opened (the row, or the selection it was part of).
-    private func menuTargets(_ fallback: UUID) -> [UUID] {
-        if let invocation = pointer.invocation { return invocation.targets }
-        return model.targets(for: fallback)
+    /// What a menu command acts on: the targets its opening press took on
+    /// this row (the row, or the selection it was part of then), or, for a
+    /// menu no press opened, the row's targets now (round 5, F2).
+    private func menuTargets(_ row: UUID) -> [UUID] {
+        pointer.binding(for: row)?.targets ?? model.targets(for: row)
     }
 
     /// Runs a menu command on its targets; a failure shows under the menu's
-    /// row with Retry (round 4: outcomes reach the UI).
-    private func menuCommand(_ fallback: UUID, _ command: @escaping ([UUID]) -> CommandOutcome) {
-        let row = menuRowID(fallback)
-        let targets = menuTargets(fallback)
+    /// row with Retry (round 4: outcomes reach the UI). The command ends
+    /// the binding: the next menu is bound by its own opening.
+    private func menuCommand(_ row: UUID, _ command: @escaping ([UUID]) -> CommandOutcome) {
+        let targets = menuTargets(row)
+        pointer.endInvocation()
         model.report(command(targets), on: row) { command(targets) }
     }
 
@@ -1743,9 +1748,32 @@ final class TasksPointer {
     struct Invocation: Equatable {
         let row: UUID
         let targets: [UUID]
+        /// The opening press's timestamp: the menu that begins with this
+        /// event is the one it binds.
+        var pressedAt: TimeInterval = 0
     }
 
-    var invocation: Invocation?
+    private(set) var invocation: Invocation?
+
+    /// The binding for a menu on `row`: only one opened by a press on that
+    /// same row (a menu on another row never inherits it).
+    func binding(for row: UUID) -> Invocation? {
+        invocation?.row == row ? invocation : nil
+    }
+
+    /// A menu begins tracking during `event`. A binding holds only for the
+    /// menu its own press opened; one opened any other way (keyboard,
+    /// VoiceOver, the menu bar) ends it.
+    func menuBegan(with event: NSEvent?) {
+        guard let invocation, event.map({ $0.timestamp != invocation.pressedAt }) ?? true else { return }
+        self.invocation = nil
+    }
+
+    /// The menu's command ran, or the page hid, changed tab or ended a
+    /// drag: no binding outlives it.
+    func endInvocation() {
+        invocation = nil
+    }
 
     /// What kind of press opens a context menu.
     enum MenuPress: Equatable {
@@ -1771,7 +1799,7 @@ final class TasksPointer {
             invocation = nil
             return
         }
-        invocation = Invocation(row: id, targets: select(id))
+        invocation = Invocation(row: id, targets: select(id), pressedAt: event.timestamp)
     }
 
     /// The event's location in the page, or nil when it is another
