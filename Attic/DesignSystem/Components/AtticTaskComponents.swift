@@ -831,7 +831,9 @@ struct AtticTaskRow: View {
         .onTapGesture { if isEnabled { (onSelect ?? actions.openPage)() } }
         .atticTaskFocus($focused, enabled: isEnabled && titleEditing == nil, actions: actions, listCommands: true,
                         live: capture == nil, external: focus)
-        .accessibilityElement(children: .combine)
+        // While the title is edited, its field is its own element, so
+        // VoiceOver (and a UI test) reaches the text being typed.
+        .accessibilityElement(children: titleEditing == nil ? .combine : .contain)
         .accessibilityLabel(model.accessibilityDescription)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityAction { actions.openPage() }
