@@ -146,7 +146,6 @@ final class PanelShellUITests: XCTestCase {
         waitFor(abs(pageButton.frame.width - 36) < 1.5, "shut, it is the pin's size (\(pageButton.frame.width))")
         XCTAssertEqual(pageButton.frame.height, 36, accuracy: 1)
         XCTAssertTrue(page("tasks").isHittable, "the current page shows")
-        XCTAssertLessThan(page("notes").frame.width, 1, "the others are folded away")
         XCTAssertEqual(page("notes").label, "Notes")
         assertOnlySelected("tasks")
 

@@ -261,7 +261,12 @@ final class TasksPanelUITests: XCTestCase {
         XCTAssertTrue(addBar.waitForExistence(timeout: 3))
         addBar.click()
         app.typeText("Kept draft")
-        let circlePoint = circle("Book dentist")
+        // Where the circle is, fixed to the panel (the row leaves the
+        // accessibility tree once Tasks is hidden).
+        let panel = app.dialogs.firstMatch
+        let rowFrame = row("Book dentist").frame
+        let circlePoint = panel.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: rowFrame.minX + 24 - panel.frame.minX, dy: rowFrame.minY + 16 - panel.frame.minY))
 
         app.typeKey("3", modifierFlags: .command)
         XCTAssertTrue(app.descendants(matching: .any)["canvas-surface"].waitForExistence(timeout: 5))
