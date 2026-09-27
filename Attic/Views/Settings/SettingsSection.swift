@@ -9,6 +9,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case recentlyDeleted
     case agentAccess
     case about
+    /// Temporary: the review switches (`AtticReviewVariants`), last in the
+    /// sidebar. Removed with the last switch.
+    case compare
 
     /// The sidebar's groups (spec § Settings): App, then Connections with
     /// its quiet hint; About sits alone at the bottom, apart by space.
@@ -48,6 +51,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .recentlyDeleted: String(localized: "Recently Deleted")
         case .agentAccess: String(localized: "Agent Access")
         case .about: String(localized: "About")
+        case .compare: String(localized: "Compare (temporary)")
         }
     }
 
@@ -60,6 +64,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .recentlyDeleted: "trash"
         case .agentAccess: "sparkles"
         case .about: "info.circle"
+        case .compare: "switch.2"
         }
     }
 
@@ -68,7 +73,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general, .panel, .appearance, .recentlyDeleted: .app
         case .agentAccess: .connections
-        case .about: nil
+        case .about, .compare: nil
         }
     }
 

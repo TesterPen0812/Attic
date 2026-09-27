@@ -11,10 +11,12 @@ extension AtticLibrary {
         addingTag: String? = nil,
         removingTag: String? = nil,
         in history: UndoHistoryID = .tasks
-    ) -> Bool {
+    ) -> CommandOutcome {
+        let requested = ids
         let ids = ids.filter { tasks.task(withID: $0) != nil }
-        guard !ids.isEmpty else { return false }
+        guard !ids.isEmpty else { return taskOutcome(false, since: tasks.errorSerial, ids: requested) }
         var succeeded = false
+        let serial = tasks.errorSerial
         undo.perform(in: history) {
             let before = ids.compactMap(tasks.editableState(of:))
             guard tasks.updateBatchFields(ids, dueDay: dueDay, addingTag: addingTag, removingTag: removingTag) else { return nil }
@@ -27,6 +29,6 @@ extension AtticLibrary {
                 redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
             )
         }
-        return succeeded
+        return taskOutcome(succeeded, since: serial, ids: ids)
     }
 }

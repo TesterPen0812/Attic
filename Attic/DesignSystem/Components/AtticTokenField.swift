@@ -375,7 +375,13 @@ final class AtticTokenTextView: NSTextView {
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned { owner?.focusChanged(false) }
+        if resigned {
+            // Typing undo belongs to the visit: once the keyboard leaves,
+            // ⌘Z from anywhere else reaches the page's history, never this
+            // field's earlier typing (stream S's finding).
+            fieldUndoManager.removeAllActions()
+            owner?.focusChanged(false)
+        }
         return resigned
     }
 

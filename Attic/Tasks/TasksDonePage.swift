@@ -50,11 +50,18 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         cell(row).id(row.id)
                     }
                 }
-                if model.doneLogHasMore {
+                if model.doneLogFailure != nil {
+                    // A read failed (Astra 18): what loaded stays, and the
+                    // page says it could not load more, never "no more".
+                    AtticErrorLine(message: String(localized: "Couldn’t load more"), onRetry: model.retryDoneLog)
+                        .frame(height: AtticLayout.rowPitch)
+                        .padding(.leading, AtticLayout.circleX)
+                        .accessibilityIdentifier("tasks-done-load-failed")
+                } else if model.doneLogHasMore {
                     AtticLoadingRows(count: 2)
                         .onAppear { model.loadMoreDoneLog() }
                 }
-                if days.isEmpty {
+                if days.isEmpty, model.doneLogFailure == nil {
                     let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
                     AtticEmptyLine(text: query.isEmpty
                         ? String(localized: "Finished tasks collect here.")

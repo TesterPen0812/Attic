@@ -62,6 +62,20 @@ struct AtticSurfaceModel: Equatable, Sendable {
     struct Edge: Equatable, Sendable {
         let color: AtticRGBA
         let width: CGFloat
+        /// A faint line just inside the edge (Defined Dark Edge), or nil.
+        var innerHighlight: AtticRGBA?
+    }
+
+    /// Defined Dark Edge (review switch, CU review visual 4): on Dark Glass
+    /// and Frosted, the palette's edge colour at a clearer strength and a
+    /// full point wide, with a faint white line inside it, so the surface
+    /// never merges into a grey desktop. Unchanged when `enabled` is false.
+    func definedDarkEdge(_ enabled: Bool) -> AtticSurfaceModel {
+        guard enabled, kind != .solid, appearance == .dark, let edge else { return self }
+        var copy = self
+        copy.edge = Edge(color: edge.color.withAlpha(min(edge.color.alpha * 1.9 + 0.04, 1)), width: 1,
+                         innerHighlight: .white(increaseContrast ? 0.14 : 0.07))
+        return copy
     }
 
     /// Visual A: the default surface's top sheen, within the first 24 pt.
@@ -124,6 +138,40 @@ struct AtticSurfaceModel: Equatable, Sendable {
             edge: Edge(color: edgeColor.withAlpha(treatment.surfaceEdgeOpacity(for: contrast)),
                        width: treatment.surfaceEdgeLineWidth(for: contrast))
         )
+    }
+
+    /// Readable Glass (review switch, Astra 11): the least foundation, never
+    /// less than this surface's own, at which the text Glass and Frosted draw
+    /// (Phase 0's `primary` and `secondary` greys) keeps the text floors on
+    /// the surface as drawn over every desktop, black, mid-grey and white,
+    /// at the first content line and at the bottom (so the Tint counts):
+    /// titles 4.5 : 1, secondary text 3 : 1, all text 4.5 : 1 under Increase
+    /// Contrast. Only the backing grows: the palette's own surface colour, the
+    /// Tint, Frosted's wash and the edge are unchanged, so the glass keeps its
+    /// character and just stops depending on the desktop behind it.
+    /// Unchanged when `enabled` is false or the surface is Solid.
+    func readable(_ enabled: Bool, primary: AtticRGBA, secondary: AtticRGBA) -> AtticSurfaceModel {
+        guard enabled, kind != .solid else { return self }
+        let pairs = [
+            Pair(ink: .heading, foreground: primary, overlays: []),
+            Pair(ink: increaseContrast ? .heading : .helper, foreground: secondary, overlays: [])
+        ]
+        for percent in Int((foundationOpacity * 100).rounded(.down))...100 {
+            let candidate = withFoundation(max(foundationOpacity, Double(percent) / 100))
+            if candidate.worstMargin(pairs) >= Self.solverMargin { return candidate }
+        }
+        return withFoundation(1)
+    }
+
+    /// The same surface with another foundation opacity.
+    func withFoundation(_ opacity: Double) -> AtticSurfaceModel {
+        var copy = AtticSurfaceModel(
+            kind: kind, appearance: appearance, base: base, foundationOpacity: opacity,
+            washColor: washColor, tintStops: tintStops, increaseContrast: increaseContrast,
+            porcelain: porcelain, materialWash: materialWash, brightNative: brightNative
+        )
+        copy.edge = edge
+        return copy
     }
 
     /// The appearance the native material is drawn (and measured) in.

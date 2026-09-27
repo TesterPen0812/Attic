@@ -83,7 +83,8 @@ struct SettingsView: View {
             surface: settings.panelSurfaceStyle,
             tint: settings.panelTint,
             tintLength: settings.panelTintLength,
-            hapticsEnabled: settings.hapticsEnabled
+            hapticsEnabled: settings.hapticsEnabled,
+            variants: settings.reviewVariants
         )
         .atticWindowAppearance(SettingsAppearance.mode(for: settings.appearance))
         .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)
@@ -110,6 +111,8 @@ struct SettingsView: View {
             AgentAccessSettingsView(settings: settings, agentServer: agentServer)
         case .about:
             AboutSettingsView()
+        case .compare:
+            CompareSettingsView(settings: settings)
         }
     }
 }
@@ -156,6 +159,8 @@ private struct SettingsSidebar: View {
             }
             Spacer(minLength: AtticSpacing.s16)
             row(.about)
+            // Temporary (review switches): last in the sidebar, under About.
+            row(.compare)
                 .padding(.bottom, SettingsChromeLayout.sidebarBottom)
         }
         .focusable()

@@ -81,11 +81,6 @@ struct TasksPage: View {
         }
         .overlay(alignment: .bottom) { bottomControls }
         .coordinateSpace(Self.space)
-        .background(TasksWindowReveal(action: { model.resetForReveal() }, hidden: {
-            model.pageDidHide()
-            cancelTransientState()
-        })
-            .frame(width: 0, height: 0).accessibilityHidden(true))
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear {
@@ -149,6 +144,7 @@ struct TasksPage: View {
             if id != nil { focusedRow = nil }
         }
         // A page or tab change ends a drag and closes a row's pickers.
+        .onChange(of: model.hides) { _, _ in cancelTransientState() }
         .onChange(of: model.tab) { _, _ in
             cancelTransientState()
             // The last page's row keeps no claim on the keyboard.
@@ -424,7 +420,7 @@ struct TasksPage: View {
                 selectionRun: selectionRun(for: id, in: tab),
                 isExpanded: expanded(),
                 dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
-                actions: actions(for: id),
+                actions: actions(for: id, in: tab),
                 onToggleExpanded: { toggleExpanded(id) },
                 onSelect: { rowClicked(id, tab: tab) },
                 focus: live.focus,
@@ -449,10 +445,17 @@ struct TasksPage: View {
                 AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitTitle() })
                     .padding(.leading, AtticLayout.textX)
             }
+            if let failure = model.rowFailure, failure.id == id {
+                AtticErrorLine(message: failure.canRetry ? String(localized: "Not saved") : failure.message,
+                               actionTitle: failure.canRetry ? String(localized: "Retry") : String(localized: "OK"),
+                               onRetry: { failure.canRetry ? model.retryRowFailure() : model.dismissRowFailure() })
+                    .padding(.leading, AtticLayout.textX)
+                    .accessibilityIdentifier("tasks-row-failure")
+            }
             if expanded() {
                 AtticQuickLook(
                     subtasks: row.subtasks,
-                    onToggle: { model.toggleSubtask($0.id) },
+                    onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { model.toggleSubtask(subtask.id) } },
                     onAddSubtask: { model.beginAddingSubtask(to: id) },
                     onOpenPage: { model.openPage(id) },
                     newSubtask: model.newSubtaskParentID == id
@@ -601,10 +604,32 @@ struct TasksPage: View {
         focusedRow = id
     }
 
-    private func actions(for id: UUID) -> AtticTaskActions {
-        AtticTaskActions(
-            // The circle's click and Space: done, or back (Direction A).
-            toggleDone: { model.toggleDone(id) },
+    /// What a row offers, decided once for the keys, the circle, VoiceOver
+    /// and the right-click menu (Astra 19). A Done page row completes or
+    /// un-completes, restores to Now and shows its details (a Done log
+    /// task) or its files (one still in Now's done group); nothing else.
+    private func actions(for id: UUID, in tab: TasksTab) -> AtticTaskActions {
+        if tab == .done {
+            return AtticTaskActions(
+                toggleDone: { model.toggleDone(id) },
+                openPage: { toggleDetails(id) },
+                restoreToNow: { model.targets(for: id).forEach { model.restoreToNow($0) } },
+                names: .init(openPage: detailsActionName(for: id))
+            )
+        }
+        return AtticTaskActions(
+            // The circle's click acts on its row; Space on a row that is part
+            // of a multi-selection acts on the selection, as the menu does
+            // (review 5). A failure shows under the row (review 6).
+            toggleDone: {
+                let fromKeyboard = NSApp.currentEvent?.type == .keyDown
+                let targets = fromKeyboard ? model.targets(for: id) : [id]
+                if targets.count > 1 {
+                    model.report(model.toggleDone(targets), on: id) { model.toggleDone(targets) }
+                } else {
+                    model.report(model.toggleDone(id), on: id) { model.toggleDone(id) }
+                }
+            },
             // ⇧Space and the menu: start or stop working.
             toggleWorking: { model.toggleWorking(model.targets(for: id)) },
             openPage: { model.openPage(id) },
@@ -618,15 +643,42 @@ struct TasksPage: View {
                 guard model.tab != .done else { return }
                 model.selectOnly(id)
                 model.beginEditingTitle(id)
-            }
+            },
+            names: .init(openPage: AtticPhase1Labels.openLiveTaskAction(design.variants))
         )
+    }
+
+    /// ⌘Return on a Done page row: a Done log task's details open or close
+    /// in place; a task still in Now's done group opens its files.
+    private func toggleDetails(_ id: UUID) {
+        if model.doneDetailID == id { model.doneDetailID = nil } else { model.openPage(id) }
+    }
+
+    private func isArchived(_ id: UUID) -> Bool {
+        store.task(withID: id) == nil
+    }
+
+    /// VoiceOver's name for `toggleDetails`.
+    private func detailsActionName(for id: UUID) -> String {
+        if model.doneDetailID == id { return String(localized: "Close details") }
+        return isArchived(id) ? AtticPhase1Labels.showArchivedDetailsAction(design.variants)
+            : AtticPhase1Labels.openLiveTaskAction(design.variants)
+    }
+
+    /// The right-click menu's name for `toggleDetails`.
+    private func detailsMenuTitle(for id: UUID) -> String {
+        if model.doneDetailID == id { return String(localized: "Close Details") }
+        return isArchived(id) ? AtticPhase1Labels.showArchivedDetails(design.variants)
+            : AtticPhase1Labels.openLiveTask(design.variants)
     }
 
     private func deleteAndMoveFocus(_ ids: [UUID]) {
         let visible = visibleIDs()
         let next = visible.first { !ids.contains($0) && (visible.firstIndex(of: $0) ?? 0) > (ids.compactMap { visible.firstIndex(of: $0) }.max() ?? 0) }
             ?? visible.last { !ids.contains($0) }
-        model.delete(ids)
+        // Focus moves only once the delete saved (Astra 6); a failure shows
+        // under the row the command came from.
+        guard let first = ids.first, model.report(model.delete(ids), on: first, retry: { model.delete(ids) }).isApplied else { return }
         focusedRow = next
         if let next { model.selectOnly(next) }
     }
@@ -642,13 +694,15 @@ struct TasksPage: View {
         let targets = model.targets(for: id)
         let single = targets.count == 1
         if tab == .done {
-            Button(String(localized: "Restore to Now")) { menuTargets(row.id).forEach(model.restoreToNow) }
+            // The same commands the row's keys and VoiceOver offer
+            // (`actions(for:)`), for the row the pointer right-clicked.
+            let actions = actions(for: id, in: tab)
+            if let restore = actions.restoreToNow {
+                Button(String(localized: "Restore to Now")) { restore() }
+            }
             if single {
-                Button(model.doneDetailID == id ? String(localized: "Close Details") : String(localized: "Open Page")) {
-                    let id = menuRowID(row.id)
-                    if model.doneDetailID == id { model.doneDetailID = nil } else { model.openPage(id) }
-                }
-                .keyboardShortcut(.return, modifiers: .command)
+                Button(detailsMenuTitle(for: id)) { actions.openPage() }
+                    .keyboardShortcut(.return, modifiers: .command)
             }
         } else {
             let allDone = targets.allSatisfy { store.listedTask(withID: $0)?.status == .done }
@@ -727,7 +781,7 @@ struct TasksPage: View {
                 if store.task(withID: id)?.status != .done {
                     Button(String(localized: "Add Subtask")) { model.beginAddingSubtask(to: menuRowID(row.id)) }
                 }
-                Button(String(localized: "Open Page")) { model.openPage(menuRowID(row.id)) }
+                Button(AtticPhase1Labels.openLiveTask(design.variants)) { model.openPage(menuRowID(row.id)) }
                     .keyboardShortcut(.return, modifiers: .command)
             }
             Divider()
@@ -787,6 +841,11 @@ struct TasksPage: View {
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
         let modifiers = press.modifiers.intersection([.command, .shift, .option, .control])
         if press.key == KeyEquivalent("z") || press.characters.lowercased() == "z" {
+            // ⌘Z reaches the page only when the field being edited had
+            // nothing of its own to undo (the Edit menu's Undo, a key
+            // equivalent, takes a field's typing first): the Tasks history
+            // then (Astra 23). The window's undo manager is never called
+            // from here.
             if modifiers == .command { model.undo(); return .handled }
             if modifiers == [.command, .shift] { model.redo(); return .handled }
         }
@@ -811,7 +870,11 @@ struct TasksPage: View {
             if modifiers == .command {
                 // The same rule as a drag (review 10): a task moves within
                 // its group; at the group's edge the hint says why.
-                if atGroupEdge(current, step: step) { showBoundaryHint() } else { model.moveBy(current, offset: step) }
+                if atGroupEdge(current, step: step) {
+                    showBoundaryHint()
+                } else {
+                    model.report(model.moveBy(current, offset: step), on: current) { model.moveBy(current, offset: step) }
+                }
                 return .handled
             }
             let next = visible[min(max(index + step, 0), visible.count - 1)]
@@ -876,7 +939,9 @@ struct TasksPage: View {
         withAnimation(travel) {
             drag = nil
             if finished.targetIndex != finished.startIndex {
-                model.move(finished.id, toGroupIndex: finished.targetIndex)
+                model.report(model.move(finished.id, toGroupIndex: finished.targetIndex), on: finished.id) {
+                    model.move(finished.id, toGroupIndex: finished.targetIndex)
+                }
                 AtticHaptics.tick(enabled: design.hapticsEnabled)
             }
         }

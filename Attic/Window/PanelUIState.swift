@@ -190,6 +190,17 @@ final class PanelUIState: ObservableObject {
     /// once, whether or not the page is built yet.
     @Published private(set) var searchRequest: UInt64 = 0
 
+    /// The panel's explicit lifecycle (Astra 7), marked by the panel
+    /// controller: each reveal (ordered front from hidden) and each hide
+    /// (ordered out). Pages reset on these ("Tasks opens on Now"), never on
+    /// window occlusion: a pinned panel covered by another window, or on
+    /// another Space, is still open and keeps its place.
+    @Published private(set) var revealCount: UInt64 = 0
+    @Published private(set) var hideCount: UInt64 = 0
+
+    func panelDidReveal() { revealCount &+= 1 }
+    func panelDidHide() { hideCount &+= 1 }
+
     func requestSearch() {
         searchRequest &+= 1
     }

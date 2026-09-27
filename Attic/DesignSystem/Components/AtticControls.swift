@@ -745,7 +745,21 @@ struct AtticMenuCommand: Identifiable {
         startsSection: Bool = false,
         action: @escaping () -> Void
     ) {
-        self.title = String(localized: title)
+        self.init(verbatim: String(localized: title), systemImage: systemImage, shortcut: shortcut, isDestructive: isDestructive,
+                  isDisabled: isDisabled, startsSection: startsSection, action: action)
+    }
+
+    /// A title already localized (a switched Phase 1 label).
+    init(
+        verbatim title: String,
+        systemImage: String? = nil,
+        shortcut: KeyboardShortcut? = nil,
+        isDestructive: Bool = false,
+        isDisabled: Bool = false,
+        startsSection: Bool = false,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
         self.systemImage = systemImage
         self.shortcut = shortcut
         self.isDestructive = isDestructive

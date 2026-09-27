@@ -92,6 +92,11 @@ struct TasksPageHost: View {
                     model.openForCapture(tab)
                 }
                 if environment["ATTIC_UI_TEST_COMPLETED_OPEN"] == "1" { model.completedTodayExpanded = true }
+                // The first row with subtasks, its quick look open.
+                if environment["ATTIC_UI_TEST_EXPAND_FIRST"] == "1",
+                   let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
+                    model.setExpanded(row.id, true)
+                }
             }
             #endif
         }
@@ -100,6 +105,10 @@ struct TasksPageHost: View {
         // Tasks alone: they arrive while Tasks is already showing, too.
         // Search (the menu-bar item): the Done page's search, focused.
         .onReceive(uiState.$searchRequest) { request in handleSearchRequest(model, request: request) }
+        // Reveal and hide come from the panel controller (Astra 7); a
+        // covered or off-Space window is still open and keeps its place.
+        .onReceive(uiState.$revealCount.dropFirst()) { _ in model.resetForReveal() }
+        .onReceive(uiState.$hideCount.dropFirst()) { _ in model.pageDidHide() }
         // An agent's `show` of a task: its tab, the row selected in view.
         .onReceive(uiState.$shownItem) { item in showItemIfNeeded(model, item) }
         // Quick capture (the global shortcut) and the shell's own focus

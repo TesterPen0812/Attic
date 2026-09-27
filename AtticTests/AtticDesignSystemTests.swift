@@ -314,7 +314,10 @@ final class AtticDesignSystemTests: XCTestCase {
     /// native material under Original's shade, and hairline edge), in
     /// both modes; Reduce Transparency still makes the surface Solid.
     func testGlassAndFrostedArePhase0s() {
-        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid {
+        // The decided design (Readable Glass off; the switch's own test is
+        // `AtticReviewVariantsTests`).
+        for context in AtticAppearanceCheck.allContexts() where context.effectiveSurface != .solid && !context.colourKey.readableGlass
+            && !context.colourKey.definedDarkEdge {
             let appearance: AtticPanelThemeAppearance = context.mode == .dark ? .dark : .light
             let treatment = context.palette.surfaceTreatment(
                 appearance: appearance, contrast: context.increaseContrast ? .increased : .standard,
@@ -327,8 +330,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticDesignContext(mode: .light, surface: .glass, reduceTransparency: true).tokens.panel.kind, .solid)
         // Phase 0's Original coverage (far more see-through than PR #5's 67 / 80 / 66 / 82).
         let measured = [
-            AtticDesignContext(mode: .light, surface: .glass), AtticDesignContext(mode: .light, surface: .frosted),
-            AtticDesignContext(mode: .dark, surface: .glass), AtticDesignContext(mode: .dark, surface: .frosted)
+            AtticDesignContext(mode: .light, surface: .glass, variants: .decided), AtticDesignContext(mode: .light, surface: .frosted, variants: .decided),
+            AtticDesignContext(mode: .dark, surface: .glass, variants: .decided), AtticDesignContext(mode: .dark, surface: .frosted, variants: .decided)
         ].map { Int(($0.tokens.panel.foundationOpacity * 100).rounded()) }
         XCTAssertEqual(measured, [1, 16, 10, 32])
         // Text on them is Phase 0's (owner, 2026-09-26): its primary and
@@ -431,6 +434,34 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(send, CGSize(width: 28, height: 28), "Owner's decision: 28 × 28 inside the bar")
         XCTAssertEqual(send.height, AtticControlSize.addBarHeight - 2 * AtticControlSize.sendInset)
         XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 11)
+    }
+
+    /// Astra 19: one definition of what a row can do. VoiceOver offers
+    /// exactly the commands the row has (a Done log row: complete or
+    /// un-complete, Restore to Now, its details; no working, moving or
+    /// deleting), live rows add Edit title, and a key for a command the row
+    /// lacks does nothing.
+    func testTaskActionsOfferOnlyWhatTheRowCanDo() {
+        var fired: [String] = []
+        let live = AtticTaskActions(
+            toggleDone: { fired.append("done") }, toggleWorking: { fired.append("working") },
+            openPage: { fired.append("open") }, moveToBacklog: { fired.append("later") }, delete: { fired.append("delete") },
+            editTitle: { fired.append("edit") }, names: .init(openPage: "Open files")
+        )
+        XCTAssertEqual(live.accessibilityActions(for: .todo).map(\.name),
+                       ["Complete", "Start working", "Open files", "Edit title", "Move to Later", "Delete"])
+        let archived = AtticTaskActions(
+            toggleDone: { fired.append("done") }, openPage: { fired.append("details") },
+            restoreToNow: { fired.append("restore") }, names: .init(openPage: "Show details")
+        )
+        XCTAssertEqual(archived.accessibilityActions(for: .done).map(\.name), ["Mark as not done", "Restore to Now", "Show details"])
+        for command in [AtticTaskKeys.Command.toggleWorking, .moveToBacklog, .delete, .editTitle] {
+            AtticTaskKeys.perform(command, archived)
+        }
+        XCTAssertEqual(fired, [], "keys for commands a Done log row lacks do nothing")
+        AtticTaskKeys.perform(.openPage, archived)
+        AtticTaskKeys.perform(.toggleDone, archived)
+        XCTAssertEqual(fired, ["details", "done"])
     }
 
     func testTaskKeysMapToDistinctCommands() {

@@ -124,12 +124,17 @@ enum AtticAppearanceCheck {
                 for surface in PanelSurfaceStyle.allCases {
                     for tint in PanelTintLevel.allCases {
                         for (ic, rt) in [(false, false), (true, false), (false, true), (true, true)] {
-                            let context = AtticDesignContext(
-                                mode: mode, palette: palette, surface: surface, tint: tint,
-                                increaseContrast: ic, reduceTransparency: rt
-                            )
-                            if seen.insert(context.caption).inserted {
-                                contexts.append(context)
+                            // The review switches in both states: the decided
+                            // design and the suggestions (the caption names
+                            // Readable Glass where it changes a colour).
+                            for variants in [AtticReviewVariants.decided, .defaults] {
+                                let context = AtticDesignContext(
+                                    mode: mode, palette: palette, surface: surface, tint: tint,
+                                    increaseContrast: ic, reduceTransparency: rt, variants: variants
+                                )
+                                if seen.insert(context.caption).inserted {
+                                    contexts.append(context)
+                                }
                             }
                         }
                     }

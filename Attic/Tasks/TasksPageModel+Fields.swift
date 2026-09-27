@@ -23,7 +23,7 @@ extension TasksPageModel {
     func setDueDay(_ day: DueDay?, for ids: [UUID]) {
         let live = ids.filter { store.task(withID: $0) != nil }
         guard !live.isEmpty, live.contains(where: { store.task(withID: $0)?.dueDay != day }) else { return }
-        guard library.updateTaskFields(live, dueDay: .some(day)) else { return }
+        guard library.updateTaskFields(live, dueDay: .some(day)).isApplied else { return }
         let message: String
         if let day {
             let text = TaskRowPresentation.due(day, today: dateChoices.today, calendar: services.calendar(), locale: services.locale).text
@@ -50,7 +50,7 @@ extension TasksPageModel {
         let live = ids.filter { store.task(withID: $0) != nil }
         guard !live.isEmpty else { return }
         let removing = tagState(tag, for: live) == .on
-        guard library.updateTaskFields(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil) else { return }
+        guard library.updateTaskFields(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil).isApplied else { return }
         showToast(removing ? String(localized: "Removed #\(tag)") : String(localized: "Tagged #\(tag)"))
     }
 

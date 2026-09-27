@@ -30,6 +30,9 @@ struct AtticDesignContext: Hashable, Sendable {
     /// What raised controls are made of. The text on them is tuned against
     /// both materials, so this changes no colour token.
     var controls: AtticControlMaterial = .liquidGlass
+    /// The temporary review switches (`AtticReviewVariants`): the suggested
+    /// changes the owner compares with the design they decided.
+    var variants: AtticReviewVariants = .defaults
 
     /// Reduce Transparency makes glass and blur solid.
     var effectiveSurface: AtticPanelSurfaceTreatment.Kind {
@@ -54,7 +57,12 @@ struct AtticDesignContext: Hashable, Sendable {
             surface: effectiveSurface,
             tint: tint,
             tintLength: Self.quantisedTintLength(tintLength),
-            increaseContrast: increaseContrast
+            increaseContrast: increaseContrast,
+            // Only the switches that change a colour, and Readable Glass
+            // only where there is glass.
+            readableGlass: variants.isOn(.readableGlass) && isTranslucent,
+            quietControls: variants.isOn(.quietInactiveControls),
+            definedDarkEdge: variants.isOn(.definedDarkEdge) && isTranslucent && mode == .dark
         )
     }
 
@@ -76,6 +84,9 @@ struct AtticDesignContext: Hashable, Sendable {
         let tint: PanelTintLevel
         let tintLength: Double
         let increaseContrast: Bool
+        var readableGlass = false
+        var quietControls = false
+        var definedDarkEdge = false
     }
 
     /// The resolved tokens for this context (cached).
@@ -91,6 +102,11 @@ struct AtticDesignContext: Hashable, Sendable {
         if increaseContrast { parts.append("Increase contrast") }
         if reduceTransparency { parts.append("Reduce transparency") }
         if !reduceTransparency, controls == .craft { parts.append("Craft-style controls") }
+        // The review switches that change a colour, so the appearance check
+        // keeps both states of each apart.
+        if colourKey.readableGlass { parts.append("Readable Glass") }
+        if colourKey.quietControls { parts.append("Quiet controls") }
+        if colourKey.definedDarkEdge { parts.append("Defined dark edge") }
         return parts.joined(separator: " · ")
     }
 }
@@ -125,10 +141,12 @@ extension View {
         tint: PanelTintLevel = .off,
         tintLength: Double = PanelTintLength.defaultValue,
         hapticsEnabled: Bool = true,
-        controls: AtticControlMaterial = .liquidGlass
+        controls: AtticControlMaterial = .liquidGlass,
+        variants: AtticReviewVariants = .defaults
     ) -> some View {
         modifier(AtticSystemDesignModifier(
             controls: controls,
+            variants: variants,
             palette: palette,
             surface: surface,
             tint: tint,
@@ -140,6 +158,7 @@ extension View {
 
 private struct AtticSystemDesignModifier: ViewModifier {
     let controls: AtticControlMaterial
+    let variants: AtticReviewVariants
     let palette: AtticPanelTheme
     let surface: PanelSurfaceStyle
     let tint: PanelTintLevel
@@ -164,7 +183,8 @@ private struct AtticSystemDesignModifier: ViewModifier {
             reduceMotion: reduceMotion,
             differentiateWithoutColor: differentiateWithoutColor,
             hapticsEnabled: hapticsEnabled,
-            controls: controls
+            controls: controls,
+            variants: variants
         ))
     }
 }
