@@ -58,6 +58,11 @@ private struct DamagedNoteRecovery: Error {}
 /// stands against the store. Lives outside any view.
 @MainActor
 final class NoteSession: ObservableObject, Identifiable {
+    enum ConflictKind: Equatable { case changed, deleted }
+    enum State: Equatable {
+        case untouched, clean, dirty, notSaved(String), onlyInMemory(String)
+        case conflict(ConflictKind), readOnly
+    }
     nonisolated let id = UUID()
     /// The note's id (a new note's reserved id until its first save).
     @Published private(set) var noteID: UUID
@@ -65,9 +70,42 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var baseRevisionID: UUID?
     @Published private(set) var engine: NoteEditorEngine
     let readOnlyReason: NoteReadOnlyReason?
-    @Published fileprivate(set) var isDirty = false
+    @Published fileprivate(set) var state: State
+    fileprivate(set) var isDirty: Bool {
+        get {
+            switch state {
+            case .dirty, .notSaved, .onlyInMemory, .conflict: true
+            default: false
+            }
+        }
+        set {
+            if newValue {
+                if case .clean = state { state = .dirty }
+                if case .untouched = state { state = .dirty }
+            } else if case .dirty = state {
+                state = isPersisted ? .clean : .untouched
+            }
+        }
+    }
     fileprivate var editGeneration: UInt64 = 0
-    @Published fileprivate(set) var problem: NoteSaveProblem?
+    fileprivate(set) var problem: NoteSaveProblem? {
+        get {
+            switch state {
+            case let .notSaved(reason): .notSaved(reason)
+            case let .onlyInMemory(reason): .onlyInMemory(reason)
+            case .conflict: .changedElsewhere
+            default: nil
+            }
+        }
+        set {
+            switch newValue {
+            case let .notSaved(reason): state = .notSaved(reason)
+            case let .onlyInMemory(reason): state = .onlyInMemory(reason)
+            case .changedElsewhere: state = .conflict(.changed)
+            case nil: state = isPersisted ? .clean : .untouched
+            }
+        }
+    }
     /// Information for the slot (lowest priority), such as a refused change.
     @Published var notice: String?
     fileprivate(set) var lastEditAt: Date?
@@ -85,6 +123,7 @@ final class NoteSession: ObservableObject, Identifiable {
         self.baseRevisionID = baseRevisionID
         self.engine = engine
         self.readOnlyReason = readOnlyReason
+        self.state = readOnlyReason != nil ? .readOnly : (isPersisted ? .clean : .untouched)
     }
 
     fileprivate func adopt(noteID: UUID) {
@@ -1074,5 +1113,73 @@ extension NotesPageController: NoteImageProviding {
 
     private func attachmentRow(_ id: UUID) -> NoteAttachment? {
         store.attachmentsByNoteID.values.lazy.flatMap { $0 }.first { $0.id == id }
+    }
+}
+
+/// The decisions shared by autosave, navigation, imports and agent writes.
+/// Inputs are values so the policy can be tested without a store or a view.
+enum NoteSessionPolicy {
+    enum DueSaveAction: Equatable { case preserve, checkpointOnly }
+    enum Presence: Equatable { case onScreen, background, released }
+    enum AgentDisposition: Equatable { case proposal, direct, flush, refuseImport }
+    enum ImportCompletion: Equatable { case insert, deferUntilIdle, drop }
+
+    static func canWriteStore(_ state: NoteSession.State, activity: NoteEditorEngine.Activity) -> Bool {
+        guard activity == .idle else { return false }
+        switch state {
+        case .conflict, .readOnly: return false
+        default: return true
+        }
+    }
+
+    static func dueSaveAction(_ state: NoteSession.State, activity: NoteEditorEngine.Activity) -> DueSaveAction {
+        guard activity == .idle else { return .checkpointOnly }
+        if case .conflict = state { return .checkpointOnly }
+        return .preserve
+    }
+
+    static func canLeave(_ activity: NoteEditorEngine.Activity) -> Bool { activity == .idle }
+    static func commandAllowed(_ activity: NoteEditorEngine.Activity) -> Bool { activity == .idle }
+
+    static func canEvict(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
+                         hasBatch: Bool, presence: Presence) -> Bool {
+        guard activity == .idle, !hasBatch, presence != .onScreen else { return false }
+        switch state {
+        case .untouched, .clean, .readOnly: return true
+        default: return false
+        }
+    }
+
+    static func writingToolsAvailable(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
+                                      refusedSinceLastStoreSave: Bool) -> Bool {
+        guard activity == .idle, !refusedSinceLastStoreSave else { return false }
+        switch state {
+        case .clean, .dirty: return true
+        default: return false
+        }
+    }
+
+    static func agentDisposition(_ presence: Presence, state: NoteSession.State?, hasBatch: Bool) -> AgentDisposition {
+        if presence == .onScreen { return .proposal }
+        if hasBatch { return .refuseImport }
+        guard let state else { return .direct }
+        if case .clean = state { return .direct }
+        if case .readOnly = state { return .direct }
+        return .flush
+    }
+
+    static func importCompletion(_ state: NoteSession.State, activity: NoteEditorEngine.Activity) -> ImportCompletion {
+        if activity != .idle { return .deferUntilIdle }
+        switch state {
+        case .conflict(.deleted), .readOnly: return .drop
+        default: return .insert
+        }
+    }
+
+    static func keepAsNewAllowed(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
+                                 hasBatch: Bool) -> Bool {
+        guard activity == .idle, !hasBatch else { return false }
+        if case .conflict = state { return true }
+        return false
     }
 }

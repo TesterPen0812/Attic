@@ -1399,3 +1399,51 @@ private actor DelayedImageLoader {
         pending.removeFirst().resume(returning: success)
     }
 }
+
+@MainActor
+final class NoteSessionPolicyTests: XCTestCase {
+    func testEveryGateInputCombination() {
+        let states: [NoteSession.State] = [
+            .untouched, .clean, .dirty, .notSaved("failed"), .onlyInMemory("failed"),
+            .conflict(.changed), .conflict(.deleted), .readOnly
+        ]
+        let activities: [NoteEditorEngine.Activity] = [
+            .idle, .composing, .writingToolsSafe, .writingToolsRefused
+        ]
+        for state in states {
+            for activity in activities {
+                let idle = activity == .idle
+                let conflict: Bool = if case .conflict = state { true } else { false }
+                let readOnly: Bool = if case .readOnly = state { true } else { false }
+                XCTAssertEqual(NoteSessionPolicy.canWriteStore(state, activity: activity), idle && !conflict && !readOnly)
+                XCTAssertEqual(NoteSessionPolicy.dueSaveAction(state, activity: activity),
+                               idle && !conflict ? .preserve : .checkpointOnly)
+                XCTAssertEqual(NoteSessionPolicy.canLeave(activity), idle)
+                XCTAssertEqual(NoteSessionPolicy.commandAllowed(activity), idle)
+                for refused in [false, true] {
+                    let available = idle && !refused && (state == .clean || state == .dirty)
+                    XCTAssertEqual(NoteSessionPolicy.writingToolsAvailable(state, activity: activity,
+                                                                           refusedSinceLastStoreSave: refused), available)
+                }
+                for hasBatch in [false, true] {
+                    for presence in [NoteSessionPolicy.Presence.onScreen, .background, .released] {
+                        let evictable = state == .untouched || state == .clean || state == .readOnly
+                        XCTAssertEqual(NoteSessionPolicy.canEvict(state, activity: activity,
+                                                                 hasBatch: hasBatch, presence: presence),
+                                       idle && !hasBatch && presence != .onScreen && evictable)
+                        let disposition: NoteSessionPolicy.AgentDisposition = presence == .onScreen ? .proposal
+                            : hasBatch ? .refuseImport : (state == .clean || state == .readOnly ? .direct : .flush)
+                        XCTAssertEqual(NoteSessionPolicy.agentDisposition(presence, state: state, hasBatch: hasBatch),
+                                       disposition)
+                    }
+                    XCTAssertEqual(NoteSessionPolicy.keepAsNewAllowed(state, activity: activity, hasBatch: hasBatch),
+                                   idle && !hasBatch && conflict)
+                }
+                let completion: NoteSessionPolicy.ImportCompletion = !idle ? .deferUntilIdle
+                    : (state == .conflict(.deleted) || readOnly ? .drop : .insert)
+                XCTAssertEqual(NoteSessionPolicy.importCompletion(state, activity: activity), completion)
+            }
+        }
+        XCTAssertEqual(NoteSessionPolicy.agentDisposition(.released, state: nil, hasBatch: false), .direct)
+    }
+}

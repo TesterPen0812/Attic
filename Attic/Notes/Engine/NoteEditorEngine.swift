@@ -29,6 +29,9 @@ protocol NoteImageProviding: AnyObject {
 ///   neighbours are restyled).
 @MainActor
 final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
+    enum Activity: Equatable {
+        case idle, composing, writingToolsSafe, writingToolsRefused
+    }
     /// The note's id; a new note's reserved id may be replaced on its first save.
     var noteID: UUID
     let contentStorage: NSTextContentStorage
@@ -47,6 +50,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     weak var imageProvider: NoteImageProviding?
     /// The text changed through editing, undo or an editor command.
     var onTextChange: (() -> Void)?
+    var onActivityChanged: ((Activity, Activity) -> Void)?
     /// Approved engine commands are durable even while rewrite notifications are suppressed.
     var onApprovedMutation: (() -> Void)?
     var onWritingToolsDidEnd: (() -> Void)?
@@ -67,6 +71,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var userEditDepth = 0
     private var engineEditDepth = 0
     private(set) var isWritingToolsSessionActive = false
+    private(set) var activity: Activity = .idle
+    private func setActivity(_ next: Activity) {
+        guard next != activity else { return }
+        let previous = activity
+        activity = next
+        onActivityChanged?(previous, next)
+    }
     private var writingToolsBlocked = false
     var isWritingToolsBlocked: Bool { writingToolsBlocked }
     var writingToolsRefusalReason: String?
@@ -763,6 +774,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textDidChange(_ notification: Notification) {
         history.didChange()
+        if !isWritingToolsSessionActive {
+            setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
+        }
         guard !(writingToolsBlocked && isWritingToolsSessionActive) else { return }
         onTextChange?()
     }
@@ -839,6 +853,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let preserved = onWritingToolsWillBegin?() ?? true
         writingToolsBlocked = !preserved
         isWritingToolsSessionActive = true
+        setActivity(preserved ? .writingToolsSafe : .writingToolsRefused)
         writingToolsBypassDetected = false
         approvedWritingToolsShadow = writingToolsBlocked ? NSMutableAttributedString(attributedString: textStorage) : nil
         approvedWritingToolsEdits = []
@@ -854,6 +869,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func writingToolsDidEnd() {
         let wasBlocked = writingToolsBlocked
         isWritingToolsSessionActive = false
+        setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
         guard let snapshot = writingToolsSnapshot else { return }
         writingToolsSnapshot = nil
         let lost = writingToolsObjectsBefore.subtracting(objectIDs())
