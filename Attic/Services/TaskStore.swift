@@ -934,6 +934,37 @@ final class TaskStore: ObservableObject {
         update(task, dueDay: .some(dueDay))
     }
 
+    /// The right-click menu's and a row popover's Date and Tags on several
+    /// tasks (owner fixes 3 and 5): the due day set or removed, a tag added
+    /// or removed, on every task in one context and one save, or on none.
+    func updateBatchFields(
+        _ ids: [UUID],
+        dueDay: DueDay?? = nil,
+        addingTag: String? = nil,
+        removingTag: String? = nil
+    ) -> Bool {
+        guard !ids.isEmpty else { return false }
+        var changed = false
+        do {
+            for id in ids {
+                guard let task = task(withID: id) else { throw TaskReplicaMutationError.missingReplica(id) }
+                var tags: [String]?
+                if let addingTag { tags = AtticTag.normalizedSet(task.tags + [addingTag]) }
+                if let removingTag {
+                    let removed = (tags ?? task.tags).filter { $0.caseInsensitiveCompare(removingTag) != .orderedSame }
+                    tags = removed
+                }
+                changed = try stageUpdate(task, tags: tags, dueDay: dueDay, allowingUnfinishedSubtasks: true) || changed
+            }
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error.localizedDescription, owner: nil)
+            return false
+        }
+        return changed ? save(owner: nil) : true
+    }
+
     /// The editable fields of a visible task, for an undo step.
     func editableState(of id: UUID) -> TaskEditableState? {
         task(withID: id).map(TaskEditableState.init)

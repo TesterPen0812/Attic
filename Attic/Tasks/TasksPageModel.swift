@@ -86,6 +86,10 @@ struct TasksDoneDay: Identifiable, Equatable {
 final class TasksAddBarState: ObservableObject {
     @Published var text = TaskAddBarText()
     @Published var caret: Int?
+    /// The suggestion list's highlighted choice (owner fix 5 B).
+    @Published var highlighted = 0
+    /// The piece whose suggestions Esc hid; the next edit shows them again.
+    @Published var hiddenSuggestion: NSRange?
 }
 
 /// The Tasks page's state and every action it takes. All changes go through
@@ -105,7 +109,15 @@ final class TasksPageModel: ObservableObject {
     /// Rows whose quick look is open (remembered per row for the session).
     @Published private(set) var expanded: Set<UUID> = []
     @Published private(set) var editingTitleID: UUID?
-    @Published var editingTitle = ""
+    /// The title being edited, with its shorthand (owner fix 4): what is
+    /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
+    @Published var titleEdit = TaskAddBarText()
+    @Published var titleEditCaret: Int?
+    /// The plain text being edited.
+    var editingTitle: String {
+        get { titleEdit.text }
+        set { titleEdit.text = newValue }
+    }
     /// A title, subtask or paste whose save failed: the text stays where it
     /// was typed and the row offers "Not saved · Retry" until a save works.
     @Published private(set) var failedSave: FailedSave?
@@ -258,6 +270,21 @@ final class TasksPageModel: ObservableObject {
         return tasks.map(rowModel(for:))
     }
 
+    /// The library's tags, most used first, read once per store change
+    /// (the suggestions look at them on every keystroke).
+    var cachedTags: [String] {
+        if let tagsCache, tagsCache.revision == store.revision { return tagsCache.tags }
+        let tags = library.tags.counts().map(\.name)
+        tagsCache = (store.revision, tags)
+        return tags
+    }
+
+    private var tagsCache: (revision: UInt64, tags: [String])?
+
+    /// Now is empty and Later has tasks: the empty line offers "Choose
+    /// from Later" (review 24).
+    var offersLater: Bool { !hasDoneToday && backlogCount > 0 }
+
     var nowCount: Int { store.snapshot(for: .tasks).activeCount }
     var backlogCount: Int { store.snapshot(for: .backlog).visibleCount }
     var hasDoneToday: Bool { store.snapshot(for: .tasks).sections.contains { $0.status == .done } }
@@ -274,7 +301,7 @@ final class TasksPageModel: ObservableObject {
     var emptyMessage: [TasksTab: String] {
         [
             .now: hasDoneToday ? String(localized: "You’re caught up")
-                : (backlogCount > 0 ? String(localized: "Nothing active. Choose from Later.") : String(localized: "Add your first task")),
+                : (backlogCount > 0 ? String(localized: "Nothing active") : String(localized: "Add your first task")),
             .backlog: String(localized: "Nothing for later")
         ]
     }
@@ -379,8 +406,7 @@ final class TasksPageModel: ObservableObject {
         case .title?, .newSubtask?: return true
         case .paste?, nil: break
         }
-        if let id = editingTitleID,
-           editingTitle.trimmingCharacters(in: .whitespacesAndNewlines) != (store.task(withID: id)?.title ?? "") {
+        if let id = editingTitleID, let task = store.task(withID: id), titlePatch(for: task) != nil {
             return true
         }
         return newSubtaskParentID != nil && !newSubtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -697,7 +723,12 @@ final class TasksPageModel: ObservableObject {
     func beginEditingTitle(_ id: UUID) {
         guard let task = store.task(withID: id) else { return }
         newSubtaskParentID = nil
-        editingTitle = task.title
+        // The words the title already has stay words: only shorthand typed
+        // now applies (review 17: a rename never re-reads "today").
+        var edit = TaskAddBarText(text: task.title)
+        edit.dismissAllRecognised(parser: parser)
+        titleEdit = edit
+        titleEditCaret = nil
         editingTitleID = id
     }
 
@@ -707,19 +738,45 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func commitTitle() -> Bool {
         guard let id = editingTitleID else { return true }
-        let title = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, let task = store.task(withID: id), task.title != title else {
+        guard let task = store.task(withID: id), let patch = titlePatch(for: task) else {
             editingTitleID = nil
             clearFailure(.title(id))
             return true
         }
-        guard library.updateTask(id, title: title) else {
+        guard library.updateTask(id, title: patch.title, priority: patch.priority, tags: patch.tags,
+                                 dueDay: patch.dueDay.map { .some($0) }) else {
             failedSave = .title(id)
             return false
         }
         editingTitleID = nil
         clearFailure(.title(id))
         return true
+    }
+
+    /// What saving the title edit changes (review 17: a patch, never a
+    /// rebuild): the title without its new shorthand; new tags added to the
+    /// task's; a new date or priority replacing the old. Anything not typed
+    /// stays as it was. Nil when nothing changes (or the title is empty).
+    struct TitlePatch: Equatable {
+        var title: String?
+        var tags: [String]?
+        var dueDay: DueDay?
+        var priority: TaskPriority?
+    }
+
+    func titlePatch(for task: TaskItem) -> TitlePatch? {
+        let parts = titleEdit.parts(parser: parser)
+        let title = TaskDraftBuilder.collapsed(parts.title)
+        var patch = TitlePatch()
+        // Only shorthand ("#home" alone) keeps the title it had.
+        if !title.isEmpty, title != task.title { patch.title = title }
+        let tags = AtticTag.normalizedSet(task.tags + parts.tags)
+        if Set(tags.map { $0.lowercased() }) != Set(task.tags.map { $0.lowercased() }) { patch.tags = tags }
+        if let day = parts.dueDay, day != task.dueDay { patch.dueDay = day }
+        if let priority = parts.priority, priority != task.priority { patch.priority = priority }
+        guard patch != TitlePatch() else { return nil }
+        if title.isEmpty, patch.tags == nil, patch.dueDay == nil, patch.priority == nil { return nil }
+        return patch
     }
 
     private func clearFailure(_ failure: FailedSave) {

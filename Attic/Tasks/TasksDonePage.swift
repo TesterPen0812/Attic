@@ -6,10 +6,15 @@ import SwiftUI
 /// (Direction A: the add bar below always adds), each task restorable to
 /// Now (its circle, or right-click). Loaded a page at a time as it scrolls,
 /// so 5,000 finished tasks never load at once.
-struct TasksDonePage<Cell: View>: View {
+struct TasksDonePage<Cell: View, Mask: View>: View {
     @ObservedObject var model: TasksPageModel
     @ObservedObject var store: TaskStore
-    let footerZone: CGFloat
+    /// Where the first line rests (under the tabs) and what the bottom
+    /// stack needs clear (owner fix 8): the search row and the day
+    /// headings scroll under the tabs like Now's rows.
+    let listTop: CGFloat
+    let bottomClearance: CGFloat
+    let mask: Mask
     /// The search field's keyboard focus (Search from the menu bar sets it).
     @Binding var searchFocused: Bool
     let cell: (TasksListRow) -> Cell
@@ -18,11 +23,7 @@ struct TasksDonePage<Cell: View>: View {
 
     var body: some View {
         let days = model.doneDays()
-        VStack(alignment: .leading, spacing: 0) {
-            AtticListSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch, isFocused: $searchFocused)
-                .accessibilityIdentifier("tasks-done-search")
-            list(days)
-        }
+        list(days)
         .onAppear { model.loadDoneLogIfNeeded() }
         .onChange(of: model.doneSearch) { _, _ in model.loadDoneLogIfNeeded() }
         .onChange(of: store.revision) { _, _ in model.loadDoneLogIfNeeded() }
@@ -31,6 +32,8 @@ struct TasksDonePage<Cell: View>: View {
     private func list(_ days: [TasksDoneDay]) -> some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
+                AtticListSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch, isFocused: $searchFocused)
+                    .accessibilityIdentifier("tasks-done-search")
                 ForEach(days) { day in
                     // A day heading takes one row's pitch, its text on
                     // the rows' title line, so the log keeps the 34 / 48
@@ -40,7 +43,6 @@ struct TasksDonePage<Cell: View>: View {
                         .frame(height: AtticLayout.rowPitch)
                         .padding(.leading, AtticLayout.circleX)
                         .accessibilityAddTraits(.isHeader)
-                        .modifier(AtticScrollEdgeFade(space: Self.space, top: TasksPage.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                     ForEach(day.rows) { row in
                         cell(row).id(row.id)
                     }
@@ -57,8 +59,12 @@ struct TasksDonePage<Cell: View>: View {
                 }
             }
         }
-        .contentMargins(.bottom, footerZone, for: .scrollContent)
+        .contentMargins(.top, listTop, for: .scrollContent)
+        .contentMargins(.bottom, bottomClearance, for: .scrollContent)
+        .contentMargins(.top, listTop, for: .scrollIndicators)
+        .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
         .scrollEdgeEffectHidden(true, for: .all)
+        .mask { mask }
         .coordinateSpace(Self.space)
     }
 }
