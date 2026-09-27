@@ -488,8 +488,17 @@ final class AtticTokenTextView: NSTextView {
     }
 
     override func cancelOperation(_ sender: Any?) {
-        if !hasMarkedText(), owner?.parent.actions.escape() == true { return }
-        super.cancelOperation(sender)
+        // An input method composing owns Esc: it ends the composition and
+        // nothing else.
+        if hasMarkedText() {
+            inputContext?.discardMarkedText()
+            return
+        }
+        if owner?.parent.actions.escape() == true { return }
+        // NSTextView declares but does not implement cancelOperation:, so
+        // `super` would raise an unrecognized selector (found by the round 4
+        // marked-text test); unhandled, Esc goes up the chain to the panel.
+        passUp(#selector(cancelOperation(_:)), sender)
     }
 
     override func paste(_ sender: Any?) {

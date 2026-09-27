@@ -101,16 +101,17 @@ final class TasksRound4Tests: XCTestCase {
         let coordinator: AtticTokenField.Coordinator
     }
 
-    private func liveBar(undoFallback: @escaping () -> Void = {}) -> LiveBar {
+    private func liveBar(undoFallback: @escaping () -> Void = {}, escape: @escaping () -> Bool = { false }) -> LiveBar {
         let state = model.addBarState
         let actions = AtticTokenFieldActions(
             submit: { _ in },
             dismissChip: { range in
+                self.chipDismissals += 1
                 state.history.checkpoint(state.text, caret: state.caret)
                 state.text.dismiss(range)
             },
             multilinePaste: { _ in false },
-            escape: { false },
+            escape: escape,
             undoFallback: undoFallback,
             redoFallback: {},
             edited: { range, replacement in
@@ -145,6 +146,7 @@ final class TasksRound4Tests: XCTestCase {
     }
 
     private var liveField: AtticTokenField?
+    private var chipDismissals = 0
 
     /// What `updateNSView` does after each change: the chips drawn now.
     private func refreshChips(_ bar: LiveBar) {
@@ -207,6 +209,60 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertEqual(pageUndos, 0, "the draft's own steps came first")
         bar.view.textView.undo(nil)
         XCTAssertEqual(pageUndos, 1, "with nothing left in the draft, ⌘Z reaches the Tasks history")
+        bar.window.close()
+    }
+
+    func testAnInputMethodsMarkedTextKeepsEscBackspaceAndUndo() {
+        var escapes = 0
+        var pageUndos = 0
+        let bar = liveBar(undoFallback: { pageUndos += 1 }, escape: { escapes += 1; return true })
+        let textView = bar.view.textView
+        // "fri" is a chip right before the caret: Backspace would dismiss it.
+        type("Call fri ", into: bar)
+        textView.deleteBackward(nil)
+        refreshChips(bar)
+        XCTAssertNotNil(bar.coordinator.chipBeforeCaret(textView), "the harness has a chip to protect")
+        let text = model.addBar.text
+        // An input method starts composing right there.
+        textView.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0),
+                               replacementRange: textView.selectedRange())
+        XCTAssertTrue(textView.hasMarkedText())
+        // Esc, ⌘Z and the Edit menu's Undo belong to the composition.
+        textView.cancelOperation(nil)
+        textView.undo(nil)
+        textView.redo(nil)
+        XCTAssertEqual(escapes, 0, "Esc cancels the composition, not the field")
+        XCTAssertEqual(pageUndos, 0, "⌘Z did not reach the Tasks history")
+        XCTAssertTrue(textView.hasMarkedText())
+        // Backspace deletes inside the composition, never the chip.
+        textView.deleteBackward(nil)
+        XCTAssertEqual(chipDismissals, 0, "Backspace stayed in the composition")
+        // Once the composition ends, the same keys are the field's again.
+        textView.unmarkText()
+        textView.cancelOperation(nil)
+        XCTAssertEqual(escapes, 1)
+        XCTAssertNotEqual(model.addBar.text, "", "the draft is intact: \(text)")
+        bar.window.close()
+    }
+
+    func testAnEscTheFieldDoesNotUseGoesUpTheChainWithoutRaising() {
+        // NSTextView declares cancelOperation: without implementing it: the
+        // field used to call `super` for an Esc it did not use, which raises.
+        final class Catcher: NSView {
+            var caught = 0
+            override func cancelOperation(_ sender: Any?) { caught += 1 }
+        }
+        let bar = liveBar(escape: { false })
+        let catcher = Catcher(frame: bar.view.frame)
+        bar.window.contentView?.addSubview(catcher)
+        bar.view.removeFromSuperview()
+        catcher.addSubview(bar.view)
+        bar.view.textView.cancelOperation(nil)
+        XCTAssertEqual(catcher.caught, 1, "the unused Esc reached the view that holds the field")
+        catcher.removeFromSuperview()
+        let lone = liveBar(escape: { false })
+        lone.view.textView.cancelOperation(nil) // up to the window, which has it
+        lone.window.close()
         bar.window.close()
     }
 

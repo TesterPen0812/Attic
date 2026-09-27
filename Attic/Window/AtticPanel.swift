@@ -1249,7 +1249,9 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func cancelOperation(_ sender: Any?) {
         guard interactionLifecycle.activeInteraction != nil else {
-            super.cancelOperation(sender)
+            // NSView (and so the hosting view) declares but does not
+            // implement cancelOperation:; `super` would raise.
+            passUp(#selector(cancelOperation(_:)), sender)
             return
         }
         cancelActiveInteraction(reason: .escape)
@@ -1519,5 +1521,17 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     func displayResizeCursor(for edges: PanelResizeEdges) {
         resizeCursor(for: edges).set()
+    }
+}
+
+extension NSResponder {
+    /// Hand a standard action this responder chose not to handle to the rest
+    /// of the responder chain. AppKit declares actions such as
+    /// `cancelOperation:` on NSResponder without implementing them in NSView
+    /// or NSTextView, so calling `super` for them raises an unrecognized
+    /// selector; this walks on to the first responder that does implement it
+    /// (the window, in the end) and does nothing when none does.
+    func passUp(_ action: Selector, _ sender: Any?) {
+        _ = nextResponder?.tryToPerform(action, with: sender)
     }
 }
