@@ -63,8 +63,6 @@ struct AtticStateResolver {
 struct AtticRaisedBackground: View {
     var cornerRadius: CGFloat
     var state: AtticControlState = .rest
-    /// The add bar (visual A): drawn flat, lower than the header's controls.
-    var flat = false
 
     @Environment(\.atticDesign) private var design
 
@@ -72,8 +70,6 @@ struct AtticRaisedBackground: View {
         let tokens = design.tokens
         let recipe: AtticRaisedRecipe = if design.effectiveControls == .liquidGlass {
             tokens.glassStandIn
-        } else if flat, state != .disabled {
-            tokens.addBarFlat
         } else {
             switch state {
             case .hover: tokens.raisedHover
@@ -195,7 +191,6 @@ struct AtticRaisedMaterialModifier: ViewModifier {
     let cornerRadius: CGFloat
     let state: AtticControlState
     let interactive: Bool
-    var flat = false
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -219,15 +214,15 @@ struct AtticRaisedMaterialModifier: ViewModifier {
                     }
                 }
         } else {
-            content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state, flat: flat))
+            content.background(AtticRaisedBackground(cornerRadius: cornerRadius, state: state))
         }
     }
 }
 
 extension View {
     /// The raised material in a control's shape (see `AtticRaisedMaterialModifier`).
-    func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true, flat: Bool = false) -> some View {
-        modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive, flat: flat))
+    func atticRaisedMaterial(cornerRadius: CGFloat, state: AtticControlState = .rest, interactive: Bool = true) -> some View {
+        modifier(AtticRaisedMaterialModifier(cornerRadius: cornerRadius, state: state, interactive: interactive))
     }
 }
 

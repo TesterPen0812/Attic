@@ -163,16 +163,6 @@ enum AtticLayout {
     /// Subtask text column: checkbox at the row's text column, text after it.
     static let subtaskTextX: CGFloat = textX + 14 + 8
 
-    /// The page's one title ("Tasks", "Backlog", "Done"): a small section
-    /// label (owner's reference, 2026-09-26) on the pin's left edge (12,
-    /// the controls' inset), its line box 28 below the header, and the
-    /// list 14 below it. Unused while the Direction A trial shows page tabs
-    /// instead (kept so the trial can be reverted in one step).
-    static let pageTitleX: CGFloat = 12
-    static let pageTitleTop: CGFloat = 28
-    static let pageTitleHeight: CGFloat = 13
-    static let pageTitleToList: CGFloat = 14
-
     /// Direction A's page tabs ("Now · Later · Done") in place of the
     /// title: the chip row on the panel's 18 pt line (12 inside the page),
     /// 14 below the header, the list 10 below the chips.

@@ -88,11 +88,8 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(light.ink(.doneCheck).hexString, "#797979")
         XCTAssertEqual(light.hover.over(light.panel.base).hexString, "#F1F1F1")
         XCTAssertEqual(light.selected.over(light.panel.base).hexString, "#E7E7E7")
-        XCTAssertEqual(light.tabSelected.over(light.panel.base).hexString, "#EDEDED")
-        XCTAssertEqual(light.tabHover.over(light.panel.base).hexString, "#F6F6F6")
         // Phase 0's drawn control look (as before visual A) over this surface.
         XCTAssertEqual(light.controlFace.hexString, "#ECECEC")
-        XCTAssertEqual(light.addBarFlat.face.hexString, "#F6F6F6")
         XCTAssertEqual(light.contentCard.hexString, "#FBFBFB")
         XCTAssertEqual(light.groupCard.hexString, "#F2F2F2")
         let dark = AtticDesignContext(mode: .dark).tokens
@@ -106,10 +103,7 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(dark.ink(.doneCheck).hexString, "#B8B8B8")
         XCTAssertEqual(dark.hover.over(dark.panel.base).hexString, "#383838")
         XCTAssertEqual(dark.selected.over(dark.panel.base).hexString, "#454545")
-        XCTAssertEqual(dark.tabSelected.over(dark.panel.base).hexString, "#404040")
-        XCTAssertEqual(dark.tabHover.over(dark.panel.base).hexString, "#353535")
         XCTAssertEqual(dark.controlFace.hexString, "#454545")
-        XCTAssertEqual(dark.addBarFlat.face.hexString, "#343434")
         XCTAssertEqual(dark.contentCard.hexString, "#2E2E2E")
         XCTAssertEqual(dark.groupCard.hexString, "#333333")
         // Original's accent is grey.
@@ -119,8 +113,8 @@ final class AtticDesignSystemTests: XCTestCase {
         for tokens in [light, dark] {
             let base = tokens.panel.base
             let greys = [tokens.ink(.heading), tokens.ink(.body), tokens.ink(.helper), tokens.ink(.priorityNone), tokens.doneDisc,
-                         tokens.ink(.doneCheck), tokens.controlFace, tokens.addBarFlat.face,
-                         tokens.hover.over(base), tokens.selected.over(base), tokens.tabSelected.over(base), tokens.tabHover.over(base)]
+                         tokens.ink(.doneCheck), tokens.controlFace,
+                         tokens.hover.over(base), tokens.selected.over(base)]
             for grey in greys {
                 XCTAssertTrue(abs(grey.red - grey.green) < 0.006 && abs(grey.green - grey.blue) < 0.006, "\(grey.hexString) is not neutral")
             }
