@@ -56,6 +56,21 @@ final class TasksRound5Tests: XCTestCase {
         XCTAssertEqual(applied, [true, false, true], "no release while a second picker is open")
         hold.end()
         XCTAssertEqual(applied, [true, false, true, false], "hiding ends it with no grace")
+
+        // The page goes behind another page with an editor open: no hold
+        // for that page; back in front, the open editor holds again.
+        hold.set(true)
+        XCTAssertEqual(applied.last, true)
+        hold.setSuspended(true)
+        XCTAssertEqual(applied.last, false, "released at once, no grace")
+        hold.set(true)
+        XCTAssertEqual(applied.last, false, "a suspended page holds nothing")
+        hold.setSuspended(false)
+        XCTAssertEqual(applied.last, true, "in front again, the editor still open holds the panel")
+        hold.set(false)
+        hold.setSuspended(true)
+        hold.setSuspended(false)
+        XCTAssertEqual(applied.last, false, "nothing open: nothing held on return")
     }
 
     func testTheEditingLockNeverLapsesLikeTypingFocus() {
@@ -118,6 +133,11 @@ final class TasksRound5Tests: XCTestCase {
         origin = CGPoint(x: 12, y: 230)
         XCTAssertFalse(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "however the row moves after")
         XCTAssertEqual(decisions, 2)
+        // That press never dragged, so no gesture ended it; the next mouse
+        // down at the same point, the row now elsewhere, decides afresh.
+        session.newPress()
+        XCTAssertTrue(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "a new press is not the old one")
+        XCTAssertEqual(decisions, 3)
         session.end()
     }
 

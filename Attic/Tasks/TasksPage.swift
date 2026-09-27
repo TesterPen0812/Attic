@@ -937,6 +937,7 @@ struct TasksPage: View {
     /// unless it is already part of the selection (as in Finder); any other
     /// press, or one outside the list, ends the previous binding.
     private func mousePressed(_ event: NSEvent) {
+        dragSession.newPress()
         pointer.press(event, below: listTop - AtticLayout.pageTabsToList / 2) { id in
             if !model.selection.contains(id) { model.selectOnly(id) }
             return model.targets(for: id)
@@ -1556,6 +1557,14 @@ final class TasksDragSession {
         let allowed = decide(start)
         press = (id, start, allowed)
         return allowed
+    }
+
+    /// A mouse button went down: whatever the last press decided is
+    /// forgotten. A press that never dragged (on a control, or a click)
+    /// ends no gesture, so without this its answer could be reused by a
+    /// later press at the same point once the row had moved.
+    func newPress() {
+        press = nil
     }
 
     /// The press is over (released or cancelled by the system).
