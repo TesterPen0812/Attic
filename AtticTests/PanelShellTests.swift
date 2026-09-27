@@ -58,6 +58,14 @@ final class PanelShellTests: XCTestCase {
     func testControlsAreGlassOnlyWhileThePanelIsKey() {
         XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: true), .liquidGlass)
         XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false), .craft)
+        // Glass and Frosted keep real glass out of focus (Phase 0's weight).
+        for surface in [PanelSurfaceStyle.glass, .frosted] {
+            XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: surface), .liquidGlass)
+            XCTAssertEqual(AtticDesignContext(surface: .glass, reduceTransparency: true,
+                                              controls: PanelKeyTreatment.controls(isPanelKey: false, surface: surface)).effectiveControls,
+                           .craft, "Reduce Transparency still draws them")
+        }
+        XCTAssertEqual(PanelKeyTreatment.controls(isPanelKey: false, surface: .solid), .craft)
         let state = PanelUIState()
         XCTAssertFalse(state.isPanelKey)
         state.setPanelKey(true)

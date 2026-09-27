@@ -302,7 +302,7 @@ struct AtticPanelView: View {
                 tint: settings.panelTint,
                 tintLength: settings.panelTintLength,
                 hapticsEnabled: settings.panelHapticsEnabled,
-                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey)
+                controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey, surface: settings.panelSurfaceStyle)
             )
             // Native menus (context menus, pop-ups) follow Attic's chosen
             // appearance, not only the Mac's.
@@ -457,14 +457,20 @@ private struct PanelPageVisibility: ViewModifier {
 }
 
 /// Native Liquid Glass renders flat (a grey slab with a dark outline) in a
-/// window that is not key, and a panel revealed from the corner must not
-/// take the keyboard from the app the person is typing in. So the panel's
-/// controls are real glass while it is key (an explicit open, or once the
-/// person clicks in it) and the Craft-style recipe, the design system's
-/// drawn material, while it is not.
+/// window that is not key over a Solid panel, and a panel revealed from the
+/// corner must not take the keyboard from the app the person is typing in.
+/// So on Solid the panel's controls are real glass while it is key (an
+/// explicit open, or once the person clicks in it) and the Craft-style
+/// recipe, the design system's drawn material, while it is not.
+///
+/// On Glass and Frosted the controls stay real glass whether or not the
+/// panel is key, as Phase 0's did (owner, 2026-09-27): the opaque drawn
+/// faces read as solid blocks over the see-through surface, while glass
+/// takes the colour behind it at the same weight as the key panel's.
+/// (Reduce Transparency still draws them: it makes the surface Solid.)
 enum PanelKeyTreatment {
-    static func controls(isPanelKey: Bool) -> AtticControlMaterial {
-        isPanelKey ? .liquidGlass : .craft
+    static func controls(isPanelKey: Bool, surface: PanelSurfaceStyle = .solid) -> AtticControlMaterial {
+        isPanelKey || surface != .solid ? .liquidGlass : .craft
     }
 }
 
