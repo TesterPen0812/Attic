@@ -96,7 +96,9 @@ struct TaskTagPickerView: View {
     let state: (String) -> AtticCheckState
     let onToggle: (String) -> Void
     /// Adds a new tag; false when it did not save, so what was typed stays.
-    let onCreate: (String) -> Bool
+    /// `completed` finishes the typed entry (clears the field) when a later
+    /// Retry saves it (round 5, F5), as a first-time save does.
+    let onCreate: (_ name: String, _ completed: @escaping () -> Void) -> Bool
     /// Opened by "New Tag…": the field has the keyboard at once.
     var focusField = true
 
@@ -114,7 +116,10 @@ struct TaskTagPickerView: View {
             create: create,
             highlighted: highlighted,
             onToggle: onToggle,
-            onCreate: { name in if onCreate(name) { query = "" } },
+            onCreate: { name in
+                let clear = { query = "" }
+                if onCreate(name, clear) { clear() }
+            },
             fieldFocused: $fieldFocused
         )
         .onAppear { if focusField { fieldFocused = true } }
@@ -134,7 +139,8 @@ struct TaskTagPickerView: View {
                 if let highlighted, highlighted < filtered.count {
                     onToggle(filtered[highlighted])
                 } else if let create {
-                    if onCreate(create) { query = "" }
+                    let clear = { query = "" }
+                    if onCreate(create, clear) { clear() }
                 } else {
                     return .ignored
                 }

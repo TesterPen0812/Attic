@@ -619,7 +619,9 @@ struct TasksPage: View {
                 allTags: model.tagChoices(for: targets),
                 state: { model.tagState($0, for: targets) },
                 onToggle: { tag in model.pickerChange(on: id) { model.toggleTag(tag, for: targets) } },
-                onCreate: { tag in model.pickerChange(on: id) { model.toggleTag(tag, for: targets) } },
+                onCreate: { tag, completed in
+                    model.pickerChange(on: id, onSaved: completed) { model.toggleTag(tag, for: targets) }
+                },
                 focusField: true
             )
             TasksPickerFailureLine(model: model, id: id, closeOnRetrySuccess: nil)
@@ -674,7 +676,8 @@ struct TasksPage: View {
         NSApp.currentEvent?.type == .keyDown ? model.targets(for: id) : [id]
     }
 
-    private func actions(for id: UUID, in tab: TasksTab) -> AtticTaskActions {
+    /// Internal for tests: the keys' and VoiceOver's commands, reported the menu's way.
+    func actions(for id: UUID, in tab: TasksTab) -> AtticTaskActions {
         if tab == .done {
             return AtticTaskActions(
                 // The same scope rule as live rows: the circle acts on its
@@ -702,12 +705,19 @@ struct TasksPage: View {
                     : model.report(model.toggleDone(id), on: id) { model.toggleDone(id) }
                 completionFeedback(outcome, targets)
             },
-            // ⇧Space and the menu: start or stop working.
-            toggleWorking: { model.toggleWorking(model.targets(for: id)) },
+            // ⇧Space (and VoiceOver): start or stop working, with the same
+            // failure line and Retry the menu's command shows (round 5, F5).
+            toggleWorking: {
+                let targets = model.targets(for: id)
+                model.report(model.toggleWorking(targets), on: id) { model.toggleWorking(targets) }
+            },
             openPage: { model.openPage(id) },
+            // ⌘B: to Later, or back to Now from Later, reported the same way.
             moveToBacklog: {
                 let targets = model.targets(for: id)
-                if model.tab == .backlog { model.moveToNow(targets) } else { model.moveToBacklog(targets) }
+                let onLater = model.tab == .backlog
+                let move = { onLater ? model.moveToNow(targets) : model.moveToBacklog(targets) }
+                model.report(move(), on: id, retry: move)
             },
             delete: { deleteAndMoveFocus(model.targets(for: id)) },
             // Return: the title in place (not in the Done log).

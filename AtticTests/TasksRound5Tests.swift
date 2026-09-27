@@ -1,10 +1,37 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Attic
 
 /// Round 5: the owner's items after the round 4 preview.
 @MainActor
 final class TasksRound5Tests: XCTestCase {
+    private let clock = MutableNow(Date(timeIntervalSince1970: 1_790_000_000))
+    private var gate: PersistenceGate!
+    private var store: TaskStore!
+    private var library: AtticLibrary!
+    private var model: TasksPageModel!
+
+    override func setUp() async throws {
+        gate = PersistenceGate()
+        store = try makeTestStore(now: { [clock] in clock.value }, persist: gate.save)
+        library = AtticLibrary(tasks: store, now: { [clock] in clock.value }, persist: gate.save)
+        model = TasksPageModel(library: library, services: TasksPageServices(
+            now: { [clock] in clock.value },
+            calendar: { Calendar(identifier: .gregorian) },
+            locale: Locale(identifier: "en_GB"),
+            doneHold: .seconds(3_600)
+        ))
+        model.toasts.holdDuration = 3_600
+    }
+
+    override func tearDown() {
+        model = nil
+        library = nil
+        store = nil
+        gate = nil
+    }
+
     // MARK: - An open picker is edit mode (the owner's item 2)
 
     func testEditModeHoldsThePanelUntilItClosesThenAShortGrace() async throws {
@@ -92,5 +119,57 @@ final class TasksRound5Tests: XCTestCase {
         XCTAssertFalse(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "however the row moves after")
         XCTAssertEqual(decisions, 2)
         session.end()
+    }
+
+    // MARK: - F5: every caller reports its outcome
+
+    private var page: TasksPage {
+        TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: 344, height: 520)),
+                  addBarFocused: .constant(false))
+    }
+
+    func testShiftSpaceAndCommandBShowTheRowsFailureWithRetry() throws {
+        let task = try XCTUnwrap(store.create(title: "Pay rent"))
+        let actions = page.actions(for: task.id, in: .now)
+
+        gate.shouldFail = true
+        actions.toggleWorking?()
+        XCTAssertEqual(model.rowFailure?.id, task.id, "⇧Space's failure shows under its row")
+        XCTAssertEqual(store.task(withID: task.id)?.status, .todo)
+        gate.shouldFail = false
+        model.retryRowFailure()
+        XCTAssertNil(model.rowFailure)
+        XCTAssertEqual(store.task(withID: task.id)?.status, .inProgress, "Retry started it")
+
+        gate.shouldFail = true
+        actions.moveToBacklog?()
+        XCTAssertEqual(model.rowFailure?.id, task.id, "⌘B's failure shows under its row")
+        gate.shouldFail = false
+        model.retryRowFailure()
+        XCTAssertEqual(store.task(withID: task.id)?.status, .backlog, "Retry moved it to Later")
+    }
+
+    func testARetriedNewTagFinishesThePickersTypedEntry() throws {
+        let task = try XCTUnwrap(store.create(title: "Pay rent"))
+        var cleared = 0
+        gate.shouldFail = true
+        let saved = model.pickerChange(on: task.id, onSaved: { cleared += 1 }) { self.model.toggleTag("garden", for: [task.id]) }
+        XCTAssertFalse(saved, "the create did not save: the typed name stays")
+        XCTAssertEqual(cleared, 0)
+        XCTAssertNotNil(model.pickerFailure)
+        // Retry fails again: still pending.
+        XCTAssertFalse(model.retryPickerChange())
+        XCTAssertEqual(cleared, 0)
+        gate.shouldFail = false
+        XCTAssertTrue(model.retryPickerChange())
+        XCTAssertEqual(cleared, 1, "the saved tag's name is cleared, so Return can't toggle it off")
+        XCTAssertTrue(store.task(withID: task.id)?.tags.contains("garden") == true)
+        XCTAssertNil(model.pickerFailure)
+        // A toggle's retry finishes nothing of the entry.
+        gate.shouldFail = true
+        model.pickerChange(on: task.id) { self.model.toggleTag("garden", for: [task.id]) }
+        gate.shouldFail = false
+        XCTAssertTrue(model.retryPickerChange())
+        XCTAssertEqual(cleared, 1)
     }
 }

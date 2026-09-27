@@ -586,31 +586,40 @@ final class TasksPageModel: ObservableObject {
     /// "Not saved · Retry" inside itself (round 4).
     @Published private(set) var pickerFailure: RowFailure?
     private var pickerRetry: (() -> CommandOutcome)?
+    /// What the picker finishes when a retried change saves (a new tag's
+    /// typed name is cleared, as a first-time save clears it).
+    private var pickerRetrySaved: (() -> Void)?
 
-    /// Runs a picker's change; true when it saved (the caller may close).
+    /// Runs a picker's change; true when it saved (the caller may close
+    /// or finish its input). `onSaved` runs if a later Retry saves it.
     @discardableResult
-    func pickerChange(on id: UUID, _ change: @escaping () -> CommandOutcome) -> Bool {
+    func pickerChange(on id: UUID, onSaved: (() -> Void)? = nil, _ change: @escaping () -> CommandOutcome) -> Bool {
         let outcome = change()
         if let failure = outcome.failure {
             pickerFailure = RowFailure(id: id, message: failure.message, canRetry: failure.canRetry)
             pickerRetry = failure.canRetry ? change : nil
+            pickerRetrySaved = failure.canRetry ? onSaved : nil
             return false
         }
-        pickerFailure = nil
-        pickerRetry = nil
+        clearPickerFailure()
         return true
     }
 
-    /// Retry in the picker; true when it saved.
+    /// Retry in the picker; true when it saved, and then the input the
+    /// failed change left pending is finished (round 5, F5).
     @discardableResult
     func retryPickerChange() -> Bool {
         guard let failure = pickerFailure, let retry = pickerRetry else { clearPickerFailure(); return false }
-        return pickerChange(on: failure.id, retry)
+        let saved = pickerRetrySaved
+        guard pickerChange(on: failure.id, onSaved: saved, retry) else { return false }
+        saved?()
+        return true
     }
 
     func clearPickerFailure() {
         pickerFailure = nil
         pickerRetry = nil
+        pickerRetrySaved = nil
     }
 
     /// Moving to another page saves an open edit first; if that save
