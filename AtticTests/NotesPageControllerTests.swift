@@ -552,7 +552,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
     }
 
-    func testFirstSaveCheckpointProtectsAgentWriteBeforeStartAndRestart() throws {
+    func testEqualCheckpointDropsAfterCommittedSaveEvenWithAgentProposal() throws {
         let storeDirectory = directory.appendingPathComponent("store", isDirectory: true)
         let journalDirectory = directory.appendingPathComponent("journal", isDirectory: true)
         try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
@@ -579,8 +579,8 @@ final class NotesPageControllerTests: XCTestCase {
         controller.start()
         XCTAssertEqual(secondStore.note(withID: id)?.title, "Committed")
         XCTAssertEqual(secondStore.pendingEdits(noteID: id).count, 1)
-        XCTAssertEqual(controller.active?.problem, .changedElsewhere)
-        XCTAssertEqual(try journal.entries().count, 1)
+        XCTAssertTrue(try journal.entries().isEmpty)
+        XCTAssertNil(controller.active?.problem)
     }
 
     func testRecoveredFirstSaveCheckpointConflictsWithAlreadyCommittedAgentWrite() throws {
@@ -637,7 +637,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(try journal.entries().isEmpty)
     }
 
-    func testFailedJournalRemovalIsRetiredAfterSuccessfulSave() throws {
+    func testFailedJournalRemovalIsOverwrittenWithSavedState() throws {
         let realJournal = NoteDraftJournal(directory: directory)
         let journal = RemoveFailingJournal(base: realJournal)
         let controller = makeController(journal: journal)
@@ -649,11 +649,31 @@ final class NotesPageControllerTests: XCTestCase {
             selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
         journal.failNextRemove = true
         XCTAssertTrue(controller.save(session))
-        XCTAssertEqual(try realJournal.entries().first?.0.retired, true)
+        let savedEntry = try XCTUnwrap(realJournal.entries().first?.0)
+        XCTAssertEqual(savedEntry.baseRevisionID, store.note(withID: session.noteID)?.revisionID)
+        XCTAssertEqual(NoteContentCodec.decode(savedEntry.content).document,
+                       store.loadDocument(noteID: session.noteID)?.content.document)
         let relaunched = makeController(journal: realJournal)
         relaunched.start()
         XCTAssertEqual(store.note(withID: session.noteID)?.title, "Person")
         XCTAssertTrue(try realJournal.entries().isEmpty)
+    }
+
+    func testLegacyRetiredMarkerIsIgnoredWithoutReplayingBlankText() throws {
+        let journal = NoteDraftJournal(directory: directory)
+        let id = UUID()
+        let entry = NoteDraftJournalEntry(noteID: id, isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(.blank), selectionLocation: 0,
+            selectionLength: 0, staged: [], savedAt: Date())
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(entry)) as? [String: Any])
+        object["retired"] = true
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("\(id.uuidString).json")
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+        XCTAssertTrue(try journal.recoveryEntries().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
     func testProposalStatusOnLongNoteDoesNotFetchOrExtractOnTyping() throws {

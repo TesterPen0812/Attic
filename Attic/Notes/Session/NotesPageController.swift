@@ -197,6 +197,8 @@ final class NotesPageController: ObservableObject {
     private var proposalStatusCache: [UUID: (revision: UInt64, agent: String?)] = [:]
     private let cacheLimit = 8
     private var didStart = false
+    private var didRecoverAtLaunch = false
+    private var newestRecovered: NoteSession?
     private var isPageVisible = false
     /// Saves and closes the old editor's draft before the page moves on
     /// from a legacy note (set by `NoteDraftController`).
@@ -230,7 +232,7 @@ final class NotesPageController: ObservableObject {
             }
             if let journal = self.journal, let entries = try? journal.recoveryEntries() {
                 let storedIDs = Set(self.store.notes.map(\.id))
-                for case let .valid(entry, _) in entries where entry.retired != true {
+                for case let .valid(entry, _) in entries {
                     if entry.isPersisted || storedIDs.contains(entry.noteID) {
                         ids.insert(entry.noteID)
                     }
@@ -253,7 +255,6 @@ final class NotesPageController: ObservableObject {
                     self.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
                     throw DamagedNoteRecovery()
                 }
-                if entry.retired == true { continue }
                 ids.formUnion(document.attachmentIDs)
                 ids.formUnion(entry.staged.map(\.id))
             }
@@ -265,7 +266,6 @@ final class NotesPageController: ObservableObject {
             var bases = Set<UUID>()
             for item in entries {
                 guard case let .valid(entry, _) = item else { throw DamagedNoteRecovery() }
-                if entry.retired == true { continue }
                 if let base = entry.baseRevisionID { bases.insert(base) }
             }
             return bases
@@ -346,10 +346,12 @@ final class NotesPageController: ObservableObject {
     /// Recovery first, then the last note viewed, else a new draft.
     func start() {
         guard !didStart else { return }
+        if !didRecoverAtLaunch { recoverAtLaunch() }
         didStart = true
         isPageVisible = true
         pruneObsoleteViewState()
-        if let recovered = recoverDrafts() {
+        if let recovered = newestRecovered {
+            newestRecovered = nil
             activate(recovered)
             return
         }
@@ -844,18 +846,18 @@ final class NotesPageController: ObservableObject {
         guard let journal else { return }
         do { try journal.remove(noteID: noteID) }
         catch {
-            // Removal can fail after the store committed. Replace the stale
-            // draft with a marker so a later launch never replays it as work
-            // the person still needs to save.
-            guard let existing = try? journal.entries().first(where: { $0.0.noteID == noteID }) else {
+            // A committed document replaces a stale checkpoint if removal
+            // fails. Recovery compares content with the store and drops it.
+            guard let stored = store.loadDocument(noteID: noteID),
+                  let document = stored.content.document,
+                  let content = try? NoteContentCodec.encode(document) else {
                 active?.notice = String(localized: "Saved, but an old recovery copy could not be cleared.")
                 return
             }
-            var marker = NoteDraftJournalEntry(noteID: noteID, isPersisted: false, baseRevisionID: nil,
-                content: (try? NoteContentCodec.encode(.blank)) ?? Data(),
-                selectionLocation: 0, selectionLength: 0, staged: existing.0.staged, savedAt: now())
-            marker.retired = true
-            do { try journal.write(marker, staged: existing.1) }
+            let saved = NoteDraftJournalEntry(noteID: noteID, isPersisted: true,
+                baseRevisionID: stored.revisionID, content: content,
+                selectionLocation: 0, selectionLength: 0, staged: [], savedAt: now())
+            do { try journal.write(saved, staged: []) }
             catch {
                 active?.notice = String(localized: "Saved, but an old recovery copy could not be cleared.")
             }
@@ -890,33 +892,35 @@ final class NotesPageController: ObservableObject {
 
     // MARK: Recovery
 
-    /// Saves every checkpointed draft back to the store. Returns the session
-    /// to open first: the newest recovered draft.
-    private func recoverDrafts() -> NoteSession? {
-        guard let journal else { return nil }
+    /// Materializes recovery drafts before agent access starts. Safe to call
+    /// again from `start()` in tests that do not create an AppCoordinator.
+    func recoverAtLaunch() {
+        guard !didRecoverAtLaunch else { return }
+        didRecoverAtLaunch = true
+        guard let journal else { return }
         let entries: [NoteDraftRecoveryEntry]
         do { entries = try journal.recoveryEntries() }
         catch {
             recoveryWarnings.append("Recovery copies could not be listed: \(error.localizedDescription)")
-            return nil
+            return
         }
-        var newest: NoteSession?
         for item in entries {
             guard case let .valid(entry, staged) = item else {
                 if case let .damaged(message) = item { recoveryWarnings.append(message) }
-                continue
-            }
-            if entry.retired == true {
-                try? journal.remove(noteID: entry.noteID)
                 continue
             }
             guard case let .editable(document) = NoteContentCodec.decode(entry.content) else {
                 recoveryWarnings.append("Recovery copy for \(entry.noteID.uuidString) contains unreadable note content.")
                 continue
             }
+            let replicas: [NoteItem]
+            do { replicas = try store.replicasIncludingDeleted(of: entry.noteID) }
+            catch {
+                recoveryWarnings.append("Recovery copy for \(entry.noteID.uuidString) could not be compared with the note store.")
+                continue
+            }
             let stored = store.loadDocument(noteID: entry.noteID)
-            if entry.isPersisted, stored?.content.document == document {
-                // A previous store commit succeeded but journal removal did not.
+            if stored?.content.document == document {
                 try? journal.remove(noteID: entry.noteID)
                 continue
             }
@@ -926,24 +930,32 @@ final class NotesPageController: ObservableObject {
                 recoveryWarnings.append("Recovery copy for \(entry.noteID.uuidString) refers to an image that is missing from both the checkpoint and the note store.")
                 continue
             }
-            let session = NoteSession(noteID: entry.noteID, isPersisted: entry.isPersisted || stored != nil,
-                                      baseRevisionID: entry.baseRevisionID,
-                                      engine: makeEngine(noteID: entry.noteID, document: document, readOnly: false, staged: staged),
-                                      readOnlyReason: nil)
+            let session = NoteSession(noteID: entry.noteID,
+                isPersisted: stored != nil || entry.baseRevisionID != nil || !replicas.isEmpty,
+                baseRevisionID: entry.baseRevisionID,
+                engine: makeEngine(noteID: entry.noteID, document: document, readOnly: false, staged: staged),
+                readOnlyReason: nil)
             wire(session)
-            session.isDirty = true
             session.selection = NSRange(location: entry.selectionLocation, length: entry.selectionLength)
             session.scrollOffset = CGFloat(entry.scrollOffset ?? 0)
-            if !save(session), session.problem != .changedElsewhere {
-                session.problem = .notSaved(storeMessage())
+            let deleted = stored == nil && (entry.baseRevisionID != nil || replicas.contains { $0.deletedAt != nil })
+            if deleted {
+                session.state = .conflict(.deleted)
+            } else if (entry.baseRevisionID == nil && !replicas.isEmpty)
+                        || (entry.baseRevisionID != nil && stored?.revisionID != entry.baseRevisionID) {
+                session.state = .conflict(.changed)
+            } else {
+                session.state = .dirty
+                if !save(session), !session.isConflict {
+                    session.state = .notSaved(storeMessage())
+                }
             }
             session.notice = String(localized: "Restored unsaved text.")
             cache[session.noteID] = session
             touch(session.noteID)
-            newest = session
+            newestRecovered = session
         }
-        if !recoveryWarnings.isEmpty { newest?.notice = recoveryWarnings.joined(separator: " ") }
-        return newest
+        if !recoveryWarnings.isEmpty { newestRecovered?.notice = recoveryWarnings.joined(separator: " ") }
     }
 
     private func captureViewState(_ session: NoteSession) {
@@ -965,7 +977,7 @@ final class NotesPageController: ObservableObject {
         // A damaged journal may still own a draft whose ID cannot be decoded.
         guard recovery.allSatisfy({ if case .valid = $0 { return true }; return false }) else { return }
         let retained = Set(store.notes.map(\.id)).union(recovery.compactMap { item -> UUID? in
-            if case let .valid(entry, _) = item, entry.retired != true { return entry.noteID }
+            if case let .valid(entry, _) = item { return entry.noteID }
             return nil
         })
         let prefix = "notes.viewState."

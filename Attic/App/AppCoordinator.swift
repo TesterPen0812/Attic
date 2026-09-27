@@ -789,6 +789,7 @@ final class AppCoordinator: ObservableObject {
             return
         }
 
+        noteDraft.pages.recoverAtLaunch()
         newTaskHotKey.register()
         hoverMonitor.start()
         if !isRunningTests {

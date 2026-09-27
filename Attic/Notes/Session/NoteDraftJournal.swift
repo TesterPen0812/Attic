@@ -22,8 +22,6 @@ struct NoteDraftJournalEntry: Codable, Equatable {
     var scrollOffset: Double? = nil
     var staged: [StagedFile]
     var savedAt: Date
-    /// A store save succeeded, but checkpoint removal failed.
-    var retired: Bool? = nil
 }
 
 enum NoteDraftRecoveryEntry {
@@ -143,8 +141,16 @@ final class NoteDraftJournal: NoteDraftJournaling {
         guard fileManager.fileExists(atPath: directory.path) else { return [] }
         let files = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-        return files.map { file in
+        return files.compactMap { file in
             do {
+                let data = try Data(contentsOf: file)
+                // Older builds used a retired marker after a committed save.
+                // It is not a draft and must never be replayed as one.
+                if let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   values["retired"] as? Bool == true {
+                    try? fileManager.removeItem(at: file)
+                    return nil
+                }
                 let entry = try read(file)
                 var staged: [StagedNoteAttachment] = []
                 for meta in entry.staged {
