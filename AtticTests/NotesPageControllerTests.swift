@@ -271,7 +271,10 @@ final class NotesPageControllerTests: XCTestCase {
         type("Mine", into: session)
         XCTAssertTrue(controller.preserveAll())
         let id = session.noteID
+        type(" draft", into: session)
+        gate.shouldFail = true
         XCTAssertTrue(controller.preserveForHide())
+        gate.shouldFail = false
         XCTAssertTrue(store.openDocumentNoteIDs().contains(id))
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
@@ -280,16 +283,16 @@ final class NotesPageControllerTests: XCTestCase {
         controller.panelDidShow()
         type(" and mine", into: session)
         XCTAssertTrue(controller.preserveAll())
-        XCTAssertEqual(store.note(withID: id)?.title, "Mine and mine")
+        XCTAssertEqual(store.note(withID: id)?.title, "Mine draft and mine")
         let comparison = try XCTUnwrap(controller.proposalComparison(for: session))
-        XCTAssertEqual(comparison.current, "Mine and mine")
+        XCTAssertEqual(comparison.current, "Mine draft and mine")
         XCTAssertEqual(comparison.proposed, "Agent")
         XCTAssertTrue(controller.showLibrary())
         let proposal = try XCTUnwrap(store.pendingEdits(noteID: id).first)
         XCTAssertTrue(proposal.needsReview)
         XCTAssertEqual(proposal.proposedContent.flatMap { NoteContentCodec.decode($0).document?.title }, "Agent")
         controller.dismissLibrary()
-        XCTAssertEqual(controller.active?.engine.document().title, "Mine and mine")
+        XCTAssertEqual(controller.active?.engine.document().title, "Mine draft and mine")
     }
 
     func testPendingAgentEditAppliedOnLeaveReloadsTheRetainedSession() throws {
@@ -299,12 +302,10 @@ final class NotesPageControllerTests: XCTestCase {
         type("Mine", into: session)
         XCTAssertTrue(controller.preserveAll())
         let id = session.noteID
-        XCTAssertTrue(controller.preserveForHide())
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
         guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
             document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
             noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
-        controller.panelDidShow()
         XCTAssertTrue(controller.showLibrary())
         controller.dismissLibrary()
         XCTAssertEqual(controller.active?.engine.document().title, "Agent")
@@ -323,14 +324,218 @@ final class NotesPageControllerTests: XCTestCase {
         let id = session.noteID
         XCTAssertTrue(controller.showLibrary())
         let token = try XCTUnwrap(store.note(withID: id)).revisionToken
-        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+        guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: token,
             document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
             noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
         XCTAssertTrue(controller.open(noteID: id))
         controller.dismissLibrary()
+        XCTAssertEqual(controller.active?.engine.document().title, "Agent")
         type(" and mine", into: try XCTUnwrap(controller.active))
         XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(store.note(withID: id)?.title, "Agent and mine")
+        XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
+    }
+
+    func testTwoAgentWritesToHiddenCleanNoteApplyAndReloadOnReturn() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Original", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let id = session.noteID
+        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertFalse(store.openDocumentNoteIDs().contains(id))
+        for line in ["First", "Second"] {
+            let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+            var document = try XCTUnwrap(store.loadDocument(noteID: id)?.content.document)
+            document.blocks.append(.text(line))
+            guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: token,
+                document: document, agentName: "Claude",
+                noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail(line) }
+        }
+        XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
+        controller.panelDidShow()
+        XCTAssertEqual(controller.active?.engine.document().blocks.map(\.text), ["Original", "First", "Second"])
+        type(" plus mine", into: try XCTUnwrap(controller.active))
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.blocks.map(\.text),
+                       ["Original", "First", "Second plus mine"])
+    }
+
+    func testCleanCachedBackgroundNoteTakesAgentWriteDirectly() throws {
+        let controller = makeController()
+        controller.start()
+        let first = try XCTUnwrap(controller.active)
+        type("First", into: first)
+        XCTAssertTrue(controller.preserveAll())
+        let id = first.noteID
+        XCTAssertTrue(controller.newNote())
+        type("Second", into: try XCTUnwrap(controller.active))
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertFalse(store.openDocumentNoteIDs().contains(id))
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent first")]), agentName: "Claude",
+            noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
+        XCTAssertTrue(controller.open(noteID: id))
+        XCTAssertEqual(controller.active?.engine.document().title, "Agent first")
+    }
+
+    func testVisibleDirtyNoteProposesAgentEditAndKeepsTyping() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Original", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        type(" draft", into: session)
+        let token = try XCTUnwrap(store.note(withID: session.noteID)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: session.noteID, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
+            noteIsOpen: store.openDocumentNoteIDs().contains(session.noteID)) else { return XCTFail() }
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Original draft")
+        XCTAssertEqual(controller.proposalAgent(for: session), "Claude")
+    }
+
+    func testRecoveryCopyProtectsNoteBeforePageStarts() throws {
+        guard case let .success((id, base)) = store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Stored")])) else { return XCTFail() }
+        let journal = NoteDraftJournal(directory: directory)
+        let entry = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: base,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Recovery")])),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        try journal.write(entry, staged: [])
+        let controller = makeController(journal: journal)
+        XCTAssertTrue(store.openDocumentNoteIDs().contains(id))
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
+            noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
+        controller.start()
+        XCTAssertEqual(store.note(withID: id)?.title, "Recovery")
         XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+    }
+
+    func testRecoveredStaleDraftShowsConflictAndKeepAsNewPreservesBothNotes() throws {
+        guard case let .success((id, base)) = store.createDocumentNote(id: UUID(),
+            document: NoteDocument(blocks: [.text("Stored")])) else { return XCTFail() }
+        let journal = NoteDraftJournal(directory: directory)
+        try journal.write(NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: base,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Person")])) ,
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude", noteIsOpen: false) else {
+            return XCTFail()
+        }
+        let controller = makeController(journal: journal)
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertEqual(session.problem, .changedElsewhere)
+        XCTAssertEqual(controller.statusItems(for: session).first, .changedElsewhere)
+        XCTAssertEqual(controller.conflictComparison(for: session)?.current, "Agent")
+        XCTAssertEqual(controller.conflictComparison(for: session)?.proposed, "Person")
+        let saves = gate.saveCount
+        controller.retry()
+        XCTAssertEqual(gate.saveCount, saves, "a stale retry must not attempt the same impossible save")
+        XCTAssertTrue(controller.keepAsNewNote())
+        XCTAssertNotEqual(session.noteID, id)
+        XCTAssertEqual(store.note(withID: id)?.title, "Agent")
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Person")
+        XCTAssertNil(session.problem)
+        XCTAssertTrue(try journal.entries().isEmpty)
+    }
+
+    func testSuccessfulSaveClearsLeftoverRecoveryCopyOnRelaunch() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Saved", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let id = session.noteID
+        let previous = try XCTUnwrap(store.note(withID: id)?.revisionID)
+        let journal = NoteDraftJournal(directory: directory)
+        type(" again", into: session)
+        let document = session.engine.document()
+        try journal.write(NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: previous,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [], savedAt: Date()), staged: [])
+        XCTAssertTrue(controller.save(session))
+        // Simulate a remove failure by putting the old checkpoint back.
+        try journal.write(NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: previous,
+            content: try NoteContentCodec.encode(document), selectionLocation: 0, selectionLength: 0,
+            staged: [], savedAt: Date()), staged: [])
+        let relaunched = makeController(journal: journal)
+        relaunched.start()
+        XCTAssertNil(relaunched.active?.problem)
+        XCTAssertEqual(store.note(withID: id)?.title, "Saved again")
+        XCTAssertTrue(try journal.entries().isEmpty)
+    }
+
+    func testFailedJournalRemovalIsRetiredAfterSuccessfulSave() throws {
+        let realJournal = NoteDraftJournal(directory: directory)
+        let journal = RemoveFailingJournal(base: realJournal)
+        let controller = makeController(journal: journal)
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Person", into: session)
+        try realJournal.write(NoteDraftJournalEntry(noteID: session.noteID, isPersisted: false,
+            baseRevisionID: nil, content: try NoteContentCodec.encode(session.engine.document()),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
+        journal.failNextRemove = true
+        XCTAssertTrue(controller.save(session))
+        XCTAssertEqual(try realJournal.entries().first?.0.retired, true)
+        let relaunched = makeController(journal: realJournal)
+        relaunched.start()
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Person")
+        XCTAssertTrue(try realJournal.entries().isEmpty)
+    }
+
+    func testProposalStatusOnLongNoteDoesNotFetchOrExtractOnTyping() throws {
+        let document = NoteDocument(blocks: (0..<5_000).map { .text("Line \($0)") })
+        guard case let .success((id, _)) = store.createDocumentNote(id: UUID(), document: document) else {
+            return XCTFail()
+        }
+        let controller = makeController()
+        controller.start()
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Proposal")]), agentName: "Claude",
+            noteIsOpen: store.openDocumentNoteIDs().contains(id)) else { return XCTFail() }
+        XCTAssertEqual(controller.statusItems(for: session).first, .proposal("Claude"))
+        let fetches = store.pendingEditFetchCount
+        let extractions = session.engine.documentExtractionCount
+        let start = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<100 {
+            type("x", into: session)
+            XCTAssertEqual(controller.statusItems(for: session).first, .proposal("Claude"))
+        }
+        print("NOTE_5000_PROPOSAL_100_KEYS_MS=\(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)")
+        XCTAssertEqual(store.pendingEditFetchCount, fetches)
+        XCTAssertEqual(session.engine.documentExtractionCount, extractions)
+        guard case let .success((baselineID, _)) = store.createDocumentNote(id: UUID(), document: document) else {
+            return XCTFail("baseline fixture")
+        }
+        let baseline = makeController()
+        baseline.start()
+        XCTAssertTrue(baseline.open(noteID: baselineID))
+        let baselineSession = try XCTUnwrap(baseline.active)
+        XCTAssertTrue(baseline.statusItems(for: baselineSession).isEmpty)
+        let baselineFetches = store.pendingEditFetchCount
+        let baselineExtractions = baselineSession.engine.documentExtractionCount
+        let baselineStart = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<100 {
+            type("x", into: baselineSession)
+            XCTAssertTrue(baseline.statusItems(for: baselineSession).isEmpty)
+        }
+        print("NOTE_5000_NO_PROPOSAL_100_KEYS_MS=\(Double(DispatchTime.now().uptimeNanoseconds - baselineStart) / 1_000_000)")
+        XCTAssertEqual(store.pendingEditFetchCount, baselineFetches)
+        XCTAssertEqual(baselineSession.engine.documentExtractionCount, baselineExtractions)
+        session.notice = "Finish composing text before leaving this note."
+        XCTAssertEqual(controller.statusItems(for: session).map(\.label),
+                       ["Claude has changes", "Finish composing text before leaving this note."])
     }
 
     func testStagedImageIsCommittedWithTheSaveThatShowsIt() throws {
@@ -408,6 +613,9 @@ final class NotesPageControllerTests: XCTestCase {
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.preserveAll())
         XCTAssertNil(draft.problem, "a normal import is waiting, not a failed save")
+        draft.engine.writingToolsWillBegin()
+        XCTAssertTrue(draft.notice?.contains("Finish adding images") == true)
+        draft.engine.writingToolsDidEnd()
         await loader.releaseNext(success: true)
         await waitForImageRequests(loader, count: 2)
         XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty,
@@ -438,11 +646,36 @@ final class NotesPageControllerTests: XCTestCase {
         await waitForImageRequests(loader, count: 1)
         XCTAssertTrue(controller.newNote())
         XCTAssertTrue(draft.notice?.contains("cancelled") == true)
+        XCTAssertTrue(controller.active?.notice?.contains("cancelled") == true,
+                      "the notice follows the person to the destination")
         await loader.releaseNext(success: true)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.attachmentIDs, [])
         XCTAssertTrue(store.loadDocument(noteID: id)?.content.document?.blocks.last?.text.contains("after") == true)
         XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
+    }
+
+    func testStatusCancelBatchKeepsTypedTextAndIgnoresLateImage() async throws {
+        let image = try realImage()
+        let loader = DelayedImageLoader()
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                             saveDelay: .seconds(60),
+                                             imageLoader: { url in await loader.load(url, template: image) })
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Before", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        controller.importImages([URL(fileURLWithPath: "/tmp/cancel.png")])
+        type(" after", into: draft)
+        await waitForImageRequests(loader, count: 1)
+        XCTAssertTrue(controller.statusItems(for: draft).contains(.importing))
+        controller.cancelActiveImport()
+        XCTAssertFalse(controller.statusItems(for: draft).contains(.importing))
+        XCTAssertTrue(draft.notice?.contains("cancelled") == true)
+        await loader.releaseNext(success: true)
+        XCTAssertEqual(store.loadDocument(noteID: draft.noteID)?.content.document?.attachmentIDs, [])
+        XCTAssertTrue(store.loadDocument(noteID: draft.noteID)?.content.document?.blocks
+            .contains(where: { $0.text.contains("after") }) == true)
     }
 
     func testHiddenImportContinuesAndCommitsToItsOriginalNote() async throws {
@@ -561,6 +794,31 @@ final class NotesPageControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(draft.engine.document().title, "Original prose")
         XCTAssertEqual(store.note(withID: draft.noteID)?.revisionID, savedRevision)
+    }
+
+    func testBlockedWritingToolsCheckpointsButCannotCommitFromCopyOrExplicitSave() throws {
+        let controller = makeController()
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Original\nBody", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        let revision = store.note(withID: draft.noteID)?.revisionID
+        gate.shouldFail = true
+        draft.engine.writingToolsWillBegin()
+        gate.shouldFail = false
+        draft.engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 8), with: "Unapproved")
+        draft.engine.insertDate(NoteDay(year: 2026, month: 10, day: 2)!)
+        XCTAssertFalse(controller.save(draft))
+        XCTAssertTrue(controller.preserveAll())
+        draft.engine.onBeforeCopy?()
+        XCTAssertEqual(store.note(withID: draft.noteID)?.revisionID, revision)
+        XCTAssertEqual(draft.problem, nil)
+        let recovery = try XCTUnwrap(NoteDraftJournal(directory: directory).entries().first?.0)
+        XCTAssertEqual(NoteContentCodec.decode(recovery.content).document?.title, "Original")
+        XCTAssertEqual(NoteContentCodec.decode(recovery.content).document?.blocks.flatMap(\.inlines).count, 1)
+        draft.engine.writingToolsDidEnd()
+        XCTAssertTrue(controller.save(draft))
+        XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
     }
 
     func testUnreadableDocumentOpensAnExplanatoryReadOnlySession() throws {
@@ -782,6 +1040,23 @@ private final class FailingJournal: NoteDraftJournaling {
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws { throw Failure() }
     func remove(noteID: UUID) throws {}
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { [] }
+}
+
+@MainActor
+private final class RemoveFailingJournal: NoteDraftJournaling {
+    struct Failure: Error {}
+    let base: NoteDraftJournal
+    var failNextRemove = false
+
+    init(base: NoteDraftJournal) { self.base = base }
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+        try base.write(entry, staged: staged)
+    }
+    func remove(noteID: UUID) throws {
+        if failNextRemove { failNextRemove = false; throw Failure() }
+        try base.remove(noteID: noteID)
+    }
+    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
 }
 
 private actor DelayedDocumentPreparer {

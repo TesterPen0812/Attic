@@ -135,7 +135,8 @@ struct NotesEditorPage: View {
     }
 }
 
-/// The status slot: the most urgent state only; nothing when all is well.
+/// The status slot shows the most urgent state and keeps the rest in a
+/// keyboard-accessible details pop-over. Nothing appears when all is well.
 private struct NoteStatusSlot: View {
     @ObservedObject var controller: NotesPageController
     @ObservedObject var noteStore: NoteStore
@@ -152,55 +153,85 @@ private struct NoteStatusSlot: View {
         @ObservedObject var store: NoteStore
         @ObservedObject var session: NoteSession
         @State private var showingProposal = false
+        @State private var showingDetails = false
 
         var body: some View {
-            Group {
-                switch session.problem {
-                case let .onlyInMemory(reason):
-                    HStack(spacing: 6) {
-                        AtticErrorLine(message: String(localized: "Only in memory"), onRetry: controller.retry)
-                        Button("Copy Text", action: controller.copyActiveText)
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("notes-copy-text")
+            let items = controller.statusItems(for: session)
+            HStack(spacing: 4) {
+                if let primary = items.first {
+                    Button { showingDetails = true } label: {
+                        AtticText(verbatim: primary.label, style: .rowMeta, ink: .heading, truncates: true)
                     }
-                    .help(reason)
-                    .accessibilityIdentifier("notes-only-in-memory")
-                case let .notSaved(reason):
-                    AtticErrorLine(message: String(localized: "Not saved"), onRetry: controller.retry)
-                        .help(reason)
-                        .accessibilityIdentifier("notes-not-saved")
-                case nil:
-                    if let reason = session.readOnlyReason {
-                        AtticText(verbatim: String(localized: "Read only"), style: .rowMeta, ink: .helper)
-                            .help(reason.message)
-                            .accessibilityIdentifier("notes-read-only")
-                    } else if let comparison = controller.proposalComparison(for: session) {
-                        Button { showingProposal = true } label: {
-                            AtticText(verbatim: "\(comparison.agent) has changes", style: .rowMeta, ink: .heading)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("notes-agent-has-changes")
-                    } else if let notice = session.notice {
-                        Button {
-                            session.notice = nil
-                        } label: {
-                            AtticText(verbatim: notice, style: .rowMeta, ink: .helper)
-                                .lineLimit(2)
-                        }
-                        .buttonStyle(.plain)
-                        .help(notice)
-                        .accessibilityLabel(notice)
-                        .accessibilityHint("Dismiss")
-                        .accessibilityIdentifier("notes-notice")
+                    .buttonStyle(.plain)
+                    .help(primary.explanation ?? primary.label)
+                    .accessibilityIdentifier("notes-status-primary")
+                    if items.count > 1 {
+                        Button("+\(items.count - 1)") { showingDetails = true }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(items.count - 1) more note statuses")
+                            .accessibilityIdentifier("notes-status-more")
                     }
                 }
             }
             .frame(maxWidth: 200)
+            .popover(isPresented: $showingDetails) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(items.indices, id: \.self) { index in
+                        let item = items[index]
+                        VStack(alignment: .leading, spacing: 4) {
+                            AtticText(verbatim: item.label, style: .rowMeta, ink: .heading)
+                            if let explanation = item.explanation {
+                                AtticText(verbatim: explanation, style: .rowMeta, ink: .helper)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            actions(for: item)
+                        }
+                    }
+                }
+                .padding(16)
+                .frame(width: 280)
+                .accessibilityIdentifier("notes-status-details")
+            }
             .sheet(isPresented: $showingProposal) {
-                if let comparison = controller.proposalComparison(for: session) {
-                    NoteProposalComparison(agent: comparison.agent, current: comparison.current,
+                if let comparison = session.problem == .changedElsewhere
+                    ? controller.conflictComparison(for: session) : controller.proposalComparison(for: session) {
+                    NoteProposalComparison(title: session.problem == .changedElsewhere
+                                           ? String(localized: "Changed elsewhere") : "\(comparison.agent) has changes",
+                                           current: comparison.current,
                                            proposed: comparison.proposed)
                 }
+            }
+        }
+
+        @ViewBuilder
+        private func actions(for item: NoteStatusItem) -> some View {
+            switch item {
+            case .onlyInMemory:
+                HStack {
+                    Button("Retry", action: controller.retry)
+                    Button("Copy Text", action: controller.copyActiveText)
+                        .accessibilityIdentifier("notes-copy-text")
+                }
+            case .notSaved:
+                Button("Retry", action: controller.retry)
+            case .changedElsewhere:
+                HStack {
+                    Button("Keep as new note") { _ = controller.keepAsNewNote() }
+                        .accessibilityIdentifier("notes-keep-as-new")
+                    Button("Review") { showingDetails = false; showingProposal = true }
+                        .accessibilityIdentifier("notes-review-conflict")
+                }
+            case .proposal:
+                Button("Review") { showingDetails = false; showingProposal = true }
+                    .accessibilityIdentifier("notes-agent-has-changes")
+            case .importing:
+                Button("Cancel Batch", action: controller.cancelActiveImport)
+                    .accessibilityIdentifier("notes-cancel-import")
+            case .readOnly:
+                EmptyView()
+            case .notice:
+                Button("Dismiss") { session.notice = nil }
+                    .accessibilityIdentifier("notes-notice-dismiss")
             }
         }
     }
@@ -209,7 +240,7 @@ private struct NoteStatusSlot: View {
 /// The proposal stays read-only until the person deliberately resolves it.
 /// The transactional replacement controls arrive with the review slice.
 private struct NoteProposalComparison: View {
-    let agent: String
+    let title: String
     let current: String
     let proposed: String
     @State private var selected = 0
@@ -217,7 +248,7 @@ private struct NoteProposalComparison: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            AtticText(verbatim: "\(agent) has changes", style: .panelHeading, ink: .heading)
+            AtticText(verbatim: title, style: .panelHeading, ink: .heading)
             Picker("Version", selection: $selected) {
                 Text("Current").tag(0)
                 Text("Proposed").tag(1)

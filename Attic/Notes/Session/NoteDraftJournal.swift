@@ -22,6 +22,8 @@ struct NoteDraftJournalEntry: Codable, Equatable {
     var scrollOffset: Double? = nil
     var staged: [StagedFile]
     var savedAt: Date
+    /// A store save succeeded, but checkpoint removal failed.
+    var retired: Bool? = nil
 }
 
 enum NoteDraftRecoveryEntry {

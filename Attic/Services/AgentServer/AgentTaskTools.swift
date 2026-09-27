@@ -799,7 +799,7 @@ final class AgentTaskTools {
             return try encode([
                 "status": "pending",
                 "pending_edit": editID.uuidString,
-                "message": "The note is open in Attic; the change applies when the person leaves it, if they haven't changed it.",
+                "message": "Attic held this change because the note is visible, has an unsaved draft, or has a recovery copy. It may apply when the person leaves the note; otherwise it will wait for review.",
                 "note": serializeNote(note)
             ])
         case let .failure(error):
