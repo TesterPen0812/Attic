@@ -637,6 +637,12 @@ struct TasksPage: View {
     /// and the right-click menu (Astra 19). A Done page row completes or
     /// un-completes, restores to Now and shows its details (a Done log
     /// task) or its files (one still in Now's done group); nothing else.
+    /// One haptic tick per completing command, once it saved (review 22).
+    private func completionFeedback(_ outcome: CommandOutcome, _ ids: [UUID]) {
+        guard outcome.isApplied, ids.contains(where: { store.listedTask(withID: $0)?.status == .done }) else { return }
+        AtticHaptics.tick(enabled: design.hapticsEnabled)
+    }
+
     /// The one scope rule (review 5): a pointer on a row's own control acts
     /// on that row; the keyboard and menus act on the selection the row is
     /// part of.
@@ -667,11 +673,10 @@ struct TasksPage: View {
             // (review 5). A failure shows under the row (review 6).
             toggleDone: {
                 let targets = commandTargets(for: id)
-                if targets.count > 1 {
-                    model.report(model.toggleDone(targets), on: id) { model.toggleDone(targets) }
-                } else {
-                    model.report(model.toggleDone(id), on: id) { model.toggleDone(id) }
-                }
+                let outcome = targets.count > 1
+                    ? model.report(model.toggleDone(targets), on: id) { model.toggleDone(targets) }
+                    : model.report(model.toggleDone(id), on: id) { model.toggleDone(id) }
+                completionFeedback(outcome, targets)
             },
             // ⇧Space and the menu: start or stop working.
             toggleWorking: { model.toggleWorking(model.targets(for: id)) },
@@ -850,7 +855,11 @@ struct TasksPage: View {
     @ViewBuilder
     private func stateCommands(_ rowID: UUID, allDone: Bool, allWorking: Bool) -> some View {
         Button(allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete")) {
-            menuCommand(rowID) { model.toggleDone($0) }
+            menuCommand(rowID) { targets in
+                let outcome = model.toggleDone(targets)
+                completionFeedback(outcome, targets)
+                return outcome
+            }
         }
         .keyboardShortcut(.space, modifiers: [])
         Button(allWorking ? String(localized: "Stop Working") : String(localized: "Start Working")) {

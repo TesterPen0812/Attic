@@ -942,7 +942,9 @@ final class TasksPageModel: ObservableObject {
         let destination = index + offset
         guard group.indices.contains(destination) else { return .applied }
         var outcome = CommandOutcome.applied
-        withAnimation(AtticMotionPreset.settle.animation(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) {
+        // Reduce Motion: the row is simply in its new place (no travel).
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        withAnimation(reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
             outcome = library.moveTask(id, toIndex: destination)
         }
         return outcome

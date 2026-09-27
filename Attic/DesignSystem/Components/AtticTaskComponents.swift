@@ -410,27 +410,23 @@ struct AtticStatusCircle: View {
             }
         }
         .frame(width: size, height: size)
+        // One confirmation per completion (round 4, review 22): the disc and
+        // its check arrive together; the haptic is the command's (the page
+        // ticks once when the change saved), never one per drawn circle.
         .onChange(of: state) { old, new in
-            guard new == .done, old != .done else { return }
-            guard checkProgress == nil, completionProgress == nil else {
-                AtticHaptics.tick(enabled: design.hapticsEnabled)
-                return
-            }
+            guard new == .done, old != .done, checkProgress == nil, completionProgress == nil else { return }
             if design.reduceMotion {
                 completion = 1
                 drawnCheck = 1
                 discOpacity = 0
                 withAnimation(motion) { discOpacity = 1 }
-                AtticHaptics.tick(enabled: design.hapticsEnabled)
             } else {
                 completion = 0
                 drawnCheck = 0
                 discOpacity = 1
                 withAnimation(motion) {
                     completion = 1
-                } completion: {
-                    AtticHaptics.tick(enabled: design.hapticsEnabled)
-                    withAnimation(motion) { drawnCheck = 1 }
+                    drawnCheck = 1
                 }
             }
         }
