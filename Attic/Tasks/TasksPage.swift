@@ -8,6 +8,9 @@ import UniformTypeIdentifiers
 struct TasksPageChrome {
     var bottomControlsHeight: (CGFloat) -> Void = { _ in }
     var typingLock: (Bool) -> Void = { _ in }
+    /// Edit mode: an editor, a picker or a popover is open. The host holds
+    /// the panel open until it closes (then a short grace).
+    var editLock: (Bool) -> Void = { _ in }
 }
 
 /// The Tasks page (spec § Tasks, Direction A): the page tabs (Now · Later ·
@@ -195,8 +198,16 @@ struct TasksPage: View {
     /// bar, Done's search, a title or new subtask, or an open picker (which
     /// may reach past the panel, review 16).
     private func updateTypingLock() {
-        chrome.typingLock(addBarFocused || searchFocused || model.editingTitleID != nil
-            || model.newSubtaskParentID != nil || composerPickerOpen || metaPopover != nil)
+        // A field with the keyboard and nothing open: a hold that lapses
+        // once the pointer has left and the keyboard is idle.
+        chrome.typingLock(addBarFocused || searchFocused)
+        // Edit mode (round 5, the owner's item 2): a title or subtask
+        // editor, the strip's pickers, a row's date or tag picker. The panel
+        // stays until it closes, wherever the pointer goes. Context menus
+        // hold it through the shell's menu-tracking lock; suggestions show
+        // only over a draft, which the composer lock holds.
+        chrome.editLock(model.editingTitleID != nil || model.newSubtaskParentID != nil
+            || composerPickerOpen || metaPopover != nil)
     }
 
     /// A drag in progress and a row's pickers end when the panel hides or

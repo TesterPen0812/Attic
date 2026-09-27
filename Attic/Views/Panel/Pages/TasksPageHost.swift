@@ -40,6 +40,7 @@ struct TasksPageHost: View {
     var isCurrent = true
 
     @State private var addBarFocused = false
+    @State private var editHold = PanelEditHold()
     /// The shell's one toast host: the page's Undo toasts show there.
     @Environment(\.atticPanelToasts) private var toasts
 
@@ -52,7 +53,11 @@ struct TasksPageHost: View {
             addBarFocused: $addBarFocused,
             chrome: TasksPageChrome(
                 bottomControlsHeight: { chromeInteractionState.bottomControlsHeight = $0 },
-                typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) }
+                typingLock: { uiState.setInteractionLock(.quickEntryFocus, isActive: $0) },
+                editLock: { [editHold] editing in
+                    editHold.apply = { uiState.setInteractionLock(.taskEditing, isActive: $0) }
+                    editHold.set(editing)
+                }
             )
         )
         .equatable()

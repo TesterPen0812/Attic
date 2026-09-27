@@ -346,3 +346,55 @@ final class PanelUIState: ObservableObject {
         return releasedOutsidePanel ? draggedTaskID : nil
     }
 }
+
+/// Edit mode's hold on the panel (round 5, the owner's item 2): while an
+/// editor, a picker or a popover is open the panel does not auto-hide,
+/// whatever the pointer does. When the last one closes, the hold lasts a
+/// short grace more, so a pointer already outside does not collapse the
+/// panel the instant a picker closes; then the normal hover rules resume.
+/// One lock for all of them: the shell's editing lock (`.taskEditing`).
+@MainActor
+final class PanelEditHold {
+    static let defaultGrace: Duration = .milliseconds(600)
+
+    let grace: Duration
+    /// Sets the shell's lock; called only when the hold changes.
+    var apply: (Bool) -> Void
+
+    private(set) var isHeld = false
+    private var release: Task<Void, Never>?
+
+    init(grace: Duration = PanelEditHold.defaultGrace, apply: @escaping (Bool) -> Void = { _ in }) {
+        self.grace = grace
+        self.apply = apply
+    }
+
+    /// Whether anything that is edit mode is open now.
+    func set(_ editing: Bool) {
+        if editing {
+            release?.cancel()
+            release = nil
+            guard !isHeld else { return }
+            isHeld = true
+            apply(true)
+        } else {
+            guard isHeld, release == nil else { return }
+            release = Task { [weak self, grace] in
+                try? await Task.sleep(for: grace)
+                guard !Task.isCancelled, let self else { return }
+                self.release = nil
+                self.isHeld = false
+                self.apply(false)
+            }
+        }
+    }
+
+    /// The panel hid or the page went away: no grace is owed.
+    func end() {
+        release?.cancel()
+        release = nil
+        guard isHeld else { return }
+        isHeld = false
+        apply(false)
+    }
+}
