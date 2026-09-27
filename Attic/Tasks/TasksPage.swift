@@ -1073,7 +1073,6 @@ private struct TasksAddBar: View {
         let suggestion = suggestion
         let stripShown = showsStrip && (hasDraft || datePresented || priorityPresented)
         VStack(alignment: .leading, spacing: AtticPickerMetrics.stripToBar) {
-            if stripShown {
                 AtticComposerStrip(
                     datePresented: $datePresented,
                     priorityPresented: $priorityPresented,
@@ -1095,8 +1094,14 @@ private struct TasksAddBar: View {
                 )
                 // The first icon on the circles' line (x 36), as the bar's plus.
                 .padding(.leading, AtticAddBarMetrics.iconSlot / 2 - AtticSmallControlMetrics.labelPadding - AtticSmallControlMetrics.iconSize / 2)
-                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion))
-            }
+                // Built with the bar and shown by a frame and an opacity, as
+                // the send button is: the first keystroke changes those,
+                // never builds the strip (spec: one frame per keystroke).
+                .frame(height: stripShown ? AtticControlSize.smallHeight : 0, alignment: .top)
+                .opacity(stripShown ? 1 : 0)
+                .allowsHitTesting(stripShown)
+                .accessibilityHidden(!stripShown)
+                .padding(.bottom, stripShown ? 0 : -AtticPickerMetrics.stripToBar)
             AtticAddBar(
                 placeholder: model.addPlaceholder,
                 text: $text.text.text,
