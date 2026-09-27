@@ -61,7 +61,7 @@ final class NoteEditorEngineTests: XCTestCase {
         let (engine, _) = makeEngine()
         for (object, _) in engine.objects() where !(object is NoteImageAttachment) {
             let image = object.image
-            XCTAssertNotNil(image, "\(type(of: object)) has an image TextKit 2 can draw")
+            XCTAssertNotNil(image, "\(String(describing: Swift.type(of: object))) has an image TextKit 2 can draw")
             XCTAssertGreaterThan(image?.size.width ?? 0, 4)
             XCTAssertGreaterThan(image?.size.height ?? 0, 4)
             XCTAssertNotNil(image?.cgImage(forProposedRect: nil, context: nil, hints: nil))
