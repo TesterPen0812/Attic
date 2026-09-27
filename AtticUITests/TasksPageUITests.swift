@@ -439,12 +439,13 @@ final class TasksPageUITests: XCTestCase {
         // A typed piece shows on its button too; the × clears it, words and all.
         addBar.click()
         addBar.typeKey(.rightArrow, modifierFlags: .command)
-        addBar.typeText(" next week ")
+        // 31 Dec (not "next week": on a Sunday that is tomorrow too).
+        addBar.typeText(" 31 dec ")
         waitFor((date.value as? String)?.isEmpty == false && (date.value as? String) != "Tomorrow",
                 "a date typed after the pick replaces it: \(String(describing: date.value))")
         window.buttons["composer-date-clear"].click()
         waitFor((date.value as? String ?? "").isEmpty, "× clears the date")
-        waitFor((addBar.value as? String)?.contains("week") == false, "and its typed words")
+        waitFor((addBar.value as? String)?.lowercased().contains("dec") == false, "and its typed words")
 
         addBar.click()
         addBar.typeKey(.rightArrow, modifierFlags: .command)

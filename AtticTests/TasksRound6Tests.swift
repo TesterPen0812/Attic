@@ -161,6 +161,52 @@ final class TasksRound6Tests: XCTestCase {
         }
     }
 
+    /// ⌘F on Done, with the add bar holding the keyboard (as the panel
+    /// opens): the search takes the tabs' line with the keyboard in it
+    /// (CI run 1: the field showed without it).
+    func testCommandFOnDoneGivesTheSearchTheKeyboard() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        XCTAssertTrue(hosted.window.firstResponder is AtticTokenTextView, "the add bar has the keyboard")
+        hosted.go(to: .done)
+        hosted.press("f", keyCode: 3, modifiers: .command)
+        XCTAssertTrue(hosted.searchHasKeyboard, "⌘F puts the keyboard in the search: \(String(describing: hosted.window.firstResponder))")
+        hosted.press("i", keyCode: 34)
+        hosted.press("n", keyCode: 45)
+        XCTAssertEqual(hosted.model.doneSearch, "in", "typing goes into the search, the first letter kept")
+        hosted.press("\u{1B}", keyCode: 53)
+        XCTAssertEqual(hosted.model.doneSearch, "", "Esc ends the search")
+        XCTAssertFalse(hosted.searchHasKeyboard)
+    }
+
+    /// A click on Done's magnifier, with the add bar holding the keyboard:
+    /// the field takes the tabs' line and the keyboard (CI run 1).
+    func testTheMagnifierGivesTheSearchTheKeyboard() throws {
+        let hosted = try Hosted(height: 520, addBarFocused: true)
+        defer { hosted.close() }
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
+        let y = layout.headerBottom + AtticLayout.pageTabsTop + AtticLayout.pageTabsHeight / 2
+        // A click on the Done tab, as a person arrives there (the tabs take
+        // the keyboard's focus, and they leave when the field comes).
+        var tabX: CGFloat = 60
+        while tabX < 200, hosted.model.tab != .done {
+            hosted.click(y: y, x: tabX)
+            tabX += 6
+        }
+        XCTAssertEqual(hosted.model.tab, .done)
+        hosted.spin(1)
+        var x = AtticLayout.panelSize.width - 12
+        while x > AtticLayout.panelSize.width - 80, !hosted.searchFieldShown {
+            hosted.click(y: y, x: x)
+            x -= 4
+        }
+        XCTAssertTrue(hosted.searchFieldShown, "the magnifier opens the search")
+        XCTAssertNotNil(hosted.window.contentView.flatMap { AtticTabsSearchField.searchField(in: $0, placeholder: "Search done tasks") },
+                        "the field's own text field is found by its prompt (the keyboard's fallback)")
+        hosted.spin(0.4)
+        XCTAssertTrue(hosted.searchHasKeyboard, "with the keyboard in it: \(String(describing: hosted.window.firstResponder))")
+    }
+
     func testTheClearPartOfTheListRunsToTheBottomStack() {
         let margin = TasksViewport.bottomMargin(bottomInset: 12)
         XCTAssertEqual(margin, AtticControlSize.addBarHeight + 12, "only the add bar's zone is margin")
@@ -197,15 +243,22 @@ private final class Hosted {
         override var canBecomeKey: Bool { true }
     }
 
-    init(height: CGFloat) throws {
+    /// The add bar's focus, as the panel holds it (the preview opens with
+    /// the bar focused).
+    final class Focus { var addBar = false }
+    let focus = Focus()
+
+    init(height: CGFloat, addBarFocused: Bool = false) throws {
+        focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
         try TasksPagePreview.seedDemo(in: container)
         store = TaskStore(container: container)
         model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let size = CGSize(width: AtticLayout.panelSize.width, height: height)
+        let focus = focus
         page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
-                         addBarFocused: .constant(false))
+                         addBarFocused: Binding(get: { focus.addBar }, set: { focus.addBar = $0 }))
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -248,8 +301,37 @@ private final class Hosted {
         return nil
     }
 
-    func click(y: CGFloat, modifiers: NSEvent.ModifierFlags = []) {
-        let point = CGPoint(x: 110, y: height - y)
+    /// A key press through the app's queue (key equivalents included).
+    func press(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                                         timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                         context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                         isARepeat: false, keyCode: keyCode)!
+            NSApp.postEvent(event, atStart: false)
+            while let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(next)
+            }
+        }
+        spin(0.4)
+    }
+
+    /// The keyboard is in a plain text field (the search), not the add bar.
+    var searchHasKeyboard: Bool {
+        (window.firstResponder as? NSTextView)?.isFieldEditor == true
+    }
+
+    /// A plain text field (the search) is in the page.
+    var searchFieldShown: Bool {
+        func find(_ view: NSView) -> Bool {
+            if view is NSTextField, (view as? NSTextField)?.isEditable == true { return true }
+            return view.subviews.contains(where: find)
+        }
+        return window.contentView.map(find) ?? false
+    }
+
+    func click(y: CGFloat, x: CGFloat = 110, modifiers: NSEvent.ModifierFlags = []) {
+        let point = CGPoint(x: x, y: height - y)
         // Through the app's queue, as a real click comes: the page reads
         // the click's modifiers from `NSApp.currentEvent`.
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {

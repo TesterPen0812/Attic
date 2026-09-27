@@ -553,16 +553,25 @@ struct AtticTabsSearchField: View {
         .contentShape(Rectangle())
         .onTapGesture { focused = true }
         .onAppear {
-            if isFocused?.wrappedValue == true {
-                focused = true
-                caretToEnd()
+            // Once the field is in the window (a focus set as it appears is
+            // lost, and the click that opened it ends after this): the
+            // keyboard goes to it, the insertion point after its text.
+            // A field that held the keyboard (the add bar) gives it up in
+            // the same turn, so a second try follows if the first was lost.
+            guard isFocused?.wrappedValue == true else { return }
+            for delay in [0.0, 0.15, 0.4] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    guard isFocused?.wrappedValue == true else { return }
+                    if delay == 0 { focused = true }
+                    takeKeyboard()
+                }
             }
         }
         .onChange(of: focused) { _, now in if isFocused?.wrappedValue != now { isFocused?.wrappedValue = now } }
         .onChange(of: isFocused?.wrappedValue) { _, wanted in
             if let wanted, wanted != focused {
                 focused = wanted
-                if wanted { caretToEnd() }
+                if wanted { DispatchQueue.main.async { takeKeyboard() } }
             }
         }
         .padding(.horizontal, AtticLayout.rowHighlightInset)
@@ -577,6 +586,36 @@ struct AtticTabsSearchField: View {
             guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor else { return }
             editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
         }
+    }
+
+    /// This field's AppKit text field: an editable one with its prompt.
+    static func isSearchField(_ field: NSTextField, placeholder: String) -> Bool {
+        field.isEditable && (field.placeholderAttributedString?.string == placeholder || field.placeholderString == placeholder
+            || field.accessibilityLabel() == placeholder)
+    }
+
+    static func searchField(in view: NSView, placeholder: String) -> NSTextField? {
+        if let field = view as? NSTextField, isSearchField(field, placeholder: placeholder) { return field }
+        for child in view.subviews {
+            if let found = searchField(in: child, placeholder: placeholder) { return found }
+        }
+        return nil
+    }
+
+    /// The field takes the keyboard even when the view that had it went
+    /// away in the same moment (the tabs it replaces, CI run 1): if the
+    /// focus asked for did not land, the window's first responder becomes
+    /// this field's own text field.
+    private func takeKeyboard() {
+        guard let window = NSApp.keyWindow else { return }
+        if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
+           let owner = editor.delegate as? NSTextField, Self.isSearchField(owner, placeholder: placeholder) {
+            caretToEnd()
+            return
+        }
+        guard let content = window.contentView, let field = Self.searchField(in: content, placeholder: placeholder) else { return }
+        window.makeFirstResponder(field)
+        caretToEnd()
     }
 }
 
