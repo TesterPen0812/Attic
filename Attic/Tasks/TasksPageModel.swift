@@ -795,7 +795,9 @@ final class TasksPageModel: ObservableObject {
     }
 
     func orderedSelection() -> [UUID] {
-        let visible = rows(for: tab).map(\.id)
+        // In list order: the Done page's is its days' rows (round 6: a
+        // restore of a selection there keeps the log's order).
+        let visible = tab == .done ? doneDays().flatMap { $0.rows.map(\.id) } : rows(for: tab).map(\.id)
         return visible.filter(selection.contains) + selection.subtracting(visible).sorted { $0.uuidString < $1.uuidString }
     }
 

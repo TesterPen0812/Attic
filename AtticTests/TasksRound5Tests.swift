@@ -84,24 +84,6 @@ final class TasksRound5Tests: XCTestCase {
             reasons: [.quickEntryFocus, .taskEditing], pointerInside: false, secondsSinceKeyboardInput: 60))
     }
 
-    // MARK: - One swipe, one page (the owner's item 4)
-
-    func testASwipeMovesAtMostOnePage() {
-        let width: CGFloat = 320
-        func land(_ x: CGFloat, from current: Int) -> Int {
-            TasksPagerBehavior.page(proposed: x, width: width, current: current, count: 3)
-        }
-        XCTAssertEqual(land(2 * width, from: 0), 1, "a hard swipe from Now stops at Later")
-        XCTAssertEqual(land(10 * width, from: 0), 1, "however far the momentum would carry it")
-        XCTAssertEqual(land(0, from: 2), 1, "from Done, back to Later, not Now")
-        XCTAssertEqual(land(-5 * width, from: 1), 0)
-        XCTAssertEqual(land(width * 0.4, from: 0), 0, "a short drag settles back")
-        XCTAssertEqual(land(width * 0.6, from: 0), 1, "past halfway it turns the page")
-        XCTAssertEqual(land(3 * width, from: 2), 2, "never past the last page")
-        XCTAssertEqual(land(-width, from: 0), 0, "nor before the first")
-        XCTAssertEqual(TasksPagerBehavior.page(proposed: 500, width: 0, current: 1, count: 3), 1, "no width yet: stay")
-    }
-
     // MARK: - F4: a drag's eligibility is decided at the press
 
     func testATitlePressStaysADragAsTheRowMovesPastItsControls() {

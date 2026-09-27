@@ -428,15 +428,4 @@ final class TasksPageModelTests: XCTestCase {
         XCTAssertTrue(model.expanded.contains(parent))
         XCTAssertEqual(model.show(UUID()), .missing)
     }
-
-    /// Only a swipe moves the page: the pager's reports while it is idle (a
-    /// reveal laying out) or animating to the selected page never select
-    /// a neighbour, so the panel opens on Now.
-    func testOnlyASwipeLetsThePagerChangeThePage() {
-        XCTAssertTrue(TasksPage.swipeMovesPage(.tracking))
-        XCTAssertTrue(TasksPage.swipeMovesPage(.interacting))
-        XCTAssertTrue(TasksPage.swipeMovesPage(.decelerating))
-        XCTAssertFalse(TasksPage.swipeMovesPage(.idle))
-        XCTAssertFalse(TasksPage.swipeMovesPage(.animating))
-    }
 }

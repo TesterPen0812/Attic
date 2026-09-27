@@ -14,11 +14,16 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// headings scroll under the tabs like Now's rows.
     let listTop: CGFloat
     let bottomClearance: CGFloat
+    /// The add bar's zone: the only bottom margin (round 6; the rest of the
+    /// clearance is room at the end of the list, so rows there take clicks).
+    let bottomMargin: CGFloat
     let mask: Mask
     /// The search field's keyboard focus (Search from the menu bar sets it).
     @Binding var searchFocused: Bool
     /// A row the keyboard moved to: brought into the visible area (review 8).
     @Binding var reveal: TasksPageModel.ScrollRequest?
+    /// Brings a row into the uncovered part of the list (the page's rule).
+    let revealRow: (UUID, ScrollViewProxy) -> Void
     let cell: (TasksListRow) -> Cell
 
     static var space: NamedCoordinateSpace { .named("AtticTasksDone") }
@@ -68,9 +73,10 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         : String(localized: "No finished tasks match “\(query)”."))
                 }
             }
+            .padding(.bottom, bottomClearance - bottomMargin)
         }
         .contentMargins(.top, listTop, for: .scrollContent)
-        .contentMargins(.bottom, bottomClearance, for: .scrollContent)
+        .contentMargins(.bottom, bottomMargin, for: .scrollContent)
         .contentMargins(.top, listTop, for: .scrollIndicators)
         .contentMargins(.bottom, bottomClearance, for: .scrollIndicators)
         .scrollEdgeEffectHidden(true, for: .all)
@@ -78,7 +84,7 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         .coordinateSpace(Self.space)
         .onChange(of: reveal) { _, request in
             guard let request else { return }
-            proxy.scrollTo(request.id)
+            revealRow(request.id, proxy)
         }
         // An agent's `show` of a finished task (the model loaded its page).
         .onChange(of: model.scrollRequest) { _, request in
