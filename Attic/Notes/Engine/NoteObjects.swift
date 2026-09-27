@@ -20,8 +20,11 @@ class NoteObjectAttachment: NSTextAttachment {
     required init?(coder: NSCoder) { fatalError("Note objects are not archived; they are encoded as note fragments.") }
 
     /// Drawn image, set by the editor (the design system renders it on the
-    /// main actor; drawing never renders).
-    var renderedImage: NSImage?
+    /// main actor; drawing never renders). Also the attachment's `image`,
+    /// which is what TextKit 2 draws for an attachment without a view.
+    var renderedImage: NSImage? {
+        didSet { image = renderedImage }
+    }
 
     /// Lines of their own (images, unsupported blocks) as opposed to objects
     /// that flow with text (dates) or lead a line (checkboxes).

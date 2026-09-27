@@ -55,6 +55,19 @@ final class NoteEditorEngineTests: XCTestCase {
         for character in text { textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0)) }
     }
 
+    // MARK: Drawing
+
+    func testObjectsAreDrawnFromTheDesignSystem() {
+        let (engine, _) = makeEngine()
+        for (object, _) in engine.objects() where !(object is NoteImageAttachment) {
+            let image = object.image
+            XCTAssertNotNil(image, "\(type(of: object)) has an image TextKit 2 can draw")
+            XCTAssertGreaterThan(image?.size.width ?? 0, 4)
+            XCTAssertGreaterThan(image?.size.height ?? 0, 4)
+            XCTAssertNotNil(image?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        }
+    }
+
     // MARK: Round trip
 
     func testDocumentSurvivesTheTextSystem() {
