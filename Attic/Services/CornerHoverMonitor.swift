@@ -206,7 +206,8 @@ final class CornerHoverMonitor {
     func revealProgrammatically(
         openComposer: Bool = false,
         section: PanelSection? = nil,
-        takesKeyboard: Bool = true
+        takesKeyboard: Bool = true,
+        focusesAddBar: Bool = true
     ) -> PanelRevealOutcome {
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else {
             return .refused(.noScreen)
@@ -224,7 +225,7 @@ final class CornerHoverMonitor {
             refreshSamplingCadence(at: NSEvent.mouseLocation)
             return .refused(.noUsableScreenArea)
         }
-        if takesKeyboard, uiState.selectedSection.isTaskBased {
+        if takesKeyboard, focusesAddBar, uiState.selectedSection.isTaskBased {
             uiState.requestPrimaryInputFocus()
         }
         return .shown

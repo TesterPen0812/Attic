@@ -867,7 +867,9 @@ final class AppCoordinator: ObservableObject {
     /// The menu-bar Search: the Tasks page's Done search, focused (⌘K
     /// search arrives with the command palette in a later phase).
     func showSearch() {
-        guard hoverMonitor.revealProgrammatically(section: .tasks) == .shown else { return }
+        // The panel takes the keyboard, but not for the add bar: a late add
+        // bar focus request would take it back from the search field.
+        guard hoverMonitor.revealProgrammatically(section: .tasks, focusesAddBar: false) == .shown else { return }
         uiState.requestSearch()
     }
 
