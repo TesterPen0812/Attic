@@ -248,3 +248,26 @@ The look ported, not the code: the design system's surface model now carries Pha
 - **Follow-up (owner, 2026-09-26):** Glass and Frosted, every palette and both modes, also take
   Phase 0's text: its primary (`heading`, `body`, `label`) and secondary (`helper`, `placeholder`)
   greys, near-black in Light and near-white in Dark. Solid keeps its text.
+
+### Phase 1 final pass (owner, 2026-09-27)
+
+- **Control corners stay at the 42 % rule** (the pin and page button 36 × 36, radius 15). The
+  temporary Round controls switch is gone: `AtticRadius.controlFraction` is a constant again.
+- **The selected page tab is semibold** (`pageTabSelected`), the others medium, in every look;
+  every label reserves its semibold width, so the row never shifts.
+- **The page button** reads as one "Pages" group with a named, selectable button per page
+  (identifiers `panel-section-*`), open or shut; its `Item` is its own type.
+- **Removed** (no caller left outside the gallery): `AtticPageSwitch` and its chip faces and
+  metrics, `AtticPagePill` and its glyphs and metrics, `AtticStatusTabs` and their metrics, the
+  `statusTab`, `statusTabSelected`, `statusCount` and `pageHeading` text styles, the page-title and
+  status-tab layout tokens, visual A's flat add bar (`addBarFlat`, the raised material's `flat`
+  option), its control recipes and body, page chip and tab chip colours (`tabSelected`,
+  `tabHover`), and the 4.5 pt subtask checkbox radius.
+- **Geometry check:** the page button replaces the page switch; the subtask checkbox is measured
+  against its own squircle (superellipse, exponent 4).
+- **Gallery panel and the Settings miniature** use the live panel's lines (corner-aware 24 pt
+  controls inset, 36 pt header, the page 12 inside the panel); the miniature gains the add bar.
+- **Done log day headings** take one row's pitch (34 pt), their text on the rows' title line.
+- **Out of focus on Glass and Frosted** the panel's controls stay native glass (Phase 0's weight);
+  the drawn recipe is for Solid (and Reduce Transparency) only.
+- **VoiceOver:** a Later task's state reads "later"; a row being edited exposes its title field.
