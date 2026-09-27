@@ -306,7 +306,10 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(row("Send invoice").exists)
         let count = window.descendants(matching: .any)["tasks-done-search-count"]
         XCTAssertTrue(count.waitForExistence(timeout: 3), "a quiet count under the results")
-        XCTAssertTrue(count.label.hasPrefix("1 of "), count.label)
+        // A static text reads out as its value on macOS (CI run 2: the
+        // label was empty).
+        let spoken = [count.label, (count.value as? String) ?? ""].first { !$0.isEmpty } ?? ""
+        XCTAssertTrue(spoken.hasPrefix("1 of "), "the count says 1 of all: \(spoken)")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(row("Pay rent").exists, "Esc ends the search")
         waitFor(tab("now").exists, "and the tabs return")
