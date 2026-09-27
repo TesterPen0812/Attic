@@ -188,6 +188,7 @@ final class NoteStore: ObservableObject {
     /// A successful save keeps this context alive. Reuse the capability check
     /// for identical bytes instead of decoding every replica on each autosave.
     var documentReplicaCapabilityCache: [ObjectIdentifier: (revisionID: UUID?, content: Data, editable: Bool)] = [:]
+    var pendingEditFetchCount = 0
     private(set) var documentReplicaDecodeCount = 0
     func countDocumentReplicaDecode() { documentReplicaDecodeCount += 1 }
     private var presentationIndex: PresentationIndex?

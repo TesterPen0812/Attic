@@ -76,6 +76,22 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(Set(try rows(id).map(\.title)), ["Edited"])
     }
 
+    func testDivergentDocumentReplicaDoesNotRejectCanonicalSaveAndIsVersioned() throws {
+        let (id, base) = try create(document("Main"))
+        let other = NoteItem(id: id, title: "Other", body: "")
+        other.content = try NoteContentCodec.encode(document("Other"))
+        other.contentFormat = 1
+        other.revisionID = UUID()
+        other.revision = -1
+        store.modelContext.insert(other)
+        try store.modelContext.save()
+        guard case let .success(next) = store.saveDocument(noteID: id, document: document("Person"),
+                                                           baseRevisionID: base) else { return XCTFail() }
+        XCTAssertEqual(Set(try rows(id).map(\.revisionID)), [next])
+        XCTAssertEqual(Set(try rows(id).map(\.title)), ["Person"])
+        XCTAssertTrue(versions(id).contains { $0.title == "Other" && $0.reason == .replacedByDraft })
+    }
+
     func testHundredDocumentAutosavesDoNotMakeHistoryRowsOrDecodeUnchangedReplicas() throws {
         let (id, first) = try create(document("Draft"))
         var revision = first
@@ -248,6 +264,22 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(retained.intersection([dailyFirst.id, dailySecond.id]).count, 1)
         XCTAssertFalse(retained.contains(expired.id))
         XCTAssertTrue(retained.contains(protected.id))
+    }
+
+    func testVersionThinningDeletesEveryPhysicalCopyOfRemovedVersion() throws {
+        let (id, _) = try create(document("Current"))
+        let old = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
+                              reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                              attachmentIDs: [], sourceRevisionID: UUID())
+        let duplicate = NoteVersion(id: old.id, noteID: id, createdAt: old.createdAt,
+                                    reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+                                    attachmentIDs: [], sourceRevisionID: old.sourceRevisionID)
+        store.modelContext.insert(old)
+        store.modelContext.insert(duplicate)
+        try store.modelContext.save()
+        store.thinVersions(noteID: id)
+        let physical = try store.modelContext.fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { $0.noteID == id }))
+        XCTAssertTrue(physical.isEmpty)
     }
 
     func testUnreadableRecoveryBaseStopsVersionThinning() throws {

@@ -205,10 +205,9 @@ extension NoteStore {
         return .success((resolvedID, revisionID))
     }
 
-    /// Saves an editor's document to every replica. When the stored note is
-    /// no longer at `baseRevisionID` (a recovered draft, an agent edit that
-    /// applied while the note was closed, a divergent replica), what is
-    /// stored is first kept as a version, in the same save.
+    /// Saves an editor's document to every replica. When the presented copy
+    /// moved past `baseRevisionID`, reject the draft. Divergent secondary
+    /// replicas are preserved as versions before the family is converged.
     func saveDocument(
         noteID: UUID,
         document: NoteDocument,
@@ -223,12 +222,14 @@ extension NoteStore {
             return .failure(error as? NoteDocumentStoreError ?? .noteMissing(noteID))
         }
         let replicas = preflight.replicas
-        // A late legacy replica can be repaired by this document write. A
-        // different document revision means the draft's base is stale.
-        guard replicas.contains(where: { $0.revisionID == baseRevisionID && $0.usesDocumentFormat }),
-              !replicas.contains(where: { $0.usesDocumentFormat && $0.revisionID != baseRevisionID }) else {
+        // The editor based its draft on the presented row. A secondary row
+        // arriving later may become the preflight's sorting winner before the
+        // page refreshes, but it does not make that presented base stale.
+        let main = note(withID: noteID) ?? preflight.canonical
+        guard replicas.contains(where: { $0 === main }),
+              main.usesDocumentFormat, main.revisionID == baseRevisionID else {
             return .failure(.staleRevision(expected: baseRevisionID?.uuidString ?? NoteItem.initialRevisionToken,
-                                           current: preflight.canonical.revisionToken))
+                                           current: main.revisionToken))
         }
         let timestamp = currentDate
         let context = modelContext
@@ -347,6 +348,11 @@ extension NoteStore {
     /// same instant are kept together so divergent replicas are not collapsed.
     func thinVersions(noteID: UUID) {
         let all = versions(noteID: noteID)
+        let targetID = noteID
+        let physical = (try? modelContext.fetch(FetchDescriptor<NoteVersion>(
+            predicate: #Predicate { $0.noteID == targetID }
+        ))) ?? []
+        let copies = Dictionary(grouping: physical, by: \.id)
         let protectedIDs = Set(pendingEdits(noteID: noteID).compactMap(\.baseVersionID))
         // If any recovery entry is unreadable, its base is unknown. Keep the
         // whole history until the entry can be inspected safely.
@@ -372,14 +378,14 @@ extension NoteStore {
             } else if age < 30 * day {
                 bucket = Int64(version.createdAt.timeIntervalSince1970 / day) - 1_000_000_000
             } else {
-                modelContext.delete(version)
+                copies[version.id]?.forEach(modelContext.delete)
                 removed = true
                 continue
             }
             if buckets.insert(bucket).inserted {
                 keptTimes.insert(version.createdAt)
             } else {
-                modelContext.delete(version)
+                copies[version.id]?.forEach(modelContext.delete)
                 removed = true
             }
         }
@@ -577,6 +583,7 @@ extension NoteStore {
 
     /// Oldest first, one per id.
     func pendingEdits(noteID: UUID) -> [NotePendingEdit] {
+        pendingEditFetchCount += 1
         let targetID = noteID
         let rows = (try? modelContext.fetch(FetchDescriptor<NotePendingEdit>(
             predicate: #Predicate { $0.noteID == targetID }
