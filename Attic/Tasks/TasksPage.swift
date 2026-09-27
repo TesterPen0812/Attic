@@ -71,7 +71,12 @@ struct TasksPage: View {
 
         .onChange(of: addBarFocused) { _, focused in chrome.typingLock(focused || searchFocused || model.editingTitleID != nil) }
         .onChange(of: searchFocused) { _, focused in chrome.typingLock(focused || addBarFocused || model.editingTitleID != nil) }
-        .onChange(of: model.editingTitleID) { _, id in chrome.typingLock(addBarFocused || searchFocused || id != nil) }
+        .onChange(of: model.editingTitleID) { _, id in
+            chrome.typingLock(addBarFocused || searchFocused || id != nil)
+            // The row gives up the keyboard so its title field can take it.
+            if id != nil { focusedRow = nil }
+        }
+        .onChange(of: model.newSubtaskParentID) { _, id in if id != nil { focusedRow = nil } }
         // Search (the menu-bar item): the keyboard goes to the Done page's
         // search field, not the add bar.
         .onChange(of: model.pendingSearchFocus, initial: true) { _, pending in

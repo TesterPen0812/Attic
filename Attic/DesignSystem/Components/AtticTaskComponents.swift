@@ -185,6 +185,9 @@ struct AtticRowTitleEditor: View {
     @Environment(\.atticDesign) private var design
     @FocusState private var focused: Bool
     @State private var finished = false
+    /// When the field appeared: a focus loss in its first moments is the
+    /// list settling its own focus, not the person leaving the field.
+    @State private var appearedAt: Date?
 
     var body: some View {
         TextField("", text: editing.text)
@@ -195,12 +198,21 @@ struct AtticRowTitleEditor: View {
             .onSubmit { finish(commit: true) }
             .onExitCommand { finish(commit: false) }
             .onAppear {
+                appearedAt = Date()
                 focused = true
                 // Again once the list has settled its own focus for this
                 // change, so the field keeps the keyboard.
                 DispatchQueue.main.async { if !finished { focused = true } }
             }
-            .onChange(of: focused) { _, now in if !now { finish(commit: true) } }
+            .onChange(of: focused) { _, now in
+                guard !now else { return }
+                if let appearedAt, Date().timeIntervalSince(appearedAt) < 0.5 {
+                    // Taken away while appearing: take the keyboard back.
+                    DispatchQueue.main.async { if !finished { focused = true } }
+                } else {
+                    finish(commit: true)
+                }
+            }
             // A field that stays for the next entry (a new subtask) is
             // ready again once its text is cleared or changed.
             .onChange(of: editing.text.wrappedValue) { _, _ in finished = false }
