@@ -130,8 +130,14 @@ enum AtticTaskRowMetrics {
     static let trailingMinGap: CGFloat = 12
     /// Small icons in the details line (window, paperclip).
     static let detailsIconSize: CGFloat = 10
-    static let detailsIconGap: CGFloat = 3
-    static let attachmentIconGap: CGFloat = 2
+    /// Owner fix 2 (2026-09-27): an icon 5 pt before its label (the
+    /// paperclip's too), items 14 pt apart with no " · " between them.
+    static let detailsIconGap: CGFloat = 5
+    static let detailsItemSpacing: CGFloat = 14
+    /// The hover pill behind a clickable date or tags (owner fix 5 C):
+    /// 18 tall, reaching 5 pt past the text on each side.
+    static let metaPillHeight: CGFloat = 18
+    static let metaPillOutset: CGFloat = 5
     /// The date at the right end sits this far inside the highlight.
     static let dateInset: CGFloat = 8
 }
@@ -241,10 +247,11 @@ enum AtticPriorityMarkMetrics {
 /// The subtask count on a row's details line: a checklist glyph and
 /// "1/3", with a hover fill that reads as a control.
 enum AtticSubtaskChecklistMetrics {
-    /// Visual A: a 10 pt glyph in a 12 pt slot, 3 pt before the count.
+    /// A 10 pt glyph in a 12 pt slot, 4 pt before the count: 5 pt from
+    /// the glyph's edge, like every details icon (owner fix 2).
     static let iconSize: CGFloat = 10
     static let iconSlot: CGFloat = 12
-    static let iconGap: CGFloat = 3
+    static let iconGap: CGFloat = 4
     static let horizontalPadding: CGFloat = 4
     static let height: CGFloat = 18
 }
@@ -440,4 +447,31 @@ enum AtticPaletteTileMetrics {
 /// Tag chips (18 tall, control corner rule).
 enum AtticTagMetrics {
     static let horizontalPadding: CGFloat = 6
+}
+
+/// The pickers of owner fix 5 (v17): the date picker, the tag list, the
+/// composer strip and the suggestions over the add bar. The date grid is
+/// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.
+enum AtticPickerMetrics {
+    static let rowGap: CGFloat = 8
+    static let checkSize: CGFloat = 10
+    static let checkSlot: CGFloat = 12
+    static let dividerGap: CGFloat = 4
+    static let dateWidth: CGFloat = 212
+    static let tagWidth: CGFloat = 200
+    static let tagListMaxHeight: CGFloat = 196
+    static let suggestionWidth: CGFloat = 220
+    static let monthHeaderHeight: CGFloat = 26
+    static let monthButton: CGFloat = 20
+    static let chevronSize: CGFloat = 10
+    static let weekdayHeight: CGFloat = 18
+    static let dayCell: CGFloat = 28
+    static let dayRow: CGFloat = 26
+    static let dayDisc: CGFloat = 24
+    static let todayRing: CGFloat = 1.2
+    static let gridInset: CGFloat = 4
+    static let gridBottom: CGFloat = 2
+    /// The strip's buttons touch (their padding is the gap), 8 above the bar.
+    static let stripSpacing: CGFloat = 2
+    static let stripToBar: CGFloat = 8
 }

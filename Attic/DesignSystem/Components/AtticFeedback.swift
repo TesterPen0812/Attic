@@ -368,3 +368,31 @@ struct AtticReorderLift<Content: View>: View {
             }
     }
 }
+
+/// The reorder lift as a modifier (owner fix 6): the row keeps one view
+/// identity whether lifted or not, so a drag in progress is never torn
+/// down by the lift appearing (the stuck lift the owner saw).
+struct AtticReorderLiftModifier: ViewModifier {
+    let lifted: Bool
+
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        let tokens = design.tokens
+        let shape = RoundedRectangle(cornerRadius: AtticRadius.highlight, style: .continuous)
+        content
+            .background {
+                // Only the background changes: `content` keeps its identity.
+                if lifted {
+                ZStack {
+                    AtticOutsideShadow(shape: shape, color: tokens.dragShadow, spec: AtticShadows.reorder)
+                    shape.fill(tokens.popoverFill.color)
+                    shape.inset(by: AtticHairline.innerRim / 2).stroke(tokens.popoverInnerRim.color, lineWidth: AtticHairline.innerRim)
+                    shape.stroke(tokens.popoverOuterRim.color, lineWidth: AtticHairline.width)
+                }
+                .padding(.horizontal, AtticLayout.rowHighlightInset)
+                .padding(.vertical, AtticTaskRowMetrics.pitchTopInset)
+                }
+            }
+    }
+}

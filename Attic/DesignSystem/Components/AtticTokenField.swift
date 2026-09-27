@@ -28,6 +28,54 @@ struct AtticTokenFieldActions {
     /// Where the insertion point is (UTF-16), for "a chip forms once its
     /// word is finished".
     let caretMoved: (Int) -> Void
+    /// A key while a suggestion list is showing (owner fix 5 B, review 15):
+    /// ↑ ↓ move the highlight, Tab or Return take it (and keep editing),
+    /// Esc hides the list. Return true when the list used the key. Marked
+    /// text (an input method composing) always keeps its keys.
+    var suggestionKey: ((AtticSuggestionKey) -> Bool)? = nil
+}
+
+/// The keys a suggestion list answers while the field has the keyboard.
+enum AtticSuggestionKey: Equatable {
+    case up, down, accept, dismiss
+}
+
+/// Edits the field's text the way typing does (review 14): through the
+/// text view, so each change is one step of the field's own undo and the
+/// insertion point lands after it, never by replacing the bound string
+/// (which resets the selection and the typing undo).
+@MainActor
+final class AtticTokenFieldEditor {
+    fileprivate weak var textView: NSTextView?
+
+    init() {}
+
+    /// Replaces the edits, last first, as one undoable step; the insertion
+    /// point ends after the last one. False when the field is not live.
+    @discardableResult
+    func replace(_ edits: [(range: NSRange, string: String)], caretAfter: Int? = nil) -> Bool {
+        guard let textView, let storage = textView.textStorage else { return false }
+        let undo = textView.undoManager
+        undo?.beginUndoGrouping()
+        defer { undo?.endUndoGrouping() }
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+            guard NSMaxRange(edit.range) <= storage.length else { continue }
+            textView.insertText(edit.string, replacementRange: edit.range)
+        }
+        if let caretAfter, caretAfter <= (textView.string as NSString).length {
+            textView.setSelectedRange(NSRange(location: caretAfter, length: 0))
+        }
+        return true
+    }
+
+    /// The insertion point (UTF-16), or nil when the field is not live.
+    var caret: Int? { textView?.selectedRange().location }
+
+    /// Gives the field the keyboard again (after a picker closes).
+    func focus() {
+        guard let textView, let window = textView.window else { return }
+        window.makeFirstResponder(textView)
+    }
 }
 
 /// The add bar's text: a native text view (so typing, selection, spelling,
@@ -47,6 +95,12 @@ struct AtticTokenField: NSViewRepresentable {
     var accessibilityLabel: String
     var isEnabled = true
     let actions: AtticTokenFieldActions
+    /// The text style (the add bar's body; a row title in the title editor).
+    var style: AtticTextStyle = .listBody
+    /// The text ink.
+    var ink: AtticInk = .body
+    /// Edits made as typing (strip picks, suggestions).
+    var editor: AtticTokenFieldEditor?
 
     @Environment(\.atticDesign) private var design
 
@@ -57,16 +111,18 @@ struct AtticTokenField: NSViewRepresentable {
         view.textView.delegate = context.coordinator
         view.textView.owner = context.coordinator
         context.coordinator.view = view
+        editor?.textView = view.textView
         return view
     }
 
     func updateNSView(_ view: AtticTokenFieldView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
+        editor?.textView = view.textView
         let tokens = design.tokens
         view.apply(style: AtticTokenFieldView.Style(
-            font: AtticTextStyle.listBody.nsFont,
-            text: NSColor(tokens.color(isEnabled ? .body : .disabledText)),
+            font: style.nsFont,
+            text: NSColor(tokens.color(isEnabled ? ink : .disabledText)),
             // The heading ink: the pill sits on the raised bar, where the
             // tag's accent grey falls below 3 : 1 in Dark.
             chipText: NSColor(tokens.color(.heading)),
@@ -301,6 +357,18 @@ final class AtticTokenTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        // A suggestion list takes its keys first; an input method's marked
+        // text takes precedence over both the list and submitting.
+        if !hasMarkedText(), flags.isEmpty || flags == .shift, let answer = owner?.parent.actions.suggestionKey {
+            let key: AtticSuggestionKey? = switch event.keyCode {
+            case 126: .up
+            case 125: .down
+            case 48 where flags.isEmpty, 36 where flags.isEmpty, 76 where flags.isEmpty: .accept
+            case 53: .dismiss
+            default: nil
+            }
+            if let key, answer(key) { return }
+        }
         switch event.keyCode {
         case 36, 76: // Return, Enter
             if !hasMarkedText() {
@@ -326,7 +394,7 @@ final class AtticTokenTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // ⌘Return submits and opens; it must not reach a menu first.
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if window?.firstResponder === self, flags == .command, event.keyCode == 36 || event.keyCode == 76 {
+        if window?.firstResponder === self, !hasMarkedText(), flags == .command, event.keyCode == 36 || event.keyCode == 76 {
             owner?.parent.actions.submit(true)
             return true
         }
@@ -339,6 +407,16 @@ final class AtticTokenTextView: NSTextView {
             return
         }
         super.deleteBackward(sender)
+    }
+
+    /// One line: Tab moves the keyboard on, as in a text field (review 15:
+    /// outside a suggestion list Tab is focus navigation).
+    override func insertTab(_ sender: Any?) {
+        window?.selectNextKeyView(self)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        window?.selectPreviousKeyView(self)
     }
 
     override func cancelOperation(_ sender: Any?) {

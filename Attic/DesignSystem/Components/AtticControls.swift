@@ -330,6 +330,8 @@ struct AtticAddBar: View {
         var chips: [NSRange]
         var isFocused: Binding<Bool>
         var actions: AtticTokenFieldActions
+        /// Edits made as typing (the strip's picks, a suggestion taken).
+        var editor: AtticTokenFieldEditor?
     }
 
     let placeholder: String
@@ -431,7 +433,8 @@ struct AtticAddBar: View {
                 isFocused: tokens.isFocused,
                 accessibilityLabel: placeholder,
                 isEnabled: !disabled,
-                actions: tokens.actions
+                actions: tokens.actions,
+                editor: tokens.editor
             )
             .frame(height: AtticTokenFieldMetrics.height)
             .overlay(alignment: .leading) {

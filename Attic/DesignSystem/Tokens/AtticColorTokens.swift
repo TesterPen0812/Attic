@@ -289,6 +289,31 @@ struct AtticColorTokens: Equatable, Sendable {
     }
     func color(_ ink: AtticInk) -> Color { self.ink(ink).color }
 
+    /// An open task's ring (to do, and Later's dashed ring), owner fix 1
+    /// (2026-09-27, card B of v15): the primary ink at low opacity, so it
+    /// follows the surface it sits on and the title carries the row. Light
+    /// Solid is the owner's reference (≈ #CDCDCE on white, 1.6 : 1); Dark
+    /// and the see-through surfaces keep a clearly visible ring (the
+    /// conservative default for the cases the owner left open); hovered or
+    /// keyboard-focused it steps up to a firm ring. Below the 3 : 1 icon
+    /// floor on purpose: a named exception in the appearance test
+    /// (`OpenRingException`), never a loosened rule. Increase Contrast
+    /// draws the primary ink (well past 3 : 1).
+    func openRing(emphasised: Bool = false) -> AtticRGBA {
+        let heading = ink(.heading)
+        guard !context.increaseContrast else { return heading }
+        let dark = context.mode == .dark
+        let translucent = context.surface != .solid
+        let alpha: Double = if emphasised {
+            dark ? 0.62 : 0.55
+        } else if dark {
+            translucent ? 0.36 : 0.28
+        } else {
+            translucent ? 0.30 : 0.22
+        }
+        return heading.withAlpha(alpha)
+    }
+
     var focusRing: AtticRGBA { ink(.accent) }
     var tagFill: AtticRGBA { ink(.accent).withAlpha(context.mode == .dark ? 0.16 : 0.10) }
     var tagFillSelected: AtticRGBA { ink(.accent).withAlpha(context.mode == .dark ? 0.26 : 0.18) }
