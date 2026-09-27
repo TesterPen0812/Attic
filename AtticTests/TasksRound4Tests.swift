@@ -241,4 +241,50 @@ final class TasksRound4Tests: XCTestCase {
         history.reset()
         XCTAssertFalse(history.canUndo)
     }
+
+    // MARK: - Must fix 3: each menu is bound to its own press
+
+    func testEachContextMenuIsBoundToThePressThatOpenedIt() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let page = Flipped(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
+        window.contentView?.addSubview(page)
+        let pointer = TasksPointer()
+        pointer.view = page
+        let a = UUID(), b = UUID()
+        pointer.frames = [a: CGRect(x: 0, y: 100, width: 300, height: 34), b: CGRect(x: 0, y: 134, width: 300, height: 34)]
+        func event(_ type: NSEvent.EventType, at y: CGFloat, control: Bool = false, in target: NSWindow? = nil) -> NSEvent {
+            let target = target ?? window
+            // Page coordinates are flipped; the window's are not.
+            let location = page.convert(NSPoint(x: 50, y: y), to: nil)
+            return NSEvent.mouseEvent(with: type, location: location, modifierFlags: control ? .control : [],
+                                      timestamp: 0, windowNumber: target.windowNumber, context: nil,
+                                      eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        var selected: [UUID] = []
+        let select: (UUID) -> [UUID] = { selected.append($0); return [$0] }
+
+        pointer.press(event(.rightMouseDown, at: 110), below: 90, select: select)
+        XCTAssertEqual(pointer.invocation?.row, a, "a right-click binds A")
+        // Dismissed without a command, then Control-click on B.
+        pointer.press(event(.leftMouseDown, at: 150, control: true), below: 90, select: select)
+        XCTAssertEqual(pointer.invocation?.row, b, "a Control-click binds B, never the stale A")
+        XCTAssertEqual(selected, [a, b])
+        // Right-click A again, then a plain click anywhere ends the binding.
+        pointer.press(event(.rightMouseDown, at: 110), below: 90, select: select)
+        XCTAssertEqual(pointer.invocation?.row, a)
+        pointer.press(event(.leftMouseDown, at: 150), below: 90, select: select)
+        XCTAssertNil(pointer.invocation, "a plain press ends the last menu's binding")
+        // Over the tabs' band, or off the rows: no binding.
+        pointer.press(event(.rightMouseDown, at: 50), below: 90, select: select)
+        XCTAssertNil(pointer.invocation)
+        // Another window's press never binds this page's rows.
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        pointer.press(event(.rightMouseDown, at: 110, in: other), below: 90, select: select)
+        XCTAssertNil(pointer.invocation)
+        other.close()
+        window.close()
+    }
 }

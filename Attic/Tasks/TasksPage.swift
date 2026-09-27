@@ -872,18 +872,10 @@ struct TasksPage: View {
     /// unless it is already part of the selection (as in Finder); any other
     /// press, or one outside the list, ends the previous binding.
     private func mousePressed(_ event: NSEvent) {
-        let kind = TasksPointer.MenuPress(type: event.type, modifiers: event.modifierFlags)
-        guard kind != .none else {
-            pointer.invocation = nil
-            return
+        pointer.press(event, below: listTop - AtticLayout.pageTabsToList / 2) { id in
+            if !model.selection.contains(id) { model.selectOnly(id) }
+            return model.targets(for: id)
         }
-        guard let point = pointer.location(of: event), point.y >= listTop - AtticLayout.pageTabsToList / 2,
-              let id = pointer.row(at: point) else {
-            pointer.invocation = nil
-            return
-        }
-        if !model.selection.contains(id) { model.selectOnly(id) }
-        pointer.invocation = TasksPointer.Invocation(row: id, targets: model.targets(for: id))
     }
 
     // MARK: - Keys
@@ -1612,6 +1604,20 @@ final class TasksPointer {
             default: self = .none
             }
         }
+    }
+
+    /// A press, before SwiftUI sees it: a secondary click or Control-click
+    /// on a row (below `minY`, the tabs' band) binds the menu about to open
+    /// to that row, with the targets `select` returns (it selects the row
+    /// unless it is part of the selection); any other press, or one off the
+    /// rows or in another window, ends the previous binding.
+    func press(_ event: NSEvent, below minY: CGFloat, select: (UUID) -> [UUID]) {
+        guard MenuPress(type: event.type, modifiers: event.modifierFlags) != .none,
+              let point = location(of: event), point.y >= minY, let id = row(at: point) else {
+            invocation = nil
+            return
+        }
+        invocation = Invocation(row: id, targets: select(id))
     }
 
     /// The event's location in the page, or nil when it is another
