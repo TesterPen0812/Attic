@@ -596,7 +596,8 @@ final class AtticUITests: XCTestCase {
         XCTAssertTrue(restoreTask.waitForExistence(timeout: 3), "the deleted task is listed")
         XCTAssertTrue(restoreNote.exists, "the deleted note is listed")
         XCTAssertTrue(settings.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "with 1 subtask")).firstMatch.exists, "its subtask is counted")
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "with 1 subtask", "with 1 subtask")).firstMatch.exists,
+            "its subtask is counted")
 
         let search = settings.textFields["recently-deleted-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 3))

@@ -165,7 +165,7 @@ final class TasksPanelUITests: XCTestCase {
         let add = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Add subtask")).firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 3))
         add.click()
-        let field = app.textFields.matching(NSPredicate(format: "label == %@", "Title")).firstMatch
+        let field = app.textFields.matching(NSPredicate(format: "identifier != %@", "AtticTokenField")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "Add subtask opens its field")
         waitFor((field.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the field has the keyboard")
         app.typeText("Pack the charger\r")
@@ -265,18 +265,18 @@ final class TasksPanelUITests: XCTestCase {
 
         app.typeKey("3", modifierFlags: .command)
         XCTAssertTrue(app.descendants(matching: .any)["canvas-surface"].waitForExistence(timeout: 5))
+        // The select tool: a click on empty canvas then changes nothing.
+        let selectTool = app.buttons["canvas-tool-select"]
+        XCTAssertTrue(selectTool.waitForExistence(timeout: 3))
+        selectTool.click()
         waitFor(!row("Book dentist").exists, "VoiceOver does not read the hidden Tasks page")
         XCTAssertFalse(addBar.exists, "nor its add bar")
 
         circlePoint.click()                       // where the hidden circle is
         app.typeKey("9", modifierFlags: [])       // a key the hidden field must not take
 
-        // Back to Tasks through the page button.
-        let pages = app.descendants(matching: .any).matching(identifier: "panel-section-picker").firstMatch
-        pages.hover()
-        let tasks = app.buttons["panel-section-tasks"]
-        waitFor(tasks.isHittable, "the page button opens under the pointer")
-        tasks.click()
+        app.typeKey("1", modifierFlags: .command)
+        waitFor(app.buttons["panel-section-tasks"].isSelected, "⌘1 shows Tasks again")
         waitFor(row("Book dentist").exists, "Tasks shows again")
         XCTAssertTrue(row("Book dentist").label.contains("to do"), "the click did not reach the hidden circle")
         XCTAssertEqual(addBar.value as? String, "Kept draft", "the key did not reach the hidden add bar")

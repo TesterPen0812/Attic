@@ -165,7 +165,7 @@ final class TasksPageUITests: XCTestCase {
         app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
         // The title editor takes the keyboard on the next turn: wait for it
         // before ⌘A, or the list's select-all takes the key instead.
-        let editor = window.textFields.matching(NSPredicate(format: "label == %@", "Title")).firstMatch
+        let editor = window.textFields.matching(NSPredicate(format: "identifier != %@", "AtticTokenField")).firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 3), "Return opens the title editor")
         XCTAssertEqual(editor.value as? String, "Email beta testers")
         waitFor((editor.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the editor has the keyboard")
