@@ -703,8 +703,9 @@ struct AtticPriorityMark: View {
     }
 }
 
-/// A task row: 34 pt (32 highlight + 2), 48 pt with a details line; the
-/// circle at x = 16 and the title at x = 42; highlight inset 8, radius 10.
+/// A task row: 34 pt (a 30 pt highlight, 2 pt clear above and below), 48
+/// pt with a details line; in the page, the circle's left edge at 16 and
+/// the title at 44 (28 and 56 in the panel); highlight inset 8, radius 10.
 /// Three click targets: the circle (done, or back), the subtask checklist
 /// on the details line (quick look), and the rest (select). Keyboard
 /// focusable: a focused row draws the 2 pt accent ring and answers the

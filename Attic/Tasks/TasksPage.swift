@@ -303,10 +303,6 @@ struct TasksPage: View {
         .modifier(TasksDragModifier(
             id: id, tab: tab, group: group, drag: $drag, enabled: tab != .done && model.editingTitleID == nil,
             offset: dragOffset(for: id), heights: { rowHeight($0, in: tab) },
-            // The tabs a row could be dropped on went with v9's one title;
-            // ⌘B and the menu still move a task between Tasks and Backlog.
-            overTab: { _ in nil },
-            onTarget: { model.dropTargetTab = $0 },
             onEnd: finishDrag
         ))
         .onDrop(of: TaskDropContent.dropTypes, delegate: TaskFileDropDelegate(
@@ -509,7 +505,7 @@ struct TasksPage: View {
     }
 
     /// A row's height, from what it shows (no measuring, so scrolling never
-    /// writes view state): 32 pt, 44 with a details line, plus the quick
+    /// writes view state): 34 pt, 48 with a details line, plus the quick
     /// look's lines when it is open.
     private func rowHeight(_ id: UUID, in tab: TasksTab) -> CGFloat {
         guard let row = model.rows(for: tab).first(where: { $0.id == id }) else { return AtticLayout.rowPitch }
@@ -520,13 +516,6 @@ struct TasksPage: View {
 
     private func finishDrag(_ finished: TasksDrag) {
         let reduceMotion = design.reduceMotion
-        model.dropTargetTab = nil
-        if let tab = finished.overTab {
-            drag = nil
-            AtticHaptics.tick(enabled: design.hapticsEnabled)
-            if tab == .backlog { model.moveToBacklog([finished.id]) } else { model.moveToNow([finished.id]) }
-            return
-        }
         withAnimation(AtticMotionPreset.settle.animation(reduceMotion: reduceMotion)) {
             if finished.targetIndex != finished.startIndex {
                 model.move(finished.id, toGroupIndex: finished.targetIndex)
@@ -711,7 +700,7 @@ extension TaskPriority {
 // MARK: - Drag to reorder
 
 /// A row being dragged within its group (reorder: it lifts in place, the
-/// others slide apart), or onto the Now / Backlog label.
+/// others slide apart). ⌘B and the menu move a task between Now and Later.
 struct TasksDrag: Equatable {
     let id: UUID
     let tab: TasksTab
@@ -719,7 +708,6 @@ struct TasksDrag: Equatable {
     let startIndex: Int
     var translation: CGFloat = 0
     var targetIndex: Int
-    var overTab: TasksTab?
 }
 
 private struct TasksDragModifier: ViewModifier {
@@ -730,8 +718,6 @@ private struct TasksDragModifier: ViewModifier {
     let enabled: Bool
     let offset: CGFloat
     let heights: (UUID) -> CGFloat
-    let overTab: (CGPoint) -> TasksTab?
-    let onTarget: (TasksTab?) -> Void
     let onEnd: (TasksDrag) -> Void
 
     @Environment(\.atticDesign) private var design
@@ -764,9 +750,7 @@ private struct TasksDragModifier: ViewModifier {
         var current = drag ?? TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: start)
         guard current.id == id else { return }
         current.translation = value.translation.height
-        current.overTab = overTab(value.location)
         current.targetIndex = Self.target(start: start, translation: current.translation, group: group, heights: heights)
-        if current.overTab != drag?.overTab { onTarget(current.overTab) }
         drag = current
     }
 

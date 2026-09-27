@@ -158,8 +158,6 @@ final class TasksPageModel: ObservableObject {
     private var doneLogQuery: String?
     private var doneLogRevision: UInt64?
     private var doneLogCursor = TaskStore.DoneLogCursor()
-    /// The tab a dragged row is over (Now or Backlog): it outlines.
-    @Published var dropTargetTab: TasksTab?
 
     let parser: TaskTextParser
     /// Where the page's Undo toast shows: the shell's one toast host (the

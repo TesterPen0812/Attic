@@ -106,16 +106,17 @@ enum AtticSubtaskMetrics {
 
 // MARK: - Task row, quick look and card
 
-/// A task row (visual A, "Calm"), from the row's top: the title's 18 pt
-/// line box at 8 (8 + 18 + 10 in a 36 pt row), the details line 2 below it
-/// (8 + 18 + 2 + 16 + 8 in a 52 pt row), the circle centred on the title
-/// line (row top + 17), the highlight 1 pt inside the row.
+/// A task row (34 pt, 48 with a details line), from the row's top: the
+/// text block centred (the title's 18 pt line box at 8 in a 34 pt row;
+/// title, 2 pt, then the 16 pt details line at 6 in a 48 pt one), the
+/// circle centred on the title line (17, or 15), the 30 / 44 pt highlight
+/// 2 pt inside the row.
 enum AtticTaskRowMetrics {
     static let titleLineHeight: CGFloat = 18
     static let detailsLineHeight: CGFloat = 16
     static let titleToDetails: CGFloat = 2
     /// The text block (title, or title + 2 + details) is centred in the
-    /// row: 9 from the top of a 36 pt row, 7 in a 50 pt one.
+    /// row: 8 from the top of a 34 pt row, 6 in a 48 pt one.
     static func titleTop(twoLine: Bool) -> CGFloat {
         let block = titleLineHeight + (twoLine ? titleToDetails + detailsLineHeight : 0)
         return ((twoLine ? AtticLayout.detailRowPitch : AtticLayout.rowPitch) - block) / 2
