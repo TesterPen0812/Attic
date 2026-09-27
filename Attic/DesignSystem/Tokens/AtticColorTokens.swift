@@ -634,6 +634,39 @@ struct AtticColorTokens: Equatable, Sendable {
             inks[.accent] = AtticRGBA(p0.accent)
             inks[.accentText] = AtticRGBA(p0.accent)
         }
+        // Glass and Frosted: every secondary text role reads as Phase 0's
+        // secondary grey, a step below the primary (owner item 7, Astra 11).
+        // Before, only helper and placeholder took it, so tags, the quietest
+        // grey and the colours of meaning kept greys tuned for Solid, which
+        // fade to about 1.5 : 1 on Dark Glass over a light desktop.
+        if phase0Translucent {
+            let p0 = phase0Treatment.palette
+            let secondary = AtticRGBA(p0.secondaryForeground)
+            let p0Base = AtticRGBA(p0.opaqueSurface)
+            inks[.muted] = secondary
+            // Tags: Original's grey is the secondary grey; a palette keeps its
+            // hue at the secondary grey's lightness (Dark). The Light
+            // palettes keep Phase 0's accent exactly (above).
+            if key.palette == .original {
+                inks[.accentText] = secondary
+            } else if dark {
+                inks[.accentText] = accentBase.tuned(toContrast: secondary.contrast(on: p0Base), against: [p0Base], lighten: true)
+            }
+            // The colours of meaning (overdue, the High mark, warnings) keep
+            // their floors on the surface as drawn over a mid-grey desktop.
+            // Over black and white desktops they stay inside the named
+            // translucency exception: a red that kept 4.5 : 1 there would
+            // be almost white or black and stop meaning "overdue".
+            let surfaces = [AtticSurfaceModel.contentTop, 1].map { panel.composite(.midGrey, at: $0) }
+            // High's orange "!!" would have to go almost white to reach the
+            // 4.5 : 1 Increase Contrast asks of it here, and stop reading as
+            // orange: under Increase Contrast it stays in the exception.
+            for ink in [AtticInk.dueText, .priorityMark, .warningText] where !(ink == .priorityMark && ic) {
+                let floor = AtticSurfaceModel.floor(for: ink, kind: key.surface, increaseContrast: ic)
+                inks[ink] = inks[ink]!.tuned(toContrast: floor * (floor > 3 ? textTarget / 4.5 : secondaryTarget / 3),
+                                             against: surfaces, lighten: dark)
+            }
+        }
         // The surface tuning can bring the priority greys together (each
         // stops at the floor): keep Low and Medium a step beyond None.
         let noneOnPanel = inks[.priorityNone]!.contrast(on: basePanel)
