@@ -31,6 +31,9 @@ struct TasksPage: View {
     @State private var fileDropRow: UUID?
     /// The Done page's search field has the keyboard.
     @State private var searchFocused = false
+    /// The pager's scroll phase: only a person's swipe changes the page.
+    @State private var pagerPhase: ScrollPhase = .idle
+    @State private var swipeEndedAt: Date?
     /// The bottom stack's height: the add bar, plus the selection bar, a
     /// paste offer or an error line while they show.
     @State private var bottomControlsHeight: CGFloat = AtticControlSize.addBarHeight
@@ -119,10 +122,33 @@ struct TasksPage: View {
             .scrollTargetLayout()
         }
         .scrollTargetBehavior(.paging)
-        .scrollPosition(id: Binding(get: { Optional(model.tab) }, set: { if let tab = $0 { model.select(tab: tab) } }))
+        // Only a swipe moves the page: the position the pager reports while
+        // no one is scrolling (a reveal laying out, a resize) never selects
+        // a neighbour, so the panel always opens on the page the model says.
+        .scrollPosition(id: Binding(get: { Optional(model.tab) }, set: { reported in
+            guard let tab = reported else { return }
+            let justSwiped = swipeEndedAt.map { Date().timeIntervalSince($0) < 0.4 } ?? false
+            guard Self.swipeMovesPage(pagerPhase) || justSwiped else { return }
+            model.select(tab: tab)
+        }))
+        .onScrollPhaseChange { old, phase in
+            pagerPhase = phase
+            // The settled page can be reported just after the swipe ends.
+            if phase == .idle, Self.swipeMovesPage(old) { swipeEndedAt = Date() }
+        }
         .scrollIndicators(.never)
         .scrollDisabled(drag != nil)
         .scrollEdgeEffectHidden(true, for: .all)
+    }
+
+    /// The phases in which the pager follows a person's swipe (not a
+    /// layout pass, and not its own animation to the selected page).
+    nonisolated static func swipeMovesPage(_ phase: ScrollPhase) -> Bool {
+        switch phase {
+        case .tracking, .interacting, .decelerating: true
+        case .idle, .animating: false
+        @unknown default: false
+        }
     }
 
     private func page(_ tab: TasksTab) -> some View {
