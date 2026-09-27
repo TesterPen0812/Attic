@@ -293,14 +293,14 @@ struct AtticComposerStrip<DateContent: View, PriorityContent: View>: View {
         HStack(spacing: AtticPickerMetrics.stripSpacing) {
             AtticSmallButton(systemName: "calendar", title: "Date", label: "Date") { datePresented = true }
                 .popover(isPresented: $datePresented, arrowEdge: .top) {
-                    datePicker().padding(AtticPopoverMetrics.padding)
+                    datePicker().atticPickerSurface()
                 }
                 .accessibilityIdentifier("composer-date")
             AtticSmallButton(systemName: "tag", title: "Tag", label: "Tag", action: onTag)
                 .accessibilityIdentifier("composer-tag")
             AtticSmallButton(systemName: "flag", title: "Priority", label: "Priority") { priorityPresented = true }
                 .popover(isPresented: $priorityPresented, arrowEdge: .top) {
-                    priorityPicker().padding(AtticPopoverMetrics.padding)
+                    priorityPicker().atticPickerSurface()
                 }
                 .accessibilityIdentifier("composer-priority")
         }
@@ -337,4 +337,24 @@ struct AtticSuggestionList: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Suggestions"))
     }
+}
+
+// MARK: - Picker surface
+
+/// A picker inside a native pop-over (which may reach past the panel): its
+/// padding and Attic's opaque pop-over fill, so its text keeps its contrast
+/// whatever the desktop behind the pop-over's glass (the see-through native
+/// pop-over washed Dark's secondary text out over a light desktop).
+private struct AtticPickerSurface: ViewModifier {
+    @Environment(\.atticDesign) private var design
+
+    func body(content: Content) -> some View {
+        content
+            .padding(AtticPopoverMetrics.padding)
+            .background(design.tokens.popoverFill.color)
+    }
+}
+
+extension View {
+    func atticPickerSurface() -> some View { modifier(AtticPickerSurface()) }
 }

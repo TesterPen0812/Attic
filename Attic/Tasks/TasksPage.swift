@@ -557,8 +557,7 @@ struct TasksPage: View {
                 model.setDueDay(nil, for: targets)
             }
         )
-        .padding(AtticPopoverMetrics.padding)
-        .atticDesign(design)
+        .atticPickerSurface()
     }
 
     private func tagPicker(for id: UUID, open: TasksMetaPopover?) -> some View {
@@ -570,8 +569,7 @@ struct TasksPage: View {
             onCreate: { model.toggleTag($0, for: targets) },
             focusField: true
         )
-        .padding(AtticPopoverMetrics.padding)
-        .atticDesign(design)
+        .atticPickerSurface()
     }
 
     private func selectionRun(for id: UUID, in tab: TasksTab) -> AtticSelectionRun {
