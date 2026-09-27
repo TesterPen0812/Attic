@@ -92,6 +92,11 @@ struct TasksPageHost: View {
                     model.openForCapture(tab)
                 }
                 if environment["ATTIC_UI_TEST_COMPLETED_OPEN"] == "1" { model.completedTodayExpanded = true }
+                // The first row with subtasks, its quick look open.
+                if environment["ATTIC_UI_TEST_EXPAND_FIRST"] == "1",
+                   let row = model.rows(for: model.tab).first(where: { $0.model.subtasks != nil }) {
+                    model.setExpanded(row.id, true)
+                }
             }
             #endif
         }

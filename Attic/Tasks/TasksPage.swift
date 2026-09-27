@@ -253,7 +253,7 @@ struct TasksPage: View {
                 selectionRun: selectionRun(for: id, in: tab),
                 isExpanded: expanded,
                 dropLabel: fileDropRow == id ? String(localized: "Add to page") : nil,
-                actions: actions(for: id),
+                actions: actions(for: id, in: tab),
                 onToggleExpanded: { model.toggleExpanded(id) },
                 onSelect: { rowClicked(id, tab: tab) },
                 focus: AtticRowFocus(binding: $focusedRow, id: id),
@@ -348,8 +348,8 @@ struct TasksPage: View {
     /// and the right-click menu (Astra 19). A Done page row completes or
     /// un-completes, restores to Now and shows its details (a Done log
     /// task) or its files (one still in Now's done group); nothing else.
-    private func actions(for id: UUID) -> AtticTaskActions {
-        if model.tab == .done {
+    private func actions(for id: UUID, in tab: TasksTab) -> AtticTaskActions {
+        if tab == .done {
             return AtticTaskActions(
                 toggleDone: { model.toggleDone(id) },
                 openPage: { toggleDetails(id) },
@@ -421,7 +421,7 @@ struct TasksPage: View {
         if tab == .done {
             // The same commands the row's keys and VoiceOver offer
             // (`actions(for:)`).
-            let actions = actions(for: row.id)
+            let actions = actions(for: row.id, in: tab)
             if let restore = actions.restoreToNow {
                 Button(String(localized: "Restore to Now")) { restore() }
             }
