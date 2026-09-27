@@ -56,7 +56,13 @@ struct TasksPage: View {
     @State private var swipeEndedAt: Date?
     /// The bottom stack's height: the add bar, plus the selection bar, a
     /// paste offer or an error line while they show.
-    @State private var bottomControlsHeight: CGFloat = AtticControlSize.addBarHeight
+    @State private var bottomControlsHeight: CGFloat = TasksViewport.reservedStack
+    /// The bottom stack's measured height, observed only by the viewport's
+    /// fade and the notice clearance: a keystroke that shows the strip
+    /// redraws those, never the page and its 500 rows (round 4: the first
+    /// keystroke's cost). Held in `@State`, not `@StateObject`, so the page
+    /// itself does not observe it.
+    @State private var bottomStack = TasksBottomStackHeight()
 
     static let space = NamedCoordinateSpace.named("AtticTasksPage")
 
@@ -88,6 +94,10 @@ struct TasksPage: View {
         .onAppear {
             model.resetForReveal()
             chrome.bottomControlsHeight(footerZone)
+            // After the first frame: the parser's and the date words' first
+            // use (formatters, calendars) happens here, not in the first
+            // keystroke (round 4).
+            DispatchQueue.main.async { model.warmUpShorthand() }
             #if DEBUG
             // Capture seam (`ATTIC_UI_TEST_META=date|tags`): a row's date or
             // tag list opens by itself for hands-off captures.
@@ -168,8 +178,7 @@ struct TasksPage: View {
         }
         // The shell's toast and notices sit above everything in the bottom
         // stack, so a selection bar or paste offer never hides under them.
-        .preference(key: PanelPageNoticeClearancePreferenceKey.self,
-                    value: footerZone + max(0, bottomControlsHeight - AtticControlSize.addBarHeight))
+        .background(TasksNoticeClearance(stack: bottomStack, footerZone: footerZone))
     }
 
     /// The panel must stay open while someone types or picks in it: the add
@@ -388,15 +397,7 @@ struct TasksPage: View {
     /// viewport, not per row, so an open quick look fades line by line as
     /// it passes under the tabs and header, or under the add bar.
     private var viewportMask: some View {
-        GeometryReader { proxy in
-            LinearGradient(
-                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, listTop: listTop,
-                                                bottomStack: bottomControlsHeight + bottomInset)
-                    .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
-                startPoint: .top, endPoint: .bottom
-            )
-        }
-        .allowsHitTesting(false)
+        TasksViewportMask(stack: bottomStack, tabsTop: tabsTop, listTop: listTop, bottomInset: bottomInset)
     }
 
     // MARK: - Row
@@ -1141,11 +1142,13 @@ struct TasksPage: View {
             }
             addBar
         }
-        // The lists take the new room on the next turn: the keystroke that
-        // shows the strip draws at once, and the lists' margins (500 rows
-        // re-laid out) follow while the strip fades in.
+        // The lists' clearance changes only past the room always kept for
+        // the strip (a selection bar, a paste offer): the strip appearing
+        // with the first keystroke never re-lays the lists.
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-            DispatchQueue.main.async { if bottomControlsHeight != height { bottomControlsHeight = height } }
+            bottomStack.height = height
+            let clearance = max(height, TasksViewport.reservedStack)
+            if bottomControlsHeight != clearance { bottomControlsHeight = clearance }
         }
         .padding(.horizontal, max(AtticSpacing.panelMargin, layout.chromeInsets.leading))
         .padding(.bottom, bottomInset)
@@ -1805,9 +1808,74 @@ struct TasksMetaPopover: Equatable {
     var newTag = false
 }
 
+/// The bottom stack's measured height (see `TasksPage.bottomStack`).
+@MainActor
+final class TasksBottomStackHeight: ObservableObject {
+    @Published var height: CGFloat = AtticControlSize.addBarHeight {
+        didSet { scheduleMask() }
+    }
+    /// What the viewport's fade uses: the height a moment later. Changing
+    /// the lists' mask re-renders their layers (about 12 ms with 500 rows),
+    /// so it follows the strip after the keystroke's frame, while the strip
+    /// is still fading in, never inside it (round 4: the first keystroke).
+    @Published private(set) var maskHeight: CGFloat = AtticControlSize.addBarHeight
+    private var pending: DispatchWorkItem?
+
+    private func scheduleMask() {
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.maskHeight != self.height else { return }
+                self.maskHeight = self.height
+            }
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+}
+
+/// The viewport's fade, redrawn by itself when the bottom stack changes.
+private struct TasksViewportMask: View {
+    @ObservedObject var stack: TasksBottomStackHeight
+    let tabsTop: CGFloat
+    let listTop: CGFloat
+    let bottomInset: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            LinearGradient(
+                stops: TasksViewport.maskStops(height: proxy.size.height, tabsTop: tabsTop, listTop: listTop,
+                                                bottomStack: stack.maskHeight + bottomInset)
+                    .map { Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location) },
+                startPoint: .top, endPoint: .bottom
+            )
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Tells the shell how high its toast and notices must sit (above the
+/// bottom stack as it is), from its own small view.
+private struct TasksNoticeClearance: View {
+    @ObservedObject var stack: TasksBottomStackHeight
+    let footerZone: CGFloat
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .preference(key: PanelPageNoticeClearancePreferenceKey.self,
+                        value: footerZone + max(0, stack.height - AtticControlSize.addBarHeight))
+            .accessibilityHidden(true)
+    }
+}
+
 /// The list viewport's geometry (owner fix 8, review 9), pure so the
 /// clearance and the fade are tested directly.
 enum TasksViewport {
+    /// The bottom stack's room the lists always keep: the add bar, and the
+    /// strip over it with its gap (it comes and goes with the draft).
+    static let reservedStack = AtticControlSize.addBarHeight + AtticPickerMetrics.stripToBar + AtticControlSize.smallHeight
+
     /// Where the first row rests: the tabs, then 14.
     static func listTop(tabsTop: CGFloat) -> CGFloat {
         tabsTop + AtticLayout.pageTabsHeight + AtticLayout.pageTabsToList

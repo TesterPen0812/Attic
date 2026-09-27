@@ -67,7 +67,10 @@ struct TasksPageHost: View {
         // composer lock) until it is added or cleared; it is kept either way.
         .onReceive(model.addBarState.$text.map { !$0.text.isEmpty }.removeDuplicates()) { hasDraft in
             guard isCurrent else { return }
-            uiState.setInteractionLock(.taskComposer, isActive: hasDraft)
+            // On the next turn (round 4): the shell's published lock redraws
+            // what observes the shell, and the first keystroke's frame is
+            // the add bar's alone. A turn late changes nothing for hiding.
+            DispatchQueue.main.async { uiState.setInteractionLock(.taskComposer, isActive: hasDraft) }
         }
         .onAppear {
             // Task pages arrive in Phase 3; until then "Open page" opens the

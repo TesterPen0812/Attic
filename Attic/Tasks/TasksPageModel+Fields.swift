@@ -7,6 +7,16 @@ import Foundation
 extension TasksPageModel {
     var dateChoices: TaskDateChoices { TaskDateChoices(parser: parser) }
 
+    /// The shorthand's first use, done ahead of the first keystroke: the
+    /// parser's words and formatters, the quick days, the tags list.
+    func warmUpShorthand() {
+        var sample = TaskAddBarText(text: "Pay rent tomorrow 30 Sep #home !!")
+        _ = sample.chips(parser: parser, caret: nil)
+        _ = sample.markShown(parser: parser, caret: 0)
+        _ = sample.suggestion(parser: parser, caret: (sample.text as NSString).length, tags: cachedTags)
+        _ = dateChoices.quick.map { dateChoices.detail(for: $0.day) }
+    }
+
     /// The library's tags, most used first.
     var allTags: [String] { library.tags.counts().map(\.name) }
 
