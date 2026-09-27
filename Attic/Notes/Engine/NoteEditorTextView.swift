@@ -39,8 +39,17 @@ final class NoteEditorTextView: NSTextView {
         CATransaction.commit()
     }
 
-    override func textViewportLayoutControllerDidLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
-        super.textViewportLayoutControllerDidLayout(textViewportLayoutController)
+    /// Keystroke-to-layout end marker. The macOS 26 SDK does not expose
+    /// NSTextView's viewport-controller delegate method for overriding, so
+    /// the marker closes after the view's own layout or pre-draw pass,
+    /// where TextKit 2 lays out the viewport.
+    override func layout() {
+        super.layout()
+        PerformanceSignposts.noteDidLayout()
+    }
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
         PerformanceSignposts.noteDidLayout()
     }
 
