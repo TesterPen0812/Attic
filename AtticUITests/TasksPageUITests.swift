@@ -599,6 +599,18 @@ final class TasksPageUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
     }
 
+    /// Waits until `element` has stopped moving (a page sliding in).
+    private func waitForSettled(_ element: XCUIElement, timeout: TimeInterval = 3) {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = element.frame
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            let now = element.frame
+            if now == last { return }
+            last = now
+        }
+    }
+
     /// Round 5 (the owner's Done row stayed lit): a click on the list's
     /// empty space, or on Done's search, leaves no row lit; nothing is lit
     /// that the person did not click or reach with the keyboard.
@@ -617,6 +629,9 @@ final class TasksPageUITests: XCTestCase {
         tab("done").click()
         waitFor(row("Pay rent").isHittable, "the Done log shows")
         XCTAssertFalse(row("Send invoice").isSelected, "Done's first row is not lit on arrival")
+        // The pager slides the Done page in: click once it has settled, or
+        // the click lands where the row was a moment before.
+        waitForSettled(row("Pay rent"))
         select("Pay rent")
         waitFor(row("Pay rent").isSelected, "a click selects it")
         searchField.click()
