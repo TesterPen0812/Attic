@@ -14,6 +14,9 @@ enum PerformanceSignposts {
     private static var reveal: OSSignpostIntervalState?
     private static var pageSwitch: OSSignpostIntervalState?
     private static var noteKey: OSSignpostIntervalState?
+    /// Phase 2 editor: keystroke to the TextKit 2 viewport layout that
+    /// shows it (the TextKit 2 counterpart of the Phase 0 draw callback).
+    private static var noteLayout: OSSignpostIntervalState?
     private static var canvasDrag: OSSignpostIntervalState?
     private static var launchStart: UInt64?
     private static var revealStart: UInt64?
@@ -95,7 +98,15 @@ enum PerformanceSignposts {
     static func beginNoteKey() {
         guard noteKey == nil, noteStart == nil else { return }
         noteStart = started()
-        if signposter.isEnabled { noteKey = signposter.beginInterval("NoteKeystrokeToDraw") }
+        if signposter.isEnabled {
+            noteKey = signposter.beginInterval("NoteKeystrokeToDraw")
+            noteLayout = signposter.beginInterval("NoteKeystrokeToLayout")
+        }
+    }
+
+    static func noteDidLayout() {
+        if let noteLayout { signposter.endInterval("NoteKeystrokeToLayout", noteLayout) }
+        noteLayout = nil
     }
 
     static func noteDidDraw() {
@@ -106,6 +117,7 @@ enum PerformanceSignposts {
     }
 
     static func cancelNoteKey() {
+        noteDidLayout()
         if let noteKey { signposter.endInterval("NoteKeystrokeToDraw", noteKey) }
         noteKey = nil
         noteStart = nil

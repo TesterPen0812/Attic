@@ -39,6 +39,11 @@ final class NoteEditorTextView: NSTextView {
         CATransaction.commit()
     }
 
+    override func textViewportLayoutControllerDidLayout(_ textViewportLayoutController: NSTextViewportLayoutController) {
+        super.textViewportLayoutControllerDidLayout(textViewportLayoutController)
+        PerformanceSignposts.noteDidLayout()
+    }
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
         guard let engine, !engine.isWritingToolsSessionActive else {
             return super.insertText(string, replacementRange: replacementRange)

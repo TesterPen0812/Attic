@@ -34,7 +34,7 @@ final class SchemaMigrationTests: XCTestCase {
             let entities = Dictionary(uniqueKeysWithValues: container.schema.entities.map { ($0.name, $0) })
             XCTAssertEqual(Set(entities.keys), [
                 "TaskItem", "NoteItem", "NoteAttachment", "CanvasBoardItem", "CanvasStrokeItem",
-                "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink"
+                "CanvasImageItem", "CanvasSemanticObjectItem", "ItemLink", "NoteVersion", "NotePendingEdit"
             ])
             let taskAttributes = Set(entities["TaskItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(taskAttributes.isSuperset(of: [
@@ -45,6 +45,8 @@ final class SchemaMigrationTests: XCTestCase {
             XCTAssertTrue(attachmentAttributes.contains("deletedAt"))
             let noteAttributes = Set(entities["NoteItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(noteAttributes.isSuperset(of: ["deletedAt", "deletedAttachmentIDsRaw", "tagsRaw"]))
+            // Phase 2: the note format fields (all defaulted or optional).
+            XCTAssertTrue(noteAttributes.isSuperset(of: ["content", "contentFormat", "plainText", "taskID", "revision", "revisionID"]))
             let boardAttributes = Set(entities["CanvasBoardItem"]?.attributes.map(\.name) ?? [])
             XCTAssertTrue(boardAttributes.isSuperset(of: ["tagsRaw", "purgedAt", "recentlyDeletedAt", "deletedContentCount"]))
         }
