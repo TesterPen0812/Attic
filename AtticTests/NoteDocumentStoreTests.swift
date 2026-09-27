@@ -386,6 +386,31 @@ final class NoteDocumentStoreTests: XCTestCase {
                              digest: String(repeating: "a", count: 64), data: Data([1, 2, 3, 4]))
     }
 
+    func testIncompleteImageReservationCannotBecomeAStoredAttachment() throws {
+        let id = UUID()
+        let reservation = StagedNoteAttachment(id: UUID(), filename: "loading.png",
+            contentTypeIdentifier: "public.png", byteCount: 0, digest: "", data: Data())
+        let result = store.createDocumentNote(id: id,
+            document: NoteDocument(blocks: [.text("Image"), .image(attachmentID: reservation.id)]),
+            staged: [reservation])
+        guard case .failure(.invalidDocument) = result else { return XCTFail("incomplete image must be refused") }
+        XCTAssertNil(store.note(withID: id))
+        XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
+    }
+
+    func testCreateWithExistingLiveIDCannotInventRevisionToOverwrite() throws {
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: document("First")) else {
+            return XCTFail()
+        }
+        let revision = store.note(withID: id)?.revisionID
+        guard case .failure(.staleRevision) = store.createDocumentNote(id: id, document: document("Second")) else {
+            return XCTFail("a first-save retry has no proven base revision")
+        }
+        XCTAssertEqual(store.note(withID: id)?.title, "First")
+        XCTAssertEqual(store.note(withID: id)?.revisionID, revision)
+    }
+
     func testStagedImageRowsCommitOnlyWithTheDocumentThatShowsThem() throws {
         let shown = stagedImage(), undone = stagedImage()
         let doc = NoteDocument(blocks: [.text("Pics"), .image(attachmentID: shown.id)])
@@ -419,6 +444,45 @@ final class NoteDocumentStoreTests: XCTestCase {
         let base = try XCTUnwrap(versions(id).first { $0.id == edit.baseVersionID })
         XCTAssertEqual(base.title, "Base")
         XCTAssertEqual(base.sourceRevisionID, store.note(withID: id)?.revisionID)
+    }
+
+    func testPendingProposalAndBaseSurvivePersistentRestart() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProposal-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let firstContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
+                                                                      storeDirectory: directory)
+        let first = NoteStore(container: firstContainer, attachmentFileStore: makeTestAttachmentFileStore())
+        guard case let .success((id, _)) = first.createDocumentNote(id: UUID(), document: document("Base")) else {
+            return XCTFail()
+        }
+        let token = try XCTUnwrap(first.note(withID: id)).revisionToken
+        guard case .success(.pending) = first.agentWrite(noteID: id, baseRevisionToken: token,
+            document: document("Proposal"), agentName: "Agent", noteIsOpen: true) else { return XCTFail() }
+        let secondContainer = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
+                                                                       storeDirectory: directory)
+        let second = NoteStore(container: secondContainer, attachmentFileStore: makeTestAttachmentFileStore())
+        let edit = try XCTUnwrap(second.pendingEdits(noteID: id).first)
+        XCTAssertEqual(second.note(withID: id)?.title, "Base")
+        XCTAssertEqual(second.versions(noteID: id).first(where: { $0.id == edit.baseVersionID })?.title, "Base")
+        XCTAssertEqual(NoteContentCodec.decode(try XCTUnwrap(edit.proposedContent)).document?.title, "Proposal")
+    }
+
+    func testFailedProposalApplyRetainsPendingEditAndBaseUntilRetry() throws {
+        let (id, _) = try create(document("Base"))
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: document("Proposal"), agentName: "Agent", noteIsOpen: true) else { return XCTFail() }
+        let edit = try XCTUnwrap(store.pendingEdits(noteID: id).first)
+        gate.shouldFail = true
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        gate.shouldFail = false
+        XCTAssertEqual(store.note(withID: id)?.title, "Base")
+        XCTAssertEqual(store.pendingEdits(noteID: id).first?.id, edit.id)
+        XCTAssertEqual(store.versions(noteID: id).first(where: { $0.id == edit.baseVersionID })?.title, "Base")
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 1)
+        XCTAssertEqual(store.note(withID: id)?.title, "Proposal")
+        XCTAssertTrue(store.pendingEdits(noteID: id).isEmpty)
     }
 
     func testRowsShownByVersionsAreRetained() throws {

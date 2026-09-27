@@ -179,10 +179,10 @@ extension NoteStore {
             if existing.contains(where: { $0.deletedAt != nil }) || existing.contains(where: { !$0.usesDocumentFormat }) {
                 resolvedID = UUID()
             } else {
-                // Already created (a retried first save): save into it.
-                return saveDocument(noteID: id, document: document, baseRevisionID: canonical(existing)?.revisionID,
-                                    staged: staged, prepared: prepared)
-                    .map { (id, $0) }
+                // A crashed first save may already have committed this ID.
+                // The caller has no revision proving it may replace that row.
+                return .failure(.staleRevision(expected: NoteItem.initialRevisionToken,
+                                               current: canonical(existing)?.revisionToken ?? NoteItem.initialRevisionToken))
             }
         }
         let timestamp = currentDate
@@ -190,13 +190,15 @@ extension NoteStore {
         let revisionID: UUID
         do {
             revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: prepared)
+            try stageAttachments(staged, referencedBy: document, noteID: resolvedID, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
+            context.rollback()
             return .failure(error)
         } catch {
+            context.rollback()
             return .failure(.encodingFailed(error.localizedDescription))
         }
         context.insert(note)
-        stageAttachments(staged, referencedBy: document, noteID: resolvedID, context: context, timestamp: timestamp)
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
         }
@@ -238,7 +240,7 @@ extension NoteStore {
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0, prepared: prepared)
-            stageAttachments(staged, referencedBy: document, noteID: noteID, context: context, timestamp: timestamp)
+            try stageAttachments(staged, referencedBy: document, noteID: noteID, context: context, timestamp: timestamp)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
@@ -293,9 +295,15 @@ extension NoteStore {
         noteID: UUID,
         context: ModelContext,
         timestamp: Date
-    ) {
+    ) throws {
         guard !staged.isEmpty else { return }
         let shown = Set(document.attachmentIDs)
+        guard staged.filter({ shown.contains($0.id) }).allSatisfy({
+            $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment
+                && $0.byteCount == Int64($0.data.count) && !$0.digest.isEmpty
+        }) else {
+            throw NoteDocumentStoreError.invalidDocument("An image has no complete payload.")
+        }
         let existing = Set((try? attachmentRows(forNoteID: noteID))?.map(\.id) ?? [])
         let highest = (try? attachmentRows(forNoteID: noteID))?.map(\.sortIndex).max() ?? -1
         var nextIndex = highest &+ 1
