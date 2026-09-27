@@ -47,9 +47,11 @@ struct NotesEditorPage: View {
     @ViewBuilder
     private var content: some View {
         if controller.isLibraryPresented {
-            NotesPlainLibrary(noteStore: noteStore, selectedID: controller.active?.noteID ?? controller.legacyNoteID) { id in
-                if controller.open(noteID: id) { controller.isLibraryPresented = false }
-            }
+            NotesPlainLibrary(noteStore: noteStore, failedDrafts: controller.failedDrafts,
+                              selectedID: controller.active?.noteID ?? controller.legacyNoteID,
+                              onOpen: { id in
+                                  if controller.open(noteID: id) { controller.isLibraryPresented = false }
+                              }, onOpenDraft: { id in _ = controller.openFailedDraft(sessionID: id) })
             .padding(.top, topInset)
             .padding(.bottom, bottomInset)
             .padding(.horizontal, layout.contentInsets.leading)
@@ -61,7 +63,7 @@ struct NotesEditorPage: View {
         } else if let session = controller.active {
             NoteEditorRepresentable(session: session, topInset: topInset, bottomInset: bottomInset,
                                     horizontalInset: layout.contentInsets.leading)
-                .id(session.id)
+                .id(ObjectIdentifier(session.engine))
                 .accessibilityIdentifier("note-editor")
         } else {
             Color.clear
@@ -122,8 +124,8 @@ struct NotesEditorPage: View {
         }
         if controller.isLibraryPresented {
             controller.isLibraryPresented = false
-        } else if controller.active.map({ controller.preserve($0) }) ?? true {
-            controller.isLibraryPresented = true
+        } else {
+            _ = controller.showLibrary()
         }
     }
 
@@ -192,8 +194,10 @@ private struct NoteStatusSlot: View {
 /// All notes, plain (the real library is slice 4).
 private struct NotesPlainLibrary: View {
     @ObservedObject var noteStore: NoteStore
+    let failedDrafts: [NoteSession]
     let selectedID: UUID?
     let onOpen: (UUID) -> Void
+    let onOpenDraft: (UUID) -> Void
 
     var body: some View {
         let notes = noteStore.orderedNotes()
@@ -202,7 +206,28 @@ private struct NotesPlainLibrary: View {
                 AtticText(verbatim: String(localized: "All notes"), style: .panelHeading, ink: .heading)
                     .padding(.bottom, 6)
                 if notes.isEmpty {
-                    AtticText(verbatim: String(localized: "No notes yet"), style: .body, ink: .helper)
+                    if failedDrafts.isEmpty {
+                        AtticText(verbatim: String(localized: "No notes yet"), style: .body, ink: .helper)
+                    }
+                }
+                ForEach(failedDrafts) { draft in
+                    let status = switch draft.problem {
+                    case .some(.onlyInMemory): String(localized: "Only in memory")
+                    default: String(localized: "Not saved · Recovery copy")
+                    }
+                    Button { onOpenDraft(draft.id) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            AtticText(verbatim: draft.engine.document().title.isEmpty ? String(localized: "Untitled draft")
+                                      : draft.engine.document().title, style: .rowTitle, ink: .heading, truncates: true)
+                            AtticText(verbatim: status,
+                                      style: .rowMeta, ink: .helper)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("notes-failed-draft-row")
                 }
                 ForEach(notes) { note in
                     Button { onOpen(note.id) } label: {
@@ -255,6 +280,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: min(selection.location, length),
                                               length: min(selection.length, max(0, length - selection.location))))
             textView.scrollRangeToVisible(textView.selectedRange())
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: session.scrollOffset))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
             textView.window?.makeFirstResponder(textView)
         }
         return scrollView

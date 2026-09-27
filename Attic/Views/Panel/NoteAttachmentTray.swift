@@ -1041,6 +1041,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
     /// delta instead of a whole-document diff (PERF-12).
     var bodyEditLedger: NoteBodyEditLedger? = nil
     var onMoveAttachment: (UUID, Int) -> Bool = { _, _ in false }
+    var onTextViewReady: ((NSTextView) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -1096,6 +1097,7 @@ struct AttachmentAwareTextEditor: NSViewRepresentable {
         textView.setAccessibilityIdentifier("note-body")
         textView.setAccessibilityLabel("Note body")
         context.coordinator.textView = textView
+        onTextViewReady?(textView)
         textView.textStorage?.delegate = context.coordinator
         _ = context.coordinator.synchronize(parent: self, textView: textView)
         Self.applyReadability(

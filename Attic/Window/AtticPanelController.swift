@@ -388,6 +388,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             PerformanceSignposts.cancelPageSwitch()
             return false
         }
+        if uiState.selectedSection.isNotes { noteDraft.pages.panelDidShow() }
         let visibleFrame = workArea.visibleFrame
         let priorFrame = panel.visibleContentFrame
         currentCorner = corner
@@ -489,7 +490,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         guard let screen = panel.screen ?? currentScreen else {
             return .rejected(.missingUsableScreen)
         }
-        guard noteDraft.flush() else {
+        guard noteDraft.leaveForNavigation() else {
             return .rejected(.draftFlushFailed)
         }
         clearInteractiveDismissal()

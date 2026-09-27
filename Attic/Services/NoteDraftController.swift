@@ -156,6 +156,9 @@ final class NoteDraftController: ObservableObject {
     /// page switch) reach them through `flush()`, so both editors' drafts
     /// are preserved at the same boundaries.
     let pages: NotesPageController
+    /// The visible legacy AppKit editor supplies this without making the
+    /// persistence controller own a view or a responder-chain lookup.
+    var legacyHasActiveComposition: () -> Bool = { false }
     private let autosaveDelay: Duration
     private let maximumAutosaveDelay: Duration
     private let sessionDefaults: UserDefaults?
@@ -410,6 +413,13 @@ final class NoteDraftController: ObservableObject {
         return legacy && current
     }
 
+    /// Called before navigation can remove the visible Notes editor.
+    @discardableResult
+    func leaveForNavigation() -> Bool {
+        guard close() else { return false }
+        return pages.leaveForNavigation()
+    }
+
     /// Persists pending text without closing the editor. The current store
     /// snapshot is compared with the snapshot loaded into the editor before a
     /// write, preventing autosave from silently overwriting a CloudKit change.
@@ -513,6 +523,10 @@ final class NoteDraftController: ObservableObject {
     /// Flushes and clears the editor only after persistence succeeds.
     @discardableResult
     func close() -> Bool {
+        if isActive && legacyHasActiveComposition() {
+            saveErrorMessage = String(localized: "Finish composing text before leaving this note.")
+            return false
+        }
         guard flush() else { return false }
         discardDraft()
         return true

@@ -20,6 +20,11 @@ struct NotesPageHost: View {
         return noteStore.note(withID: id)?.usesDocumentFormat ?? false
     }
 
+    private var legacyExitAction: (() -> Void)? {
+        guard !NotesEditorSetting.isEnabled() else { return nil }
+        return { exitToOldPage() }
+    }
+
     var body: some View {
         Group {
             if !hasRestoredSession {
@@ -27,8 +32,8 @@ struct NotesPageHost: View {
             } else if usesNewEditor {
                 NotesEditorPage(controller: noteDraft.pages, noteStore: noteStore, noteDraft: noteDraft,
                                 uiState: uiState, layout: layout,
-                                exitToOldPage: NotesEditorSetting.isEnabled() ? nil : exitToOldPage)
-                    .onAppear(perform: openDocumentNoteFromOldPage)
+                                exitToOldPage: legacyExitAction)
+                    .onAppear { openDocumentNoteFromOldPage() }
             } else if uiState.isComposerPresented {
                 NoteComposerView(noteDraft: noteDraft, uiState: uiState,
                                  topContentInset: layout.contentInsets.top + 64,
@@ -54,7 +59,7 @@ struct NotesPageHost: View {
     }
 
     private func exitToOldPage() {
-        guard noteDraft.pages.preserveAll() else { return }
+        guard noteDraft.leaveForNavigation() else { return }
         noteDraft.discardDraft()
         uiState.endAdding()
     }

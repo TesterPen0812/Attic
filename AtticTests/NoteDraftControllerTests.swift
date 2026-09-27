@@ -6,6 +6,20 @@ import XCTest
 
 final class NoteDraftControllerTests: XCTestCase {
     @MainActor
+    func testLegacyNavigationRefusesActiveComposition() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))
+        XCTAssertTrue(draft.beginNew())
+        draft.title = "Composing"
+        draft.legacyHasActiveComposition = { true }
+        XCTAssertFalse(draft.leaveForNavigation())
+        XCTAssertNotNil(draft.saveErrorMessage)
+        XCTAssertTrue(store.notes.isEmpty)
+        draft.legacyHasActiveComposition = { false }
+        XCTAssertTrue(draft.leaveForNavigation())
+    }
+
+    @MainActor
     func testNoteViewportExtendsUnderChromeWithReachableDocumentEnds() throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let draft = NoteDraftController(noteStore: store, autosaveDelay: .seconds(60))

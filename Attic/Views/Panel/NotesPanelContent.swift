@@ -301,6 +301,11 @@ struct NoteComposerView: View {
                 onMoveAttachment: { id, offset in
                     guard noteDraft.flush(), let noteID = noteDraft.activeNoteID else { return false }
                     return noteStore.placeAttachment(id, in: noteID, offset: offset)
+                },
+                onTextViewReady: { [weak noteDraft] textView in
+                    noteDraft?.legacyHasActiveComposition = { [weak textView] in
+                        textView?.hasMarkedText() ?? false
+                    }
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)

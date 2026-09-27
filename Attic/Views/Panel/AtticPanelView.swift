@@ -355,12 +355,12 @@ struct AtticPanelView: View {
         selectSection(page.section)
     }
 
-    private func selectSection(_ section: PanelSection) {
+    func selectSection(_ section: PanelSection) {
         guard uiState.selectedSection != section else { return }
         // A refused Notes close must leave every other state untouched, so
         // the refusal is decided before any focus or lock changes.
-        if uiState.selectedSection.isNotes, noteDraft.isActive {
-            guard noteDraft.close() else { return }
+        if uiState.selectedSection.isNotes {
+            guard noteDraft.leaveForNavigation() else { return }
         }
         PerformanceSignposts.beginPageSwitch()
         isQuickEntryFocused = false
@@ -370,7 +370,10 @@ struct AtticPanelView: View {
         }
         let selection = {
             uiState.selectSection(section)
-            if section.isNotes { openMostRecentNoteIfNeeded() }
+            if section.isNotes {
+                noteDraft.pages.panelDidShow()
+                openMostRecentNoteIfNeeded()
+            }
         }
         withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion)) { selection() }
     }
