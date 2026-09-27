@@ -23,6 +23,10 @@ final class AtticPanel: NSPanel {
     /// field or editor, no page with keyboard focus. The page's history
     /// takes it (Astra 23: the Undo toast owns no shortcut of its own).
     var onUnhandledUndo: ((_ redo: Bool) -> Void)?
+    /// Whether `onUnhandledUndo` has a step to take (⇧: redo), so the Edit
+    /// menu's Undo and Redo are enabled for the page's history when the
+    /// window's own undo manager has nothing.
+    var canPerformUnhandledUndo: ((_ redo: Bool) -> Bool)?
     var trackpadDismissCorner: ScreenCorner = .topRight {
         didSet {
             if trackpadDismissCorner != oldValue { cancelTrackpadSwipe() }
@@ -124,19 +128,54 @@ final class AtticPanel: NSPanel {
         return super.performKeyEquivalent(with: event)
     }
 
-    /// The Edit menu's Undo and Redo, whichever route sent them (a key
-    /// equivalent matched by the menu before or after this window, a click
-    /// on the menu, the responder chain from a removed field): the window's
-    /// undo manager never invokes a registration of a text view that has
-    /// left the panel (round 4, the ⌘Z crash in `popAndInvoke`).
+    /// The Edit menu's Undo and Redo once nothing before the window in the
+    /// responder chain took them (the add bar and title editor answer their
+    /// own; a native text view's typing lives in this window's manager).
+    /// Whichever route sent them (a key equivalent, a click on the menu, the
+    /// chain from a removed field), the window's undo manager never invokes
+    /// a registration of a text view that has left the panel (round 4, the
+    /// ⌘Z crash in `popAndInvoke`). With nothing of its own to undo, the
+    /// window hands the command to the page's history, as ⌘Z pressed with
+    /// the keyboard nowhere in a page does (round 5, F1).
     @objc func undo(_ sender: Any?) {
-        removeDepartedUndoParticipants()
-        if undoManager?.canUndo == true { undoManager?.undo() }
+        performUndo(redo: false)
     }
 
     @objc func redo(_ sender: Any?) {
+        performUndo(redo: true)
+    }
+
+    private func performUndo(redo: Bool) {
         removeDepartedUndoParticipants()
-        if undoManager?.canRedo == true { undoManager?.redo() }
+        if let manager = undoManager, redo ? manager.canRedo : manager.canUndo {
+            redo ? manager.redo() : manager.undo()
+            return
+        }
+        onUnhandledUndo?(redo)
+    }
+
+    /// Undo and Redo are enabled when the window's manager or the page's
+    /// history has a step. NSWindow validates menu items in
+    /// `validateMenuItem:` (which AppKit asks first) and other controls in
+    /// `validateUserInterfaceItem:`; both answer the same.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        undoAvailability(for: menuItem.action) ?? super.validateMenuItem(menuItem)
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        undoAvailability(for: item.action) ?? super.validateUserInterfaceItem(item)
+    }
+
+    private func undoAvailability(for action: Selector?) -> Bool? {
+        let redo: Bool
+        switch action {
+        case #selector(undo(_:)): redo = false
+        case #selector(redo(_:)): redo = true
+        default: return nil
+        }
+        removeDepartedUndoParticipants()
+        if let manager = undoManager, redo ? manager.canRedo : manager.canUndo { return true }
+        return canPerformUnhandledUndo?(redo) == true
     }
 
     static func isUndoKey(_ event: NSEvent) -> Bool {

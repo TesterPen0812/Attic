@@ -453,6 +453,14 @@ final class AtticTokenTextView: NSTextView {
         owner?.redo(self)
     }
 
+    /// NSTextView validates menu items in `validateMenuItem:`, which AppKit
+    /// asks before `validateUserInterfaceItem:`; both enable Undo and Redo
+    /// while the field has an owner (its draft history, then the page's).
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(undo(_:)) || menuItem.action == #selector(redo(_:)) { return owner != nil }
+        return super.validateMenuItem(menuItem)
+    }
+
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(undo(_:)) || item.action == #selector(redo(_:)) { return owner != nil }
         return super.validateUserInterfaceItem(item)

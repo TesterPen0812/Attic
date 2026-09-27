@@ -584,6 +584,10 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return }
             _ = redo ? library.redo(in: .tasks) : library.undo(in: .tasks)
         }
+        panel.canPerformUnhandledUndo = { [weak self] redo in
+            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return false }
+            return redo ? library.undo.canRedo(in: .tasks) : library.undo.canUndo(in: .tasks)
+        }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
             self.clearInteractiveDismissal()
