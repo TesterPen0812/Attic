@@ -96,8 +96,8 @@ struct TasksPageHost: View {
             #endif
         }
         // The host does not observe the shell's state (it would redraw on
-        // every change to it), so it listens to the requests it acts on:
-        // they arrive while Tasks is already showing, too.
+        // every change to it), so it listens to the two requests meant for
+        // Tasks alone: they arrive while Tasks is already showing, too.
         // Search (the menu-bar item): the Done page's search, focused.
         .onReceive(uiState.$searchRequest) { request in handleSearchRequest(model, request: request) }
         // An agent's `show` of a task: its tab, the row selected in view.
@@ -105,7 +105,7 @@ struct TasksPageHost: View {
         // Quick capture (the global shortcut) and the shell's own focus
         // requests put the insertion point in the add bar.
         .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused { addBarFocused = true } }
-        .onReceive(uiState.$isComposerPresented) { presented in if presented { addBarFocused = true } }
+        .onChange(of: uiState.isComposerPresented) { _, presented in if presented { addBarFocused = true } }
         .onChange(of: addBarFocused) { _, focused in if !focused, uiState.isComposerPresented { uiState.endAdding() } }
     }
 
