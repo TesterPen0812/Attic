@@ -346,8 +346,20 @@ struct TasksPage: View {
         focusedRow = id
     }
 
+    /// What a row offers, decided once for the keys, the circle, VoiceOver
+    /// and the right-click menu (Astra 19). A Done page row completes or
+    /// un-completes, restores to Now and shows its details (a Done log
+    /// task) or its files (one still in Now's done group); nothing else.
     private func actions(for id: UUID) -> AtticTaskActions {
-        AtticTaskActions(
+        if model.tab == .done {
+            return AtticTaskActions(
+                toggleDone: { model.toggleDone(id) },
+                openPage: { toggleDetails(id) },
+                restoreToNow: { model.targets(for: id).forEach(model.restoreToNow) },
+                names: .init(openPage: detailsActionName(for: id))
+            )
+        }
+        return AtticTaskActions(
             // The circle's click and Space: done, or back (Direction A).
             toggleDone: { model.toggleDone(id) },
             // ⇧Space and the menu: start or stop working.
@@ -363,8 +375,33 @@ struct TasksPage: View {
                 guard model.tab != .done else { return }
                 model.selectOnly(id)
                 model.beginEditingTitle(id)
-            }
+            },
+            names: .init(openPage: AtticPhase1Labels.openLiveTaskAction(design.variants))
         )
+    }
+
+    /// ⌘Return on a Done page row: a Done log task's details open or close
+    /// in place; a task still in Now's done group opens its files.
+    private func toggleDetails(_ id: UUID) {
+        if model.doneDetailID == id { model.doneDetailID = nil } else { model.openPage(id) }
+    }
+
+    private func isArchived(_ id: UUID) -> Bool {
+        store.task(withID: id) == nil
+    }
+
+    /// VoiceOver's name for `toggleDetails`.
+    private func detailsActionName(for id: UUID) -> String {
+        if model.doneDetailID == id { return String(localized: "Close details") }
+        return isArchived(id) ? AtticPhase1Labels.showArchivedDetailsAction(design.variants)
+            : AtticPhase1Labels.openLiveTaskAction(design.variants)
+    }
+
+    /// The right-click menu's name for `toggleDetails`.
+    private func detailsMenuTitle(for id: UUID) -> String {
+        if model.doneDetailID == id { return String(localized: "Close Details") }
+        return isArchived(id) ? AtticPhase1Labels.showArchivedDetails(design.variants)
+            : AtticPhase1Labels.openLiveTask(design.variants)
     }
 
     private func deleteAndMoveFocus(_ ids: [UUID]) {
@@ -383,12 +420,15 @@ struct TasksPage: View {
         let targets = model.targets(for: row.id)
         let single = targets.count == 1
         if tab == .done {
-            Button(String(localized: "Restore to Now")) { targets.forEach(model.restoreToNow) }
+            // The same commands the row's keys and VoiceOver offer
+            // (`actions(for:)`).
+            let actions = actions(for: row.id)
+            if let restore = actions.restoreToNow {
+                Button(String(localized: "Restore to Now")) { restore() }
+            }
             if single {
-                Button(model.doneDetailID == row.id ? String(localized: "Close Details") : String(localized: "Open Page")) {
-                    if model.doneDetailID == row.id { model.doneDetailID = nil } else { model.openPage(row.id) }
-                }
-                .keyboardShortcut(.return, modifiers: .command)
+                Button(detailsMenuTitle(for: row.id)) { actions.openPage() }
+                    .keyboardShortcut(.return, modifiers: .command)
             }
         } else {
             let allDone = targets.allSatisfy { store.listedTask(withID: $0)?.status == .done }
@@ -430,7 +470,7 @@ struct TasksPage: View {
                 if row.status != .done {
                     Button(String(localized: "Add Subtask")) { model.beginAddingSubtask(to: row.id) }
                 }
-                Button(String(localized: "Open Page")) { model.openPage(row.id) }
+                Button(AtticPhase1Labels.openLiveTask(design.variants)) { model.openPage(row.id) }
                     .keyboardShortcut(.return, modifiers: .command)
             }
             Divider()

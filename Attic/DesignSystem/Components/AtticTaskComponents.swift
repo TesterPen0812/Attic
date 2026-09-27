@@ -2,37 +2,60 @@ import SwiftUI
 
 // MARK: - Actions
 
-/// Everything a task row or card can do. Every callback is required, so a
-/// control that is drawn is always wired: Phase 1 passes the store's
-/// operations, the gallery records which one fired.
+/// Everything a task row or card can do, and so what it offers: one
+/// definition read by the keys (`AtticTaskKeys`), the buttons, VoiceOver
+/// (`accessibilityActions(for:)`) and the page's right-click menu. A
+/// command a row cannot perform is nil and is offered nowhere (a Done log
+/// row cannot start working, move or be deleted). Phase 1 passes the
+/// store's operations, the gallery records which one fired.
 struct AtticTaskActions {
     /// The circle's click, Space (and ⌥Space): done, or a done task back to
     /// what it was (Direction A: one-click completion).
     let toggleDone: () -> Void
     /// ⇧Space, the right-click menu and VoiceOver: start or stop working
     /// on the task (the circle's centre dot).
-    let toggleWorking: () -> Void
-    /// A click on the row, ⌘Return and VoiceOver "Open page".
+    var toggleWorking: (() -> Void)?
+    /// A click on the row, ⌘Return and VoiceOver "Open page" (named by
+    /// `names.openPage`).
     let openPage: () -> Void
     /// ⌘B and VoiceOver "Move to Later" (or "Move to Now" on Later).
-    let moveToBacklog: () -> Void
+    var moveToBacklog: (() -> Void)?
     /// Delete and VoiceOver "Delete".
-    let delete: () -> Void
-    /// Return on a focused row in a list: edit the title in place (nil
-    /// where the title cannot be edited).
+    var delete: (() -> Void)?
+    /// Return on a focused row in a list, and VoiceOver "Edit title": edit
+    /// the title in place (nil where the title cannot be edited).
     var editTitle: (() -> Void)? = nil
+    /// The Done page's "Restore to Now" (to Now as to do, whatever the task
+    /// was before), where it is offered.
+    var restoreToNow: (() -> Void)? = nil
+    /// What the commands are called where they differ from the defaults.
+    var names = Names()
+
+    struct Names {
+        /// ⌘Return's command as VoiceOver says it: "Open page", or the
+        /// Phase 1 labels' "Open files" / "Show details" / "Close details".
+        var openPage = String(localized: "Open page")
+    }
 
     /// The VoiceOver actions a task offers, named for its state: Complete
-    /// (or Mark as not done), Start working (or Stop working), Open page,
-    /// Move to Later, Delete.
+    /// (or Mark as not done), Start working (or Stop working), Restore to
+    /// Now, Open page, Edit title, Move to Later, Delete; only those it can
+    /// perform.
     func accessibilityActions(for state: AtticTaskState) -> [(name: String, handler: () -> Void)] {
-        [
-            (state == .done ? String(localized: "Mark as not done") : String(localized: "Complete"), toggleDone),
-            (state == .inProgress ? String(localized: "Stop working") : String(localized: "Start working"), toggleWorking),
-            (String(localized: "Open page"), openPage),
-            (state == .backlog ? String(localized: "Move to Now") : String(localized: "Move to Later"), moveToBacklog),
-            (String(localized: "Delete"), delete)
+        var list: [(name: String, handler: () -> Void)] = [
+            (state == .done ? String(localized: "Mark as not done") : String(localized: "Complete"), toggleDone)
         ]
+        if let toggleWorking {
+            list.append((state == .inProgress ? String(localized: "Stop working") : String(localized: "Start working"), toggleWorking))
+        }
+        if let restoreToNow { list.append((String(localized: "Restore to Now"), restoreToNow)) }
+        list.append((names.openPage, openPage))
+        if let editTitle { list.append((String(localized: "Edit title"), editTitle)) }
+        if let moveToBacklog {
+            list.append((state == .backlog ? String(localized: "Move to Now") : String(localized: "Move to Later"), moveToBacklog))
+        }
+        if let delete { list.append((String(localized: "Delete"), delete)) }
+        return list
     }
 }
 
@@ -68,10 +91,10 @@ enum AtticTaskKeys {
     static func perform(_ command: Command, _ actions: AtticTaskActions) {
         switch command {
         case .toggleDone: actions.toggleDone()
-        case .toggleWorking: actions.toggleWorking()
+        case .toggleWorking: actions.toggleWorking?()
         case .openPage: actions.openPage()
-        case .moveToBacklog: actions.moveToBacklog()
-        case .delete: actions.delete()
+        case .moveToBacklog: actions.moveToBacklog?()
+        case .delete: actions.delete?()
         case .editTitle: actions.editTitle?()
         }
     }
@@ -1152,6 +1175,7 @@ struct AtticQuickLook: View {
     var newSubtask: AtticTitleEditing? = nil
 
     @Environment(\.atticCapture) private var capture
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1167,7 +1191,9 @@ struct AtticQuickLook: View {
             } else {
                 AtticQuietAction(systemName: "plus", title: String(localized: "Add subtask"), action: onAddSubtask)
             }
-            AtticQuietAction(systemName: nil, title: String(localized: "Open page"), trailingChevron: true, emphasised: true, action: onOpenPage)
+            // "Open files" with Explicit Phase 1 Labels (a live task's files
+            // and details panel until task pages arrive).
+            AtticQuietAction(systemName: nil, title: AtticPhase1Labels.openLiveTaskAction(design.variants), trailingChevron: true, emphasised: true, action: onOpenPage)
         }
         .padding(.leading, AtticLayout.textX)
         .padding(.trailing, AtticLayout.rowHighlightInset)
@@ -1305,7 +1331,7 @@ struct AtticTaskCard: View {
                     HStack {
                         AtticQuietAction(systemName: nil, title: String(localized: "Open in Tasks"), emphasised: true, action: cardActions.openInTasks)
                         Spacer()
-                        AtticQuietAction(systemName: "doc.text", title: String(localized: "Open page"), emphasised: true, action: actions.openPage)
+                        AtticQuietAction(systemName: "doc.text", title: AtticPhase1Labels.openLiveTaskAction(design.variants), emphasised: true, action: actions.openPage)
                     }
                     .padding(.top, m.actionsTop)
                 }

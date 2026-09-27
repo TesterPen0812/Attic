@@ -435,6 +435,34 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(AtticRadius.nested(outer: AtticRadius.control(height: AtticControlSize.addBarHeight), gap: AtticControlSize.sendInset), 11)
     }
 
+    /// Astra 19: one definition of what a row can do. VoiceOver offers
+    /// exactly the commands the row has (a Done log row: complete or
+    /// un-complete, Restore to Now, its details; no working, moving or
+    /// deleting), live rows add Edit title, and a key for a command the row
+    /// lacks does nothing.
+    func testTaskActionsOfferOnlyWhatTheRowCanDo() {
+        var fired: [String] = []
+        let live = AtticTaskActions(
+            toggleDone: { fired.append("done") }, toggleWorking: { fired.append("working") },
+            openPage: { fired.append("open") }, moveToBacklog: { fired.append("later") }, delete: { fired.append("delete") },
+            editTitle: { fired.append("edit") }, names: .init(openPage: "Open files")
+        )
+        XCTAssertEqual(live.accessibilityActions(for: .todo).map(\.name),
+                       ["Complete", "Start working", "Open files", "Edit title", "Move to Later", "Delete"])
+        let archived = AtticTaskActions(
+            toggleDone: { fired.append("done") }, openPage: { fired.append("details") },
+            restoreToNow: { fired.append("restore") }, names: .init(openPage: "Show details")
+        )
+        XCTAssertEqual(archived.accessibilityActions(for: .done).map(\.name), ["Mark as not done", "Restore to Now", "Show details"])
+        for command in [AtticTaskKeys.Command.toggleWorking, .moveToBacklog, .delete, .editTitle] {
+            AtticTaskKeys.perform(command, archived)
+        }
+        XCTAssertEqual(fired, [], "keys for commands a Done log row lacks do nothing")
+        AtticTaskKeys.perform(.openPage, archived)
+        AtticTaskKeys.perform(.toggleDone, archived)
+        XCTAssertEqual(fired, ["details", "done"])
+    }
+
     func testTaskKeysMapToDistinctCommands() {
         func command(_ key: KeyEquivalent, _ characters: String, _ modifiers: EventModifiers, list: Bool = true) -> AtticTaskKeys.Command? {
             AtticTaskKeys.command(key: key, characters: characters, modifiers: modifiers, listCommands: list)
