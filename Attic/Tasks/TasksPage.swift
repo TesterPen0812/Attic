@@ -1426,7 +1426,10 @@ enum TasksViewport {
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
-        let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar, listTop)
+        // The fade starts in the 16 pt the list keeps from the bar and
+        // reaches a faint trace under the controls: without the per-row
+        // blur, text under see-through glass must be quieter than before.
+        let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar * 1.75, listTop)
         let barTop = max(height - bottomStack, fadeStart)
         let points: [(CGFloat, Double)] = [
             (0, 0),
@@ -1434,8 +1437,8 @@ enum TasksViewport {
             (tabsBottom, 0.14),
             (listTop, 1),
             (fadeStart, 1),
-            (barTop, 0.35),
-            (height, 0.2)
+            (barTop, 0.22),
+            (height, 0.06)
         ]
         var result: [(location: CGFloat, opacity: Double)] = []
         var last: CGFloat = -1
