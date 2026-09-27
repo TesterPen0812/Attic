@@ -29,10 +29,15 @@ final class AtticKeyboardFocusTracker: ObservableObject {
     /// Tab, and the four arrows.
     static let navigationKeyCodes: Set<UInt16> = [48, 123, 124, 125, 126]
 
+    /// Starting and stopping each begin with no rings: a tracker that was
+    /// off screen saw no clicks, so a ring it left on would stay on after
+    /// the person clicked elsewhere (round 5: the Done page's first row).
     func start() {
         guard monitor == nil else { return }
+        if isKeyboardDriving { isKeyboardDriving = false }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
-            self?.observe(event.type, keyCode: event.type == .keyDown ? event.keyCode : nil)
+            self?.observe(event.type, keyCode: event.type == .keyDown ? event.keyCode : nil,
+                          inField: AtticTextInput.isTyping(event.window?.firstResponder))
             return event
         }
     }
@@ -40,13 +45,17 @@ final class AtticKeyboardFocusTracker: ObservableObject {
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if isKeyboardDriving { isKeyboardDriving = false }
     }
 
     /// Exposed for tests: what one event does to the state.
-    func observe(_ type: NSEvent.EventType, keyCode: UInt16?) {
+    /// `inField`: a text field has the keyboard, where the arrows move the
+    /// insertion point, not focus (only Tab moves on from a field).
+    func observe(_ type: NSEvent.EventType, keyCode: UInt16?, inField: Bool = false) {
         switch type {
         case .keyDown:
-            if let keyCode, Self.navigationKeyCodes.contains(keyCode), !isKeyboardDriving { isKeyboardDriving = true }
+            guard let keyCode, Self.navigationKeyCodes.contains(keyCode), !inField || keyCode == 48 else { break }
+            if !isKeyboardDriving { isKeyboardDriving = true }
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             if isKeyboardDriving { isKeyboardDriving = false }
         default:

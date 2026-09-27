@@ -31,16 +31,21 @@ struct AtticTokenFieldActions {
     var suggestionKey: ((AtticSuggestionKey) -> Bool)? = nil
     /// The draft's own undo (round 4): the owner steps its history back
     /// (text and pieces together) and returns the text and insertion point
-    /// to show, or nil when the draft has nothing to undo. A field that is
-    /// typing keeps ⌘Z even then: it never reaches the Tasks history (round
-    /// 5, the owner's rule: no page command from a field's keys). The field
-    /// keeps no undo of its own: nothing it registers can outlive it in a
-    /// window's undo manager.
+    /// to show, or nil when the draft has nothing to undo (then ⌘Z reaches
+    /// `undoFallback`: spec § Undo, "while typing … it undoes typing
+    /// first", then the place being worked in). The field keeps no undo of
+    /// its own: nothing it registers can outlive it in a window's undo
+    /// manager.
     var undoDraft: (() -> (text: String, selection: NSRange)?)? = nil
     var redoDraft: (() -> (text: String, selection: NSRange)?)? = nil
     /// The whole selection (UTF-16) whenever it changes, so the owner's
     /// draft history can select replaced text again on undo.
     var selectionMoved: ((NSRange) -> Void)? = nil
+    /// ⌘Z (⇧⌘Z) once the draft has nothing left to undo (redo): the page's
+    /// history. Only undo reaches past a field; no other page or row
+    /// command answers a key the field has (round 5).
+    var undoFallback: () -> Void = {}
+    var redoFallback: () -> Void = {}
 }
 
 /// The keys a suggestion list answers while the field has the keyboard.
@@ -240,11 +245,11 @@ struct AtticTokenField: NSViewRepresentable {
         }
 
         func undo(_ textView: NSTextView) {
-            if let state = parent.actions.undoDraft?() { show(state, in: textView) } else { NSSound.beep() }
+            if let state = parent.actions.undoDraft?() { show(state, in: textView) } else { parent.actions.undoFallback() }
         }
 
         func redo(_ textView: NSTextView) {
-            if let state = parent.actions.redoDraft?() { show(state, in: textView) } else { NSSound.beep() }
+            if let state = parent.actions.redoDraft?() { show(state, in: textView) } else { parent.actions.redoFallback() }
         }
 
         func focusChanged(_ focused: Bool) {

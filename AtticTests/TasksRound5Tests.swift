@@ -204,10 +204,17 @@ final class TasksRound5Tests: XCTestCase {
         // The marker `atticPopover` puts behind a pop-over's content.
         window.contentView?.addSubview(AtticPopoverWindowMarker.Marker(frame: .zero))
         XCTAssertTrue(AtticTextInput.isPopover(window), "a pop-over's window: its keys are its own")
-        if ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" {
-            window.makeKeyAndOrderFront(nil)
-            XCTAssertTrue(AtticTextInput.hasKeyboard, "a key pop-over has the keyboard, a field or not")
-        }
+        XCTAssertFalse(AtticTextInput.isPopoverOpen, "not on screen yet")
+        // On screen, key or not (AppKit may leave the keys with the window
+        // that presented it), no row or page command answers a key.
+        // Ordered in only on CI (ATTIC_KEY_WINDOW_TESTS): off screen, but a
+        // window all the same, and a person's Mac is left alone.
+        guard ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" else { return }
+        window.orderFront(nil)
+        XCTAssertTrue(AtticTextInput.isPopoverOpen)
+        XCTAssertTrue(AtticTextInput.hasKeyboard, "an open pop-over has the keyboard, a field or not")
+        window.orderOut(nil)
+        XCTAssertFalse(AtticTextInput.isPopoverOpen, "closed, the rows answer again")
     }
 
     // MARK: - One highlight per list; the pointer moves it
@@ -262,5 +269,53 @@ final class TasksRound5Tests: XCTestCase {
         highlight.hoverDay(choices.day(pointed, movedByMonths: 1), inside: true, inShownMonth: false)
         XCTAssertEqual(highlight.cursor.month(in: choices), month)
         XCTAssertFalse(highlight.cursor.isKeyboardActive)
+    }
+
+    // MARK: - A row lit only while the keyboard drives (the owner's Done row)
+
+    func testRingsNeedTheKeyboardAndAnyClickOrRestartClearsThem() {
+        let tracker = AtticKeyboardFocusTracker()
+        tracker.observe(.keyDown, keyCode: 125, inField: true)
+        XCTAssertFalse(tracker.isKeyboardDriving, "an arrow in a field moves the insertion point, not focus")
+        tracker.observe(.keyDown, keyCode: 48, inField: true)
+        XCTAssertTrue(tracker.isKeyboardDriving, "Tab moves on from a field")
+        tracker.observe(.leftMouseDown, keyCode: nil)
+        XCTAssertFalse(tracker.isKeyboardDriving, "a click clears it")
+        // A tracker that was off screen saw no clicks: it never starts, or
+        // stops, with a ring left on.
+        tracker.noteKeyboardNavigation()
+        tracker.stop()
+        XCTAssertFalse(tracker.isKeyboardDriving)
+        tracker.noteKeyboardNavigation()
+        tracker.start()
+        XCTAssertFalse(tracker.isKeyboardDriving)
+        tracker.stop()
+    }
+
+    func testAPlainClickOnTheListsSpaceIsNoRowsClick() throws {
+        // Not deferred: its events need a window number to find it.
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 300, height: 400), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        let page = Flipped(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
+        window.contentView?.addSubview(page)
+        let pointer = TasksPointer()
+        pointer.view = page
+        let row = UUID()
+        pointer.frames = [row: CGRect(x: 0, y: 100, width: 300, height: 34)]
+        func click(at y: CGFloat, _ type: NSEvent.EventType = .leftMouseDown, flags: NSEvent.ModifierFlags = []) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: page.convert(NSPoint(x: 50, y: y), to: nil), modifierFlags: flags,
+                               timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                               eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        func outside(_ event: NSEvent) -> Bool { pointer.isPlainPressOutsideRows(event, top: 80, bottomInset: 60) }
+        XCTAssertTrue(outside(click(at: 200)), "the space under the rows (or Done's search, a day heading)")
+        XCTAssertFalse(outside(click(at: 110)), "a row's own click selects it")
+        XCTAssertFalse(outside(click(at: 40)), "the tabs and header are not the list")
+        XCTAssertFalse(outside(click(at: 370)), "the add bar and selection bar are not the list")
+        XCTAssertFalse(outside(click(at: 200, flags: .command)), "⌘-click keeps the selection, as in Finder")
+        XCTAssertFalse(outside(click(at: 200, .rightMouseDown)), "a right-click is a menu's")
     }
 }

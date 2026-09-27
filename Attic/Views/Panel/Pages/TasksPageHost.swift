@@ -91,7 +91,9 @@ struct TasksPageHost: View {
                 subtaskPanels.openFilesPanel(for: id)
             }
             editHold.setSuspended(!isCurrent)
-            if primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
+            // Only the page shown takes the shell's focus (a page built
+            // behind Notes, or prepared on approach, never takes it).
+            if isCurrent, primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
             handleSearchRequest(model, request: uiState.searchRequest)
             showItemIfNeeded(model, uiState.shownItem)
             syncDraftLock(model)
@@ -131,9 +133,14 @@ struct TasksPageHost: View {
         }
         // Quick capture (the global shortcut) and the shell's own focus
         // requests put the insertion point in the add bar.
-        .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused { addBarFocused = true } }
-        .onChange(of: uiState.isComposerPresented) { _, presented in if presented { addBarFocused = true } }
-        .onChange(of: addBarFocused) { _, focused in if !focused, uiState.isComposerPresented { uiState.endAdding() } }
+        // Only while this page is the one shown: the shell's composer is
+        // also Notes' New Note, which a Tasks page kept behind must neither
+        // take nor end (round 5's CI: New Note closed at once).
+        .onChange(of: primaryInputFocus.wrappedValue) { _, focused in if focused, isCurrent { addBarFocused = true } }
+        .onChange(of: uiState.isComposerPresented) { _, presented in if presented, isCurrent { addBarFocused = true } }
+        .onChange(of: addBarFocused) { _, focused in
+            if !focused, isCurrent, uiState.isComposerPresented { uiState.endAdding() }
+        }
     }
 
     private func syncDraftLock(_ model: TasksPageModel) {

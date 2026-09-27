@@ -68,15 +68,20 @@ struct AtticTaskActions {
 /// While an editable text view (a field's editor, the add bar, a title or
 /// subtask editor, the Done search, a picker's search) has the keyboard in
 /// the key window, no page or row command answers a key: the field does.
-/// The same holds for an Attic pop-over (`atticPopover`), a field or not:
-/// the date picker's Space or Backspace is never the row's Complete or
-/// Delete (round 5: the class of the owner's blocker).
+/// The same holds while an Attic pop-over (`atticPopover`) is open, a
+/// field or not, key or not: the date picker's Space or Backspace is never
+/// the row's Complete or Delete (round 5: the class of the owner's blocker).
 enum AtticTextInput {
-    /// An editable text view is the key window's first responder, or the
-    /// key window is an Attic pop-over.
+    /// An editable text view is the key window's first responder, or an
+    /// Attic pop-over is open.
     @MainActor static var hasKeyboard: Bool {
-        guard let key = NSApp.keyWindow else { return false }
-        return isTyping(key.firstResponder) || isPopover(key)
+        isTyping(NSApp.keyWindow?.firstResponder) || isPopoverOpen
+    }
+
+    /// An Attic pop-over is on screen: its keys are its own, whichever
+    /// window AppKit delivers them to.
+    @MainActor static var isPopoverOpen: Bool {
+        popoverWindows.allObjects.contains { $0.isVisible }
     }
 
     static func isTyping(_ responder: NSResponder?) -> Bool {
@@ -268,6 +273,9 @@ struct AtticTitleEditing {
         var undoDraft: (() -> (text: String, selection: NSRange)?)? = nil
         var redoDraft: (() -> (text: String, selection: NSRange)?)? = nil
         var selectionMoved: ((NSRange) -> Void)? = nil
+        /// ⌘Z past the title's own history: the page's.
+        var undoFallback: () -> Void = {}
+        var redoFallback: () -> Void = {}
     }
 }
 
@@ -300,7 +308,9 @@ struct AtticRowTitleEditor: View {
                     caretMoved: tokens.caretMoved,
                     undoDraft: tokens.undoDraft,
                     redoDraft: tokens.redoDraft,
-                    selectionMoved: tokens.selectionMoved
+                    selectionMoved: tokens.selectionMoved,
+                    undoFallback: tokens.undoFallback,
+                    redoFallback: tokens.redoFallback
                 ),
                 style: .rowTitle,
                 ink: .heading,

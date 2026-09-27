@@ -525,9 +525,13 @@ final class TasksPageUITests: XCTestCase {
         addBar.typeText("Buy #la")
         let suggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "#launch")).firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 3), "the suggestions show")
+        // The first Backspace may turn the recognised "#la" back into text
+        // (a chip's Backspace deletes nothing); either way the keys stay in
+        // the draft.
         addBar.typeKey(.delete, modifierFlags: [])
         addBar.typeKey(.delete, modifierFlags: [])
-        waitFor((addBar.value as? String) == "Buy #", "Backspace edited the draft: \(String(describing: addBar.value))")
+        waitFor(["Buy #", "Buy #l"].contains((addBar.value as? String) ?? ""),
+                "Backspace edited the draft: \(String(describing: addBar.value))")
         addBar.typeKey(.space, modifierFlags: [])
         addBar.typeKey(.space, modifierFlags: .shift)
         XCTAssertTrue(row("Call the plumber").exists, "the selected task is still there")
@@ -593,5 +597,30 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertLessThan(abs(popover.frame.midX - tagPoint.x), 40,
                           "popover \(popover.frame) points at the tags near \(tagPoint), not the row \(rowFrame)")
         app.typeKey(.escape, modifierFlags: [])
+    }
+
+    /// Round 5 (the owner's Done row stayed lit): a click on the list's
+    /// empty space, or on Done's search, leaves no row lit; nothing is lit
+    /// that the person did not click or reach with the keyboard.
+    func testAClickElsewhereInTheListLeavesNoRowLit() throws {
+        XCTAssertFalse(row("Call the plumber").isSelected, "nothing is lit on opening")
+        select("Call the plumber")
+        waitFor(row("Call the plumber").isSelected, "a click on the row selects it")
+        // The space between the last line of the list and the add bar.
+        XCTAssertTrue(completedToday.waitForExistence(timeout: 3))
+        let gapTop = completedToday.frame.maxY, gapBottom = addBar.frame.minY
+        XCTAssertGreaterThan(gapBottom - gapTop, 40, "the demo list leaves space under its last line")
+        window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: window.frame.width / 2, dy: (gapTop + gapBottom) / 2 - window.frame.minY)).click()
+        waitFor(!row("Call the plumber").isSelected, "a click on the empty space clears it")
+
+        tab("done").click()
+        waitFor(row("Pay rent").isHittable, "the Done log shows")
+        XCTAssertFalse(row("Send invoice").isSelected, "Done's first row is not lit on arrival")
+        select("Pay rent")
+        waitFor(row("Pay rent").isSelected, "a click selects it")
+        searchField.click()
+        waitFor(!row("Pay rent").isSelected, "a click in the search clears it")
+        XCTAssertFalse(row("Send invoice").isSelected)
     }
 }

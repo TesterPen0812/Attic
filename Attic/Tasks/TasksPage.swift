@@ -407,10 +407,16 @@ struct TasksPage: View {
                 }
             }
             // A row the keyboard completed leaves its place: the keyboard
-            // moves on to the row that took it (review 8).
+            // moves on to the row that took it (review 8). A row the pointer
+            // completed takes nothing with it: no row is lit that the person
+            // did not reach (round 5).
             .onChange(of: rows.map(\.id)) { old, new in
                 guard tab == model.tab, let focused = focusedRow, !new.contains(focused),
                       let index = old.firstIndex(of: focused), !new.isEmpty else { return }
+                guard focusTracker.isKeyboardDriving else {
+                    focusedRow = nil
+                    return
+                }
                 let next = new[min(index, new.count - 1)]
                 focusedRow = next
                 model.selectOnly(next)
@@ -553,7 +559,9 @@ struct TasksPage: View {
                 },
                 undoDraft: { model.undoTitleEdit() },
                 redoDraft: { model.redoTitleEdit() },
-                selectionMoved: { model.titleEditSelection = $0 }
+                selectionMoved: { model.titleEditSelection = $0 },
+                undoFallback: { model.undo() },
+                redoFallback: { model.redo() }
             )
         )
     }
@@ -938,6 +946,15 @@ struct TasksPage: View {
     /// press, or one outside the list, ends the previous binding.
     private func mousePressed(_ event: NSEvent) {
         dragSession.newPress()
+        // A plain click in the list that no row takes (the space under the
+        // rows, a day heading, Done's search) clears the selection and the
+        // keyboard's row, as in a native list (round 5: the owner's Done
+        // row stayed lit after a click elsewhere).
+        if pointer.isPlainPressOutsideRows(event, top: listTop - AtticLayout.pageTabsToList / 2,
+                                           bottomInset: bottomStack.height + AtticSpacing.panelMargin) {
+            if !model.selection.isEmpty { model.clearSelection() }
+            if focusedRow != nil { focusedRow = nil }
+        }
         pointer.press(event, below: listTop - AtticLayout.pageTabsToList / 2) { id in
             if !model.selection.contains(id) { model.selectOnly(id) }
             return model.targets(for: id)
@@ -1404,7 +1421,11 @@ private struct TasksAddBar: View {
                         suggestionKey: { key in suggestionKey(key) },
                         undoDraft: { text.undoDraft() },
                         redoDraft: { text.redoDraft() },
-                        selectionMoved: { text.selection = $0 }
+                        selectionMoved: { text.selection = $0 },
+                        // Spec § Undo: typing first, then the page (the
+                        // task just added, round 5's CI).
+                        undoFallback: { model.undo() },
+                        redoFallback: { model.redo() }
                     ),
                     editor: editor
                 ),
@@ -1874,6 +1895,16 @@ final class TasksPointer {
         guard let view, let window = view.window, event.window === window else { return nil }
         let point = view.convert(event.locationInWindow, from: nil)
         return view.bounds.contains(point) ? point : nil
+    }
+
+    /// A plain left click in the list's space (below `top`, above the
+    /// bottom stack) that no row holds.
+    func isPlainPressOutsideRows(_ event: NSEvent, top: CGFloat, bottomInset: CGFloat) -> Bool {
+        guard event.type == .leftMouseDown,
+              event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty,
+              let view, let point = location(of: event), point.y >= top, point.y <= view.bounds.height - bottomInset
+        else { return false }
+        return row(at: point) == nil
     }
 
     /// The row under `point`: the one whose frame holds it (the list's
