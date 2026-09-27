@@ -71,6 +71,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var userEditDepth = 0
     private var engineEditDepth = 0
     private(set) var isWritingToolsSessionActive = false
+    private(set) var writingToolsBeganInView = false
     private(set) var activity: Activity = .idle
     private func setActivity(_ next: Activity) {
         guard next != activity else { return }
@@ -774,11 +775,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textDidChange(_ notification: Notification) {
         history.didChange()
+        if !(writingToolsBlocked && isWritingToolsSessionActive) { onTextChange?() }
         if !isWritingToolsSessionActive {
             setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
         }
-        guard !(writingToolsBlocked && isWritingToolsSessionActive) else { return }
-        onTextChange?()
     }
 
     func textView(_ textView: NSTextView, shouldChangeTypingAttributes oldTypingAttributes: [String: Any] = [:],
@@ -837,6 +837,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func textViewWritingToolsWillBegin(_ textView: NSTextView) {
+        writingToolsBeganInView = true
         writingToolsWillBegin()
     }
 
@@ -869,7 +870,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func writingToolsDidEnd() {
         let wasBlocked = writingToolsBlocked
         isWritingToolsSessionActive = false
-        setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
+        writingToolsBeganInView = false
         guard let snapshot = writingToolsSnapshot else { return }
         writingToolsSnapshot = nil
         let lost = writingToolsObjectsBefore.subtracting(objectIDs())
@@ -883,6 +884,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             writingToolsBlocked = false
             writingToolsRefusalReason = nil
             writingToolsHistory = nil
+            setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
             onWritingToolsDidEnd?()
             return
         }
@@ -922,6 +924,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         writingToolsRecoveries += 1
         if !wasBlocked { onTextChange?() }
+        setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
         onWritingToolsDidEnd?()
         onNotice?(wasBlocked
             ? String(localized: "Writing Tools changed this note without approval, so its rewrite was not kept.")

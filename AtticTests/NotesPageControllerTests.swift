@@ -993,7 +993,7 @@ final class NotesPageControllerTests: XCTestCase {
             XCTAssertTrue(NoteContentCodec.decode(try XCTUnwrap(journal.entries().first).0.content)
                 .document?.blocks[1].checked == true)
             XCTAssertFalse(controller.save(draft))
-            XCTAssertTrue(controller.preserveForHide())
+            XCTAssertFalse(controller.preserveForHide())
             draft.engine.writingToolsDidEnd()
             XCTAssertEqual(firstStore.loadDocument(noteID: id)?.content.document?.blocks[1].checked, true)
             XCTAssertTrue(try journal.entries().isEmpty)
@@ -1025,7 +1025,7 @@ final class NotesPageControllerTests: XCTestCase {
         gate.shouldFail = false
         controller.importImages([URL(fileURLWithPath: "/tmp/blocked.png")])
         await waitForImageRequests(loader, count: 1)
-        XCTAssertTrue(controller.preserveForHide())
+        XCTAssertFalse(controller.preserveForHide())
         XCTAssertEqual(store.loadDocument(noteID: draft.noteID)?.content.document?.attachmentIDs, [])
         await loader.releaseNext(success: true)
         for _ in 0..<60 {
@@ -1104,7 +1104,7 @@ final class NotesPageControllerTests: XCTestCase {
         draft.engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 8), with: "Unapproved")
         draft.engine.insertDate(NoteDay(year: 2026, month: 10, day: 2)!)
         XCTAssertFalse(controller.save(draft))
-        XCTAssertTrue(controller.preserveAll())
+        XCTAssertTrue(controller.preserve(draft))
         draft.engine.onBeforeCopy?()
         XCTAssertEqual(store.note(withID: draft.noteID)?.revisionID, revision)
         XCTAssertEqual(draft.problem, nil)
@@ -1343,6 +1343,79 @@ final class NotesPageControllerTests: XCTestCase {
         await firstStore.waitForAttachmentReconciliation()
         await secondStore.waitForAttachmentReconciliation()
         await thirdStore.waitForAttachmentReconciliation()
+    }
+
+    func testDueSaveDuringWritingToolsCheckpointsSilentlyThenSavesOnce() async throws {
+        let controller = makeController(delay: .milliseconds(20))
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let revision = store.note(withID: session.noteID)?.revisionID
+        session.engine.writingToolsWillBegin()
+        XCTAssertEqual(session.engine.activity, .writingToolsSafe)
+        session.engine.textStorage.replaceCharacters(in: NSRange(location: session.engine.textStorage.length, length: 0),
+                                                     with: " after")
+        session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(session.problem)
+        XCTAssertEqual(store.note(withID: session.noteID)?.revisionID, revision)
+        XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
+        session.engine.writingToolsDidEnd()
+        XCTAssertNil(session.problem)
+        XCTAssertNotEqual(store.note(withID: session.noteID)?.revisionID, revision)
+        XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
+    }
+
+    func testDueSaveDuringIMECompositionHasNoFalseNotSavedStatus() async throws {
+        let controller = makeController(delay: .milliseconds(20))
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let revision = store.note(withID: session.noteID)?.revisionID
+        let (_, textView) = session.engine.makeView()
+        textView.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                               replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(textView.hasMarkedText())
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(session.problem)
+        XCTAssertEqual(store.note(withID: session.noteID)?.revisionID, revision)
+        textView.unmarkText()
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertNil(session.problem)
+    }
+
+    func testBackgroundPreserveDoesNotCancelAnotherSessionAutosave() async throws {
+        let controller = makeController(delay: .milliseconds(80))
+        controller.start()
+        let first = try XCTUnwrap(controller.active)
+        type("First", into: first)
+        XCTAssertTrue(controller.newNote())
+        let second = try XCTUnwrap(controller.active)
+        type("Second", into: second)
+        type(" edited", into: first)
+        gate.shouldFail = true
+        XCTAssertTrue(controller.preserve(first))
+        gate.shouldFail = false
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(store.note(withID: second.noteID)?.title, "Second")
+        XCTAssertNil(second.problem)
+    }
+
+    func testHideAndQuitRefuseActiveWritingToolsWithAccurateNotice() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        session.engine.writingToolsWillBegin()
+        XCTAssertFalse(controller.preserveForHide())
+        XCTAssertFalse(controller.leaveForNavigation())
+        XCTAssertEqual(session.notice, "Finish Writing Tools first.")
+        XCTAssertNil(session.problem)
+        session.engine.writingToolsDidEnd()
+        XCTAssertTrue(controller.preserveForHide())
     }
 }
 

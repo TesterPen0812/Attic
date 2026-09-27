@@ -115,6 +115,8 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var pendingImportIDs = Set<UUID>()
     fileprivate var importTask: Task<Void, Never>?
     fileprivate var blocksAutomaticRekey = false
+    fileprivate var saveTask: Task<Void, Never>?
+    fileprivate var pauseTask: Task<Void, Never>?
 
     fileprivate init(noteID: UUID, isPersisted: Bool, baseRevisionID: UUID?, engine: NoteEditorEngine,
                      readOnlyReason: NoteReadOnlyReason?) {
@@ -178,8 +180,6 @@ final class NotesPageController: ObservableObject {
     private var proposalStatusCache: [UUID: (revision: UInt64, agent: String?)] = [:]
     private var navigationNotice: String?
     private let cacheLimit = 8
-    private var saveTask: Task<Void, Never>?
-    private var pauseTask: Task<Void, Never>?
     private var didStart = false
     private var isPageVisible = false
     /// Saves and closes the old editor's draft before the page moves on
@@ -450,9 +450,11 @@ final class NotesPageController: ObservableObject {
             self.textDidChange(in: session)
             _ = self.preserve(session)
         }
-        engine.onWritingToolsDidEnd = { [weak self, weak session] in
-            guard let self, let session, session.isDirty else { return }
-            _ = self.preserve(session)
+        engine.onActivityChanged = { [weak self, weak session] old, new in
+            guard let self, let session else { return }
+            if old != .idle && new == .idle {
+                _ = self.preserve(session)
+            }
         }
         engine.onNotice = { [weak session] message in session?.notice = message }
         engine.onBeforeCopy = { [weak self, weak session] in
@@ -531,7 +533,7 @@ final class NotesPageController: ObservableObject {
             }
         }
         if session.isUntouchedDraft { cache[session.noteID] = nil }
-        pauseTask?.cancel()
+        session.pauseTask?.cancel()
         return true
     }
 
@@ -556,8 +558,16 @@ final class NotesPageController: ObservableObject {
     }
 
     private func canLeaveComposition(in session: NoteSession) -> Bool {
-        guard session.engine.textView?.hasMarkedText() != true else {
-            session.notice = String(localized: "Finish composing text before leaving this note.")
+        if session.engine.writingToolsBeganInView,
+           session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused,
+           session.engine.textView?.isWritingToolsActive == false {
+            session.engine.writingToolsDidEnd()
+        }
+        guard NoteSessionPolicy.canLeave(session.engine.activity),
+              session.engine.textView?.hasMarkedText() != true else {
+            session.notice = session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused
+                ? String(localized: "Finish Writing Tools first.")
+                : String(localized: "Finish composing text before leaving this note.")
             return false
         }
         return true
@@ -591,8 +601,11 @@ final class NotesPageController: ObservableObject {
     /// Save, else checkpoint, else keep in memory and say so.
     @discardableResult
     func preserve(_ session: NoteSession) -> Bool {
-        saveTask?.cancel()
+        session.saveTask?.cancel()
         guard session.isDirty || session.problem != nil else { return true }
+        if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity) == .checkpointOnly {
+            return checkpoint(session, silent: true)
+        }
         if !session.pendingImportIDs.isEmpty {
             // Reservations have no bytes yet. Checkpoint the durable text,
             // keeping the live import and its anchors in memory.
@@ -626,6 +639,24 @@ final class NotesPageController: ObservableObject {
             return true
         } catch {
             session.problem = .onlyInMemory("\(storeMessage()) The recovery copy failed too: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// An activity can defer a store write without making the status say it failed.
+    private func checkpoint(_ session: NoteSession, silent: Bool) -> Bool {
+        guard let journal else {
+            session.problem = .onlyInMemory(String(localized: "There is no recovery copy for this note."))
+            return false
+        }
+        do {
+            let document = checkpointDocument(for: session)
+            try journal.write(journalEntry(for: session, document: document),
+                              staged: session.engine.stagedAttachments(for: document))
+            if !silent, session.problem == nil { session.problem = .notSaved(storeMessage()) }
+            return true
+        } catch {
+            session.problem = .onlyInMemory("The recovery copy failed: \(error.localizedDescription)")
             return false
         }
     }
@@ -677,11 +708,15 @@ final class NotesPageController: ObservableObject {
     }
 
     private func scheduleSave(_ session: NoteSession) {
-        saveTask?.cancel()
+        session.saveTask?.cancel()
         let delay = saveDelay
-        saveTask = Task { @MainActor [weak self, weak session] in
+        session.saveTask = Task { @MainActor [weak self, weak session] in
             do { try await Task.sleep(for: delay) } catch { return }
             guard let self, let session, !Task.isCancelled else { return }
+            if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity) == .checkpointOnly {
+                _ = self.checkpoint(session, silent: true)
+                return
+            }
             guard session.pendingImportIDs.isEmpty else { _ = self.preserve(session); return }
             let generation = session.editGeneration
             let noteID = session.noteID
@@ -826,9 +861,9 @@ final class NotesPageController: ObservableObject {
 
     /// A version after 2 minutes without edits.
     private func schedulePauseVersion(_ session: NoteSession) {
-        pauseTask?.cancel()
+        session.pauseTask?.cancel()
         let delay = pauseVersionDelay
-        pauseTask = Task { @MainActor [weak self, weak session] in
+        session.pauseTask = Task { @MainActor [weak self, weak session] in
             do { try await Task.sleep(for: delay) } catch { return }
             guard let self, let session, !Task.isCancelled, session.isPersisted, !session.isDirty else { return }
             self.store.recordVersion(noteID: session.noteID, reason: .pause)
