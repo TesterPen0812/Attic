@@ -267,11 +267,12 @@ enum AtticCompletedLineMetrics {
     static let horizontalPadding: CGFloat = 6
 }
 
-/// The Done page's search row (`AtticListSearchField`): one row tall, no box.
-enum AtticListSearchFieldMetrics {
-    /// The magnifier (13 pt) on the circles' line; the clear button's glyph.
+/// The Done page's search on the tabs line (`AtticTabsSearchField`).
+enum AtticTabsSearchMetrics {
+    /// The magnifier (13 pt) on the circles' line.
     static let iconSize: CGFloat = 13
-    static let clearSize: CGFloat = 12
+    /// The "Esc" hint's padding inside the field's end.
+    static let hintPadding: CGFloat = 10
 }
 
 /// Title menus and Attic's own pop-overs (radius 20).

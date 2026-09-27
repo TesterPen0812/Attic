@@ -226,6 +226,17 @@ enum AtticGallerySamples {
         )
     }
 
+    /// The composer strip with these values (nil: the button's name).
+    @MainActor
+    static func strip(date: AtticStripValue?, tags: AtticStripValue?, priority: AtticStripValue?) -> some View {
+        AtticComposerStrip(
+            datePresented: .constant(false), tagsPresented: .constant(false), priorityPresented: .constant(false),
+            date: date, tags: tags, priority: priority,
+            onClearDate: {}, onClearTags: {}, onClearPriority: {},
+            datePicker: { EmptyView() }, tagPicker: { EmptyView() }, priorityPicker: { EmptyView() }
+        )
+    }
+
     static let rows: [AtticTaskRowModel] = [
         .init(title: "Finalize launch checklist", state: .inProgress, priority: .high,
               due: .init(text: "Today", tone: .today), tags: ["launch"], subtasks: (1, 3)),
@@ -567,8 +578,20 @@ private struct AddBarBoard: View {
                             tokens: AtticGallerySamples.chipTokens, onSubmit: demo.record("Add"))
                     .padding(.horizontal, 12)
             }
-            AtticSpecimen("Done page: the bar still adds; its search sits at the top of the list", fullWidth: true) {
-                AtticListSearchField(placeholder: "Search done tasks", text: .constant(""))
+            AtticSpecimen("The strip over the bar: Date · Tag · Priority", fullWidth: true) {
+                AtticGallerySamples.strip(date: nil, tags: nil, priority: nil)
+                    .padding(.horizontal, 12)
+            }
+            AtticSpecimen("The strip shows what the task will get, with a clear ×", fullWidth: true) {
+                AtticGallerySamples.strip(
+                    date: AtticStripValue(text: "Tomorrow", spoken: "Tomorrow"),
+                    tags: AtticStripValue(text: "#home +1", spoken: "home and 1 more"),
+                    priority: AtticStripValue(text: "!!", ink: .priorityMark, style: .priorityMark, spoken: "High")
+                )
+                .padding(.horizontal, 12)
+            }
+            AtticSpecimen("Done page: the bar still adds; its search takes the tabs' line", fullWidth: true) {
+                AtticTabsSearchField(placeholder: "Search done tasks", text: .constant("invoice"), onEscape: {})
                     .padding(.horizontal, 12)
             }
             AtticSpecimen("Keyboard focus", fullWidth: true) {

@@ -2,24 +2,23 @@ import SwiftUI
 
 /// The Done log (spec § Now, Backlog and Done): everything finished, kept
 /// indefinitely, grouped by the day it was finished (Today, Yesterday,
-/// Mon 21 Sep…), searchable from the field at the top of its list
-/// (Direction A: the add bar below always adds), each task restorable to
+/// Mon 21 Sep…), searchable from the tabs line (owner item 17: the field
+/// takes the tabs' place while searching; the add bar below always adds),
+/// matches highlighted, with a quiet "N of M done tasks"; each task restorable to
 /// Now (its circle, or right-click). Loaded a page at a time as it scrolls,
 /// so 5,000 finished tasks never load at once.
 struct TasksDonePage<Cell: View, Mask: View>: View {
     @ObservedObject var model: TasksPageModel
     @ObservedObject var store: TaskStore
     /// Where the first line rests (under the tabs) and what the bottom
-    /// stack needs clear (owner fix 8): the search row and the day
-    /// headings scroll under the tabs like Now's rows.
+    /// stack needs clear (owner fix 8): the day headings scroll under the
+    /// tabs like Now's rows.
     let listTop: CGFloat
     let bottomClearance: CGFloat
     /// The add bar's zone: the only bottom margin (round 6; the rest of the
     /// clearance is room at the end of the list, so rows there take clicks).
     let bottomMargin: CGFloat
     let mask: Mask
-    /// The search field's keyboard focus (Search from the menu bar sets it).
-    @Binding var searchFocused: Bool
     /// A row the keyboard moved to: brought into the visible area (review 8).
     @Binding var reveal: TasksPageModel.ScrollRequest?
     /// Brings a row into the uncovered part of the list (the page's rule).
@@ -40,8 +39,6 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                AtticListSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch, isFocused: $searchFocused)
-                    .accessibilityIdentifier("tasks-done-search")
                 ForEach(days) { day in
                     // A day heading takes one row's pitch, its text on
                     // the rows' title line, so the log keeps the 34 / 48
@@ -71,6 +68,12 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                     AtticEmptyLine(text: query.isEmpty
                         ? String(localized: "Finished tasks collect here.")
                         : String(localized: "No finished tasks match “\(query)”."))
+                } else if let count = model.doneSearchCount() {
+                    // A quiet line under the results (v22 card B).
+                    AtticText(verbatim: String(localized: "\(count.matches) of \(count.total) done tasks"), style: .rowMeta, ink: .helper)
+                        .frame(height: AtticLayout.rowPitch)
+                        .padding(.leading, AtticLayout.textX)
+                        .accessibilityIdentifier("tasks-done-search-count")
                 }
             }
             .padding(.bottom, bottomClearance - bottomMargin)

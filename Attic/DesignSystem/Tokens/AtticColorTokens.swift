@@ -282,6 +282,17 @@ struct AtticColorTokens: Equatable, Sendable {
     /// The Craft-style control face (opaque).
     var controlFace: AtticRGBA { raised.face.over(controlBase) }
 
+    /// A search match in a title (the Done search, owner item 17): the
+    /// find highlight's soft yellow behind the matched letters, which take
+    /// the primary ink on it (heading reads at more than 7 : 1 on it in
+    /// Light and 4.5 : 1 in Dark). Increase Contrast makes it firmer.
+    var findHighlight: AtticRGBA {
+        let ic = context.increaseContrast
+        return context.mode == .dark
+            ? AtticRGBA(0xFFD60A).withAlpha(ic ? 0.42 : 0.30)
+            : AtticRGBA(0xFFDD33).withAlpha(ic ? 0.70 : 0.48)
+    }
+
     /// Every face a control's label can sit on over `surface`: the Craft
     /// style's, and the worst Liquid Glass leaves on that surface.
     func controlFaces(over surface: AtticRGBA) -> [AtticRGBA] {

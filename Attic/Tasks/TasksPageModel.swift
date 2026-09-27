@@ -57,7 +57,7 @@ struct TasksListRow: Identifiable, Equatable {
         lhs.id == rhs.id && lhs.status == rhs.status && lhs.model.title == rhs.model.title
             && lhs.model.state == rhs.model.state && lhs.model.priority == rhs.model.priority
             && lhs.model.due?.text == rhs.model.due?.text && lhs.model.tags == rhs.model.tags
-            && lhs.model.attachments == rhs.model.attachments
+            && lhs.model.attachments == rhs.model.attachments && lhs.model.titleMatch == rhs.model.titleMatch
             && lhs.model.subtasks?.done == rhs.model.subtasks?.done
             && lhs.model.subtasks?.total == rhs.model.subtasks?.total
             && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
@@ -409,7 +409,13 @@ final class TasksPageModel: ObservableObject {
         var current: (day: Date, rows: [TasksListRow])?
         for task in finished {
             let day = calendar.startOfDay(for: task.completedAt ?? task.updatedAt)
-            let row = rowModel(for: task)
+            var row = rowModel(for: task)
+            if !query.isEmpty {
+                // The match is highlighted in the title (owner item 17).
+                var model = row.model
+                model.titleMatch = query
+                row = TasksListRow(id: row.id, model: model, status: row.status, subtasks: row.subtasks)
+            }
             if current?.day == day {
                 current?.rows.append(row)
             } else {
@@ -426,6 +432,30 @@ final class TasksPageModel: ObservableObject {
         }
         return days
     }
+
+    /// The Done search's quiet count (owner item 17): how many done tasks
+    /// match, of how many there are (today's done group and the Done log).
+    /// Nil with no search, or when the log could not be counted.
+    func doneSearchCount() -> (matches: Int, total: Int)? {
+        let query = doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return nil }
+        let key = DoneCountKey(revision: store.revision, query: query)
+        if let doneCountCache, doneCountCache.key == key { return doneCountCache.count }
+        let today = store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks ?? []
+        var count: (matches: Int, total: Int)?
+        if let logMatches = store.doneLogTaskCount(matching: query), let logTotal = store.doneLogTaskCount() {
+            count = (today.filter { $0.title.localizedStandardContains(query) }.count + logMatches, today.count + logTotal)
+        }
+        doneCountCache = (key, count)
+        return count
+    }
+
+    private struct DoneCountKey: Equatable {
+        let revision: UInt64
+        let query: String
+    }
+
+    private var doneCountCache: (key: DoneCountKey, count: (matches: Int, total: Int)?)?
 
     /// Loads the Done log's first page for the current search, if the store
     /// or the search changed since.

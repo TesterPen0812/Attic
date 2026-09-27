@@ -865,6 +865,23 @@ struct AtticTaskRowModel: Identifiable, Sendable {
     var inWindow = false
     /// The task has a page (notes written into it).
     var hasPage = false
+    /// A search the title matches: its matches are highlighted (the Done
+    /// search, owner item 17).
+    var titleMatch: String?
+
+    /// Where `titleMatch` occurs in the title (as the search reads it:
+    /// case and diacritics ignored).
+    var titleMatchRanges: [Range<String.Index>] {
+        guard let query = titleMatch?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty else { return [] }
+        var ranges: [Range<String.Index>] = []
+        var start = title.startIndex
+        while start < title.endIndex,
+              let found = title.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: start..<title.endIndex) {
+            ranges.append(found)
+            start = found.upperBound
+        }
+        return ranges
+    }
 
     /// A second line only when the task has tags or subtasks (or a page,
     /// files or links, or is open in a window); done rows never have one.
@@ -1011,7 +1028,8 @@ struct AtticTaskRow: View {
                                 style: model.state == .inProgress ? .rowTitleActive : .rowTitle,
                                 // Done fades the title, without a strike (v9).
                                 ink: disabled ? .disabledText : (done ? .helper : .heading),
-                                truncates: true
+                                truncates: true,
+                                highlights: model.titleMatchRanges
                             )
                             // The title gives way first (review 13): the
                             // mark and the date keep their room; the full

@@ -188,12 +188,11 @@ struct TasksPage: View {
         }
 
         // Search (the menu-bar item): the keyboard goes to the Done page's
-        // search field, not the add bar.
+        // search field on the tabs' line, not the add bar.
         .onChange(of: model.pendingSearchFocus, initial: true) { _, pending in
             guard pending else { return }
             model.pendingSearchFocus = false
-            addBarFocused = false
-            searchFocused = true
+            beginSearch()
         }
         // The shell's toast and notices sit above everything in the bottom
         // stack, so a selection bar or paste offer never hides under them.
@@ -227,19 +226,69 @@ struct TasksPage: View {
     // MARK: - Tabs
 
     /// Now · Later · Done under the header, in place of a title and the
-    /// page pill. The tabs stay put while the pages swipe under them.
+    /// page pill. The tabs stay put while the pages swipe under them. On
+    /// Done a magnifier sits at the line's end (owner item 17, card B of
+    /// v22); while searching, the search field takes the line.
     private var tabs: some View {
-        AtticPageTabs(
-            items: TasksTab.allCases.map { tab in
-                AtticPageTabs.Item(page: tab, title: tab.title, accessibilityIdentifier: "tasks-page-\(tab.identifier)")
-            },
-            selection: Binding(get: { model.tab }, set: { model.select(tab: $0) })
-        )
-        .accessibilityIdentifier("tasks-page-tabs")
-        .padding(.leading, AtticLayout.pageTabsX)
-        .padding(.top, tabsTop)
+        ZStack(alignment: .topLeading) {
+            if searchShown {
+                AtticTabsSearchField(placeholder: model.searchPlaceholder, text: $model.doneSearch,
+                                     isFocused: $searchFocused, onEscape: endSearch)
+                    .accessibilityIdentifier("tasks-done-search")
+                    // Centred on the tabs' line.
+                    .padding(.top, tabsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
+                    .transition(.opacity)
+            } else {
+                HStack(spacing: 0) {
+                    AtticPageTabs(
+                        items: TasksTab.allCases.map { tab in
+                            AtticPageTabs.Item(page: tab, title: tab.title, accessibilityIdentifier: "tasks-page-\(tab.identifier)")
+                        },
+                        selection: Binding(get: { model.tab }, set: { model.select(tab: $0) })
+                    )
+                    .accessibilityIdentifier("tasks-page-tabs")
+                    .padding(.leading, AtticLayout.pageTabsX)
+                    Spacer(minLength: 0)
+                    if model.tab == .done {
+                        // Its glyph ends where the rows' dates end. ⌘F too.
+                        AtticSmallButton(systemName: "magnifyingglass", label: "Search done tasks", action: beginSearch)
+                            .keyboardShortcut("f", modifiers: .command)
+                            .accessibilityIdentifier("tasks-done-search-button")
+                            .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
+                                - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))
+                            .transition(.opacity)
+                    }
+                }
+                .frame(height: AtticLayout.pageTabsHeight)
+                .padding(.top, tabsTop)
+                .transition(.opacity)
+            }
+        }
         .padding(.horizontal, cornerInset)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: searchShown)
+        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.tab == .done)
+    }
+
+    /// The Done search is on the tabs' line while it has the keyboard or a
+    /// query (owner item 17); Esc, or clearing and leaving, returns the tabs.
+    private var searchShown: Bool {
+        model.tab == .done && (searchFocused || !model.doneSearch.isEmpty)
+    }
+
+    /// The magnifier, ⌘F, typing on the Done page, or the menu bar's
+    /// Search: the keyboard goes to the search field on the tabs' line.
+    private func beginSearch() {
+        addBarFocused = false
+        focusedRow = nil
+        searchFocused = true
+    }
+
+    /// Esc (or the field's "Esc"): the search ends, the tabs return, and the
+    /// Done log shows whole again.
+    private func endSearch() {
+        if !model.doneSearch.isEmpty { model.doneSearch = "" }
+        searchFocused = false
     }
 
     /// Where the lists' first row rests: under the tabs, as before.
@@ -338,7 +387,7 @@ struct TasksPage: View {
             case .done:
                 TasksDonePage(model: model, store: store, listTop: listTop, bottomClearance: bottomClearance,
                               bottomMargin: bottomMargin,
-                              mask: viewportMask, searchFocused: $searchFocused, reveal: $doneReveal,
+                              mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
                               cell: { row in cell(row, tab: .done, group: []) })
             }
@@ -1013,6 +1062,13 @@ struct TasksPage: View {
         // Every editor keeps its own keys (review 8): the title, a new
         // subtask, the add bar and Done's search.
         guard model.editingTitleID == nil, model.newSubtaskParentID == nil, !addBarFocused, !searchFocused else { return .ignored }
+        // Typing on the Done page starts a search there (owner item 17):
+        // the letter is the query's first, the field takes the tabs' line.
+        if model.tab == .done, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
+            model.doneSearch = press.characters
+            beginSearch()
+            return .handled
+        }
         let visible = visibleIDs()
         // The focused row, or the one selected row when the keyboard is
         // elsewhere in the page (a click on a row in a panel that was not
@@ -1057,6 +1113,8 @@ struct TasksPage: View {
         case .escape:
             if drag != nil { cancelDrag(); return .handled }
             if model.doneDetailID != nil { model.doneDetailID = nil; return .handled }
+            // A search left with its query: Esc ends it (the tabs return).
+            if model.tab == .done, !model.doneSearch.isEmpty { endSearch(); return .handled }
             // Esc closes the quick look the keyboard is in (or the one
             // open) and the keyboard returns to its row (review UX 2).
             let open = current.flatMap { model.expanded.contains($0) ? $0 : nil }
@@ -1075,6 +1133,15 @@ struct TasksPage: View {
                 return .handled
             }
             return .ignored
+        }
+    }
+
+    /// A key that starts a Done search: one printable character, not a
+    /// space (Space completes) and not a function key (arrows, Page Up).
+    nonisolated static func startsSearch(_ characters: String) -> Bool {
+        guard characters.count == 1, let character = characters.first, !character.isWhitespace, !character.isNewline else { return false }
+        return character.unicodeScalars.allSatisfy { scalar in
+            !CharacterSet.controlCharacters.contains(scalar) && !(0xF700...0xF8FF).contains(scalar.value)
         }
     }
 

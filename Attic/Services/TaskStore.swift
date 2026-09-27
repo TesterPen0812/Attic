@@ -2236,6 +2236,27 @@ final class TaskStore: ObservableObject {
         return (try? context.fetchCount(FetchDescriptor(predicate: predicate))) ?? 0
     }
 
+    /// How many different main tasks in the Done log match `query` (all of
+    /// them for an empty query): distinct ids, so a replicated task counts
+    /// once (the Done search's "N of M", owner item 17). Nil when the read
+    /// failed.
+    func doneLogTaskCount(matching query: String = "") -> Int? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let noDate: Date? = nil
+        let noParent: UUID? = nil
+        var descriptor = trimmed.isEmpty
+            ? FetchDescriptor<TaskItem>(predicate: #Predicate<TaskItem> { item in
+                item.doneLoggedAt != noDate && item.parentID == noParent && item.deletedAt == noDate
+            })
+            : FetchDescriptor<TaskItem>(predicate: #Predicate<TaskItem> { item in
+                item.doneLoggedAt != noDate && item.parentID == noParent && item.deletedAt == noDate
+                    && item.title.localizedStandardContains(trimmed)
+            })
+        descriptor.propertiesToFetch = [\.id]
+        guard let rows = try? context.fetch(descriptor) else { return nil }
+        return Set(rows.map(\.id)).count
+    }
+
     /// The subtasks of a task in the Done log (they left with it).
     func doneLogSubtasks(of parentID: UUID) -> [TaskItem] {
         do {

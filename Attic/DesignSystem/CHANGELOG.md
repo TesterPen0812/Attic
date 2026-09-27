@@ -305,3 +305,16 @@ The look ported, not the code: the design system's surface model now carries Pha
   compact Appearance page and the explicit command names are always on.
 - **Priority menus** (owner item 19): `TaskPriority.choices(keeping:)` offers No Priority, Medium
   and High; Low only while a task has it.
+- **Strip values** (`AtticComposerStrip`, `AtticStripValue`; owner item 18, v19): a button with a
+  value shows it on a filled pill (the recessed fill; the pressed fill while its picker is open)
+  with a clear × (14 pt, glyph 8, 7 pt either side); empty, the small button's face as before.
+  `!!` in High's orange, `!` in the helper grey. The Tag button opens the tag list. VoiceOver:
+  the button's name, its value, and a Clear action. The strip's buttons are 4 pt apart
+  (`stripSpacing`, was 2) so two pills never touch. The gallery shows the strip empty and set.
+- **Done search on the tabs line** (`AtticTabsSearchField`, `AtticTabsSearchMetrics`; owner item
+  17, card B of v22): replaces `AtticListSearchField` (removed with its metrics). A recessed 28 pt
+  pill across the list's width, the magnifier on the circles' line, the text on the titles' line,
+  a quiet "Esc" at the end. Programmatic focus puts the insertion point after the text.
+- **Find highlight** (`AtticColorTokens.findHighlight`, `AtticText.highlights`,
+  `AtticTaskRowModel.titleMatch`): a search match in a title sits on a soft yellow (Light 48 %,
+  Dark 30 %; Increase Contrast 70 % / 42 %), its letters in the primary ink.

@@ -457,3 +457,82 @@ final class TasksRound6ComposerTests: XCTestCase {
         XCTAssertEqual(TaskPriority.none.pickerTitle, "No Priority")
     }
 }
+
+/// Round 6: the Done search on the tabs line (owner item 17).
+@MainActor
+final class TasksRound6SearchTests: XCTestCase {
+    private let base = Date(timeIntervalSince1970: 1_790_000_000)
+
+    private func model(logging titles: [String], duplicate: String? = nil) throws -> (TaskStore, TasksPageModel) {
+        let store = try makeTestStore(now: { [base] in base })
+        let context = ModelContext(store.container)
+        for (index, title) in titles.enumerated() {
+            let id = UUID()
+            let copies = title == duplicate ? 2 : 1
+            for _ in 0..<copies {
+                let item = TaskItem(id: id, title: title, status: .done, createdAt: base,
+                                    updatedAt: base, completedAt: base.addingTimeInterval(-Double(index + 1) * 3_600))
+                item.doneLoggedAt = base
+                item.listOrderVersion = TaskItem.currentListOrderVersion
+                context.insert(item)
+            }
+        }
+        try context.save()
+        store.refresh()
+        let model = TasksPageModel(library: AtticLibrary(tasks: store, now: { [base] in base }), services: TasksPageServices(
+            now: { [base] in base }, calendar: { Calendar(identifier: .gregorian) }, locale: Locale(identifier: "en_GB")))
+        return (store, model)
+    }
+
+    /// "N of M done tasks": matches of all, each task once however many
+    /// copies it has; nothing without a search.
+    func testTheSearchCountsMatchesOfAllDoneTasksOnce() throws {
+        let (_, model) = try model(logging: ["Send invoice", "Pay invoice", "Call the bank", "Renew passport"], duplicate: "Pay invoice")
+        model.select(tab: .done)
+        XCTAssertNil(model.doneSearchCount())
+        model.doneSearch = "INVOICE"
+        let count = try XCTUnwrap(model.doneSearchCount())
+        XCTAssertEqual(count.matches, 2)
+        XCTAssertEqual(count.total, 4)
+        model.doneSearch = "zzz"
+        XCTAssertEqual(model.doneSearchCount()?.matches, 0)
+    }
+
+    /// The results mark where the search matched.
+    func testResultsHighlightTheMatch() throws {
+        let (_, model) = try model(logging: ["Send invoice", "Invoice the café"])
+        model.select(tab: .done)
+        model.doneSearch = "invoice"
+        model.loadDoneLogIfNeeded()
+        let rows = model.doneDays().flatMap(\.rows)
+        XCTAssertEqual(rows.count, 2)
+        for row in rows {
+            XCTAssertEqual(row.model.titleMatch, "invoice")
+            let ranges = row.model.titleMatchRanges
+            XCTAssertEqual(ranges.count, 1)
+            XCTAssertEqual(row.model.title[ranges[0]].lowercased(), "invoice")
+        }
+        var model2 = AtticTaskRowModel(title: "Cafe café CAFÉ")
+        model2.titleMatch = "cafe"
+        XCTAssertEqual(model2.titleMatchRanges.count, 3, "case and accents ignored, as the search reads")
+        model.doneSearch = ""
+        XCTAssertTrue(model.doneDays().flatMap(\.rows).allSatisfy { $0.model.titleMatch == nil }, "no search, no marks")
+    }
+
+    /// Typing on the Done page starts a search with printable keys only:
+    /// never Space (it completes), Return, Tab or the arrow keys.
+    func testOnlyPrintableKeysStartASearch() {
+        XCTAssertTrue(TasksPage.startsSearch("i"))
+        XCTAssertTrue(TasksPage.startsSearch("I"))
+        XCTAssertTrue(TasksPage.startsSearch("é"))
+        XCTAssertTrue(TasksPage.startsSearch("#"))
+        XCTAssertFalse(TasksPage.startsSearch(" "))
+        XCTAssertFalse(TasksPage.startsSearch("\r"))
+        XCTAssertFalse(TasksPage.startsSearch("\t"))
+        XCTAssertFalse(TasksPage.startsSearch("\u{1B}"), "Esc")
+        XCTAssertFalse(TasksPage.startsSearch("\u{7F}"), "Delete")
+        XCTAssertFalse(TasksPage.startsSearch("\u{F700}"), "↑")
+        XCTAssertFalse(TasksPage.startsSearch("ab"))
+        XCTAssertFalse(TasksPage.startsSearch(""))
+    }
+}
