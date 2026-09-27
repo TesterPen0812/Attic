@@ -854,11 +854,6 @@ final class TasksPageModel: ObservableObject {
         return outcome
     }
 
-    func addTag(_ tag: String, to ids: [UUID]) {
-        guard let tag = AtticTag.normalize(tag) else { return }
-        library.updateTasks(ids, addingTag: tag)
-    }
-
     /// ⌘B and the menu: to Later (the backlog), with an Undo toast (a move).
     @discardableResult
     func moveToBacklog(_ ids: [UUID]) -> CommandOutcome {
