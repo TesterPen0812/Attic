@@ -47,6 +47,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     weak var imageProvider: NoteImageProviding?
     /// The text changed through editing, undo or an editor command.
     var onTextChange: (() -> Void)?
+    /// Approved engine commands are durable even while rewrite notifications are suppressed.
+    var onApprovedMutation: (() -> Void)?
+    var onWritingToolsDidEnd: (() -> Void)?
     /// A short explanation for the status slot (a refused change).
     var onNotice: ((String) -> Void)?
     /// Called before a Writing Tools session starts (the session saves and
@@ -72,7 +75,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var writingToolsObjectsBefore = Set<UUID>()
     private var writingToolsBypassDetected = false
     private var approvedWritingToolsShadow: NSMutableAttributedString?
-    private var approvedWritingToolsEdits: [(range: NSRange, replacement: NSAttributedString, name: String)] = []
+    private enum ApprovedEdit {
+        case command(NSRange, NSAttributedString, String)
+        case undo, redo
+        case unrecorded(NSRange, NSAttributedString)
+    }
+    private var approvedWritingToolsEdits: [ApprovedEdit] = []
+    private var approvedReplayPending = false
     var isPerformingSelfMove = false
     private(set) var refusals: [String] = []
     private(set) var writingToolsRecoveries = 0
@@ -103,6 +112,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage.delegate = self
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
         history.onReplay = { [weak self] range in self?.didReplay(range) }
+        history.onWillReplay = { [weak self] range, replacement in
+            self?.willReplay(range, replacement: replacement) ?? true
+        }
+        history.onReplayCompleted = { [weak self] direction in self?.completedReplay(direction) }
     }
 
     // MARK: Document
@@ -384,7 +397,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard let range = range(of: image) else { return }
         // A size learnt from the file is stored with the next real save;
         // opening a note never writes it.
-        _ = sizeChanged
+        if sizeChanged { documentCache = nil }
         invalidateLayout(range)
     }
 
@@ -484,8 +497,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func performEdit(_ range: NSRange, with replacement: NSAttributedString, name: String,
                      selection: NSRange? = nil) -> Bool {
         guard !isReadOnly, NSMaxRange(range) <= textStorage.length else { return false }
-        let approvedRange = writingToolsBlocked && isWritingToolsSessionActive
-            ? rangeInApprovedWritingToolsText(range) : nil
+        let blocked = writingToolsBlocked && isWritingToolsSessionActive
+        let approvedRange = blocked ? rangeInApprovedWritingToolsText(range) : nil
+        if blocked && approvedRange == nil {
+            return refuse(String(localized: "This command’s target changed during Writing Tools, so it was not applied."))
+        }
         history.breakCoalescing()
         engineEditDepth += 1
         defer { engineEditDepth -= 1 }
@@ -503,7 +519,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         history.breakCoalescing()
         if let approvedRange, let shadow = approvedWritingToolsShadow {
             shadow.replaceCharacters(in: approvedRange, with: replacement)
-            approvedWritingToolsEdits.append((approvedRange, NSAttributedString(attributedString: replacement), name))
+            approvedWritingToolsEdits.append(.command(approvedRange, NSAttributedString(attributedString: replacement), name))
+            onApprovedMutation?()
         }
         if let selection {
             textView?.setSelectedRange(NSRange(location: min(selection.location, textStorage.length),
@@ -567,7 +584,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     /// Adds an imported image on its own line after the caret's line.
-    func insertImage(_ item: StagedNoteAttachment, pixelSize: CGSize?) {
+    @discardableResult
+    func insertImage(_ item: StagedNoteAttachment, pixelSize: CGSize?) -> Bool {
         staged[item.id] = item
         let selection = textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         let line = lineRange(at: selection.location)
@@ -580,8 +598,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if at == textStorage.length {
             insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
-        performEdit(NSRange(location: at, length: 0), with: insertion, name: String(localized: "Insert Image"),
-                    selection: NSRange(location: at + insertion.length, length: 0))
+        let inserted = performEdit(NSRange(location: at, length: 0), with: insertion,
+                                   name: String(localized: "Insert Image"),
+                                   selection: NSRange(location: at + insertion.length, length: 0))
+        if !inserted { staged[item.id] = nil }
+        return inserted
     }
 
     /// Import placeholders reserve their final positions before the file
@@ -589,6 +610,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func completeImageImport(_ items: [StagedNoteAttachment]) {
         for item in items { staged[item.id] = item }
         renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
+        if writingToolsBlocked && isWritingToolsSessionActive { onApprovedMutation?() }
     }
 
     func cancelImageImport(_ ids: Set<UUID>) {
@@ -600,20 +622,27 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             ranges.append(NSRange(location: start, length: NSMaxRange(range) - start))
         }
         for range in ranges.sorted(by: { $0.location > $1.location }) {
-            let approvedRange = writingToolsBlocked && isWritingToolsSessionActive
-                ? rangeInApprovedWritingToolsText(range) : nil
             history.performUnrecorded {
                 engineEditDepth += 1
                 textStorage.replaceCharacters(in: range, with: "")
                 textView?.didChangeText()
                 engineEditDepth -= 1
             }
-            if let approvedRange, let shadow = approvedWritingToolsShadow {
-                shadow.replaceCharacters(in: approvedRange, with: "")
-                approvedWritingToolsEdits.append((approvedRange, NSAttributedString(string: ""),
-                    String(localized: "Cancel Image Import")))
-            }
             history.rebase(editAt: range, newLength: 0)
+        }
+        if writingToolsBlocked && isWritingToolsSessionActive, let shadow = approvedWritingToolsShadow {
+            var approvedRanges: [NSRange] = []
+            shadow.enumerateAttribute(.attachment, in: NSRange(location: 0, length: shadow.length)) { value, range, _ in
+                guard let image = value as? NoteImageAttachment, ids.contains(image.attachmentID) else { return }
+                let start = range.location > 0 && (shadow.string as NSString).character(at: range.location - 1) == 0x0A
+                    ? range.location - 1 : range.location
+                approvedRanges.append(NSRange(location: start, length: NSMaxRange(range) - start))
+            }
+            for range in approvedRanges.sorted(by: { $0.location > $1.location }) {
+                shadow.replaceCharacters(in: range, with: "")
+                approvedWritingToolsEdits.append(.unrecorded(range, NSAttributedString(string: "")))
+            }
+            onApprovedMutation?()
         }
         for id in ids { staged[id] = nil }
     }
@@ -802,6 +831,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func writingToolsWillBegin() {
+        guard !isWritingToolsSessionActive else { return }
         writingToolsSnapshot = NSAttributedString(attributedString: textStorage)
         writingToolsHistory = history.checkpoint()
         writingToolsObjectsBefore = Set(objectIDs())
@@ -837,6 +867,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             writingToolsBlocked = false
             writingToolsRefusalReason = nil
             writingToolsHistory = nil
+            onWritingToolsDidEnd?()
             return
         }
         let whole = NSRange(location: 0, length: textStorage.length)
@@ -858,11 +889,24 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         writingToolsBlocked = false
         writingToolsRefusalReason = nil
         if bypass {
-            for edit in approvedEdits { performEdit(edit.range, with: edit.replacement, name: edit.name) }
+            for edit in approvedEdits {
+                switch edit {
+                case let .command(range, replacement, name):
+                    performEdit(range, with: replacement, name: name)
+                case .undo: history.undo()
+                case .redo: history.redo()
+                case let .unrecorded(range, replacement):
+                    history.performUnrecorded {
+                        textStorage.replaceCharacters(in: range, with: replacement)
+                    }
+                    history.rebase(editAt: range, newLength: replacement.length)
+                }
+            }
             renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
         }
         writingToolsRecoveries += 1
         if !wasBlocked { onTextChange?() }
+        onWritingToolsDidEnd?()
         onNotice?(wasBlocked
             ? String(localized: "Writing Tools changed this note without approval, so its rewrite was not kept.")
             : String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept."))
@@ -875,6 +919,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
+        if editedMask.contains(.editedAttributes), writingToolsBlocked && isWritingToolsSessionActive,
+           engineEditDepth == 0 && !history.isReplaying && userEditDepth == 0 {
+            writingToolsBypassDetected = true
+        }
         guard editedMask.contains(.editedCharacters) else { return }
         if var cached = documentCache {
             let string = textStorage.string as NSString
@@ -889,49 +937,94 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 documentCache = nil
             }
         }
-        if writingToolsBlocked && isWritingToolsSessionActive && engineEditDepth == 0
-            && !history.isReplaying && userEditDepth == 0 {
+        let bypass = writingToolsBlocked && isWritingToolsSessionActive && engineEditDepth == 0
+            && !history.isReplaying && userEditDepth == 0
+        if bypass {
             writingToolsBypassDetected = true
+            let oldLength = editedRange.length - delta
+            if oldLength >= 0 {
+                history.breakCoalescing()
+                history.rebase(editAt: NSRange(location: editedRange.location, length: oldLength),
+                               newLength: editedRange.length)
+            }
+        } else {
+            history.captureUnrecorded(newRange: editedRange, delta: delta)
         }
-        history.captureUnrecorded(newRange: editedRange, delta: delta)
         let start = DispatchTime.now().uptimeNanoseconds
         restyle(paragraphs(around: editedRange))
         renderObjects(in: NSIntersectionRange(editedRange, NSRange(location: 0, length: textStorage.length)))
         lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
 
-    /// Translate an editor command through an unapproved rewrite so it can
-    /// be replayed after restoring the pre-session text. The common case is
-    /// identical storage and needs no diff.
+    /// Resolve an approved command against the recovery shadow. Object IDs
+    /// identify object targets; plain-text edits need one unique nearby anchor.
+    /// The latter is capped so a rewrite cannot trigger an expensive diff on
+    /// the main actor or silently widen a deletion.
     private func rangeInApprovedWritingToolsText(_ range: NSRange) -> NSRange? {
         guard let shadow = approvedWritingToolsShadow else { return nil }
-        let clean = Array(shadow.string.utf16)
-        let live = Array(textStorage.string.utf16)
-        if clean == live { return range }
-        let difference = live.difference(from: clean)
-        var removed = Set<Int>()
-        var inserted = Set<Int>()
-        for change in difference {
-            switch change {
-            case let .remove(offset, _, _): removed.insert(offset)
-            case let .insert(offset, _, _): inserted.insert(offset)
+        guard NSMaxRange(range) <= textStorage.length else { return nil }
+        if !writingToolsBypassDetected { return range }
+        var liveObjects: [(NoteObjectAttachment, NSRange)] = []
+        if range.length > 0 {
+            textStorage.enumerateAttribute(.attachment, in: range) { value, found, _ in
+                if let object = value as? NoteObjectAttachment { liveObjects.append((object, found)) }
             }
         }
-        var mapping = [Int](repeating: 0, count: live.count + 1)
-        var cleanIndex = 0
-        for liveIndex in 0...live.count {
-            while removed.contains(cleanIndex) { cleanIndex += 1 }
-            mapping[liveIndex] = min(cleanIndex, clean.count)
-            if liveIndex == live.count { break }
-            if !inserted.contains(liveIndex) { cleanIndex += 1 }
+        if liveObjects.count == 1 {
+            let (object, objectRange) = liveObjects[0]
+            var matches: [NSRange] = []
+            shadow.enumerateAttribute(.attachment, in: NSRange(location: 0, length: shadow.length)) { value, found, _ in
+                if (value as? NoteObjectAttachment)?.objectID == object.objectID { matches.append(found) }
+            }
+            guard matches.count == 1 else { return nil }
+            let start = matches[0].location + range.location - objectRange.location
+            guard start >= 0, start + range.length <= shadow.length else { return nil }
+            let mapped = NSRange(location: start, length: range.length)
+            guard shadow.attributedSubstring(from: mapped).string == textStorage.attributedSubstring(from: range).string else {
+                return nil
+            }
+            return mapped
         }
-        let start = mapping[min(range.location, live.count)]
-        let end = mapping[min(NSMaxRange(range), live.count)]
-        return NSRange(location: start, length: max(0, end - start))
+        guard liveObjects.isEmpty, shadow.length <= 65_536 else { return nil }
+        let live = textStorage.string as NSString
+        let clean = shadow.string as NSString
+        for span in [24, 16, 8, 4] {
+            let before = min(span, range.location)
+            let after = min(span, live.length - NSMaxRange(range))
+            guard before + after > 0 else { continue }
+            let probe = live.substring(with: NSRange(location: range.location - before,
+                                                     length: before + range.length + after))
+            let first = clean.range(of: probe)
+            guard first.location != NSNotFound else { continue }
+            let remainder = NSRange(location: NSMaxRange(first), length: clean.length - NSMaxRange(first))
+            guard clean.range(of: probe, range: remainder).location == NSNotFound else { return nil }
+            return NSRange(location: first.location + before, length: range.length)
+        }
+        return nil
+    }
+
+    private func willReplay(_ range: NSRange, replacement: NSAttributedString) -> Bool {
+        guard writingToolsBlocked && isWritingToolsSessionActive else { return true }
+        guard let approved = rangeInApprovedWritingToolsText(range), let shadow = approvedWritingToolsShadow else {
+            return refuse(String(localized: "Undo’s target changed during Writing Tools, so it was not applied."))
+        }
+        shadow.replaceCharacters(in: approved, with: replacement)
+        approvedReplayPending = true
+        return true
     }
 
     private func didReplay(_ range: NSRange) {
+        if writingToolsBlocked && isWritingToolsSessionActive {
+            return
+        }
         onTextChange?()
+    }
+
+    private func completedReplay(_ direction: NoteUndoHistory.ReplayDirection) {
+        guard writingToolsBlocked && isWritingToolsSessionActive, approvedReplayPending else { return }
+        approvedWritingToolsEdits.append(direction == .undo ? .undo : .redo)
+        approvedReplayPending = false
+        onApprovedMutation?()
     }
 
     // MARK: Pasteboard
