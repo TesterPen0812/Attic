@@ -60,6 +60,9 @@ struct AtticChoiceRow: View {
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
+        // Keyboard focus (Full Keyboard Access) draws Attic's ring, never
+        // nothing (round 4).
+        .atticOwnFocusRing(.rounded(radius: radius, height: height))
         .onHover { hovered = $0 }
         .accessibilityLabel(detail.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(check == .on || isHighlighted ? .isSelected : [])
@@ -173,6 +176,7 @@ struct AtticDatePicker: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
+        .atticOwnFocusRing(.circle(diameter: AtticPickerMetrics.monthButton))
         .help(label)
         .accessibilityLabel(label)
     }
@@ -199,6 +203,7 @@ struct AtticDatePicker: View {
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
+        .atticOwnFocusRing(.circle(diameter: m.dayDisc))
         .accessibilityLabel(day.spoken)
         .accessibilityAddTraits(day.isSelected ? [.isSelected, .isButton] : .isButton)
         .accessibilityValue(day.isToday ? String(localized: "today") : "")
@@ -240,18 +245,21 @@ struct AtticTagPicker: View {
                 .background(AtticPickerFieldBackground())
                 .padding(.bottom, m.dividerGap)
                 .accessibilityLabel(String(localized: "Find or add a tag"))
+            ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
                         AtticChoiceRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index) {
                             onToggle(tag.name)
                         }
+                        .id(index)
                     }
                     if let create {
                         AtticChoiceRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
                                        isHighlighted: highlighted == tags.count) {
                             onCreate(create)
                         }
+                        .id(tags.count)
                     }
                     if tags.isEmpty, create == nil {
                         AtticText(verbatim: String(localized: "No tags yet"), style: .menuRow, ink: .helper)
@@ -262,6 +270,12 @@ struct AtticTagPicker: View {
             }
             .frame(maxHeight: m.tagListMaxHeight)
             .fixedSize(horizontal: false, vertical: true)
+            // The keyboard's highlight stays in view in a long list.
+            .onChange(of: highlighted) { _, index in
+                guard let index else { return }
+                proxy.scrollTo(index)
+            }
+            }
         }
         .frame(width: m.tagWidth)
     }

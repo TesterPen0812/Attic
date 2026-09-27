@@ -287,4 +287,21 @@ final class TasksRound4Tests: XCTestCase {
         other.close()
         window.close()
     }
+
+    // MARK: - Must fix 4: the calendar's month follows its active day
+
+    func testTheCalendarsActiveDayAndMonthMoveTogether() {
+        let choices = model.dateChoices
+        var cursor = TaskDateCursor(start: day("2026-09-21"))
+        cursor.move(days: 1, in: choices)                           // →
+        cursor.move(months: 1, in: choices, byKeyboard: true)       // Page Down
+        XCTAssertEqual(cursor.active, day("2026-10-22"), "Return picks the day shown, in October")
+        XCTAssertEqual(cursor.month(in: choices).month, 10)
+        var clamp = TaskDateCursor(start: day("2027-01-31"))
+        clamp.move(months: 1, in: choices, byKeyboard: false)       // the chevron
+        XCTAssertEqual(clamp.active, day("2027-02-28"), "clamped to February's length")
+        XCTAssertFalse(clamp.isKeyboardActive, "a click on the chevron draws no keyboard cursor")
+        clamp.move(days: -60, in: choices)
+        XCTAssertEqual(clamp.month(in: choices).month, 12, "arrows past the month's edge show the new month")
+    }
 }

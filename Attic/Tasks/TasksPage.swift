@@ -754,9 +754,12 @@ struct TasksPage: View {
             Menu(String(localized: "Date")) {
                 let choices = model.dateChoices
                 let current = model.commonDueDay(targets)
+                // One tick for one day: on a Sunday, Tomorrow and Next Week
+                // are the same Monday; only the first is ticked.
+                let ticked = choices.quick.first { $0.day == current }?.id
                 ForEach(choices.quick) { quick in
                     // A toggle draws the native tick for the current day.
-                    Toggle(isOn: Binding(get: { current == quick.day },
+                    Toggle(isOn: Binding(get: { quick.id == ticked },
                                          set: { _ in menuCommand(row.id) { model.setDueDay(quick.day, for: $0) } })) {
                         Text(quick.menuTitle)
                     }

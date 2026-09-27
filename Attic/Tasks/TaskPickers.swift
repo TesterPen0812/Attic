@@ -12,17 +12,20 @@ struct TaskDatePickerView: View {
     let onPick: (DueDay) -> Void
     var onRemove: () -> Void = {}
 
-    @State private var shown: TaskDateChoices.Month?
-    @State private var cursor: DueDay?
+    @State private var cursor: TaskDateCursor?
     @FocusState private var focused: Bool
 
     var body: some View {
         let today = choices.today
-        let month = shown ?? choices.month(containing: selected ?? today)
+        let cursor = self.cursor ?? TaskDateCursor(start: selected ?? today)
+        let month = cursor.month(in: choices)
         let quick = choices.quick
+        // One tick for one day: when Tomorrow and Next week are the same
+        // day (on a Sunday), only the first shows it (review wording).
+        let tickedQuick = quick.first { $0.day == selected }?.id
         AtticDatePicker(
             quick: quick.map { item in
-                AtticDatePicker.Quick(id: item.id, title: item.title, detail: choices.detail(for: item.day), isChecked: item.day == selected)
+                AtticDatePicker.Quick(id: item.id, title: item.title, detail: choices.detail(for: item.day), isChecked: item.id == tickedQuick)
             },
             showsChecks: forRow,
             monthTitle: month.title,
@@ -38,48 +41,45 @@ struct TaskDatePickerView: View {
                     spoken: spoken(day.day)
                 )
             },
-            cursor: cursor?.rawValue,
+            cursor: cursor.isKeyboardActive ? cursor.active.rawValue : nil,
             removeTitle: forRow && selected != nil ? String(localized: "Remove date") : nil,
             onQuick: { id in if let item = quick.first(where: { $0.id == id }) { onPick(item.day) } },
             onDay: { id in if let day = DueDay(rawValue: id) { onPick(day) } },
-            onMonth: { step in shown = choices.month(after: month, by: step) },
+            onMonth: { step in
+                var next = cursor
+                next.move(months: step, in: choices, byKeyboard: false)
+                self.cursor = next
+            },
             onRemove: onRemove
         )
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
         .onAppear { focused = true }
-        .onKeyPress(phases: .down) { press in key(press, month: month) }
+        .onKeyPress(phases: .down) { press in key(press, cursor: cursor) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Choose a date"))
     }
 
-    private func key(_ press: KeyPress, month: TaskDateChoices.Month) -> KeyPress.Result {
-        let start = cursor ?? selected ?? choices.today
-        let step: Int? = switch press.key {
-        case .leftArrow: -1
-        case .rightArrow: 1
-        case .upArrow: -7
-        case .downArrow: 7
-        default: nil
-        }
-        if let step {
-            let next = choices.day(start, movedBy: step)
-            cursor = next
-            if next.month != month.month || next.year != month.year { shown = choices.month(containing: next) }
-            return .handled
-        }
+    private func key(_ press: KeyPress, cursor start: TaskDateCursor) -> KeyPress.Result {
+        var cursor = start
         switch press.key {
-        case .pageUp, .pageDown:
-            shown = choices.month(after: month, by: press.key == .pageUp ? -1 : 1)
-            return .handled
+        case .leftArrow: cursor.move(days: -1, in: choices)
+        case .rightArrow: cursor.move(days: 1, in: choices)
+        case .upArrow: cursor.move(days: -7, in: choices)
+        case .downArrow: cursor.move(days: 7, in: choices)
+        case .pageUp: cursor.move(months: -1, in: choices, byKeyboard: true)
+        case .pageDown: cursor.move(months: 1, in: choices, byKeyboard: true)
         case .return:
-            guard let cursor else { return .ignored }
-            onPick(cursor)
+            // The day the person sees highlighted, in the month shown.
+            guard start.isKeyboardActive else { return .ignored }
+            onPick(start.active)
             return .handled
         default:
             return .ignored
         }
+        self.cursor = cursor
+        return .handled
     }
 
     private func spoken(_ day: DueDay) -> String {

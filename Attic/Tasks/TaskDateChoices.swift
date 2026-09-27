@@ -145,6 +145,14 @@ struct TaskDateChoices {
         return self.month(year: y, month: m)
     }
 
+    /// The same day `months` months on, clamped to that month's length
+    /// (31 Jan + 1 month = 28 or 29 Feb).
+    func day(_ day: DueDay, movedByMonths months: Int) -> DueDay {
+        guard let date = day.startDate(in: calendar),
+              let moved = calendar.date(byAdding: .month, value: months, to: date) else { return day }
+        return DueDay(date: moved, calendar: calendar)
+    }
+
     /// Keyboard travel in the grid: ← → a day, ↑ ↓ a week.
     func day(_ day: DueDay, movedBy days: Int) -> DueDay {
         guard let date = day.startDate(in: calendar),
@@ -152,3 +160,30 @@ struct TaskDateChoices {
         return DueDay(date: moved, calendar: calendar)
     }
 }
+
+/// The date picker's active day (round 4, Astra's final review 4): the
+/// month shown is always the active day's month, so the day Return picks is
+/// the one the person sees. Arrows move it by days and weeks, Page Up/Down
+/// and the chevrons by months (the day clamped to the month's length).
+struct TaskDateCursor: Equatable {
+    private(set) var active: DueDay
+    /// The keyboard has moved it: the grid draws it.
+    private(set) var isKeyboardActive = false
+
+    init(start: DueDay) { active = start }
+
+    mutating func move(days: Int, in choices: TaskDateChoices) {
+        active = choices.day(active, movedBy: days)
+        isKeyboardActive = true
+    }
+
+    mutating func move(months: Int, in choices: TaskDateChoices, byKeyboard: Bool) {
+        active = choices.day(active, movedByMonths: months)
+        if byKeyboard { isKeyboardActive = true }
+    }
+
+    func month(in choices: TaskDateChoices) -> TaskDateChoices.Month {
+        choices.month(containing: active)
+    }
+}
+
