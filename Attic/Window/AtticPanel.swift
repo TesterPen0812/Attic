@@ -19,6 +19,10 @@ final class AtticPanel: NSPanel {
     /// Esc that nothing inside the panel used (a menu, a field, the list's
     /// own Esc all come first): the panel hides.
     var onUnhandledEscape: (() -> Void)?
+    /// ⌘Z (or ⇧⌘Z, `true`) that nothing inside the panel used: no text
+    /// field or editor, no page with keyboard focus. The page's history
+    /// takes it (Astra 23: the Undo toast owns no shortcut of its own).
+    var onUnhandledUndo: ((_ redo: Bool) -> Void)?
     var trackpadDismissCorner: ScreenCorner = .topRight {
         didSet {
             if trackpadDismissCorner != oldValue { cancelTrackpadSwipe() }
@@ -83,6 +87,12 @@ final class AtticPanel: NSPanel {
            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
            !(firstResponder is NSTextView) {
             onUnhandledEscape?()
+            return
+        }
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.charactersIgnoringModifiers?.lowercased() == "z", flags == .command || flags == [.command, .shift],
+           !(firstResponder is NSTextView), let onUnhandledUndo {
+            onUnhandledUndo(flags.contains(.shift))
             return
         }
         super.keyDown(with: event)

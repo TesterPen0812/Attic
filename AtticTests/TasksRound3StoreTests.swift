@@ -462,3 +462,31 @@ final class PanelLifecycleTests: XCTestCase {
         XCTAssertEqual(model.selection, [])
     }
 }
+
+/// Astra 23: ⌘Z that nothing in the panel used reaches the page's history
+/// through the window (the toast no longer owns the shortcut); a text view
+/// keeps its own.
+@MainActor
+final class PanelUndoKeyTests: XCTestCase {
+    func testUnhandledCommandZReachesTheHistoryButNeverPastATextView() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 320, height: 520), styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        var calls: [Bool] = []
+        panel.onUnhandledUndo = { calls.append($0) }
+        func key(_ modifiers: NSEvent.ModifierFlags, _ characters: String = "z") -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: panel.windowNumber,
+                             context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 6)!
+        }
+        panel.keyDown(with: key(.command))
+        panel.keyDown(with: key([.command, .shift], "Z"))
+        panel.keyDown(with: key([.command, .option]))
+        XCTAssertEqual(calls, [false, true], "⌘Z undoes, ⇧⌘Z redoes, nothing else")
+        let field = NSTextView(frame: CGRect(x: 0, y: 0, width: 100, height: 20))
+        panel.contentView?.addSubview(field)
+        panel.makeFirstResponder(field)
+        if panel.firstResponder === field {
+            panel.keyDown(with: key(.command))
+            XCTAssertEqual(calls.count, 2, "a text view's own undo comes first")
+        }
+    }
+}

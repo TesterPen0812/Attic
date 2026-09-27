@@ -578,6 +578,12 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
             guard let self, self.panel.isVisible else { return }
             self.requestInteractiveHide()
         }
+        // ⌘Z with the keyboard nowhere in a page (after clicking the pin,
+        // say): the Tasks history, the one the Undo toast names.
+        panel.onUnhandledUndo = { [weak self] redo in
+            guard let self, self.uiState.selectedSection.isTaskBased, let library = self.store.commandLibrary else { return }
+            _ = redo ? library.redo(in: .tasks) : library.undo(in: .tasks)
+        }
         panel.onDirectContentInteraction = { [weak self] in
             guard let self, self.isShowing || self.isInteractiveDismissal else { return }
             self.clearInteractiveDismissal()
