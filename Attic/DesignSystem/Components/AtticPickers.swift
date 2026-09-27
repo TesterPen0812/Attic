@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Choice rows
@@ -10,8 +11,12 @@ enum AtticCheckState: Equatable, Sendable {
 
 /// One choice in a picker (the date picker's quick days, the tag list,
 /// Priority, a suggestion): 28 tall, the pop-over row's shape, an optional
-/// check column, a quiet trailing detail ("Thu 1 Oct"). The hovered row, or
-/// the one the keyboard is on, takes the selection fill.
+/// check column, a quiet trailing detail ("Thu 1 Oct"). One row of a list
+/// takes the selection fill: in a list with a keyboard highlight the list
+/// owns it and the pointer moves it (`onHover`), as in a native menu, so a
+/// hovered row and a keyboard row are never lit together (round 5). The
+/// fill is inset 1 pt top and bottom: two lit rows never merge into one
+/// block.
 struct AtticChoiceRow: View {
     let title: String
     var systemName: String?
@@ -20,6 +25,10 @@ struct AtticChoiceRow: View {
     var check: AtticCheckState?
     var isHighlighted = false
     var titleInk: AtticInk = .body
+    /// The pointer entered (true) or left (false) the row: the list moves
+    /// its one highlight here. Nil: the row lights itself while hovered (a
+    /// list with no keyboard highlight).
+    var onHover: ((Bool) -> Void)? = nil
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -28,8 +37,10 @@ struct AtticChoiceRow: View {
     var body: some View {
         let m = AtticPickerMetrics.self
         let height = AtticControlSize.smallHeight
-        let radius = AtticRadius.control(height: height)
-        let fill: AtticRGBA = (hovered || isHighlighted) ? design.tokens.selected : .clear
+        let fillHeight = height - m.highlightGap
+        let radius = AtticRadius.control(height: fillHeight)
+        let lit = onHover == nil ? (hovered || isHighlighted) : isHighlighted
+        let fill: AtticRGBA = lit ? design.tokens.selected : .clear
         Button(action: action) {
             HStack(spacing: m.rowGap) {
                 if let check {
@@ -55,18 +66,59 @@ struct AtticChoiceRow: View {
             }
             .padding(.horizontal, AtticPopoverMetrics.rowPadding)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color)
+                .padding(.vertical, m.highlightGap / 2))
             .contentShape(Rectangle())
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         // Keyboard focus (Full Keyboard Access) draws Attic's ring, never
-        // nothing (round 4).
-        .atticOwnFocusRing(.rounded(radius: radius, height: height))
-        .onHover { hovered = $0 }
+        // nothing (round 4), on the fill's shape.
+        .atticOwnFocusRing(.rounded(radius: radius, height: fillHeight))
+        // The whole row answers the pointer (no dead gap between rows). A
+        // row moving under a resting pointer as the keyboard scrolls the
+        // list is not the pointer moving: the keyboard keeps its highlight.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                if !hovered { hovered = true }
+                onHover?(true)
+            case .ended:
+                hovered = false
+                onHover?(false)
+            }
+        }
         .accessibilityLabel(detail.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(check == .on || isHighlighted ? .isSelected : [])
         .accessibilityValue(check == .mixed ? String(localized: "some selected tasks") : "")
+    }
+}
+
+/// A list's one highlight (round 5, the owner's item: two rows lit at
+/// once): the keyboard and the pointer move the same index, as in a native
+/// menu.
+enum AtticListHighlight {
+    /// The highlight after the pointer entered (`inside`) or left row
+    /// `index`: entering takes it there; leaving clears it only if it is
+    /// still on that row (the pointer went off the list, not to a
+    /// neighbour, whose entry may come first).
+    static func hovered(_ index: Int, inside: Bool, current: Int?) -> Int? {
+        if inside { return index }
+        return current == index ? nil : current
+    }
+
+    /// A hover the pointer made: a row sliding under a resting pointer as
+    /// the keyboard scrolls the list (a key event, or none) is not one.
+    static func isPointerMove(_ event: NSEvent?) -> Bool {
+        guard let event else { return false }
+        switch event.type {
+        case .mouseMoved, .mouseEntered, .mouseExited, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+             .scrollWheel, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp:
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -116,14 +168,25 @@ struct AtticDatePicker: View {
     let monthTitle: String
     let weekdays: [String]
     let days: [Day]
-    /// The keyboard cursor's day (id), if the keyboard has moved.
+    /// The cursor's day (id) when it is the highlight (the keyboard moved
+    /// it, or the pointer is on that day).
     var cursor: String?
     /// "Remove date" (a row that has a date).
     var removeTitle: String?
+    /// The quick day's row (its id, or `removeID`) the pointer is on: the
+    /// one highlight then, never with the cursor (round 5).
+    var highlightedRow: String? = nil
     let onQuick: (String) -> Void
     let onDay: (String) -> Void
     let onMonth: (Int) -> Void
     var onRemove: () -> Void = {}
+    /// The pointer entered (true) or left a row (a quick id, `removeID`).
+    var onHoverRow: ((_ id: String, _ inside: Bool) -> Void)? = nil
+    /// The pointer entered (true) or left a day (its id).
+    var onHoverDay: ((_ id: String, _ inside: Bool) -> Void)? = nil
+
+    /// "Remove date"'s row id for `highlightedRow` and `onHoverRow`.
+    static let removeID = "attic.date.remove"
 
     @Environment(\.atticDesign) private var design
 
@@ -131,7 +194,8 @@ struct AtticDatePicker: View {
         let m = AtticPickerMetrics.self
         VStack(alignment: .leading, spacing: 0) {
             ForEach(quick) { item in
-                AtticChoiceRow(title: item.title, detail: item.detail, check: showsChecks ? (item.isChecked ? .on : .off) : nil) {
+                AtticChoiceRow(title: item.title, detail: item.detail, check: showsChecks ? (item.isChecked ? .on : .off) : nil,
+                               isHighlighted: highlightedRow == item.id, onHover: hoverRow(item.id)) {
                     onQuick(item.id)
                 }
             }
@@ -162,10 +226,15 @@ struct AtticDatePicker: View {
             .padding(.bottom, m.gridBottom)
             if let removeTitle {
                 AtticPickerDivider()
-                AtticChoiceRow(title: removeTitle, check: showsChecks ? .off : nil, action: onRemove)
+                AtticChoiceRow(title: removeTitle, check: showsChecks ? .off : nil,
+                               isHighlighted: highlightedRow == Self.removeID, onHover: hoverRow(Self.removeID), action: onRemove)
             }
         }
         .frame(width: m.dateWidth)
+    }
+
+    private func hoverRow(_ id: String) -> ((Bool) -> Void)? {
+        onHoverRow.map { report in { inside in report(id, inside) } }
     }
 
     private func monthButton(_ step: Int, systemName: String, label: String) -> some View {
@@ -204,6 +273,16 @@ struct AtticDatePicker: View {
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
         .atticOwnFocusRing(.circle(diameter: m.dayDisc))
+        // The pointer moves the cursor, as it moves a menu's highlight.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                guard AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                onHoverDay?(day.id, true)
+            case .ended:
+                onHoverDay?(day.id, false)
+            }
+        }
         .accessibilityLabel(day.spoken)
         .accessibilityAddTraits(day.isSelected ? [.isSelected, .isButton] : .isButton)
         .accessibilityValue(day.isToday ? String(localized: "today") : "")
@@ -227,11 +306,14 @@ struct AtticTagPicker: View {
     let tags: [Tag]
     /// "New tag “…”" when the query is not an existing tag.
     var create: String?
-    /// The keyboard highlight (index into `tags`, then the create row).
+    /// The list's one highlight (index into `tags`, then the create row):
+    /// the keyboard's, and the pointer moves it (`onHover`).
     var highlighted: Int?
     let onToggle: (String) -> Void
     let onCreate: (String) -> Void
     var fieldFocused: FocusState<Bool>.Binding
+    /// The pointer entered (true) or left row `index`.
+    var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
 
     var body: some View {
         let m = AtticPickerMetrics.self
@@ -249,14 +331,15 @@ struct AtticTagPicker: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(tags.enumerated()), id: \.element.id) { index, tag in
-                        AtticChoiceRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index) {
+                        AtticChoiceRow(title: "#" + tag.name, check: tag.state, isHighlighted: highlighted == index,
+                                       onHover: hover(index)) {
                             onToggle(tag.name)
                         }
                         .id(index)
                     }
                     if let create {
                         AtticChoiceRow(title: String(localized: "New tag “#\(create)”"), systemName: "plus", check: .off,
-                                       isHighlighted: highlighted == tags.count) {
+                                       isHighlighted: highlighted == tags.count, onHover: hover(tags.count)) {
                             onCreate(create)
                         }
                         .id(tags.count)
@@ -270,14 +353,19 @@ struct AtticTagPicker: View {
             }
             .frame(maxHeight: m.tagListMaxHeight)
             .fixedSize(horizontal: false, vertical: true)
-            // The keyboard's highlight stays in view in a long list.
+            // The keyboard's highlight stays in view in a long list; the
+            // pointer's is under the pointer already.
             .onChange(of: highlighted) { _, index in
-                guard let index else { return }
+                guard let index, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
                 proxy.scrollTo(index)
             }
             }
         }
         .frame(width: m.tagWidth)
+    }
+
+    private func hover(_ index: Int) -> ((Bool) -> Void)? {
+        onHover.map { report in { inside in report(index, inside) } }
     }
 }
 
@@ -306,14 +394,14 @@ struct AtticComposerStrip<DateContent: View, PriorityContent: View>: View {
     var body: some View {
         HStack(spacing: AtticPickerMetrics.stripSpacing) {
             AtticSmallButton(systemName: "calendar", title: "Date", label: "Date") { datePresented = true }
-                .popover(isPresented: $datePresented, arrowEdge: .top) {
+                .atticPopover(isPresented: $datePresented, arrowEdge: .top) {
                     datePicker().atticPickerSurface()
                 }
                 .accessibilityIdentifier("composer-date")
             AtticSmallButton(systemName: "tag", title: "Tag", label: "Tag", action: onTag)
                 .accessibilityIdentifier("composer-tag")
             AtticSmallButton(systemName: "flag", title: "Priority", label: "Priority") { priorityPresented = true }
-                .popover(isPresented: $priorityPresented, arrowEdge: .top) {
+                .atticPopover(isPresented: $priorityPresented, arrowEdge: .top) {
                     priorityPicker().atticPickerSurface()
                 }
                 .accessibilityIdentifier("composer-priority")
@@ -339,13 +427,17 @@ struct AtticSuggestionList: View {
 
     let items: [Item]
     let highlighted: Int
+    /// The pointer moves the one highlight (a list always has one: Tab and
+    /// Return take it).
+    var onHover: ((Int) -> Void)? = nil
     let onChoose: (Int) -> Void
 
     var body: some View {
         AtticPopover(width: AtticPickerMetrics.suggestionWidth) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 AtticChoiceRow(title: item.title, systemName: item.systemName, detail: item.detail,
-                               isHighlighted: index == highlighted) { onChoose(index) }
+                               isHighlighted: index == highlighted,
+                               onHover: onHover.map { report in { inside in if inside { report(index) } } }) { onChoose(index) }
             }
         }
         .accessibilityElement(children: .contain)
@@ -371,4 +463,30 @@ private struct AtticPickerSurface: ViewModifier {
 
 extension View {
     func atticPickerSurface() -> some View { modifier(AtticPickerSurface()) }
+
+    /// Attic's pop-over: the native one, whose content owns every key while
+    /// it has the keyboard. SwiftUI offers a key the pop-over's content
+    /// leaves unhandled to the views it was presented from, so without this
+    /// the date picker's Backspace or Space reached the row's Delete or
+    /// Complete (round 5, the class of the owner's blocker).
+    func atticPopover<Content: View>(isPresented: Binding<Bool>, arrowEdge: Edge,
+                                     @ViewBuilder content: @escaping () -> Content) -> some View {
+        popover(isPresented: isPresented, arrowEdge: arrowEdge) {
+            content().background(AtticPopoverWindowMarker())
+        }
+    }
+}
+
+/// Notes the pop-over's window with `AtticTextInput`, so no row or page
+/// command answers a key while that window has the keyboard.
+struct AtticPopoverWindowMarker: NSViewRepresentable {
+    final class Marker: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { AtticTextInput.notePopover(window) }
+        }
+    }
+
+    func makeNSView(context: Context) -> Marker { Marker(frame: .zero) }
+    func updateNSView(_ view: Marker, context: Context) {}
 }

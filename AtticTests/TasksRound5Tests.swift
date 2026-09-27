@@ -172,4 +172,75 @@ final class TasksRound5Tests: XCTestCase {
         XCTAssertTrue(model.retryPickerChange())
         XCTAssertEqual(cleared, 1)
     }
+
+    // MARK: - An open pop-over keeps its keys (the class of the owner's blocker)
+
+    func testAnAtticPopoversWindowOwnsItsKeys() {
+        let window = NSWindow(contentRect: CGRect(x: -4_000, y: -4_000, width: 200, height: 120), styleMask: [.titled],
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.close() }
+        XCTAssertFalse(AtticTextInput.isPopover(window), "a window that shows no pop-over")
+        // The marker `atticPopover` puts behind a pop-over's content.
+        window.contentView?.addSubview(AtticPopoverWindowMarker.Marker(frame: .zero))
+        XCTAssertTrue(AtticTextInput.isPopover(window), "a pop-over's window: its keys are its own")
+        if ProcessInfo.processInfo.environment["ATTIC_KEY_WINDOW_TESTS"] == "1" {
+            window.makeKeyAndOrderFront(nil)
+            XCTAssertTrue(AtticTextInput.hasKeyboard, "a key pop-over has the keyboard, a field or not")
+        }
+    }
+
+    // MARK: - One highlight per list; the pointer moves it
+
+    func testThePointerMovesTheListsOneHighlight() throws {
+        // Entering a row takes the highlight there, from the keyboard's row.
+        XCTAssertEqual(AtticListHighlight.hovered(3, inside: true, current: 0), 3)
+        // Leaving a row for a neighbour, whichever event comes first.
+        XCTAssertEqual(AtticListHighlight.hovered(3, inside: false, current: 4), 4, "the neighbour's entry came first")
+        XCTAssertNil(AtticListHighlight.hovered(3, inside: false, current: 3), "off the list: nothing lit")
+        // A row sliding under a resting pointer as the keyboard scrolls is
+        // not the pointer moving.
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                 windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                                                 isARepeat: false, keyCode: 125))
+        let moved = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        XCTAssertFalse(AtticListHighlight.isPointerMove(key))
+        XCTAssertFalse(AtticListHighlight.isPointerMove(nil))
+        XCTAssertTrue(AtticListHighlight.isPointerMove(moved))
+    }
+
+    func testTheDatePickerLightsOneThingAtATime() throws {
+        let choices = TaskDateChoices(parser: TaskTextParser(calendar: Calendar(identifier: .gregorian),
+                                                             locale: Locale(identifier: "en_GB"), now: { [clock] in clock.value }))
+        let today = choices.today
+        var highlight = TaskDatePickerHighlight(cursor: TaskDateCursor(start: today))
+        XCTAssertFalse(highlight.cursor.isKeyboardActive, "nothing lit when it opens")
+        // The keyboard lights a day.
+        highlight.moveByKeyboard { $0.move(days: 1, in: choices) }
+        XCTAssertTrue(highlight.cursor.isKeyboardActive)
+        let keyboardDay = highlight.cursor.active
+        // The pointer on a quick day's row takes the highlight from it.
+        highlight.hoverRow("tomorrow", inside: true)
+        XCTAssertEqual(highlight.row, "tomorrow")
+        XCTAssertFalse(highlight.cursor.isKeyboardActive, "the day is no longer lit")
+        XCTAssertEqual(highlight.cursor.active, keyboardDay, "the cursor stays put for the next arrow")
+        // An arrow brings it back to the grid, off the row.
+        highlight.moveByKeyboard { $0.move(days: 1, in: choices) }
+        XCTAssertNil(highlight.row)
+        XCTAssertTrue(highlight.cursor.isKeyboardActive)
+        // The pointer on a day of the month shown moves the cursor there.
+        let pointed = choices.day(today, movedBy: 5)
+        highlight.hoverDay(pointed, inside: true, inShownMonth: true)
+        XCTAssertEqual(highlight.cursor.active, pointed)
+        XCTAssertTrue(highlight.cursor.isKeyboardActive)
+        // Off it, nothing is lit.
+        highlight.hoverDay(pointed, inside: false, inShownMonth: true)
+        XCTAssertFalse(highlight.cursor.isKeyboardActive)
+        // A neighbouring month's day never turns the page under the pointer.
+        let month = highlight.cursor.month(in: choices)
+        highlight.hoverDay(choices.day(pointed, movedByMonths: 1), inside: true, inShownMonth: false)
+        XCTAssertEqual(highlight.cursor.month(in: choices), month)
+        XCTAssertFalse(highlight.cursor.isKeyboardActive)
+    }
 }

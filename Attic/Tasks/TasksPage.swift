@@ -1413,7 +1413,8 @@ private struct TasksAddBar: View {
         // Over the strip and the bar, never pushing them (review 14).
         .overlay(alignment: .topLeading) {
             if let suggestion {
-                AtticSuggestionList(items: items(for: suggestion), highlighted: min(text.highlighted, suggestion.count - 1)) { index in
+                AtticSuggestionList(items: items(for: suggestion), highlighted: min(text.highlighted, suggestion.count - 1),
+                                    onHover: { index in if text.highlighted != index { text.highlighted = index } }) { index in
                     model.accept(suggestion, choice: index, editor: editor)
                     text.highlighted = 0
                 }

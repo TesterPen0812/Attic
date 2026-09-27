@@ -12,12 +12,13 @@ struct TaskDatePickerView: View {
     let onPick: (DueDay) -> Void
     var onRemove: () -> Void = {}
 
-    @State private var cursor: TaskDateCursor?
+    @State private var highlight: TaskDatePickerHighlight?
     @FocusState private var focused: Bool
 
     var body: some View {
         let today = choices.today
-        let cursor = self.cursor ?? TaskDateCursor(start: selected ?? today)
+        let highlight = self.highlight ?? TaskDatePickerHighlight(cursor: TaskDateCursor(start: selected ?? today))
+        let cursor = highlight.cursor
         let month = cursor.month(in: choices)
         let quick = choices.quick
         // One tick for one day: when Tomorrow and Next week are the same
@@ -43,42 +44,59 @@ struct TaskDatePickerView: View {
             },
             cursor: cursor.isKeyboardActive ? cursor.active.rawValue : nil,
             removeTitle: forRow && selected != nil ? String(localized: "Remove date") : nil,
+            highlightedRow: highlight.row,
             onQuick: { id in if let item = quick.first(where: { $0.id == id }) { onPick(item.day) } },
             onDay: { id in if let day = DueDay(rawValue: id) { onPick(day) } },
             onMonth: { step in
-                var next = cursor
-                next.move(months: step, in: choices, byKeyboard: false)
-                self.cursor = next
+                var next = highlight
+                next.cursor.move(months: step, in: choices, byKeyboard: false)
+                self.highlight = next
             },
-            onRemove: onRemove
+            onRemove: onRemove,
+            onHoverRow: { id, inside in
+                var next = highlight
+                next.hoverRow(id, inside: inside)
+                if next != highlight { self.highlight = next }
+            },
+            onHoverDay: { id, inside in
+                guard let day = DueDay(rawValue: id) else { return }
+                var next = highlight
+                next.hoverDay(day, inside: inside, inShownMonth: month.days.contains { $0.day == day && $0.inMonth })
+                if next != highlight { self.highlight = next }
+            }
         )
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
         .onAppear { focused = true }
-        .onKeyPress(phases: .down) { press in key(press, cursor: cursor) }
+        .onKeyPress(phases: .down) { press in key(press, highlight: highlight, quick: quick) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Choose a date"))
     }
 
-    private func key(_ press: KeyPress, cursor start: TaskDateCursor) -> KeyPress.Result {
-        var cursor = start
+    private func key(_ press: KeyPress, highlight start: TaskDatePickerHighlight, quick: [TaskDateChoices.Quick]) -> KeyPress.Result {
+        var next = start
         switch press.key {
-        case .leftArrow: cursor.move(days: -1, in: choices)
-        case .rightArrow: cursor.move(days: 1, in: choices)
-        case .upArrow: cursor.move(days: -7, in: choices)
-        case .downArrow: cursor.move(days: 7, in: choices)
-        case .pageUp: cursor.move(months: -1, in: choices, byKeyboard: true)
-        case .pageDown: cursor.move(months: 1, in: choices, byKeyboard: true)
+        case .leftArrow: next.moveByKeyboard { $0.move(days: -1, in: choices) }
+        case .rightArrow: next.moveByKeyboard { $0.move(days: 1, in: choices) }
+        case .upArrow: next.moveByKeyboard { $0.move(days: -7, in: choices) }
+        case .downArrow: next.moveByKeyboard { $0.move(days: 7, in: choices) }
+        case .pageUp: next.moveByKeyboard { $0.move(months: -1, in: choices, byKeyboard: true) }
+        case .pageDown: next.moveByKeyboard { $0.move(months: 1, in: choices, byKeyboard: true) }
         case .return:
-            // The day the person sees highlighted, in the month shown.
-            guard start.isKeyboardActive else { return .ignored }
-            onPick(start.active)
+            // What the person sees highlighted: a quick day's row the
+            // pointer is on, or the cursor's day in the month shown.
+            if let row = start.row {
+                if row == AtticDatePicker.removeID { onRemove() } else if let item = quick.first(where: { $0.id == row }) { onPick(item.day) }
+                return .handled
+            }
+            guard start.cursor.isKeyboardActive else { return .ignored }
+            onPick(start.cursor.active)
             return .handled
         default:
             return .ignored
         }
-        self.cursor = cursor
+        self.highlight = next
         return .handled
     }
 
@@ -120,10 +138,17 @@ struct TaskTagPickerView: View {
                 let clear = { query = "" }
                 if onCreate(name, clear) { clear() }
             },
-            fieldFocused: $fieldFocused
+            fieldFocused: $fieldFocused,
+            onHover: { index, inside in
+                let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                if next != highlighted { highlighted = next }
+            }
         )
         .onAppear { if focusField { fieldFocused = true } }
-        .onChange(of: query) { _, _ in highlighted = filtered.isEmpty && create == nil ? nil : 0 }
+        // Typing highlights the first match; an empty field (as after a new
+        // tag saved) highlights nothing, so another Return does nothing
+        // rather than toggle a tag (round 5, F5).
+        .onChange(of: query) { _, _ in highlighted = lowered.isEmpty || (filtered.isEmpty && create == nil) ? nil : 0 }
         .onKeyPress(phases: .down) { press in
             let count = filtered.count + (create == nil ? 0 : 1)
             switch press.key {
@@ -171,7 +196,11 @@ struct TaskPriorityPickerView: View {
             ForEach(Array(options.enumerated()), id: \.element) { index, priority in
                 AtticChoiceRow(title: priority.pickerTitle, detail: nil,
                                check: current == priority || (current == nil && priority == .none) ? .on : .off,
-                               isHighlighted: highlighted == index, titleInk: .body) { onPick(priority) }
+                               isHighlighted: highlighted == index, titleInk: .body,
+                               onHover: { inside in
+                                   let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                                   if next != highlighted { highlighted = next }
+                               }) { onPick(priority) }
             }
         }
         .frame(width: AtticPickerMetrics.tagWidth - 40)

@@ -167,7 +167,8 @@ struct TaskDateChoices {
 /// and the chevrons by months (the day clamped to the month's length).
 struct TaskDateCursor: Equatable {
     private(set) var active: DueDay
-    /// The keyboard has moved it: the grid draws it.
+    /// The grid draws it and Return picks it: the keyboard moved it, or the
+    /// pointer is on its day.
     private(set) var isKeyboardActive = false
 
     init(start: DueDay) { active = start }
@@ -182,8 +183,55 @@ struct TaskDateCursor: Equatable {
         if byKeyboard { isKeyboardActive = true }
     }
 
+    /// The pointer is on `day`, in the month shown: the cursor goes there,
+    /// as a menu's highlight follows the pointer (round 5).
+    mutating func point(at day: DueDay) {
+        active = day
+        isKeyboardActive = true
+    }
+
+    /// The highlight is elsewhere (the pointer on a quick day's row, or off
+    /// the grid): the cursor stays put, undrawn, for the next arrow key.
+    mutating func hide() {
+        isKeyboardActive = false
+    }
+
     func month(in choices: TaskDateChoices) -> TaskDateChoices.Month {
         choices.month(containing: active)
     }
 }
 
+/// The date picker's one highlight (round 5): the cursor on a day, or the
+/// quick day's row the pointer is on, never both. The keyboard and the
+/// pointer move the same highlight, as in a native menu.
+struct TaskDatePickerHighlight: Equatable {
+    var cursor: TaskDateCursor
+    /// A quick day's id, or `AtticDatePicker.removeID`.
+    var row: String?
+
+    /// An arrow or Page key moved the cursor: the highlight leaves the row.
+    mutating func moveByKeyboard(_ move: (inout TaskDateCursor) -> Void) {
+        move(&cursor)
+        row = nil
+    }
+
+    mutating func hoverRow(_ id: String, inside: Bool) {
+        if inside {
+            row = id
+            cursor.hide()
+        } else if row == id {
+            row = nil
+        }
+    }
+
+    /// The pointer on a day: the cursor follows it within the month shown
+    /// (a neighbouring month's day never turns the page under the pointer).
+    mutating func hoverDay(_ day: DueDay, inside: Bool, inShownMonth: Bool) {
+        if inside {
+            row = nil
+            if inShownMonth { cursor.point(at: day) } else { cursor.hide() }
+        } else if cursor.active == day {
+            cursor.hide()
+        }
+    }
+}

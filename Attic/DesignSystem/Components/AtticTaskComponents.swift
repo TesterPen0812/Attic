@@ -68,14 +68,32 @@ struct AtticTaskActions {
 /// While an editable text view (a field's editor, the add bar, a title or
 /// subtask editor, the Done search, a picker's search) has the keyboard in
 /// the key window, no page or row command answers a key: the field does.
+/// The same holds for an Attic pop-over (`atticPopover`), a field or not:
+/// the date picker's Space or Backspace is never the row's Complete or
+/// Delete (round 5: the class of the owner's blocker).
 enum AtticTextInput {
-    /// An editable text view is the key window's first responder.
+    /// An editable text view is the key window's first responder, or the
+    /// key window is an Attic pop-over.
     @MainActor static var hasKeyboard: Bool {
-        isTyping(NSApp.keyWindow?.firstResponder)
+        guard let key = NSApp.keyWindow else { return false }
+        return isTyping(key.firstResponder) || isPopover(key)
     }
 
     static func isTyping(_ responder: NSResponder?) -> Bool {
         (responder as? NSTextView)?.isEditable == true
+    }
+
+    /// The windows of the pop-overs Attic shows (weak: a closed pop-over's
+    /// window goes).
+    @MainActor private static let popoverWindows = NSHashTable<NSWindow>.weakObjects()
+
+    /// `window` shows an Attic pop-over's content: its keys are its own.
+    @MainActor static func isPopover(_ window: NSWindow) -> Bool {
+        popoverWindows.contains(window)
+    }
+
+    @MainActor static func notePopover(_ window: NSWindow) {
+        popoverWindows.add(window)
     }
 
     /// A command reached by a key (a menu's key equivalent included) while
@@ -1018,7 +1036,7 @@ struct AtticTaskRow: View {
                 if !twoLine || model.tags.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
                         .padding(.leading, AtticLayout.textX)
-                        .popover(isPresented: tagsPresented(twoLine: false), arrowEdge: .bottom) { meta?.tagPicker() }
+                        .atticPopover(isPresented: tagsPresented(twoLine: false), arrowEdge: .bottom) { meta?.tagPicker() }
                 }
             }
         }
@@ -1088,7 +1106,7 @@ struct AtticTaskRow: View {
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
                 .accessibilityHint(String(localized: "Changes the date"))
-                .popover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
             } else {
                 AtticDueText(due: due, disabled: disabled)
                     .fixedSize()
@@ -1096,7 +1114,7 @@ struct AtticTaskRow: View {
         } else if let meta, capture == nil {
             // No date yet: "Pick a Date…" opens the picker from here.
             Color.clear.frame(width: 1, height: 1)
-                .popover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
+                .atticPopover(isPresented: meta.datePresented, arrowEdge: .bottom) { meta.datePicker() }
         }
     }
 
@@ -1277,7 +1295,7 @@ private struct AtticDetailsTags: View {
             .focusEffectDisabled()
             .onHover { hovered = $0 }
             .atticRowControl()
-            .popover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
+            .atticPopover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
             .help(tags.map { "#" + $0 }.joined(separator: " "))
             .accessibilityLabel(String(localized: "Tags: \(tags.joined(separator: ", "))"))
             .accessibilityHint(String(localized: "Changes the tags"))

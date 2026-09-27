@@ -456,6 +456,9 @@ enum AtticTagMetrics {
 /// v17-lib's: 28 pt columns, 26 pt rows, a 24 pt day disc, today ringed.
 enum AtticPickerMetrics {
     static let rowGap: CGFloat = 8
+    /// Between two lit rows' fills (round 5, the owner saw two adjacent tag
+    /// rows lit as one block): each fill is inset half of it top and bottom.
+    static let highlightGap: CGFloat = 2
     static let checkSize: CGFloat = 10
     static let checkSlot: CGFloat = 12
     static let dividerGap: CGFloat = 4

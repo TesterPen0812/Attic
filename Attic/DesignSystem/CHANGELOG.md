@@ -271,3 +271,18 @@ The look ported, not the code: the design system's surface model now carries Pha
 - **Out of focus on Glass and Frosted** the panel's controls stay native glass (Phase 0's weight);
   the drawn recipe is for Solid (and Reduce Transparency) only.
 - **VoiceOver:** a Later task's state reads "later"; a row being edited exposes its title field.
+
+### Phase 1 round 5 (2026-09-27)
+
+- **One highlight per list** (`AtticChoiceRow.onHover`, `AtticListHighlight`): in the date, tag,
+  priority and suggestion lists the list owns its one highlight and the pointer moves it, as in a
+  native menu; a hovered row and a keyboard row are never lit together. A row sliding under a
+  resting pointer as the keyboard scrolls is not a pointer move. In the date picker the pointer on
+  a day moves the keyboard cursor there (within the month shown), and on a quick day's row it
+  takes the highlight from the cursor.
+- **Highlight gap** (`AtticPickerMetrics.highlightGap`, 2 pt): a choice row's fill (and its focus
+  ring) is inset 1 pt top and bottom, so two lit rows never merge into one block. Rows stay 28 pt
+  and answer the pointer across their full height.
+- **`atticPopover`**: Attic's pop-overs note their window with `AtticTextInput`, so no row or page
+  command answers a key while a pop-over has the keyboard (the date picker's Backspace or Space
+  never reaches the row's Delete or Complete).
