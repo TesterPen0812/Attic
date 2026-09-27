@@ -70,7 +70,12 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var baseRevisionID: UUID?
     @Published private(set) var engine: NoteEditorEngine
     let readOnlyReason: NoteReadOnlyReason?
-    @Published fileprivate(set) var state: State
+    @Published fileprivate(set) var state: State {
+        didSet {
+            engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(state,
+                activity: engine.activity, refusedSinceLastStoreSave: refusedWritingToolsSinceSave))
+        }
+    }
     fileprivate(set) var isDirty: Bool {
         get {
             switch state {
@@ -115,6 +120,7 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var pendingImportIDs = Set<UUID>()
     fileprivate var importTask: Task<Void, Never>?
     fileprivate var blocksAutomaticRekey = false
+    fileprivate var refusedWritingToolsSinceSave = false
     fileprivate var saveTask: Task<Void, Never>?
     fileprivate var pauseTask: Task<Void, Never>?
 
@@ -445,16 +451,16 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return }
             self.textDidChange(in: session)
         }
-        engine.onApprovedMutation = { [weak self, weak session] in
-            guard let self, let session else { return }
-            self.textDidChange(in: session)
-            _ = self.preserve(session)
-        }
         engine.onActivityChanged = { [weak self, weak session] old, new in
             guard let self, let session else { return }
             if old != .idle && new == .idle {
-                _ = self.preserve(session)
+                if session.isDirty || session.problem != nil {
+                    _ = self.preserve(session)
+                } else {
+                    self.clearRecoveryCopy(noteID: session.noteID)
+                }
             }
+            self.updateWritingToolsAvailability(for: session)
         }
         engine.onNotice = { [weak session] message in session?.notice = message }
         engine.onBeforeCopy = { [weak self, weak session] in
@@ -467,19 +473,28 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return false }
             session.blocksAutomaticRekey = true
             defer { session.blocksAutomaticRekey = false }
-            if session.isImporting {
-                engine.writingToolsRefusalReason = String(localized: "Finish adding images before using Writing Tools.")
+            guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
+                    refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave) else {
+                engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
                 return false
             }
-            if session.problem == .changedElsewhere {
-                engine.writingToolsRefusalReason = String(localized: "Resolve the change elsewhere before using Writing Tools.")
+            let saved = self.save(session)
+            if !saved { _ = self.preserve(session) }
+            guard saved, session.isPersisted,
+                  self.store.recordVersion(noteID: session.noteID, reason: .beforeWritingTools) else {
+                session.refusedWritingToolsSinceSave = true
+                engine.writingToolsRefusalReason = String(localized: "Writing Tools unavailable — couldn't save a safety copy.")
                 return false
             }
-            // What the note holds before a rewrite is kept as a version.
-            return self.save(session) && session.isPersisted
-                && self.store.recordVersion(noteID: session.noteID, reason: .beforeWritingTools)
+            return true
         }
         engine.onSelectionChange = { [weak session] range in session?.selection = range }
+        updateWritingToolsAvailability(for: session)
+    }
+
+    private func updateWritingToolsAvailability(for session: NoteSession) {
+        session.engine.setWritingToolsAvailable(NoteSessionPolicy.writingToolsAvailable(session.state,
+            activity: session.engine.activity, refusedSinceLastStoreSave: session.refusedWritingToolsSinceSave))
     }
 
     private func remember(_ noteID: UUID) {
@@ -559,6 +574,15 @@ final class NotesPageController: ObservableObject {
 
     private func canLeaveComposition(in session: NoteSession) -> Bool {
         if session.engine.writingToolsBeganInView,
+           let textView = session.engine.textView,
+           textView.isWritingToolsActive,
+           let coordinator = textView.writingToolsCoordinator {
+            coordinator.stopWritingTools()
+            if session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused {
+                session.engine.writingToolsDidEnd()
+            }
+        }
+        if session.engine.writingToolsBeganInView,
            session.engine.activity == .writingToolsSafe || session.engine.activity == .writingToolsRefused,
            session.engine.textView?.isWritingToolsActive == false {
             session.engine.writingToolsDidEnd()
@@ -602,10 +626,10 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func preserve(_ session: NoteSession) -> Bool {
         session.saveTask?.cancel()
-        guard session.isDirty || session.problem != nil else { return true }
         if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity) == .checkpointOnly {
             return checkpoint(session, silent: true)
         }
+        guard session.isDirty || session.problem != nil else { return true }
         if !session.pendingImportIDs.isEmpty {
             // Reservations have no bytes yet. Checkpoint the durable text,
             // keeping the live import and its anchors in memory.
@@ -692,11 +716,9 @@ final class NotesPageController: ObservableObject {
 
     /// All paths that replace a stored document or rekey a draft use this gate.
     private func canCommit(_ session: NoteSession, resolvingConflict: Bool = false) -> Bool {
-        guard !session.isReadOnly, session.pendingImportIDs.isEmpty,
-              session.engine.textView?.hasMarkedText() != true,
-              !session.engine.isWritingToolsSessionActive,
-              resolvingConflict || session.problem != .changedElsewhere else { return false }
-        return true
+        NoteSessionPolicy.canWriteStore(resolvingConflict ? .dirty : session.state,
+            activity: session.engine.activity) && session.pendingImportIDs.isEmpty
+            && session.engine.textView?.hasMarkedText() != true
     }
 
     private func textDidChange(in session: NoteSession) {
@@ -704,6 +726,7 @@ final class NotesPageController: ObservableObject {
         if !session.isDirty { session.isDirty = true }
         session.editGeneration &+= 1
         session.lastEditAt = now()
+        updateWritingToolsAvailability(for: session)
         scheduleSave(session)
     }
 
@@ -736,9 +759,9 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func save(_ session: NoteSession, snapshot: NoteDocument? = nil,
               stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil) -> Bool {
+        guard canCommit(session) else { return false }
         guard session.isDirty || session.problem != nil else { return true }
         guard !session.isReadOnly else { return true }
-        guard canCommit(session) else { return false }
         let engine = session.engine
         let document = snapshot ?? engine.document()
         let staged = stagedSnapshot ?? engine.stagedAttachments(for: document)
@@ -828,6 +851,8 @@ final class NotesPageController: ObservableObject {
         captureViewState(session)
         session.isDirty = false
         if session.problem != nil { session.problem = nil }
+        session.refusedWritingToolsSinceSave = false
+        updateWritingToolsAvailability(for: session)
         session.engine.forgetStaged(Set(staged.map(\.id)))
         clearRecoveryCopy(noteID: session.noteID)
         if let source = session.recoverySourceID {

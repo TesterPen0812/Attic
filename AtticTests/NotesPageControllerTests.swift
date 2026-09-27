@@ -779,7 +779,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(controller.preserveAll())
         XCTAssertNil(draft.problem, "a normal import is waiting, not a failed save")
         draft.engine.writingToolsWillBegin()
-        XCTAssertTrue(draft.notice?.contains("Finish adding images") == true)
+        XCTAssertTrue(draft.notice?.contains("safety copy") == true)
         draft.engine.writingToolsDidEnd()
         await loader.releaseNext(success: true)
         await waitForImageRequests(loader, count: 2)
@@ -956,120 +956,48 @@ final class NotesPageControllerTests: XCTestCase {
         gate.shouldFail = true
         draft.engine.writingToolsWillBegin()
         XCTAssertFalse(draft.engine.allowsChange(ranges: [NSRange(location: 0, length: 1)]))
-        XCTAssertTrue(draft.notice?.contains("recovery version") == true)
+        XCTAssertTrue(draft.notice?.contains("safety copy") == true)
         draft.engine.writingToolsDidEnd()
         gate.shouldFail = false
         XCTAssertEqual(store.note(withID: draft.noteID)?.title, "Original prose")
     }
 
-    func testAttachedViewApprovedCommandDuringBlockedWritingToolsCheckpointsAndRestarts() throws {
-        let storeDirectory = directory.appendingPathComponent("store", isDirectory: true)
-        let journalDirectory = directory.appendingPathComponent("journal", isDirectory: true)
-        try FileManager.default.createDirectory(at: storeDirectory, withIntermediateDirectories: true)
-        let id = UUID()
-        let journal = NoteDraftJournal(directory: journalDirectory)
-        do {
-            let persistence = PersistenceGate()
-            let container1 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
-                                                                      storeDirectory: storeDirectory)
-            let firstStore = NoteStore(container: container1, persist: { try persistence.save($0) },
-                                       attachmentFileStore: makeTestAttachmentFileStore())
-            guard case .success = firstStore.createDocumentNote(id: id,
-                document: NoteDocument(blocks: [.text("Title"), .checklist("Do it", id: UUID())])) else {
-                return XCTFail()
-            }
-            let controller = NotesPageController(store: firstStore, journal: journal)
-            XCTAssertTrue(controller.open(noteID: id))
-            let draft = try XCTUnwrap(controller.active)
-            _ = draft.engine.makeView()
-            XCTAssertFalse(draft.isDirty)
-            persistence.shouldFail = true
-            draft.engine.writingToolsWillBegin()
-            persistence.shouldFail = false
-            let box = try XCTUnwrap(draft.engine.objects().first?.1)
-            draft.engine.toggleCheckbox(atLineOf: box.location)
-            XCTAssertTrue(draft.isDirty)
-            XCTAssertTrue(try XCTUnwrap(journal.entries().first).0.content.count > 0)
-            XCTAssertTrue(NoteContentCodec.decode(try XCTUnwrap(journal.entries().first).0.content)
-                .document?.blocks[1].checked == true)
-            XCTAssertFalse(controller.save(draft))
-            XCTAssertFalse(controller.preserveForHide())
-            draft.engine.writingToolsDidEnd()
-            XCTAssertEqual(firstStore.loadDocument(noteID: id)?.content.document?.blocks[1].checked, true)
-            XCTAssertTrue(try journal.entries().isEmpty)
-            XCTAssertTrue(controller.open(noteID: id))
-            XCTAssertEqual(controller.active?.engine.document().blocks[1].checked, true)
-        }
-
-        let container2 = try PersistenceController.makeContainer(inMemory: false, cloudSyncEnabled: false,
-                                                                  storeDirectory: storeDirectory)
-        let secondStore = NoteStore(container: container2, attachmentFileStore: makeTestAttachmentFileStore())
-        let restarted = NotesPageController(store: secondStore, journal: journal)
-        restarted.start()
-        XCTAssertTrue(restarted.open(noteID: id))
-        XCTAssertEqual(restarted.active?.engine.document().blocks[1].checked, true)
+    func testRefusedWritingToolsSessionFreezesCommandsAndCheckpointsSnapshot() throws {
+        let controller = makeController()
+        controller.start()
+        let draft = try XCTUnwrap(controller.active)
+        type("Original", into: draft)
+        XCTAssertTrue(controller.preserveAll())
+        gate.shouldFail = true
+        draft.engine.writingToolsWillBegin()
+        gate.shouldFail = false
+        XCTAssertEqual(draft.engine.activity, .writingToolsRefused)
+        let before = draft.engine.document()
+        draft.engine.insertDate(NoteDay(year: 2026, month: 10, day: 2)!)
+        XCTAssertEqual(draft.engine.document(), before)
+        draft.engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 8), with: "Rewrite")
+        XCTAssertTrue(controller.preserve(draft))
+        let entry = try XCTUnwrap(NoteDraftJournal(directory: directory).entries().first?.0)
+        XCTAssertEqual(NoteContentCodec.decode(entry.content).document, before)
+        draft.engine.writingToolsDidEnd()
+        XCTAssertEqual(draft.engine.document(), before)
+        XCTAssertNil(draft.problem)
     }
 
-    func testImportCompletionDuringBlockedWritingToolsCheckpointsThenSavesOnEnd() async throws {
-        let image = try realImage()
-        let loader = DelayedImageLoader()
-        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
-            saveDelay: .seconds(60), imageLoader: { url in await loader.load(url, template: image) })
+    func testImportStartIsRefusedDuringWritingTools() throws {
+        let controller = makeController()
         controller.start()
         let draft = try XCTUnwrap(controller.active)
         type("Title", into: draft)
         XCTAssertTrue(controller.preserveAll())
-        _ = draft.engine.makeView()
         gate.shouldFail = true
         draft.engine.writingToolsWillBegin()
         gate.shouldFail = false
         controller.importImages([URL(fileURLWithPath: "/tmp/blocked.png")])
-        await waitForImageRequests(loader, count: 1)
-        XCTAssertFalse(controller.preserveForHide())
-        XCTAssertEqual(store.loadDocument(noteID: draft.noteID)?.content.document?.attachmentIDs, [])
-        await loader.releaseNext(success: true)
-        for _ in 0..<60 {
-            if !draft.isImporting { break }
-            try await Task.sleep(for: .milliseconds(20))
-        }
         XCTAssertFalse(draft.isImporting)
-        let checkpoint = try XCTUnwrap(NoteDraftJournal(directory: directory).entries().first?.0)
-        XCTAssertEqual(NoteContentCodec.decode(checkpoint.content).document?.attachmentIDs.count, 1)
-        XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty)
+        XCTAssertTrue(draft.engine.document().attachmentIDs.isEmpty)
         draft.engine.writingToolsDidEnd()
-        XCTAssertEqual(try store.attachmentRows(forNoteID: draft.noteID).count, 1)
-        XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
-    }
-
-    func testAdjacentBypassDeletionKeepsApprovedCheckboxInCheckpointAndUndoRedo() throws {
-        let id = UUID()
-        guard case .success = store.createDocumentNote(id: id,
-            document: NoteDocument(blocks: [.text("T"), .checklist("abc", id: UUID())])) else {
-            return XCTFail()
-        }
-        let controller = makeController()
-        XCTAssertTrue(controller.open(noteID: id))
-        let draft = try XCTUnwrap(controller.active)
-        _ = draft.engine.makeView()
-        gate.shouldFail = true
-        draft.engine.writingToolsWillBegin()
-        gate.shouldFail = false
-        let box = try XCTUnwrap(draft.engine.objects().first?.1)
-        draft.engine.textStorage.replaceCharacters(in: NSRange(location: NSMaxRange(box), length: 3), with: "")
-        draft.engine.toggleCheckbox(atLineOf: box.location)
-        let checkpoint = try XCTUnwrap(NoteDraftJournal(directory: directory).entries().first?.0)
-        let approved = try XCTUnwrap(NoteContentCodec.decode(checkpoint.content).document)
-        XCTAssertEqual(approved.blocks[1].text, "abc")
-        XCTAssertTrue(approved.blocks[1].checked == true)
-        draft.engine.writingToolsDidEnd()
-        XCTAssertEqual(draft.engine.document().blocks[1].text, "abc")
-        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.blocks[1].text, "abc")
-        XCTAssertTrue(draft.engine.history.undo())
-        XCTAssertFalse(draft.engine.document().blocks[1].checked == true)
-        XCTAssertTrue(draft.engine.history.redo())
-        XCTAssertTrue(draft.engine.document().blocks[1].checked == true)
-        XCTAssertTrue(controller.save(draft))
-        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.blocks[1].text, "abc")
+        XCTAssertTrue(draft.engine.document().attachmentIDs.isEmpty)
     }
 
     func testRefusedWritingToolsBypassRestoresTextAndDoesNotAutosave() async throws {
@@ -1110,7 +1038,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(draft.problem, nil)
         let recovery = try XCTUnwrap(NoteDraftJournal(directory: directory).entries().first?.0)
         XCTAssertEqual(NoteContentCodec.decode(recovery.content).document?.title, "Original")
-        XCTAssertEqual(NoteContentCodec.decode(recovery.content).document?.blocks.flatMap(\.inlines).count, 1)
+        XCTAssertEqual(NoteContentCodec.decode(recovery.content).document?.blocks.flatMap(\.inlines).count, 0)
         draft.engine.writingToolsDidEnd()
         XCTAssertTrue(controller.save(draft))
         XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)

@@ -24,7 +24,6 @@ import AppKit
 /// move) undo together.
 @MainActor
 final class NoteUndoHistory {
-    enum ReplayDirection { case undo, redo }
     final class Op {
         fileprivate(set) var range: NSRange
         fileprivate var current: NSAttributedString
@@ -58,10 +57,9 @@ final class NoteUndoHistory {
     /// Replays through the text view when one is attached, so its delegate,
     /// selection and layout see the change; nil edits the storage directly.
     weak var textView: NSTextView?
-    /// A recovery shadow can refuse an Undo/Redo whose target is ambiguous.
-    var onWillReplay: ((NSRange, NSAttributedString) -> Bool)?
+    /// A refused Writing Tools session freezes all history operations.
+    var canReplay: (() -> Bool)?
     var onReplay: ((NSRange) -> Void)?
-    var onReplayCompleted: ((ReplayDirection) -> Void)?
 
     private(set) var undoOps: [Op] = []
     private(set) var redoOps: [Op] = []
@@ -81,8 +79,8 @@ final class NoteUndoHistory {
         self.limit = limit
     }
 
-    var canUndo: Bool { !undoOps.isEmpty }
-    var canRedo: Bool { !redoOps.isEmpty }
+    var canUndo: Bool { !undoOps.isEmpty && (canReplay?() ?? true) }
+    var canRedo: Bool { !redoOps.isEmpty && (canReplay?() ?? true) }
     var undoActionName: String { undoOps.last?.name ?? "" }
     var redoActionName: String { redoOps.first?.name ?? "" }
     var isChangeInFlight: Bool { !pending.isEmpty }
@@ -339,6 +337,7 @@ final class NoteUndoHistory {
 
     @discardableResult
     func undo() -> Bool {
+        guard canReplay?() ?? true else { return false }
         guard let last = undoOps.last else { return false }
         open = nil
         let group = last.group
@@ -350,12 +349,12 @@ final class NoteUndoHistory {
             changed = applied || changed
             redoOps.insert(op, at: 0)
         }
-        if changed { onReplayCompleted?(.undo) }
         return changed
     }
 
     @discardableResult
     func redo() -> Bool {
+        guard canReplay?() ?? true else { return false }
         guard let first = redoOps.first else { return false }
         open = nil
         let group = first.group
@@ -367,7 +366,6 @@ final class NoteUndoHistory {
             changed = applied || changed
             undoOps.append(op)
         }
-        if changed { onReplayCompleted?(.redo) }
         return changed
     }
 
@@ -389,17 +387,9 @@ final class NoteUndoHistory {
                 log.append("could not replay \(op.name)")
                 return false
             }
-            guard onWillReplay?(op.range, replacement) ?? true else {
-                log.append("could not locate \(op.name) in approved text")
-                return false
-            }
             storage.replaceCharacters(in: op.range, with: replacement)
             textView.didChangeText()
         } else {
-            guard onWillReplay?(op.range, replacement) ?? true else {
-                log.append("could not locate \(op.name) in approved text")
-                return false
-            }
             storage.replaceCharacters(in: op.range, with: replacement)
         }
         op.other = op.current

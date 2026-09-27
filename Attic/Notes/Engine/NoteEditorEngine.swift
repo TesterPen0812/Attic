@@ -51,8 +51,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// The text changed through editing, undo or an editor command.
     var onTextChange: (() -> Void)?
     var onActivityChanged: ((Activity, Activity) -> Void)?
-    /// Approved engine commands are durable even while rewrite notifications are suppressed.
-    var onApprovedMutation: (() -> Void)?
     var onWritingToolsDidEnd: (() -> Void)?
     /// A short explanation for the status slot (a refused change).
     var onNotice: ((String) -> Void)?
@@ -85,15 +83,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var writingToolsSnapshot: NSAttributedString?
     private var writingToolsHistory: NoteUndoHistory.Checkpoint?
     private var writingToolsObjectsBefore = Set<UUID>()
-    private var writingToolsBypassDetected = false
-    private var approvedWritingToolsShadow: NSMutableAttributedString?
-    private enum ApprovedEdit {
-        case command(NSRange, NSAttributedString, String)
-        case undo, redo
-        case unrecorded(NSRange, NSAttributedString)
-    }
-    private var approvedWritingToolsEdits: [ApprovedEdit] = []
-    private var approvedReplayPending = false
+    private var restoringWritingToolsSnapshot = false
+    private var writingToolsAvailable = true
     var isPerformingSelfMove = false
     private(set) var refusals: [String] = []
     private(set) var writingToolsRecoveries = 0
@@ -124,10 +115,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage.delegate = self
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
         history.onReplay = { [weak self] range in self?.didReplay(range) }
-        history.onWillReplay = { [weak self] range, replacement in
-            self?.willReplay(range, replacement: replacement) ?? true
-        }
-        history.onReplayCompleted = { [weak self] direction in self?.completedReplay(direction) }
+        history.canReplay = { [weak self] in self?.activity == .idle }
     }
 
     // MARK: Document
@@ -158,12 +146,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     /// Recovery checkpoints during a refused Writing Tools session contain
-    /// approved commands, never a rewrite that bypassed the refusal guard.
+    /// the starting document, never an in-place rewrite that bypassed the guard.
     func checkpointDocument() -> NoteDocument {
-        if writingToolsBlocked, isWritingToolsSessionActive, let approvedWritingToolsShadow {
-            return NoteTextCodec.document(from: approvedWritingToolsShadow, template: template)
+        if activity == .writingToolsRefused, let writingToolsSnapshot {
+            return NoteTextCodec.document(from: writingToolsSnapshot, template: template)
         }
         return document()
+    }
+
+    func setWritingToolsAvailable(_ available: Bool) {
+        writingToolsAvailable = available
+        if activity == .idle { textView?.writingToolsBehavior = available ? .complete : .none }
     }
 
     private static func isSimpleTextBlock(_ block: NoteBlock) -> Bool {
@@ -256,7 +249,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.typingAttributes = style.titleAttributes
         textView.insertionPointColor = style.bodyColor
         // Writing Tools: inline, plain-text results only, objects protected.
-        textView.writingToolsBehavior = .complete
+        textView.writingToolsBehavior = writingToolsAvailable ? .complete : .none
         textView.allowedWritingToolsResultOptions = [.plainText]
         textView.setAccessibilityLabel(String(localized: "Note"))
     }
@@ -509,10 +502,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func performEdit(_ range: NSRange, with replacement: NSAttributedString, name: String,
                      selection: NSRange? = nil) -> Bool {
         guard !isReadOnly, NSMaxRange(range) <= textStorage.length else { return false }
-        let blocked = writingToolsBlocked && isWritingToolsSessionActive
-        let approvedRange = blocked ? rangeInApprovedWritingToolsText(range) : nil
-        if blocked && approvedRange == nil {
-            return refuse(String(localized: "This command’s target changed during Writing Tools, so it was not applied."))
+        guard activity == .idle else {
+            return refuse(String(localized: "Finish Writing Tools or composing text before editing this note."))
         }
         history.breakCoalescing()
         engineEditDepth += 1
@@ -529,11 +520,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         history.renameLast(name)
         history.breakCoalescing()
-        if let approvedRange, let shadow = approvedWritingToolsShadow {
-            shadow.replaceCharacters(in: approvedRange, with: replacement)
-            approvedWritingToolsEdits.append(.command(approvedRange, NSAttributedString(attributedString: replacement), name))
-            onApprovedMutation?()
-        }
         if let selection {
             textView?.setSelectedRange(NSRange(location: min(selection.location, textStorage.length),
                                                length: min(selection.length, max(0, textStorage.length - selection.location))))
@@ -622,7 +608,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func completeImageImport(_ items: [StagedNoteAttachment]) {
         for item in items { staged[item.id] = item }
         renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
-        if writingToolsBlocked && isWritingToolsSessionActive { onApprovedMutation?() }
     }
 
     func cancelImageImport(_ ids: Set<UUID>) {
@@ -641,20 +626,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 engineEditDepth -= 1
             }
             history.rebase(editAt: range, newLength: 0)
-        }
-        if writingToolsBlocked && isWritingToolsSessionActive, let shadow = approvedWritingToolsShadow {
-            var approvedRanges: [NSRange] = []
-            shadow.enumerateAttribute(.attachment, in: NSRange(location: 0, length: shadow.length)) { value, range, _ in
-                guard let image = value as? NoteImageAttachment, ids.contains(image.attachmentID) else { return }
-                let start = range.location > 0 && (shadow.string as NSString).character(at: range.location - 1) == 0x0A
-                    ? range.location - 1 : range.location
-                approvedRanges.append(NSRange(location: start, length: NSMaxRange(range) - start))
-            }
-            for range in approvedRanges.sorted(by: { $0.location > $1.location }) {
-                shadow.replaceCharacters(in: range, with: "")
-                approvedWritingToolsEdits.append(.unrecorded(range, NSAttributedString(string: "")))
-            }
-            onApprovedMutation?()
         }
         for id in ids { staged[id] = nil }
     }
@@ -775,6 +746,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textDidChange(_ notification: Notification) {
         history.didChange()
+        guard !restoringWritingToolsSnapshot else { return }
         if !(writingToolsBlocked && isWritingToolsSessionActive) { onTextChange?() }
         if !isWritingToolsSessionActive {
             setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
@@ -855,80 +827,51 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         writingToolsBlocked = !preserved
         isWritingToolsSessionActive = true
         setActivity(preserved ? .writingToolsSafe : .writingToolsRefused)
-        writingToolsBypassDetected = false
-        approvedWritingToolsShadow = writingToolsBlocked ? NSMutableAttributedString(attributedString: textStorage) : nil
-        approvedWritingToolsEdits = []
-        guard preserved else {
-            onNotice?(writingToolsRefusalReason ?? String(localized: "Writing Tools can’t change this note until a recovery version is saved."))
-            return
+        if !preserved {
+            onNotice?(writingToolsRefusalReason ?? String(localized: "Writing Tools unavailable — couldn't save a safety copy."))
         }
     }
 
-    /// If an object disappeared anyway (a path that never asked), the text
-    /// goes back to how it was before the session and the session's steps
-    /// leave the history: Undo can't return to the loss, Redo has nothing.
+    /// A refused rewrite always returns to the exact starting text and Undo
+    /// checkpoint. A protected object lost during a safe rewrite does too.
     func writingToolsDidEnd() {
+        guard let snapshot = writingToolsSnapshot else { return }
         let wasBlocked = writingToolsBlocked
+        let lostObject = !writingToolsObjectsBefore.subtracting(objectIDs()).isEmpty
+        let changed = !snapshot.isEqual(to: textStorage)
+        writingToolsSnapshot = nil
+        writingToolsObjectsBefore = []
         isWritingToolsSessionActive = false
         writingToolsBeganInView = false
-        guard let snapshot = writingToolsSnapshot else { return }
-        writingToolsSnapshot = nil
-        let lost = writingToolsObjectsBefore.subtracting(objectIDs())
-        writingToolsObjectsBefore = []
-        let bypass = wasBlocked && writingToolsBypassDetected
-        writingToolsBypassDetected = false
-        let approvedEdits = approvedWritingToolsEdits
-        approvedWritingToolsEdits = []
-        approvedWritingToolsShadow = nil
-        guard bypass || (!wasBlocked && !lost.isEmpty) else {
-            writingToolsBlocked = false
-            writingToolsRefusalReason = nil
-            writingToolsHistory = nil
-            setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
-            onWritingToolsDidEnd?()
-            return
-        }
-        let whole = NSRange(location: 0, length: textStorage.length)
-        history.performUnrecorded {
-            engineEditDepth += 1
-            if let textView, textView.shouldChangeText(in: whole, replacementString: snapshot.string) {
-                textStorage.replaceCharacters(in: whole, with: snapshot)
-                textView.didChangeText()
-            } else {
-                textStorage.replaceCharacters(in: whole, with: snapshot)
+        if wasBlocked || lostObject {
+            let whole = NSRange(location: 0, length: textStorage.length)
+            restoringWritingToolsSnapshot = true
+            history.performUnrecorded {
+                engineEditDepth += 1
+                if let textView, textView.shouldChangeText(in: whole, replacementString: snapshot.string) {
+                    textStorage.replaceCharacters(in: whole, with: snapshot)
+                    textView.didChangeText()
+                } else {
+                    textStorage.replaceCharacters(in: whole, with: snapshot)
+                }
+                engineEditDepth -= 1
             }
-            engineEditDepth -= 1
+            restoringWritingToolsSnapshot = false
+            if let checkpoint = writingToolsHistory { history.rewind(to: checkpoint) }
+            if changed || lostObject {
+                writingToolsRecoveries += 1
+                onNotice?(wasBlocked
+                    ? String(localized: "Writing Tools changed this note without a safety copy, so its rewrite was not kept.")
+                    : String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept."))
+            }
+        } else if changed {
+            onTextChange?()
         }
-        // The text is exactly as it was before the session, so the history
-        // goes back exactly too: none of the session's steps (nor any step
-        // rebased around its changes) survives to redo or undo into loss.
-        if let checkpoint = writingToolsHistory { history.rewind(to: checkpoint) }
         writingToolsHistory = nil
         writingToolsBlocked = false
         writingToolsRefusalReason = nil
-        if bypass {
-            for edit in approvedEdits {
-                switch edit {
-                case let .command(range, replacement, name):
-                    performEdit(range, with: replacement, name: name)
-                case .undo: history.undo()
-                case .redo: history.redo()
-                case let .unrecorded(range, replacement):
-                    history.performUnrecorded {
-                        textStorage.replaceCharacters(in: range, with: replacement)
-                    }
-                    history.rebase(editAt: range, newLength: replacement.length)
-                }
-            }
-            renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
-        }
-        writingToolsRecoveries += 1
-        if !wasBlocked { onTextChange?() }
         setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
         onWritingToolsDidEnd?()
-        onNotice?(wasBlocked
-            ? String(localized: "Writing Tools changed this note without approval, so its rewrite was not kept.")
-            : String(localized: "Writing Tools changed an image, checklist or date, so its rewrite was not kept."))
     }
 
     // MARK: NSTextStorageDelegate
@@ -938,10 +881,6 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// processEditing allows here).
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
-        if editedMask.contains(.editedAttributes), writingToolsBlocked && isWritingToolsSessionActive,
-           engineEditDepth == 0 && !history.isReplaying && userEditDepth == 0 {
-            writingToolsBypassDetected = true
-        }
         guard editedMask.contains(.editedCharacters) else { return }
         if var cached = documentCache {
             let string = textStorage.string as NSString
@@ -956,10 +895,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 documentCache = nil
             }
         }
-        let bypass = writingToolsBlocked && isWritingToolsSessionActive && engineEditDepth == 0
+        let outsideRefusedEdit = activity == .writingToolsRefused && engineEditDepth == 0
             && !history.isReplaying && userEditDepth == 0
-        if bypass {
-            writingToolsBypassDetected = true
+        if outsideRefusedEdit {
             let oldLength = editedRange.length - delta
             if oldLength >= 0 {
                 history.breakCoalescing()
@@ -975,75 +913,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
 
-    /// Resolve an approved command against the recovery shadow. Object IDs
-    /// identify object targets; plain-text edits need one unique nearby anchor.
-    /// The latter is capped so a rewrite cannot trigger an expensive diff on
-    /// the main actor or silently widen a deletion.
-    private func rangeInApprovedWritingToolsText(_ range: NSRange) -> NSRange? {
-        guard let shadow = approvedWritingToolsShadow else { return nil }
-        guard NSMaxRange(range) <= textStorage.length else { return nil }
-        if !writingToolsBypassDetected { return range }
-        var liveObjects: [(NoteObjectAttachment, NSRange)] = []
-        if range.length > 0 {
-            textStorage.enumerateAttribute(.attachment, in: range) { value, found, _ in
-                if let object = value as? NoteObjectAttachment { liveObjects.append((object, found)) }
-            }
-        }
-        if liveObjects.count == 1 {
-            let (object, objectRange) = liveObjects[0]
-            var matches: [NSRange] = []
-            shadow.enumerateAttribute(.attachment, in: NSRange(location: 0, length: shadow.length)) { value, found, _ in
-                if (value as? NoteObjectAttachment)?.objectID == object.objectID { matches.append(found) }
-            }
-            guard matches.count == 1 else { return nil }
-            let start = matches[0].location + range.location - objectRange.location
-            guard start >= 0, start + range.length <= shadow.length else { return nil }
-            let mapped = NSRange(location: start, length: range.length)
-            guard shadow.attributedSubstring(from: mapped).string == textStorage.attributedSubstring(from: range).string else {
-                return nil
-            }
-            return mapped
-        }
-        guard liveObjects.isEmpty, shadow.length <= 65_536 else { return nil }
-        let live = textStorage.string as NSString
-        let clean = shadow.string as NSString
-        for span in [24, 16, 8, 4] {
-            let before = min(span, range.location)
-            let after = min(span, live.length - NSMaxRange(range))
-            guard before + after > 0 else { continue }
-            let probe = live.substring(with: NSRange(location: range.location - before,
-                                                     length: before + range.length + after))
-            let first = clean.range(of: probe)
-            guard first.location != NSNotFound else { continue }
-            let remainder = NSRange(location: NSMaxRange(first), length: clean.length - NSMaxRange(first))
-            guard clean.range(of: probe, range: remainder).location == NSNotFound else { return nil }
-            return NSRange(location: first.location + before, length: range.length)
-        }
-        return nil
-    }
-
-    private func willReplay(_ range: NSRange, replacement: NSAttributedString) -> Bool {
-        guard writingToolsBlocked && isWritingToolsSessionActive else { return true }
-        guard let approved = rangeInApprovedWritingToolsText(range), let shadow = approvedWritingToolsShadow else {
-            return refuse(String(localized: "Undo’s target changed during Writing Tools, so it was not applied."))
-        }
-        shadow.replaceCharacters(in: approved, with: replacement)
-        approvedReplayPending = true
-        return true
-    }
-
     private func didReplay(_ range: NSRange) {
-        if writingToolsBlocked && isWritingToolsSessionActive {
-            return
-        }
         onTextChange?()
-    }
-
-    private func completedReplay(_ direction: NoteUndoHistory.ReplayDirection) {
-        guard writingToolsBlocked && isWritingToolsSessionActive, approvedReplayPending else { return }
-        approvedWritingToolsEdits.append(direction == .undo ? .undo : .redo)
-        approvedReplayPending = false
-        onApprovedMutation?()
     }
 
     // MARK: Pasteboard

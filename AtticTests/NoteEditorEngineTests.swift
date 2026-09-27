@@ -365,143 +365,27 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.document(), before)
     }
 
-    func testBlockedWritingToolsRestoresOnlyBypassAndKeepsApprovedObjectCommands() {
+    func testRefusedWritingToolsSessionIsFrozenAndRestoresExactly() throws {
         let (engine, textView) = makeEngine()
+        type("!", textView)
+        let before = engine.document()
+        let undoBefore = engine.history.canUndo
         engine.onWritingToolsWillBegin = { false }
         engine.writingToolsWillBegin()
-        // The refusal guard is bypassed by a direct storage rewrite.
-        let title = NSRange(location: 0, length: 5)
-        engine.textStorage.replaceCharacters(in: title, with: "Rewrite")
-        engine.toggleCheckbox(atLineOf: location(of: "Buy", in: engine))
-        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        XCTAssertEqual(engine.activity, .writingToolsRefused)
+        let box = try XCTUnwrap(engine.objects().first?.1)
+        engine.toggleCheckbox(atLineOf: box.location)
         engine.insertDate(NoteDay(year: 2026, month: 10, day: 2)!)
+        XCTAssertFalse(engine.history.undo())
+        XCTAssertFalse(engine.history.redo())
+        XCTAssertFalse(engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "typed"), name: "Typing"))
+        engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "Rewrite")
+        XCTAssertEqual(engine.checkpointDocument(), before)
         engine.writingToolsDidEnd()
-        let result = engine.document()
-        XCTAssertEqual(result.title, "Title")
-        XCTAssertTrue(result.blocks[2].checked)
-        XCTAssertEqual(result.blocks.flatMap(\.inlines).count, 2)
-        XCTAssertEqual(engine.writingToolsRecoveries, 1)
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertEqual(engine.history.canUndo, undoBefore)
         XCTAssertFalse(engine.history.canRedo)
-    }
-
-    func testBlockedWritingToolsAdjacentDeletionNeverWidensCheckboxCommand() throws {
-        let id = UUID()
-        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .checklist("abc", id: id), .text("End")]))
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        let box = try XCTUnwrap(engine.objects().first?.1)
-        engine.textStorage.replaceCharacters(in: NSRange(location: NSMaxRange(box), length: 3), with: "")
-        engine.toggleCheckbox(atLineOf: box.location)
-        XCTAssertEqual(engine.checkpointDocument().blocks[1].text, "abc")
-        XCTAssertTrue(engine.checkpointDocument().blocks[1].checked == true)
-        engine.writingToolsDidEnd()
-        XCTAssertEqual(engine.document().blocks[1].text, "abc")
-        XCTAssertEqual(engine.document().blocks[1].id, id)
-        XCTAssertTrue(engine.document().blocks[1].checked == true)
-        XCTAssertTrue(engine.history.undo())
-        XCTAssertEqual(engine.document().blocks[1].text, "abc")
-        XCTAssertFalse(engine.document().blocks[1].checked == true)
-        XCTAssertTrue(engine.history.redo())
-        XCTAssertTrue(engine.document().blocks[1].checked == true)
-    }
-
-    func testBlockedWritingToolsRepeatedObjectsKeepTheirOwnTargets() {
-        let first = UUID(), second = UUID()
-        let (engine, _) = makeEngine(NoteDocument(blocks: [
-            .text("T"), .checklist("same", id: first), .checklist("same", id: second)
-        ]))
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        let boxes = engine.objects().map(\.1)
-        engine.textStorage.replaceCharacters(in: NSRange(location: NSMaxRange(boxes[0]), length: 4), with: "")
-        engine.toggleCheckbox(atLineOf: boxes[1].location - 4)
-        engine.writingToolsDidEnd()
-        let blocks = engine.document().blocks
-        XCTAssertEqual(blocks[1].text, "same")
-        XCTAssertEqual(blocks[1].id, first)
-        XCTAssertFalse(blocks[1].checked == true)
-        XCTAssertEqual(blocks[2].id, second)
-        XCTAssertTrue(blocks[2].checked == true)
-    }
-
-    func testBlockedWritingToolsRejectsAmbiguousRepeatedObjectID() throws {
-        let shared = UUID()
-        let (engine, _) = makeEngine(NoteDocument(blocks: [
-            .text("T"), .checklist("first", id: shared), .checklist("second", id: shared)
-        ]))
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        let second = try XCTUnwrap(engine.objects().last?.1)
-        engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 1), with: "Unapproved")
-        engine.toggleCheckbox(atLineOf: second.location + 9)
-        XCTAssertFalse(engine.checkpointDocument().blocks[2].checked == true)
-        engine.writingToolsDidEnd()
-        XCTAssertEqual(engine.document().title, "T")
-        XCTAssertFalse(engine.document().blocks[2].checked == true)
-        XCTAssertTrue(engine.refusals.contains { $0.contains("target changed") })
-    }
-
-    func testBlockedWritingToolsRejectsObjectIdentityChangedWithoutTextChange() throws {
-        let originalID = UUID()
-        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .checklist("abc", id: originalID)]))
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        let box = try XCTUnwrap(engine.objects().first?.1)
-        engine.textStorage.addAttribute(.attachment,
-                                        value: NoteChecklistAttachment(objectID: UUID(), isChecked: false), range: box)
-        engine.toggleCheckbox(atLineOf: box.location)
-        engine.writingToolsDidEnd()
-        XCTAssertEqual(engine.document().blocks[1].id, originalID)
-        XCTAssertFalse(engine.document().blocks[1].checked == true)
-    }
-
-    func testBlockedWritingToolsUndoAndRedoReviseApprovedCheckpointAndHistory() throws {
-        let id = UUID()
-        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .checklist("abc", id: id)]))
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        let box = try XCTUnwrap(engine.objects().first?.1)
-        engine.toggleCheckbox(atLineOf: box.location)
-        XCTAssertTrue(engine.history.undo())
-        XCTAssertFalse(engine.checkpointDocument().blocks[1].checked == true)
-        engine.textStorage.replaceCharacters(in: NSRange(location: NSMaxRange(box), length: 3), with: "")
-        engine.writingToolsDidEnd()
-        XCTAssertEqual(engine.document().blocks[1].text, "abc")
-        XCTAssertFalse(engine.document().blocks[1].checked == true)
-        XCTAssertFalse(engine.history.canUndo)
-        XCTAssertTrue(engine.history.redo())
-        XCTAssertTrue(engine.document().blocks[1].checked == true)
-        XCTAssertTrue(engine.history.undo())
-        XCTAssertFalse(engine.document().blocks[1].checked == true)
-    }
-
-    func testBypassInsertionNeverBecomesAnUndoableApprovedEdit() throws {
-        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .checklist("abc", id: UUID())]))
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        engine.textStorage.replaceCharacters(in: NSRange(location: engine.textStorage.length, length: 0), with: "BAD")
-        XCTAssertFalse(engine.history.canUndo)
-        let box = try XCTUnwrap(engine.objects().first?.1)
-        engine.toggleCheckbox(atLineOf: box.location)
-        XCTAssertFalse(engine.checkpointDocument().blocks[1].text.contains("BAD"))
-        engine.writingToolsDidEnd()
-        XCTAssertEqual(engine.document().blocks[1].text, "abc")
-        XCTAssertTrue(engine.document().blocks[1].checked == true)
-        XCTAssertTrue(engine.history.undo())
-        XCTAssertFalse(engine.document().blocks[1].checked == true)
-    }
-
-    func testRepeatedWritingToolsBeginDoesNotResetApprovedShadow() throws {
-        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .checklist("abc", id: UUID())]))
-        engine.onWritingToolsWillBegin = { false }
-        engine.writingToolsWillBegin()
-        let box = try XCTUnwrap(engine.objects().first?.1)
-        engine.toggleCheckbox(atLineOf: box.location)
-        engine.writingToolsWillBegin()
-        engine.textStorage.replaceCharacters(in: NSRange(location: NSMaxRange(box), length: 3), with: "")
-        engine.writingToolsDidEnd()
-        XCTAssertEqual(engine.document().blocks[1].text, "abc")
-        XCTAssertTrue(engine.document().blocks[1].checked == true)
+        XCTAssertEqual(engine.activity, .idle)
     }
 
     func testBlockedWritingToolsKeepsFinishedImportAndDoesNotBlameItForRewrite() {
