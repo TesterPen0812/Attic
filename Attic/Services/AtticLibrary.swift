@@ -327,7 +327,7 @@ final class AtticLibrary {
             succeeded = true
             let after = before.map(\.id).compactMap(tasks.listedEditableState(of:))
             guard before != after else { return nil }
-            let tasks = self.tasks
+            let store = self.tasks
             let name = ids.count == 1 ? "Reopen Task" : "Reopen \(ids.count) Tasks"
             guard !logged.isEmpty else { return editStep(name, before: before, after: after) }
             return UndoStep(
@@ -335,10 +335,10 @@ final class AtticLibrary {
                 undoOutcome: {
                     // Finished again and back in the log, families and all,
                     // in one save.
-                    tasks.undoReturnFromDoneLog(from: after, to: before, logging: Dictionary(logged, uniquingKeysWith: { first, _ in first }))
+                    store.undoReturnFromDoneLog(from: after, to: before, logging: Dictionary(logged, uniquingKeysWith: { first, _ in first }))
                 },
                 redoOutcome: {
-                    tasks.reopen(taskIDs: ids) ? .applied : (ids.allSatisfy { tasks.listedTask(withID: $0) != nil } ? .failed : .obsolete)
+                    store.reopen(taskIDs: ids) ? .applied : (ids.allSatisfy { store.listedTask(withID: $0) != nil } ? .failed : .obsolete)
                 }
             )
         }
