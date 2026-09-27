@@ -71,6 +71,17 @@ extension TasksPageModel {
 
     // MARK: - The add bar's strip and suggestions
 
+    /// A pick or a taken suggestion is one undo step, with its value: the
+    /// state before it is the checkpoint, its text edits are not steps of
+    /// their own, and the pin that follows belongs to the same step.
+    @discardableResult
+    private func programmaticEdit(_ editor: AtticTokenFieldEditor, _ edit: () -> Bool) -> Bool {
+        addBarState.history.checkpoint(addBar, caret: editor.caret ?? addBarCaret)
+        addBarState.history.isSuspended = true
+        defer { addBarState.history.isSuspended = false }
+        return edit()
+    }
+
     /// A day picked from the strip: into the draft as its words, holding
     /// the exact day, in place of a date already there (review 16).
     func pickDate(_ day: DueDay, editor: AtticTokenFieldEditor) {
@@ -87,7 +98,7 @@ extension TasksPageModel {
             var range = existing
             if NSMaxRange(range) < ns.length, ns.character(at: NSMaxRange(range)) == 32 { range.length += 1 }
             else if range.location > 0, ns.character(at: range.location - 1) == 32 { range.location -= 1; range.length += 1 }
-            editor.replace([(range, "")])
+            programmaticEdit(editor) { editor.replace([(range, "")]) }
             return
         }
         insertPiece(words, value: .priority(priority), kind: .priority, editor: editor)
@@ -97,7 +108,7 @@ extension TasksPageModel {
         let existing = addBar.range(of: kind, parser: parser)
         let plan = addBar.insertion(of: words, replacing: existing, caret: editor.caret ?? addBarCaret)
         let caretAfter = plan.range.location + (plan.string as NSString).length
-        guard editor.replace([(plan.range, plan.string)], caretAfter: caretAfter) else { return }
+        guard programmaticEdit(editor, { editor.replace([(plan.range, plan.string)], caretAfter: caretAfter) }) else { return }
         var text = addBar
         text.pin(plan.piece, value: value)
         addBar = text
@@ -110,7 +121,7 @@ extension TasksPageModel {
         let caret = min(editor.caret ?? ns.length, ns.length)
         let needsSpace = caret > 0 && ns.character(at: caret - 1) != 32
         let string = needsSpace ? " #" : "#"
-        editor.replace([(NSRange(location: caret, length: 0), string)], caretAfter: caret + (string as NSString).length)
+        programmaticEdit(editor) { editor.replace([(NSRange(location: caret, length: 0), string)], caretAfter: caret + (string as NSString).length) }
         editor.focus()
     }
 
@@ -132,7 +143,7 @@ extension TasksPageModel {
         let hasSpaceAfter = NSMaxRange(range) < ns.length && ns.character(at: NSMaxRange(range)) == 32
         let string = words + (hasSpaceAfter ? "" : " ")
         let caretAfter = range.location + (words as NSString).length + 1
-        guard editor.replace([(range, string)], caretAfter: caretAfter) else { return }
+        guard programmaticEdit(editor, { editor.replace([(range, string)], caretAfter: caretAfter) }) else { return }
         guard let value else { return }
         var text = addBar
         text.pin(NSRange(location: range.location, length: (words as NSString).length), value: value)

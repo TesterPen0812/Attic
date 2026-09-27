@@ -328,3 +328,92 @@ struct TaskPasteOffer: Equatable {
         lineCount = lines.count
     }
 }
+
+/// A draft's own undo history (round 4, Astra's final review 2): every
+/// state of the text *with its pieces* (picked values, pieces turned back
+/// into text, drawn chips) and the insertion point, for the life of the
+/// draft. Blur keeps it; adding the task or replacing the draft clears it.
+/// Typing coalesces as in a text field (a run of letters, or of Backspaces,
+/// is one step); a pick, a taken suggestion and a chip turned into text are
+/// steps of their own. Pure: tested directly.
+struct TaskDraftHistory: Equatable {
+    struct Entry: Equatable {
+        var text: TaskAddBarText
+        var caret: Int
+    }
+
+    private(set) var undoStack: [Entry] = []
+    private(set) var redoStack: [Entry] = []
+    private var run: Run?
+    /// While a programmatic edit (a pick) applies, its text changes are not
+    /// steps of their own: the caller took one checkpoint for all of it.
+    var isSuspended = false
+
+    private struct Run: Equatable {
+        enum Kind: Equatable { case insert, delete }
+        let kind: Kind
+        var end: Int
+    }
+
+    static let limit = 200
+
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    /// An edit is about to replace `range` with `replacement` in `before`.
+    mutating func willEdit(_ before: TaskAddBarText, caret: Int?, range: NSRange, replacement: String) {
+        guard !isSuspended else { return }
+        let length = (replacement as NSString).length
+        let kind: Run.Kind? = if range.length == 0, length == 1, replacement.first.map({ !$0.isWhitespace }) == true {
+            .insert
+        } else if range.length == 1, length == 0 {
+            .delete
+        } else {
+            nil
+        }
+        redoStack.removeAll()
+        if let kind, let current = run, current.kind == kind,
+           kind == .insert ? range.location == current.end : NSMaxRange(range) == current.end {
+            run?.end = kind == .insert ? range.location + 1 : range.location
+            return
+        }
+        push(Entry(text: before, caret: caret ?? (before.text as NSString).length))
+        run = kind.map { Run(kind: $0, end: $0 == .insert ? range.location + 1 : range.location) }
+    }
+
+    /// A step of its own is about to happen (a pick, a chip turned into
+    /// text): `before` is what undo returns to.
+    mutating func checkpoint(_ before: TaskAddBarText, caret: Int?) {
+        redoStack.removeAll()
+        push(Entry(text: before, caret: caret ?? (before.text as NSString).length))
+        run = nil
+    }
+
+    /// Steps back: returns the state to show, remembering `current` for redo.
+    mutating func undo(current: TaskAddBarText, caret: Int?) -> Entry? {
+        guard let entry = undoStack.popLast() else { return nil }
+        redoStack.append(Entry(text: current, caret: caret ?? (current.text as NSString).length))
+        run = nil
+        return entry
+    }
+
+    mutating func redo(current: TaskAddBarText, caret: Int?) -> Entry? {
+        guard let entry = redoStack.popLast() else { return nil }
+        undoStack.append(Entry(text: current, caret: caret ?? (current.text as NSString).length))
+        run = nil
+        return entry
+    }
+
+    /// The draft is gone (added, or replaced on purpose).
+    mutating func reset() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+        run = nil
+        isSuspended = false
+    }
+
+    private mutating func push(_ entry: Entry) {
+        undoStack.append(entry)
+        if undoStack.count > Self.limit { undoStack.removeFirst(undoStack.count - Self.limit) }
+    }
+}

@@ -33,6 +33,13 @@ struct AtticTokenFieldActions {
     /// Esc hides the list. Return true when the list used the key. Marked
     /// text (an input method composing) always keeps its keys.
     var suggestionKey: ((AtticSuggestionKey) -> Bool)? = nil
+    /// The draft's own undo (round 4): the owner steps its history back
+    /// (text and pieces together) and returns the text and insertion point
+    /// to show, or nil when the draft has nothing to undo (then ⌘Z reaches
+    /// `undoFallback`). The field keeps no undo of its own: nothing it
+    /// registers can outlive it in a window's undo manager.
+    var undoDraft: (() -> (text: String, caret: Int)?)? = nil
+    var redoDraft: (() -> (text: String, caret: Int)?)? = nil
 }
 
 /// The keys a suggestion list answers while the field has the keyboard.
@@ -46,7 +53,7 @@ enum AtticSuggestionKey: Equatable {
 /// (which resets the selection and the typing undo).
 @MainActor
 final class AtticTokenFieldEditor {
-    fileprivate weak var textView: NSTextView?
+    weak var textView: NSTextView?
 
     init() {}
 
@@ -213,6 +220,24 @@ struct AtticTokenField: NSViewRepresentable {
             parent.actions.caretMoved(textView.selectedRange().location)
         }
 
+        /// Shows a state the owner's draft history returned: the text and
+        /// the insertion point, as the model's own (no edit is reported).
+        func show(_ state: (text: String, caret: Int), in textView: NSTextView) {
+            isApplyingModel = true
+            textView.string = state.text
+            textView.setSelectedRange(NSRange(location: min(state.caret, (state.text as NSString).length), length: 0))
+            isApplyingModel = false
+            parent.actions.caretMoved(textView.selectedRange().location)
+        }
+
+        func undo(_ textView: NSTextView) {
+            if let state = parent.actions.undoDraft?() { show(state, in: textView) } else { parent.actions.undoFallback() }
+        }
+
+        func redo(_ textView: NSTextView) {
+            if let state = parent.actions.redoDraft?() { show(state, in: textView) } else { parent.actions.redoFallback() }
+        }
+
         func focusChanged(_ focused: Bool) {
             if parent.isFocused != focused { parent.isFocused = focused }
         }
@@ -254,7 +279,9 @@ final class AtticTokenFieldView: NSView {
         super.init(frame: frame)
         textView.isRichText = false
         textView.importsGraphics = false
-        textView.allowsUndo = true
+        // Undo is the owner's draft history (`AtticTokenFieldActions.undoDraft`):
+        // the text view registers nothing with any undo manager.
+        textView.allowsUndo = false
         textView.drawsBackground = false
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = false
@@ -375,13 +402,7 @@ final class AtticTokenTextView: NSTextView {
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        if resigned {
-            // Typing undo belongs to the visit: once the keyboard leaves,
-            // ⌘Z from anywhere else reaches the page's history, never this
-            // field's earlier typing (stream S's finding).
-            fieldUndoManager.removeAllActions()
-            owner?.focusChanged(false)
-        }
+        if resigned { owner?.focusChanged(false) }
         return resigned
     }
 
@@ -405,20 +426,38 @@ final class AtticTokenTextView: NSTextView {
                 owner?.parent.actions.submit(flags.contains(.command))
                 return
             }
-        case 53: // Esc
-            if owner?.parent.actions.escape() == true { return }
+        case 53: // Esc: an input method composing cancels its composition first.
+            if !hasMarkedText(), owner?.parent.actions.escape() == true { return }
         default:
             break
         }
-        if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "z" {
-            if undoManager?.canUndo == true { undoManager?.undo() } else { owner?.parent.actions.undoFallback() }
+        if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "z", !hasMarkedText() {
+            owner?.undo(self)
             return
         }
-        if flags == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "z" {
-            if undoManager?.canRedo == true { undoManager?.redo() } else { owner?.parent.actions.redoFallback() }
+        if flags == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "z", !hasMarkedText() {
+            owner?.redo(self)
             return
         }
         super.keyDown(with: event)
+    }
+
+    /// The Edit menu's Undo and Redo (and ⌘Z matched by the menu first)
+    /// reach the field before the window: the draft's history, then the
+    /// page's (round 4: the crash came through this menu path).
+    @objc func undo(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        owner?.undo(self)
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard !hasMarkedText() else { return }
+        owner?.redo(self)
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(undo(_:)) || item.action == #selector(redo(_:)) { return owner != nil }
+        return super.validateUserInterfaceItem(item)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -432,7 +471,8 @@ final class AtticTokenTextView: NSTextView {
     }
 
     override func deleteBackward(_ sender: Any?) {
-        if let owner, let chip = owner.chipBeforeCaret(self) {
+        // Composing text deletes within the composition, never a chip.
+        if !hasMarkedText(), let owner, let chip = owner.chipBeforeCaret(self) {
             owner.parent.actions.dismissChip(chip)
             return
         }
@@ -450,7 +490,7 @@ final class AtticTokenTextView: NSTextView {
     }
 
     override func cancelOperation(_ sender: Any?) {
-        if owner?.parent.actions.escape() == true { return }
+        if !hasMarkedText(), owner?.parent.actions.escape() == true { return }
         super.cancelOperation(sender)
     }
 

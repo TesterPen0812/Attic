@@ -125,7 +125,7 @@ struct TasksPage: View {
             // A draft of only spaces is no draft: the placeholder returns
             // (bug 7).
             if !focused, model.addBar.text.trimmingCharacters(in: .whitespaces).isEmpty, !model.addBar.text.isEmpty {
-                model.addBar.clear()
+                model.addBarState.clearDraft()
             }
         }
         .onChange(of: searchFocused) { _, focused in
@@ -503,15 +503,23 @@ struct TasksPage: View {
             cancel: { model.cancelEditing(); focusedRow = id },
             tokens: AtticTitleEditing.Tokens(
                 chips: model.titleEdit.chips(parser: model.parser, caret: model.titleEditCaret),
-                dismissChip: { model.titleEdit.dismiss($0) },
-                edited: { range, replacement in model.titleEdit.edited(range, replacement: replacement) },
+                dismissChip: { range in
+                    model.titleHistory.checkpoint(model.titleEdit, caret: model.titleEditCaret)
+                    model.titleEdit.dismiss(range)
+                },
+                edited: { range, replacement in
+                    model.titleHistory.willEdit(model.titleEdit, caret: model.titleEditCaret, range: range, replacement: replacement)
+                    model.titleEdit.edited(range, replacement: replacement)
+                },
                 caretMoved: { caret in
                     if model.titleEditCaret != caret { model.titleEditCaret = caret }
                     var shown = model.titleEdit
                     if shown.markShown(parser: model.parser, caret: caret) { model.titleEdit = shown }
                 },
                 undoFallback: { model.undo() },
-                redoFallback: { model.redo() }
+                redoFallback: { model.redo() },
+                undoDraft: { model.undoTitleEdit() },
+                redoDraft: { model.redoTitleEdit() }
             )
         )
     }
@@ -1233,7 +1241,12 @@ private struct TasksAddBar: View {
                     isFocused: $isFocused,
                     actions: AtticTokenFieldActions(
                         submit: { command in submit(openingPage: command) },
-                        dismissChip: { text.text.dismiss($0) },
+                        dismissChip: { range in
+                            // Turning a chip into text is a step of its own:
+                            // ⌘Z makes it a chip again (round 4).
+                            text.history.checkpoint(text.text, caret: text.caret)
+                            text.text.dismiss(range)
+                        },
                         multilinePaste: { pasted in
                             guard let offer = TaskPasteOffer(pasted) else { return false }
                             model.pasteOffer = offer
@@ -1246,6 +1259,7 @@ private struct TasksAddBar: View {
                         undoFallback: { model.undo() },
                         redoFallback: { model.redo() },
                         edited: { range, replacement in
+                            text.history.willEdit(text.text, caret: text.caret, range: range, replacement: replacement)
                             text.text.edited(range, replacement: replacement)
                             text.hiddenSuggestion = nil
                             text.highlighted = 0
@@ -1256,7 +1270,9 @@ private struct TasksAddBar: View {
                             var shown = text.text
                             if shown.markShown(parser: model.parser, caret: caret) { text.text = shown }
                         },
-                        suggestionKey: { key in suggestionKey(key) }
+                        suggestionKey: { key in suggestionKey(key) },
+                        undoDraft: { text.undoDraft() },
+                        redoDraft: { text.redoDraft() }
                     ),
                     editor: editor
                 ),

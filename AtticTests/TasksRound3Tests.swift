@@ -365,7 +365,10 @@ final class TokenFieldUndoLifetimeTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(field!.textView))
         field!.textView.insertText("typed", replacementRange: NSRange(location: 0, length: 0))
         XCTAssertEqual(field!.textView.string, "typed")
-        XCTAssertTrue(field!.textView.undoManager?.canUndo == true, "the field can undo its own typing")
+        // Round 4: the field registers no undo anywhere; its owner's draft
+        // history holds typing (see `TasksRound4Tests`).
+        XCTAssertFalse(field!.textView.allowsUndo)
+        XCTAssertFalse(field!.textView.undoManager?.canUndo == true)
         XCTAssertFalse(window.undoManager?.canUndo == true, "nothing of the field's is in the window's undo manager")
         XCTAssertFalse(field!.textView.undoManager === window.undoManager)
         window.makeFirstResponder(nil)

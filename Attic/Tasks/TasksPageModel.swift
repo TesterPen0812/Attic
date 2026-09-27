@@ -90,6 +90,32 @@ final class TasksAddBarState: ObservableObject {
     @Published var highlighted = 0
     /// The piece whose suggestions Esc hid; the next edit shows them again.
     @Published var hiddenSuggestion: NSRange?
+    /// The draft's undo history, text and pieces together (round 4).
+    var history = TaskDraftHistory()
+
+    /// The owner's side of the token field's undo: text and pieces step
+    /// back together; nil when the draft has nothing to undo.
+    func undoDraft() -> (text: String, caret: Int)? {
+        guard let entry = history.undo(current: text, caret: caret) else { return nil }
+        text = entry.text
+        caret = entry.caret
+        return (entry.text.text, entry.caret)
+    }
+
+    func redoDraft() -> (text: String, caret: Int)? {
+        guard let entry = history.redo(current: text, caret: caret) else { return nil }
+        text = entry.text
+        caret = entry.caret
+        return (entry.text.text, entry.caret)
+    }
+
+    /// The draft is gone (added, or cleared on purpose).
+    func clearDraft() {
+        text.clear()
+        history.reset()
+        hiddenSuggestion = nil
+        highlighted = 0
+    }
 }
 
 /// The Tasks page's state and every action it takes. All changes go through
@@ -113,6 +139,22 @@ final class TasksPageModel: ObservableObject {
     /// typed as `#tag`, a date or `!` becomes a chip and applies on save.
     @Published var titleEdit = TaskAddBarText()
     @Published var titleEditCaret: Int?
+    /// The title editor's undo history, text and pieces together (round 4).
+    var titleHistory = TaskDraftHistory()
+
+    func undoTitleEdit() -> (text: String, caret: Int)? {
+        guard let entry = titleHistory.undo(current: titleEdit, caret: titleEditCaret) else { return nil }
+        titleEdit = entry.text
+        titleEditCaret = entry.caret
+        return (entry.text.text, entry.caret)
+    }
+
+    func redoTitleEdit() -> (text: String, caret: Int)? {
+        guard let entry = titleHistory.redo(current: titleEdit, caret: titleEditCaret) else { return nil }
+        titleEdit = entry.text
+        titleEditCaret = entry.caret
+        return (entry.text.text, entry.caret)
+    }
     /// The plain text being edited.
     var editingTitle: String {
         get { titleEdit.text }
@@ -900,6 +942,7 @@ final class TasksPageModel: ObservableObject {
         edit.dismissAllRecognised(parser: parser)
         titleEdit = edit
         titleEditCaret = nil
+        titleHistory.reset()
         editingTitleID = id
     }
 
@@ -1061,7 +1104,7 @@ final class TasksPageModel: ObservableObject {
     func submitAddBar(openingPage: Bool = false) -> UUID? {
         guard let draft = addBar.draft(parser: parser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
-        addBar.clear()
+        addBarState.clearDraft()
         if openingPage { services.openPage(task.id) }
         selectOnly(nil)
         // Added from Done, the task goes to Now, out of sight: say where.
