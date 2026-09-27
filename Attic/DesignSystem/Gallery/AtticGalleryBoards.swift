@@ -334,11 +334,15 @@ struct AtticGalleryPanelComposition: View {
     /// The panel's own coordinate space (the scroll edge zones are measured in it).
     static let space = NamedCoordinateSpace.named("AtticGalleryPanel")
 
+    /// The live panel's lines at the default corner size (52): the
+    /// controls' inset, and the page 12 inside the panel's own frame.
+    private static let chrome = PanelGeometry.chromeInsets(cornerSize: 52, panelSize: AtticLayout.panelSize).leading
+    private static let pageInset = max(0, chrome - AtticSpacing.panelMargin)
     /// Above the list: the header's margin and controls, then the page tabs.
-    private static let headerZone = AtticSpacing.panelMargin + AtticControlSize.capsuleHeight + AtticLayout.pageTabsTop
+    private static let headerZone = chrome + AtticControlSize.headerControl + AtticLayout.pageTabsTop
         + AtticLayout.pageTabsHeight + AtticLayout.pageTabsToList
-    /// Below the list: the add bar and its margins.
-    private static let footerZone = AtticControlSize.addBarHeight + AtticSpacing.panelMargin * 2
+    /// Below the list: the add bar, its margin and the gap above it.
+    private static let footerZone = AtticControlSize.addBarHeight + chrome + AtticLayout.contentToAddBar
 
     var body: some View {
         Group {
@@ -395,10 +399,11 @@ struct AtticGalleryPanelComposition: View {
             header
             AtticPageTabs(items: AtticGallerySamples.pageTabs, selection: $demo.tab)
                 .padding(.top, AtticLayout.pageTabsTop)
+                .padding(.leading, Self.pageInset + AtticLayout.pageTabsX - Self.chrome)
             Spacer(minLength: 0)
             addBar
         }
-        .padding(AtticSpacing.panelMargin)
+        .padding(Self.chrome)
     }
 
     private var veils: some View {
@@ -412,7 +417,9 @@ struct AtticGalleryPanelComposition: View {
     private var header: some View {
         AtticControlGroup {
             HStack(spacing: 0) {
-                AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)", action: demo.record("Pin"))
+                AtticRaisedButton(systemName: "pin", label: "Pin", help: "Pin (⇧⌘P)",
+                                  glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true,
+                                  action: demo.record("Pin"))
                 Spacer(minLength: AtticSpacing.betweenControls)
                 AtticPageButton(items: AtticGallerySamples.pages, selection: $demo.page)
             }
@@ -441,6 +448,7 @@ struct AtticGalleryPanelComposition: View {
                     .atticScrollEdgeFade(fades, in: Self.space)
             }
         }
+        .padding(.horizontal, Self.pageInset)
     }
 }
 

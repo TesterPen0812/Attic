@@ -24,7 +24,8 @@ enum AppearancePreviewDescription {
 /// The panel in miniature, drawn by the design system exactly as the
 /// panel draws itself: its surface (palette, Surface, Tint and Tint length,
 /// in the window's Light or Dark), the squircle at the chosen corner size,
-/// the header's glass controls, the status tabs and the first rows. It is a
+/// the header's controls, the page tabs, the first rows, Completed today
+/// and the add bar, on the live panel's lines (`PanelPageLayout`). It is a
 /// picture: nothing in it can be clicked or focused, and it shows sample
 /// tasks, never the person's own.
 struct SettingsPanelMiniature: View {
@@ -32,7 +33,7 @@ struct SettingsPanelMiniature: View {
 
     @Environment(\.atticDesign) private var design
 
-    private static let pages: [AtticPageSwitch<Int>.Item] = [
+    private static let pages: [AtticPageButton<Int>.Item] = [
         .init(page: 0, systemName: "checkmark.circle", title: String(localized: "Tasks"), shortcut: "⌘1"),
         .init(page: 1, systemName: "note.text", title: String(localized: "Notes"), shortcut: "⌘2"),
         .init(page: 2, systemName: "scribble.variable", title: String(localized: "Canvas"), shortcut: "⌘3")
@@ -59,17 +60,16 @@ struct SettingsPanelMiniature: View {
         toggleDone: {}, toggleWorking: {}, openPage: {}, moveToBacklog: {}, delete: {}
     )
 
-    /// The page tabs' top: the header's margin and controls, then the gap.
-    private static let tabsTop = AtticStyle.chromeMinimumInset + AtticControlSize.capsuleHeight + AtticLayout.pageTabsTop
-    /// The page sits this far inside the panel's own 12 pt frame, as the
-    /// live Tasks page does (visual A's 20 → 24 → 48 lines).
-    private static let pageInset = AtticStyle.chromeMinimumInset - AtticSpacing.panelMargin
-
     var body: some View {
         let shape = Squircle(cornerRadius: cornerSize, exponent: AtticStyle.panelSquircleExponent)
+        // The live panel's lines at this corner size: the controls' inset
+        // grows with bigger corners, and the page follows it.
+        let layout = PanelPageLayout(cornerSize: cornerSize, panelSize: AtticLayout.panelSize)
+        let chrome = layout.chromeInsets.leading
+        let pageInset = max(0, chrome - AtticSpacing.panelMargin)
         ZStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: Self.tabsTop)
+                Color.clear.frame(height: layout.headerBottom + AtticLayout.pageTabsTop)
                 AtticPageTabs(items: Self.tabs, selection: .constant(0))
                     .padding(.leading, AtticLayout.pageTabsX)
                     .padding(.bottom, AtticLayout.pageTabsToList)
@@ -80,15 +80,21 @@ struct SettingsPanelMiniature: View {
                     .padding(.top, AtticCompletedLineMetrics.top)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, Self.pageInset)
+            .padding(.horizontal, pageInset)
             AtticControlGroup {
                 HStack(spacing: 0) {
-                    AtticRaisedButton(systemName: "pin", label: "Pin") {}
+                    AtticRaisedButton(systemName: "pin", label: "Pin",
+                                      glyphOffsetY: AtticRaisedButtonMetrics.pinGlyphOffsetY, emphasisedGlyph: true) {}
                     Spacer(minLength: AtticSpacing.betweenControls)
                     AtticPageButton(items: Self.pages, selection: .constant(0), pinnedOpen: false)
                 }
             }
-            .padding(AtticStyle.chromeMinimumInset)
+            .padding(chrome)
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                AtticAddBar(placeholder: "Add a task", text: .constant(""), onSubmit: {})
+            }
+            .padding(max(AtticSpacing.panelMargin, chrome))
         }
         .frame(width: AtticLayout.panelSize.width, height: AtticLayout.panelSize.height)
         .background(AtticSurfaceBackground(model: design.tokens.panel, shape: shape, tintHeight: AtticLayout.panelSize.height))
