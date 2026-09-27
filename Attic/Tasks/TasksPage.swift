@@ -352,7 +352,13 @@ struct TasksPage: View {
                 let targets = model.targets(for: id)
                 if model.tab == .backlog { model.moveToNow(targets) } else { model.moveToBacklog(targets) }
             },
-            delete: { deleteAndMoveFocus(model.targets(for: id)) }
+            delete: { deleteAndMoveFocus(model.targets(for: id)) },
+            // Return: the title in place (not in the Done log).
+            editTitle: {
+                guard model.tab != .done else { return }
+                model.selectOnly(id)
+                model.beginEditingTitle(id)
+            }
         )
     }
 

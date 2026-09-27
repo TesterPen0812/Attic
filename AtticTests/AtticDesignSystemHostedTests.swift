@@ -229,7 +229,8 @@ final class AtticDesignSystemHostedTests: XCTestCase {
             AtticTaskActions(
                 toggleDone: { fired.append("\(row) done") }, toggleWorking: { fired.append("\(row) working") },
                 openPage: { fired.append("\(row) open") },
-                moveToBacklog: { fired.append("\(row) backlog") }, delete: { fired.append("\(row) delete") }
+                moveToBacklog: { fired.append("\(row) backlog") }, delete: { fired.append("\(row) delete") },
+                editTitle: { fired.append("\(row) edit") }
             )
         }
         // A palette with a coloured accent, so the ring is unmistakable.
@@ -279,7 +280,8 @@ final class AtticDesignSystemHostedTests: XCTestCase {
         key(window, "\r", code: 36, modifiers: .command)
         key(window, "b", code: 11, modifiers: .command)
         key(window, "\u{7F}", code: 51)
-        XCTAssertEqual(fired, ["B done", "B working", "B done", "B open", "B backlog", "B delete"])
+        key(window, "\r", code: 36)
+        XCTAssertEqual(fired, ["B done", "B working", "B done", "B open", "B backlog", "B delete", "B edit"])
     }
 
     /// The add bar's state comes from its own field's keyboard focus and the

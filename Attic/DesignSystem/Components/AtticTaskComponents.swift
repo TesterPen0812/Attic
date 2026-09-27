@@ -18,6 +18,9 @@ struct AtticTaskActions {
     let moveToBacklog: () -> Void
     /// Delete and VoiceOver "Delete".
     let delete: () -> Void
+    /// Return on a focused row in a list: edit the title in place (nil
+    /// where the title cannot be edited).
+    var editTitle: (() -> Void)? = nil
 
     /// The VoiceOver actions a task offers, named for its state: Complete
     /// (or Mark as not done), Start working (or Stop working), Open page,
@@ -39,7 +42,7 @@ struct AtticTaskActions {
 /// ⌘B (Later) and Delete. ↑ ↓ and ⌘↑ ⌘↓ belong to the list, and Return
 /// (edit title) to the row's title editor.
 enum AtticTaskKeys {
-    enum Command: Equatable { case toggleDone, toggleWorking, openPage, moveToBacklog, delete }
+    enum Command: Equatable { case toggleDone, toggleWorking, openPage, moveToBacklog, delete, editTitle }
 
     /// The command for a key, or nil when the key is not a task key.
     static func command(key: KeyEquivalent, characters: String, modifiers: EventModifiers, listCommands: Bool) -> Command? {
@@ -52,6 +55,9 @@ enum AtticTaskKeys {
         }
         if key == .return, relevant == .command { return .openPage }
         guard listCommands else { return nil }
+        // Return edits the title. The row answers it itself: left to the
+        // list, a focused row would take Return as a click.
+        if key == .return, relevant == [] { return .editTitle }
         // Backspace arrives as U+007F (or U+0008), forward delete as U+F728.
         let deletes: Set<Character> = [KeyEquivalent.delete.character, KeyEquivalent.deleteForward.character, "\u{7F}", "\u{8}", "\u{F728}"]
         if deletes.contains(key.character) || characters.first.map(deletes.contains) == true, relevant == [] { return .delete }
@@ -66,6 +72,7 @@ enum AtticTaskKeys {
         case .openPage: actions.openPage()
         case .moveToBacklog: actions.moveToBacklog()
         case .delete: actions.delete()
+        case .editTitle: actions.editTitle?()
         }
     }
 }
@@ -111,7 +118,7 @@ private struct AtticTaskFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .focusable(enabled, interactions: .edit)
+            .focusable(enabled)
             .focused($focused)
             .focusEffectDisabled()
             .onChange(of: focused) { _, now in isFocused = now }
@@ -148,7 +155,7 @@ private struct AtticListTaskFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .focusable(enabled, interactions: .edit)
+            .focusable(enabled)
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in
@@ -630,7 +637,7 @@ struct AtticPageTabs<Page: Hashable>: View {
                 .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
             }
         }
-        .focusable(capture == nil, interactions: .activate)
+        .focusable(capture == nil)
         .focused($focused)
         .focusEffectDisabled()
         .onKeyPress(phases: .down) { press in
