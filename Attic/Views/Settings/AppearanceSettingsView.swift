@@ -58,11 +58,6 @@ struct AppearanceSettingsView: View {
             .accessibilityIdentifier("setting-appearance-preview")
             Color.clear.frame(height: AtticSpacing.s12)
 
-            // TEMPORARY owner test: compare fully round controls. Remove before merging.
-            SettingsGroup(title: "Temporary test") {
-                AtticSwitchRow(title: "Round controls", isOn: $settings.roundControlsTest, identifier: "setting-round-controls-test")
-            }
-
             AtticGroupCard {
                 HStack(spacing: AtticModeTileMetrics.tileSpacing) {
                     ForEach(AppearancePreference.allCases) { preference in

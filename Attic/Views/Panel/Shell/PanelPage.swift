@@ -72,7 +72,7 @@ enum PanelPage: String, CaseIterable, Hashable, Identifiable {
 enum PanelHeaderLayout {
     /// The header's controls are one row, 36 tall.
     static let height = AtticControlSize.headerControl
-    static var pinSize: CGSize { AtticControlSize.panelButton }
+    static let pinSize = AtticControlSize.panelButton
 
     /// The page button's width when open (the region its controls may
     /// take; shut it is the pin's width).

@@ -50,12 +50,8 @@ enum AtticRadius {
     /// (owner's decision, 2026-09-25, spec rev 175: the rounder corner,
     /// chosen over Craft's 32 % on the full panel), rounded to the half
     /// point: 13.5 on 32, 14.5 on 34, 15 on 36, 12 on 28, 7.5 on 18.
-    static let controlFraction42: CGFloat = 0.42
-    /// TEMPORARY owner test (2026-09-26): Settings → Appearance → Round
-    /// controls switches every control to fully round ends. Remove before
-    /// merging.
-    nonisolated(unsafe) static var roundControls = false
-    static var controlFraction: CGFloat { roundControls ? 0.5 : controlFraction42 }
+    /// Kept by the owner on 2026-09-27 after comparing fully round controls.
+    static let controlFraction: CGFloat = 0.42
 
     static func control(height: CGFloat) -> CGFloat {
         (height * controlFraction * 2).rounded() / 2
@@ -91,13 +87,11 @@ enum AtticRadius {
 /// Control sizes (spec § Raised controls). Controls are slightly wider than
 /// tall (about 1.15 : 1).
 enum AtticControlSize {
-    /// The panel's raised buttons (pin, All notes, New note): 32 × 32 (visual
-    /// A, "Calm": a smaller header); radius 13.5, or a circle with the
-    /// temporary Round controls switch (visual C).
+    /// The panel's raised buttons (pin, All notes, New note): the header's
+    /// 36 pt square, radius 15 by the 42 % rule.
     static let panelButton = CGSize(width: headerControl, height: headerControl)
     /// The header's controls (Phase 0's qualities, 2026-09-26): the pin and
-    /// the page button are equal 36 pt squares, radius 15 by the 42 % rule
-    /// (circles with the temporary Round controls switch).
+    /// the page button are equal 36 pt squares, radius 15 by the 42 % rule.
     static let headerControl: CGFloat = 36
     static let settingsBackButton = CGSize(width: 38, height: 34)
     /// The page switch: 32 tall (visual A), chips 24 inside a 4 pt inset.

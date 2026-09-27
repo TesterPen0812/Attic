@@ -107,7 +107,6 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
-        static let roundControlsTest = "roundControlsTest"
     }
 
     @Published var corner: ScreenCorner {
@@ -151,13 +150,6 @@ final class AppSettings: ObservableObject {
 
     /// The light haptic tick when a task is completed or a dragged item
     /// snaps into place (spec § Touch and sound). On by default.
-    /// TEMPORARY owner test: fully round controls. Remove before merging.
-    @Published var roundControlsTest: Bool {
-        didSet {
-            defaults.set(roundControlsTest, forKey: Key.roundControlsTest)
-            AtticRadius.roundControls = roundControlsTest
-        }
-    }
     @Published var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
     }
@@ -310,9 +302,6 @@ final class AppSettings: ObservableObject {
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
-        let roundControls = defaults.bool(forKey: Key.roundControlsTest)
-        roundControlsTest = roundControls
-        AtticRadius.roundControls = roundControls
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,
