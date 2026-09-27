@@ -124,11 +124,14 @@ extension NoteStore {
         } catch {
             return .failure(.noteMissing(noteID))
         }
-        // A legacy note changes format only through the migration gate.
-        guard replicas.allSatisfy(\.usesDocumentFormat) else {
+        // A legacy note changes format only through the migration gate. A
+        // stale legacy replica beside new-format ones is overwritten (its
+        // state is kept as a version below).
+        guard replicas.contains(where: \.usesDocumentFormat) else {
             return .failure(.invalidDocument("This note has not been moved to the new format."))
         }
-        guard replicas.allSatisfy({ $0.content.map { NoteContentCodec.decode($0).isEditable } ?? false }) else {
+        guard replicas.filter(\.usesDocumentFormat)
+            .allSatisfy({ $0.content.map { NoteContentCodec.decode($0).isEditable } ?? false }) else {
             return .failure(.readOnly)
         }
         let timestamp = currentDate

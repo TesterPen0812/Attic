@@ -719,15 +719,21 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: NSTextStorageDelegate
 
+    /// Per-edit upkeep, before layout sees the change: only the edited
+    /// paragraphs and their neighbours are restyled.
+    func textStorage(_ textStorage: NSTextStorage, willProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange, changeInLength delta: Int) {
+        guard editedMask.contains(.editedCharacters) else { return }
+        let start = DispatchTime.now().uptimeNanoseconds
+        restyle(paragraphs(around: editedRange))
+        renderObjects(in: NSIntersectionRange(editedRange, NSRange(location: 0, length: textStorage.length)))
+        lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+    }
+
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
         history.captureUnrecorded(newRange: editedRange, delta: delta)
-        let start = DispatchTime.now().uptimeNanoseconds
-        let scope = paragraphs(around: editedRange)
-        restyle(scope)
-        renderObjects(in: NSIntersectionRange(editedRange, NSRange(location: 0, length: textStorage.length)))
-        lastUpkeepMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
     }
 
     private func didReplay(_ range: NSRange) {
@@ -917,13 +923,19 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
             setAccessibilityRole(.staticText)
             setAccessibilityLabel(object.accessibilityDescription)
         }
-        if let rect = engine.rect(for: range), let window = textView.window {
-            let inWindow = textView.convert(rect, to: nil)
-            setAccessibilityFrame(window.convertToScreen(inWindow))
-        }
     }
 
     var objectID: UUID { object.objectID }
+
+    /// Computed when asked, so listing a long note's objects never forces
+    /// layout of the whole note.
+    override func accessibilityFrame() -> NSRect {
+        MainActor.assumeIsolated {
+            guard let engine, let textView, let window = textView.window,
+                  let rect = engine.rect(for: range) else { return .zero }
+            return window.convertToScreen(textView.convert(rect, to: nil))
+        }
+    }
 
     override func accessibilityPerformPress() -> Bool {
         guard object is NoteChecklistAttachment else { return false }
