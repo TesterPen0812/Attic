@@ -353,4 +353,37 @@ final class TasksRound4Tests: XCTestCase {
         XCTAssertEqual(store.task(withID: a.id)?.title, "A renamed")
         XCTAssertEqual(model.selection, [b.id])
     }
+
+    // MARK: - Must fix 7: cancellation, controls, edge scrolling
+
+    func testACancelledDragCommitsNothingUntilTheButtonIsUp() {
+        let session = TasksDragSession()
+        XCTAssertFalse(session.isCancelled)
+        session.cancel()
+        XCTAssertTrue(session.isCancelled, "Esc while tracking: the release will not commit")
+        session.end()
+        XCTAssertFalse(session.isCancelled, "the next press starts afresh")
+    }
+
+    func testAPressOnARowsControlNeverStartsADrag() {
+        let session = TasksDragSession()
+        let row = UUID()
+        // The row's checklist and date, in the row's own space.
+        session.controlFrames[row] = [CGRect(x: 56, y: 26, width: 40, height: 16), CGRect(x: 280, y: 8, width: 60, height: 18)]
+        let origin = CGPoint(x: 12, y: 200)
+        XCTAssertTrue(session.isOnControl(row, at: CGPoint(x: 80, y: 234), rowOrigin: origin), "on the checklist")
+        XCTAssertTrue(session.isOnControl(row, at: CGPoint(x: 310, y: 215), rowOrigin: origin), "on the date")
+        XCTAssertFalse(session.isOnControl(row, at: CGPoint(x: 180, y: 215), rowOrigin: origin), "on the title: a drag")
+        XCTAssertFalse(session.isOnControl(row, at: CGPoint(x: 80, y: 234), rowOrigin: nil), "unknown frame: no guess")
+    }
+
+    func testEdgeAutoScrollIsBoundedAndOnlyNearTheEdges() {
+        let step = { (y: CGFloat) in TasksDragSession.autoScrollStep(y: y, top: 110, bottom: 440) }
+        XCTAssertEqual(step(300), 0, "inside the usable viewport: no scrolling")
+        XCTAssertLessThan(step(120), 0, "near the top: up")
+        XCTAssertGreaterThan(step(430), 0, "near the bottom: down")
+        XCTAssertEqual(step(0), -14, "bounded at the top")
+        XCTAssertEqual(step(900), 14, "bounded at the bottom")
+        XCTAssertLessThan(abs(step(145)), abs(step(115)), "faster deeper into the edge")
+    }
 }

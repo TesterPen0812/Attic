@@ -858,6 +858,9 @@ struct AtticPriorityMark: View {
 /// focusable: a focused row draws the 2 pt accent ring and answers the
 /// task keys (`AtticTaskKeys`).
 struct AtticTaskRow: View {
+    /// The row's own coordinate space, for its controls' frames.
+    static let space = NamedCoordinateSpace.named("AtticTaskRow")
+
     let model: AtticTaskRowModel
     var isSelected = false
     var selectionRun: AtticSelectionRun = .single
@@ -928,6 +931,7 @@ struct AtticTaskRow: View {
             AtticStatusButton(state: model.state, priority: model.priority, subtasks: model.subtasks, isDisabled: disabled, isTabStop: false,
                               isEmphasised: showsFocusRing, onToggle: actions.toggleDone)
                 .atticForcedState(nil)
+                .atticRowControl()
                 .padding(.leading, AtticLayout.circleX + AtticControlSize.statusCircle / 2 - AtticControlSize.minimumHitTarget / 2)
                 .padding(.top, m.circleCentreY(twoLine: twoLine) - m.pitchTopInset - AtticControlSize.minimumHitTarget / 2)
 
@@ -1017,6 +1021,7 @@ struct AtticTaskRow: View {
                 Button(String(localized: "Change tags"), action: meta.onTags)
             }
         }
+        .coordinateSpace(Self.space)
         .atticControlProbe(
             twoLine ? "Task row (details)" : "Task row", id: probeID,
             expectedSize: CGSize(width: 0, height: pitch), radius: AtticRadius.highlight, expectedRadius: 10
@@ -1043,6 +1048,7 @@ struct AtticTaskRow: View {
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
                 .onHover { dateHovered = $0 }
+                .atticRowControl()
                 .help(String(localized: "Change the date"))
                 .accessibilityLabel(String(localized: "Due \(due.text)"))
                 .accessibilityHint(String(localized: "Changes the date"))
@@ -1065,6 +1071,28 @@ struct AtticTaskRow: View {
         let hasTagsLine = model.hasDetails && !model.tags.isEmpty
         guard attachedToDetails == hasTagsLine else { return .constant(false) }
         return meta.tagsPresented
+    }
+}
+
+/// The frames of the controls inside a task row (its circle, checklist,
+/// date and tags), in the row's own coordinate space
+/// (`AtticTaskRow.space`), so a list can keep a drag from starting on
+/// them (round 4: embedded controls keep their own presses).
+struct AtticRowControlFramesKey: PreferenceKey {
+    static var defaultValue: [CGRect] { [] }
+
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+extension View {
+    /// Reports this control's frame in its task row (see
+    /// `AtticRowControlFramesKey`).
+    func atticRowControl() -> some View {
+        background(GeometryReader { proxy in
+            Color.clear.preference(key: AtticRowControlFramesKey.self, value: [proxy.frame(in: AtticTaskRow.space)])
+        })
     }
 }
 
@@ -1202,6 +1230,7 @@ private struct AtticDetailsTags: View {
             .buttonStyle(.plain)
             .focusEffectDisabled()
             .onHover { hovered = $0 }
+            .atticRowControl()
             .help(tags.map { "#" + $0 }.joined(separator: " "))
             .accessibilityLabel(String(localized: "Tags: \(tags.joined(separator: ", "))"))
             .accessibilityHint(String(localized: "Changes the tags"))
@@ -1280,6 +1309,7 @@ private struct AtticSubtaskChecklistButton: View {
         .onHover { hovered = $0 }
         .padding(.horizontal, -m.horizontalPadding)
         .frame(height: AtticTaskRowMetrics.detailsLineHeight)
+        .atticRowControl()
         .help(isExpanded ? String(localized: "Hide subtasks") : String(localized: "Show subtasks"))
         .accessibilityLabel(String(localized: "\(done) of \(total) subtasks"))
         .accessibilityValue(isExpanded ? String(localized: "expanded") : String(localized: "collapsed"))

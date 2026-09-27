@@ -43,6 +43,8 @@ struct TasksPage: View {
     /// Where the pointer is and where the rows are (not observed: it
     /// never redraws anything), so a right-click knows its row.
     @State private var pointer = TasksPointer()
+    /// The drag in progress, outside view state (round 4).
+    @State private var dragSession = TasksDragSession()
     @State private var rightClickMonitor: Any?
     /// The add bar's text, edited the way typing does (the strip, suggestions).
     @State private var addBarEditor = AtticTokenFieldEditor()
@@ -181,7 +183,7 @@ struct TasksPage: View {
     /// A drag in progress and a row's pickers end when the panel hides or
     /// the page changes (review 1); nothing stays lifted.
     private func cancelTransientState() {
-        if drag != nil { drag = nil }
+        cancelDrag()
         if metaPopover != nil { metaPopover = nil }
     }
 
@@ -409,8 +411,15 @@ struct TasksPage: View {
             model: model, focus: $focusedRow,
             id: id, tab: tab, group: group, drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
             enabled: tab != .done && model.editingTitleID != id,
-            circleEdge: cornerInset + AtticLayout.textX - AtticSpacing.s4,
+            session: dragSession,
+            allowsStart: { [pointer, dragSession] point in
+                // Not the circle column (before the row reports its
+                // controls), and never one of the row's controls.
+                point.x > cornerInset + AtticLayout.textX - AtticSpacing.s4
+                    && !dragSession.isOnControl(id, at: point, rowOrigin: pointer.frames[id]?.origin)
+            },
             heights: { rowHeight($0, in: tab) },
+            onBegin: { beginDragSession(in: tab) },
             onEnd: finishDrag,
             onPushPastGroup: showBoundaryHint
         ) { live in
@@ -944,7 +953,7 @@ struct TasksPage: View {
             model.setExpanded(current, false)
             return .handled
         case .escape:
-            if drag != nil { drag = nil; return .handled }
+            if drag != nil { cancelDrag(); return .handled }
             if model.doneDetailID != nil { model.doneDetailID = nil; return .handled }
             // Esc closes the quick look the keyboard is in (or the one
             // open) and the keyboard returns to its row (review UX 2).
@@ -969,14 +978,87 @@ struct TasksPage: View {
 
     // MARK: - Drag
 
-    /// A row's height, from what it shows (no measuring, so scrolling never
-    /// writes view state): 34 pt, 48 with a details line, plus the quick
-    /// look's lines when it is open.
+    /// A row's height as laid out (its quick look, an error or an editor
+    /// under it included; round 4), or, before it has been laid out, from
+    /// what it shows: 34 pt, 48 with a details line, plus the quick look.
     private func rowHeight(_ id: UUID, in tab: TasksTab) -> CGFloat {
+        if let measured = pointer.frames[id]?.height, measured > 0 { return measured }
         guard let row = model.rows(for: tab).first(where: { $0.id == id }) else { return AtticLayout.rowPitch }
         let pitch = row.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         guard model.expanded.contains(id), row.status != .done else { return pitch }
         return pitch + CGFloat(row.subtasks.count + 2) * AtticLayout.subtaskPitch + AtticQuickLookMetrics.bottomPadding
+    }
+
+    /// A drag began: a timer while it lasts reads Esc (SwiftUI's mouse
+    /// tracking holds key events until the button is up, so the key's own
+    /// state is read) and scrolls the list near its edges.
+    private func beginDragSession(in tab: TasksTab) {
+        dragSession.timer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in
+            MainActor.assumeIsolated { dragTick(in: tab) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        dragSession.timer = timer
+    }
+
+    private func dragTick(in tab: TasksTab) {
+        guard let current = drag, !dragSession.isCancelled else { return }
+        // Esc while the button is down cancels: nothing moves, and the
+        // release commits nothing.
+        if CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(53)) {
+            cancelDrag()
+            return
+        }
+        guard let location = dragSession.location,
+              let scrollView = listScrollView(at: location) else { return }
+        let step = TasksDragSession.autoScrollStep(
+            y: location.y, top: listTop,
+            bottom: (pointer.view?.bounds.height ?? 0) - bottomClearance
+        )
+        guard step != 0 else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+        var origin = clip.bounds.origin
+        let before = origin.y
+        origin.y = min(max(origin.y + step, -clip.contentInsets.top), maxY)
+        let moved = origin.y - before
+        guard moved != 0 else { return }
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
+        var next = current
+        next.scrolled += moved
+        let total = dragSession.translation + next.scrolled
+        next.targetIndex = TasksReorderCell<EmptyView, EmptyView>.target(
+            start: current.startIndex, translation: total, group: current.group, heights: { rowHeight($0, in: tab) }
+        )
+        drag = next
+    }
+
+    /// The list's scroll view under a page point (the page's current tab).
+    private func listScrollView(at point: CGPoint) -> NSScrollView? {
+        guard let page = pointer.view, let window = page.window else { return nil }
+        let windowPoint = page.convert(point, to: nil)
+        var found: NSScrollView?
+        func visit(_ view: NSView) {
+            if let scroll = view as? NSScrollView, !scroll.isHiddenOrHasHiddenAncestor,
+               scroll.convert(scroll.bounds, to: nil).contains(windowPoint),
+               (scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height {
+                found = scroll
+            }
+            view.subviews.forEach(visit)
+        }
+        if let content = window.contentView { visit(content) }
+        return found
+    }
+
+    /// Cancels the drag in progress: the row settles back, the neighbours
+    /// return, and its release commits nothing.
+    private func cancelDrag() {
+        guard drag != nil else { return }
+        dragSession.cancel()
+        dragSession.timer?.invalidate()
+        dragSession.timer = nil
+        drag = nil
     }
 
     /// The drop: the move is one step; the lift clears whether the save
@@ -1384,6 +1466,53 @@ struct TasksDrag: Equatable {
     let group: [UUID]
     let startIndex: Int
     var targetIndex: Int
+    /// How far the list has scrolled under the drag (edge auto-scroll):
+    /// the row keeps under the pointer and lands by where it is.
+    var scrolled: CGFloat = 0
+}
+
+/// One drag's live state outside view state (round 4, Astra's final 7):
+/// whether it was cancelled (Esc while tracking, a hide, a page change),
+/// where the pointer is, the last translation, the rows' control frames
+/// (a press on them never starts a drag), and the edge auto-scroll's timer.
+@MainActor
+final class TasksDragSession {
+    /// Set when the drag is cancelled: nothing about this press moves or
+    /// commits until the button comes up (`end`).
+    private(set) var isCancelled = false
+    var translation: CGFloat = 0
+    var location: CGPoint?
+    var controlFrames: [UUID: [CGRect]] = [:]
+    var timer: Timer?
+
+    func cancel() { isCancelled = true }
+
+    /// The press is over (released or cancelled by the system).
+    func end() {
+        isCancelled = false
+        timer?.invalidate()
+        timer = nil
+        location = nil
+        translation = 0
+    }
+
+    /// A press at `point` (page space) on row `id`, whose frame in the page
+    /// starts at `origin`, landed on one of its controls.
+    func isOnControl(_ id: UUID, at point: CGPoint, rowOrigin origin: CGPoint?) -> Bool {
+        guard let origin, let frames = controlFrames[id] else { return false }
+        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        return frames.contains { $0.insetBy(dx: -2, dy: -2).contains(local) }
+    }
+
+    /// The edge auto-scroll's step for a pointer at `y`: 0 inside the
+    /// usable viewport, up to `maximum` points a tick within `zone` of its
+    /// top (negative) or bottom (positive) edge, growing with depth.
+    nonisolated static func autoScrollStep(y: CGFloat, top: CGFloat, bottom: CGFloat, zone: CGFloat = 40, maximum: CGFloat = 14) -> CGFloat {
+        guard bottom > top else { return 0 }
+        if y < top + zone { return -maximum * min(1, max(0, (top + zone - y) / zone)) }
+        if y > bottom - zone { return maximum * min(1, max(0, (y - (bottom - zone)) / zone)) }
+        return 0
+    }
 }
 
 /// A row that can be dragged to reorder (owner fix 6, review 1). The lift is
@@ -1409,10 +1538,13 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     @Binding var metaPopover: TasksMetaPopover?
     @Binding var fileDropRow: UUID?
     let enabled: Bool
-    /// The circle column's right edge in the page: a press left of it is
-    /// the circle's.
-    let circleEdge: CGFloat
+    /// The drag's live state: cancellation, pointer, control frames.
+    let session: TasksDragSession
+    /// Whether a press at this page point may start a drag (not on the
+    /// row's circle, checklist, date or tags).
+    let allowsStart: (CGPoint) -> Bool
     let heights: (UUID) -> CGFloat
+    let onBegin: () -> Void
     let onEnd: (TasksDrag) -> Void
     let onPushPastGroup: () -> Void
     @ViewBuilder let row: (TasksCellLive) -> Row
@@ -1420,9 +1552,6 @@ struct TasksReorderCell<Row: View, Below: View>: View {
 
     @Environment(\.atticDesign) private var design
     @GestureState private var translation: CGFloat?
-    /// This press was cancelled from outside (Esc, a hide, a page change):
-    /// it moves nothing more until the button comes up.
-    @State private var cancelled = false
     @State private var pushedPast = false
 
     var body: some View {
@@ -1440,48 +1569,58 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
+                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id] frames in
+                    MainActor.assumeIsolated { session.controlFrames[id] = frames }
+                }
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
             below()
         }
         .modifier(AtticReorderLiftModifier(lifted: lifted))
-        .offset(y: lifted ? (translation ?? 0) : offset)
+        // The lifted row follows the pointer, plus whatever the list has
+        // scrolled under it.
+        .offset(y: lifted ? (translation ?? 0) + (drag?.scrolled ?? 0) : offset)
         .zIndex(lifted ? 1 : 0)
         .animation(lifted || design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false), value: offset)
         .onChange(of: translation == nil) { _, ended in
             guard ended else { return }
-            // Cancelled or ended: the lift goes either way (an ended drag
-            // was committed by `onEnded` already).
-            cancelled = false
+            // Released, cancelled by the system or by Esc: the lift goes
+            // (a release was committed by `onEnded` already), and the next
+            // press starts afresh.
             pushedPast = false
             if drag?.id == id { drag = nil }
-        }
-        .onChange(of: drag) { old, new in
-            if old?.id == id, new == nil, translation != nil { cancelled = true }
+            session.end()
         }
     }
 
     private var gesture: some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: TasksPage.space)
             .updating($translation) { value, state, _ in
-                guard value.startLocation.x > circleEdge else { return }
+                guard allowsStart(value.startLocation) else { return }
                 state = value.translation.height
             }
             .onChanged { value in
-                guard !cancelled, value.startLocation.x > circleEdge, let start = group.firstIndex(of: id) else { return }
-                let target = Self.target(start: start, translation: value.translation.height, group: group, heights: heights)
+                guard !session.isCancelled, allowsStart(value.startLocation), let start = group.firstIndex(of: id) else { return }
+                session.translation = value.translation.height
+                session.location = value.location
+                let scrolled = drag?.id == id ? (drag?.scrolled ?? 0) : 0
+                let moved = value.translation.height + scrolled
+                let target = Self.target(start: start, translation: moved, group: group, heights: heights)
                 if drag?.id != id {
                     drag = TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target)
+                    onBegin()
                 } else if drag?.targetIndex != target {
                     drag?.targetIndex = target
                 }
                 // Pushing past the group's end: say why it stops there.
-                let past = Self.pushesPastGroup(start: start, translation: value.translation.height, group: group, heights: heights)
+                let past = Self.pushesPastGroup(start: start, translation: moved, group: group, heights: heights)
                 if past, !pushedPast { onPushPastGroup() }
                 if past != pushedPast { pushedPast = past }
             }
             .onEnded { value in
-                guard !cancelled, value.startLocation.x > circleEdge, let start = group.firstIndex(of: id) else { return }
-                let target = Self.target(start: start, translation: value.translation.height, group: group, heights: heights)
+                // A cancelled press never commits on release.
+                guard !session.isCancelled, allowsStart(value.startLocation), let start = group.firstIndex(of: id) else { return }
+                let moved = value.translation.height + (drag?.id == id ? (drag?.scrolled ?? 0) : 0)
+                let target = Self.target(start: start, translation: moved, group: group, heights: heights)
                 onEnd(TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target))
             }
     }
