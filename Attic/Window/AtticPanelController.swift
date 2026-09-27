@@ -457,6 +457,8 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         resamplePointerPassthrough()
         animateShow(to: finalFrame)
         PerformanceSignposts.panelOrderedFront()
+        // A reveal: the panel was hidden and is now on screen.
+        uiState.panelDidReveal()
         return true
     }
 
@@ -522,6 +524,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
                 guard let self, self.visibilityTransition.ownsCompletion(generation) else { return }
                 self.panel.orderOut(nil)
                 self.performanceVisibilityChanges += 1
+                self.uiState.panelDidHide()
                 self.panel.alphaValue = 1
                 self.stopPointerPassthroughMonitoring()
                 self.subtaskPanels.mainPanelDidHide()

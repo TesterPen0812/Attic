@@ -100,6 +100,10 @@ struct TasksPageHost: View {
         // Tasks alone: they arrive while Tasks is already showing, too.
         // Search (the menu-bar item): the Done page's search, focused.
         .onReceive(uiState.$searchRequest) { request in handleSearchRequest(model, request: request) }
+        // Reveal and hide come from the panel controller (Astra 7); a
+        // covered or off-Space window is still open and keeps its place.
+        .onReceive(uiState.$revealCount.dropFirst()) { _ in model.resetForReveal() }
+        .onReceive(uiState.$hideCount.dropFirst()) { _ in model.pageDidHide() }
         // An agent's `show` of a task: its tab, the row selected in view.
         .onReceive(uiState.$shownItem) { item in showItemIfNeeded(model, item) }
         // Quick capture (the global shortcut) and the shell's own focus

@@ -60,8 +60,6 @@ struct TasksPage: View {
             bottomControls
         }
         .coordinateSpace(Self.space)
-        .background(TasksWindowReveal(action: { model.resetForReveal() }, hidden: { model.pageDidHide() })
-            .frame(width: 0, height: 0).accessibilityHidden(true))
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear {
