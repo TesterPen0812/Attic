@@ -68,9 +68,6 @@ enum AtticRadius {
     /// A chip nested in a capsule: outer radius minus the inset
     /// (14.5 − 4 = 10.5 on the 34 pt capsule).
     static var nestedChip: CGFloat { control(height: AtticControlSize.capsuleHeight) - AtticControlSize.capsuleInset }
-    /// Rounded-square subtask checkbox: a fixed glyph radius (a glyph, not
-    /// a control, so it keeps its square look beside the round circles).
-    static let subtaskCheckbox: CGFloat = 4.5
     /// The subtask checkbox is a true squircle: a superellipse of this
     /// exponent across the whole 14 pt box (owner, 2026-09-26).
     static let subtaskCheckboxExponent: CGFloat = 4

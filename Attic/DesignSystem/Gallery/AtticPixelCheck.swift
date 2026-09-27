@@ -240,12 +240,24 @@ enum AtticGeometryCheck {
         }
     }
 
+    /// The subtask checkbox is a true squircle (superellipse, exponent 4,
+    /// across the whole 14 pt box), not a rounded rectangle: its expected
+    /// radius is what the same fit reads from that squircle drawn alone.
+    static var subtaskCheckboxRadius: CGFloat {
+        let size = AtticControlSize.subtaskCheckbox
+        return AtticCornerMeasure.measure(
+            Squircle(cornerRadius: size / 2, exponent: AtticRadius.subtaskCheckboxExponent).fill(Color.gray),
+            layoutSize: CGSize(width: size, height: size), context: .default
+        )?.radius ?? 0
+    }
+
     static func specimens(demo: AtticGalleryDemo = AtticGalleryDemo()) -> [Specimen] {
         let noop = demo.record("Geometry check")
         let tokens = AtticDesignContext.default.tokens
         let panelButton = AtticControlSize.panelButton
         let back = AtticControlSize.settingsBackButton
         let row = CGSize(width: AtticLayout.panelSize.width - 2 * AtticLayout.rowHighlightInset, height: AtticLayout.rowHighlightHeight)
+        let checkbox = AtticControlSize.subtaskCheckbox
         return [
             Specimen(name: "Single button", view: AnyView(AtticRaisedButton(systemName: "pin", label: "Pin", action: noop)),
                      expectedSize: panelButton, expectedRadius: AtticRadius.control(height: panelButton.height)),
@@ -293,8 +305,8 @@ enum AtticGeometryCheck {
                      expectedSize: CGSize(width: row.width + 2 * AtticRingMetrics.outset, height: row.height + 2 * AtticRingMetrics.outset),
                      expectedRadius: AtticRadius.ring(around: AtticRadius.highlight, offset: AtticRingMetrics.outset)),
             Specimen(name: "Subtask checkbox (done)", view: AnyView(AtticSubtaskCheckbox(isDone: true)),
-                     expectedSize: CGSize(width: AtticControlSize.subtaskCheckbox, height: AtticControlSize.subtaskCheckbox),
-                     expectedRadius: AtticRadius.subtaskCheckbox)
+                     expectedSize: CGSize(width: checkbox, height: checkbox),
+                     expectedRadius: subtaskCheckboxRadius)
         ]
     }
 
