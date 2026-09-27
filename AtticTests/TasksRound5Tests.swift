@@ -59,4 +59,38 @@ final class TasksRound5Tests: XCTestCase {
         XCTAssertEqual(land(-width, from: 0), 0, "nor before the first")
         XCTAssertEqual(TasksPagerBehavior.page(proposed: 500, width: 0, current: 1, count: 3), 1, "no width yet: stay")
     }
+
+    // MARK: - F4: a drag's eligibility is decided at the press
+
+    func testATitlePressStaysADragAsTheRowMovesPastItsControls() {
+        let session = TasksDragSession()
+        let row = UUID()
+        // The checklist, in the row's own space (Astra's geometry).
+        session.controlFrames[row] = [CGRect(x: 56, y: 26, width: 40, height: 16)]
+        var origin = CGPoint(x: 12, y: 200)
+        var decisions = 0
+        let decide: (CGPoint) -> Bool = { point in
+            decisions += 1
+            return !session.isOnControl(row, at: point, rowOrigin: origin)
+        }
+        let press = CGPoint(x: 80, y: 210)   // on the title line, above the checklist
+        XCTAssertTrue(session.allows(row, start: press, decide: decide), "a title press drags")
+        // The row lifts and travels up (and the list scrolls): measured
+        // now, the same press point would fall on the checklist.
+        origin = CGPoint(x: 12, y: 180)
+        XCTAssertTrue(session.isOnControl(row, at: press, rowOrigin: origin), "the geometry that used to stop the drag")
+        for _ in 0..<5 { XCTAssertTrue(session.allows(row, start: press, decide: decide), "updates keep the press's answer") }
+        XCTAssertTrue(session.allows(row, start: press, decide: decide), "and so does the release")
+        XCTAssertEqual(decisions, 1, "decided once, at the press")
+        session.end()
+
+        // The next press is decided afresh: with the row now at y 180,
+        // this one is on the checklist.
+        XCTAssertEqual(origin, CGPoint(x: 12, y: 180))
+        XCTAssertFalse(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "a press on a control never drags")
+        origin = CGPoint(x: 12, y: 230)
+        XCTAssertFalse(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "however the row moves after")
+        XCTAssertEqual(decisions, 2)
+        session.end()
+    }
 }

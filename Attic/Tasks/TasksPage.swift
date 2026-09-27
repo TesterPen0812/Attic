@@ -1531,8 +1531,25 @@ final class TasksDragSession {
 
     func cancel() { isCancelled = true }
 
+    /// This press's decision, taken once when it starts (round 5, F4): a
+    /// press on a row's title stays a drag however far the row then moves
+    /// or the list scrolls under it, and a press on a control never
+    /// becomes one.
+    private var press: (id: UUID, start: CGPoint, allowed: Bool)?
+
+    /// Whether the press that started at `start` on row `id` may drag.
+    /// `decide` runs once per press, when the row is where it was pressed;
+    /// every later update and the release reuse its answer.
+    func allows(_ id: UUID, start: CGPoint, decide: (CGPoint) -> Bool) -> Bool {
+        if let press, press.id == id, press.start == start { return press.allowed }
+        let allowed = decide(start)
+        press = (id, start, allowed)
+        return allowed
+    }
+
     /// The press is over (released or cancelled by the system).
     func end() {
+        press = nil
         isCancelled = false
         timer?.invalidate()
         timer = nil
@@ -1639,11 +1656,12 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     private var gesture: some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: TasksPage.space)
             .updating($translation) { value, state, _ in
-                guard allowsStart(value.startLocation) else { return }
+                guard session.allows(id, start: value.startLocation, decide: allowsStart) else { return }
                 state = value.translation.height
             }
             .onChanged { value in
-                guard !session.isCancelled, allowsStart(value.startLocation), let start = group.firstIndex(of: id) else { return }
+                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
+                      let start = group.firstIndex(of: id) else { return }
                 session.translation = value.translation.height
                 session.location = value.location
                 let scrolled = drag?.id == id ? (drag?.scrolled ?? 0) : 0
@@ -1662,7 +1680,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
             }
             .onEnded { value in
                 // A cancelled press never commits on release.
-                guard !session.isCancelled, allowsStart(value.startLocation), let start = group.firstIndex(of: id) else { return }
+                guard !session.isCancelled, session.allows(id, start: value.startLocation, decide: allowsStart),
+                      let start = group.firstIndex(of: id) else { return }
                 let moved = value.translation.height + (drag?.id == id ? (drag?.scrolled ?? 0) : 0)
                 let target = Self.target(start: start, translation: moved, group: group, heights: heights)
                 onEnd(TasksDrag(id: id, tab: tab, group: group, startIndex: start, targetIndex: target))
