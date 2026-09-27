@@ -943,7 +943,12 @@ struct TasksPage: View {
             }
             addBar
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomControlsHeight = $0 }
+        // The lists take the new room on the next turn: the keystroke that
+        // shows the strip draws at once, and the lists' margins (500 rows
+        // re-laid out) follow while the strip fades in.
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            DispatchQueue.main.async { if bottomControlsHeight != height { bottomControlsHeight = height } }
+        }
         .padding(.horizontal, max(AtticSpacing.panelMargin, layout.chromeInsets.leading))
         .padding(.bottom, bottomInset)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.selection.count > 1)
