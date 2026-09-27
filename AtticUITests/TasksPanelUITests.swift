@@ -2,10 +2,10 @@ import AppKit
 import XCTest
 
 /// The Tasks page inside the real panel (not the standalone preview window):
-/// the v9 title and page pill, a long title, the row quick look, the files
-/// panel "Open page" leads to until task pages arrive, and a page kept
-/// built behind another one taking no keys, clicks or VoiceOver.
-/// The in-memory UI-test store holds the v9 mockup's tasks
+/// the page tabs, the pinned state, Now on every reveal, a long title, the
+/// row quick look, the files panel "Open page" leads to until task pages
+/// arrive, and a page kept built behind another one taking no keys, clicks
+/// or VoiceOver. The in-memory UI-test store holds the demo tasks
 /// (`ATTIC_UI_TEST_SEED=demo`).
 final class TasksPanelUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -40,9 +40,11 @@ final class TasksPanelUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
     }
 
-    private var pageTitle: XCUIElement {
-        app.descendants(matching: .any).matching(identifier: "tasks-page-title").firstMatch
+    private func tab(_ page: String) -> XCUIElement {
+        app.buttons["tasks-page-\(page)"]
     }
+
+    private var pin: XCUIElement { app.buttons["panel-pin-button"] }
 
     private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 5, _ message: String,
                          file: StaticString = #filePath, line: UInt = #line) {
@@ -51,30 +53,80 @@ final class TasksPanelUITests: XCTestCase {
         XCTAssertTrue(condition(), message, file: file, line: line)
     }
 
-    /// The row's status circle: 16 pt at x = 20, on the title line.
+    /// The row's status circle: 16 pt, centred 24 pt in from the row's
+    /// leading edge on the title line (the 28 pt hit area takes 16 down).
     private func circle(_ title: String) -> XCUICoordinate {
-        row(title).coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 28, dy: 17))
+        row(title).coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 24, dy: 16))
     }
 
-    // MARK: - Title and page pill
+    /// A click on the row's title (it selects; the circle completes).
+    private func select(_ title: String) {
+        row(title).coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).click()
+    }
 
-    func testTheTitleAndPagePillMoveBetweenTasksBacklogAndDone() throws {
-        XCTAssertTrue(pageTitle.waitForExistence(timeout: 3))
-        XCTAssertEqual(pageTitle.label, "Tasks")
-        let pill = app.descendants(matching: .any)["tasks-page-pill"]
-        XCTAssertTrue(pill.exists, "the page pill is one control")
-        for (page, title, task) in [("backlog", "Backlog", "Plan the spring trip"), ("done", "Done", "Send invoice"),
-                                    ("now", "Tasks", "Book dentist")] {
-            let choice = app.buttons["tasks-page-\(page)"]
-            XCTAssertTrue(choice.exists, "\(title) is one of the pill's named choices")
+    // MARK: - Tabs
+
+    func testTheTabsMoveBetweenNowLaterAndDone() throws {
+        let group = app.descendants(matching: .any)["tasks-page-tabs"]
+        XCTAssertTrue(group.waitForExistence(timeout: 3))
+        XCTAssertEqual(group.label, "Pages", "the tabs are one group for VoiceOver")
+        XCTAssertTrue(tab("now").isSelected, "Tasks opens on Now")
+        for (page, title, task) in [("backlog", "Later", "Plan the spring trip"), ("done", "Done", "Send invoice"),
+                                    ("now", "Now", "Book dentist")] {
+            let choice = tab(page)
+            XCTAssertEqual(choice.label, title)
             choice.click()
-            waitFor(pageTitle.label == title, "the title reads \(title)")
             waitFor(row(task).exists, "\(title) lists its tasks")
-            XCTAssertTrue(choice.isSelected, "\(title) reads as the selected choice")
+            waitFor(choice.isSelected, "\(title) reads as the selected tab")
+            XCTAssertEqual(["now", "backlog", "done"].filter { tab($0).isSelected }, [page], "exactly one tab is selected")
         }
         // Only the page shown is read: the other pages built for the swipe
         // are hidden from VoiceOver.
         XCTAssertFalse(row("Plan the spring trip").exists)
+    }
+
+    /// Whatever page Tasks was left on, the panel opens on Now: hidden
+    /// with Esc and shown again from the menu-bar item, three times.
+    func testThePanelAlwaysOpensOnNow() throws {
+        for page in ["backlog", "done", "backlog"] {
+            tab(page).click()
+            waitFor(tab(page).isSelected, "\(page) is shown")
+            pin.coordinate(withNormalizedOffset: CGVector(dx: 2.6, dy: 0.5)).click()
+            app.typeKey(.escape, modifierFlags: [])
+            if pin.exists { app.typeKey(.escape, modifierFlags: []) }
+            XCTAssertTrue(pin.waitForNonExistence(timeout: 3), "Esc hides the panel")
+
+            let item = app.statusItems.firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5), "the menu-bar item is there")
+            item.click()
+            let show = app.menuItems["Show Attic"]
+            XCTAssertTrue(show.waitForExistence(timeout: 3))
+            show.click()
+            XCTAssertTrue(pin.waitForExistence(timeout: 3), "Show Attic reveals the panel")
+            waitFor(tab("now").isSelected, "the panel opens on Now")
+            XCTAssertFalse(tab(page).isSelected)
+            waitFor(row("Book dentist").exists, "Now's list shows")
+        }
+    }
+
+    // MARK: - Pinned
+
+    /// Pinning shows as the pin's selected state and leaves the list where
+    /// it was; unpinning puts the button back.
+    func testPinningKeepsTheListInPlace() throws {
+        XCTAssertFalse(pin.isSelected)
+        XCTAssertEqual(pin.label, "Pin panel")
+        let before = row("Book dentist").frame
+        pin.click()
+        waitFor(pin.isSelected, "the pin reads as selected")
+        XCTAssertEqual(pin.label, "Unpin panel")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        let after = row("Book dentist").frame
+        XCTAssertEqual(after.minX, before.minX, accuracy: 0.5, "pinning does not move the list")
+        XCTAssertEqual(after.minY, before.minY, accuracy: 0.5, "pinning does not move the list")
+        pin.click()
+        waitFor(!pin.isSelected, "unpinned")
+        XCTAssertEqual(pin.label, "Pin panel")
     }
 
     // MARK: - Long title
@@ -100,7 +152,7 @@ final class TasksPanelUITests: XCTestCase {
     /// → opens the row's quick look; a subtask ticks; "Add subtask" adds
     /// one (Return, then Esc stops); Esc closes the quick look.
     func testTheQuickLookExpandsTicksAddsAndClosesWithEscape() throws {
-        row("Ship appearance PR").click()
+        select("Ship appearance PR")
         app.typeKey(.rightArrow, modifierFlags: [])
         let merge = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Merge")).firstMatch
         XCTAssertTrue(merge.waitForExistence(timeout: 3), "the quick look lists the subtasks")
@@ -117,12 +169,13 @@ final class TasksPanelUITests: XCTestCase {
         app.typeText("Pack the charger\r")
         let added = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Pack the charger")).firstMatch
         waitFor(added.exists, "Return adds the subtask")
+        waitFor(row("Ship appearance PR").label.contains("3 of 5 subtasks"), "the row counts the new one")
         app.typeKey(.escape, modifierFlags: [])
 
-        row("Ship appearance PR").click()
+        select("Ship appearance PR")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(!merge.exists, "Esc closes the quick look")
-        XCTAssertTrue(app.buttons["panel-pin-button"].exists, "and nothing more")
+        XCTAssertTrue(pin.exists, "and nothing more")
     }
 
     // MARK: - Files panel
@@ -131,7 +184,7 @@ final class TasksPanelUITests: XCTestCase {
     /// panel, with no way to its Subtasks editor; it pins, and Esc
     /// dismisses it without taking the main panel with it.
     func testOpenPageShowsTheFilesPanelThatPinsAndDismisses() throws {
-        row("Book dentist").click()
+        select("Book dentist")
         app.typeKey(.return, modifierFlags: .command)
         let transient = element("subtask-panel-")
         XCTAssertTrue(transient.waitForExistence(timeout: 3), "the files panel opens")
@@ -144,14 +197,14 @@ final class TasksPanelUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
         waitFor(!transient.exists, "Esc dismisses it")
-        XCTAssertTrue(app.buttons["panel-pin-button"].exists, "the main panel stays")
+        XCTAssertTrue(pin.exists, "the main panel stays")
 
-        row("Book dentist").click()
+        select("Book dentist")
         app.typeKey(.return, modifierFlags: .command)
         XCTAssertTrue(transient.waitForExistence(timeout: 3))
-        let pin = element("subtask-pin-")
-        XCTAssertTrue(pin.waitForExistence(timeout: 3))
-        pin.click()
+        let filesPin = element("subtask-pin-")
+        XCTAssertTrue(filesPin.waitForExistence(timeout: 3))
+        filesPin.click()
         let pinned = element("subtask-pinned-")
         XCTAssertTrue(pinned.waitForExistence(timeout: 3), "it pins into its own window")
         XCTAssertFalse(element("subtask-view-switch-").exists, "still files only")
@@ -161,6 +214,41 @@ final class TasksPanelUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
         waitFor(!pinned.exists, "Esc dismisses the pinned window too")
+    }
+
+    /// The pinned files window is its own window: it stays when another
+    /// app takes the foreground, and its header drags it.
+    func testThePinnedFilesWindowSurvivesDeactivationAndDragsByItsHeader() throws {
+        select("Book dentist")
+        app.typeKey(.return, modifierFlags: .command)
+        XCTAssertTrue(element("subtask-panel-").waitForExistence(timeout: 3), "the files panel opens")
+        let filesPin = element("subtask-pin-")
+        XCTAssertTrue(filesPin.waitForExistence(timeout: 3))
+        filesPin.click()
+        let pinned = element("subtask-pinned-")
+        XCTAssertTrue(pinned.waitForExistence(timeout: 3))
+        XCTAssertFalse(element("subtask-panel-").exists, "pinning promotes the panel, never duplicates it")
+
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        finder.activate()
+        XCTAssertTrue(finder.wait(for: .runningForeground, timeout: 5))
+        XCTAssertTrue(pinned.exists, "the pinned window stays when Attic loses the foreground")
+        app.activate()
+        XCTAssertTrue(pinned.waitForExistence(timeout: 3))
+
+        let handle = element("subtask-drag-")
+        XCTAssertTrue(handle.waitForExistence(timeout: 3), "the pinned header exposes its drag handle")
+        let initial = pinned.frame
+        let press = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        press.click(forDuration: 0.2, thenDragTo: press.withOffset(CGVector(dx: -120, dy: 80)))
+        waitFor(abs(pinned.frame.minX - (initial.minX - 120)) < 10 && abs(pinned.frame.minY - (initial.minY + 80)) < 10,
+                "the pinned window follows a header drag (\(initial) → \(pinned.frame))")
+        pinned.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        for _ in 0..<3 where pinned.exists {
+            app.typeKey(.escape, modifierFlags: [])
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        waitFor(!pinned.exists, "Esc dismisses it")
     }
 
     // MARK: - A page kept built behind another
@@ -185,5 +273,47 @@ final class TasksPanelUITests: XCTestCase {
         waitFor(row("Book dentist").exists, "Tasks shows again")
         XCTAssertTrue(row("Book dentist").label.contains("to do"), "the click did not reach the hidden circle")
         XCTAssertEqual(addBar.value as? String, "Kept draft", "the key did not reach the hidden add bar")
+    }
+}
+
+/// The empty states, in the real panel over the caught-up seed: nothing
+/// open, six tasks finished today, Later empty
+/// (`ATTIC_UI_TEST_SEED=caughtup`).
+final class TasksEmptyStateUITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "caughtup"
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 5))
+    }
+
+    override func tearDownWithError() throws {
+        app?.terminate()
+    }
+
+    private func emptyLine(_ text: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR value == %@", text, text)).firstMatch
+    }
+
+    func testNowIsCaughtUpAndLaterIsEmpty() throws {
+        XCTAssertTrue(emptyLine("You’re caught up").waitForExistence(timeout: 3), "Now says it is caught up")
+        let completed = app.descendants(matching: .any)["tasks-completed-today"]
+        XCTAssertTrue(completed.exists, "with today's tasks one row below")
+        XCTAssertEqual(completed.label, "Completed today, 6")
+        XCTAssertEqual(completed.frame.minY - emptyLine("You’re caught up").frame.minY, 34, accuracy: 10,
+                       "one row apart")
+
+        app.buttons["tasks-page-backlog"].click()
+        XCTAssertTrue(emptyLine("Nothing for later").waitForExistence(timeout: 3), "Later says it is empty")
+
+        app.buttons["tasks-page-done"].click()
+        let finished = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Send invoice,")).firstMatch
+        XCTAssertTrue(finished.waitForExistence(timeout: 3), "Done lists today's finished tasks")
     }
 }

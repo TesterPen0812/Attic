@@ -85,9 +85,12 @@ final class PerformanceUITests: XCTestCase {
         XCTAssertTrue(picker.waitForExistence(timeout: 20))
         let tasks = visible.buttons["panel-section-tasks"]
         XCTAssertTrue(tasks.waitForExistence(timeout: 5))
+        // The page button opens under the pointer; the other pages take
+        // clicks once it has.
         tasks.hover()
         let canvas = visible.buttons["panel-section-canvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil { canvas.isHittable }, "the page button did not open under the pointer")
         canvas.click()
         XCTAssertTrue(visible.descendants(matching: .any)["canvas-surface"]
             .waitForExistence(timeout: 10))
