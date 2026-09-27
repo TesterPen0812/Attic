@@ -32,9 +32,12 @@ struct TasksDonePage<Cell: View>: View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(days) { day in
+                    // A day heading takes one row's pitch, its text on
+                    // the rows' title line, so the log keeps the 34 / 48
+                    // rhythm of the rows under it.
                     AtticText(verbatim: day.title, style: .rowMeta, ink: .helper)
-                        .frame(height: AtticLayout.rowPitch, alignment: .bottom)
-                        .padding(.bottom, AtticSpacing.s4)
+                        .frame(height: AtticTaskRowMetrics.titleLineHeight)
+                        .frame(height: AtticLayout.rowPitch)
                         .padding(.leading, AtticLayout.circleX)
                         .accessibilityAddTraits(.isHeader)
                         .modifier(AtticScrollEdgeFade(space: Self.space, top: TasksPage.listTopFade, bottom: AtticEdgeBlur.panelBottom))
