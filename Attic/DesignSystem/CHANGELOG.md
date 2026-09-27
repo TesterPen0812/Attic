@@ -286,3 +286,22 @@ The look ported, not the code: the design system's surface model now carries Pha
 - **`atticPopover`**: Attic's pop-overs note their window with `AtticTextInput`, so no row or page
   command answers a key while a pop-over has the keyboard (the date picker's Backspace or Space
   never reaches the row's Delete or Complete).
+
+### Phase 1 round 6 (owner decisions, 2026-09-27)
+
+- **Typed pieces, option H** (`AtticTokenChip`, `AtticTokenField`, `AtticChipText`; owner item
+  15): no pill. A recognised piece is drawn in the secondary ink (the add bar's placeholder grey,
+  tuned on the bar's faces; a title being edited uses the row's helper grey), `!!` in High's orange
+  (`priorityMark`), and a date gets its calendar icon before it, drawn by the layout manager as
+  decoration (never a character). The icon fades in over 0.18 s while its room (kerning on the
+  character before the date) opens, so the words after it move gently; Reduce Motion shows it at
+  once. Measured on the bar's faces over every Solid combination: the grey ≥ 3.12 : 1 (4.68 : 1
+  with Increase Contrast), the orange ≥ 3.25 : 1 (5.52 : 1); Glass and Frosted stay inside Phase
+  0's named translucency exception. Removed: the chip pill (`chipOutset`, `chipFill`).
+- **The review switches are the design** (owner item 20): `AtticReviewVariants`, the design
+  context's `variants`, the colour key's switch fields and Settings › Compare are gone. Readable
+  Glass (`AtticSurfaceModel.readable(primary:secondary:)`), the quiet drawn controls
+  (`AtticColorTokens.recipes`), the defined dark edge (`AtticSurfaceModel.definedDarkEdge()`), the
+  compact Appearance page and the explicit command names are always on.
+- **Priority menus** (owner item 19): `TaskPriority.choices(keeping:)` offers No Priority, Medium
+  and High; Low only while a task has it.

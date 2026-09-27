@@ -264,7 +264,7 @@ struct AtticTitleEditing {
     var accessibilityLabel = String(localized: "Title")
 
     struct Tokens {
-        var chips: [NSRange]
+        var chips: [AtticTokenChip]
         /// Backspace after a chip, edits and the caret, as in the add bar.
         let dismissChip: (NSRange) -> Void
         let edited: (NSRange, String) -> Void
@@ -314,6 +314,8 @@ struct AtticRowTitleEditor: View {
                 ),
                 style: .rowTitle,
                 ink: .heading,
+                // On its row (selected while edited): the row's secondary grey.
+                pieceInk: .helper,
                 accessibilityIdentifier: "AtticTitleField"
             )
             .frame(height: AtticTaskRowMetrics.titleLineHeight)

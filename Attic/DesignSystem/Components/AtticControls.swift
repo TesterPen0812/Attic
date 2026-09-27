@@ -327,7 +327,7 @@ struct AtticAddBar: View {
     /// The chip-drawing field (Phase 1, logged in `CHANGELOG.md`): what it
     /// draws as chips, its focus and what it reports.
     struct Tokens {
-        var chips: [NSRange]
+        var chips: [AtticTokenChip]
         var isFocused: Binding<Bool>
         var actions: AtticTokenFieldActions
         /// Edits made as typing (the strip's picks, a suggestion taken).

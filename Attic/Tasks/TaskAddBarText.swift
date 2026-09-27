@@ -59,9 +59,25 @@ struct TaskAddBarText: Equatable {
     /// may still be typing ("fri" on the way to "friday", "mon" to
     /// "monday"). One already drawn (or picked) stays a chip there.
     func chips(parser: TaskTextParser, caret: Int?) -> [NSRange] {
+        tokenChips(parser: parser, caret: caret).map(\.range)
+    }
+
+    /// The chips with how each draws (owner item 15, option H): a date with
+    /// its calendar, `!!` in High's orange, the rest in the secondary ink.
+    func tokenChips(parser: TaskTextParser, caret: Int?) -> [AtticTokenChip] {
         activeTokens(parser: parser)
-            .map { $0.utf16Range(in: text) }
-            .filter { range in caret == nil || NSMaxRange(range) != caret || shown.contains(range) || pinned.contains { $0.range == range } }
+            .map { token -> AtticTokenChip in
+                let kind: AtticTokenChip.Kind = switch token.value {
+                case .dueDay: .date
+                case .priority(.high): .high
+                case .priority, .tag: .piece
+                }
+                return AtticTokenChip(range: token.utf16Range(in: text), kind: kind)
+            }
+            .filter { chip in
+                let range = chip.range
+                return caret == nil || NSMaxRange(range) != caret || shown.contains(range) || pinned.contains { $0.range == range }
+            }
     }
 
     /// The caret moved: every piece it is not at the end of is finished,

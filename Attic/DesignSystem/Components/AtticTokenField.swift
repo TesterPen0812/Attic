@@ -48,6 +48,24 @@ struct AtticTokenFieldActions {
     var redoFallback: () -> Void = {}
 }
 
+/// A recognised piece of typed text (`#tag`, a date, `!`, `!!`) and how it
+/// is drawn (owner item 15, option H of v21): no pill; the piece in the
+/// secondary ink, `!!` in High's orange, and a date with its calendar icon
+/// drawn before it as decoration (never a character in the text).
+struct AtticTokenChip: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        /// A tag or `!`: the secondary ink.
+        case piece
+        /// A date: the secondary ink, with its calendar icon.
+        case date
+        /// `!!`: High's orange.
+        case high
+    }
+
+    var range: NSRange
+    var kind: Kind = .piece
+}
+
 /// The keys a suggestion list answers while the field has the keyboard.
 enum AtticSuggestionKey: Equatable {
     case up, down, accept, dismiss
@@ -94,17 +112,18 @@ final class AtticTokenFieldEditor {
 
 /// The add bar's text: a native text view (so typing, selection, spelling,
 /// dictation and VoiceOver are the system's own) that draws recognised
-/// pieces (`#tag`, a date, `!`) as chips: the tag colours on a recessed
-/// pill, the text itself unchanged. Backspace right after a chip turns it
-/// back into text. One line: Return submits, pasted lines are offered to
+/// pieces (`#tag`, a date, `!`) as `AtticTokenChip`s: no pill, the piece
+/// in the secondary ink (`!!` in High's orange), a date with its calendar
+/// icon fading in before it, the text itself unchanged. Backspace right
+/// after a piece turns it back into plain words. One line: Return submits, pasted lines are offered to
 /// the owner, and typed newlines never enter.
 ///
 /// Keyboard focus follows `isFocused` both ways, so the shell's quick
 /// capture can put the insertion point here.
 struct AtticTokenField: NSViewRepresentable {
     @Binding var text: String
-    /// Ranges (UTF-16, in `text`) drawn as chips.
-    var chips: [NSRange]
+    /// The recognised pieces (UTF-16 ranges in `text`) and how each draws.
+    var chips: [AtticTokenChip]
     @Binding var isFocused: Bool
     var accessibilityLabel: String
     var isEnabled = true
@@ -113,6 +132,10 @@ struct AtticTokenField: NSViewRepresentable {
     var style: AtticTextStyle = .listBody
     /// The text ink.
     var ink: AtticInk = .body
+    /// The pieces' secondary ink: the add bar's placeholder grey (tuned on
+    /// the bar's faces); a title being edited on its row takes the row's
+    /// secondary grey.
+    var pieceInk: AtticInk = .placeholder
     /// Edits made as typing (strip picks, suggestions).
     var editor: AtticTokenFieldEditor?
     /// For UI tests and automation.
@@ -139,13 +162,10 @@ struct AtticTokenField: NSViewRepresentable {
         view.apply(style: AtticTokenFieldView.Style(
             font: style.nsFont,
             text: NSColor(tokens.color(isEnabled ? ink : .disabledText)),
-            // The heading ink: the pill sits on the raised bar, where the
-            // tag's accent grey falls below 3 : 1 in Dark.
-            chipText: NSColor(tokens.color(.heading)),
-            // The selection fill, fainter than the tag pill: on the raised
-            // (and see-through) bar a stronger pill costs the text contrast.
-            chipFill: NSColor(tokens.selected.color),
-            caret: NSColor(tokens.color(.heading))
+            piece: NSColor(tokens.color(isEnabled ? pieceInk : .disabledText)),
+            high: NSColor(tokens.color(isEnabled ? .priorityMark : .disabledText)),
+            caret: NSColor(tokens.color(.heading)),
+            reduceMotion: design.reduceMotion
         ))
         view.textView.isEditable = isEnabled
         view.textView.setAccessibilityLabel(accessibilityLabel)
@@ -260,7 +280,7 @@ struct AtticTokenField: NSViewRepresentable {
         func chipBeforeCaret(_ textView: NSTextView) -> NSRange? {
             let selection = textView.selectedRange()
             guard selection.length == 0 else { return nil }
-            return parent.chips.first { NSMaxRange($0) == selection.location }
+            return parent.chips.first { NSMaxRange($0.range) == selection.location }?.range
         }
     }
 }
@@ -271,16 +291,26 @@ final class AtticTokenFieldView: NSView {
     struct Style: Equatable {
         var font: NSFont
         var text: NSColor
-        var chipText: NSColor
-        var chipFill: NSColor
+        /// A piece's secondary ink.
+        var piece: NSColor
+        /// `!!`: High's orange.
+        var high: NSColor
         var caret: NSColor
+        var reduceMotion = false
     }
 
     let textView: AtticTokenTextView
     private let scrollView = NSScrollView()
     private let layoutManager = AtticChipLayoutManager()
     private var style: Style?
-    private var chips: [NSRange] = []
+    private var chips: [AtticTokenChip] = []
+    /// Each date's icon, 0 (just recognised) to 1 (shown), by the date's
+    /// order among the dates: the icon fades in and its room opens with it,
+    /// so the words after it move gently (owner item 15).
+    private var iconProgress: [CGFloat] = []
+    private var fadeTimer: Timer?
+    private var fadeStart: Date?
+    private var fadeFrom: [CGFloat] = []
 
     override init(frame: NSRect) {
         let storage = NSTextStorage()
@@ -341,26 +371,90 @@ final class AtticTokenFieldView: NSView {
         textView.font = newStyle.font
         textView.insertionPointColor = newStyle.caret
         textView.typingAttributes = [.font: newStyle.font, .foregroundColor: newStyle.text]
-        layoutManager.chipFill = newStyle.chipFill
+        layoutManager.iconColor = newStyle.piece
         restyle()
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
 
-    func setChips(_ newChips: [NSRange]) {
+    func setChips(_ newChips: [AtticTokenChip]) {
         guard newChips != chips else { return }
+        let oldDates = chips.filter { $0.kind == .date }.map(\.range)
+        let newDates = newChips.filter { $0.kind == .date }.map(\.range)
         chips = newChips
+        // A date already shown keeps its icon (moved along by typing
+        // before it); a new one starts from nothing and fades in.
+        let carried: [CGFloat] = newDates.enumerated().map { index, range in
+            if oldDates.count == newDates.count, iconProgress.indices.contains(index) { return iconProgress[index] }
+            if let old = oldDates.firstIndex(of: range), iconProgress.indices.contains(old) { return iconProgress[old] }
+            return 0
+        }
+        iconProgress = carried
+        if style?.reduceMotion == true || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            iconProgress = iconProgress.map { _ in 1 }
+        }
         restyle()
+        if iconProgress.contains(where: { $0 < 1 }) { startFade() }
     }
 
-    /// Chips are attributes, never text: the characters stay exactly as typed.
+    /// The icon's fade and its room opening, together (the popover's short
+    /// motion), ticking at the display's pace until every icon is shown.
+    private func startFade() {
+        fadeFrom = iconProgress
+        fadeStart = Date()
+        guard fadeTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fadeTick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        fadeTimer = timer
+    }
+
+    private func fadeTick() {
+        guard let fadeStart else { stopFade(); return }
+        let t = min(1, Date().timeIntervalSince(fadeStart) / AtticTokenFieldMetrics.iconFade)
+        // Ease out: the room opens quickly, then settles.
+        let eased = CGFloat(1 - pow(1 - t, 3))
+        iconProgress = zip(fadeFrom, iconProgress).map { from, _ in from + (1 - from) * eased }
+        if fadeFrom.count != iconProgress.count { iconProgress = iconProgress.map { _ in CGFloat(eased) } }
+        restyle()
+        if t >= 1 { stopFade() }
+    }
+
+    private func stopFade() {
+        fadeTimer?.invalidate()
+        fadeTimer = nil
+        fadeStart = nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { stopFade() }
+    }
+
+    /// Pieces are attributes, never text: the characters stay exactly as
+    /// typed. A date's icon room is kerning on the character before it (or
+    /// the line's indent at the start), so no character is added.
     private func restyle() {
         guard let style, let storage = textView.textStorage else { return }
         let whole = NSRange(location: 0, length: storage.length)
+        let room = AtticChipLayoutManager.iconRoom
         storage.beginEditing()
         storage.setAttributes([.font: style.font, .foregroundColor: style.text], range: whole)
-        for chip in chips where NSMaxRange(chip) <= storage.length {
-            storage.addAttributes([.foregroundColor: style.chipText, .atticChip: true], range: chip)
+        var dateIndex = 0
+        for chip in chips where NSMaxRange(chip.range) <= storage.length && chip.range.length > 0 {
+            storage.addAttributes([.foregroundColor: chip.kind == .high ? style.high : style.piece, .atticChip: true], range: chip.range)
+            guard chip.kind == .date else { continue }
+            let progress = iconProgress.indices.contains(dateIndex) ? iconProgress[dateIndex] : 1
+            dateIndex += 1
+            storage.addAttribute(.atticDateIcon, value: progress, range: NSRange(location: chip.range.location, length: 1))
+            if chip.range.location > 0 {
+                storage.addAttribute(.kern, value: room * progress, range: NSRange(location: chip.range.location - 1, length: 1))
+            } else {
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.firstLineHeadIndent = room * progress
+                storage.addAttribute(.paragraphStyle, value: paragraph, range: whole)
+            }
         }
         storage.endEditing()
         textView.needsDisplay = true
@@ -368,32 +462,53 @@ final class AtticTokenFieldView: NSView {
 }
 
 extension NSAttributedString.Key {
-    /// Marks a recognised piece of add-bar text, drawn as a chip.
+    /// Marks a recognised piece of add-bar text.
     static let atticChip = NSAttributedString.Key("AtticChip")
+    /// On a date's first character: its calendar icon's progress (0...1).
+    static let atticDateIcon = NSAttributedString.Key("AtticDateIcon")
 }
 
-/// Draws a recessed pill behind every run marked `.atticChip`: the tag
-/// chip's shape (18 tall, the control corner) around the text as typed.
+/// Draws a date's calendar icon in the room kept before it (owner item 15,
+/// option H): decoration, not a character, in the piece's secondary ink,
+/// faded by its progress.
 final class AtticChipLayoutManager: NSLayoutManager {
-    var chipFill: NSColor = .clear
+    var iconColor: NSColor = .secondaryLabelColor
 
-    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
-        storage.enumerateAttribute(.atticChip, in: characters) { value, range, _ in
-            guard value != nil else { return }
-            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            var rect = boundingRect(forGlyphRange: glyphs, in: container)
-            let height = AtticControlSize.tagHeight
-            rect.origin.x += origin.x - AtticTokenFieldMetrics.chipOutset
-            rect.size.width += AtticTokenFieldMetrics.chipOutset * 2
-            rect.origin.y = origin.y + rect.midY - height / 2
-            rect.size.height = height
-            let radius = AtticRadius.control(height: height)
-            chipFill.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        storage.enumerateAttribute(.atticDateIcon, in: characters) { value, range, _ in
+            guard let progress = value as? CGFloat, progress > 0.01 else { return }
+            let glyph = glyphRange(forCharacterRange: NSRange(location: range.location, length: 1), actualCharacterRange: nil)
+            let rect = boundingRect(forGlyphRange: glyph, in: container)
+            guard let image = icon() else { return }
+            let size = image.size
+            let icon = NSRect(x: origin.x + rect.minX - AtticTokenFieldMetrics.dateIconGap - size.width,
+                              y: origin.y + rect.midY - size.height / 2,
+                              width: size.width, height: size.height)
+            image.draw(in: icon, from: .zero, operation: .sourceOver, fraction: progress, respectFlipped: true, hints: nil)
         }
+    }
+
+    private var cachedIcon: (color: NSColor, image: NSImage)?
+
+    private func icon() -> NSImage? {
+        if let cachedIcon, cachedIcon.color == iconColor { return cachedIcon.image }
+        guard let image = Self.calendar(color: iconColor) else { return nil }
+        cachedIcon = (iconColor, image)
+        return image
+    }
+
+    /// The room a date's icon takes before it: the symbol's drawn width
+    /// and its gap.
+    static let iconRoom: CGFloat = ceil(calendar(color: .black)?.size.width ?? AtticTokenFieldMetrics.dateIconSize)
+        + AtticTokenFieldMetrics.dateIconGap
+
+    private static func calendar(color: NSColor) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: AtticTokenFieldMetrics.dateIconSize, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        return NSImage(systemSymbolName: "calendar", accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
     }
 }
 
@@ -534,27 +649,25 @@ final class AtticTokenTextView: NSTextView {
     }
 }
 
-/// The add bar's text with its chips, drawn by SwiftUI (captures and the
-/// gallery): the same pill and colours `AtticChipLayoutManager` draws.
+/// The add bar's text with its pieces, drawn by SwiftUI (captures and the
+/// gallery): the same inks and calendar icon the native field draws.
 struct AtticChipText: View {
     let text: String
-    let chips: [NSRange]
+    let chips: [AtticTokenChip]
     var disabled = false
-
-    @Environment(\.atticDesign) private var design
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                if segment.isChip {
-                    let height = AtticControlSize.tagHeight
-                    AtticText(verbatim: segment.text, style: .listBody, ink: .heading, allowsOverlap: true)
-                        .background(
-                            RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
-                                .fill(design.tokens.selected.color)
-                                .frame(height: height)
-                                .padding(.horizontal, -AtticTokenFieldMetrics.chipOutset)
-                        )
+                if let kind = segment.kind {
+                    let ink: AtticInk = disabled ? .disabledText : (kind == .high ? .priorityMark : .placeholder)
+                    HStack(spacing: AtticTokenFieldMetrics.dateIconGap) {
+                        if kind == .date {
+                            AtticIcon(systemName: "calendar", size: AtticTokenFieldMetrics.dateIconSize, weight: .regular, ink: ink)
+                                .accessibilityHidden(true)
+                        }
+                        AtticText(verbatim: segment.text, style: .listBody, ink: ink, allowsOverlap: true)
+                    }
                 } else if segment.text.allSatisfy(\.isWhitespace) {
                     // Only space: nothing to read, so nothing to check.
                     Text(verbatim: segment.text).font(AtticTextStyle.listBody.font).accessibilityHidden(true)
@@ -566,26 +679,30 @@ struct AtticChipText: View {
         .lineLimit(1)
     }
 
-    private var segments: [(text: String, isChip: Bool)] {
+    private var segments: [(text: String, kind: AtticTokenChip.Kind?)] {
         let string = text as NSString
-        var result: [(String, Bool)] = []
+        var result: [(String, AtticTokenChip.Kind?)] = []
         var location = 0
-        for chip in chips.sorted(by: { $0.location < $1.location }) where chip.location >= location && NSMaxRange(chip) <= string.length {
-            if chip.location > location {
-                result.append((string.substring(with: NSRange(location: location, length: chip.location - location)), false))
+        for chip in chips.sorted(by: { $0.range.location < $1.range.location })
+        where chip.range.location >= location && NSMaxRange(chip.range) <= string.length {
+            if chip.range.location > location {
+                result.append((string.substring(with: NSRange(location: location, length: chip.range.location - location)), nil))
             }
-            result.append((string.substring(with: chip), true))
-            location = NSMaxRange(chip)
+            result.append((string.substring(with: chip.range), chip.kind))
+            location = NSMaxRange(chip.range)
         }
-        if location < string.length { result.append((string.substring(from: location), false)) }
+        if location < string.length { result.append((string.substring(from: location), nil)) }
         return result
     }
 }
 
 enum AtticTokenFieldMetrics {
-    /// A chip reaches this far past its text on each side (into the spaces
-    /// around the word, which are wider).
-    static let chipOutset: CGFloat = 3
     /// The field's height inside the add bar.
     static let height: CGFloat = 20
+    /// A date's calendar icon (option H): the size of a details-line icon
+    /// a step up for the body text, 3 pt before the date's first letter.
+    static let dateIconSize: CGFloat = 11
+    static let dateIconGap: CGFloat = 3
+    /// The icon's fade and its room opening (the popover motion's length).
+    static let iconFade: TimeInterval = 0.18
 }

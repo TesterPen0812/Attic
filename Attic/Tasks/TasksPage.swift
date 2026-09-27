@@ -569,7 +569,7 @@ struct TasksPage: View {
             },
             cancel: { model.cancelEditing(); focusedRow = id },
             tokens: AtticTitleEditing.Tokens(
-                chips: model.titleEdit.chips(parser: model.parser, caret: model.titleEditCaret),
+                chips: model.titleEdit.tokenChips(parser: model.parser, caret: model.titleEditCaret),
                 dismissChip: { range in
                     model.titleHistory.checkpoint(model.titleEdit, selection: model.titleEditCurrentSelection)
                     model.titleEdit.dismiss(range)
@@ -1422,7 +1422,7 @@ private struct TasksAddBar: View {
                 placeholder: model.addPlaceholder,
                 text: $text.text.text,
                 tokens: AtticAddBar.Tokens(
-                    chips: text.text.chips(parser: model.parser, caret: text.caret),
+                    chips: text.text.tokenChips(parser: model.parser, caret: text.caret),
                     isFocused: $isFocused,
                     actions: AtticTokenFieldActions(
                         submit: { command in submit(openingPage: command) },

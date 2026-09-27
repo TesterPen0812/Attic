@@ -211,11 +211,14 @@ private struct BoardHeading: View {
 // MARK: - Sample data
 
 enum AtticGallerySamples {
-    /// "Call mom fri #family !!": the date, the tag and the priority as chips.
+    /// "Call mom fri #family !!": the date (with its calendar), the tag and
+    /// High's mark as recognised pieces.
     @MainActor
     static var chipTokens: AtticAddBar.Tokens {
         AtticAddBar.Tokens(
-            chips: [NSRange(location: 9, length: 3), NSRange(location: 13, length: 7), NSRange(location: 21, length: 2)],
+            chips: [AtticTokenChip(range: NSRange(location: 9, length: 3), kind: .date),
+                    AtticTokenChip(range: NSRange(location: 13, length: 7)),
+                    AtticTokenChip(range: NSRange(location: 21, length: 2), kind: .high)],
             isFocused: .constant(false),
             actions: AtticTokenFieldActions(submit: { _ in }, dismissChip: { _ in }, multilinePaste: { _ in false },
                                             escape: { false },
@@ -559,7 +562,7 @@ private struct AddBarBoard: View {
             AtticSpecimen("Later page", fullWidth: true) {
                 AtticAddBar(placeholder: "Add to later", text: .constant(""), onSubmit: demo.record("Add")).padding(.horizontal, 12)
             }
-            AtticSpecimen("Recognised pieces become chips (Phase 1)", fullWidth: true) {
+            AtticSpecimen("Recognised pieces turn secondary; a date gets its calendar", fullWidth: true) {
                 AtticAddBar(placeholder: "Add a task", text: .constant("Call mom fri #family !!"),
                             tokens: AtticGallerySamples.chipTokens, onSubmit: demo.record("Add"))
                     .padding(.horizontal, 12)

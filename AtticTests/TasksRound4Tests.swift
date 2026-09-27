@@ -152,7 +152,7 @@ final class TasksRound4Tests: XCTestCase {
     /// What `updateNSView` does after each change: the chips drawn now.
     private func refreshChips(_ bar: LiveBar) {
         guard var field = liveField else { return }
-        field.chips = model.addBar.chips(parser: model.parser, caret: model.addBarCaret)
+        field.chips = model.addBar.tokenChips(parser: model.parser, caret: model.addBarCaret)
         bar.coordinator.parent = field
     }
 
