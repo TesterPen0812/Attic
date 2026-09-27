@@ -46,6 +46,21 @@ final class PanelSquircleGeometryTests: XCTestCase {
         XCTAssertEqual(panel.accessibilityFrame(), visible)
     }
 
+    /// At a top corner the surface sits 12 pt under the menu bar, like the
+    /// side edge: AppKit must not push the frame down because its
+    /// transparent margin crosses the menu bar.
+    @MainActor
+    func testTheShadowMarginMayCrossTheMenuBar() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let panel = AtticPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        panel.surfaceMargin = AtticStyle.panelElevationMargin
+        let visible = CGRect(x: screen.visibleFrame.maxX - 332, y: screen.visibleFrame.maxY - 12 - 464, width: 320, height: 464)
+        let native = panel.nativeFrame(forVisibleFrame: visible)
+        XCTAssertGreaterThan(native.maxY, screen.visibleFrame.maxY, "the margin reaches past the work area")
+        XCTAssertEqual(panel.constrainFrameRect(native, to: screen), native)
+    }
+
     @MainActor
     func testSurfaceMarginWidensTheNativeFrameWithoutMovingTheVisibleSurface() {
         let visible = CGRect(x: 100, y: 200, width: 480, height: 620)

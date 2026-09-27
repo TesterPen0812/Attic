@@ -60,6 +60,16 @@ final class AtticPanel: NSPanel {
         setFrame(nativeFrame(forVisibleFrame: frame), display: display)
     }
 
+    /// The visible surface is always placed inside the work area
+    /// (`PanelGeometry`), 12 pt from its edges. AppKit would push a window
+    /// whose frame crosses the menu bar down, which moved the surface as far
+    /// below the menu bar as its transparent shadow margin (28 pt) at the
+    /// top corners while it sat 12 pt from the side. Only the click-through
+    /// margin crosses, so the frame is kept as placed.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
