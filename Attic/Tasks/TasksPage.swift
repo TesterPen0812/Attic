@@ -353,7 +353,7 @@ struct TasksPage: View {
             return AtticTaskActions(
                 toggleDone: { model.toggleDone(id) },
                 openPage: { toggleDetails(id) },
-                restoreToNow: { model.targets(for: id).forEach(model.restoreToNow) },
+                restoreToNow: { model.targets(for: id).forEach { model.restoreToNow($0) } },
                 names: .init(openPage: detailsActionName(for: id))
             )
         }
@@ -406,7 +406,8 @@ struct TasksPage: View {
         let visible = visibleIDs()
         let next = visible.first { !ids.contains($0) && (visible.firstIndex(of: $0) ?? 0) > (ids.compactMap { visible.firstIndex(of: $0) }.max() ?? 0) }
             ?? visible.last { !ids.contains($0) }
-        model.delete(ids)
+        // Focus moves only once the delete saved (Astra 6).
+        guard model.delete(ids).isApplied else { return }
         focusedRow = next
         if let next { model.selectOnly(next) }
     }
@@ -491,8 +492,18 @@ struct TasksPage: View {
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
         let modifiers = press.modifiers.intersection([.command, .shift, .option, .control])
         if press.key == KeyEquivalent("z") || press.characters.lowercased() == "z" {
-            if modifiers == .command { model.undo(); return .handled }
-            if modifiers == [.command, .shift] { model.redo(); return .handled }
+            // ⌘Z undoes the typing in the field being edited first (a title,
+            // a new subtask, the search), then the Tasks history (Astra 23).
+            // The add bar's field does the same itself.
+            let editor = NSApp.keyWindow?.firstResponder as? NSTextView
+            if modifiers == .command {
+                if let manager = editor?.undoManager, manager.canUndo { manager.undo() } else { model.undo() }
+                return .handled
+            }
+            if modifiers == [.command, .shift] {
+                if let manager = editor?.undoManager, manager.canRedo { manager.redo() } else { model.redo() }
+                return .handled
+            }
         }
         guard model.editingTitleID == nil, model.newSubtaskParentID == nil, !addBarFocused else { return .ignored }
         let visible = visibleIDs()

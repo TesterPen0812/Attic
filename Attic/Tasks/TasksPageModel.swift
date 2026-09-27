@@ -129,13 +129,6 @@ final class TasksPageModel: ObservableObject {
     /// Whether Now's "Completed today" shows its rows (remembered for the
     /// session: the model lives as long as the panel).
     @Published var completedTodayExpanded = false
-    /// What a task was before the circle finished it, so un-completing
-    /// puts it back (in progress, or Later); to do when unknown.
-    private var statusBeforeDone: [UUID: TaskStatus] = [:]
-    /// The undo step each completion recorded: un-completing while that is
-    /// still the latest step undoes it, so the task returns exactly where
-    /// it was (its place, its subtasks).
-    private var completionSteps: [UUID: UUID] = [:]
     /// Search (the menu-bar item) asked for the Done page's search field;
     /// the page puts the keyboard there and clears it.
     @Published var pendingSearchFocus = false
@@ -555,23 +548,23 @@ final class TasksPageModel: ObservableObject {
     /// The circle's click and Space (Direction A: one-click completion):
     /// an open task (to do, in progress or Later) is done; a done task goes
     /// back to what it was.
-    func toggleDone(_ id: UUID) {
-        guard let task = store.listedTask(withID: id) else { return }
-        if task.status == .done { reopen(id) } else { complete(id) }
+    @discardableResult
+    func toggleDone(_ id: UUID) -> CommandOutcome {
+        guard let task = store.listedTask(withID: id) else { return .failed(.taskGone) }
+        return task.status == .done ? reopen(id) : complete(id)
     }
 
     /// The right-click menu on several tasks: all done, or (when all are
-    /// done already) all back.
-    func toggleDone(_ ids: [UUID]) {
+    /// done already) all back, each as one step.
+    @discardableResult
+    func toggleDone(_ ids: [UUID]) -> CommandOutcome {
         let tasks = ids.compactMap { store.listedTask(withID: $0) }
         if !tasks.isEmpty, tasks.allSatisfy({ $0.status == .done }) {
-            tasks.forEach { reopen($0.id) }
+            return tasks.count == 1 ? reopen(tasks[0].id) : library.reopenTasks(tasks.map(\.id))
         } else if ids.count == 1 {
-            complete(ids[0])
+            return complete(ids[0])
         } else {
-            let open = tasks.filter { $0.status != .done }
-            for task in open { statusBeforeDone[task.id] = task.status }
-            library.updateTasks(open.map(\.id), status: .done)
+            return library.updateTasks(tasks.filter { $0.status != .done }.map(\.id), status: .done)
         }
     }
 
@@ -585,35 +578,39 @@ final class TasksPageModel: ObservableObject {
     }
 
     /// Done in one step, with any open subtasks. The row holds its place
-    /// for about a second, then slides into "Completed today".
-    func complete(_ id: UUID) {
-        guard let task = store.task(withID: id), task.status != .done else { return }
-        let before = task.status
+    /// for about a second, then slides into "Completed today". The store
+    /// records where the task was finished from, in the same save.
+    @discardableResult
+    func complete(_ id: UUID) -> CommandOutcome {
+        guard let task = store.task(withID: id) else { return .failed(.taskGone) }
+        guard task.status != .done else { return .applied }
         let holdTab: TasksTab? = tab == .done ? nil : tab
         let index = holdTab.flatMap { holdTab in rows(for: holdTab).firstIndex { $0.id == id } }
-        guard library.completeTask(id) else { return }
-        statusBeforeDone[id] = before
-        completionSteps[id] = library.undo.undoStepID(in: .tasks)
-        if let holdTab, let index { hold(id, tab: holdTab, at: index) }
+        let outcome = library.completeTask(id)
+        if outcome.isApplied, let holdTab, let index { hold(id, tab: holdTab, at: index) }
+        return outcome
     }
 
-    /// A done task back to what it was before the circle finished it. Right
-    /// after finishing (the completion is still the latest step), that step
-    /// is undone, so the task keeps its place and its subtasks their state;
-    /// later it goes back to its earlier state (to do when unknown).
-    func reopen(_ id: UUID) {
-        let previous = statusBeforeDone.removeValue(forKey: id) ?? .todo
-        let step = completionSteps.removeValue(forKey: id)
-        cancelHold(id)
-        if let step, library.undo.undoStepID(in: .tasks) == step, store.task(withID: id)?.status == .done {
-            _ = library.undo.undo(in: .tasks)
-            return
+    /// A done task back to what it was before the circle finished it
+    /// (Astra 20): the state and place the store recorded when it was
+    /// finished, with the subtasks finished along with it, whatever the undo
+    /// history holds and across relaunches (to do when unknown). A Done log
+    /// task comes back with its family.
+    @discardableResult
+    func reopen(_ id: UUID) -> CommandOutcome {
+        let outcome = library.reopenTasks([id])
+        if outcome.isApplied {
+            cancelHold(id)
+            reloadDoneLogAfterChange()
         }
-        if previous != .todo, store.task(withID: id)?.status == .done {
-            library.updateTask(id, status: previous, allowingUnfinishedSubtasks: true)
-        } else {
-            restoreToNow(id)
-        }
+        return outcome
+    }
+
+    /// The Done log's loaded pages after a task left it.
+    private func reloadDoneLogAfterChange() {
+        guard doneLogQuery != nil else { return }
+        doneLogRevision = nil
+        loadDoneLogIfNeeded()
     }
 
     private func cancelHold(_ id: UUID) {
@@ -679,7 +676,7 @@ final class TasksPageModel: ObservableObject {
         let succeeded = movable.count == 1
             ? library.updateTask(movable[0], status: .backlog, allowingUnfinishedSubtasks: true)
             : library.updateTasks(movable, status: .backlog)
-        guard succeeded else { return }
+        guard succeeded.isApplied else { return }
         selection.subtract(movable)
         showToast(movable.count == 1 ? String(localized: "Moved to Later") : String(localized: "Moved \(movable.count) tasks to Later"))
     }
@@ -691,25 +688,32 @@ final class TasksPageModel: ObservableObject {
         let succeeded = movable.count == 1
             ? library.updateTask(movable[0], status: .todo)
             : library.updateTasks(movable, status: .todo)
-        guard succeeded else { return }
+        guard succeeded.isApplied else { return }
         selection.subtract(movable)
         showToast(movable.count == 1 ? String(localized: "Moved to Now") : String(localized: "Moved \(movable.count) tasks to Now"))
     }
 
     /// A finished task (today's or the Done log's) back to Now as to do.
-    func restoreToNow(_ id: UUID) {
-        guard library.restoreToNow(id) else { return }
+    @discardableResult
+    func restoreToNow(_ id: UUID) -> CommandOutcome {
+        let outcome = library.restoreToNow(id)
+        guard outcome.isApplied else { return outcome }
         if tab == .done { showToast(String(localized: "Restored to Now")) }
         doneLogRevision = nil
         loadDoneLogIfNeeded()
+        return outcome
     }
 
     /// Delete: to Recently Deleted, with the Undo toast (6 s; ⌘Z works too).
-    func delete(_ ids: [UUID]) {
+    /// Selection, the quick look and the toast change only once the delete
+    /// saved; the caller moves focus only then (Astra 6).
+    @discardableResult
+    func delete(_ ids: [UUID]) -> CommandOutcome {
         let live = ids.filter { store.task(withID: $0) != nil }
-        guard !live.isEmpty else { return }
+        guard !live.isEmpty else { return .failed(.taskGone) }
         let title = live.count == 1 ? store.task(withID: live[0])?.title : nil
-        guard library.deleteTasks(live) else { return }
+        let outcome = library.deleteTasks(live)
+        guard outcome.isApplied else { return outcome }
         selection.subtract(live)
         expanded.subtract(live)
         if let title {
@@ -717,24 +721,30 @@ final class TasksPageModel: ObservableObject {
         } else {
             showToast(String(localized: "Deleted \(live.count) tasks"))
         }
+        return outcome
     }
 
     // MARK: - Order
 
-    /// ⌘↑ ⌘↓: one place up or down within the task's group.
-    func moveBy(_ id: UUID, offset: Int) {
-        guard let task = store.task(withID: id) else { return }
+    /// ⌘↑ ⌘↓: one place up or down within the task's group. At either end
+    /// of the group nothing moves (`.applied`: nothing needed to change).
+    @discardableResult
+    func moveBy(_ id: UUID, offset: Int) -> CommandOutcome {
+        guard let task = store.task(withID: id) else { return .failed(.taskGone) }
         let group = store.orderGroup(of: task)
-        guard let index = group.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = group.firstIndex(where: { $0.id == id }) else { return .failed(.taskGone) }
         let destination = index + offset
-        guard group.indices.contains(destination) else { return }
+        guard group.indices.contains(destination) else { return .applied }
+        var outcome = CommandOutcome.applied
         withAnimation(AtticMotionPreset.settle.animation(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) {
-            _ = library.moveTask(id, toIndex: destination)
+            outcome = library.moveTask(id, toIndex: destination)
         }
+        return outcome
     }
 
     /// A drag reorder: the row lands at `index` within its group.
-    func move(_ id: UUID, toGroupIndex index: Int) {
+    @discardableResult
+    func move(_ id: UUID, toGroupIndex index: Int) -> CommandOutcome {
         library.moveTask(id, toIndex: index)
     }
 
@@ -759,7 +769,7 @@ final class TasksPageModel: ObservableObject {
             clearFailure(.title(id))
             return true
         }
-        guard library.updateTask(id, title: title) else {
+        guard library.updateTask(id, title: title).isApplied else {
             failedSave = .title(id)
             return false
         }
@@ -819,9 +829,13 @@ final class TasksPageModel: ObservableObject {
         return true
     }
 
-    func toggleSubtask(_ id: UUID) {
-        guard let task = store.task(withID: id) else { return }
-        library.updateTask(id, status: task.status == .done ? .todo : .done)
+    /// A subtask's box in the quick look. The outcome carries the store's
+    /// reason on failure, also for failures the store files under the
+    /// family (Astra 6): the quick look shows it where the box is.
+    @discardableResult
+    func toggleSubtask(_ id: UUID) -> CommandOutcome {
+        guard let task = store.task(withID: id) else { return .failed(.taskGone) }
+        return library.updateTask(id, status: task.status == .done ? .todo : .done)
     }
 
     // MARK: - Add bar
@@ -887,13 +901,19 @@ final class TasksPageModel: ObservableObject {
 
     // MARK: - Undo and the toast
 
-    func undo() {
-        _ = library.undo.undo(in: .tasks)
-        dismissToast()
+    /// ⌘Z with no text being edited (a field's own typing comes first).
+    /// The toast goes only once the undo applied; a failure is the store's
+    /// notice (Astra 23).
+    @discardableResult
+    func undo() -> CommandOutcome {
+        let outcome = library.undo(in: .tasks)
+        if outcome.isApplied { dismissToast() }
+        return outcome
     }
 
-    func redo() {
-        _ = library.undo.redo(in: .tasks)
+    @discardableResult
+    func redo() -> CommandOutcome {
+        library.redo(in: .tasks)
     }
 
     /// Posts "… · Undo" to the shell's toast host (6 s, held while the
@@ -904,16 +924,24 @@ final class TasksPageModel: ObservableObject {
     func showToast(_ message: String) {
         let step = library.undo.undoStepID(in: .tasks)
         postedToastStep = step
-        postedToastID = toasts.show(message) { [weak self] in
-            guard let self, let step, self.library.undo.undoStepID(in: .tasks) == step else { return }
-            _ = self.library.undo.undo(in: .tasks)
-        }.id
+        postedToastID = toasts.show(message, performing: { [weak self] in
+            // Only the step the toast named: anything newer makes it stale.
+            guard let self, let step, self.library.undo.undoStepID(in: .tasks) == step else { return .applied }
+            let outcome = self.library.undo(in: .tasks)
+            // The toast says it where the Undo was pressed; the same
+            // sentence is not repeated in the panel's notice.
+            if let failure = outcome.failure, self.store.lastErrorMessage == failure.message { self.store.dismissError() }
+            return outcome
+        }).id
     }
 
     /// A change after the toast's step (or an undo of it) makes the toast
     /// stale: it goes.
     private func dismissToastIfSuperseded() {
         guard postedToastID != nil, library.undo.undoStepID(in: .tasks) != postedToastStep else { return }
+        // A failed Undo's message stays until its own button (Retry, which
+        // then finds nothing to do, or OK) or a newer toast.
+        guard toasts.current?.isFailure != true else { return }
         dismissToast()
         postedToastID = nil
     }

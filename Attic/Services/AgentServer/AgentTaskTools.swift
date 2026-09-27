@@ -685,6 +685,14 @@ final class AgentTaskTools {
         }
     }
 
+    /// A library command: its own failure message, whichever family owns
+    /// the store's notice.
+    private func perform(_ change: () throws -> CommandOutcome) throws {
+        if let failure = try change().failure {
+            throw AgentToolError.storeFailure(failure.message)
+        }
+    }
+
     // MARK: - Notes
 
     private func listNotes(_ arguments: [String: Any]) throws -> String {

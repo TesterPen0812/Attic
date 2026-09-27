@@ -23,13 +23,13 @@ final class TasksReviewFixTests: XCTestCase {
         let c = try XCTUnwrap(store.create(title: "C"))
 
         let before = gate.saveCount
-        XCTAssertTrue(library.updateTasks([a.id, b.id], priority: .high))
+        XCTAssertTrue(library.updateTasks([a.id, b.id], priority: .high).isApplied)
         XCTAssertEqual(gate.saveCount, before + 1, "the whole batch is one save")
 
         gate.shouldFail = true
         let steps = library.undo.undoCount(in: .tasks)
-        XCTAssertFalse(library.updateTasks([a.id, b.id, c.id], status: .backlog))
-        XCTAssertFalse(library.updateTasks([a.id, b.id, c.id], status: .done))
+        XCTAssertFalse(library.updateTasks([a.id, b.id, c.id], status: .backlog).isApplied)
+        XCTAssertFalse(library.updateTasks([a.id, b.id, c.id], status: .done).isApplied)
         gate.shouldFail = false
         for id in [a.id, b.id, c.id] {
             XCTAssertTrue(try rows(store.container, id).allSatisfy { $0.status == .todo }, "nothing changed")
