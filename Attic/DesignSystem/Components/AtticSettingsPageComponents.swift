@@ -297,9 +297,12 @@ struct AtticDeletedItemRow: View {
                 AtticText(verbatim: title, style: .groupValue, ink: .body, truncates: true)
                 AtticText(verbatim: detail, style: .groupLabel, ink: .helper, truncates: true)
             }
+            // One element that reads the kind, the title and the detail
+            // ("Deleted today · with 1 subtask"): a value on this group was
+            // not exposed, so VoiceOver never read the detail.
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(kind): \(title)")
-            .accessibilityValue(detail)
+            .accessibilityLabel("\(kind): \(title), \(detail)")
+            .accessibilityAddTraits(.isStaticText)
             Spacer(minLength: AtticSettingsMetrics.rowTrailingMinGap)
             AtticRaisedButton(systemName: nil, title: "Restore", height: m.actionHeight, action: onRestore)
                 .fixedSize()
