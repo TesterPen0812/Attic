@@ -82,6 +82,53 @@ final class AtticPanel: NSPanel {
     /// clearing a selection) and an open menu all see it first. A text view
     /// never passes Esc on here (it has its own completion behaviour), so
     /// the field's owner decides whether Esc leaves it.
+    // MARK: Undo registrations that outlive their text view
+
+    /// Every text view that took the keyboard in this panel, held until its
+    /// typing-undo registrations are removed. The window's undo manager
+    /// keeps its targets unretained: a field torn down with registrations
+    /// left behind made the next ⌘Z (the Edit menu's Undo) message a freed
+    /// object and crash. Holding the view keeps that pointer valid until the
+    /// view has left the panel, when its registrations are removed.
+    private var undoParticipants: [NSTextView] = []
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let changed = super.makeFirstResponder(responder)
+        if let textView = firstResponder as? NSTextView, !undoParticipants.contains(where: { $0 === textView }) {
+            undoParticipants.append(textView)
+        }
+        removeDepartedUndoParticipants()
+        return changed
+    }
+
+    /// Removes the undo registrations of text views that are no longer in
+    /// the panel, and lets them go. Runs on every focus change and before
+    /// any ⌘Z is dispatched (`performKeyEquivalent`, ahead of the menu).
+    func removeDepartedUndoParticipants() {
+        guard !undoParticipants.isEmpty else { return }
+        let manager = undoManager
+        undoParticipants.removeAll { textView in
+            guard textView.window !== self else { return false }
+            manager?.removeAllActions(withTarget: textView)
+            if let storage = textView.textStorage { manager?.removeAllActions(withTarget: storage) }
+            if let own = textView.undoManager, own !== manager {
+                own.removeAllActions(withTarget: textView)
+                if let storage = textView.textStorage { own.removeAllActions(withTarget: storage) }
+            }
+            return true
+        }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if Self.isUndoKey(event) { removeDepartedUndoParticipants() }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    static func isUndoKey(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        return event.charactersIgnoringModifiers?.lowercased() == "z" && (flags == .command || flags == [.command, .shift])
+    }
+
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53,
            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
@@ -89,10 +136,8 @@ final class AtticPanel: NSPanel {
             onUnhandledEscape?()
             return
         }
-        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if event.charactersIgnoringModifiers?.lowercased() == "z", flags == .command || flags == [.command, .shift],
-           !(firstResponder is NSTextView), let onUnhandledUndo {
-            onUnhandledUndo(flags.contains(.shift))
+        if Self.isUndoKey(event), !(firstResponder is NSTextView), let onUnhandledUndo {
+            onUnhandledUndo(event.modifierFlags.contains(.shift))
             return
         }
         super.keyDown(with: event)

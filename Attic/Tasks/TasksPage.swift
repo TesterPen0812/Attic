@@ -492,18 +492,13 @@ struct TasksPage: View {
     private func pageKey(_ press: KeyPress) -> KeyPress.Result {
         let modifiers = press.modifiers.intersection([.command, .shift, .option, .control])
         if press.key == KeyEquivalent("z") || press.characters.lowercased() == "z" {
-            // ⌘Z undoes the typing in the field being edited first (a title,
-            // a new subtask, the search), then the Tasks history (Astra 23).
-            // The add bar's field does the same itself.
-            let editor = NSApp.keyWindow?.firstResponder as? NSTextView
-            if modifiers == .command {
-                if let manager = editor?.undoManager, manager.canUndo { manager.undo() } else { model.undo() }
-                return .handled
-            }
-            if modifiers == [.command, .shift] {
-                if let manager = editor?.undoManager, manager.canRedo { manager.redo() } else { model.redo() }
-                return .handled
-            }
+            // ⌘Z reaches the page only when the field being edited had
+            // nothing of its own to undo (the Edit menu's Undo, a key
+            // equivalent, takes a field's typing first): the Tasks history
+            // then (Astra 23). The window's undo manager is never called
+            // from here.
+            if modifiers == .command { model.undo(); return .handled }
+            if modifiers == [.command, .shift] { model.redo(); return .handled }
         }
         guard model.editingTitleID == nil, model.newSubtaskParentID == nil, !addBarFocused else { return .ignored }
         let visible = visibleIDs()

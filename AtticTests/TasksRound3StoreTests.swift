@@ -489,4 +489,36 @@ final class PanelUndoKeyTests: XCTestCase {
             XCTAssertEqual(calls.count, 2, "a text view's own undo comes first")
         }
     }
+
+    /// The ⌘Z crash (CU review, 2026-09-27): a field torn down with typing
+    /// registrations left in the window's undo manager. Before any ⌘Z is
+    /// dispatched, the panel removes the registrations of text views that
+    /// have left it; a field still in the panel keeps its own.
+    func testUndoRegistrationsOfATextViewThatLeftThePanelAreRemovedBeforeCommandZ() throws {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 320, height: 520), styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: true)
+        let manager = try XCTUnwrap(panel.undoManager)
+        let staying = NSTextView(frame: CGRect(x: 0, y: 0, width: 100, height: 20))
+        let leaving = NSTextView(frame: CGRect(x: 0, y: 30, width: 100, height: 20))
+        panel.contentView?.addSubview(staying)
+        panel.contentView?.addSubview(leaving)
+        var undone: [String] = []
+        XCTAssertTrue(panel.makeFirstResponder(staying))
+        manager.registerUndo(withTarget: staying) { _ in undone.append("staying") }
+        XCTAssertTrue(panel.makeFirstResponder(leaving))
+        manager.registerUndo(withTarget: leaving) { _ in undone.append("leaving") }
+        let storage = try XCTUnwrap(leaving.textStorage)
+        manager.registerUndo(withTarget: storage) { _ in undone.append("leaving storage") }
+        XCTAssertTrue(panel.makeFirstResponder(nil))
+        leaving.removeFromSuperview()
+
+        let commandZ = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+                                                      windowNumber: panel.windowNumber, context: nil, characters: "z",
+                                                      charactersIgnoringModifiers: "z", isARepeat: false, keyCode: 6))
+        _ = panel.performKeyEquivalent(with: commandZ)
+        XCTAssertTrue(manager.canUndo, "the field still in the panel keeps its registration")
+        manager.undo()
+        XCTAssertEqual(undone, ["staying"], "nothing registered by the field that left is ever invoked")
+        XCTAssertFalse(manager.canUndo)
+    }
 }
