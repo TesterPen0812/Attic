@@ -977,13 +977,16 @@ struct AtticMenuCommand: Identifiable {
     /// The command a key press runs (a subtask's keys, round 10): the
     /// first enabled one whose shortcut is this key with exactly these
     /// modifiers; letters by their character, Backspace however it comes.
+    /// `includingDisabled` finds a disabled command too (a key the list owns
+    /// even when it cannot run now).
     static func command(key: KeyEquivalent, characters: String, modifiers: EventModifiers,
-                        in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+                        in commands: [AtticMenuCommand], includingDisabled: Bool = false) -> AtticMenuCommand? {
         let relevant = modifiers.intersection([.command, .shift, .option, .control])
         let deletes: Set<Character> = [KeyEquivalent.delete.character, KeyEquivalent.deleteForward.character, "\u{7F}", "\u{8}", "\u{F728}"]
         for command in commands {
-            if let found = Self.command(key: key, characters: characters, modifiers: modifiers, in: command.children) { return found }
-            guard !command.isDisabled, !command.isHeader, command.children.isEmpty, let shortcut = command.shortcut,
+            if let found = Self.command(key: key, characters: characters, modifiers: modifiers,
+                                        in: command.children, includingDisabled: includingDisabled) { return found }
+            guard includingDisabled || !command.isDisabled, !command.isHeader, command.children.isEmpty, let shortcut = command.shortcut,
                   shortcut.modifiers == relevant else { continue }
             if shortcut.key == .delete {
                 if deletes.contains(key.character) || characters.first.map(deletes.contains) == true { return command }
@@ -994,6 +997,18 @@ struct AtticMenuCommand: Identifiable {
             }
         }
         return nil
+    }
+
+    /// A subtask's key press (round 10b): runs the command the key names
+    /// and takes the key. A command that is disabled right now (Move Up on
+    /// the first subtask) still takes its key and does nothing, so the key
+    /// never falls through to the list and moves the main task instead.
+    static func performSubtaskKey(key: KeyEquivalent, characters: String, modifiers: EventModifiers,
+                                  in commands: [AtticMenuCommand]) -> KeyPress.Result {
+        guard let command = command(key: key, characters: characters, modifiers: modifiers,
+                                    in: commands, includingDisabled: true) else { return .ignored }
+        if !command.isDisabled { command.action() }
+        return .handled
     }
 
     /// Every title, submenus included (tests read what a menu offers).

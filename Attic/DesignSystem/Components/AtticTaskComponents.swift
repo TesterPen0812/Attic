@@ -1634,6 +1634,9 @@ struct AtticSubtaskRow: View {
     var commands: [AtticMenuCommand] = []
     /// Its title being edited in place (Return, or Rename).
     var renaming: AtticTitleEditing? = nil
+    /// Told when the line gains or loses the keyboard (round 10b), so the
+    /// page knows a shortcut is not about the main task.
+    var onFocusChange: (Bool) -> Void = { _ in }
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
@@ -1668,6 +1671,8 @@ struct AtticSubtaskRow: View {
         }
         .contentShape(Rectangle())
         .modifier(AtticSubtaskCommands(commands: managed && renaming == nil ? commands : [], focused: $focused))
+        .onChange(of: focused) { _, now in onFocusChange(now) }
+        .onDisappear { if focused { onFocusChange(false) } }
         .accessibilityElement(children: renaming == nil ? .combine : .contain)
         .accessibilityLabel(subtask.title)
         .accessibilityValue(subtask.isDone ? String(localized: "done") : String(localized: "to do"))
@@ -1701,11 +1706,9 @@ private struct AtticSubtaskCommands: ViewModifier {
                 // its own click).
                 .onTapGesture { focused.wrappedValue = true }
                 .onKeyPress(phases: .down) { press in
-                    guard !AtticTextInput.hasKeyboard,
-                          let command = AtticMenuCommand.command(key: press.key, characters: press.characters,
-                                                                 modifiers: press.modifiers, in: commands) else { return .ignored }
-                    command.action()
-                    return .handled
+                    guard !AtticTextInput.hasKeyboard else { return .ignored }
+                    return AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
+                                                              modifiers: press.modifiers, in: commands)
                 }
                 .contextMenu { AtticMenuItems(commands: commands) }
         }
@@ -1722,6 +1725,8 @@ struct AtticQuickLook: View {
     /// Each subtask's commands (round 10: rename, delete, reorder); none
     /// draws plain lines (captures).
     var commands: (AtticSubtaskModel) -> [AtticMenuCommand] = { _ in [] }
+    /// A subtask line gained (true) or lost (false) the keyboard.
+    var onFocusChange: (UUID, Bool) -> Void = { _, _ in }
     /// The subtask whose title is being edited in place.
     var renaming: (id: UUID, editing: AtticTitleEditing)? = nil
     /// While a subtask is being written (Phase 1): an unticked box and the
@@ -1736,7 +1741,8 @@ struct AtticQuickLook: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(subtasks) { subtask in
                 AtticSubtaskRow(subtask: subtask, onToggle: { onToggle(subtask) }, commands: commands(subtask),
-                                renaming: renaming?.id == subtask.id ? renaming?.editing : nil)
+                                renaming: renaming?.id == subtask.id ? renaming?.editing : nil,
+                                onFocusChange: { onFocusChange(subtask.id, $0) })
             }
             if let newSubtask, capture == nil {
                 HStack(spacing: AtticSubtaskMetrics.titleGap) {

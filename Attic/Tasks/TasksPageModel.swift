@@ -196,6 +196,9 @@ final class TasksPageModel: ObservableObject {
     @Published var renamingSubtaskID: UUID?
     @Published var subtaskRename = ""
     @Published var subtaskRenameFailed = false
+    /// The subtask line that has the keyboard (round 10b). Not published: it
+    /// only steers which row a shortcut targets, and never redraws.
+    var focusedSubtaskID: UUID?
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: HeldPlace] = [:]
@@ -888,6 +891,14 @@ final class TasksPageModel: ObservableObject {
     /// the row is part of a multi-selection, otherwise the row.
     func targets(for id: UUID) -> [UUID] {
         selection.count > 1 && selection.contains(id) ? orderedSelection() : [id]
+    }
+
+    /// The row ⌘C, ⌘D and ⇧⌘I act on: the focused row, else the first
+    /// selected. While a subtask line has the keyboard there is none (round
+    /// 10b): the parent is selected, but the key is not about it.
+    func shortcutRow(focusedRow: UUID?, visible: Set<UUID>) -> UUID? {
+        guard focusedSubtaskID == nil else { return nil }
+        return (focusedRow ?? orderedSelection().first).flatMap { visible.contains($0) ? $0 : nil }
     }
 
     func orderedSelection() -> [UUID] {

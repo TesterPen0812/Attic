@@ -497,9 +497,7 @@ struct TasksPage: View {
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
         }) else { return false }
-        let visible = visibleIDs()
-        let current = (focusedRow ?? model.orderedSelection().first).flatMap { visible.contains($0) ? $0 : nil }
-        guard let current else { return false }
+        guard let current = model.shortcutRow(focusedRow: focusedRow, visible: Set(visibleIDs())) else { return false }
         // No right-click's binding decides a key's targets.
         pointer.endInvocation()
         if shortcut == AtticTaskShortcut.actions {
@@ -844,6 +842,9 @@ struct TasksPage: View {
                     onAddSubtask: { model.beginAddingSubtask(to: id) },
                     onOpenPage: { model.openPage(id) },
                     commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
+                    onFocusChange: { subtaskID, focused in
+                        if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
+                    },
                     renaming: model.renamingSubtaskID.map { renaming in
                         (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
                                                      cancel: { model.cancelSubtaskRename() },

@@ -413,6 +413,40 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertEqual(AtticMenuCommand.command(key: .delete, characters: "\u{7F}", modifiers: [], in: commands)?.title, "Delete")
     }
 
+    /// Round 10b, finding 2: a disabled subtask command (Move Up on the
+    /// first subtask) still takes its key and does nothing, so the key never
+    /// reaches the list, which would move the selected main task instead.
+    func testADisabledSubtaskCommandTakesItsKeyAndDoesNothing() {
+        var ran: [String] = []
+        let commands: [AtticMenuCommand] = [
+            AtticMenuCommand(verbatim: "Move Up", shortcut: AtticTaskShortcut.moveUp, isDisabled: true) { ran.append("up") },
+            AtticMenuCommand(verbatim: "Move Down", shortcut: AtticTaskShortcut.moveDown) { ran.append("down") }
+        ]
+        XCTAssertEqual(AtticMenuCommand.performSubtaskKey(key: .upArrow, characters: "", modifiers: .command, in: commands), .handled)
+        XCTAssertEqual(ran, [], "a boundary move does nothing")
+        XCTAssertEqual(AtticMenuCommand.performSubtaskKey(key: .downArrow, characters: "", modifiers: .command, in: commands), .handled)
+        XCTAssertEqual(ran, ["down"])
+        XCTAssertEqual(AtticMenuCommand.performSubtaskKey(key: .upArrow, characters: "", modifiers: [], in: commands), .ignored,
+                       "a plain arrow is not a command's key")
+        XCTAssertNil(AtticMenuCommand.command(key: .upArrow, characters: "", modifiers: .command, in: commands),
+                     "menus and VoiceOver still offer only the enabled")
+    }
+
+    /// Round 10b, finding 2: with the main task selected and a subtask line
+    /// holding the keyboard, ⌘C, ⌘D and ⇧⌘I have no target row.
+    func testShortcutsDoNotTargetTheParentWhileASubtaskHasTheKeyboard() throws {
+        let parent = try make("Plan the trip")
+        let child = try make("Book flights", parent: parent.id)
+        model.selectOnly(parent.id)
+        let visible: Set<UUID> = [parent.id]
+        XCTAssertEqual(model.shortcutRow(focusedRow: nil, visible: visible), parent.id, "the selected row, as before")
+        model.focusedSubtaskID = child.id
+        XCTAssertNil(model.shortcutRow(focusedRow: nil, visible: visible))
+        XCTAssertNil(model.shortcutRow(focusedRow: parent.id, visible: visible))
+        model.focusedSubtaskID = nil
+        XCTAssertEqual(model.shortcutRow(focusedRow: nil, visible: visible), parent.id)
+    }
+
     // MARK: - Agent tools
 
     /// `duplicate_task` duplicates as ⌘D does; `delete_task` reaches the
