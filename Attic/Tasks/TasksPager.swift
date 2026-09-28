@@ -62,7 +62,8 @@ final class TasksPagerMotion: ObservableObject {
 
     /// A settle is (probably) still moving: a new swipe then catches the
     /// page with a short spring instead of jumping from where it is heading.
-    private var settlesUntil: TimeInterval = 0
+    /// The settle in progress (the pager's own spring, see `show`).
+    private var driver: Timer?
     private var generation = 0
     /// The pages drawn (the swipe owns it and gives it here).
     weak var span: TasksPagerSpan?
@@ -90,14 +91,10 @@ final class TasksPagerMotion: ObservableObject {
             setSpan(page, page)
             return
         }
-        // A moment later, outside the animation's own turn and with no
-        // animation: pages removed right as a quick release ended left the
-        // page shown drawn where the fingers had it (CI run 2).
+        // A moment later, once the move is surely drawn.
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.restDelay) { [weak self] in
             guard let self, self.generation == ticket else { return }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { self.setSpan(page, page) }
+            self.setSpan(page, page)
         }
     }
 
@@ -120,7 +117,18 @@ final class TasksPagerMotion: ObservableObject {
         #endif
     }()
 
-    var isSettling: Bool { ProcessInfo.processInfo.systemUptime < settlesUntil }
+    /// A settle is moving the page.
+    var isSettling: Bool { driver != nil }
+
+    /// Where the page is heading (its position once a settle ends).
+    private(set) var destination: CGFloat = 0
+
+    /// Stops a settle where it is (a new swipe takes the page from there).
+    func stop() {
+        driver?.invalidate()
+        driver = nil
+        generation &+= 1
+    }
 
     /// A gesture (a swipe or a wheel burst) starts.
     func beginGesture() {
@@ -135,18 +143,15 @@ final class TasksPagerMotion: ObservableObject {
         if switchedAt == nil { switchedAt = ProcessInfo.processInfo.systemUptime }
     }
 
-    /// The page follows the fingers: no animation, unless a settle is still
-    /// moving (then a short spring catches it where it is).
+    /// The page follows the fingers: a plain assignment (see `show`). A
+    /// settle still moving stops where it is; the swipe takes the page from
+    /// there (`TasksPagerSwipe` starts its travel at the page's place).
     func follow(_ target: CGFloat) {
+        if driver != nil { stop() }
         generation &+= 1
         reach = max(reach, abs(target - gestureStart))
-        if isSettling {
-            withAnimation(.interactiveSpring(response: 0.12, dampingFraction: 1)) { position = target }
-        } else {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { position = target }
-        }
+        position = target
+        destination = target
     }
 
     /// Shows `page`: at once (`animated` false, or no width yet), with a
@@ -154,6 +159,10 @@ final class TasksPagerMotion: ObservableObject {
     /// per second toward the page), or with the slide.
     func show(_ page: Int, width: CGFloat, velocity: CGFloat = 0, reduced: Bool, animated: Bool = true) {
         let target = CGFloat(page)
+        if driver != nil, destination == target, animated, !reduced { return }
+        driver?.invalidate()
+        driver = nil
+        destination = target
         guard target != position || fadingOut != nil else {
             generation &+= 1
             rest(on: page, ticket: generation, now: !animated)
@@ -163,34 +172,30 @@ final class TasksPagerMotion: ObservableObject {
         generation &+= 1
         let ticket = generation
         // Every page the move passes is drawn until it ends.
-        setSpan(min(Int(position.rounded(.down)), page), max(Int(position.rounded(.up)), page))
+        // (A sliver under a tenth of a page, a rubber band's, needs none.)
+        setSpan(min(Int((position + 0.15).rounded(.down)), page), max(Int((position - 0.15).rounded(.up)), page))
         reach = max(reach, abs(target - gestureStart))
-        var instant = Transaction()
-        instant.disablesAnimations = true
+        // Changes without an animation are plain assignments: under a
+        // `disablesAnimations` transaction SwiftUI moved what it draws but
+        // left the lists' AppKit scroll views where they were, and the next
+        // animated move never reached them (CI runs 2 and 3).
         guard animated, width > 0 else {
-            withTransaction(instant) {
-                position = target
-                fadingOut = nil
-                fade = 1
-            }
-            settlesUntil = 0
+            position = target
+            fadingOut = nil
+            fade = 1
             rest(on: page, ticket: ticket, now: true)
             settled()
             return
         }
         if reduced {
             let from = Int(position.rounded())
-            withTransaction(instant) {
-                position = target
-                fadingOut = from != page ? from : nil
-                fade = 0
-            }
+            position = target
+            fadingOut = from != page ? from : nil
+            fade = 0
             guard let crossfade = Self.settleOverride.map({ Animation.linear(duration: $0) })
                     ?? AtticMotionPreset.slide.animation(reduceMotion: true) else {
-                withTransaction(instant) {
-                    fadingOut = nil
-                    fade = 1
-                }
+                fadingOut = nil
+                fade = 1
                 rest(on: page, ticket: ticket)
                 settled()
                 return
@@ -200,36 +205,44 @@ final class TasksPagerMotion: ObservableObject {
                 guard let self, self.generation == ticket else { return }
                 withAnimation(crossfade, completionCriteria: .removed) { self.fade = 1 } completion: { [weak self] in
                     guard let self, self.generation == ticket else { return }
-                    withTransaction(instant) { self.fadingOut = nil }
+                    self.fadingOut = nil
                     self.rest(on: page, ticket: ticket)
                     self.settled()
                 }
             }
             return
         }
-        let distance = abs(target - position) * width
-        let animation = Self.settleOverride.map { Animation.linear(duration: $0) }
-            ?? (velocity > 0
-                ? AtticMotionPreset.release(velocity: velocity, distance: distance, reduceMotion: false)
-                : AtticMotionPreset.slide.animation(reduceMotion: false))
-        settlesUntil = ProcessInfo.processInfo.systemUptime + (Self.settleOverride ?? AtticMotionPreset.slide.duration) + 0.05
-        withAnimation(animation, completionCriteria: .removed) {
-            position = target
-            if fadingOut != nil {
-                fadingOut = nil
-                fade = 1
+        // The slide: the pager's own critically damped spring, stepped by a
+        // timer with plain assignments (SwiftUI's animations moved what it
+        // draws but not the lists' AppKit scroll views: the page shown was
+        // left where the fingers had it, CI runs 2 and 3). It starts at the
+        // fingers' speed, capped so it never passes the page.
+        fadingOut = nil
+        fade = 1
+        let duration = Self.settleOverride ?? AtticMotionPreset.slide.duration
+        let spring = TasksPagerSpring(from: position, to: target, speed: width > 0 ? velocity / width : 0,
+                                      duration: duration)
+        let start = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.generation == ticket else {
+                    timer.invalidate()
+                    return
+                }
+                let elapsed = ProcessInfo.processInfo.systemUptime - start
+                if let value = spring.value(at: elapsed) {
+                    self.position = value
+                } else {
+                    timer.invalidate()
+                    self.driver = nil
+                    self.position = target
+                    self.rest(on: page, ticket: ticket)
+                    self.settled()
+                }
             }
-        } completion: { [weak self] in
-            guard let self, self.generation == ticket else { return }
-            self.rest(on: page, ticket: ticket)
-            self.settled()
         }
-        // Should the completion never come (an interrupted animation), the
-        // pages passed still go once the move is long over.
-        let deadline = (Self.settleOverride ?? AtticMotionPreset.slide.duration) + 0.6
-        DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
-            self?.rest(on: page, ticket: ticket)
-        }
+        RunLoop.main.add(timer, forMode: .common)
+        driver = timer
     }
 
     private func settled() {
@@ -247,6 +260,36 @@ final class TasksPagerMotion: ObservableObject {
         nil
         #endif
     }()
+}
+
+/// A critically damped spring from `from` to `to` (pages) over about
+/// `duration`, starting at `speed` pages per second toward `to`, capped
+/// below the speed that would carry it past `to`: it never overshoots.
+struct TasksPagerSpring: Equatable {
+    let from: CGFloat
+    let to: CGFloat
+    let omega: CGFloat
+    let velocity: CGFloat
+
+    init(from: CGFloat, to: CGFloat, speed: CGFloat, duration: Double) {
+        self.from = from
+        self.to = to
+        omega = 2 * .pi / CGFloat(max(duration, 0.01))
+        let offset = from - to
+        // Toward `to` is against the offset; at most 0.9 ω |offset|, where
+        // a critically damped spring would start to pass its target.
+        let limit = 0.9 * omega * abs(offset)
+        let toward = min(max(speed.isFinite ? speed : 0, 0), limit)
+        velocity = offset == 0 ? 0 : (offset > 0 ? -toward : toward)
+    }
+
+    /// The position `time` seconds in, or nil once it has come to rest.
+    func value(at time: TimeInterval) -> CGFloat? {
+        let t = CGFloat(max(time, 0))
+        let offset = from - to
+        let x = (offset + (velocity + omega * offset) * t) * exp(-omega * t)
+        return abs(x) < 0.0005 && t > 0 ? nil : to + x
+    }
 }
 
 /// The pager's pages: those in the span (and always the one shown), each
@@ -502,6 +545,10 @@ final class TasksPagerSwipe {
             }
             axis = .horizontal
             origin = shown
+            // A settle still moving: the swipe takes the page from where it
+            // is, not from where it was heading.
+            travel = width > 0 ? (motion.position - CGFloat(shown)) * width : 0
+            motion.stop()
             motion.beginGesture()
             motion.draw(around: shown)
             return move(sample)

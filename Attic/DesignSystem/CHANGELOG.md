@@ -327,12 +327,10 @@ The look ported, not the code: the design system's surface model now carries Pha
   `doneSlide` 0.2, `failReturn` 0.15. Pages stay firm: `slide` 0.15, `.snappy`'s bounce (about
   2 pt on a 360 pt page), 0.32 s; `pageSwitch` (a crossfade) and `hover` never bounce. Durations
   are at most 0.35 s. Reduce Motion fallbacks are unchanged.
-- **`AtticMotionPreset.release(velocity:distance:reduceMotion:)`**: a page released by a swipe
-  settles with a critically damped spring (never past the page) whose length follows the fingers'
-  speed (`releaseDuration`: about twice the time that speed takes to cover the rest, 0.16 s to the
-  slide's 0.32 s). Owner item 25: no overshoot, no spring-back. An interpolating spring with an
-  initial velocity was tried and dropped: it is additive and left the page drawn where the fingers
-  had it once the view next changed.
+- **Pages settle on the slide's duration, critically damped.** The Tasks pager steps its own
+  spring (`TasksPagerSpring`: 2π / `slide.duration`, no bounce, starting at the fingers' speed and
+  capped so it never passes the page). SwiftUI animations of a page's offset moved what SwiftUI
+  draws but not the lists' AppKit scroll views, so the pager does not use them for travel.
 - **`AtticMotionPreset.exit(reduceMotion:)`**: leaving is a short fade-out with no bounce (the
   Done search's field lets the keyboard go at once).
 - **`transition(reduceMotion:edge:)`** takes `.leading` and `.trailing` too (a sideways move of

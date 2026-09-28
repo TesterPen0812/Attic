@@ -449,28 +449,6 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         }
     }
 
-    /// A page released by a swipe (round 9): a critically damped spring,
-    /// so it never passes the page, whose length follows the fingers'
-    /// speed: a flick lands quickly, a slow release takes the slide's full
-    /// time. `velocity` is in points per second toward the page,
-    /// `distance` the points still to go. (Not an interpolating spring with
-    /// an initial velocity: those add to what runs and left the page drawn
-    /// where the fingers had it once the view next changed, CI run 2.)
-    /// Reduce Motion: the slide's crossfade.
-    static func release(velocity: CGFloat, distance: CGFloat, reduceMotion: Bool) -> Animation? {
-        if reduceMotion { return slide.animation(reduceMotion: true) }
-        return .spring(duration: releaseDuration(velocity: velocity, distance: distance), bounce: 0)
-    }
-
-    /// The release's duration: about twice the time the fingers' speed
-    /// would take to cover the rest, between 0.16 s and the slide's
-    /// duration (tested directly).
-    static func releaseDuration(velocity: CGFloat, distance: CGFloat) -> Double {
-        let longest = slide.duration
-        guard distance > 0.5, velocity.isFinite, velocity > 0 else { return longest }
-        return min(longest, max(0.16, Double(2.2 * distance / velocity)))
-    }
-
     /// How long the finished state holds before `doneSlide` (spec: about 1 s).
     static let doneHold: Double = 1.0
     /// How long the Undo toast stays (spec: 6 s).

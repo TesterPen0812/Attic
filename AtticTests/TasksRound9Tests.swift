@@ -27,7 +27,8 @@ final class TasksRound9Tests: XCTestCase {
     }
 
     private var swipe: TasksPagerSwipe { model.pagerSwipe }
-    private var position: CGFloat { swipe.motion.position }
+    /// Where the page is heading (it settles there with its own spring).
+    private var position: CGFloat { swipe.motion.destination }
 
     /// One trackpad sample, 1/120 s after the last. `dx` is AppKit's
     /// `scrollingDeltaX`: negative moves toward the next page.
@@ -93,15 +94,29 @@ final class TasksRound9Tests: XCTestCase {
         XCTAssertEqual(TasksPagerSwipe.livePage(origin: 0, travel: -0.8, count: 3), 0, "nothing before Now")
     }
 
-    /// A released page never passes the page (a critically damped
-    /// spring); a flick lands sooner than a slow release.
-    func testTheReleaseFollowsTheFingersSpeedWithoutOvershoot() {
-        let slide = AtticMotionPreset.slide.duration
-        XCTAssertEqual(AtticMotionPreset.releaseDuration(velocity: 0, distance: 200), slide, "a slow release: the slide")
-        XCTAssertEqual(AtticMotionPreset.releaseDuration(velocity: 50_000, distance: 200), 0.16, "a hard flick: quick")
-        XCTAssertLessThan(AtticMotionPreset.releaseDuration(velocity: 2_000, distance: 200), slide)
-        XCTAssertEqual(AtticMotionPreset.releaseDuration(velocity: 600, distance: 0), slide, "already there")
-        XCTAssertNotNil(AtticMotionPreset.release(velocity: 600, distance: 200, reduceMotion: false))
+    /// A released page never passes the page: the pager's spring is
+    /// critically damped, starts at the fingers' speed, and caps a flick
+    /// below the speed that would carry it past.
+    func testTheReleaseSpringNeverOvershoots() {
+        let duration = AtticMotionPreset.slide.duration
+        for speed in [CGFloat(0), 2, 20, 500] {
+            let spring = TasksPagerSpring(from: 0.4, to: 1, speed: speed, duration: duration)
+            var time: TimeInterval = 0
+            var last: CGFloat = 0.4
+            while let value = spring.value(at: time) {
+                XCTAssertLessThanOrEqual(value, 1.0001, "speed \(speed): never past the page")
+                XCTAssertGreaterThanOrEqual(value, last - 0.0001, "speed \(speed): never back")
+                last = value
+                time += 1.0 / 120
+                XCTAssertLessThan(time, 3, "it comes to rest")
+                if time > 3 { break }
+            }
+        }
+        let quick = TasksPagerSpring(from: 0.4, to: 1, speed: 20, duration: duration)
+        let slow = TasksPagerSpring(from: 0.4, to: 1, speed: 0, duration: duration)
+        XCTAssertGreaterThan(quick.value(at: 0.05)!, slow.value(at: 0.05)!, "a flick lands sooner")
+        let back = TasksPagerSpring(from: 1.08, to: 1, speed: 0, duration: duration)
+        XCTAssertGreaterThanOrEqual(back.value(at: 0.1)!, 1, "from the rubber band, back without passing")
     }
 
     // MARK: - The gesture, as a trackpad sends it
@@ -322,8 +337,11 @@ final class TasksRound9Tests: XCTestCase {
         for _ in 0..<40 { send(.changed, dx: -30) }
         XCTAssertEqual(model.tab, .backlog, "the tab turned while the fingers were down")
         send(.ended)
-        hosted.spin(1)
-        XCTAssertEqual(hosted.shownPage(), 1, "position \(model.pagerSwipe.motion.position), span \(model.pagerSwipe.span.pages), lists \(hosted.window.contentView.map { hosted.lists(in: $0).map { $0.convert($0.bounds, to: nil) } } ?? [])")
+        // Past the pages' release (0.3 s after the settle), so the page is
+        // checked after the view changed again (CI runs 2 and 3: the list
+        // was left where the fingers had it).
+        hosted.spin(1.5)
+        XCTAssertEqual(hosted.shownPage(), 1, "Later's list sits on the page (position \(model.pagerSwipe.motion.position), lists \(hosted.window.contentView.map { hosted.lists(in: $0).map { $0.convert($0.bounds, to: nil) } } ?? []))")
         hosted.go(to: .done)
         XCTAssertEqual(hosted.shownPage(), 2)
         hosted.go(to: .now)

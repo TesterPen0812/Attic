@@ -224,6 +224,10 @@ final class Hosted {
     func shownPage() -> Int? {
         let position = model.pagerSwipe.motion.position
         guard position == position.rounded(), let content = window.contentView else { return nil }
+        // AppKit views take their SwiftUI place on the next layout pass,
+        // which an off-screen test window does not always run by itself.
+        content.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
         let onPage = lists(in: content).filter { list in
             let frame = list.convert(list.bounds, to: nil)
             return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
