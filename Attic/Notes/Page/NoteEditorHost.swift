@@ -121,7 +121,11 @@ final class NoteTitleAccessories {
         suggestionHost.removeFromSuperview()
         if chrome.accessories === self {
             chrome.accessories = nil
-            chrome.headerTitleProgress = 0
+            // Dismantling runs inside a SwiftUI update: publish afterwards.
+            let chrome = chrome
+            DispatchQueue.main.async {
+                if chrome.accessories == nil { chrome.headerTitleProgress = 0 }
+            }
         }
     }
 

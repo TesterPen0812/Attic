@@ -107,6 +107,8 @@ struct NotesEditorPage: View {
             if case let .success(urls) = result { controller.importImages(urls) }
         }
         .preference(key: PanelPageNoticeClearancePreferenceKey.self, value: noticeClearance)
+        // A group, so its identifier never replaces its controls' own.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-editor-page")
     }
 

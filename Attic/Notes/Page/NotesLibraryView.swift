@@ -39,6 +39,7 @@ struct NotesLibraryView: View {
                 onKeyPress: { press in key(press, groups: groups, selected: selected, inField: true) },
                 onEscapeWhenEmpty: onBack
             )
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("notes-library-search")
             list(groups, selected: selected)
         }
@@ -47,6 +48,7 @@ struct NotesLibraryView: View {
             if model.isSearching { model.clearSearch() } else { onBack() }
         }
         .onKeyPress(phases: .down) { press in key(press, groups: groups, selected: selected, inField: false) }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-library")
     }
 

@@ -829,6 +829,21 @@ private struct TagsBoard: View {
                 }
             }
         }
+        BoardHeading(title: "Notes · the tag line under a title, and suggestions while typing #pri")
+        AtticSpecimen("Tag line, wrapping", fullWidth: true) {
+            AtticNoteTagLine(tags: ["launch-october", "pricing", "website-redesign"]) { _ in }
+                .frame(width: 264, alignment: .leading)
+                .padding(.horizontal, 16)
+        }
+        SpecimenRow {
+            AtticSpecimen("Suggestions") {
+                AtticTagSuggestionList(suggestions: [
+                    AtticTagSuggestion(name: "pricing", count: 6, isNew: false),
+                    AtticTagSuggestion(name: "print-shop", count: 1, isNew: false),
+                    AtticTagSuggestion(name: "pri", count: 0, isNew: true)
+                ], highlighted: 0) { _ in }
+            }
+        }
     }
 }
 
@@ -874,6 +889,58 @@ private struct FeedbackBoard: View {
         }
         AtticSpecimen("Retry hover", fullWidth: true) {
             AtticErrorLine(message: String(localized: "Not saved"), onRetry: demo.record("Retry")).padding(.leading, AtticLayout.textX).atticForcedState(.hover)
+        }
+        BoardHeading(title: "Notes status slot · the most urgent state between the bottom buttons")
+        AtticSpecimen("Not saved, with Retry", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .warning),
+                            inlineAction: AtticStatusItem.Action(title: "Retry", handler: demo.record("Retry")),
+                            onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Several at once", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved", tone: .warning),
+                            more: 2, onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("An agent's proposal", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "proposal", systemName: "sparkle", title: "Claude has changes"),
+                            onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Read only", fullWidth: true) {
+            AtticStatusPill(item: AtticStatusItem(id: "readOnly", systemName: "lock", title: "Read only", tone: .quiet),
+                            onOpen: demo.record("Details"))
+                .padding(.horizontal, 16)
+        }
+        AtticSpecimen("Details", fullWidth: true) {
+            AtticStatusDetails(items: [
+                AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: "Not saved",
+                                explanation: "The disk is full. Every change is in the recovery copy; Attic keeps trying.",
+                                tone: .warning, actions: [.init(title: "Retry", handler: demo.record("Retry")),
+                                                          .init(title: "Copy Text", handler: demo.record("Copy Text"))]),
+                AtticStatusItem(id: "proposal", systemName: "sparkle", title: "Claude has changes",
+                                explanation: "Proposed at 14:10, based on an older version.",
+                                actions: [.init(title: "Review", handler: demo.record("Review"))])
+            ])
+            .background(AtticPopoverBackground())
+            .padding(.horizontal, 16)
+        }
+        BoardHeading(title: "All notes rows · 48 pt, the time never replaced by a status")
+        AtticSpecimen("Rows", fullWidth: true) {
+            VStack(spacing: 0) {
+                AtticNoteRow(model: AtticNoteRowModel(id: UUID(), title: "Pricing page", time: "09:40",
+                                                      preview: "Lead with the free tier. Most people only need the panel.",
+                                                      checklist: (1, 3), images: 1, spoken: "Pricing page"),
+                             isSelected: true, onOpen: demo.record("Open"))
+                AtticNoteRow(model: AtticNoteRowModel(id: UUID(), title: "Groceries", time: "08:15", needsAttention: true,
+                                                      preview: "Oat milk, lemons, rice, coffee beans",
+                                                      checklist: (3, 6), spoken: "Groceries"),
+                             onOpen: demo.record("Open"))
+                AtticNoteRow(model: AtticNoteRowModel(id: UUID(), title: "pricing-v2.pdf", time: "07:50",
+                                                      preview: "1 file", files: 1, spoken: "pricing-v2.pdf"),
+                             onOpen: demo.record("Open"))
+            }
+            .frame(width: 296)
         }
         BoardHeading(title: "Loading · static skeleton, no shimmer")
         AtticSpecimen("List loading", fullWidth: true) { AtticLoadingRows(count: 3) }

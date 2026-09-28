@@ -19,7 +19,7 @@ final class NotesPageUITests: XCTestCase {
         app.activate()
         XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 10))
         app.typeKey("2", modifierFlags: .command)
-        XCTAssertTrue(noteText.waitForExistence(timeout: 10), "the Notes page shows a note")
+        require(noteText, timeout: 10, "the Notes page shows a note")
     }
 
     override func tearDownWithError() throws {
@@ -35,13 +35,22 @@ final class NotesPageUITests: XCTestCase {
                          file: StaticString = #filePath, line: UInt = #line) {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline, !condition() { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        if !condition() { print("NOTES_UI_TREE for '\(message)':\n\(app.debugDescription)") }
         XCTAssertTrue(condition(), message, file: file, line: line)
+    }
+
+    /// Waits for an element; on failure the CI log gets the accessibility tree.
+    private func require(_ element: XCUIElement, timeout: TimeInterval = 5, _ message: String,
+                         file: StaticString = #filePath, line: UInt = #line) {
+        let found = element.waitForExistence(timeout: timeout)
+        if !found { print("NOTES_UI_TREE for '\(message)':\n\(app.debugDescription)") }
+        XCTAssertTrue(found, message, file: file, line: line)
     }
 
     /// A fresh draft with the keyboard in it.
     private func newNote(file: StaticString = #filePath, line: UInt = #line) {
         let button = app.buttons["notes-new-note"]
-        XCTAssertTrue(button.waitForExistence(timeout: 5), file: file, line: line)
+        require(button, "the New note button", file: file, line: line)
         button.click()
         waitFor(noteValue.isEmpty, "a new note starts empty (\(noteValue))", file: file, line: line)
         noteText.click()
@@ -53,9 +62,9 @@ final class NotesPageUITests: XCTestCase {
 
     private func showAllNotes() {
         let allNotes = app.buttons["notes-all-notes"]
-        XCTAssertTrue(allNotes.waitForExistence(timeout: 5))
+        require(allNotes, "the All notes button")
         allNotes.click()
-        XCTAssertTrue(app.descendants(matching: .any)["notes-library"].waitForExistence(timeout: 5), "All notes shows")
+        require(app.descendants(matching: .any)["notes-library"], "All notes shows")
     }
 
     // MARK: Flows
@@ -75,14 +84,14 @@ final class NotesPageUITests: XCTestCase {
         waitFor(noteValue == "Kyoto trip\nBook the ryokan soon", "typing continues where you were (\(noteValue))")
 
         showAllNotes()
-        XCTAssertTrue(row("Kyoto trip").waitForExistence(timeout: 5), "the note is saved and listed")
+        require(row("Kyoto trip"), "the note is saved and listed")
     }
 
     func testAHashtagInTheTitleBecomesATagAndOneUndoBringsItBack() throws {
         newNote()
         app.typeText("Trip #kyoto ")
         let tag = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Tag kyoto")).firstMatch
-        XCTAssertTrue(tag.waitForExistence(timeout: 5), "the tag shows under the title")
+        require(tag, "the tag shows under the title")
         waitFor(noteValue == "Trip ", "the hashtag left the title (\(noteValue))")
 
         app.typeKey("z", modifierFlags: .command)
@@ -95,17 +104,16 @@ final class NotesPageUITests: XCTestCase {
         app.typeText("Delete me\nNot really")
         waitFor(noteValue == "Delete me\nNot really", "typed")
         let menu = app.buttons["notes-menu-button"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 5), "the ⋯ shows on a note with text")
+        require(menu, "the ⋯ shows on a note with text")
         menu.click()
         let delete = app.menuItems["Delete Note"]
-        XCTAssertTrue(delete.waitForExistence(timeout: 5), "the note's menu opens")
+        require(delete, "the note's menu opens")
         delete.click()
 
-        XCTAssertTrue(app.descendants(matching: .any)["notes-library"].waitForExistence(timeout: 5),
-                      "deleting the open note shows All notes")
+        require(app.descendants(matching: .any)["notes-library"], "deleting the open note shows All notes")
         waitFor(!row("Delete me").exists, "the note left the list")
         let undo = app.buttons["Undo"]
-        XCTAssertTrue(undo.waitForExistence(timeout: 5), "the Undo toast shows")
+        require(undo, "the Undo toast shows")
         undo.click()
         waitFor(noteText.exists && noteValue == "Delete me\nNot really", "Undo brings the note back (\(noteValue))")
     }
@@ -120,16 +128,16 @@ final class NotesPageUITests: XCTestCase {
         newNote()
 
         showAllNotes()
-        XCTAssertTrue(row("Groceries").waitForExistence(timeout: 5))
-        XCTAssertTrue(row("Kyoto trip").exists)
+        require(row("Groceries"), "the first note is listed")
+        require(row("Kyoto trip"), "the second note is listed")
         // "Search 2 notes" (the Tasks page's Done search reads "Search done tasks").
         let search = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@",
                                                          "Search", "notes")).firstMatch
-        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        require(search, "the search field")
         search.click()
         search.typeText("temples")
         waitFor(!row("Groceries").exists, "search narrows the list")
-        XCTAssertTrue(row("Kyoto trip").waitForExistence(timeout: 5), "the matching note stays")
+        require(row("Kyoto trip"), "the matching note stays")
         row("Kyoto trip").click()
         waitFor(noteText.exists && noteValue == "Kyoto trip\nTemples", "the note opens (\(noteValue))")
     }

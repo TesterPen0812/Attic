@@ -416,11 +416,10 @@ struct AtticStatusPill: View {
     var body: some View {
         let m = AtticNoteMetrics.self
         let radius = AtticRadius.control(height: m.pillHeight)
-        let ink: AtticInk = switch item.tone {
-        case .warning: .warningText
-        case .normal: .body
-        case .quiet: .helper
-        }
+        // A quiet state (Read only) is said by its glyph; its words keep the
+        // body ink, since the secondary grey falls under 3 : 1 on raised
+        // material in some Dark palettes (the appearance matrix).
+        let ink: AtticInk = item.tone == .warning ? .warningText : .body
         HStack(spacing: m.pillGap) {
             Button(action: onOpen) {
                 HStack(spacing: m.pillGap) {
