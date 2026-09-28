@@ -168,9 +168,8 @@ extension NoteStore {
 
     // MARK: Saving
 
-    /// Creates a note in the new format. `id` is the draft's reserved id; a
-    /// note in Recently Deleted with that id is never revived (a fresh id is
-    /// returned instead).
+    /// Creates a note in the new format. The reserved id must remain stable;
+    /// callers that want a new note supply a new id themselves.
     func createDocumentNote(
         id: UUID,
         document: NoteDocument,
@@ -178,23 +177,19 @@ extension NoteStore {
         prepared: PreparedNoteDocument? = nil
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
         let context = modelContext
-        var resolvedID = id
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
-            if existing.contains(where: { $0.deletedAt != nil }) || existing.contains(where: { !$0.usesDocumentFormat }) {
-                resolvedID = UUID()
-            } else {
-                // A crashed first save may already have committed this ID.
-                // The caller has no revision proving it may replace that row.
-                return .failure(.staleRevision(expected: NoteItem.initialRevisionToken,
-                                               current: canonical(existing)?.revisionToken ?? NoteItem.initialRevisionToken))
-            }
+            if existing.contains(where: { $0.deletedAt != nil }) { return .failure(.noteMissing(id)) }
+            // A crashed first save or a legacy row may already own this ID.
+            // The caller has no revision proving it may replace that row.
+            return .failure(.staleRevision(expected: NoteItem.initialRevisionToken,
+                                           current: canonical(existing)?.revisionToken ?? NoteItem.initialRevisionToken))
         }
         let timestamp = currentDate
-        let note = NoteItem(id: resolvedID, createdAt: timestamp, updatedAt: timestamp)
+        let note = NoteItem(id: id, createdAt: timestamp, updatedAt: timestamp)
         let revisionID: UUID
         do {
             revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: prepared)
-            try stageAttachments(staged, referencedBy: document, noteID: resolvedID, context: context, timestamp: timestamp)
+            try stageAttachments(staged, referencedBy: document, noteID: id, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
             context.rollback()
             return .failure(error)
@@ -208,7 +203,7 @@ extension NoteStore {
         }
         present(note)
         refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
-        return .success((resolvedID, revisionID))
+        return .success((id, revisionID))
     }
 
     /// Saves an editor's document to every replica. When the presented copy

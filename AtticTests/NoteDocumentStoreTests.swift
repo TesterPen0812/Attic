@@ -411,6 +411,20 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(store.note(withID: id)?.revisionID, revision)
     }
 
+    func testReservedDraftIDCannotSilentlyRekeyOverDeletedReplica() throws {
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: document("First")) else {
+            return XCTFail("initial note fixture")
+        }
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        guard case .failure(.noteMissing) = store.createDocumentNote(id: id,
+            document: document("Draft")) else {
+            return XCTFail("reserved ID must report the deleted collision")
+        }
+        XCTAssertNil(store.note(withID: id))
+        XCTAssertTrue(store.notes.isEmpty)
+    }
+
     func testStagedImageRowsCommitOnlyWithTheDocumentThatShowsThem() throws {
         let shown = stagedImage(), undone = stagedImage()
         let doc = NoteDocument(blocks: [.text("Pics"), .image(attachmentID: shown.id)])
