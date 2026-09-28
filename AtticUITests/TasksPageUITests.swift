@@ -286,6 +286,10 @@ final class TasksPageUITests: XCTestCase {
     func testCompletingOnLaterHoldsThenLeaves() throws {
         tab("backlog").click()
         waitFor(row("Try the paper sketch idea").isHittable, "Later lists its tasks")
+        // The page slides in: its rows are hittable before they come to
+        // rest, and a circle's place read mid-slide put the click on the
+        // title (round 10, CI run 2).
+        waitForRest("Try the paper sketch idea")
         circle("Try the paper sketch idea").click()
         waitFor(label("Try the paper sketch idea").contains(", done"), "a click completes it on Later")
         waitFor(!row("Try the paper sketch idea").exists, timeout: 4, "then it leaves Later")
@@ -553,6 +557,18 @@ final class TasksPageUITests: XCTestCase {
     private func openItem(_ title: String) -> XCUIElement {
         let items = app.menuItems.matching(NSPredicate(format: "title == %@", title)).allElementsBoundByIndex
         return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? app.menuItems[title]
+    }
+
+    /// Waits until the row stops moving (a page's slide has ended).
+    private func waitForRest(_ title: String) {
+        var last = row(title).frame
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            let now = row(title).frame
+            if now == last { return }
+            last = now
+        }
     }
 
     /// Rows whose label starts with the title (a title and its copies).

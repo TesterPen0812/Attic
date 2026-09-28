@@ -27,11 +27,16 @@ Options:
   --scheme NAME                Scheme; default Attic.
   --configuration NAME         Configuration; default Local.
   --appearance MODE            Explicit isolated override: system, light, or dark.
+  --optimized                  Keep the Local configuration and its local-only
+                               entitlements, but build optimized (-O, whole
+                               module, no debug dylib, no testability), to
+                               judge feel and speed as a release would.
   --build-only                 Build and emit provenance without launching.
   --verify                     Build and launch nothing: check that exactly one
                                launchd-owned process runs this preview and
-                               that it maps the on-disk executable and debug
-                               dylib, then print that provenance.
+                               that it maps the on-disk executable and, when
+                               the executable loads one, its debug dylib; then
+                               print that provenance.
   --dry-run                    Print resolved settings and build command only.
   --help                       Show this help.
 USAGE
@@ -64,6 +69,7 @@ scheme="Attic"
 configuration="Local"
 appearance=""
 build_only=false
+optimized=false
 verify_only=false
 dry_run=false
 allow_applications_install=false
@@ -131,6 +137,10 @@ while (( $# > 0 )); do
             ;;
         --build-only)
             build_only=true
+            shift
+            ;;
+        --optimized)
+            optimized=true
             shift
             ;;
         --verify)
@@ -257,7 +267,10 @@ verify_preview_process() {
     stub_mapped=$(mapped_identity "$pid" "$executable")
     [[ -n "$stub_mapped" && "$stub_disk" == "$stub_mapped "* ]] \
         || { print -u2 -- "PID $pid maps executable '${stub_mapped:-nothing}', on disk '$stub_disk'"; return 1; }
-    if [[ "$dylib_disk" != absent ]]; then
+    # An optimized build has no debug dylib; one left on disk by an
+    # earlier debug build is not the app's code unless the executable
+    # loads it.
+    if [[ "$dylib_disk" != absent ]] && /usr/bin/otool -L "$executable" 2>/dev/null | /usr/bin/grep -q "${dylib:t}"; then
         dylib_mapped=$(mapped_identity "$pid" "$dylib")
         [[ -n "$dylib_mapped" && "$dylib_disk" == "$dylib_mapped "* ]] \
             || { print -u2 -- "PID $pid maps debug dylib '${dylib_mapped:-nothing}', on disk '$dylib_disk'"; return 1; }
@@ -303,6 +316,15 @@ build_arguments=(
 if [[ -n "$development_team" ]]; then
     build_arguments+=("DEVELOPMENT_TEAM=$development_team")
 fi
+if $optimized; then
+    build_arguments+=(
+        SWIFT_OPTIMIZATION_LEVEL=-O
+        SWIFT_COMPILATION_MODE=wholemodule
+        ENABLE_DEBUG_DYLIB=NO
+        GCC_OPTIMIZATION_LEVEL=s
+        ENABLE_TESTABILITY=NO
+    )
+fi
 
 print_resolved_configuration() {
     print -- "branch=$branch_name"
@@ -315,6 +337,7 @@ print_resolved_configuration() {
     print -- "preview_app=$preview_app"
     print -- "signing_identity=$signing_identity"
     print -- "appearance=${appearance:-unchanged}"
+    print -- "optimized=$optimized"
 }
 
 if $verify_only; then
@@ -364,8 +387,12 @@ executable_hash=$(/usr/bin/shasum -a 256 "$built_executable" | /usr/bin/awk '{pr
     print -- "executable=$built_executable"
     print -- "executable_sha256=$executable_hash"
     print -- "executable_inode_size_sha256=$(file_identity "$built_executable")"
-    print -- "debug_dylib=${built_executable}.debug.dylib"
-    print -- "debug_dylib_inode_size_sha256=$(file_identity "${built_executable}.debug.dylib")"
+    if $optimized; then
+        print -- "debug_dylib=none (optimized)"
+    else
+        print -- "debug_dylib=${built_executable}.debug.dylib"
+        print -- "debug_dylib_inode_size_sha256=$(file_identity "${built_executable}.debug.dylib")"
+    fi
     print -- "entitlements=$entitlements_file"
     print -- "signature=$signature_file"
 } >"$manifest_file"

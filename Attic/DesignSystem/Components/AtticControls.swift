@@ -1161,7 +1161,7 @@ enum AtticNativeMenu {
             item.submenu = make(command.children, title: command.title)
         } else {
             item.target = AtticMenuTarget.shared
-            item.action = #selector(AtticMenuTarget.perform(_:))
+            item.action = #selector(AtticMenuTarget.runCommand(_:))
             item.representedObject = AtticMenuTarget.Box(command.action)
         }
         switch command.state {
@@ -1229,7 +1229,9 @@ final class AtticMenuTarget: NSObject {
         init(_ action: @escaping () -> Void) { self.action = action }
     }
 
-    @objc func perform(_ item: NSMenuItem) {
+    /// Not `perform(_:)`: that is NSObject's `performSelector:`, which the
+    /// selector resolved to, so a chosen item ran nothing (round 10, CI run 2).
+    @objc func runCommand(_ item: NSMenuItem) {
         (item.representedObject as? Box)?.action()
     }
 }

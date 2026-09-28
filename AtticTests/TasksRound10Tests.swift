@@ -363,7 +363,7 @@ final class TasksRound10Tests: XCTestCase {
 
     /// The same list as an `NSMenu`: submenus, ticks and dashes, headings,
     /// key equivalents and details.
-    func testTheNativeMenuShowsWhatTheListSays() {
+    func testTheNativeMenuShowsWhatTheListSays() throws {
         var ran = false
         var tagged = AtticMenuCommand(verbatim: "#home", state: .mixed) {}
         tagged.detail = nil
@@ -391,7 +391,8 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertEqual(menu.items[5].badge?.stringValue, "Tue")
         XCTAssertEqual(menu.items[6].keyEquivalent, "i")
         XCTAssertEqual(menu.items[6].keyEquivalentModifierMask, [.command, .shift])
-        _ = (complete.target as? AtticMenuTarget)?.perform(complete)
+        XCTAssertEqual(complete.action, #selector(AtticMenuTarget.runCommand(_:)))
+        NSApp.sendAction(try XCTUnwrap(complete.action), to: complete.target, from: complete)
         XCTAssertTrue(ran, "an item runs its command")
     }
 
