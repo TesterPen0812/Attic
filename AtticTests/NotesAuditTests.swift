@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftData
 import SwiftUI
 import XCTest
@@ -284,5 +285,175 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(route.undoCount(in: .notesLibrary), 1)
         XCTAssertEqual(route.undoCount(in: .note(a)), 0)
         XCTAssertEqual(route.undoCount(in: .tasks), 0)
+    }
+
+    // MARK: 17. Save Recovery Copy…
+
+    private final class DeadJournal: NoteDraftJournaling {
+        struct Failure: Error {}
+        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws { throw Failure() }
+        func remove(noteID: UUID) throws {}
+        func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { [] }
+    }
+
+    private func pixel(_ name: String = "pixel.png") throws -> StagedNoteAttachment {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+                                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                                   bytesPerRow: 0, bitsPerPixel: 0))
+        bitmap.setColor(.red, atX: 0, y: 0)
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        return StagedNoteAttachment(id: UUID(), filename: name, contentTypeIdentifier: "public.png",
+                                    byteCount: Int64(bytes.count), digest: digest, data: bytes)
+    }
+
+    /// A note that is only in memory: typed text and an image, the store
+    /// refusing the save and the recovery journal dead.
+    private func onlyInMemoryNote(image: StagedNoteAttachment? = nil) throws -> (NotesPageController, NoteSession) {
+        let controller = NotesPageController(store: store, journal: DeadJournal(), defaults: defaults,
+                                             saveDelay: .seconds(60), pauseVersionDelay: .seconds(600))
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        let engine = session.engine
+        engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Groceries"), name: "Typing")
+        if let image { XCTAssertTrue(engine.insertImage(image, pixelSize: CGSize(width: 2, height: 2))) }
+        gate.shouldFail = true
+        XCTAssertFalse(controller.newNote(), "both saves fail, so the note cannot be left")
+        guard case .onlyInMemory = session.state else { throw NSError(domain: "state", code: 1) }
+        return (controller, session)
+    }
+
+    private func scratchURL(_ name: String) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent(name)
+    }
+
+    func testARecoveryCopyKeepsTheStructureTheTextAndTheImagesInAReopenableFolder() async throws {
+        let image = try pixel()
+        let (controller, session) = try onlyInMemoryNote(image: image)
+        let expected = session.engine.document()
+        let target = try scratchURL("Groceries recovery copy")
+        var suggested: String?
+        controller.recoveryCopyDestination = { name in suggested = name; return target }
+
+        let saved = await controller.saveRecoveryCopy()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(suggested, "Groceries recovery copy")
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: target.path).sorted()
+        XCTAssertEqual(files, ["README.txt", "attachments", "manifest.json", "note.json", "note.md"])
+        // The structure: decoding note.json gives back the very document.
+        let noteJSON = try Data(contentsOf: target.appendingPathComponent("note.json"))
+        guard case let .editable(decoded) = NoteContentCodec.decode(noteJSON) else { return XCTFail("note.json must decode") }
+        XCTAssertEqual(decoded, expected)
+        // The images: the original bytes, found through the manifest.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(NoteRecoveryCopy.Manifest.self,
+                                          from: Data(contentsOf: target.appendingPathComponent("manifest.json")))
+        XCTAssertEqual(manifest.noteID, session.noteID)
+        XCTAssertEqual(manifest.format, NoteRecoveryCopy.formatName)
+        XCTAssertEqual(manifest.images.map(\.id), [image.id])
+        XCTAssertEqual(manifest.images.first?.digest, image.digest)
+        XCTAssertEqual(manifest.unavailableImageIDs, [])
+        let file = try XCTUnwrap(manifest.images.first?.file)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent(file)), image.data)
+        XCTAssertEqual(Set(decoded.attachmentIDs), Set(manifest.images.map(\.id)), "every image note.json shows is in the folder")
+        // Readable anywhere.
+        let markdown = try String(contentsOf: target.appendingPathComponent("note.md"), encoding: .utf8)
+        XCTAssertTrue(markdown.contains("# Groceries"))
+        XCTAssertTrue(markdown.contains("[image: pixel.png]"))
+        let readme = try String(contentsOf: target.appendingPathComponent("README.txt"), encoding: .utf8)
+        XCTAssertTrue(readme.contains("note.json"))
+        // It is a copy: the note is exactly as it was, and says where the copy went.
+        guard case .onlyInMemory = session.state else { return XCTFail("the copy does not change the note's state") }
+        XCTAssertEqual(session.engine.document(), expected)
+        XCTAssertEqual(session.notice, "Recovery copy saved to “Groceries recovery copy”.")
+        XCTAssertTrue(store.notes.isEmpty, "nothing was saved to the library")
+    }
+
+    func testCancellingTheSavePanelWritesNothingAndSaysNothing() async throws {
+        let (controller, session) = try onlyInMemoryNote()
+        let target = try scratchURL("never")
+        var asked = 0
+        controller.recoveryCopyDestination = { _ in asked += 1; return nil }
+        let saved = await controller.saveRecoveryCopy()
+        XCTAssertFalse(saved)
+        XCTAssertEqual(asked, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertNil(session.notice)
+    }
+
+    func testAFailedWriteIsSaidLeavesNothingBehindAndKeepsTheNote() async throws {
+        let (controller, session) = try onlyInMemoryNote(image: try pixel())
+        // A folder cannot be made inside a file.
+        let blocker = try scratchURL("blocker")
+        try Data("x".utf8).write(to: blocker)
+        let target = blocker.appendingPathComponent("copy")
+        controller.recoveryCopyDestination = { _ in target }
+
+        let saved = await controller.saveRecoveryCopy()
+        XCTAssertFalse(saved)
+        let notice = try XCTUnwrap(session.notice)
+        XCTAssertTrue(notice.hasPrefix("The recovery copy couldn’t be saved"), notice)
+        XCTAssertEqual(try Data(contentsOf: blocker), Data("x".utf8), "the file in the way is untouched")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["blocker"], "no partial folder")
+        guard case .onlyInMemory = session.state else { return XCTFail("the note stays as it was") }
+        XCTAssertTrue(session.engine.plainText.contains("Groceries"))
+        // The person can simply try again somewhere else.
+        let elsewhere = try scratchURL("second")
+        controller.recoveryCopyDestination = { _ in elsewhere }
+        let again = await controller.saveRecoveryCopy()
+        XCTAssertTrue(again)
+    }
+
+    func testChoosingAnExistingFolderReplacesItWholeAfterTheNewOneIsComplete() async throws {
+        let (controller, _) = try onlyInMemoryNote()
+        let target = try scratchURL("copy")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: target.appendingPathComponent("stale.txt"))
+        controller.recoveryCopyDestination = { _ in target }
+        let saved = await controller.saveRecoveryCopy()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.path).sorted(),
+                       ["README.txt", "manifest.json", "note.json", "note.md"])
+    }
+
+    func testARecoveryCopyIsOfferedOnlyWhileTheTextIsHeldOnlyHere() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertFalse(controller.canSaveRecoveryCopy(session), "an untouched draft")
+        XCTAssertFalse(controller.canSaveRecoveryCopy(nil))
+        session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Hi"), name: "Typing")
+        XCTAssertFalse(controller.canSaveRecoveryCopy(controller.active), "typed but the save is still pending")
+        // The store refuses but the recovery journal works: Not saved.
+        gate.shouldFail = true
+        XCTAssertTrue(controller.newNote(), "the recovery journal holds it, so the person may leave")
+        guard case .notSaved = session.state else { return XCTFail("expected Not saved, got \(session.state)") }
+        XCTAssertTrue(controller.canSaveRecoveryCopy(session), "Not saved is offered too")
+    }
+
+    func testTheFolderNamesAreSafeAndUnique() {
+        XCTAssertEqual(NoteRecoveryCopy.suggestedName(title: ""), "Untitled note recovery copy")
+        XCTAssertEqual(NoteRecoveryCopy.suggestedName(title: "a/b: c"), "a-b- c recovery copy")
+        var used = Set<String>()
+        XCTAssertEqual(NoteRecoveryCopy.uniqueName("photo.png", among: &used), "photo.png")
+        XCTAssertEqual(NoteRecoveryCopy.uniqueName("Photo.png", among: &used), "Photo 2.png")
+        XCTAssertEqual(NoteRecoveryCopy.uniqueName("../evil", among: &used), "-evil", "no path escapes the folder")
+        XCTAssertEqual(NoteRecoveryCopy.uniqueName("", among: &used), "attachment")
+    }
+
+    func testImagesThatCouldNotBeReadAreListedNotSilentlyDropped() throws {
+        let target = try scratchURL("partial")
+        let missing = UUID()
+        let snapshot = NoteRecoverySnapshot(noteID: UUID(), title: "T", content: Data("{}".utf8), markdown: "# T", tags: ["a"],
+                                            reason: "why", savedAt: Date(), attachments: [], unavailableAttachmentIDs: [missing])
+        try NoteRecoveryCopy.write(snapshot, to: target)
+        let readme = try String(contentsOf: target.appendingPathComponent("README.txt"), encoding: .utf8)
+        XCTAssertTrue(readme.contains(missing.uuidString))
+        XCTAssertTrue(readme.contains("why"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("attachments").path))
     }
 }

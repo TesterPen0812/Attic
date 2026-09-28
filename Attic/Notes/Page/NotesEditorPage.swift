@@ -12,6 +12,11 @@ import UniformTypeIdentifiers
 /// once the title has scrolled away. Everything goes through the page's
 /// controller and its session rules.
 struct NotesEditorPage: View {
+    /// Save Recovery Copy… (⇧⌘S, the note's menu and the status details):
+    /// offered only while the note's text is held only here.
+    static let saveRecoveryCopyIdentifier = "notes-save-recovery-copy"
+    static let saveRecoveryCopyShortcut = KeyboardShortcut("s", modifiers: [.command, .shift])
+
     @ObservedObject var controller: NotesPageController
     @ObservedObject var noteStore: NoteStore
     @ObservedObject var noteDraft: NoteDraftController
@@ -259,6 +264,9 @@ struct NotesEditorPage: View {
             Button("") { if let id = currentNoteID { controller.copyMarkdown(noteID: id) } }
                 .keyboardShortcut("c", modifiers: [.command, .option, .shift])
                 .disabled(!showsEditor)
+            Button("") { Task { await controller.saveRecoveryCopy() } }
+                .keyboardShortcut(Self.saveRecoveryCopyShortcut)
+                .disabled(!showsEditor || !controller.canSaveRecoveryCopy(controller.active))
             Button("") { showLibrary(focusSearch: true) }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
         }
@@ -387,6 +395,12 @@ struct NotesEditorPage: View {
             commands.append(AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
                                              isDisabled: !session.isPersisted, identifier: "notes-menu-duplicate") {
                 controller.duplicateNote(noteID: id)
+            })
+        }
+        if controller.canSaveRecoveryCopy(session) {
+            commands.append(AtticMenuCommand("Save Recovery Copy…", shortcut: Self.saveRecoveryCopyShortcut,
+                                             startsSection: true, identifier: Self.saveRecoveryCopyIdentifier) {
+                Task { await controller.saveRecoveryCopy(of: session) }
             })
         }
         commands.append(AtticMenuCommand("Delete Note", isDestructive: true, startsSection: true,
@@ -565,6 +579,13 @@ private struct NoteStatusSlot: View {
         }
     }
 
+    /// The same command as ⇧⌘S and the note's menu: one identifier, one
+    /// controller method.
+    private func saveRecoveryCopyAction(_ details: (@escaping () -> Void) -> () -> Void) -> AtticStatusItem.Action {
+        .init(title: String(localized: "Save Recovery Copy…"), identifier: NotesEditorPage.saveRecoveryCopyIdentifier,
+              handler: details { Task { await controller.saveRecoveryCopy(of: session) } })
+    }
+
     private func item(_ status: NoteStatusItem) -> AtticStatusItem {
         let details = { (action: @escaping () -> Void) in { showingDetails = false; action() } }
         switch status {
@@ -573,7 +594,8 @@ private struct NoteStatusSlot: View {
                                    explanation: status.explanation, tone: .warning, actions: [
                                        .init(title: String(localized: "Retry"), handler: details(controller.retry)),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
-                                             handler: details(controller.copyActiveText))
+                                             handler: details(controller.copyActiveText)),
+                                       saveRecoveryCopyAction(details)
                                    ])
         case .notSaved:
             return AtticStatusItem(id: "notSaved", systemName: "exclamationmark.circle", title: status.label,
@@ -581,7 +603,8 @@ private struct NoteStatusSlot: View {
                                        .init(title: String(localized: "Retry"), identifier: "notes-retry",
                                              handler: details(controller.retry)),
                                        .init(title: String(localized: "Copy Text"), identifier: "notes-copy-text",
-                                             handler: details(controller.copyActiveText))
+                                             handler: details(controller.copyActiveText)),
+                                       saveRecoveryCopyAction(details)
                                    ])
         case .changedElsewhere, .deletedElsewhere:
             return AtticStatusItem(id: "conflict", systemName: "exclamationmark.circle", title: status.label,

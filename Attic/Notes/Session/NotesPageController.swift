@@ -926,6 +926,87 @@ final class NotesPageController: ObservableObject {
         pasteboard.setString(active.engine.plainText, forType: .string)
     }
 
+    // MARK: Recovery copy (Phase 2 audit, item 17)
+
+    /// Asks where to save a recovery copy; nil when the person cancels.
+    /// Replaced in tests, which have no panel to click.
+    var recoveryCopyDestination: @MainActor (_ suggestedName: String) -> URL? = { NotesPageController.askForRecoveryCopyLocation($0) }
+
+    /// A recovery copy is offered while the note's text is held only here:
+    /// "Only in memory" and "Not saved".
+    func canSaveRecoveryCopy(_ session: NoteSession?) -> Bool {
+        guard let session else { return false }
+        switch session.state {
+        case .onlyInMemory, .notSaved: return true
+        default: return false
+        }
+    }
+
+    /// Save Recovery Copy…: the note as it is now, with its structure and
+    /// the images that can be read, into a folder the person chooses
+    /// (`NoteRecoveryCopy` says what is in it). It changes nothing about the
+    /// note, its state or its recovery journal; the result is said in the
+    /// status slot, success or failure. False when nothing was written,
+    /// including when the person cancels the panel.
+    @discardableResult
+    func saveRecoveryCopy(of session: NoteSession? = nil) async -> Bool {
+        guard let session = session ?? active, canSaveRecoveryCopy(session) else { return false }
+        session.engine.refreshCompositionActivity()
+        do {
+            let snapshot = try recoverySnapshot(of: session)
+            guard let destination = recoveryCopyDestination(NoteRecoveryCopy.suggestedName(title: snapshot.title)) else { return false }
+            try await Task.detached(priority: .userInitiated) {
+                try NoteRecoveryCopy.write(snapshot, to: destination)
+            }.value
+            var message = String(localized: "Recovery copy saved to “\(destination.lastPathComponent)”.")
+            if !snapshot.unavailableAttachmentIDs.isEmpty {
+                message += " " + String(localized: "\(snapshot.unavailableAttachmentIDs.count) image(s) couldn’t be read and are listed in its README.")
+            }
+            session.notice = message
+            return true
+        } catch {
+            session.notice = String(localized: "The recovery copy couldn’t be saved: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func recoverySnapshot(of session: NoteSession) throws -> NoteRecoverySnapshot {
+        let document = session.engine.document()
+        var attachments = session.engine.stagedAttachments(for: document)
+        var unavailable: [UUID] = []
+        var seen = Set(attachments.map(\.id))
+        for id in document.attachmentIDs where !seen.contains(id) {
+            seen.insert(id)
+            if let stored = imageBytes(forAttachment: id) { attachments.append(stored) } else { unavailable.append(id) }
+        }
+        let names = Dictionary(attachments.map { ($0.id, $0.filename) }, uniquingKeysWith: { first, _ in first })
+        let reason: String = switch session.state {
+        case let .onlyInMemory(reason), let .notSaved(reason): reason
+        default: ""
+        }
+        // The stored format, as the store would have written it. A note that
+        // cannot be encoded is not "copied" without its structure: this
+        // throws and the failure is said.
+        let content = try NoteContentCodec.encode(document)
+        return NoteRecoverySnapshot(
+            noteID: session.noteID, title: NoteStore.normalizedTitle(document.title), content: content,
+            markdown: NoteMarkdownExport.markdown(document) { names[$0] },
+            tags: session.engine.tags, reason: reason, savedAt: now(),
+            attachments: attachments, unavailableAttachmentIDs: unavailable)
+    }
+
+    @MainActor
+    static func askForRecoveryCopyLocation(_ suggestedName: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = String(localized: "Save Recovery Copy")
+        panel.message = String(localized: "Saves a folder with this note’s text, structure and images. The note itself is not changed.")
+        panel.prompt = String(localized: "Save")
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
     // MARK: Recovery
 
     /// Materializes recovery drafts before agent access starts. Safe to call

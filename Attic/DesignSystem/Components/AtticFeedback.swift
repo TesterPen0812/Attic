@@ -500,10 +500,13 @@ struct AtticStatusDetails: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if !item.actions.isEmpty {
-                            HStack(spacing: 4) {
-                                ForEach(Array(item.actions.enumerated()), id: \.element.id) { actionIndex, action in
-                                    AtticStatusDetailButton(title: action.title, prominent: actionIndex == 0, action: action.handler)
-                                        .accessibilityIdentifier(action.identifier ?? "")
+                            // One row when the actions fit the popover; the
+                            // rest go under the first two when they do not.
+                            ViewThatFits(in: .horizontal) {
+                                actionRow(item.actions, offset: 0)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    actionRow(Array(item.actions.prefix(2)), offset: 0)
+                                    actionRow(Array(item.actions.dropFirst(2)), offset: 2)
                                 }
                             }
                             .padding(.top, 6)
@@ -517,6 +520,15 @@ struct AtticStatusDetails: View {
         .padding(m.detailsPadding)
         .frame(width: m.detailsWidth, alignment: .leading)
         .accessibilityIdentifier("notes-status-details")
+    }
+
+    private func actionRow(_ actions: [AtticStatusItem.Action], offset: Int) -> some View {
+        HStack(spacing: 4) {
+            ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
+                AtticStatusDetailButton(title: action.title, prominent: index + offset == 0, action: action.handler)
+                    .accessibilityIdentifier(action.identifier ?? "")
+            }
+        }
     }
 }
 
