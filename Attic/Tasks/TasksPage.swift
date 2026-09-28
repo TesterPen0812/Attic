@@ -160,7 +160,8 @@ struct TasksPage: View {
         #endif
         if findMonitor == nil {
             findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                findPressed(event) || searchEscapePressed(event) || taskShortcutPressed(event) ? nil : event
+                findPressed(event) || searchEscapePressed(event) || editorEscapePressed(event)
+                    || undoPressed(event) || taskShortcutPressed(event) ? nil : event
             }
         }
         if scrollMonitor == nil {
@@ -444,6 +445,41 @@ struct TasksPage: View {
         guard Self.answersFind(event: event, pageShown: model.isPageShown, tab: model.tab,
                                pageWindow: pointer.view?.window, popoverOpen: AtticTextInput.isPopoverOpen) else { return false }
         beginSearch()
+        return true
+    }
+
+    /// Esc in a subtask's field (a new one, or a rename): it stops. Here,
+    /// as for the Done search: the panel's hosting view answers Esc itself,
+    /// so the field's exit command did not always reach it (round 10, CI
+    /// run 3: the new-subtask field stayed open and the quick look with it).
+    private func editorEscapePressed(_ event: NSEvent) -> Bool {
+        guard event.keyCode == 53, event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
+              model.isPageShown, !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window,
+              !Self.isComposing(window.firstResponder), (window.firstResponder as? NSTextView)?.isFieldEditor == true else { return false }
+        if let parent = model.newSubtaskParentID {
+            model.cancelEditing()
+            focusedRow = parent
+            return true
+        }
+        if model.renamingSubtaskID != nil {
+            model.cancelSubtaskRename()
+            return true
+        }
+        return false
+    }
+
+    /// ⌘Z and ⇧⌘Z with no field typing: the Tasks history, wherever the
+    /// keyboard is in the page (round 10, CI run 3: after a click on the
+    /// selection bar no view in the page had the keyboard, so the list's
+    /// own ⌘Z never ran). A field that is typing keeps its own.
+    private func undoPressed(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, model.isPageShown, let window = pointer.view?.window, event.window === window,
+              window.isKeyWindow, !AtticTextInput.hasKeyboard, event.charactersIgnoringModifiers?.lowercased() == "z" else { return false }
+        switch event.modifierFlags.intersection([.command, .shift, .option, .control]) {
+        case .command: model.undo()
+        case [.command, .shift]: model.redo()
+        default: return false
+        }
         return true
     }
 

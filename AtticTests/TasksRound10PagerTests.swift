@@ -170,6 +170,30 @@ final class TasksRound10PagerTests: XCTestCase {
         XCTAssertEqual(again.contentView.bounds.origin.y, 300, accuracy: 1, "back where it was")
     }
 
+    /// CI run 3: Esc in the new-subtask field stops it wherever Esc would
+    /// otherwise go, and ⌘Z undoes with no view in the page holding the
+    /// keyboard (after a click on the selection bar).
+    func testEscStopsASubtaskFieldAndCommandZUndoesFromAnywhere() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        let model = hosted.model
+        let parent = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Ship appearance PR" }?.id)
+        model.beginAddingSubtask(to: parent)
+        hosted.spin(0.6)
+        XCTAssertEqual(model.newSubtaskParentID, parent)
+        XCTAssertTrue((hosted.window.firstResponder as? NSTextView)?.isFieldEditor == true, "the field has the keyboard")
+        hosted.press("\u{1B}", keyCode: 53)
+        XCTAssertNil(model.newSubtaskParentID, "Esc stops the new subtask")
+
+        let task = try XCTUnwrap(model.rows(for: .now).first { $0.model.title == "Call the plumber" }?.id)
+        XCTAssertTrue(model.moveToBacklog([task]).isApplied)
+        hosted.window.makeFirstResponder(nil)
+        hosted.window.makeKey()
+        hosted.spin(0.2)
+        hosted.press("z", keyCode: 6, modifiers: .command)
+        XCTAssertTrue(model.rows(for: .now).contains { $0.id == task }, "⌘Z brought it back with no view holding the keyboard")
+    }
+
     /// The one list on the page (its frame starts at the page's left).
     private func onPageList(_ hosted: Hosted) -> NSScrollView? {
         guard let content = hosted.window.contentView else { return nil }
