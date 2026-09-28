@@ -225,24 +225,33 @@ final class NotesPageRenderTests: XCTestCase {
         }
         spin(0.3)
         let list = textView.accessoryViews[2]
-        if harness.window.firstResponder === textView {
-            XCTAssertFalse(list.isHidden, "suggestions show under the hashtag")
-        }
-        write(harness.host, name: "suggestions-light")
-        print("NOTES_SUGGESTIONS_FIRST_RESPONDER=\(harness.window.firstResponder === textView)")
+        // The suggestions follow the note's keyboard focus: without it this
+        // test proves nothing, so it fails rather than passing silently.
+        XCTAssertIdentical(harness.window.firstResponder, textView, "the note has the keyboard")
         guard harness.window.firstResponder === textView else { return }
+        XCTAssertFalse(list.isHidden, "suggestions show under the hashtag")
+        write(harness.host, name: "suggestions-light")
         // ↓ picks the first suggestion; Return takes it (no line break).
         textView.doCommand(by: #selector(NSResponder.moveDown(_:)))
         textView.doCommand(by: #selector(NSResponder.insertNewline(_:)))
         XCTAssertTrue(engine.tags.contains("print-shop"), "\(engine.tags)")
         XCTAssertEqual(engine.document().blocks.first?.text, "Pricing page for the October launch ")
         XCTAssertTrue(list.isHidden)
-        // Typed without picking, Return takes the typed word.
-        for character in "#kyoto" {
+        // Typed without picking, Return takes the typed word and moves into
+        // the body, as it does with no list showing.
+        for character in "#pri" {
             textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
         }
+        spin(0.3)
+        XCTAssertFalse(list.isHidden, "the list shows again for #pri")
         textView.doCommand(by: #selector(NSResponder.insertNewline(_:)))
-        XCTAssertTrue(engine.tags.contains("kyoto"), "\(engine.tags)")
+        XCTAssertTrue(engine.tags.contains("pri"), "\(engine.tags)")
+        XCTAssertGreaterThan(textView.selectedRange().location, engine.titleParagraphRange.length,
+                             "the caret is in the body")
+        for character in "Body" {
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        XCTAssertFalse(engine.lineText(at: 0).contains("Body"), "typing after Return never lands in the title")
     }
 
     func testDarkWritingAndLibrary() throws {

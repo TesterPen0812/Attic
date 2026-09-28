@@ -689,7 +689,8 @@ final class NotesPageController: ObservableObject {
             staged: staged.map { .init(id: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier,
                                        byteCount: $0.byteCount, digest: $0.digest) },
             savedAt: now(),
-            tags: session.isPersisted ? session.pendingTags : (session.engine.tags.isEmpty ? nil : session.engine.tags)
+            tags: session.engine.tags,
+            tagsChanged: session.isPersisted ? session.pendingTags != nil : !session.engine.tags.isEmpty
         )
     }
 
@@ -858,23 +859,33 @@ final class NotesPageController: ObservableObject {
     }
 
     private func clearRecoveryCopy(noteID: UUID) {
-        guard let journal else { return }
-        do { try journal.remove(noteID: noteID) }
-        catch {
-            // A committed document replaces a stale checkpoint if removal
-            // fails. Recovery compares content with the store and drops it.
+        if !retireRecoveryCopy(noteID: noteID) {
+            active?.notice = String(localized: "Saved, but an old recovery copy could not be cleared.")
+        }
+    }
+
+    /// Removes a note's recovery copy, or, if removal fails, writes the
+    /// stored state over it (recovery drops a copy that matches its note,
+    /// live or deleted). False only when neither worked, so a stale copy
+    /// is still there.
+    fileprivate func retireRecoveryCopy(noteID: UUID) -> Bool {
+        guard let journal else { return true }
+        do {
+            try journal.remove(noteID: noteID)
+            return true
+        } catch {
             guard let stored = store.loadDocument(noteID: noteID),
                   let document = stored.content.document,
-                  let content = try? NoteContentCodec.encode(document) else {
-                active?.notice = String(localized: "Saved, but an old recovery copy could not be cleared.")
-                return
-            }
+                  let content = try? NoteContentCodec.encode(document) else { return false }
             let saved = NoteDraftJournalEntry(noteID: noteID, isPersisted: true,
                 baseRevisionID: stored.revisionID, content: content,
-                selectionLocation: 0, selectionLength: 0, staged: [], savedAt: now())
-            do { try journal.write(saved, staged: []) }
-            catch {
-                active?.notice = String(localized: "Saved, but an old recovery copy could not be cleared.")
+                selectionLocation: 0, selectionLength: 0, staged: [], savedAt: now(),
+                tags: store.note(withID: noteID)?.tags ?? [], tagsChanged: false)
+            do {
+                try journal.write(saved, staged: [])
+                return true
+            } catch {
+                return false
             }
         }
     }
@@ -936,8 +947,19 @@ final class NotesPageController: ObservableObject {
                 continue
             }
             let stored = store.loadDocument(noteID: entry.noteID)
+            // A copy that matches the note as it was deleted (a delete made
+            // here whose recovery copy could not be removed) holds nothing the
+            // deleted note doesn't: it is retired, never a conflict.
+            if stored == nil, let base = entry.baseRevisionID,
+               replicas.contains(where: { replica in
+                   replica.deletedAt != nil && replica.revisionID == base
+                       && replica.content.flatMap { NoteContentCodec.decode($0).document } == document
+               }) {
+                try? journal.remove(noteID: entry.noteID)
+                continue
+            }
             let storedTags = store.note(withID: entry.noteID)?.tags ?? []
-            if stored?.content.document == document, entry.tags == nil || entry.tags == storedTags {
+            if stored?.content.document == document, entry.changedTags == nil || entry.changedTags == storedTags {
                 try? journal.remove(noteID: entry.noteID)
                 continue
             }
@@ -953,7 +975,9 @@ final class NotesPageController: ObservableObject {
                 engine: makeEngine(noteID: entry.noteID, document: document, readOnly: false, staged: staged,
                                    tags: entry.tags ?? storedTags),
                 readOnlyReason: nil)
-            session.baseTags = storedTags
+            // Unchanged tags stay the stored ones' business (nothing is written
+            // over them), yet the draft keeps them, even if its note is gone.
+            session.baseTags = entry.changedTags == nil ? (entry.tags ?? storedTags) : storedTags
             wire(session)
             session.selection = NSRange(location: entry.selectionLocation, length: entry.selectionLength)
             session.scrollOffset = CGFloat(entry.scrollOffset ?? 0)
@@ -1274,6 +1298,15 @@ enum NoteSessionPolicy {
         return true
     }
 
+    /// Duplicate: like Delete, never during an activity or while images
+    /// load; never from a conflict or a note this build can only read.
+    static func duplicateAllowed(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
+                                 hasBatch: Bool, hasMarkedText: Bool = false) -> Bool {
+        guard deleteAllowed(state, activity: activity, hasBatch: hasBatch, hasMarkedText: hasMarkedText) else { return false }
+        if case .readOnly = state { return false }
+        return true
+    }
+
     static func keepAsNewAllowed(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
                                  hasBatch: Bool, hasMarkedText: Bool = false) -> Bool {
         guard activity == .idle, !hasBatch, !hasMarkedText else { return false }
@@ -1334,6 +1367,14 @@ extension NotesPageController {
             }
         }
         guard let note = store.note(withID: noteID) else { return false }
+        // Retire the recovery copy while the note is live, so a copy that
+        // can't be removed is replaced by the saved state; if neither works,
+        // nothing is deleted (the copy would come back as a conflict).
+        guard retireRecoveryCopy(noteID: noteID) else {
+            let message = String(localized: "An old recovery copy of this note couldn’t be cleared, so the note was not deleted. Try again.")
+            if let session { session.notice = message } else { active?.notice = message }
+            return false
+        }
         if let session {
             session.saveTask?.cancel()
             session.pauseTask?.cancel()
@@ -1348,7 +1389,6 @@ extension NotesPageController {
             return false
         }
         recency.removeAll { $0 == noteID }
-        clearRecoveryCopy(noteID: noteID)
         if legacyNoteID == noteID { legacyNoteID = nil }
         if lastViewedNoteID == noteID { defaults?.removeObject(forKey: Self.lastViewedKey) }
         if let session, active === session {
@@ -1372,11 +1412,29 @@ extension NotesPageController {
     /// its images and its tags, titled "… copy", and opened.
     @discardableResult
     func duplicateNote(noteID: UUID) -> Bool {
+        // 1. The gates, before anything is read or written: the source's
+        //    activity (composition, Writing Tools), a loading batch, and
+        //    leaving the note on screen. A refusal creates nothing.
+        if let session = cache[noteID] {
+            session.engine.refreshCompositionActivity()
+            guard NoteSessionPolicy.duplicateAllowed(session.state, activity: session.engine.activity,
+                    hasBatch: session.isImporting, hasMarkedText: session.engine.textView?.hasMarkedText() == true) else {
+                session.notice = switch session.state {
+                case .conflict: String(localized: "Keep this text as a new note before duplicating it.")
+                case .readOnly: String(localized: "This note can’t be duplicated here.")
+                default: session.isImporting
+                    ? String(localized: "Images are still being added. Duplicate the note when they finish.")
+                    : String(localized: "Finish Writing Tools or composing text before duplicating this note.")
+                }
+                return false
+            }
+        }
+        guard prepareToLeave(.openNote) else { return false }
+        // 2. The source as it is now (its latest text was just preserved).
         let document: NoteDocument
         let staged: [StagedNoteAttachment]
         let tags: [String]
         if let session = cache[noteID] {
-            guard !session.isReadOnly else { return false }
             document = session.engine.document()
             staged = session.engine.stagedAttachments(for: document)
             tags = session.engine.tags
@@ -1405,12 +1463,16 @@ extension NotesPageController {
             return block
         }
         images = images.filter { image in copy.attachmentIDs.contains(image.id) }
+        // 3. One complete copy, then it opens (the leave already ran).
         guard case let .success((newID, _)) = store.createDocumentNote(id: UUID(), document: copy, staged: images,
-                                                                     tags: tags.isEmpty ? nil : tags) else {
+                                                                     tags: tags.isEmpty ? nil : tags),
+              let note = store.note(withID: newID), let session = session(for: note).flatMap(presentSession) else {
             active?.notice = String(localized: "The note couldn’t be duplicated: \(storeMessage())")
             return false
         }
-        if open(noteID: newID) { isLibraryPresented = false }
+        legacyNoteID = nil
+        activate(session)
+        isLibraryPresented = false
         return true
     }
 

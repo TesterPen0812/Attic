@@ -133,14 +133,12 @@ struct NotesLibraryView: View {
             model.moveHighlight(by: -1, in: groups, from: selected)
             return .handled
         case .return:
-            guard let id = model.highlightedID ?? (model.isSearching ? model.orderedIDs(groups).first : nil) else {
-                return .ignored
-            }
+            guard let id = model.openTarget(in: groups) else { return .ignored }
             onOpen(id)
             return .handled
         case .delete where press.modifiers.contains(.command):
             // In the search field ⌘⌫ edits the text until ↑ ↓ picked a row.
-            guard let id = model.highlightedID ?? (inField ? nil : selected) else { return .ignored }
+            guard let id = model.deleteTarget(in: groups, selected: selected, inField: inField) else { return .ignored }
             onDelete(id)
             return .handled
         default:

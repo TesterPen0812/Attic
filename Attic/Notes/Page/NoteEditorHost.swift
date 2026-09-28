@@ -267,15 +267,24 @@ final class NoteTitleAccessories {
             highlightedSuggestion = highlightedSuggestion.map { max($0 - 1, 0) } ?? suggestions.count - 1
             renderSuggestions()
             return true
-        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+        case #selector(NSResponder.insertTab(_:)):
+            // Tab completes: the highlighted suggestion, else the typed word.
             if let highlightedSuggestion {
                 pickSuggestion(highlightedSuggestion)
             } else {
-                // Nothing picked: the typed word, as Space takes it.
                 hideSuggestions()
                 engine.takeTitleHashtag()
             }
             return true
+        case #selector(NSResponder.insertNewline(_:)):
+            if let highlightedSuggestion {
+                pickSuggestion(highlightedSuggestion)
+                return true
+            }
+            // Nothing picked: the list closes and Return goes on as usual,
+            // taking the typed word and moving into the body.
+            hideSuggestions()
+            return false
         case #selector(NSResponder.cancelOperation(_:)):
             _ = engine.keepTitleHashtagLiteral()
             hideSuggestions()

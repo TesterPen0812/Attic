@@ -22,9 +22,20 @@ struct NoteDraftJournalEntry: Codable, Equatable {
     var scrollOffset: Double? = nil
     var staged: [StagedFile]
     var savedAt: Date
-    /// The draft's tags when the person changed them (nil: the stored tags
-    /// stand). Optional, so older recovery files still read.
+    /// The draft's full tag set (optional, so older recovery files still
+    /// read). Kept even when unchanged, so a draft whose note disappears
+    /// still has its tags.
     var tags: [String]? = nil
+    /// Whether `tags` is a change the person made, to be written over the
+    /// stored tags. nil in files written before this field: those stored
+    /// `tags` only for a change.
+    var tagsChanged: Bool? = nil
+
+    /// The tags to write over the stored ones, if any.
+    var changedTags: [String]? {
+        guard let tags else { return nil }
+        return (tagsChanged ?? true) ? tags : nil
+    }
 }
 
 enum NoteDraftRecoveryEntry {

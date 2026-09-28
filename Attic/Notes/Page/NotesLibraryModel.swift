@@ -21,7 +21,12 @@ final class NotesLibraryModel: ObservableObject {
 
     /// What the search field holds.
     @Published var query = "" {
-        didSet { if query != oldValue { scheduleSearch() } }
+        didSet {
+            guard query != oldValue else { return }
+            // Other rows are about to show: the keyboard's row starts again.
+            highlightedID = nil
+            scheduleSearch()
+        }
     }
     /// The notes the last finished search found; nil while not searching.
     @Published private(set) var matches: Set<UUID>?
@@ -89,6 +94,8 @@ final class NotesLibraryModel: ObservableObject {
             do {
                 let found = try await run(text)
                 guard !Task.isCancelled, let self else { return }
+                // A highlight on a row the results no longer show goes.
+                if let highlighted = self.highlightedID, !found.contains(highlighted) { self.highlightedID = nil }
                 self.matches = found
                 self.matchedQuery = text
                 self.searchState = .idle
@@ -123,8 +130,9 @@ final class NotesLibraryModel: ObservableObject {
         let draftRows = unsaved.map { draftRow($0) }
         let result: [Group]
         if searching {
-            let rows = draftRows.filter { $0.title.localizedStandardContains(matchedQuery) || $0.preview.localizedStandardContains(matchedQuery) }
-                + notes.map { row($0, store: store, attention: attention) }
+            // Never-saved drafts are searched through their whole text.
+            let matchingDrafts = unsaved.filter { NoteTextExport.plainText($0.engine.document()).localizedStandardContains(matchedQuery) }
+            let rows = matchingDrafts.map { draftRow($0) } + notes.map { row($0, store: store, attention: attention) }
             let count = rows.count
             result = rows.isEmpty ? [] : [Group(id: "results", title: count == 1 ? String(localized: "1 note") : String(localized: "\(count) notes"), rows: rows)]
         } else {
@@ -152,6 +160,23 @@ final class NotesLibraryModel: ObservableObject {
 
     /// The rows in list order, for ↑ ↓.
     func orderedIDs(_ groups: [Group]) -> [UUID] { groups.flatMap { $0.rows.map(\.id) } }
+
+    /// What Return opens: the keyboard's row, or while searching the first
+    /// result, and only ever a row the list shows now.
+    func openTarget(in groups: [Group]) -> UUID? {
+        let visible = orderedIDs(groups)
+        if let highlightedID { return visible.contains(highlightedID) ? highlightedID : nil }
+        return isSearching ? visible.first : nil
+    }
+
+    /// What ⌘⌫ deletes: the keyboard's row, or (outside the search field)
+    /// the selected note, and only ever a row the list shows now.
+    func deleteTarget(in groups: [Group], selected: UUID?, inField: Bool) -> UUID? {
+        let visible = Set(orderedIDs(groups))
+        if let highlightedID { return visible.contains(highlightedID) ? highlightedID : nil }
+        guard !inField, let selected, visible.contains(selected) else { return nil }
+        return selected
+    }
 
     func moveHighlight(by step: Int, in groups: [Group], from selected: UUID?) {
         let ids = orderedIDs(groups)
@@ -243,18 +268,22 @@ struct NoteRowSummary: Equatable {
         var total = 0
         var previewParts: [String] = []
         var listLike = false
+        // Counts read the whole note; only the preview stops early (it
+        // shows one line).
+        var previewLength = 0
         for line in bodyLines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed == "[Image]" || trimmed == "[Unsupported content]" { continue }
-            if trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ") {
+            let isChecklist = trimmed.hasPrefix("[ ] ") || trimmed.hasPrefix("[x] ")
+            if isChecklist {
                 total += 1
                 if trimmed.hasPrefix("[x] ") { done += 1 }
-                if previewParts.isEmpty { listLike = true }
-                previewParts.append(String(trimmed.dropFirst(4)))
-            } else {
-                previewParts.append(trimmed)
             }
-            if previewParts.joined(separator: " ").count > 160 { break }
+            guard previewLength <= 160 else { continue }
+            if isChecklist, previewParts.isEmpty { listLike = true }
+            let part = isChecklist ? String(trimmed.dropFirst(4)) : trimmed
+            previewParts.append(part)
+            previewLength += part.count + 1
         }
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let fileOnly = cleanTitle.isEmpty && previewParts.isEmpty && images + files > 0

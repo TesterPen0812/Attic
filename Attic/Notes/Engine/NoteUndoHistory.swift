@@ -31,10 +31,12 @@ final class NoteUndoHistory {
         fileprivate(set) var name: String
         fileprivate(set) var isInert = false
         fileprivate let group: Int
-        /// A tag the step's change added to the note (the title shorthand):
-        /// `adds` says what flipping the step does next time. The tag is a
-        /// delta, so tags changed elsewhere since are never overwritten.
-        fileprivate(set) var tagDelta: (tag: String, adds: Bool)?
+        /// The title shorthand this step made: `adds` says what flipping the
+        /// step does next time; `changesTags` is false when the note already
+        /// had the tag (the step then only moves text, but its Undo still
+        /// leaves the hashtag literal). The tag is a delta, so tags changed
+        /// elsewhere since are never overwritten.
+        fileprivate(set) var tagDelta: (tag: String, adds: Bool, changesTags: Bool)?
 
         fileprivate init(range: NSRange, current: NSAttributedString, other: NSAttributedString, name: String, group: Int) {
             self.range = range
@@ -66,7 +68,7 @@ final class NoteUndoHistory {
     var onReplay: ((NSRange) -> Void)?
     /// A step carrying a tag delta was flipped: add (true) or remove the tag.
     /// The range is the step's text after the flip.
-    var onTagFlip: ((_ tag: String, _ add: Bool, _ range: NSRange) -> Void)?
+    var onTagFlip: ((_ tag: String, _ add: Bool, _ changesTags: Bool, _ range: NSRange) -> Void)?
 
     private(set) var undoOps: [Op] = []
     private(set) var redoOps: [Op] = []
@@ -126,7 +128,8 @@ final class NoteUndoHistory {
     /// The whole history as it stands, copied (steps are rebased in place,
     /// so their fields are saved too).
     struct Checkpoint {
-        fileprivate typealias Saved = (Op, NSRange, NSAttributedString, NSAttributedString, Bool, (tag: String, adds: Bool)?)
+        fileprivate typealias Saved = (Op, NSRange, NSAttributedString, NSAttributedString, Bool,
+                                       (tag: String, adds: Bool, changesTags: Bool)?)
         fileprivate let undo: [Saved]
         fileprivate let redo: [Saved]
     }
@@ -330,10 +333,11 @@ final class NoteUndoHistory {
         undoOps.last?.name = name
     }
 
-    /// The last step also added `tag` to the note: undo removes it, redo
-    /// adds it back (one step for the text and the tag).
-    func attachTagToLast(_ tag: String) {
-        undoOps.last?.tagDelta = (tag, false)
+    /// The last step was the title shorthand for `tag` (and added it to the
+    /// note when `changesTags`): undo removes it, redo adds it back (one step
+    /// for the text and the tag).
+    func attachTagToLast(_ tag: String, changesTags: Bool = true) {
+        undoOps.last?.tagDelta = (tag, false, changesTags)
     }
 
     /// Runs a storage change that must not become a step (a restore the
@@ -412,8 +416,8 @@ final class NoteUndoHistory {
         op.range = NSRange(location: op.range.location, length: replacement.length)
         textView?.setSelectedRange(NSRange(location: NSMaxRange(op.range), length: 0))
         if let delta = op.tagDelta {
-            op.tagDelta = (delta.tag, !delta.adds)
-            onTagFlip?(delta.tag, delta.adds, op.range)
+            op.tagDelta = (delta.tag, !delta.adds, delta.changesTags)
+            onTagFlip?(delta.tag, delta.adds, delta.changesTags, op.range)
         }
         onReplay?(op.range)
         return true

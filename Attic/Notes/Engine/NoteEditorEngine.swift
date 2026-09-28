@@ -136,7 +136,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage.delegate = self
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
         history.onReplay = { [weak self] range in self?.didReplay(range) }
-        history.onTagFlip = { [weak self] tag, add, range in self?.didFlipTag(tag, add: add, range: range) }
+        history.onTagFlip = { [weak self] tag, add, changesTags, range in
+            self?.didFlipTag(tag, add: add, changesTags: changesTags, range: range)
+        }
         history.canReplay = { [weak self] in self?.activity == .idle }
     }
 
@@ -1294,8 +1296,8 @@ extension NoteEditorEngine {
         let isNew = !tags.contains(tag)
         guard performEdit(range, with: NSAttributedString(), name: String(localized: "Add Tag"),
                           selection: NSRange(location: range.location, length: 0)) else { return false }
+        history.attachTagToLast(tag, changesTags: isNew)
         if isNew {
-            history.attachTagToLast(tag)
             tags = AtticTag.normalizedSet(tags + [tag])
             notifyTagsChanged()
         }
@@ -1312,15 +1314,18 @@ extension NoteEditorEngine {
 
     /// An Undo or Redo of a title shorthand step. Undo leaves the hashtag
     /// literal, so the next Space does not take it again.
-    fileprivate func didFlipTag(_ tag: String, add: Bool, range: NSRange) {
-        if add {
-            tags = AtticTag.normalizedSet(tags + [tag])
-        } else {
-            tags.removeAll { $0 == tag }
+    fileprivate func didFlipTag(_ tag: String, add: Bool, changesTags: Bool, range: NSRange) {
+        if !add {
             let string = textStorage.string as NSString
             if range.length > 0, NSMaxRange(range) <= string.length, string.character(at: range.location) == 0x23 {
                 literalHashLocation = range.location
             }
+        }
+        guard changesTags else { return }
+        if add {
+            tags = AtticTag.normalizedSet(tags + [tag])
+        } else {
+            tags.removeAll { $0 == tag }
         }
         notifyTagsChanged()
     }

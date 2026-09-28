@@ -332,6 +332,18 @@ struct AtticNoteTagList: View {
 
     @Environment(\.atticDesign) private var design
 
+    enum SubmitAction: Equatable { case toggle(String), create(String) }
+
+    /// Return in the field acts only on what was typed: the tag with exactly
+    /// that name, or a new tag. An empty field, or a partial word, does
+    /// nothing (it never toggles whichever tag happens to be first).
+    static func submitAction(query: String, tags: [Tag], create: String?) -> SubmitAction? {
+        guard let typed = AtticTag.normalize(query) else { return nil }
+        if tags.contains(where: { $0.name == typed }) { return .toggle(typed) }
+        if let create, create == typed { return .create(create) }
+        return nil
+    }
+
     var body: some View {
         let m = AtticNoteMetrics.self
         VStack(alignment: .leading, spacing: 0) {
@@ -345,7 +357,11 @@ struct AtticNoteTagList: View {
                     .fill(design.tokens.recessed.color))
                 .padding(.bottom, AtticPopoverMetrics.groupGap)
                 .onSubmit {
-                    if let create { onCreate(create) } else if let first = tags.first { onToggle(first.name) }
+                    switch Self.submitAction(query: query, tags: tags, create: create) {
+                    case let .toggle(name): onToggle(name)
+                    case let .create(name): onCreate(name)
+                    case nil: break
+                    }
                 }
                 .accessibilityLabel(String(localized: "Find or add a tag"))
             ScrollView(.vertical) {

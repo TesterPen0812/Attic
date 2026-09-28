@@ -130,11 +130,36 @@ final class NoteEditorTextView: NSTextView {
         asUserEdit { super.deleteForward(sender) }
     }
 
-    /// Esc right after `#word` in the title keeps it as text; otherwise Esc
-    /// goes on as usual.
+    /// Where Esc goes when the note has nothing left to close (the panel
+    /// hides). Tests set it; in the panel it is the window's own route.
+    var escapeFallback: (() -> Void)?
+
+    /// The Esc chain from the note (UX plan § 4.9): an input-method
+    /// composition keeps Esc; the tag suggestions (handled before this, in
+    /// `doCommand`) close; `#word` in the title stays text; the Find bar
+    /// closes; then, with nothing left to close, the panel hides. The text
+    /// view's own completion list is not used in notes.
     override func cancelOperation(_ sender: Any?) {
+        // NSTextView has no cancelOperation of its own (calling super would
+        // raise): what it doesn't take goes up the responder chain.
+        guard engine != nil else { return passEscapeOn(sender) }
+        // The input method owns Esc during a composition.
+        if hasMarkedText() { return }
         if engine?.keepTitleHashtagLiteral() == true { return }
-        super.cancelOperation(sender)
+        if let scrollView = enclosingScrollView, scrollView.isFindBarVisible {
+            let hide = NSMenuItem()
+            hide.tag = NSTextFinder.Action.hideFindInterface.rawValue
+            performTextFinderAction(hide)
+            window?.makeFirstResponder(self)
+            return
+        }
+        if let escapeFallback { return escapeFallback() }
+        if let panel = window as? AtticPanel, let hide = panel.onUnhandledEscape { return hide() }
+        passEscapeOn(sender)
+    }
+
+    private func passEscapeOn(_ sender: Any?) {
+        _ = nextResponder?.tryToPerform(#selector(NSResponder.cancelOperation(_:)), with: sender)
     }
 
     override func cut(_ sender: Any?) { asUserEdit { super.cut(sender) } }
