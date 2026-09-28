@@ -34,6 +34,9 @@ decision.
   ticked rows with counts, "New tag"). It follows Phase 1's tag list and should
   be unified with `AtticTagPicker` when Phase 1's final rounds are merged into
   this branch.
+- **New `AtticTagSuggestion` and `AtticTagSuggestionList`**: the suggestions
+  under a hashtag typed in a note's title (p2-01 #3), on the pop-over surface
+  with `AtticPopoverRow`s; the keyboard's row uses the rows' highlight.
 - **New `AtticStatusItem`, `AtticStatusPill` and `AtticStatusDetails`**: the
   Notes status slot (a raised capsule 36 tall, at most 176 wide, with the
   warning ink for problems, an inline action chip, "+N" or ✕) and its details.
