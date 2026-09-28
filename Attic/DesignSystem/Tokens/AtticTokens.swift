@@ -400,6 +400,17 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         return .spring(duration: duration, bounce: bounce)
     }
 
+    /// The livelier spring Notes uses (owner, 2026-09-28: "springy, alive"):
+    /// the preset's motion a little longer, with a soft overshoot. Reduce
+    /// Motion (and the coming Animations: Reduced setting) gives the preset's
+    /// own fade or instant change.
+    func springy(reduceMotion: Bool) -> Animation? {
+        if reduceMotion { return animation(reduceMotion: true) }
+        return .spring(duration: duration * 1.5, bounce: Self.springyBounce)
+    }
+
+    static let springyBounce: Double = 0.24
+
     /// The insertion/removal transition: opacity plus, unless Reduce Motion
     /// is on, a short move. Never scale or blur.
     func transition(reduceMotion: Bool, edge: Edge = .bottom) -> AnyTransition {

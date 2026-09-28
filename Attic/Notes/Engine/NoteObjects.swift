@@ -214,9 +214,14 @@ final class NoteObjectRenderer {
         self.scale = scale
     }
 
+    /// True when objects must be drawn again: only a change of colours (the
+    /// colour key). The panel becoming key or not swaps the controls'
+    /// material, and Reduce Motion or haptics change nothing drawn here, so
+    /// none of those redraws the note (the "blink" the owner saw).
     func update(design: AtticDesignContext) -> Bool {
-        guard design != self.design else { return false }
+        let changed = design.colourKey != self.design.colourKey
         self.design = design
+        guard changed else { return false }
         checkboxes.removeAll()
         chips.removeAll()
         return true

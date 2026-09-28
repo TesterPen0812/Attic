@@ -308,8 +308,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
     }
 
+    /// How many times a change of look redrew the whole note (diagnostic:
+    /// only a change of colours may do it).
+    private(set) var appearanceRefreshCount = 0
+
     func update(design: AtticDesignContext) {
         guard renderer.update(design: design) else { return }
+        appearanceRefreshCount += 1
         style = NoteTextStyle(design: design, tagLineHeight: style.tagLineHeight,
                               titleTrailingReserve: style.titleTrailingReserve)
         restyle(NSRange(location: 0, length: textStorage.length))
@@ -375,7 +380,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage.enumerateAttribute(.attachment, in: range) { value, _, _ in
             guard let object = value as? NoteObjectAttachment else { return }
             if let image = object as? NoteImageAttachment {
-                if force || image.renderedImage == nil { loadImage(image) }
+                // A decoded image looks the same in every appearance: only a
+                // missing one's placeholder is drawn again.
+                if image.renderedImage == nil || (force && image.isMissing) { loadImage(image) }
             } else if force || object.renderedImage == nil {
                 renderer.apply(to: object, today: today)
             }
@@ -1365,5 +1372,79 @@ extension NoteEditorEngine {
                           width: bounds.width, height: bounds.height)
         }
         return (rect(firstLine), rect(lastLine))
+    }
+}
+
+// MARK: - Format (the paragraphs at the caret or selection)
+
+/// A paragraph's format as ⋯ › Format offers it in this slice.
+enum NoteParagraphFormat: Equatable {
+    case body, checklist
+}
+
+extension NoteEditorEngine {
+    /// The body paragraphs the caret or selection touches (never the title,
+    /// never a line an image or other block object leads). A selection that
+    /// ends right after a line break does not reach into the next line.
+    func formattableParagraphs(in selection: NSRange) -> [NSRange] {
+        let string = textStorage.string as NSString
+        guard string.length > 0 else { return [] }
+        var end = NSMaxRange(selection)
+        if selection.length > 0, end > selection.location, end <= string.length,
+           string.character(at: end - 1) == 0x0A { end -= 1 }
+        var location = min(selection.location, string.length)
+        var result: [NSRange] = []
+        while true {
+            let line = lineRange(at: location)
+            if line.location > 0, !isBlockObject(at: line.location) { result.append(line) }
+            let next = NSMaxRange(line) + 1
+            guard next <= end, next <= string.length, NSMaxRange(line) < string.length else { break }
+            location = next
+        }
+        return result
+    }
+
+    /// What the touched paragraphs are now: checklist only when every one is.
+    func paragraphFormat(in selection: NSRange) -> NoteParagraphFormat? {
+        let lines = formattableParagraphs(in: selection)
+        guard !lines.isEmpty else { return nil }
+        return lines.allSatisfy { checklistBox(inParagraphAt: $0.location) != nil } ? .checklist : .body
+    }
+
+    /// ⋯ › Format: sets the paragraphs at the caret, or every paragraph the
+    /// selection touches, to `format` (one Undo step); nothing else in the
+    /// note changes. The title is never formatted.
+    @discardableResult
+    func applyParagraphFormat(_ format: NoteParagraphFormat, to range: NSRange? = nil) -> Bool {
+        guard !isReadOnly else { return false }
+        let selection = range ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
+        let lines = formattableParagraphs(in: selection)
+        let changes = lines.filter { (checklistBox(inParagraphAt: $0.location) != nil) != (format == .checklist) }
+        guard !changes.isEmpty else { return false }
+        var newSelection = selection
+        history.beginGroup()
+        defer { history.endGroup() }
+        // From the end, so earlier locations stay valid.
+        for line in changes.reversed() {
+            switch format {
+            case .checklist:
+                let box = NoteChecklistAttachment(isChecked: false)
+                renderer.apply(to: box, today: today)
+                guard performEdit(NSRange(location: line.location, length: 0),
+                                  with: NoteTextCodec.attachmentString(box, attributes: style.bodyAttributes),
+                                  name: String(localized: "Checklist")) else { return false }
+                if line.location <= newSelection.location { newSelection.location += 1 }
+                else if line.location < NSMaxRange(newSelection) { newSelection.length += 1 }
+            case .body:
+                guard performEdit(NSRange(location: line.location, length: 1), with: NSAttributedString(),
+                                  name: String(localized: "Body")) else { return false }
+                if line.location < newSelection.location { newSelection.location -= 1 }
+                else if line.location < NSMaxRange(newSelection) { newSelection.length = max(0, newSelection.length - 1) }
+            }
+        }
+        let length = textStorage.length
+        textView?.setSelectedRange(NSRange(location: min(newSelection.location, length),
+                                           length: min(newSelection.length, max(0, length - newSelection.location))))
+        return true
     }
 }

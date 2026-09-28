@@ -130,12 +130,15 @@ final class NotesPageUITests: XCTestCase {
         showAllNotes()
         require(row("Groceries"), "the first note is listed")
         require(row("Kyoto trip"), "the second note is listed")
+        // The search is quiet: a magnifier on the label line opens the field.
+        let magnifier = app.buttons["notes-library-search-button"]
+        require(magnifier, "the magnifier on the All notes line")
+        magnifier.click()
         // "Search 2 notes" (the Tasks page's Done search reads "Search done tasks").
         let search = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@",
                                                          "Search", "notes")).firstMatch
-        require(search, "the search field")
-        search.click()
-        search.typeText("temples")
+        require(search, "the search field takes the line")
+        app.typeText("temples")
         waitFor(!row("Groceries").exists, "search narrows the list")
         require(row("Kyoto trip"), "the matching note stays")
         row("Kyoto trip").click()

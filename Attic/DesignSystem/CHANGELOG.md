@@ -49,6 +49,22 @@ decision.
 - **New `AtticNoteMetrics`** (column, ⋯, tag line, header title, slot and
   All notes geometry).
 
+### Notes, the owner's first feedback on slice 2
+
+- **New `AtticMotionPreset.springy(reduceMotion:)`** (and `springyBounce`,
+  0.24): a preset's motion 1.5 × as long with a soft overshoot, for Notes'
+  slides, the search take-over, the status slot, the tag line and list
+  changes (owner: "springy, alive"). Reduce Motion (and the Phase 1
+  Animations setting, when merged) gives the preset's own fade or instant
+  change. The existing presets are unchanged.
+- **New `AtticNoteLibraryLine`**: All notes' label line with a quiet
+  magnifier at its end; searching turns the line into a recessed field with
+  an "Esc" hint (the Tasks Done search's pattern; to be unified with Phase 1's
+  `AtticTabsSearchField` at the merge). Replaces All notes' search row.
+- **`AtticNoteTagLine`** springs new tags in and fades removed ones.
+- **`NoteObjectRenderer`** redraws only when the colour key changes (a
+  control-material or Reduce Motion change redraws nothing).
+
 ### Notes rebuild, slice 1 (redesign/phase-2)
 
 - **New `AtticDateChip`** (and `AtticDateChipMetrics`: a 10 pt calendar glyph,

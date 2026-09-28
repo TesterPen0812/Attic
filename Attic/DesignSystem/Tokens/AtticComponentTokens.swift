@@ -478,6 +478,8 @@ enum AtticNoteMetrics {
     /// All notes: the search row's magnifier and text, and the rows' text,
     /// on the note column (16 inside the list's 12 pt page edge).
     static let searchIconX: CGFloat = 14
+    /// The "Esc" hint at the end of the search field.
+    static let searchHintPadding: CGFloat = 10
     static let searchTextX: CGFloat = 36
     static let rowTextX: CGFloat = 16
     static let countIconSize: CGFloat = 10

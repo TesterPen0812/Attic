@@ -43,6 +43,18 @@ struct NotesEditorPage: View {
         }))
     }
 
+    // MARK: Direction
+
+    /// The note is to the right of All notes: the library comes in from the
+    /// left and leaves to the left, the note from the right; the button in
+    /// the bottom-left corner shows the stack, then points back at the note.
+    static let libraryEdge: Edge = .leading
+    static let noteEdge: Edge = .trailing
+
+    static func libraryButtonGlyph(libraryShown: Bool) -> String {
+        libraryShown ? "chevron.right" : "rectangle.stack"
+    }
+
     // MARK: Geometry
 
     private var buttonHeight: CGFloat { AtticControlSize.panelButton.height }
@@ -69,10 +81,11 @@ struct NotesEditorPage: View {
                 .padding(.bottom, layout.chromeInsets.bottom)
             shortcuts
         }
-        .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
-        // A new or another note slides in from the right (keystrokes are
-        // never held back: the text view takes the keyboard at once).
-        .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion), value: controller.active?.id)
+        // Springy slides between the note and All notes, and for a new or
+        // another note (keystrokes are never held back: the text view takes
+        // the keyboard at once, and nothing here animates per keystroke).
+        .animation(AtticMotionPreset.slide.springy(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
+        .animation(AtticMotionPreset.slide.springy(reduceMotion: design.reduceMotion), value: controller.active?.id)
         .onAppear {
             controller.update(design: design)
             controller.start()
@@ -101,9 +114,9 @@ struct NotesEditorPage: View {
         }
         .onChange(of: controller.isLibraryPresented) { _, shown in
             if shown {
-                // Typing searches: the keyboard goes to the search row.
+                // Typing searches (the library's own keys): the search
+                // stays quiet on the label line until then.
                 library.highlightedID = nil
-                searchFocused = true
             } else {
                 searchFocused = false
             }
@@ -132,13 +145,13 @@ struct NotesEditorPage: View {
                              onOpen: { id in openFromLibrary(id) },
                              onDelete: { id in delete(id) },
                              onBack: { toggleLibrary() })
-                .transition(slide(from: .leading))
+                .transition(slide(from: Self.libraryEdge))
         } else if let legacyID = controller.legacyNoteID, noteDraft.activeNoteID == legacyID {
             // A note not yet in the new format keeps the old editor.
             NoteComposerView(noteDraft: noteDraft, uiState: uiState,
                              topContentInset: topInset, bottomContentInset: bottomInset)
                 .padding(.horizontal, layout.contentInsets.leading)
-                .transition(slide(from: .trailing))
+                .transition(slide(from: Self.noteEdge))
         } else if let session = controller.active {
             NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
                                     topInset: topInset, bottomInset: bottomInset, headerBottom: layout.headerBottom,
@@ -157,7 +170,7 @@ struct NotesEditorPage: View {
                 }
                 .accessibilityIdentifier("note-editor")
                 .accessibilitySortPriority(3)
-                .transition(slide(from: .trailing))
+                .transition(slide(from: Self.noteEdge))
         } else {
             Color.clear
         }
@@ -177,6 +190,10 @@ struct NotesEditorPage: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(.top, layout.chromeInsets.top)
             .opacity(progress)
+            // It settles into the header as the title passes under it
+            // (scroll-linked, so no animation runs while typing).
+            .offset(y: design.reduceMotion ? 0 : (1 - progress) * -6)
+            .scaleEffect(design.reduceMotion ? 1 : 0.94 + 0.06 * progress, anchor: .top)
             .allowsHitTesting(progress > 0.5)
             .accessibilityHidden(progress < 0.5)
             .accessibilityIdentifier("notes-header-title")
@@ -187,7 +204,7 @@ struct NotesEditorPage: View {
     private var bottomRow: some View {
         AtticControlGroup {
             HStack(spacing: 0) {
-                AtticRaisedButton(systemName: controller.isLibraryPresented ? "chevron.left" : "rectangle.stack",
+                AtticRaisedButton(systemName: Self.libraryButtonGlyph(libraryShown: controller.isLibraryPresented),
                                   label: controller.isLibraryPresented ? "Back" : "All notes",
                                   help: allNotesHelp) {
                     toggleLibrary()
@@ -199,6 +216,7 @@ struct NotesEditorPage: View {
                 if !controller.isLibraryPresented, let session = controller.active {
                     NoteStatusSlot(controller: controller, store: noteStore, session: session)
                         .accessibilitySortPriority(2)
+                        .transition(.opacity)
                 }
                 Spacer(minLength: AtticSpacing.s12)
                 AtticRaisedButton(systemName: "square.and.pencil", label: "New note", help: String(localized: "New note (⌘N)")) {
@@ -318,8 +336,8 @@ struct NotesEditorPage: View {
         var commands: [AtticMenuCommand] = []
         if editable {
             let selection = engine.textView?.selectedRange() ?? NSRange(location: engine.textStorage.length, length: 0)
-            let onTitle = engine.paragraphRange(at: selection.location).location == 0
-            let isChecklist = engine.checklistBox(inParagraphAt: selection.location) != nil
+            // Format acts on the paragraphs at the caret or selection only.
+            let current = engine.paragraphFormat(in: selection)
             commands.append(AtticMenuCommand("Insert", identifier: "notes-menu-insert", submenu: [
                 AtticMenuCommand("Image…", identifier: "notes-menu-insert-image") { isImporterPresented = true },
                 AtticMenuCommand("Today’s Date", startsSection: true) { engine.insertDate(NoteDay(date: Date())) },
@@ -329,9 +347,11 @@ struct NotesEditorPage: View {
                 }
             ]))
             commands.append(AtticMenuCommand("Format", identifier: "notes-menu-format", submenu: [
-                AtticMenuCommand("Body", isChecked: !isChecklist) { if isChecklist { engine.toggleChecklistLine() } },
-                AtticMenuCommand("Checklist", isDisabled: onTitle, isChecked: isChecklist) {
-                    if !isChecklist { engine.toggleChecklistLine() }
+                AtticMenuCommand("Body", isDisabled: current == nil, isChecked: current == .body) {
+                    engine.applyParagraphFormat(.body, to: selection)
+                },
+                AtticMenuCommand("Checklist", isDisabled: current == nil, isChecked: current == .checklist) {
+                    engine.applyParagraphFormat(.checklist, to: selection)
                 }
             ]))
         }
@@ -458,27 +478,35 @@ private struct NoteStatusSlot: View {
     @ObservedObject var session: NoteSession
     @State private var showingDetails = false
     @State private var showingProposal = false
+    @Environment(\.atticDesign) private var design
 
     var body: some View {
         let items = controller.statusItems(for: session).map(item)
-        if let primary = items.first {
-            AtticStatusPill(item: primary, more: items.count - 1,
-                            inlineAction: items.count == 1 ? inlineAction(for: primary) : nil,
-                            onCancel: items.count == 1 ? cancel(for: primary) : nil) {
-                showingDetails = true
-            }
-            .popover(isPresented: $showingDetails, arrowEdge: .top) {
-                AtticStatusDetails(items: items)
-            }
-            .sheet(isPresented: $showingProposal) {
-                if let comparison = session.isConflict
-                    ? controller.conflictComparison(for: session) : controller.proposalComparison(for: session) {
-                    NoteProposalComparison(title: session.isConflict ? comparison.agent : "\(comparison.agent) has changes",
-                                           current: comparison.current,
-                                           proposed: comparison.proposed)
+        // A change of state springs in; typing never changes this key.
+        let key = items.map(\.id).joined(separator: ",")
+        ZStack {
+            if let primary = items.first {
+                AtticStatusPill(item: primary, more: items.count - 1,
+                                inlineAction: items.count == 1 ? inlineAction(for: primary) : nil,
+                                onCancel: items.count == 1 ? cancel(for: primary) : nil) {
+                    showingDetails = true
                 }
+                .id(key)
+                .transition(design.reduceMotion ? .opacity
+                    : .opacity.combined(with: .scale(scale: 0.86)).combined(with: .offset(y: 8)))
             }
-            .transition(.opacity)
+        }
+        .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: key)
+        .popover(isPresented: $showingDetails, arrowEdge: .top) {
+            AtticStatusDetails(items: items)
+        }
+        .sheet(isPresented: $showingProposal) {
+            if let comparison = session.isConflict
+                ? controller.conflictComparison(for: session) : controller.proposalComparison(for: session) {
+                NoteProposalComparison(title: session.isConflict ? comparison.agent : "\(comparison.agent) has changes",
+                                       current: comparison.current,
+                                       proposed: comparison.proposed)
+            }
         }
     }
 

@@ -292,7 +292,11 @@ final class NoteEditorTextView: NSTextView {
         return menu
     }
 
-    @objc func insertChecklistLine(_ sender: Any?) { engine?.toggleChecklistLine() }
+    @objc func insertChecklistLine(_ sender: Any?) {
+        guard let engine else { return }
+        let selection = selectedRange()
+        engine.applyParagraphFormat(engine.paragraphFormat(in: selection) == .checklist ? .body : .checklist, to: selection)
+    }
     @objc func insertTodaysDate(_ sender: Any?) { engine?.insertDate(NoteDay(date: Date())) }
 
     // MARK: Accessibility

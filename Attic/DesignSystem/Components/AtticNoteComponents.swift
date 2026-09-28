@@ -76,12 +76,19 @@ struct AtticNoteTagLine: View {
     let tags: [String]
     let onSelect: (String) -> Void
 
+    @Environment(\.atticDesign) private var design
+
     var body: some View {
         AtticWrapLayout(spacing: AtticNoteMetrics.tagSpacing, lineSpacing: AtticNoteMetrics.tagLineSpacing) {
             ForEach(tags, id: \.self) { tag in
                 AtticNoteTagButton(name: tag) { onSelect(tag) }
+                    // A new tag pops in with a small spring; a removed one fades.
+                    .transition(design.reduceMotion ? .opacity
+                        : .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.6, anchor: .leading)),
+                                      removal: .opacity))
             }
         }
+        .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: tags)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tags"))
     }
@@ -475,5 +482,90 @@ struct AtticTagSuggestionList: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Tag suggestions"))
+    }
+}
+
+// MARK: - All notes' label line and its search
+
+/// All notes' label line (owner feedback, 2026-09-28): "All notes" and, at
+/// the line's end, a quiet magnifier. Searching turns the line into a
+/// recessed field (the Tasks Done search's pattern, card B of v22) with a
+/// springy take-over; Esc, or the "Esc" hint, gives the line back.
+struct AtticNoteLibraryLine: View {
+    let title: String
+    let placeholder: String
+    @Binding var query: String
+    /// The search holds the line (focused, or a query is kept).
+    let searchShown: Bool
+    var fieldFocused: FocusState<Bool>.Binding
+    let onBeginSearch: () -> Void
+    let onEndSearch: () -> Void
+    var onKeyPress: ((KeyPress) -> KeyPress.Result)?
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let height = AtticControlSize.smallHeight
+        ZStack(alignment: .trailing) {
+            if searchShown {
+                field
+                    .transition(design.reduceMotion ? .opacity
+                        : .asymmetric(insertion: .opacity.combined(with: .offset(x: 28)).combined(with: .scale(scale: 0.96, anchor: .trailing)),
+                                      removal: .opacity.combined(with: .scale(scale: 0.97, anchor: .trailing))))
+            } else {
+                HStack(spacing: 0) {
+                    AtticText(verbatim: title, style: .pageTabSelected, ink: .heading)
+                        .padding(.leading, AtticLayout.pageTabsX)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("notes-library-label")
+                    Spacer(minLength: 0)
+                    AtticSmallButton(systemName: "magnifyingglass", label: "Search notes (⌘F)", action: onBeginSearch)
+                        .accessibilityIdentifier("notes-library-search-button")
+                        .padding(.trailing, max(0, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset
+                            - (AtticControlSize.smallMinWidth - AtticSmallControlMetrics.iconSize) / 2))
+                }
+                .transition(.opacity)
+            }
+        }
+        .frame(height: height)
+        .animation(AtticMotionPreset.popover.springy(reduceMotion: design.reduceMotion), value: searchShown)
+    }
+
+    private var field: some View {
+        let tokens = design.tokens
+        let height = AtticControlSize.smallHeight
+        return HStack(spacing: 0) {
+            AtticIcon(systemName: "magnifyingglass", size: AtticListSearchFieldMetrics.iconSize,
+                      weight: AtticIconWeight.outline, ink: .helper)
+                .frame(width: AtticControlSize.statusCircle)
+                .padding(.leading, AtticNoteMetrics.searchIconX - AtticLayout.rowHighlightInset)
+            TextField("", text: $query, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
+                .textFieldStyle(.plain)
+                .font(AtticTextStyle.listBody.font)
+                .foregroundStyle(tokens.color(.heading))
+                .focused(fieldFocused)
+                .onExitCommand(perform: onEndSearch)
+                .onKeyPress(phases: .down) { press in onKeyPress?(press) ?? .ignored }
+                .accessibilityLabel(placeholder)
+                .accessibilityIdentifier("notes-library-search")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, AtticNoteMetrics.searchTextX - AtticNoteMetrics.searchIconX - AtticControlSize.statusCircle)
+            Button(action: onEndSearch) {
+                AtticText(verbatim: String(localized: "Esc"), style: .shortcut, ink: .helper)
+                    .padding(.horizontal, AtticNoteMetrics.searchHintPadding)
+                    .frame(height: height)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .help(String(localized: "End the search (Esc)"))
+            .accessibilityLabel(String(localized: "End search"))
+        }
+        .frame(height: height)
+        .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: height), style: .continuous)
+            .fill(tokens.recessed.color))
+        .contentShape(Rectangle())
+        .onTapGesture { fieldFocused.wrappedValue = true }
+        .padding(.horizontal, AtticLayout.rowHighlightInset)
     }
 }
