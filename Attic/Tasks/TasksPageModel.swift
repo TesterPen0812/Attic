@@ -448,7 +448,7 @@ final class TasksPageModel: ObservableObject {
         if let doneCountCache, doneCountCache.key == key { return doneCountCache.count }
         let today = store.snapshot(for: .tasks).sections.first { $0.status == .done }?.tasks ?? []
         var count: (matches: Int, total: Int)?
-        if let logMatches = store.doneLogTaskCount(matching: query), let logTotal = store.doneLogTaskCount() {
+        if let logMatches = store.doneLogTaskCount(matching: query), let logTotal = doneLogTotal() {
             count = (today.filter { $0.title.localizedStandardContains(query) }.count + logMatches, today.count + logTotal)
         }
         doneCountCache = (key, count)
@@ -461,6 +461,18 @@ final class TasksPageModel: ObservableObject {
     }
 
     private var doneCountCache: (key: DoneCountKey, count: (matches: Int, total: Int)?)?
+
+    /// The Done log's size, read once per store change (round 11): it does
+    /// not depend on the search, and reading it walks every logged task, so
+    /// each keystroke of a search read all 5,000 of them again.
+    private func doneLogTotal() -> Int? {
+        if let doneTotalCache, doneTotalCache.revision == store.revision { return doneTotalCache.total }
+        let total = store.doneLogTaskCount()
+        doneTotalCache = (store.revision, total)
+        return total
+    }
+
+    private var doneTotalCache: (revision: UInt64, total: Int?)?
 
     /// Loads the Done log's first page for the current search, if the store
     /// or the search changed since.

@@ -495,6 +495,11 @@ final class AppCoordinator: ObservableObject {
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "demo" || environment["ATTIC_UI_TEST_SEED"] == "long" {
             try? TasksPagePreview.seedDemo(in: container, long: environment["ATTIC_UI_TEST_SEED"] == "long")
         }
+        // The spec's sizes (round 11, on-screen measurement): 500 open, 500
+        // in Later, 5,000 in the Done log.
+        if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "scale" {
+            try? TasksPagePreview.seedScale(in: container)
+        }
         // Everything finished today: the caught-up Now page.
         if inMemoryStore, isUITesting, environment["ATTIC_UI_TEST_SEED"] == "caughtup" {
             try? TasksPagePreview.seedCaughtUp(in: container)

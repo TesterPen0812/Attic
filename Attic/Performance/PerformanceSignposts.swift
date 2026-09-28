@@ -142,6 +142,14 @@ enum PerformanceSignposts {
         ProcessInfo.processInfo.environment["ATTIC_FRAME_SIGNPOSTS"] == "1"
             || UserDefaults.standard.bool(forKey: "AtticFrameSignposts")
     }()
+    /// With the preview's frame monitor on (`ATTIC_FRAME_MONITOR=1`), the
+    /// pager's moments are printed beside its frames, so an on-screen run
+    /// can check what each synthetic input did.
+    private static let echoes = ProcessInfo.processInfo.environment["ATTIC_FRAME_MONITOR"] == "1"
+    private static func echo(_ text: @autoclosure () -> String) {
+        guard echoes else { return }
+        print(String(format: "ATTIC_EVENT %.4f ", CACurrentMediaTime()) + text())
+    }
     private static var pageChoice: OSSignpostIntervalState?
     private static var pageBuild: OSSignpostIntervalState?
     private static var settle: OSSignpostIntervalState?
@@ -149,6 +157,7 @@ enum PerformanceSignposts {
     /// A page chosen by a tab, a key, ⌘1–3, `show` or Search: ends at the
     /// first frame of its slide (after the page it shows is built).
     static func beginPageChoice() {
+        echo("page-choice")
         guard signposter.isEnabled else { return }
         if let pageChoice { signposter.endInterval("PageChoiceToFirstFrame", pageChoice, "superseded") }
         pageChoice = signposter.beginInterval("PageChoiceToFirstFrame")
@@ -156,8 +165,14 @@ enum PerformanceSignposts {
 
     /// A page is built for a move (a slide or a swipe): ends at the next frame.
     static func beginPageBuild(_ pages: ClosedRange<Int>) {
+        echo("page-build \(pages.lowerBound)-\(pages.upperBound)")
         guard signposter.isEnabled, pageBuild == nil else { return }
         pageBuild = signposter.beginInterval("PageBuildToFrame", "pages \(pages.lowerBound)-\(pages.upperBound)")
+    }
+
+    /// The pages a finished move passed are let go.
+    static func pagesReleased(_ pages: ClosedRange<Int>) {
+        echo("page-release to \(pages.lowerBound)-\(pages.upperBound)")
     }
 
     /// A frame of a move was shown: whatever was waiting for one ends.
@@ -174,6 +189,7 @@ enum PerformanceSignposts {
 
     /// The settle's first frame: the chosen page starts to show.
     static func pagerFirstFrame() {
+        echo("settle-first-frame")
         moveFrame()
         if let pageChoice { signposter.endInterval("PageChoiceToFirstFrame", pageChoice) }
         pageChoice = nil
@@ -181,6 +197,7 @@ enum PerformanceSignposts {
 
     /// The settle ended: how many frames it drew and how many it missed.
     static func pagerSettleEnded(frames: Int, late: Int, interrupted: Bool) {
+        if !interrupted { echo("settle-end frames=\(frames) late=\(late)") }
         guard let settle else { return }
         signposter.endInterval("PagerSettle", settle, "frames=\(frames) late=\(late) interrupted=\(interrupted)")
         self.settle = nil

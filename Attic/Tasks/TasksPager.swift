@@ -80,6 +80,8 @@ final class TasksPagerMotion: ObservableObject {
         guard span.pages != range else { return }
         if range.lowerBound < span.pages.lowerBound || range.upperBound > span.pages.upperBound {
             PerformanceSignposts.beginPageBuild(range)
+        } else {
+            PerformanceSignposts.pagesReleased(range)
         }
         span.pages = range
     }

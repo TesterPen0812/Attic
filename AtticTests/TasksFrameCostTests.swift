@@ -176,7 +176,7 @@ final class FrameCostHost {
 
     init() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        try Self.seed(container)
+        try TasksPagePreview.seedScale(in: container)
         store = TaskStore(container: container)
         model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let size = CGSize(width: AtticLayout.panelSize.width, height: 560)
@@ -191,34 +191,6 @@ final class FrameCostHost {
         window.orderFront(nil)
         window.makeKey()
         spin(1)
-    }
-
-    /// 500 open (some in progress), 500 in Later, 5,000 in the Done log;
-    /// dates, tags and priorities on some, as real lists have.
-    static func seed(_ container: ModelContainer) throws {
-        let context = ModelContext(container)
-        let calendar = Calendar.autoupdatingCurrent
-        let now = Date()
-        var order: Int64 = 10_000_000
-        let priorities: [TaskPriority] = [.none, .none, .medium, .none, .high]
-        func insert(_ index: Int, _ title: String, _ status: TaskStatus, logged: Bool = false, completed: Date? = nil) {
-            order -= 1_024
-            let item = TaskItem(title: title, status: status, priority: priorities[index % priorities.count], createdAt: now,
-                                completedAt: completed, manualOrder: order, parentID: nil)
-            if index % 3 == 0, let date = calendar.date(byAdding: .day, value: index % 9 - 2, to: now) {
-                item.dueDay = DueDay(date: date, calendar: calendar)
-            }
-            if index % 4 == 0 { item.tags = ["home", "work", "errands"].prefix(index % 3 + 1).map { $0 } }
-            item.listOrderVersion = TaskItem.currentListOrderVersion
-            if logged { item.doneLoggedAt = now }
-            context.insert(item)
-        }
-        for index in 0..<500 { insert(index, "Open task number \(index) with a title", index % 25 == 0 ? .inProgress : .todo) }
-        for index in 0..<500 { insert(index, "Later task number \(index)", .backlog) }
-        for index in 0..<5_000 {
-            insert(index, "Finished task \(index)", .done, logged: true, completed: now.addingTimeInterval(-Double(index + 1) * 3_600))
-        }
-        try context.save()
     }
 
     func close() { window.close() }
