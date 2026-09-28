@@ -892,7 +892,7 @@ enum AtticNativeMenu {
         }
         let target = AtticMenuAction(command.action)
         item.target = target
-        item.action = #selector(AtticMenuAction.perform(_:))
+        item.action = #selector(AtticMenuAction.runCommand(_:))
         item.representedObject = target
         if let shortcut = command.shortcut, let key = keyEquivalent(shortcut.key) {
             item.keyEquivalent = key
@@ -920,11 +920,14 @@ enum AtticNativeMenu {
     }
 }
 
-/// Runs a native menu item's closure (the item keeps it alive).
+/// Runs a native menu item's closure (the item keeps it alive). The
+/// method is not called `perform(_:)`: that selector is NSObject's
+/// `performSelector:`, and the menu would call it with itself as the
+/// selector.
 private final class AtticMenuAction: NSObject {
     let action: () -> Void
     init(_ action: @escaping () -> Void) { self.action = action }
-    @objc func perform(_ sender: Any?) { action() }
+    @objc func runCommand(_ sender: Any?) { action() }
 }
 
 /// A title that opens its item's native menu (spec § Minimalism: anything

@@ -796,3 +796,23 @@ final class NotesTagSuggestionTests: XCTestCase {
         XCTAssertNil(engine.activeTitleHashtag, "after Undo the hashtag stays text")
     }
 }
+
+@MainActor
+final class AtticNativeMenuTests: XCTestCase {
+    func testItemsRunTheirCommandsAndShowSectionsChecksAndSubmenus() throws {
+        var ran: [String] = []
+        let commands = [
+            AtticMenuCommand("Insert", submenu: [AtticMenuCommand("Image…") { ran.append("image") }]),
+            AtticMenuCommand("Pin to Top", startsSection: true, isChecked: true) { ran.append("pin") },
+            AtticMenuCommand("Delete Note", isDestructive: true, startsSection: true, identifier: "delete") { ran.append("delete") }
+        ]
+        let menu = AtticNativeMenu.make(commands)
+        XCTAssertEqual(menu.items.map(\.title), ["Insert", "", "Pin to Top", "", "Delete Note"])
+        XCTAssertEqual(menu.items[2].state, .on)
+        XCTAssertEqual(menu.items[0].submenu?.items.first?.title, "Image…")
+        menu.performActionForItem(at: 4)
+        menu.performActionForItem(at: 2)
+        try XCTUnwrap(menu.items[0].submenu).performActionForItem(at: 0)
+        XCTAssertEqual(ran, ["delete", "pin", "image"])
+    }
+}

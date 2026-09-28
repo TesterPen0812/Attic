@@ -145,6 +145,36 @@ final class NotesPageRenderTests: XCTestCase {
         write(harness.host, name: "writing-scrolled-light")
     }
 
+    /// An idle note does no layout work, and typing costs one pass per key:
+    /// the title's accessories never feed a layout loop.
+    func testAnIdleNoteDoesNotLayOutAgainAndAgain() throws {
+        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
+        let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
+        XCTAssertTrue(harness.controller.open(noteID: pricing.id))
+        spin(0.5)
+        let engine = try XCTUnwrap(harness.controller.active?.engine)
+        let textView = try XCTUnwrap(engine.textView)
+        var passes = 0
+        let original = textView.onLayout
+        textView.onLayout = { passes += 1; original?() }
+        spin(1.0)
+        print("NOTES_IDLE_LAYOUT_PASSES=\(passes)")
+        XCTAssertLessThanOrEqual(passes, 2, "an idle note settles")
+        harness.window.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        passes = 0
+        let started = Date()
+        for character in "typing into the body" {
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            harness.host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        spin(0.5)
+        print("NOTES_TYPING_20_KEYS_MS=\(Int(elapsed * 1000)) LAYOUT_PASSES=\(passes)")
+        XCTAssertLessThan(passes, 80, "about one or two passes per key")
+    }
+
     func testTheLibraryShowsGroupsAndTheEmptyDraftShowsNoMenu() throws {
         let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
         XCTAssertTrue(harness.controller.requestNewNote())
