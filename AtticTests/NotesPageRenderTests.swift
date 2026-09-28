@@ -105,7 +105,7 @@ final class NotesPageRenderTests: XCTestCase {
         }
         guard case let .success((groceries, _)) = store.createDocumentNote(id: UUID(), document: NoteDocument(blocks: [
             .text("Groceries"), .checklist("Oat milk", checked: true), .checklist("Lemons"), .checklist("Rice")
-        ])) else { throw NSError(domain: "seed", code: 2) }
+        ]), tags: ["print-shop", "priorities"]) else { throw NSError(domain: "seed", code: 2) }
         store.setPinned(true, noteID: groceries)
     }
 
@@ -121,7 +121,7 @@ final class NotesPageRenderTests: XCTestCase {
         let rects = try XCTUnwrap(engine.titleLineRects())
         XCTAssertGreaterThan(rects.last.minY, rects.first.minY, "the long title wraps")
         let accessories = textView.accessoryViews
-        XCTAssertEqual(accessories.count, 2)
+        XCTAssertEqual(accessories.count, 3, "the tag line, the ⋯ and the tag suggestions")
         let tagLine = accessories[0], menu = accessories[1]
         XCTAssertFalse(menu.isHidden, "a saved note shows its ⋯")
         XCTAssertEqual(menu.frame.midY, rects.first.midY, accuracy: 6, "the ⋯ sits on the title's first line")
@@ -151,7 +151,7 @@ final class NotesPageRenderTests: XCTestCase {
         spin(0.3)
         let draft = try XCTUnwrap(harness.controller.active)
         XCTAssertTrue(draft.isUntouchedDraft)
-        let menu = try XCTUnwrap(draft.engine.textView?.accessoryViews.last)
+        let menu = try XCTUnwrap(draft.engine.textView?.accessoryViews[1])
         XCTAssertTrue(menu.isHidden, "an untouched draft shows no ⋯")
         write(harness.host, name: "new-draft-light")
         XCTAssertTrue(harness.controller.showLibrary())
@@ -179,6 +179,40 @@ final class NotesPageRenderTests: XCTestCase {
         spin(0.3)
         XCTAssertEqual(harness.controller.statusItems(for: session).count, 2)
         write(harness.host, name: "slot-two-states-light")
+    }
+
+    func testTagSuggestionsFollowAHashtagInTheTitle() throws {
+        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
+        let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
+        XCTAssertTrue(harness.controller.open(noteID: pricing.id))
+        spin(0.4)
+        let engine = try XCTUnwrap(harness.controller.active?.engine)
+        let textView = try XCTUnwrap(engine.textView)
+        harness.window.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: engine.titleParagraphRange.length, length: 0))
+        for character in " #pri" {
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        spin(0.3)
+        let list = textView.accessoryViews[2]
+        if harness.window.firstResponder === textView {
+            XCTAssertFalse(list.isHidden, "suggestions show under the hashtag")
+        }
+        write(harness.host, name: "suggestions-light")
+        print("NOTES_SUGGESTIONS_FIRST_RESPONDER=\(harness.window.firstResponder === textView)")
+        guard harness.window.firstResponder === textView else { return }
+        // ↓ picks the first suggestion; Return takes it (no line break).
+        textView.doCommand(by: #selector(NSResponder.moveDown(_:)))
+        textView.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertTrue(engine.tags.contains("print-shop"), "\(engine.tags)")
+        XCTAssertEqual(engine.document().blocks.first?.text, "Pricing page for the October launch ")
+        XCTAssertTrue(list.isHidden)
+        // Typed without picking, Return takes the typed word.
+        for character in "#kyoto" {
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        textView.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        XCTAssertTrue(engine.tags.contains("kyoto"), "\(engine.tags)")
     }
 
     func testDarkWritingAndLibrary() throws {

@@ -483,6 +483,11 @@ enum AtticNoteMetrics {
     static let countIconSize: CGFloat = 10
     static let countGap: CGFloat = 3
     static let countsSpacing: CGFloat = 8
+    /// Tag suggestions under a title hashtag: 220 wide, 6 below its line,
+    /// the row text on the hashtag's first letter.
+    static let suggestionWidth: CGFloat = 220
+    static let suggestionGap: CGFloat = 6
+    static let suggestionShadowRoom: CGFloat = 10
     /// The tag editor: 240 wide, at most 8 rows before it scrolls.
     static let tagEditorWidth: CGFloat = 240
     static let tagEditorMaxListHeight: CGFloat = 8 * 28

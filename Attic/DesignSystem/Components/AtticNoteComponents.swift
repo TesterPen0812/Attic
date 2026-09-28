@@ -410,3 +410,54 @@ private struct AtticNoteTagChoice: View {
         .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
     }
 }
+
+// MARK: - Tag suggestions
+
+/// One suggestion while a `#word` is typed in a note's title (p2-01 #3):
+/// an existing tag with its count, or the typed word as a new tag.
+struct AtticTagSuggestion: Equatable, Identifiable {
+    let name: String
+    let count: Int
+    let isNew: Bool
+    var id: String { (isNew ? "new:" : "") + name }
+
+    /// Existing tags that start with the typed word first, then those that
+    /// contain it (most used first), up to `limit`; then "New tag" when the
+    /// typed word is not a tag yet. Tags the note already has are left out.
+    static func make(typed: String, counts: [String: Int], excluding: Set<String>, limit: Int = 3) -> [AtticTagSuggestion] {
+        guard !typed.isEmpty else { return [] }
+        let candidates = counts.filter { !excluding.contains($0.key) }
+        func ranked(_ keep: (String) -> Bool) -> [(String, Int)] {
+            candidates.filter { keep($0.key) }.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+        }
+        let prefix = ranked { $0.hasPrefix(typed) }
+        let inside = ranked { !$0.hasPrefix(typed) && $0.contains(typed) }
+        var result = (prefix + inside).prefix(limit).map { AtticTagSuggestion(name: $0.0, count: $0.1, isNew: false) }
+        if counts[typed] == nil, !excluding.contains(typed) {
+            result.append(AtticTagSuggestion(name: typed, count: 0, isNew: true))
+        }
+        return result
+    }
+}
+
+/// The suggestions under a title hashtag: a raised list (the pop-over's
+/// surface, 28 pt rows) with the keyboard's row highlighted. Space takes
+/// the typed word; Return or Tab the highlighted row; Esc keeps the text.
+struct AtticTagSuggestionList: View {
+    let suggestions: [AtticTagSuggestion]
+    let highlighted: Int
+    let onPick: (Int) -> Void
+
+    var body: some View {
+        AtticPopover(width: AtticNoteMetrics.suggestionWidth) {
+            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
+                AtticPopoverRow(systemName: nil,
+                                title: suggestion.isNew ? String(localized: "New tag “#\(suggestion.name)”") : "#" + suggestion.name,
+                                detail: suggestion.isNew ? nil : "\(suggestion.count)",
+                                isHighlighted: index == highlighted) { onPick(index) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Tag suggestions"))
+    }
+}

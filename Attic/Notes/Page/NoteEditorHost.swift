@@ -46,6 +46,14 @@ final class NoteTitleAccessories {
     private let chrome: NotesPageChrome
     private let menuHost: NSHostingView<AnyView>
     private let tagHost: NSHostingView<AnyView>
+    /// The suggestions under a `#word` being typed in the title.
+    private let suggestionHost: NSHostingView<AnyView>
+    private var suggestions: [AtticTagSuggestion] = []
+    /// The row ↑ ↓ are on; nil until they move (Return then takes the
+    /// typed word, as Space does), or the typed word's own existing tag.
+    private var highlightedSuggestion: Int?
+    /// Every tag in Notes with how many notes carry it.
+    var tagCounts: () -> [String: Int] = { [:] }
     /// Measures the tag line's wrapped height at the column's width.
     private let tagMeasure = NSHostingController(rootView: AnyView(EmptyView()))
     /// The measured tag line, kept until the tags or the width change (the
@@ -75,12 +83,16 @@ final class NoteTitleAccessories {
         self.tagEditor = tagEditor
         menuHost = NSHostingView(rootView: AnyView(EmptyView()))
         tagHost = NSHostingView(rootView: AnyView(EmptyView()))
-        for host in [tagHost, menuHost] {
+        suggestionHost = NSHostingView(rootView: AnyView(EmptyView()))
+        suggestionHost.isHidden = true
+        for host in [tagHost, menuHost, suggestionHost] {
             host.translatesAutoresizingMaskIntoConstraints = true
             host.autoresizingMask = []
             textView.addSubview(host)
         }
-        textView.accessoryViews = [tagHost, menuHost]
+        textView.accessoryViews = [tagHost, menuHost, suggestionHost]
+        textView.suggestionCommand = { [weak self] selector in self?.handleSuggestionKey(selector) ?? false }
+        engine.onCaretChange = { [weak self] in self?.updateSuggestions() }
         chrome.accessories = self
         rebuild()
         textView.onLayout = { [weak self] in self?.layout() }
@@ -100,10 +112,13 @@ final class NoteTitleAccessories {
         if let boundsObserver { NotificationCenter.default.removeObserver(boundsObserver) }
         boundsObserver = nil
         engine.onTagsDisplayChange = nil
+        engine.onCaretChange = nil
         textView?.onLayout = nil
+        textView?.suggestionCommand = nil
         textView?.accessoryViews = []
         menuHost.removeFromSuperview()
         tagHost.removeFromSuperview()
+        suggestionHost.removeFromSuperview()
         if chrome.accessories === self {
             chrome.accessories = nil
             chrome.headerTitleProgress = 0
@@ -162,13 +177,107 @@ final class NoteTitleAccessories {
         }
         engine.setTitleReserves(tagLine: tagHeight, trailing: m.titleTrailingReserve)
         // Layout can run inside a SwiftUI update: publish on the next turn.
-        DispatchQueue.main.async { [weak self] in self?.updateHeaderTitle() }
+        DispatchQueue.main.async { [weak self] in
+            self?.updateHeaderTitle()
+            self?.updateSuggestions()
+        }
         // VoiceOver: "Note, Pricing page".
         let title = engine.lineText(at: 0).trimmingCharacters(in: .whitespaces)
         if title != spokenTitle {
             spokenTitle = title
             textView.setAccessibilityLabel(title.isEmpty ? String(localized: "Note")
                                                          : String(localized: "Note, \(title)"))
+        }
+    }
+
+    // MARK: Tag suggestions
+
+    /// Shows, moves or hides the suggestions for the `#word` at the caret
+    /// in the title (never during a composition, never for a hashtag kept
+    /// as text).
+    func updateSuggestions() {
+        guard let textView, textView.window?.firstResponder === textView,
+              let active = engine.activeTitleHashtag,
+              let hashRect = engine.rect(for: NSRange(location: active.range.location, length: 1)) else {
+            hideSuggestions()
+            return
+        }
+        let list = AtticTagSuggestion.make(typed: active.tag, counts: tagCounts(), excluding: Set(engine.tags))
+        guard !list.isEmpty else { hideSuggestions(); return }
+        if list.map(\.id) != suggestions.map(\.id) {
+            highlightedSuggestion = list.firstIndex { !$0.isNew && $0.name == active.tag }
+        }
+        suggestions = list
+        let m = AtticNoteMetrics.self
+        let room = m.suggestionShadowRoom
+        let height = CGFloat(list.count) * AtticControlSize.smallHeight + AtticPopoverMetrics.padding * 2
+        let width = m.suggestionWidth
+        // The rows' text starts on the hashtag's `#`.
+        let textInset = AtticPopoverMetrics.padding + AtticPopoverMetrics.rowPadding
+        var x = hashRect.minX - textInset
+        x = min(x, textView.bounds.width - width - 8)
+        x = max(x, 8)
+        let frame = NSRect(x: x - room, y: hashRect.maxY + m.suggestionGap - room,
+                           width: width + room * 2, height: height + room * 2)
+        if suggestionHost.frame != frame { suggestionHost.frame = frame }
+        renderSuggestions()
+        suggestionHost.isHidden = false
+    }
+
+    private func renderSuggestions() {
+        let room = AtticNoteMetrics.suggestionShadowRoom
+        suggestionHost.rootView = AnyView(
+            AtticTagSuggestionList(suggestions: suggestions, highlighted: highlightedSuggestion ?? -1) { [weak self] index in
+                self?.pickSuggestion(index)
+            }
+            .padding(room)
+            .atticDesign(design)
+        )
+    }
+
+    private func hideSuggestions() {
+        guard !suggestionHost.isHidden || !suggestions.isEmpty else { return }
+        suggestionHost.isHidden = true
+        suggestions = []
+        highlightedSuggestion = nil
+    }
+
+    private func pickSuggestion(_ index: Int) {
+        guard suggestions.indices.contains(index) else { return }
+        let suggestion = suggestions[index]
+        hideSuggestions()
+        engine.takeTitleHashtag(as: suggestion.isNew ? nil : suggestion.name)
+        focusText()
+    }
+
+    /// ↑ ↓ move through the suggestions, Return or Tab takes the highlighted
+    /// one, Esc keeps the hashtag as text. Other keys type as usual.
+    private func handleSuggestionKey(_ selector: Selector) -> Bool {
+        guard !suggestionHost.isHidden, !suggestions.isEmpty else { return false }
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)):
+            highlightedSuggestion = highlightedSuggestion.map { min($0 + 1, suggestions.count - 1) } ?? 0
+            renderSuggestions()
+            return true
+        case #selector(NSResponder.moveUp(_:)):
+            highlightedSuggestion = highlightedSuggestion.map { max($0 - 1, 0) } ?? suggestions.count - 1
+            renderSuggestions()
+            return true
+        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+            if let highlightedSuggestion {
+                pickSuggestion(highlightedSuggestion)
+            } else {
+                // Nothing picked: the typed word, as Space takes it.
+                hideSuggestions()
+                engine.takeTitleHashtag()
+            }
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            _ = engine.keepTitleHashtagLiteral()
+            hideSuggestions()
+            return true
+        default:
+            return false
         }
     }
 
@@ -257,6 +366,8 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     let headerBottom: CGFloat
     let design: AtticDesignContext
     let tagEditor: () -> AnyView
+    /// Every tag in Notes with its count (for the title's suggestions).
+    let tagCounts: () -> [String: Int]
 
     final class Coordinator {
         var engine: NoteEditorEngine?
@@ -283,6 +394,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
                     && !session.isImporting
             },
             tagEditor: tagEditor)
+        context.coordinator.accessories?.tagCounts = tagCounts
         let selection = session.selection
         DispatchQueue.main.async {
             let length = engine.textStorage.length

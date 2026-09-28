@@ -104,7 +104,12 @@ final class NoteEditorTextView: NSTextView {
         asUserEdit { super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange) }
     }
 
+    /// A list the keys reach first (the title's tag suggestions): ↑ ↓,
+    /// Return, Tab and Esc go to it while it shows.
+    var suggestionCommand: ((Selector) -> Bool)?
+
     override func doCommand(by selector: Selector) {
+        if !hasMarkedText(), suggestionCommand?(selector) == true { return }
         asUserEdit { super.doCommand(by: selector) }
     }
 

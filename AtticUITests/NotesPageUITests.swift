@@ -122,7 +122,9 @@ final class NotesPageUITests: XCTestCase {
         showAllNotes()
         XCTAssertTrue(row("Groceries").waitForExistence(timeout: 5))
         XCTAssertTrue(row("Kyoto trip").exists)
-        let search = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@", "Search")).firstMatch
+        // "Search 2 notes" (the Tasks page's Done search reads "Search done tasks").
+        let search = app.textFields.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@",
+                                                         "Search", "notes")).firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.click()
         search.typeText("temples")

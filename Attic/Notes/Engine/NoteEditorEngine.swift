@@ -64,6 +64,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onTagsChange: (() -> Void)?
     /// The tag line redraws (the page's; separate from the session's save hook).
     var onTagsDisplayChange: (() -> Void)?
+    /// The caret moved or the text changed (the title's tag suggestions follow it).
+    var onCaretChange: (() -> Void)?
 
     fileprivate func notifyTagsChanged() {
         onTagsChange?()
@@ -842,6 +844,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         textView.typingAttributes = attributes(forParagraphAt: selection.location)
         onSelectionChange?(selection)
+        onCaretChange?()
     }
 
     /// The caret never rests between a checkbox and its line start: moving
@@ -1241,6 +1244,15 @@ extension NoteEditorEngine {
     /// The `#word` just before the caret in the title, when it would become
     /// a tag: at a word boundary, letters, numbers, `-` and `_`, with a
     /// letter (the add bar's rule, so "#42" stays text).
+    /// The `#word` being typed in the title that Space or Return would take
+    /// (nil when it stays text: Esc, or an Undo of its conversion).
+    var activeTitleHashtag: (range: NSRange, tag: String)? {
+        guard activity == .idle, let pending = pendingTitleHashtag(), literalHashLocation != pending.range.location else {
+            return nil
+        }
+        return pending
+    }
+
     private func pendingTitleHashtag() -> (range: NSRange, tag: String)? {
         guard !isReadOnly, let textView, !textView.hasMarkedText() else { return nil }
         let selection = textView.selectedRange()
@@ -1272,11 +1284,13 @@ extension NoteEditorEngine {
     /// Space or Return after `#word` in the title: the word leaves the title
     /// and joins the tags at once, as one Undo step (one ⌘Z brings the text
     /// back and removes the tag). Returns false when nothing was taken.
+    /// `chosen` takes a suggested tag in place of the typed word.
     @discardableResult
-    func takeTitleHashtag() -> Bool {
-        guard activity == .idle, let (range, tag) = pendingTitleHashtag(), literalHashLocation != range.location else {
+    func takeTitleHashtag(as chosen: String? = nil) -> Bool {
+        guard activity == .idle, let (range, typed) = pendingTitleHashtag(), literalHashLocation != range.location else {
             return false
         }
+        guard let tag = chosen.flatMap(AtticTag.normalize) ?? Optional(typed) else { return false }
         let isNew = !tags.contains(tag)
         guard performEdit(range, with: NSAttributedString(), name: String(localized: "Add Tag"),
                           selection: NSRange(location: range.location, length: 0)) else { return false }

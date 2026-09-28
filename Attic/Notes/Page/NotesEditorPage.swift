@@ -135,7 +135,12 @@ struct NotesEditorPage: View {
         } else if let session = controller.active {
             NoteEditorRepresentable(session: session, chrome: chrome, columnInset: columnInset,
                                     topInset: topInset, bottomInset: bottomInset, headerBottom: layout.headerBottom,
-                                    design: design, tagEditor: { AnyView(tagEditor(for: session)) })
+                                    design: design, tagEditor: { AnyView(tagEditor(for: session)) },
+                                    tagCounts: { [noteStore] in
+                                        var counts: [String: Int] = [:]
+                                        for note in noteStore.notes { for tag in note.tags { counts[tag, default: 0] += 1 } }
+                                        return counts
+                                    })
                 .id(ObjectIdentifier(session.engine))
                 .overlay(alignment: .top) {
                     AtticEdgeVeil(edge: .top, height: AtticEdgeBlur.panelTop)

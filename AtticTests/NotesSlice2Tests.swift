@@ -764,3 +764,35 @@ final class NotesSlice2MigrationTests: XCTestCase {
         XCTAssertEqual(summary.files, 1)
     }
 }
+
+@MainActor
+final class NotesTagSuggestionTests: XCTestCase {
+    func testSuggestionsPreferPrefixesThenCountsAndOfferANewTag() {
+        let counts = ["pricing": 6, "print-shop": 1, "sprint": 3, "launch": 4]
+        let list = AtticTagSuggestion.make(typed: "pri", counts: counts, excluding: [])
+        XCTAssertEqual(list.map(\.name), ["pricing", "print-shop", "sprint", "pri"])
+        XCTAssertEqual(list.last?.isNew, true)
+        let exact = AtticTagSuggestion.make(typed: "launch", counts: counts, excluding: [])
+        XCTAssertEqual(exact.map(\.name), ["launch"], "an existing tag is offered, not a new one")
+        let owned = AtticTagSuggestion.make(typed: "pri", counts: counts, excluding: ["pricing"])
+        XCTAssertFalse(owned.contains { $0.name == "pricing" }, "tags the note has are left out")
+        XCTAssertTrue(AtticTagSuggestion.make(typed: "", counts: counts, excluding: []).isEmpty)
+    }
+
+    func testTakingASuggestionUsesItsNameAsOneStep() {
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: [.text("Pricing")]))
+        let (scroll, textView) = engine.makeView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 320, height: 400)
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        for character in " #pri" { textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0)) }
+        XCTAssertEqual(engine.activeTitleHashtag?.tag, "pri")
+        XCTAssertTrue(engine.takeTitleHashtag(as: "pricing"))
+        XCTAssertEqual(engine.tags, ["pricing"])
+        XCTAssertEqual(engine.document().title, "Pricing ")
+        XCTAssertNil(engine.activeTitleHashtag)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document().title, "Pricing #pri")
+        XCTAssertEqual(engine.tags, [])
+        XCTAssertNil(engine.activeTitleHashtag, "after Undo the hashtag stays text")
+    }
+}
