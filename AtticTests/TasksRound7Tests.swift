@@ -422,5 +422,15 @@ final class TasksRound7ShellTests: XCTestCase {
         press("f", keyCode: 3, modifiers: .command)
         XCTAssertNotNil(searchField(), "⌘F on Done opens the search")
         XCTAssertTrue(searchHasKeyboard(), "with the keyboard")
+        // An input method composing keeps its Esc (round 8, G2); once the
+        // composition has ended, Esc ends the search.
+        let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+        editor.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(editor.hasMarkedText())
+        press("\u{1B}", keyCode: 53)
+        XCTAssertNotNil(searchField(), "Esc while composing is the input method's: the search stays")
+        if editor.hasMarkedText() { editor.unmarkText() }
+        press("\u{1B}", keyCode: 53)
+        XCTAssertNil(searchField(), "the next Esc ends the search")
     }
 }

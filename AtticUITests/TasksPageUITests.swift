@@ -451,6 +451,23 @@ final class TasksPageUITests: XCTestCase {
         high.click()
         waitFor((priority.value as? String) == "High", "the Priority button shows High")
 
+        // Each × takes its button's value, over the bottom stack's band
+        // (round 8: Tag × and Priority × clicked for real).
+        window.buttons["composer-priority-clear"].click()
+        waitFor((priority.value as? String ?? "").isEmpty, "Priority × clears it")
+        window.buttons["composer-tag-clear"].click()
+        waitFor((tag.value as? String ?? "").isEmpty, "Tag × clears it")
+        // And back, for the task.
+        tag.click()
+        XCTAssertTrue(launch.waitForExistence(timeout: 3))
+        launch.click()
+        waitFor((tag.value as? String) == "launch", "the tag again")
+        app.typeKey(.escape, modifierFlags: [])
+        priority.click()
+        XCTAssertTrue(high.waitForExistence(timeout: 3))
+        high.click()
+        waitFor((priority.value as? String) == "High", "High again")
+
         // A typed piece shows on its button too; the × clears it, words and all.
         addBar.click()
         addBar.typeKey(.rightArrow, modifierFlags: .command)
@@ -471,6 +488,52 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(spoken.contains("tagged launch"), spoken)
         XCTAssertFalse(spoken.contains("due "), spoken)
         waitFor(!date.exists, "the strip goes with the draft")
+    }
+
+    /// Round 8 (G1): a mark typed after a pick and sent at once, with no
+    /// space after it, is the task's priority; the send button adds it.
+    func testSendingAMarkTypedAfterAPickUsesTheMark() throws {
+        XCTAssertTrue(addBar.waitForExistence(timeout: 5))
+        addBar.click()
+        addBar.typeText("Call mom")
+        let priority = window.buttons["composer-priority"]
+        XCTAssertTrue(priority.waitForExistence(timeout: 3))
+        priority.click()
+        let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
+        XCTAssertTrue(high.waitForExistence(timeout: 3))
+        high.click()
+        waitFor((priority.value as? String) == "High", "picked High")
+        addBar.click()
+        addBar.typeKey(.rightArrow, modifierFlags: .command)
+        addBar.typeText(" !")
+        let send = window.buttons["Add"]
+        XCTAssertTrue(send.waitForExistence(timeout: 3), "the send button shows")
+        send.click()
+        waitFor(row("Call mom").exists, "the send button adds the task")
+        let spoken = label("Call mom")
+        XCTAssertTrue(spoken.contains("medium priority"), "the typed mark wins over the pick: \(spoken)")
+        XCTAssertFalse(spoken.hasPrefix("Call mom !"), spoken)
+    }
+
+    /// The selection bar's controls take their clicks over the bottom
+    /// stack's band (round 8): its priority menu and its move button.
+    func testTheSelectionBarsControlsTakeTheirClicks() throws {
+        select("Call the plumber")
+        XCUIElement.perform(withKeyModifiers: .command) { select("Email beta testers") }
+        let move = window.buttons["Move 2 tasks to Later"]
+        XCTAssertTrue(move.waitForExistence(timeout: 3), "the selection bar shows")
+        window.buttons["Set priority of 2 tasks"].click()
+        let high = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "High")).firstMatch
+        XCTAssertTrue(high.waitForExistence(timeout: 3), "its priority menu opens")
+        XCTAssertFalse(app.menuItems.matching(NSPredicate(format: "title == %@", "Low")).firstMatch.exists, "no Low")
+        high.click()
+        waitFor(label("Call the plumber").contains("high priority") && label("Email beta testers").contains("high priority"),
+                "the bar set both to High")
+        XCTAssertTrue(move.waitForExistence(timeout: 3))
+        move.click()
+        waitFor(!row("Call the plumber").exists && !row("Email beta testers").exists, "the bar moved both to Later")
+        app.typeKey("z", modifierFlags: .command)
+        waitFor(row("Call the plumber").exists && row("Email beta testers").exists, "⌘Z brings them back")
     }
 
     /// Suggestions while typing (owner fix 5 B, review 15): Tab takes the

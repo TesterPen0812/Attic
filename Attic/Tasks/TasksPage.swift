@@ -330,9 +330,18 @@ struct TasksPage: View {
     private func searchEscapePressed(_ event: NSEvent) -> Bool {
         guard searchFocused, model.isPageShown, model.tab == .done, event.keyCode == 53,
               event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
-              !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window else { return false }
+              !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window,
+              // An input method composing keeps its Esc: it cancels the
+              // composition, and only the next Esc ends the search (G2).
+              !Self.isComposing(window.firstResponder) else { return false }
         endSearch()
         return true
+    }
+
+    /// The responder is a text view with marked text (an input method
+    /// composing).
+    static func isComposing(_ responder: NSResponder?) -> Bool {
+        (responder as? NSTextView)?.hasMarkedText() == true
     }
 
     /// Whether ⌘F belongs to the Done search (pure, tested directly).
@@ -434,13 +443,17 @@ struct TasksPage: View {
             // unphased events, or momentum the target did not govern) left
             // Done on screen under a Later tab. The tabs and the page shown
             // always agree; a swipe the page could not follow (an edit that
-            // can't be saved) goes back the same way.
+            // can't be saved) goes back the same way. The correction runs a
+            // turn later, and only if nothing newer happened meanwhile (a
+            // tab, a key, `show`, Search, a new gesture; round 8, G3).
             let target = model.tab
-            if TasksPagerSwipe.isOffPage(geometry: swipe.geometry, page: TasksTab.allCases.firstIndex(of: target) ?? 0) {
-                DispatchQueue.main.async {
-                    withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
-                        proxy.scrollTo(target, anchor: .leading)
-                    }
+            guard TasksPagerSwipe.isOffPage(geometry: swipe.geometry, page: TasksTab.allCases.firstIndex(of: target) ?? 0) else { return }
+            let ticket = swipe.correctionTicket()
+            DispatchQueue.main.async {
+                guard swipe.mayCorrect(ticket, to: TasksTab.allCases.firstIndex(of: target) ?? 0,
+                                       shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0) else { return }
+                withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
+                    proxy.scrollTo(target, anchor: .leading)
                 }
             }
         }
@@ -2410,6 +2423,8 @@ final class TasksPagerSwipe {
     /// the page to select once that swipe has settled (nil otherwise).
     func phaseChanged(to phase: ScrollPhase, shown: Int) -> Int? {
         self.phase = phase
+        // Anything moving makes a correction queued at the last rest stale.
+        if phase != .idle { generation &+= 1 }
         switch phase {
         case .interacting, .tracking, .decelerating:
             if origin == nil, !isCancelledUntilIdle {
@@ -2435,7 +2450,22 @@ final class TasksPagerSwipe {
     /// the pager is idle.
     func cancel() {
         reset()
+        generation &+= 1
         if phase != .idle { isCancelledUntilIdle = true }
+    }
+
+    /// Counts what happened (a gesture, explicit navigation): a correction
+    /// queued at rest runs only if nothing has since (round 8, G3).
+    private(set) var generation = 0
+
+    /// Taken when a correction is queued at rest.
+    func correctionTicket() -> Int { generation }
+
+    /// Whether a correction queued with `ticket` to page `target` may still
+    /// run: nothing happened since, the pager is still at rest, and the
+    /// model still shows that page.
+    func mayCorrect(_ ticket: Int, to target: Int, shown: Int) -> Bool {
+        ticket == generation && phase == .idle && shown == target
     }
 
     private func reset() {

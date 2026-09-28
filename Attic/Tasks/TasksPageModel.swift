@@ -1255,7 +1255,14 @@ final class TasksPageModel: ObservableObject {
     /// task's page. Returns the new task.
     @discardableResult
     func submitAddBar(openingPage: Bool = false) -> UUID? {
-        guard let draft = addBar.draft(parser: parser, status: addStatus),
+        // Submitting finishes the words at the end (round 8, G1): a date or
+        // priority typed after a pick, still at the caret (`Call !` then
+        // Return), replaces the pick as a finished one does. Words that are
+        // no piece (`friend`, `money`) stay words. Only the saved task sees
+        // it: a failed save keeps the draft exactly as it was.
+        var finished = addBar
+        finished.typedReplacesPicks(parser: parser, caret: nil)
+        guard let draft = finished.draft(parser: parser, status: addStatus),
               let task = library.createTasks([draft])?.first else { return nil }
         addBarState.clearDraft()
         if openingPage { services.openPage(task.id) }
