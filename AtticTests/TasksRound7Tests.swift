@@ -286,10 +286,14 @@ final class TasksRound7HostedTests: XCTestCase {
         hosted.press("f", keyCode: 3, modifiers: .command)
         hosted.press("e", keyCode: 14)
         XCTAssertEqual(hosted.model.doneSearch, "e")
-        // Click a result.
-        let places = hosted.rowPlaces()
-        let first = try XCTUnwrap(places.values.min())
-        hosted.click(y: first)
+        // Click a result: the list's first rows, from under the tabs.
+        let listTop = TasksViewport.listTop(tabsTop: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520)).headerBottom
+            + AtticLayout.pageTabsTop)
+        var y = listTop + 4
+        while hosted.model.selection.isEmpty, y < listTop + 160 {
+            hosted.click(y: y)
+            y += 8
+        }
         XCTAssertEqual(hosted.model.selection.count, 1, "a click selects a result")
         // Back into the search field on the tabs' line.
         let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520))
@@ -297,7 +301,12 @@ final class TasksRound7HostedTests: XCTestCase {
         XCTAssertTrue(hosted.model.selection.isEmpty, "back in the search, no row stays lit")
         XCTAssertEqual(hosted.model.doneSearch, "e", "the query stays")
     }
+}
 
+/// Round 7 through the full panel shell (R2). Its own class, run after
+/// the hosted page tests: the shell leaves more behind when it closes.
+@MainActor
+final class TasksRound7ShellTests: XCTestCase {
     // MARK: - R2: a hidden Tasks page never answers ⌘F
 
     /// The full panel shell: Tasks → Done search, then Notes (⌘2's page
@@ -337,8 +346,11 @@ final class TasksRound7HostedTests: XCTestCase {
         panel.makeKey()
         defer {
             host.cancelActiveInteraction(reason: .lostWindow)
+            state.releasePageContent()
+            spin(0.3)
             panel.orderOut(nil)
             panel.contentView = nil
+            panel.close()
         }
         func spin(_ seconds: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(seconds)) }
         func press(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) {
@@ -347,7 +359,7 @@ final class TasksRound7HostedTests: XCTestCase {
                                              windowNumber: panel.windowNumber, context: nil, characters: characters,
                                              charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)!
                 NSApp.postEvent(event, atStart: false)
-                while let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) { NSApp.sendEvent(next) }
+                Hosted.pumpEvents()
             }
             spin(0.6)
         }

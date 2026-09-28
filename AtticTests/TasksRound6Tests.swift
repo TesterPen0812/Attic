@@ -290,6 +290,17 @@ final class Hosted {
 
     func close() { window.close() }
 
+    /// Delivers what is queued through the app, as a real event comes; a
+    /// bounded number, so a source that keeps posting can never hang the
+    /// run (round 7's CI hang).
+    static func pumpEvents(limit: Int = 64) {
+        var count = 0
+        while count < limit, let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
+            NSApp.sendEvent(next)
+            count += 1
+        }
+    }
+
     func spin(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
@@ -329,9 +340,7 @@ final class Hosted {
                                          context: nil, characters: characters, charactersIgnoringModifiers: characters,
                                          isARepeat: false, keyCode: keyCode)!
             NSApp.postEvent(event, atStart: false)
-            while let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
-                NSApp.sendEvent(next)
-            }
+            Hosted.pumpEvents()
         }
         spin(0.4)
     }
@@ -359,9 +368,7 @@ final class Hosted {
                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                                            context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
             NSApp.postEvent(event, atStart: false)
-            while let next = NSApp.nextEvent(matching: .any, until: Date(), inMode: .default, dequeue: true) {
-                NSApp.sendEvent(next)
-            }
+            Hosted.pumpEvents()
             spin(0.01)
         }
         spin(0.08)
