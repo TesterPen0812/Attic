@@ -361,17 +361,20 @@ final class Hosted {
 
     func click(y: CGFloat, x: CGFloat = 110, modifiers: NSEvent.ModifierFlags = []) {
         let point = CGPoint(x: x, y: height - y)
-        // Through the app's queue, as a real click comes: the page reads
-        // the click's modifiers from `NSApp.currentEvent`.
+        // Through the app's queue, as a real click comes (the page reads
+        // the click's modifiers from `NSApp.currentEvent`), the press and
+        // the release queued together: a view that tracks the mouse from its
+        // press (a text field) reads the release from the queue itself, so
+        // it must be there already (round 7's CI hang: a click into the
+        // search field waited for a release that was never posted).
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: modifiers,
                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                                           context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+                                           context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
             NSApp.postEvent(event, atStart: false)
-            Hosted.pumpEvents()
-            spin(0.01)
         }
-        spin(0.08)
+        Hosted.pumpEvents()
+        spin(0.09)
     }
 
     /// Where a plain click selects each row: the first point (top down)

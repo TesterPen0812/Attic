@@ -395,8 +395,12 @@ final class TasksRound7ShellTests: XCTestCase {
         press("f", keyCode: 3, modifiers: .command)
         XCTAssertNil(searchField(), "⌘F on Notes never opens the hidden Done search")
         XCTAssertFalse(searchHasKeyboard())
-        // On Tasks (Done shown) it does.
+        // On Tasks (Done shown) it does. (⌘F on Notes went to Notes' own
+        // Find, whose panel can take the key window: the panel is key
+        // again first, as a click on it makes it.)
         state.selectSection(.tasks)
+        for window in NSApp.windows where window !== panel && window.isVisible && window.className.contains("Find") { window.orderOut(nil) }
+        panel.makeKey()
         spin(1)
         press("f", keyCode: 3, modifiers: .command)
         XCTAssertNotNil(searchField(), "⌘F on Done opens the search")
