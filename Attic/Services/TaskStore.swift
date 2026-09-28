@@ -1777,8 +1777,9 @@ final class TaskStore: ObservableObject {
     /// duplicate must hold the same content as the deleted copies (a changed
     /// one refuses the restore rather than being reconciled by guesswork).
     /// A subtask deleted on its own comes back only while its main task is
-    /// live (restore the main task first), so it always returns to its
-    /// family, never as a stray row.
+    /// live, or, for an archived subtask, still in the Done log (restore the
+    /// main task first otherwise), so it always returns to its family, never
+    /// as a stray row.
     @discardableResult
     func restoreDeleted(taskIDs: [UUID]) -> Bool {
         guard !taskIDs.isEmpty else { return false }
@@ -1830,7 +1831,8 @@ final class TaskStore: ObservableObject {
                 }
                 restoring.formUnion(members)
             }
-            // A root that is a subtask returns only under a live main task.
+            // A root that is a subtask returns only under a live main task,
+            // or, if it was archived, under a main task still in the Done log.
             for (rootID, batch) in batches where !batch.isEmpty {
                 guard let parentID = batch.first(where: { $0.id == rootID })?.parentID,
                       parentID != rootID, !restoring.contains(parentID) else { continue }
@@ -1840,7 +1842,13 @@ final class TaskStore: ObservableObject {
                 // A parent that no longer exists at all leaves the subtask
                 // visible as a root, as for any orphaned link.
                 if !parentRows.isEmpty, task(withID: parentID) == nil {
-                    throw TaskReplicaMutationError.parentNotLive(rootID)
+                    // An archived subtask (round 10b) goes back into its
+                    // parent's Done-log family with its completion and
+                    // archive fields as they were; the parent is not reopened.
+                    let archived = batch.filter { $0.id == rootID }.allSatisfy { $0.doneLoggedAt != nil }
+                    guard archived, listedTask(withID: parentID) != nil else {
+                        throw TaskReplicaMutationError.parentNotLive(rootID)
+                    }
                 }
             }
             for batch in batches.values {

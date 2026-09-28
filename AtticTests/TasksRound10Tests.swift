@@ -35,6 +35,10 @@ final class TasksRound10Tests: XCTestCase {
     /// Finishes `task` (and its family) and moves it to the Done log, as
     /// the daily cleanup does.
     private func log(_ task: TaskItem) {
+        log(task, in: store, library: library)
+    }
+
+    private func log(_ task: TaskItem, in store: TaskStore, library: AtticLibrary) {
         XCTAssertTrue(library.completeTask(task.id).isApplied)
         XCTAssertGreaterThan(store.moveCompletedToDoneLog(before: Date().addingTimeInterval(60)), 0)
         XCTAssertNil(store.task(withID: task.id))
@@ -430,6 +434,60 @@ final class TasksRound10Tests: XCTestCase {
         log(finished)
         _ = try tools.call(name: "delete_task", arguments: ["id": finished.id.uuidString])
         XCTAssertEqual(library.state(of: AtticItemRef(.task, finished.id)), .deleted)
+    }
+
+    // MARK: - Round 10b: an archived subtask's delete comes back
+
+    /// Round 10b, finding 1: `delete_task` on a Done-log subtask is undoable
+    /// and restorable while its main task is still in the Done log (it never
+    /// needs reopening), with the subtask's completion and archive fields
+    /// intact on every replica. A deleted main task still refuses.
+    func testAnArchivedSubtaskDeletedOnItsOwnUndoesRedoesAndRestores() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true)
+        let seed = ModelContext(container)
+        let born = Date(timeIntervalSinceNow: -3_600)
+        let parent = TaskItem(title: "Trip", createdAt: born, manualOrder: 1_000)
+        let child = TaskItem(title: "Flights", createdAt: born, manualOrder: 2_000, parentID: parent.id)
+        let childReplica = TaskItem(id: child.id, title: "Flights", createdAt: born, manualOrder: 2_000, parentID: parent.id)
+        let parentReplica = TaskItem(id: parent.id, title: "Trip", createdAt: born, manualOrder: 1_000)
+        [parent, child, childReplica, parentReplica].forEach(seed.insert)
+        try seed.save()
+        let store = TaskStore(container: container)
+        let library = AtticLibrary(tasks: store)
+        let tools = AgentTaskTools(store: store, library: library)
+        log(try XCTUnwrap(store.task(withID: parent.id)), in: store, library: library)
+
+        func rows(_ id: UUID) throws -> [TaskItem] {
+            try ModelContext(container).fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == id }))
+        }
+        let before = try rows(child.id).map { [$0.completedAt, $0.doneLoggedAt] }
+        XCTAssertEqual(before.count, 2)
+        XCTAssertTrue(before.allSatisfy { $0[0] != nil && $0[1] != nil }, "the child is finished and archived")
+        let ref = AtticItemRef(.task, child.id)
+
+        _ = try tools.call(name: "delete_task", arguments: ["id": child.id.uuidString])
+        XCTAssertEqual(library.state(of: ref), .deleted)
+        XCTAssertTrue(store.doneLogSubtasks(of: parent.id).isEmpty)
+
+        XCTAssertTrue(library.undo(in: .tasks).isApplied, "Undo brings the archived subtask back under its Done-log parent")
+        XCTAssertNotEqual(library.state(of: ref), .deleted)
+        XCTAssertEqual(store.doneLogSubtasks(of: parent.id).map(\.id), [child.id])
+        XCTAssertNotNil(store.listedTask(withID: parent.id), "the parent stayed in the Done log, not reopened")
+        XCTAssertEqual(try rows(child.id).map { [$0.completedAt, $0.doneLoggedAt] }, before, "completion and archive fields kept")
+
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        XCTAssertEqual(library.state(of: ref), .deleted)
+
+        // Recently Deleted restores it the same way.
+        XCTAssertTrue(store.restoreDeleted(taskID: child.id))
+        XCTAssertEqual(store.doneLogSubtasks(of: parent.id).map(\.id), [child.id])
+        XCTAssertEqual(try rows(child.id).map { [$0.completedAt, $0.doneLoggedAt] }, before)
+
+        // A deleted main task still refuses: the subtask would return orphaned.
+        _ = try tools.call(name: "delete_task", arguments: ["id": child.id.uuidString])
+        _ = try tools.call(name: "delete_task", arguments: ["id": parent.id.uuidString])
+        XCTAssertFalse(store.restoreDeleted(taskID: child.id))
+        XCTAssertEqual(library.state(of: ref), .deleted)
     }
 
     // MARK: - Quick capture shortcut
