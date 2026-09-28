@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 /// - Clicking a checkbox ticks it without moving the caret.
 /// - Exposes objects to VoiceOver.
 /// - Marks keystroke-to-commit for the performance trace.
-final class NoteEditorTextView: NSTextView {
+final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearchDelegate {
     weak var engine: NoteEditorEngine?
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
     /// After each layout pass: the page keeps the title's accessories (the
@@ -22,6 +22,24 @@ final class NoteEditorTextView: NSTextView {
     /// Views laid over the text (the title's accessories), read by
     /// VoiceOver after the text.
     var accessoryViews: [NSView] = []
+    private lazy var headingsRotor = NSAccessibilityCustomRotor(rotorType: .heading, itemSearchDelegate: self)
+
+    func installHeadingsRotor() { setAccessibilityCustomRotors([headingsRotor]) }
+
+    func rotor(_ rotor: NSAccessibilityCustomRotor,
+               resultFor parameters: NSAccessibilityCustomRotor.SearchParameters) -> NSAccessibilityCustomRotor.ItemResult? {
+        guard let engine else { return nil }
+        let headings = engine.headingRanges()
+        let current = parameters.currentItem?.targetRange.location ?? (parameters.searchDirection == .next ? -1 : Int.max)
+        let candidate = parameters.searchDirection == .next
+            ? headings.first(where: { $0.range.location > current && ($0.text.localizedStandardContains(parameters.filterString) || parameters.filterString.isEmpty) })
+            : headings.reversed().first(where: { $0.range.location < current && ($0.text.localizedStandardContains(parameters.filterString) || parameters.filterString.isEmpty) })
+        guard let candidate else { return nil }
+        let result = NSAccessibilityCustomRotor.ItemResult(targetElement: self)
+        result.targetRange = candidate.range
+        result.customLabel = candidate.text
+        return result
+    }
 
     // MARK: A person's own editing
 
@@ -32,6 +50,12 @@ final class NoteEditorTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if engine?.handleShortcut(event) == true { return }
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        if flags == [.command, .option, .shift], event.charactersIgnoringModifiers?.lowercased() == "v" {
+            pasteAsPlainText(nil)
+            return
+        }
         let typing = event.charactersIgnoringModifiers?.isEmpty == false
             && !event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.control)
         guard typing else { return asUserEdit { super.keyDown(with: event) } }
@@ -90,9 +114,13 @@ final class NoteEditorTextView: NSTextView {
             if wrap.after { attributed.append(NSAttributedString(string: "\n", attributes: typingAttributes)) }
             payload = attributed
         }
+        let wasComposing = hasMarkedText()
         asUserEdit { super.insertText(payload, replacementRange: replacementRange) }
         if wrap.after {
             setSelectedRange(NSRange(location: range.location + (text as NSString).length, length: 0))
+        }
+        if !wasComposing, wrap.before == false, wrap.after == false {
+            engine.handleTypedText(text, wasComposing: wasComposing)
         }
     }
 
@@ -110,6 +138,10 @@ final class NoteEditorTextView: NSTextView {
 
     override func doCommand(by selector: Selector) {
         if !hasMarkedText(), suggestionCommand?(selector) == true { return }
+        if !hasMarkedText(), let engine {
+            if selector == #selector(insertTab(_:)), engine.perform(.indent) { return }
+            if selector == #selector(insertBacktab(_:)), engine.perform(.outdent) { return }
+        }
         asUserEdit { super.doCommand(by: selector) }
     }
 
@@ -145,6 +177,8 @@ final class NoteEditorTextView: NSTextView {
         guard engine != nil else { return passEscapeOn(sender) }
         // The input method owns Esc during a composition.
         if hasMarkedText() { return }
+        if engine?.slashSession != nil { engine?.dismissSlashSession(); return }
+        if engine?.pendingSlashDate != nil { engine?.cancelSlashDate(); return }
         if engine?.keepTitleHashtagLiteral() == true { return }
         if let scrollView = enclosingScrollView, scrollView.isFindBarVisible {
             let hide = NSMenuItem()
@@ -182,7 +216,7 @@ final class NoteEditorTextView: NSTextView {
     // MARK: Pasteboard
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        engine == nil ? super.writablePasteboardTypes : [NoteEditorEngine.fragmentType, .string]
+        engine == nil ? super.writablePasteboardTypes : [NoteEditorEngine.fragmentType, .rtf, .string]
     }
 
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
@@ -191,7 +225,7 @@ final class NoteEditorTextView: NSTextView {
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [NoteEditorEngine.fragmentType, .string]
+        [NoteEditorEngine.fragmentType, .rtf, .html, .string]
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
@@ -200,6 +234,9 @@ final class NoteEditorTextView: NSTextView {
         guard target.location != NSNotFound else { return false }
         if type == NoteEditorEngine.fragmentType, let data = pboard.data(forType: type) {
             return engine.paste(fragmentData: data, at: target)
+        }
+        if (type == .rtf || type == .html), let data = pboard.data(forType: type) {
+            return engine.pasteRichText(data, type: type, at: target)
         }
         if let text = pboard.string(forType: .string) {
             return engine.pastePlainText(text, at: target)
@@ -279,7 +316,41 @@ final class NoteEditorTextView: NSTextView {
         let insert = NSMenuItem(title: String(localized: "Insert"), action: nil, keyEquivalent: "")
         insert.submenu = NoteEditorTextView.insertMenu(target: self)
         menu.insertItem(insert, at: 0)
+        let format = NSMenuItem(title: String(localized: "Format"), action: nil, keyEquivalent: "")
+        format.submenu = formatMenu()
+        menu.insertItem(format, at: 0)
         return menu
+    }
+
+    private func formatMenu() -> NSMenu {
+        let menu = NSMenu()
+        let commands: [NoteFormatCommand] = [
+            .paragraph(.body), .paragraph(.heading(1)), .paragraph(.heading(2)), .paragraph(.heading(3)),
+            .paragraph(.mono), .paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .paragraph(.quote),
+            .mark(.bold), .mark(.italic), .mark(.underline), .mark(.strikethrough), .mark(.code),
+            .mark(.highlight), .mark(.link), .indent, .outdent, .removeLink
+        ]
+        for command in commands {
+            if [.mark(.bold), .indent].contains(command) { menu.addItem(.separator()) }
+            let item = NSMenuItem(title: command.title, action: #selector(performFormatMenuItem(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = command
+            item.image = NSImage(systemSymbolName: command.symbolName, accessibilityDescription: command.title)
+            let state = engine?.validate(command, selection: selectedRange())
+            item.isEnabled = state?.enabled ?? false
+            item.state = switch state?.state {
+            case .on: .on
+            case .mixed: .mixed
+            default: .off
+            }
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func performFormatMenuItem(_ sender: NSMenuItem) {
+        guard let command = sender.representedObject as? NoteFormatCommand else { return }
+        _ = engine?.perform(command, selection: selectedRange())
     }
 
     static func insertMenu(target: AnyObject) -> NSMenu {
@@ -295,9 +366,9 @@ final class NoteEditorTextView: NSTextView {
     @objc func insertChecklistLine(_ sender: Any?) {
         guard let engine else { return }
         let selection = selectedRange()
-        engine.applyParagraphFormat(engine.paragraphFormat(in: selection) == .checklist ? .body : .checklist, to: selection)
+        _ = engine.perform(.paragraph(engine.paragraphStyle(at: selection.location) == .checklist ? .body : .checklist), selection: selection)
     }
-    @objc func insertTodaysDate(_ sender: Any?) { engine?.insertDate(NoteDay(date: Date())) }
+    @objc func insertTodaysDate(_ sender: Any?) { _ = engine?.perform(.date(NoteDay(date: Date()))) }
 
     // MARK: Accessibility
 
@@ -320,6 +391,25 @@ final class NoteEditorTextView: NSTextView {
             let local = NSRange(location: objectRange.location - range.location, length: objectRange.length)
             guard local.location >= 0, NSMaxRange(local) <= result.length else { return }
             result.addAttribute(.accessibilityAttachment, value: element, range: local)
+        }
+        for paragraph in engine.accessibilityParagraphs(in: clamped) {
+            let local = NSIntersectionRange(paragraph.range, range)
+            guard local.length > 0 else { continue }
+            let target = NSRange(location: local.location - range.location, length: local.length)
+            if let level = paragraph.headingLevel {
+                result.addAttribute(NSAttributedString.Key(NSAccessibility.Attribute.headingLevelAttribute.rawValue),
+                                    value: level, range: target)
+            }
+            if paragraph.style == "quote" {
+                result.addAttribute(NSAttributedString.Key(NSAccessibility.Attribute.blockQuoteLevelAttribute.rawValue),
+                                    value: 1 + paragraph.indent, range: target)
+            }
+            if paragraph.style == "bullet" || paragraph.style == "number" {
+                let marker = paragraph.style == "number" ? "\(paragraph.listOrdinal ?? 1)." : "•"
+                result.addAttribute(.accessibilityListItemPrefix, value: NSAttributedString(string: marker), range: target)
+                result.addAttribute(.accessibilityListItemIndex, value: (paragraph.listOrdinal ?? 1) - 1, range: target)
+                result.addAttribute(.accessibilityListItemLevel, value: paragraph.indent, range: target)
+            }
         }
         return result
     }

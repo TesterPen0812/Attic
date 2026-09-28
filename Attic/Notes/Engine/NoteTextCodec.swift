@@ -15,18 +15,20 @@ enum NoteTextCodec {
         let result = NSMutableAttributedString()
         for (index, block) in document.blocks.enumerated() {
             let isTitle = firstBlockIsTitle && index == 0
-            var attributes = isTitle ? style.titleAttributes : style.bodyAttributes
+            var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(style: block.style, level: block.level, indent: block.indent)
             if let id = block.id, block.kind == .text { attributes[.noteBlockID] = id }
             if !block.extras.isEmpty { attributes[.noteBlockExtras] = NoteBlockExtras(block.extras) }
             if let blockStyle = block.style, block.kind == .text { attributes[.noteBlockStyle] = blockStyle }
+            if let level = block.level { attributes[.noteBlockLevel] = level }
+            if let indent = block.indent { attributes[.noteBlockIndent] = indent }
             let paragraph = NSMutableAttributedString()
             switch block.kind {
             case .text:
-                paragraph.append(inlineText(block, attributes: attributes))
+                paragraph.append(inlineText(block, attributes: attributes, style: style))
             case .checklist:
                 let box = NoteChecklistAttachment(objectID: block.id ?? UUID(), isChecked: block.checked)
                 paragraph.append(attachmentString(box, attributes: attributes))
-                paragraph.append(inlineText(block, attributes: attributes))
+                paragraph.append(inlineText(block, attributes: attributes, style: style))
             case .image:
                 let image = NoteImageAttachment(
                     objectID: block.id ?? UUID(),
@@ -37,6 +39,8 @@ enum NoteTextCodec {
                     extras: block.extras
                 )
                 paragraph.append(attachmentString(image, attributes: attributes))
+            case .divider:
+                paragraph.append(attachmentString(NoteDividerAttachment(objectID: block.id ?? UUID()), attributes: attributes))
             case .opaque:
                 let opaque = NoteOpaqueAttachment(objectID: block.opaqueID ?? UUID(), value: block.opaque ?? .null, isInline: false)
                 paragraph.append(attachmentString(opaque, attributes: attributes))
@@ -61,7 +65,7 @@ enum NoteTextCodec {
         return string
     }
 
-    private static func inlineText(_ block: NoteBlock, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
+    private static func inlineText(_ block: NoteBlock, attributes: [NSAttributedString.Key: Any], style: NoteTextStyle) -> NSAttributedString {
         let result = NSMutableAttributedString()
         var run = ""
         var inlineIndex = 0
@@ -85,6 +89,12 @@ enum NoteTextCodec {
             result.append(attachmentString(attachment, attributes: attributes))
         }
         flush()
+        let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
+        for mark in block.marks where mark.offset >= 0 && mark.length > 0 && mark.offset + mark.length <= result.length {
+            let range = NSRange(location: mark.offset, length: mark.length)
+            result.addAttribute(.noteMark(mark.kind), value: mark.url ?? true, range: range)
+            result.addAttributes(style.markedAttributes(kind: mark.kind, baseFont: baseFont, url: mark.url), range: range)
+        }
         return result
     }
 
@@ -118,14 +128,22 @@ enum NoteTextCodec {
         if firstBlockIsTitle, blocks.first?.kind != .text {
             blocks.insert(.text(""), at: 0)
         }
+        if firstBlockIsTitle, !blocks.isEmpty {
+            blocks[0].style = nil
+            blocks[0].level = nil
+            blocks[0].indent = nil
+        }
         var document = template
         document.blocks = blocks.isEmpty ? [.text("")] : blocks
+        document.refreshRequiredCapabilities()
         return document
     }
 
     private struct ParagraphMetadata {
         var id: UUID?
         var style: String?
+        var level: Int?
+        var indent: Int?
         var extras: [String: NoteJSON] = [:]
     }
 
@@ -142,6 +160,8 @@ enum NoteTextCodec {
                 result.id = id
             }
             if result.style == nil, let style = attributes[.noteBlockStyle] as? String { result.style = style }
+            if result.level == nil { result.level = attributes[.noteBlockLevel] as? Int }
+            if result.indent == nil { result.indent = attributes[.noteBlockIndent] as? Int }
             if result.extras.isEmpty, let box = attributes[.noteBlockExtras] as? NoteBlockExtras,
                !usedExtras.contains(ObjectIdentifier(box)) {
                 result.extras = box.fields
@@ -163,7 +183,8 @@ enum NoteTextCodec {
         let meta = metadata(text, in: metadataRange, usedIDs: &usedIDs, usedExtras: &usedExtras)
         var blocks: [NoteBlock] = []
         // The block being built; the paragraph's own fields go to the first.
-        var current = NoteBlock(kind: .text, id: meta.id, style: meta.style, extras: meta.extras)
+        var current = NoteBlock(kind: .text, id: meta.id, style: meta.style, level: meta.level,
+                                indent: meta.indent, extras: meta.extras)
         var hasContent = false
 
         func finishCurrent() {
@@ -180,6 +201,22 @@ enum NoteTextCodec {
                 let rest = NSRange(location: index, length: NSMaxRange(paragraph) - index)
                 let next = string.range(of: "\u{FFFC}", options: .literal, range: rest)
                 let runEnd = next.location == NSNotFound ? NSMaxRange(paragraph) : next.location
+                let baseOffset = (current.text as NSString).length
+                let runRange = NSRange(location: index, length: runEnd - index)
+                for kind in NoteMark.Kind.allCases {
+                    text.enumerateAttribute(.noteMark(kind), in: runRange) { value, markedRange, _ in
+                        guard let value else { return }
+                        let offset = baseOffset + markedRange.location - index
+                        let url = kind == .link ? value as? String : nil
+                        let mark = NoteMark(kind, offset: offset, length: markedRange.length, url: url)
+                        if let last = current.marks.indices.last,
+                           current.marks[last].kind == mark.kind,
+                           current.marks[last].url == mark.url,
+                           current.marks[last].offset + current.marks[last].length == mark.offset {
+                            current.marks[last].length += mark.length
+                        } else { current.marks.append(mark) }
+                    }
+                }
                 current.text += string.substring(with: NSRange(location: index, length: runEnd - index))
                 hasContent = true
                 index = runEnd
@@ -189,7 +226,7 @@ enum NoteTextCodec {
             case let box as NoteChecklistAttachment:
                 let leadsParagraph = index == paragraph.location
                 if !leadsParagraph { finishCurrent() }
-                current = NoteBlock(kind: .checklist, id: box.objectID, checked: box.isChecked,
+                current = NoteBlock(kind: .checklist, id: box.objectID, indent: meta.indent, checked: box.isChecked,
                                     extras: leadsParagraph ? meta.extras : [:])
                 hasContent = false
             case let image as NoteImageAttachment:
@@ -204,6 +241,9 @@ enum NoteTextCodec {
             case let opaque as NoteOpaqueAttachment where !opaque.isInline:
                 finishCurrent()
                 blocks.append(.opaque(opaque.value))
+            case let divider as NoteDividerAttachment:
+                finishCurrent()
+                blocks.append(.divider(id: divider.objectID))
             case let date as NoteDateAttachment:
                 current.text.append(NoteDocument.objectCharacter)
                 current.inlines.append(NoteInline(id: date.objectID, kind: .date(date.day), extras: date.extras))

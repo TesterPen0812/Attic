@@ -32,14 +32,18 @@ import Foundation
 /// - Image `widthFraction` is an optional format-1 display hint (fraction of
 ///   the text column). Older slice-1 previews ignore it and use the prior
 ///   point `width` when present; it does not change image ownership or text.
-/// - A newer Attic that adds semantics an older editor cannot preserve must
-///   list them in `requires` or raise `format`. Unknown fields on known
-///   blocks remain optional and are carried through unchanged.
+/// - A new semantic field that an older editor could erase or move must add
+///   a capability to `requires`. Optional display hints that old editors
+///   carry unchanged need neither. A changed meaning of an existing field,
+///   offset unit or block grammar must raise `format`.
+/// - Mark `offset` and `length` are UTF-16 units in the block's `text`, as
+///   for inline objects. Marks never include a U+FFFC object character;
+///   marks on either side are separate ranges.
 struct NoteDocument: Equatable, Sendable {
     static let currentFormat = 1
     /// What this build can edit. A document requiring anything else opens
     /// read-only.
-    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date"]
+    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date", "structure-v1", "inline-marks-v1"]
     /// U+FFFC, the character an inline object occupies in a block's text.
     static let objectCharacter: Character = "\u{FFFC}"
     static let objectUnit: unichar = 0xFFFC
@@ -72,7 +76,7 @@ struct NoteDocument: Equatable, Sendable {
         var ids: [UUID] = []
         for block in blocks {
             switch block.kind {
-            case .checklist, .image:
+            case .checklist, .image, .divider:
                 if let id = block.id { ids.append(id) }
             case .opaque:
                 if let id = block.opaqueID { ids.append(id) }
@@ -99,6 +103,8 @@ struct NoteDocument: Equatable, Sendable {
     var isWritableByThisBuild: Bool {
         guard format == Self.currentFormat,
               requires.allSatisfy(Self.editableCapabilities.contains) else { return false }
+        if let first = blocks.first, first.kind == .text,
+           first.style != nil || first.level != nil || first.indent != nil { return false }
         return blocks.allSatisfy { block in
             guard block.kind != .opaque else { return false }
             return block.inlines.allSatisfy { inline in
@@ -107,12 +113,24 @@ struct NoteDocument: Equatable, Sendable {
             }
         }
     }
+
+    /// Keep old previews read-only before any structural semantics are saved.
+    mutating func refreshRequiredCapabilities() {
+        let structured = blocks.contains { block in
+            block.kind == .divider || block.level != nil || block.indent != nil ||
+                (block.style != nil && block.style != "body")
+        }
+        let marked = blocks.contains { !$0.marks.isEmpty }
+        if structured && !requires.contains("structure-v1") { requires.append("structure-v1") }
+        if marked && !requires.contains("inline-marks-v1") { requires.append("inline-marks-v1") }
+    }
 }
 
 enum NoteBlockKind: String, Sendable {
     case text
     case checklist
     case image
+    case divider
     /// A block this build cannot read; `NoteBlock.opaque` holds it verbatim.
     case opaque
 }
@@ -126,6 +144,12 @@ struct NoteBlock: Equatable, Sendable {
     /// Text blocks: a paragraph style (nil = body). Unknown values are kept
     /// and drawn as body.
     var style: String?
+    /// Original heading level, even above the three levels this build draws.
+    var level: Int?
+    /// Zero-based nesting for lists, checklists and quotes.
+    var indent: Int?
+    /// Non-overlapping ranges per mark kind; different kinds may overlap.
+    var marks: [NoteMark] = []
     var checked = false
     var attachmentID: UUID?
     /// Fraction of the available text column. Old `width` values remain
@@ -157,6 +181,10 @@ struct NoteBlock: Equatable, Sendable {
                   pixelWidth: pixelWidth, pixelHeight: pixelHeight)
     }
 
+    static func divider(id: UUID = UUID()) -> NoteBlock {
+        NoteBlock(kind: .divider, id: id)
+    }
+
     static func opaque(_ value: NoteJSON) -> NoteBlock {
         NoteBlock(kind: .opaque, opaque: value)
     }
@@ -180,6 +208,23 @@ struct NoteBlock: Equatable, Sendable {
             }
         }
         return result
+    }
+}
+
+struct NoteMark: Equatable, Sendable {
+    enum Kind: String, Sendable, CaseIterable {
+        case bold, italic, underline, strikethrough, code, highlight, link
+    }
+    var kind: Kind
+    var offset: Int
+    var length: Int
+    var url: String?
+
+    init(_ kind: Kind, offset: Int, length: Int, url: String? = nil) {
+        self.kind = kind
+        self.offset = offset
+        self.length = length
+        self.url = url
     }
 }
 

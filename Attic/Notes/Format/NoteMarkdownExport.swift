@@ -11,6 +11,7 @@ enum NoteMarkdownExport {
     static func markdown(_ document: NoteDocument, calendar: Calendar = .current, locale: Locale = .current,
                          filename: (UUID) -> String? = { _ in nil }) -> String {
         var lines: [(text: String, isListItem: Bool)] = []
+        var numbered: [Int: Int] = [:]
         for (index, block) in document.blocks.enumerated() {
             if index == 0, block.kind == .text {
                 let title = inlineText(block, calendar: calendar, locale: locale).trimmingCharacters(in: .whitespaces)
@@ -21,13 +22,35 @@ enum NoteMarkdownExport {
             case .text:
                 let text = inlineText(block, calendar: calendar, locale: locale)
                 if text.trimmingCharacters(in: .whitespaces).isEmpty { continue }
-                lines.append((text, false))
+                let nesting = String(repeating: "  ", count: block.indent ?? 0)
+                if block.style == "number" {
+                    let depth = block.indent ?? 0
+                    numbered[depth, default: 0] += 1
+                    numbered = numbered.filter { $0.key <= depth }
+                } else { numbered.removeAll() }
+                let prefix: String = switch block.style {
+                case "heading": String(repeating: "#", count: max(1, block.level ?? 2)) + " "
+                case "bullet": "- "
+                case "number": "\(numbered[block.indent ?? 0] ?? 1). "
+                case "quote": "> "
+                case "mono": "    "
+                default: ""
+                }
+                lines.append((nesting + prefix + text, block.style == "bullet" || block.style == "number"))
             case .checklist:
-                lines.append(((block.checked ? "- [x] " : "- [ ] ") + inlineText(block, calendar: calendar, locale: locale), true))
+                numbered.removeAll()
+                lines.append((String(repeating: "  ", count: block.indent ?? 0) +
+                              (block.checked ? "- [x] " : "- [ ] ") +
+                              inlineText(block, calendar: calendar, locale: locale), true))
             case .image:
+                numbered.removeAll()
                 let name = block.attachmentID.flatMap(filename) ?? String(localized: "image")
                 lines.append(("[image: \(name)]", false))
+            case .divider:
+                numbered.removeAll()
+                lines.append(("---", false))
             case .opaque:
+                numbered.removeAll()
                 lines.append((String(localized: "[content that needs a newer Attic]"), false))
             }
         }
@@ -60,19 +83,44 @@ enum NoteMarkdownExport {
     }
 
     private static func inlineText(_ block: NoteBlock, calendar: Calendar, locale: Locale) -> String {
-        guard !block.inlines.isEmpty else { return block.text }
         var result = ""
-        var index = 0
-        for character in block.text {
-            if character == NoteDocument.objectCharacter, index < block.inlines.count {
-                switch block.inlines[index].kind {
-                case let .date(day): result += dateText(day, calendar: calendar, locale: locale)
-                case .opaque: result += String(localized: "[content that needs a newer Attic]")
+        let text = block.text as NSString
+        var boundaries: Set<Int> = [0, text.length]
+        for mark in block.marks {
+            boundaries.insert(mark.offset)
+            boundaries.insert(mark.offset + mark.length)
+        }
+        for offset in 0..<text.length where text.character(at: offset) == NoteDocument.objectUnit {
+            boundaries.insert(offset)
+            boundaries.insert(offset + 1)
+        }
+        let points = boundaries.sorted()
+        let objectOffsets = (0..<text.length).filter { text.character(at: $0) == NoteDocument.objectUnit }
+        for pair in zip(points, points.dropFirst()) where pair.0 < pair.1 {
+            let range = NSRange(location: pair.0, length: pair.1 - pair.0)
+            if let objectIndex = objectOffsets.firstIndex(of: pair.0), range.length == 1 {
+                if objectIndex < block.inlines.count {
+                    switch block.inlines[objectIndex].kind {
+                    case let .date(day): result += dateText(day, calendar: calendar, locale: locale)
+                    case .opaque: result += String(localized: "[content that needs a newer Attic]")
+                    }
                 }
-                index += 1
-            } else {
-                result.append(character)
+                continue
             }
+            var value = text.substring(with: range)
+            let marks = block.marks.filter { $0.offset <= pair.0 && $0.offset + $0.length >= pair.1 }
+            for mark in marks.sorted(by: { $0.kind.rawValue < $1.kind.rawValue }).reversed() {
+                switch mark.kind {
+                case .bold: value = "**" + value + "**"
+                case .italic: value = "*" + value + "*"
+                case .underline: value = "<u>" + value + "</u>"
+                case .strikethrough: value = "~~" + value + "~~"
+                case .code: value = "`" + value + "`"
+                case .highlight: value = "==" + value + "=="
+                case .link: value = "[" + value + "](" + (mark.url ?? "") + ")"
+                }
+            }
+            result += value
         }
         return result
     }

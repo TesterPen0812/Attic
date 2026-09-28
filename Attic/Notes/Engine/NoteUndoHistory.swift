@@ -37,6 +37,9 @@ final class NoteUndoHistory {
         /// leaves the hashtag literal). The tag is a delta, so tags changed
         /// elsewhere since are never overwritten.
         fileprivate(set) var tagDelta: (tag: String, adds: Bool, changesTags: Bool)?
+        fileprivate var tagSnapshot: (before: [String], after: [String])?
+        fileprivate var paragraphStyleSnapshot: (location: Int, before: NoteParagraphStyle, after: NoteParagraphStyle)?
+        fileprivate var typingMarkSnapshot: (kind: NoteMark.Kind, before: Bool, after: Bool)?
 
         fileprivate init(range: NSRange, current: NSAttributedString, other: NSAttributedString, name: String, group: Int) {
             self.range = range
@@ -69,6 +72,9 @@ final class NoteUndoHistory {
     /// A step carrying a tag delta was flipped: add (true) or remove the tag.
     /// The range is the step's text after the flip.
     var onTagFlip: ((_ tag: String, _ add: Bool, _ changesTags: Bool, _ range: NSRange) -> Void)?
+    var onTagSnapshot: (([String]) -> Void)?
+    var onParagraphStyleSnapshot: ((Int, NoteParagraphStyle) -> Void)?
+    var onTypingMarkSnapshot: ((NoteMark.Kind, Bool) -> Void)?
 
     private(set) var undoOps: [Op] = []
     private(set) var redoOps: [Op] = []
@@ -129,7 +135,10 @@ final class NoteUndoHistory {
     /// so their fields are saved too).
     struct Checkpoint {
         fileprivate typealias Saved = (Op, NSRange, NSAttributedString, NSAttributedString, Bool,
-                                       (tag: String, adds: Bool, changesTags: Bool)?)
+                                       (tag: String, adds: Bool, changesTags: Bool)?,
+                                       (before: [String], after: [String])?,
+                                       (location: Int, before: NoteParagraphStyle, after: NoteParagraphStyle)?,
+                                       (kind: NoteMark.Kind, before: Bool, after: Bool)?)
         fileprivate let undo: [Saved]
         fileprivate let redo: [Saved]
     }
@@ -137,7 +146,7 @@ final class NoteUndoHistory {
     func checkpoint() -> Checkpoint {
         open = nil
         func copy(_ ops: [Op]) -> [Checkpoint.Saved] {
-            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta) }
+            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta, $0.tagSnapshot, $0.paragraphStyleSnapshot, $0.typingMarkSnapshot) }
         }
         return Checkpoint(undo: copy(undoOps), redo: copy(redoOps))
     }
@@ -146,12 +155,15 @@ final class NoteUndoHistory {
     /// is now (the caller restored the text first).
     func rewind(to checkpoint: Checkpoint) {
         func restore(_ saved: [Checkpoint.Saved]) -> [Op] {
-            saved.map { op, range, current, other, inert, tagDelta in
+            saved.map { op, range, current, other, inert, tagDelta, tagSnapshot, paragraphStyleSnapshot, typingMarkSnapshot in
                 op.range = range
                 op.current = current
                 op.other = other
                 op.isInert = inert
                 op.tagDelta = tagDelta
+                op.tagSnapshot = tagSnapshot
+                op.paragraphStyleSnapshot = paragraphStyleSnapshot
+                op.typingMarkSnapshot = typingMarkSnapshot
                 return op
             }
         }
@@ -340,6 +352,37 @@ final class NoteUndoHistory {
         undoOps.last?.tagDelta = (tag, false, changesTags)
     }
 
+    /// A tag picker edit is metadata only, but shares the editor's Undo stack.
+    func recordTagChange(before: [String], after: [String]) {
+        guard before != after else { return }
+        open = nil
+        let empty = NSAttributedString()
+        let op = Op(range: NSRange(location: 0, length: 0), current: empty, other: empty,
+                    name: "Edit Tags", group: nextOwnGroup())
+        op.tagSnapshot = (before, after)
+        append(op)
+    }
+
+    func recordParagraphStyleChange(location: Int, before: NoteParagraphStyle, after: NoteParagraphStyle) {
+        guard before != after else { return }
+        open = nil
+        let empty = NSAttributedString()
+        let op = Op(range: NSRange(location: location, length: 0), current: empty, other: empty,
+                    name: "Format", group: groupID ?? nextOwnGroup())
+        op.paragraphStyleSnapshot = (location, before, after)
+        append(op)
+    }
+
+    func recordTypingMarkChange(_ kind: NoteMark.Kind, before: Bool, after: Bool) {
+        guard before != after else { return }
+        open = nil
+        let empty = NSAttributedString()
+        let op = Op(range: NSRange(location: 0, length: 0), current: empty, other: empty,
+                    name: kind.rawValue.capitalized, group: groupID ?? nextOwnGroup())
+        op.typingMarkSnapshot = (kind, before, after)
+        append(op)
+    }
+
     /// Runs a storage change that must not become a step (a restore the
     /// history is being rewound to).
     func performUnrecorded(_ body: () -> Void) {
@@ -394,6 +437,21 @@ final class NoteUndoHistory {
             log.append("skipped an inert step (\(op.name)): an outside edit overlapped it")
             return false
         }
+        if let snapshot = op.tagSnapshot {
+            op.tagSnapshot = (snapshot.after, snapshot.before)
+            onTagSnapshot?(snapshot.before)
+            return true
+        }
+        if let snapshot = op.paragraphStyleSnapshot {
+            op.paragraphStyleSnapshot = (snapshot.location, snapshot.after, snapshot.before)
+            onParagraphStyleSnapshot?(snapshot.location, snapshot.before)
+            return true
+        }
+        if let snapshot = op.typingMarkSnapshot {
+            op.typingMarkSnapshot = (snapshot.kind, snapshot.after, snapshot.before)
+            onTypingMarkSnapshot?(snapshot.kind, snapshot.before)
+            return true
+        }
         guard NSMaxRange(op.range) <= storage.length else {
             log.append("could not replay \(op.name)")
             return false
@@ -444,6 +502,18 @@ final class NoteUndoHistory {
     }
 
     private func shift(_ op: Op, by edit: (location: Int, old: Int, new: Int)) -> Bool {
+        if op.tagSnapshot != nil || op.typingMarkSnapshot != nil { return true }
+        if var snapshot = op.paragraphStyleSnapshot {
+            if edit.location + edit.old < snapshot.location {
+                snapshot.location += edit.new - edit.old
+                op.paragraphStyleSnapshot = snapshot
+                op.range.location = snapshot.location
+                return true
+            }
+            if edit.location > snapshot.location { return true }
+            op.isInert = true
+            return false
+        }
         if edit.location + edit.old <= op.range.location {
             op.range.location += edit.new - edit.old
             return true

@@ -16,10 +16,20 @@ enum NoteTextExport {
 
     static func plainLine(_ block: NoteBlock) -> String {
         switch block.kind {
-        case .text: block.displayText
-        case .checklist: (block.checked ? "[x] " : "[ ] ") + block.displayText
-        case .image: "[Image]"
-        case .opaque: "[Unsupported content]"
+        case .text:
+            let prefix: String = switch block.style {
+            case "heading": String(repeating: "#", count: max(1, block.level ?? 2)) + " "
+            case "bullet": "- "
+            case "number": "1. "
+            case "quote": "> "
+            case "mono": "    "
+            default: ""
+            }
+            return String(repeating: "  ", count: block.indent ?? 0) + prefix + block.displayText
+        case .checklist: return String(repeating: "  ", count: block.indent ?? 0) + (block.checked ? "[x] " : "[ ] ") + block.displayText
+        case .image: return "[Image]"
+        case .divider: return "---"
+        case .opaque: return "[Unsupported content]"
         }
     }
 
@@ -41,10 +51,15 @@ enum NoteTextExport {
 
     static func agentLine(_ block: NoteBlock, index: Int) -> String {
         switch block.kind {
-        case .text: agentInlineText(block)
-        case .checklist: (block.checked ? "- [x] " : "- [ ] ") + agentInlineText(block)
-        case .image: "![image](attic://image/\(block.id?.uuidString ?? ""))"
-        case .opaque: "[unsupported content](attic://block/\(index))"
+        case .text:
+            var plain = block
+            plain.text = agentInlineText(block)
+            plain.inlines = []
+            return plainLine(plain)
+        case .checklist: return (block.checked ? "- [x] " : "- [ ] ") + agentInlineText(block)
+        case .image: return "![image](attic://image/\(block.id?.uuidString ?? ""))"
+        case .divider: return "---"
+        case .opaque: return "[unsupported content](attic://block/\(index))"
         }
     }
 

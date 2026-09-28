@@ -41,6 +41,7 @@ enum NoteReadOnlyReason: Equatable, Sendable {
 /// Reads and writes `attic.note/1`. Encoding is deterministic (sorted keys),
 /// so equal documents give equal bytes.
 enum NoteContentCodec {
+    enum EncodingError: Error { case invalidStructure }
     static func decode(_ data: Data) -> NoteContent {
         let root: NoteJSON
         do {
@@ -84,10 +85,21 @@ enum NoteContentCodec {
         }) {
             return .readOnly(original: data, reason: .unsupportedContent, preview: document)
         }
+        if let first = document.blocks.first, first.kind == .text,
+           first.style != nil || first.level != nil || first.indent != nil {
+            return .readOnly(original: data, reason: .unsupportedContent, preview: document)
+        }
         return .editable(document)
     }
 
     static func encode(_ document: NoteDocument) throws -> Data {
+        var document = document
+        document.refreshRequiredCapabilities()
+        if let first = document.blocks.first, first.kind == .text,
+           first.style != nil || first.level != nil || first.indent != nil {
+            throw EncodingError.invalidStructure
+        }
+        guard document.blocks.allSatisfy(validForEncoding) else { throw EncodingError.invalidStructure }
         var object = document.extras
         object["format"] = .int(Int64(document.format))
         if !document.requires.isEmpty {
@@ -101,6 +113,21 @@ enum NoteContentCodec {
         return try encoder.encode(NoteJSON.object(object))
     }
 
+    private static func validForEncoding(_ block: NoteBlock) -> Bool {
+        guard block.level == nil || (block.style == "heading" && block.level! > 0),
+              block.indent == nil || ((0...2).contains(block.indent!) &&
+                  (block.kind == .checklist || ["bullet", "number", "quote"].contains(block.style ?? ""))) else { return false }
+        let units = Array(block.text.utf16)
+        return block.marks.allSatisfy { mark in
+            mark.offset >= 0 && mark.length > 0 && mark.offset <= units.count &&
+                mark.length <= units.count - mark.offset &&
+                isScalarBoundary(mark.offset, in: units) &&
+                isScalarBoundary(mark.offset + mark.length, in: units) &&
+                !units[mark.offset..<(mark.offset + mark.length)].contains(NoteDocument.objectUnit) &&
+                (mark.kind == .link) == (mark.url != nil)
+        }
+    }
+
     // MARK: Blocks
 
     static func decodeBlock(_ value: NoteJSON) -> NoteBlock {
@@ -110,11 +137,15 @@ enum NoteContentCodec {
         var block: NoteBlock?
         switch kind {
         case "text":
-            block = decodeTextual(object, kind: .text, known: ["kind", "text", "id", "style", "inline"])
+            block = decodeTextual(object, kind: .text, known: ["kind", "text", "id", "style", "level", "indent", "marks", "inline"])
         case "checklist":
-            block = decodeTextual(object, kind: .checklist, known: ["kind", "text", "id", "checked", "inline"])
+            block = decodeTextual(object, kind: .checklist, known: ["kind", "text", "id", "checked", "indent", "marks", "inline"])
         case "image":
             block = decodeImage(object)
+        case "divider":
+            guard let id = object["id"]?.stringValue.flatMap(UUID.init(uuidString:)) else { break }
+            block = .divider(id: id)
+            block?.extras = object.filter { !["kind", "id"].contains($0.key) }
         default:
             block = nil
         }
@@ -140,8 +171,23 @@ enum NoteContentCodec {
             }
         }
         if kind == .text, let style = object["style"] {
-            guard let value = style.stringValue else { return nil }
+            guard let value = style.stringValue,
+                  ["body", "heading", "bullet", "number", "quote", "mono"].contains(value) else { return nil }
             block.style = value
+        }
+        if let rawLevel = object["level"] {
+            guard kind == .text, block.style == "heading", let level = rawLevel.intValue, level > 0 else { return nil }
+            block.level = level
+        }
+        if block.style == "heading" && block.level == nil { return nil }
+        if let rawIndent = object["indent"] {
+            guard kind == .checklist || ["bullet", "number", "quote"].contains(block.style ?? ""),
+                  let indent = rawIndent.intValue, (0...2).contains(indent) else { return nil }
+            block.indent = indent
+        }
+        if let rawMarks = object["marks"] {
+            guard let values = rawMarks.arrayValue, let marks = decodeMarks(values, in: text) else { return nil }
+            block.marks = marks
         }
         if let rawInlines = object["inline"] {
             guard let values = rawInlines.arrayValue,
@@ -153,6 +199,35 @@ enum NoteContentCodec {
         }
         block.extras = object.filter { !known.contains($0.key) }
         return block
+    }
+
+    private static func decodeMarks(_ values: [NoteJSON], in text: String) -> [NoteMark]? {
+        let units = Array(text.utf16)
+        var marks: [NoteMark] = []
+        for value in values {
+            guard let object = value.objectValue,
+                  let name = object["kind"]?.stringValue,
+                  let kind = NoteMark.Kind(rawValue: name),
+                  let offset = object["offset"]?.intValue,
+                  let length = object["length"]?.intValue,
+                  offset >= 0, length > 0, offset <= units.count,
+                  length <= units.count - offset,
+                  isScalarBoundary(offset, in: units),
+                  isScalarBoundary(offset + length, in: units),
+                  !units[offset..<(offset + length)].contains(NoteDocument.objectUnit) else { return nil }
+            let url = object["url"]?.stringValue
+            guard (kind == .link) == (url != nil),
+                  Set(object.keys).isSubset(of: ["kind", "offset", "length", "url"]),
+                  !marks.contains(where: { $0.kind == kind && $0.offset < offset + length && offset < $0.offset + $0.length }) else { return nil }
+            marks.append(NoteMark(kind, offset: offset, length: length, url: url))
+        }
+        return marks
+    }
+
+    private static func isScalarBoundary(_ offset: Int, in units: [UInt16]) -> Bool {
+        guard offset > 0, offset < units.count else { return true }
+        return !(0xD800...0xDBFF).contains(units[offset - 1]) ||
+            !(0xDC00...0xDFFF).contains(units[offset])
     }
 
     private static func decodeImage(_ object: [String: NoteJSON]) -> NoteBlock? {
@@ -218,6 +293,15 @@ enum NoteContentCodec {
             } else {
                 object["style"] = block.style.map(NoteJSON.string)
             }
+            object["level"] = block.level.map { .int(Int64($0)) }
+            object["indent"] = block.indent.map { .int(Int64($0)) }
+            object["marks"] = block.marks.isEmpty ? nil : .array(block.marks.map { mark in
+                var fields: [String: NoteJSON] = ["kind": .string(mark.kind.rawValue),
+                                                  "offset": .int(Int64(mark.offset)),
+                                                  "length": .int(Int64(mark.length))]
+                fields["url"] = mark.url.map(NoteJSON.string)
+                return .object(fields)
+            })
             if !block.inlines.isEmpty {
                 let units = Array(block.text.utf16)
                 let offsets = units.indices.filter { units[$0] == NoteDocument.objectUnit }
@@ -227,6 +311,11 @@ enum NoteContentCodec {
             } else {
                 object["inline"] = nil
             }
+            return .object(object)
+        case .divider:
+            var object = block.extras
+            object["kind"] = .string("divider")
+            object["id"] = block.id.map { .string($0.uuidString) }
             return .object(object)
         case .image:
             var object = block.extras

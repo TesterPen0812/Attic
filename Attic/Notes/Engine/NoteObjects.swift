@@ -64,6 +64,20 @@ final class NoteChecklistAttachment: NoteObjectAttachment {
     override var accessibilityDescription: String { isChecked ? "checked" : "not checked" }
 }
 
+/// A structural rule occupying a whole paragraph, with stable identity.
+final class NoteDividerAttachment: NoteObjectAttachment {
+    override init(objectID: UUID = UUID()) { super.init(objectID: objectID) }
+    override var isBlockObject: Bool { true }
+    override var accessibilityDescription: String { String(localized: "Divider") }
+
+    override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
+                                   textContainer: NSTextContainer?, proposedLineFragment: CGRect,
+                                   position: CGPoint) -> CGRect {
+        CGRect(x: 0, y: 0, width: max(40, proposedLineFragment.width - (textContainer?.lineFragmentPadding ?? 0) * 2),
+               height: NoteTextStyle.bodyLineHeight)
+    }
+}
+
 /// A date inside a line of text.
 final class NoteDateAttachment: NoteObjectAttachment {
     let day: NoteDay
@@ -271,6 +285,9 @@ final class NoteObjectRenderer {
                 size: opaque.isInline ? CGSize(width: 24, height: AtticControlSize.tagHeight) : CGSize(width: 240, height: 28),
                 text: opaque.isInline ? "…" : String(localized: "Content from a newer Attic")
             )
+        case let divider as NoteDividerAttachment:
+            divider.renderedImage = render(Rectangle().fill(design.tokens.ink(.helper).color)
+                .frame(height: 1).frame(height: NoteTextStyle.bodyLineHeight))
         default:
             break
         }

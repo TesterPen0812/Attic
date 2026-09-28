@@ -163,7 +163,7 @@ enum LegacyNoteMigration {
                 guard let id = block.attachmentID else { return "an image without an attachment" }
                 pending.append(id)
                 order.append(id)
-            case .checklist, .opaque:
+            case .checklist, .divider, .opaque:
                 return "an unexpected block"
             }
         }

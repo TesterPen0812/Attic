@@ -7,10 +7,15 @@ extension NSAttributedString.Key {
     static let noteBlockExtras = NSAttributedString.Key("com.taha.attic.note.blockExtras")
     /// A text paragraph's style name (`NoteBlock.style`).
     static let noteBlockStyle = NSAttributedString.Key("com.taha.attic.note.blockStyle")
+    static let noteBlockLevel = NSAttributedString.Key("com.taha.attic.note.blockLevel")
+    static let noteBlockIndent = NSAttributedString.Key("com.taha.attic.note.blockIndent")
+    static func noteMark(_ kind: NoteMark.Kind) -> NSAttributedString.Key {
+        NSAttributedString.Key("com.taha.attic.note.mark.\(kind.rawValue)")
+    }
 
     /// Attributes that belong to the characters they were read with and are
     /// never carried into newly typed text.
-    static let noteBookkeeping: Set<NSAttributedString.Key> = [.noteBlockID, .noteBlockExtras, .noteBlockStyle]
+    static let noteBookkeeping: Set<NSAttributedString.Key> = [.noteBlockID, .noteBlockExtras, .noteBlockStyle, .noteBlockLevel, .noteBlockIndent]
 }
 
 /// A reference box, so a paragraph split can tell that both halves carry the
@@ -44,6 +49,13 @@ struct NoteTextStyle: Equatable {
 
     var titleFont: NSFont { AtticTextStyle.noteTitle.nsFont }
     var bodyFont: NSFont { AtticTextStyle.noteBody.nsFont }
+    var headingFont: NSFont { NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask).withSize(16) }
+    var subheadingFont: NSFont { NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask) }
+    var monoFont: NSFont { NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) }
+    var quoteColor: NSColor { secondaryColor }
+    var markerColor: NSColor { secondaryColor }
+    var highlightColor: NSColor { tokens.tagFill.nsColor }
+    var codeColor: NSColor { tokens.tagFill.nsColor }
 
     var tokens: AtticColorTokens { AtticColorTokens.resolve(design) }
     var titleColor: NSColor { tokens.ink(.heading).nsColor }
@@ -57,6 +69,47 @@ struct NoteTextStyle: Equatable {
 
     var bodyAttributes: [NSAttributedString.Key: Any] {
         [.font: bodyFont, .foregroundColor: bodyColor, .paragraphStyle: bodyParagraphStyle]
+    }
+
+    func paragraphAttributes(style name: String?, level: Int?, indent: Int?) -> [NSAttributedString.Key: Any] {
+        if (name == nil || name == "body") && indent == nil { return bodyAttributes }
+        var result = bodyAttributes
+        switch name {
+        case "heading":
+            result[.font] = (level ?? 2) <= 1 ? titleFont : (level == 2 ? headingFont : subheadingFont)
+            result[.foregroundColor] = titleColor
+        case "mono": result[.font] = monoFont
+        case "quote": result[.foregroundColor] = quoteColor
+        default: break
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.setParagraphStyle(bodyParagraphStyle)
+        paragraph.firstLineHeadIndent = CGFloat(indent ?? 0) * 20 + ((name == "bullet" || name == "number") ? 19 : 0)
+        paragraph.headIndent = paragraph.firstLineHeadIndent
+        if name == "bullet" {
+            paragraph.textLists = [NSTextList(markerFormat: .disc, options: 0)]
+        } else if name == "number" {
+            paragraph.textLists = [NSTextList(markerFormat: .decimal, options: 0)]
+        }
+        if name == "quote" { paragraph.headIndent += 12; paragraph.firstLineHeadIndent += 12 }
+        result[.paragraphStyle] = paragraph
+        return result
+    }
+
+    func markedAttributes(kind: NoteMark.Kind, baseFont: NSFont, url: String? = nil) -> [NSAttributedString.Key: Any] {
+        switch kind {
+        case .bold: return [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)]
+        case .italic: return [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)]
+        case .underline: return [.underlineStyle: NSUnderlineStyle.single.rawValue]
+        case .strikethrough: return [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
+        case .code: return [.font: monoFont, .backgroundColor: codeColor]
+        case .highlight: return [.backgroundColor: highlightColor]
+        case .link:
+            var result: [NSAttributedString.Key: Any] = [.underlineStyle: NSUnderlineStyle.single.rawValue,
+                                                          .foregroundColor: bodyColor]
+            if let url, let value = URL(string: url) { result[.link] = value }
+            return result
+        }
     }
 
     /// The gap from the title's last line to the body's first.
