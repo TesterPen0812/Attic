@@ -56,6 +56,8 @@ struct TasksPage: View {
     @State private var scrollMonitor: Any?
     /// The add bar's text, edited the way typing does (the strip, suggestions).
     @State private var addBarEditor = AtticTokenFieldEditor()
+    /// Each built list's scroll proxy, for `show` (not observed).
+    @State private var listProxies = TasksListProxies()
 
     /// The Done page's search field has the keyboard.
     @State private var searchFocused = false
@@ -143,6 +145,11 @@ struct TasksPage: View {
                 // horizontal swipe over the lists is its own, every other
                 // scroll goes on to the list (or the panel) untouched.
                 scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack] event in
+                    // Gated before any state is read (round 10): a page that
+                    // is not shown, or not in this event's visible window,
+                    // takes nothing, not even a gesture it owned before.
+                    guard model.isPageShown, let window = pointer.view?.window, window.isVisible,
+                          event.window === window else { return event }
                     let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
                                                   stackHeight: bottomStack.height, pageShown: model.isPageShown)
                     return model.pagerScrolled(TasksPagerSwipe.Sample(event), allowed: allowed) ? nil : event
@@ -212,6 +219,7 @@ struct TasksPage: View {
         // An agent's `show`: the row it brought into view takes the
         // keyboard (round 5, F3), once the list has it.
         .onChange(of: model.scrollRequest) { _, request in
+            takeScrollRequest(in: model.tab)
             guard let request else { return }
             DispatchQueue.main.async { focusedRow = request.id }
         }
@@ -251,6 +259,52 @@ struct TasksPage: View {
         // The shell's toast and notices sit above everything in the bottom
         // stack, so a selection bar or paste offer never hides under them.
         .background(TasksNoticeClearance(stack: bottomStack, footerZone: footerZone))
+    }
+
+    /// A `show`'s scroll request, taken once by the list that holds its
+    /// row, as soon as that list is built (round 10).
+    private func takeScrollRequest(in tab: TasksTab) {
+        guard let proxy = listProxies.lists[tab] else { return }
+        let ids = tab == .done ? model.doneDays().flatMap { $0.rows.map(\.id) } : model.rows(for: tab).map(\.id)
+        guard let request = model.claimScrollRequest(holding: ids, in: tab) else { return }
+        let place = rowPlace(request.id, in: tab)
+        DispatchQueue.main.async { [listProxies] in
+            // The list's own AppKit scroll view first, to the row's place
+            // from the rows' heights (a lazy list has not built a far row
+            // yet); then SwiftUI's scroll to the row itself, which centres
+            // it exactly once it is built.
+            if let place, let scroll = listProxies.scrollViews[tab] { TasksScrollKeeper.centre(place, in: scroll) }
+            proxy.scrollTo(request.id, anchor: .center)
+        }
+    }
+
+    /// A row's top and height in its list's content, from the heights of
+    /// the rows (and headings) before it.
+    private func rowPlace(_ id: UUID, in tab: TasksTab) -> (top: CGFloat, height: CGFloat)? {
+        var top: CGFloat = 0
+        if tab == .done {
+            for day in model.doneDays() {
+                top += AtticLayout.rowPitch
+                for row in day.rows {
+                    let height = pointer.frames[row.id]?.height ?? AtticLayout.rowPitch
+                    if row.id == id { return (top, height) }
+                    top += height
+                }
+            }
+            return nil
+        }
+        let sections = model.sections(for: tab)
+        for row in sections.open {
+            if row.id == id { return (top, rowHeight(id, in: tab)) }
+            top += rowHeight(row.id, in: tab)
+        }
+        guard tab == .now, !sections.done.isEmpty else { return nil }
+        top += AtticCompletedLineMetrics.top + AtticCompletedLineMetrics.height + AtticSpacing.s4
+        for row in sections.done {
+            if row.id == id { return (top, rowHeight(id, in: tab)) }
+            top += rowHeight(row.id, in: tab)
+        }
+        return nil
     }
 
     /// The panel must stay open while someone types or picks in it: the add
@@ -338,6 +392,9 @@ struct TasksPage: View {
     /// The magnifier, ⌘F, typing on the Done page, or the menu bar's
     /// Search: the keyboard goes to the search field on the tabs' line.
     private func beginSearch() {
+        // Every way into the search is an explicit choice of page: a swipe
+        // in progress ends here (round 10, Astra's round 9 check).
+        swipe.cancel()
         addBarFocused = false
         // No row stays lit behind the search (round 5, the owner's item 16).
         focusedRow = nil
@@ -460,7 +517,7 @@ struct TasksPage: View {
         GeometryReader { proxy in
             let width = proxy.size.width
             ZStack(alignment: .topLeading) {
-                TasksPagerPages(span: swipe.span, motion: swipe.motion, count: TasksTab.allCases.count,
+                TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
                                 shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size) { index in
                     page(TasksTab.allCases[index])
                 }
@@ -485,7 +542,12 @@ struct TasksPage: View {
                               bottomMargin: bottomMargin,
                               mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
-                              cell: { row in cell(row, tab: .done, group: []) })
+                              cell: { row in cell(row, tab: .done, group: []) },
+                              proxies: listProxies,
+                              registerList: { proxy in
+                                  listProxies.lists[.done] = proxy
+                                  takeScrollRequest(in: .done)
+                              })
             }
         }
         // Larger corners move the pin (and the add bar) inward; the tabs
@@ -552,6 +614,8 @@ struct TasksPage: View {
                     }
                 }
                 .animation(travel, value: rows.map(\.id))
+                // The list's place is kept while its page is not built.
+                .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
                 .padding(.bottom, bottomClearance - bottomMargin)
@@ -568,9 +632,12 @@ struct TasksPage: View {
                 revealRow(id, in: tab, proxy: proxy, animation: travel)
             }
             // An agent's `show`, or a task just added: the row comes into view.
-            .onChange(of: model.scrollRequest) { _, request in
-                guard let request, rows.contains(where: { $0.id == request.id }) else { return }
-                withAnimation(travel) { proxy.scrollTo(request.id, anchor: .center) }
+            // The list registers where it can be scrolled; the page takes
+            // a `show`'s request to it (below), also one made before this
+            // list was built (round 10, Astra's round 9 check).
+            .onAppear {
+                listProxies.lists[tab] = proxy
+                takeScrollRequest(in: tab)
             }
             .onChange(of: model.addedRequest) { _, request in
                 guard let request, tab == model.tab else { return }
@@ -2367,5 +2434,23 @@ enum TasksViewport {
             last = location
         }
         return result
+    }
+}
+
+/// The lists' scroll proxies while they are built (not observed): the
+/// page scrolls a list to a `show`'s row through them (round 10).
+@MainActor
+final class TasksListProxies {
+    var lists: [TasksTab: ScrollViewProxy] = [:]
+    /// Each built list's AppKit scroll view (`TasksScrollKeeper`).
+    private var scrollViewRefs: [TasksTab: WeakScrollView] = [:]
+
+    var scrollViews: [TasksTab: NSScrollView] {
+        get { scrollViewRefs.compactMapValues(\.view) }
+        set { scrollViewRefs = newValue.mapValues { WeakScrollView(view: $0) } }
+    }
+
+    private struct WeakScrollView {
+        weak var view: NSScrollView?
     }
 }

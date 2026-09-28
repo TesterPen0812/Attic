@@ -529,6 +529,9 @@ final class TasksPageModel: ObservableObject {
     /// changed, or whose save failed, keeps its text and "Not saved ·
     /// Retry", and the page stays where that row is.
     func resetForReveal() {
+        isHidden = false
+        // The page is on its tab at once, never sliding in (round 10).
+        defer { showPagerPage(animated: false) }
         if hasUnsavedEdit { return }
         // Assign only what changes: every assignment redraws the page.
         let target = revealTab ?? .now
@@ -567,6 +570,8 @@ final class TasksPageModel: ObservableObject {
     /// ends a drag or an open row picker (`hides` changes).
     func pageDidHide() {
         revealTab = nil
+        isHidden = true
+        suspendPager()
         hides &+= 1
     }
 
@@ -663,7 +668,17 @@ final class TasksPageModel: ObservableObject {
     /// Whether the shell shows the Tasks page (not kept built behind Notes
     /// or Canvas): only then does it answer page shortcuts such as ⌘F
     /// (round 7, R2).
-    @Published var isPageShown = true
+    @Published var isPageShown = true {
+        didSet {
+            guard isPageShown != oldValue else { return }
+            // Left for Notes or Canvas: the pager lets go (round 10); back
+            // on Tasks, the page is on its tab without travel.
+            if isPageShown { showPagerPage(animated: false) } else { suspendPager() }
+        }
+    }
+
+    /// The panel is hidden (between `pageDidHide` and the next reveal).
+    private(set) var isHidden = false
 
     /// Moving to another page saves an open edit first; if that save
     /// fails, the page stays with the text and Retry (Esc discards it).
@@ -803,6 +818,27 @@ final class TasksPageModel: ObservableObject {
     }
 
     @Published private(set) var scrollRequest: ScrollRequest?
+
+    /// The last `scrollRequest` a list acted on. A list built after the
+    /// request (a page that was not on screen when `show` chose it) acts on
+    /// it as it appears, once (round 10, Astra's round 9 check).
+    private var handledScrollToken: UUID?
+
+    /// Takes the current scroll request for a list holding `ids`, once:
+    /// the request, or nil when there is none, it was acted on, or the
+    /// list does not hold its row.
+    func claimScrollRequest(holding ids: some Collection<UUID>, in tab: TasksTab) -> ScrollRequest? {
+        guard let request = scrollRequest, request.token != handledScrollToken, ids.contains(request.id) else { return nil }
+        handledScrollToken = request.token
+        // The reveal wins over the list's remembered place.
+        scrollOffsets[tab] = nil
+        return request
+    }
+
+    /// Each list's scroll position while it is not on screen (its page is
+    /// not built then): restored when it is built again (round 10). Not
+    /// published: saving it redraws nothing.
+    var scrollOffsets: [TasksTab: CGFloat] = [:]
 
     // MARK: - Selection
 

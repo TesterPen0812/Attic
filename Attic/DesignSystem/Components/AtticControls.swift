@@ -513,6 +513,7 @@ struct AtticTabsSearchField: View {
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
     @FocusState private var focused: Bool
+    @State private var claim = AtticFieldClaim()
 
     var body: some View {
         let m = AtticTabsSearchMetrics.self
@@ -531,6 +532,11 @@ struct AtticTabsSearchField: View {
                         .focused($focused)
                         .onExitCommand(perform: onEscape)
                         .accessibilityLabel(placeholder)
+                        // This field's own AppKit field, found from beside it
+                        // (round 10): a field fading out with the last search
+                        // is never the one given the keyboard.
+                        .background(AtticFieldClaimProbe(claim: claim, placeholder: placeholder,
+                                                         wanted: { isFocused?.wrappedValue == true }).accessibilityHidden(true))
                 } else {
                     AtticText(verbatim: text.isEmpty ? placeholder : text, style: .listBody, ink: text.isEmpty ? .helper : .heading, truncates: true)
                 }
@@ -609,14 +615,108 @@ struct AtticTabsSearchField: View {
     private func takeKeyboard() {
         // Only while the page still wants it (a page hidden since, R2).
         guard isFocused?.wrappedValue ?? true, let window = NSApp.keyWindow else { return }
-        if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
-           let owner = editor.delegate as? NSTextField, Self.isSearchField(owner, placeholder: placeholder) {
+        // This field's own AppKit field, when it is in the window.
+        if let field = claim.field, field.window === window {
+            if (window.firstResponder as? NSTextView)?.delegate as? NSTextField !== field { window.makeFirstResponder(field) }
             caretToEnd()
             return
         }
-        guard let content = window.contentView, let field = Self.searchField(in: content, placeholder: placeholder) else { return }
-        window.makeFirstResponder(field)
-        caretToEnd()
+        // Not found yet: the probe gives it the keyboard the moment it is
+        // in the window (never a window-wide guess, which could pick the
+        // field fading out with the last search).
+    }
+}
+
+/// The AppKit field a SwiftUI text field draws with, found from a probe
+/// beside it (round 10: the ⌘F-after-Esc flake gave the keyboard to the
+/// field still fading out with the last search, found first in the window).
+@MainActor
+final class AtticFieldClaim {
+    weak var field: NSTextField?
+}
+
+/// Finds its field (`AtticTabsSearchField.isSearchField`) among its nearest
+/// ancestors' subviews when it enters a window, and gives it the keyboard
+/// then when the field wants it: the moment the field exists, not after a
+/// guessed delay.
+struct AtticFieldClaimProbe: NSViewRepresentable {
+    let claim: AtticFieldClaim
+    let placeholder: String
+    let wanted: () -> Bool
+
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.configure(claim: claim, placeholder: placeholder, wanted: wanted)
+        return view
+    }
+
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.configure(claim: claim, placeholder: placeholder, wanted: wanted)
+    }
+
+    final class ProbeView: NSView {
+        private var claim: AtticFieldClaim?
+        private var placeholder = ""
+        private var wanted: () -> Bool = { false }
+
+        func configure(claim: AtticFieldClaim, placeholder: String, wanted: @escaping () -> Bool) {
+            self.claim = claim
+            self.placeholder = placeholder
+            self.wanted = wanted
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            // The field is laid out beside the probe in the same pass.
+            DispatchQueue.main.async { [weak self] in self?.take() }
+        }
+
+        private func take() {
+            guard let window, let field = ownField() else { return }
+            claim?.field = field
+            guard wanted(), window.isKeyWindow || window.canBecomeKey else { return }
+            if (window.firstResponder as? NSTextView)?.delegate as? NSTextField !== field {
+                window.makeFirstResponder(field)
+            }
+            if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
+                editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+            }
+        }
+
+        /// Fields another probe already took: a field fading out with the
+        /// last search is one, the field that just appeared is not.
+        @MainActor private static let taken = NSHashTable<NSTextField>.weakObjects()
+
+        /// The matching field this probe belongs to: one no other probe
+        /// took (the newest), nearest to the probe if there are several.
+        private func ownField() -> NSTextField? {
+            if let known = claim?.field, known.window === window { return known }
+            guard let field = matchingField(excludingTaken: true) ?? matchingField(excludingTaken: false) else { return nil }
+            Self.taken.add(field)
+            return field
+        }
+
+        private func matchingField(excludingTaken: Bool) -> NSTextField? {
+            guard let content = window?.contentView else { return nil }
+            let mine = convert(bounds, to: nil)
+            var fields: [NSTextField] = []
+            func collect(_ view: NSView) {
+                if let field = view as? NSTextField, AtticTabsSearchField.isSearchField(field, placeholder: placeholder),
+                   !excludingTaken || !Self.taken.contains(field) {
+                    fields.append(field)
+                }
+                view.subviews.forEach(collect)
+            }
+            collect(content)
+            func distance(_ field: NSTextField) -> CGFloat {
+                let frame = field.convert(field.bounds, to: nil)
+                return hypot(frame.midX - mine.midX, frame.midY - mine.midY)
+            }
+            return fields.min { distance($0) < distance($1) }
+        }
     }
 }
 

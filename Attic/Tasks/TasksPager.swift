@@ -296,6 +296,12 @@ struct TasksPagerSpring: Equatable {
 /// placed by `TasksPagerSlot`; the rest are not built.
 struct TasksPagerPages<Page: View>: View {
     @ObservedObject var span: TasksPagerSpan
+    /// What the pages show (round 10): observed here, so a change the lists
+    /// react to (a `show`'s scroll request, a new row) rebuilds the pages'
+    /// content; SwiftUI did not rebuild it from the page's closure alone,
+    /// and a `show` never scrolled its list.
+    @ObservedObject var model: TasksPageModel
+    @ObservedObject var store: TaskStore
     let motion: TasksPagerMotion
     let count: Int
     let shown: Int
@@ -514,7 +520,10 @@ final class TasksPagerSwipe {
     /// the swipe in progress no longer moves the page, and the rest of its
     /// gesture (and momentum) is ignored; a wheel burst starts over.
     func cancel() {
-        if axis == .horizontal || axis == .turned {
+        // Undecided too (round 10, Astra's round 9 check): a gesture that
+        // began before the explicit choice and moves only after it never
+        // starts paging from the newly chosen tab.
+        if axis == .horizontal || axis == .turned || axis == .undecided {
             axis = .cancelled
             ownsMomentum = true
         }
@@ -523,6 +532,24 @@ final class TasksPagerSwipe {
         recent = []
         wheelTravel = 0
         onCancel?()
+    }
+
+    /// The Tasks page stopped being the one shown (another shell page, or
+    /// the panel hid): whatever gesture, momentum or wheel burst it owned
+    /// is dropped and a settle in progress stops, so nothing hidden keeps
+    /// taking scroll events or stepping a spring (round 10, Astra's round 9
+    /// check). The page is placed back on its tab without travel by the
+    /// caller.
+    func suspend() {
+        axis = nil
+        origin = nil
+        travel = 0
+        recent = []
+        ownsMomentum = false
+        wheelTravel = 0
+        wheelLast = -.infinity
+        wheelBurstUntil = -.infinity
+        motion.stop()
     }
 
     // MARK: Trackpad
@@ -729,6 +756,10 @@ extension TasksPageModel {
     /// neighbour, or back when an edit that can't be saved held the tab).
     /// Returns whether the pager took the event.
     func pagerScrolled(_ sample: TasksPagerSwipe.Sample, allowed: Bool) -> Bool {
+        // Only the page the shell shows reads scroll events at all: a
+        // gesture it owned before it was left is not continued behind
+        // Notes or Canvas, or while the panel is hidden (round 10).
+        guard isPageShown, !isHidden else { return false }
         let swipe = pagerSwipe
         let shown = TasksTab.allCases.firstIndex(of: tab) ?? 0
         let output = swipe.handle(sample, shown: shown, allowed: allowed)
@@ -749,6 +780,13 @@ extension TasksPageModel {
 
     /// Brings the pager to the model's tab (a tab, a key, `show`, Search,
     /// the end of a swipe). `animated` false: at once (a reveal).
+    /// Leaving the Tasks page or hiding the panel: the pager lets go of
+    /// its gesture and settle, and rests on the model's tab at once.
+    func suspendPager() {
+        pagerSwipe.suspend()
+        showPagerPage(animated: false)
+    }
+
     func showPagerPage(velocity: CGFloat = 0, animated: Bool = true) {
         let swipe = pagerSwipe
         swipe.motion.show(TasksTab.allCases.firstIndex(of: tab) ?? 0, width: swipe.width, velocity: velocity,

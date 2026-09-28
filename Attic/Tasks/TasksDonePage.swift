@@ -24,6 +24,9 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// Brings a row into the uncovered part of the list (the page's rule).
     let revealRow: (UUID, ScrollViewProxy) -> Void
     let cell: (TasksListRow) -> Cell
+    /// Where the page keeps the log's scroll view and proxy (round 10).
+    var proxies: TasksListProxies?
+    var registerList: (ScrollViewProxy) -> Void = { _ in }
 
     static var space: NamedCoordinateSpace { .named("AtticTasksDone") }
 
@@ -77,6 +80,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                 }
             }
             .padding(.bottom, bottomClearance - bottomMargin)
+            // The log's place is kept while its page is not built (round 10).
+            .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies).accessibilityHidden(true))
         }
         .contentMargins(.top, listTop, for: .scrollContent)
         .contentMargins(.bottom, bottomMargin, for: .scrollContent)
@@ -90,10 +95,9 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
             revealRow(request.id, proxy)
         }
         // An agent's `show` of a finished task (the model loaded its page).
-        .onChange(of: model.scrollRequest) { _, request in
-            guard let request, model.tab == .done else { return }
-            DispatchQueue.main.async { proxy.scrollTo(request.id, anchor: .center) }
-        }
+        // The page scrolls the log to a `show`'s row, also one made before
+        // the log was built (round 10).
+        .onAppear { registerList(proxy) }
         }
     }
 }
