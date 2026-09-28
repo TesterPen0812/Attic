@@ -8,7 +8,10 @@ import SwiftUI
 /// Now (its circle, or right-click). Loaded a page at a time as it scrolls,
 /// so 5,000 finished tasks never load at once.
 struct TasksDonePage<Cell: View, Mask: View>: View {
-    @ObservedObject var model: TasksPageModel
+    let model: TasksPageModel
+    /// Every change to the model while the page is drawn; nothing while it
+    /// is kept built but not drawn (round 11, `TasksCellUpdates`).
+    @ObservedObject var updates: TasksCellUpdates
     @ObservedObject var store: TaskStore
     /// Where the first line rests (under the tabs) and what the bottom
     /// stack needs clear (owner fix 8): the day headings scroll under the
@@ -18,6 +21,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// The add bar's zone: the only bottom margin (round 6; the rest of the
     /// clearance is room at the end of the list, so rows there take clicks).
     let bottomMargin: CGFloat
+    /// False while the page is kept built but not shown (round 11).
+    var drawn = true
     let mask: Mask
     /// A row the keyboard moved to: brought into the visible area (review 8).
     @Binding var reveal: TasksPageModel.ScrollRequest?
@@ -81,7 +86,7 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
             }
             .padding(.bottom, bottomClearance - bottomMargin)
             // The log's place is kept while its page is not built (round 10).
-            .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies).accessibilityHidden(true))
+            .background(TasksScrollKeeper(model: model, tab: .done, proxies: proxies, drawn: drawn).accessibilityHidden(true))
         }
         .contentMargins(.top, listTop, for: .scrollContent)
         .contentMargins(.bottom, bottomMargin, for: .scrollContent)

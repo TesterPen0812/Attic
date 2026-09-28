@@ -44,7 +44,15 @@ import SwiftUI
 /// when a gesture or a slide starts and ends, never while it moves.
 @MainActor
 final class TasksPagerSpan: ObservableObject {
+    /// The pages drawn: the one shown, and those a move passes.
     @Published var pages: ClosedRange<Int> = 0...0
+    /// The pages kept built but not drawn (round 11): built once the page
+    /// is shown and idle, so a tab click or a swipe never builds a page as
+    /// it starts to move (each build took 50–100 ms on screen, the lag the
+    /// owner felt). Hidden ones are hidden in AppKit (their scroll views),
+    /// so they draw nothing, take no clicks and are not read by VoiceOver.
+    /// Let go when the panel hides or another page of the shell is shown.
+    @Published var warm: ClosedRange<Int>?
 }
 
 /// Where the pager shows its pages: `position` is in pages (0 is Now, 1
@@ -72,15 +80,73 @@ final class TasksPagerMotion: ObservableObject {
     weak var span: TasksPagerSpan?
     var count = 3
 
+    // MARK: Pages kept built (round 11)
+
+    /// Whether pages are kept built beside the one shown (tests that
+    /// measure a cold build turn it off).
+    var warms = true
+    private var warmWork: DispatchWorkItem?
+    /// How long after the page is shown (or a move ends) the first page is
+    /// built, and between one and the next.
+    static let warmDelay: TimeInterval = 0.5
+    static let warmStep: TimeInterval = 0.2
+
+    /// Builds the pages beside the one shown, one per idle moment, once
+    /// `isAllowed` (the page shown, the panel visible) holds.
+    func warmUp(after delay: TimeInterval = TasksPagerMotion.warmDelay, isAllowed: @escaping () -> Bool) {
+        guard warms, span != nil else { return }
+        warmWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.warmStep(isAllowed) } }
+        warmWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Lets the kept pages go (the panel hid, or another page is shown).
+    func coolDown() {
+        warmWork?.cancel()
+        warmWork = nil
+        if span?.warm != nil { span?.warm = nil }
+    }
+
+    private func warmStep(_ isAllowed: @escaping () -> Bool) {
+        warmWork = nil
+        guard warms, let span, isAllowed() else { return }
+        // Something moves, or the person is typing or pointing: later.
+        if isSettling || isTracking?() == true || Self.recentInput() {
+            warmUp(after: Self.warmStep, isAllowed: isAllowed)
+            return
+        }
+        let all = 0...max(count - 1, 0)
+        let current = span.warm ?? span.pages
+        guard current != all else { return }
+        // One page more per step, so no single step builds two.
+        let next = current.upperBound < all.upperBound
+            ? current.lowerBound...(current.upperBound + 1)
+            : (current.lowerBound - 1)...current.upperBound
+        PerformanceSignposts.beginPageBuild(next)
+        span.warm = next
+        if next != all { warmUp(after: Self.warmStep, isAllowed: isAllowed) }
+    }
+
+    /// The fingers are on a swipe (the swipe tells the motion).
+    var isTracking: (() -> Bool)?
+
+    /// Input in the last quarter of a second (keys, the pointer, scrolling).
+    private static func recentInput() -> Bool {
+        guard let any = CGEventType(rawValue: ~0) else { return false }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any) < 0.25
+    }
+
     /// Draws the pages from `lower` to `upper` (clamped), if they are not
     /// drawn already.
     private func setSpan(_ lower: Int, _ upper: Int) {
         guard let span else { return }
         let range = max(0, min(lower, upper))...min(max(count - 1, 0), max(lower, upper))
         guard span.pages != range else { return }
-        if range.lowerBound < span.pages.lowerBound || range.upperBound > span.pages.upperBound {
+        let built = span.warm ?? span.pages
+        if range.lowerBound < built.lowerBound || range.upperBound > built.upperBound {
             PerformanceSignposts.beginPageBuild(range)
-        } else {
+        } else if span.warm == nil {
             PerformanceSignposts.pagesReleased(range)
         }
         span.pages = range
@@ -333,7 +399,9 @@ final class TasksDisplayClock: NSObject {
         stop()
         runs &+= 1
         self.tick = tick
-        if let view, view.window?.screen != nil {
+        // A display link steps only while its view is on a screen: a
+        // window ordered out (or off every screen) would never end the move.
+        if let view, let window = view.window, window.isVisible, window.screen != nil {
             let link = view.displayLink(target: self, selector: #selector(frame(_:)))
             link.add(to: .main, forMode: .common)
             self.link = link
@@ -387,7 +455,12 @@ struct TasksPagerPages<Page: View>: View {
     let count: Int
     let shown: Int
     let size: CGSize
-    let page: (Int) -> Page
+    /// A page, and whether it is drawn (the one shown, or one a move
+    /// passes); a page kept built but not drawn hides its list.
+    let page: (Int, Bool) -> Page
+    /// What a page kept built but not drawn shows: it redraws only when
+    /// this changes (round 11).
+    let token: (Int) -> TasksPageModel.PageToken
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -395,9 +468,11 @@ struct TasksPagerPages<Page: View>: View {
             // drawn where the last swipe had it); only its content comes
             // and goes.
             ForEach(0..<count, id: \.self) { index in
+                let drawn = index == shown || span.pages.contains(index)
                 Group {
-                    if index == shown || span.pages.contains(index) {
-                        page(index)
+                    if drawn || span.warm?.contains(index) == true {
+                        TasksKeptPage(frozen: drawn ? nil : token(index)) { page(index, drawn) }
+                            .equatable()
                     } else {
                         Color.clear
                     }
@@ -409,6 +484,19 @@ struct TasksPagerPages<Page: View>: View {
                 .accessibilityHidden(index != shown)
             }
         }
+    }
+}
+
+/// A page of the pager (round 11): drawn, it redraws with the page; kept
+/// built but not drawn, only when what it shows changes (`frozen`).
+struct TasksKeptPage<Content: View>: View, Equatable {
+    let frozen: TasksPageModel.PageToken?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated { lhs.frozen != nil && lhs.frozen == rhs.frozen }
     }
 }
 
@@ -875,7 +963,19 @@ extension TasksPageModel {
     /// its gesture and settle, and rests on the model's tab at once.
     func suspendPager() {
         pagerSwipe.suspend()
+        pagerSwipe.motion.coolDown()
         showPagerPage(animated: false)
+    }
+
+    /// Builds the pages beside the one shown, once idle (round 11), while
+    /// the page is shown in a visible panel.
+    func warmPager() {
+        let swipe = pagerSwipe
+        swipe.motion.isTracking = { [weak swipe] in swipe?.isTracking == true }
+        swipe.motion.warmUp { [weak self] in
+            guard let self else { return false }
+            return self.isPageShown && !self.isHidden
+        }
     }
 
     func showPagerPage(velocity: CGFloat = 0, animated: Bool = true) {

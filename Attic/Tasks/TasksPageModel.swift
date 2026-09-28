@@ -81,6 +81,13 @@ struct TasksDoneDay: Identifiable, Equatable {
     let rows: [TasksListRow]
 }
 
+/// A signal a task row's cell redraws on (see `TasksPageModel.cellUpdates`).
+@MainActor
+final class TasksCellUpdates: ObservableObject {
+    /// Never fires: the rows of a page kept built but not drawn.
+    static let quiet = TasksCellUpdates()
+}
+
 /// The add bar's text and insertion point. Only the add bar observes it.
 @MainActor
 final class TasksAddBarState: ObservableObject {
@@ -294,6 +301,26 @@ final class TasksPageModel: ObservableObject {
         let expanded: Set<UUID>
         let completedExpanded: Bool
         let today: DueDay
+    }
+
+    /// What a page kept built but not drawn shows (round 11): while it is
+    /// the same, the page is not redrawn when the model changes elsewhere (a
+    /// selection, a keystroke), only when its own rows could have.
+    struct PageToken: Equatable {
+        let tab: TasksTab
+        let revision: UInt64
+        let held: [UUID: HeldPlace]
+        let expanded: Set<UUID>
+        let completedExpanded: Bool
+        let today: DueDay
+        let doneLog: [UUID]
+        let search: String
+    }
+
+    func pageToken(_ tab: TasksTab) -> PageToken {
+        PageToken(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
+                  completedExpanded: tab == .now && completedTodayExpanded, today: today,
+                  doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: tab == .done ? doneSearch : "")
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -547,8 +574,12 @@ final class TasksPageModel: ObservableObject {
     /// Retry", and the page stays where that row is.
     func resetForReveal() {
         isHidden = false
-        // The page is on its tab at once, never sliding in (round 10).
-        defer { showPagerPage(animated: false) }
+        // The page is on its tab at once, never sliding in (round 10); the
+        // pages beside it are built once it is idle (round 11).
+        defer {
+            showPagerPage(animated: false)
+            warmPager()
+        }
         if hasUnsavedEdit { return }
         // Assign only what changes: every assignment redraws the page.
         let target = revealTab ?? .now
@@ -682,6 +713,18 @@ final class TasksPageModel: ObservableObject {
     /// (round 7, R5).
     let pagerSwipe = TasksPagerSwipe(count: TasksTab.allCases.count)
 
+    /// What the rows of a drawn page observe (round 11): every change to
+    /// this model. A page kept built but not drawn gives its rows
+    /// `TasksCellUpdates.quiet` instead, so they do no work until it is
+    /// drawn (or its own rows change, which redraws the page).
+    lazy var cellUpdates: TasksCellUpdates = {
+        let updates = TasksCellUpdates()
+        objectWillChange
+            .sink { [weak updates] _ in updates?.objectWillChange.send() }
+            .store(in: &cancellables)
+        return updates
+    }()
+
     /// Whether the shell shows the Tasks page (not kept built behind Notes
     /// or Canvas): only then does it answer page shortcuts such as ⌘F
     /// (round 7, R2).
@@ -690,7 +733,12 @@ final class TasksPageModel: ObservableObject {
             guard isPageShown != oldValue else { return }
             // Left for Notes or Canvas: the pager lets go (round 10); back
             // on Tasks, the page is on its tab without travel.
-            if isPageShown { showPagerPage(animated: false) } else { suspendPager() }
+            if isPageShown {
+                showPagerPage(animated: false)
+                warmPager()
+            } else {
+                suspendPager()
+            }
         }
     }
 
@@ -709,7 +757,7 @@ final class TasksPageModel: ObservableObject {
         // The person went elsewhere: a `show` still waiting for its Done log
         // page is dropped, never finished later by a scroll (round 5, F3).
         pendingReveal = nil
-        selection = []
+        if !selection.isEmpty { selection = [] }
         if !bySwipe { PerformanceSignposts.beginPageChoice() }
         self.tab = tab
     }
@@ -1242,9 +1290,11 @@ final class TasksPageModel: ObservableObject {
         if renamingSubtaskID != nil { cancelSubtaskRename() }
         if case .title? = failedSave { failedSave = nil }
         if case .newSubtask? = failedSave { failedSave = nil }
-        editingTitleID = nil
-        newSubtaskParentID = nil
-        newSubtaskTitle = ""
+        // Only what changes (round 11): each assignment redraws every row
+        // of the page shown, and a tab click came through here.
+        if editingTitleID != nil { editingTitleID = nil }
+        if newSubtaskParentID != nil { newSubtaskParentID = nil }
+        if !newSubtaskTitle.isEmpty { newSubtaskTitle = "" }
     }
 
     func toggleExpanded(_ id: UUID) {

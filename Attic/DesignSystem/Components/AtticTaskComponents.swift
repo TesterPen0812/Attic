@@ -922,8 +922,8 @@ struct AtticPageTabs<Page: Hashable>: View {
 
 /// What a task row shows. The design system's own model: Phase 1 fills it
 /// from the store.
-struct AtticTaskRowModel: Identifiable, Sendable {
-    struct Due: Sendable {
+struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
+    struct Due: Sendable, Equatable {
         /// Direction A: red only for overdue; today reads in the body
         /// colour, medium weight; the rest is the quiet secondary grey.
         enum Tone: Sendable, Equatable { case quiet, today, overdue }
@@ -947,6 +947,15 @@ struct AtticTaskRowModel: Identifiable, Sendable {
     /// A search the title matches: its matches are highlighted (the Done
     /// search, owner item 17).
     var titleMatch: String?
+
+    /// Round 11: a list skips redrawing a row whose model is unchanged
+    /// (the subtask counts are a tuple, compared by hand).
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.title == rhs.title && lhs.state == rhs.state && lhs.priority == rhs.priority
+            && lhs.due == rhs.due && lhs.tags == rhs.tags && lhs.attachments == rhs.attachments && lhs.links == rhs.links
+            && lhs.subtasks?.done == rhs.subtasks?.done && lhs.subtasks?.total == rhs.subtasks?.total
+            && lhs.inWindow == rhs.inWindow && lhs.hasPage == rhs.hasPage && lhs.titleMatch == rhs.titleMatch
+    }
 
     /// Where `titleMatch` occurs in the title (as the search reads it:
     /// case and diacritics ignored).

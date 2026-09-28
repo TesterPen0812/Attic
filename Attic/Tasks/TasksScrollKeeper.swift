@@ -12,12 +12,18 @@ struct TasksScrollKeeper: NSViewRepresentable {
     let tab: TasksTab
     /// Where the page finds this list's scroll view (a `show`'s reveal).
     var proxies: TasksListProxies?
+    /// False while the page is kept built but not drawn (round 11): the
+    /// list's scroll view is hidden, so it draws nothing, takes no event
+    /// and VoiceOver does not read it (SwiftUI's own hiding did not reach
+    /// into a list's scroll view, round 9).
+    var drawn = true
 
     func makeNSView(context: Context) -> KeeperView {
         let view = KeeperView()
         view.model = model
         view.tab = tab
         view.proxies = proxies
+        view.drawn = drawn
         return view
     }
 
@@ -25,6 +31,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
         view.model = model
         view.tab = tab
         view.proxies = proxies
+        view.drawn = drawn
     }
 
     /// Scrolls `scroll` so the content from `place.top` for `place.height`
@@ -58,6 +65,14 @@ struct TasksScrollKeeper: NSViewRepresentable {
         /// Until the remembered place is back, the list's own first layout
         /// (at the top) is not recorded over it.
         private var restoring = false
+        var drawn = true {
+            didSet { if drawn != oldValue { applyDrawn() } }
+        }
+
+        private func applyDrawn() {
+            guard let scroll = enclosingScrollView, scroll.isHidden == drawn else { return }
+            scroll.isHidden = !drawn
+        }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -68,6 +83,7 @@ struct TasksScrollKeeper: NSViewRepresentable {
                 return
             }
             guard let scroll = enclosingScrollView else { return }
+            applyDrawn()
             proxies?.scrollViews[tab] = scroll
             observe(scroll.contentView)
             restoring = true

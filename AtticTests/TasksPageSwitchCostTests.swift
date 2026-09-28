@@ -43,6 +43,8 @@ final class TasksPageSwitchCostTests: XCTestCase {
         try context.save()
         let store = TaskStore(container: container)
         let model = TasksPageModel(library: AtticLibrary(tasks: store))
+        // Cold builds are what this measures: no page kept built (round 11).
+        model.pagerSwipe.motion.warms = false
         let size = CGSize(width: 344, height: 520)
         let hosting = NSHostingView(rootView: TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
                                                         addBarFocused: .constant(false))

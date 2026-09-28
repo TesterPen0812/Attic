@@ -380,3 +380,23 @@ additive; no token, colour, radius or type style changed.
 - **`AtticTabsSearchField`** gives the keyboard to its own AppKit field from a
   probe beside it (**new `AtticFieldClaimProbe`**) the moment it is in the
   window: the ⌘F-after-Esc flake gave it to the field still fading out.
+
+### Phase 1 round 11: performance and feel (owner: "everything feels laggy", 2026-09-28)
+
+- **Motion presets back to the spec's timings** (§ Motion: under about 300 ms,
+  no bounce on everyday actions), keeping round 9's life where it belongs:
+  `slide` 0.25 s, bounce 0 (was 0.32, 0.15); `expand` 0.22, 0 (0.30, 0.2);
+  `doneSlide` 0.25, 0 (0.34, 0.2); `popover` 0.22, 0.15 (0.26, 0.3); `toast`
+  0.24, 0.12 (0.32, 0.25); `settle` 0.24, 0.08 (0.30, 0.25); `complete` 0.22,
+  0.15 (0.26, 0.3); `failReturn` 0.28, 0.1 (0.34, 0.15). Navigation never
+  bounces; only small things that appear land with a light bounce.
+- **`AtticPageTabs` changes its selection plainly**: the page that shows the
+  selection moves itself. Wrapping it in the slide's animation animated a tab
+  click twice (the Tasks pager's own spring as well) and faded the page in.
+- **`AtticMenuItems(building:)`**: commands built only when the menu is built.
+  A row's `.contextMenu` otherwise worked out every command of every row, a
+  fetch of every tag included, each time the list redrew (1.4–3.7 s for a tab
+  click's first frame with the spec's 500 open and 5,000 done tasks).
+- **`AtticTaskRowModel` is `Equatable`** (the subtask counts compared by hand),
+  so a list can skip redrawing a row whose model did not change.
+- No token, colour, radius or type style changed.

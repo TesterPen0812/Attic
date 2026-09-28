@@ -72,7 +72,7 @@ final class TasksFrameCostTests: XCTestCase {
         var selectThree: [Double] = []
         let ids = host.model.rows(for: .now).prefix(6).map(\.id)
         for _ in 0..<3 {
-            for id in ids { selectOne.append(host.frame { host.model.selectOnly(id) }) }
+            for _ in 0..<3 { for id in ids { selectOne.append(host.frame { host.model.selectOnly(id) }) } }
             for tab in [TasksTab.backlog, .done, .now] {
                 _ = host.frame { host.model.pagerSwipe.span.pages = 0...2 }
                 host.spin(0.1)
@@ -176,9 +176,15 @@ final class FrameCostHost {
 
     init() throws {
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        try TasksPagePreview.seedScale(in: container)
+        if ProcessInfo.processInfo.environment["ATTIC_EXP_SEED"] == "demo" {
+            try TasksPagePreview.seedDemo(in: container)
+        } else {
+            try TasksPagePreview.seedScale(in: container)
+        }
         store = TaskStore(container: container)
         model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        // Comparison seam: ATTIC_FRAME_COST_WARM=0 keeps no page built beside the one shown.
+        model.pagerSwipe.motion.warms = ProcessInfo.processInfo.environment["ATTIC_FRAME_COST_WARM"] != "0"
         let size = CGSize(width: AtticLayout.panelSize.width, height: 560)
         let focus = focus
         let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
@@ -283,6 +289,8 @@ final class FrameCostHost {
     func type(_ text: String, focusAddBar: Bool = true) -> [Double] {
         if focusAddBar {
             focus.addBar = true
+            // The binding is not observed: the page reads it on its next redraw.
+            model.objectWillChange.send()
             spin(0.3)
         }
         var frames: [Double] = []
