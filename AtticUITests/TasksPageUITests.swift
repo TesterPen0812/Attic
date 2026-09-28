@@ -67,6 +67,18 @@ final class TasksPageUITests: XCTestCase {
         window.textFields.matching(NSPredicate(format: "label == %@", "Search done tasks")).firstMatch
     }
 
+    /// The search field is there and has the keyboard. Reading a missing
+    /// element's value fails the test at once (no waiting), so existence is
+    /// checked first (round 7: ⌘F's field was read before it appeared).
+    private var searchHasKeyboard: Bool {
+        searchField.exists && (searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true
+    }
+
+    /// The search's text, or "" while it is not there.
+    private var searchText: String {
+        searchField.exists ? (searchField.value as? String) ?? "" : ""
+    }
+
     /// The magnifier at the end of the tabs' line on Done.
     private var searchButton: XCUIElement {
         window.buttons["tasks-done-search-button"]
@@ -299,7 +311,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertFalse(searchField.exists, "no search row: the log starts with its days")
         XCTAssertTrue(searchButton.waitForExistence(timeout: 3), "a magnifier at the end of the tabs' line")
         searchButton.click()
-        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the field takes the line, with the keyboard")
+        waitFor(searchHasKeyboard, "the field takes the line, with the keyboard")
         XCTAssertFalse(tab("now").exists, "the field is where the tabs were")
         app.typeText("invoice")
         waitFor(!row("Pay rent").exists, "typing filters the log")
@@ -317,13 +329,13 @@ final class TasksPageUITests: XCTestCase {
 
         // ⌘F, and a letter typed with a row focused, open it too.
         app.typeKey("f", modifierFlags: .command)
-        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "⌘F puts the keyboard in the search")
+        waitFor(searchHasKeyboard, "⌘F puts the keyboard in the search")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(tab("now").exists, "Esc returns the tabs")
         waitForSettled(row("Pay rent"))
         select("Pay rent")
         app.typeText("inv")
-        waitFor((searchField.value as? String) == "inv", "typing on the Done page searches: \(String(describing: searchField.value))")
+        waitFor(searchText == "inv", "typing on the Done page searches")
         waitFor(!row("Pay rent").exists, "and filters")
         app.typeKey(.escape, modifierFlags: [])
         waitFor(tab("done").exists && row("Pay rent").exists, "Esc returns the tabs and the whole log")
@@ -632,10 +644,10 @@ final class TasksPageUITests: XCTestCase {
         select("Pay rent")
         XCTAssertTrue(searchButton.waitForExistence(timeout: 3))
         searchButton.click()
-        waitFor((searchField.value(forKey: "hasKeyboardFocus") as? Bool) == true, "the search has the keyboard")
+        waitFor(searchHasKeyboard, "the search has the keyboard")
         app.typeText("pay")
         app.typeKey(.delete, modifierFlags: [])
-        waitFor((searchField.value as? String) == "pa", "Backspace edited the search: \(String(describing: searchField.value))")
+        waitFor(searchText == "pa", "Backspace edited the search")
         app.typeKey(.space, modifierFlags: [])
         app.typeKey(.delete, modifierFlags: [])
         XCTAssertTrue(row("Pay rent").exists, "the Done task is still listed")
@@ -776,7 +788,11 @@ final class TasksPageUITests: XCTestCase {
         waitForPage("now", "the panel opens on Now")
         let point = row("Call the plumber").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         point.hover()
-        for delta in [-2_000.0, 2_000.0] {
+        // Synthesized scrolls carry no trackpad phases or momentum and are
+        // sometimes dropped on a busy runner: a gesture that moved nothing
+        // is sent again (it proves one gesture never crosses two pages, not
+        // a real trackpad's feel).
+        for delta in [-2_000.0, 2_000.0, -2_000.0, 2_000.0] {
             point.scroll(byDeltaX: delta, deltaY: 0)
             let deadline = Date().addingTimeInterval(3)
             while Date() < deadline, tab("now").isSelected { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
