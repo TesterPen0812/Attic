@@ -909,10 +909,12 @@ struct AtticPageTabs<Page: Hashable>: View {
         .accessibilityLabel(String(localized: "Pages"))
     }
 
+    /// A plain change (round 11): the page that shows the selection moves
+    /// itself (the Tasks pager's own spring). Wrapping it in the slide's
+    /// animation animated the same change twice, and faded the page it
+    /// built in.
     private func select(_ page: Page) {
-        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
-            selection = page
-        }
+        selection = page
     }
 }
 

@@ -29,6 +29,19 @@ final class TasksFrameCostTests: XCTestCase {
         let host = try FrameCostHost()
         hosted = host
         var report: [String] = []
+        // Profiling seam: one scenario, repeated (ATTIC_FRAME_COST_LOOP).
+        if let loop = ProcessInfo.processInfo.environment["ATTIC_FRAME_COST_LOOP"] {
+            let ids = host.model.rows(for: .now).prefix(6).map(\.id)
+            let until = Date().addingTimeInterval(20)
+            while Date() < until {
+                switch loop {
+                case "select": for id in ids { _ = host.frame { host.model.selectOnly(id) } }
+                case "click": for tab in [TasksTab.backlog, .now] { _ = host.click(tab) }
+                default: _ = host.swipe(from: .now, steps: 40, dx: -9); host.place(.now)
+                }
+            }
+            return
+        }
 
         // A tab click, as `AtticPageTabs` makes it, to each page and back;
         // the first frame (the model's change, the page's build, the
@@ -51,6 +64,29 @@ final class TasksFrameCostTests: XCTestCase {
         report.append("click-first-parts " + phases.map { String(format: "%.1f", $0) }.joined(separator: "/"))
         host.place(.now)
 
+        // The same clicks with every page already built (what keeping the
+        // pages built would give), and what a selection change costs with
+        // one page built and with three.
+        var warmFirst: [TasksTab: [Double]] = [:]
+        var selectOne: [Double] = []
+        var selectThree: [Double] = []
+        let ids = host.model.rows(for: .now).prefix(6).map(\.id)
+        for _ in 0..<3 {
+            for id in ids { selectOne.append(host.frame { host.model.selectOnly(id) }) }
+            for tab in [TasksTab.backlog, .done, .now] {
+                _ = host.frame { host.model.pagerSwipe.span.pages = 0...2 }
+                host.spin(0.1)
+                if tab == .now { for id in ids { selectThree.append(host.frame { host.model.selectOnly(id) }) } }
+                warmFirst[tab, default: []].append(host.frame {
+                    withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { host.model.select(tab: tab) }
+                })
+                host.spin(0.8)
+            }
+        }
+        report.append("warm-click-first " + Self.byTab(warmFirst))
+        report.append("select-1-page " + Self.stats(selectOne))
+        report.append("select-3-pages " + Self.stats(selectThree))
+
         // A swipe from Now to Later: the first sideways movement (it
         // draws Later), the frames that follow the fingers, then the
         // release's settle.
@@ -71,7 +107,26 @@ final class TasksFrameCostTests: XCTestCase {
         // Typing in the add bar on Now (500 rows behind it).
         host.place(.now)
         let keys = host.type("Call the plumber tomorrow #home")
-        report.append("keystroke " + Self.stats(keys))
+        report.append("keystroke " + Self.stats(keys) + " typed=\(host.model.addBar.text.count)")
+
+        // Typing in a row's title editor, then in Done's search.
+        host.place(.now)
+        if let id = host.model.rows(for: .now).dropFirst(2).first?.id {
+            host.model.selectOnly(id)
+            host.model.beginEditingTitle(id)
+            host.spin(0.5)
+            let frames = host.type(" and more", focusAddBar: false)
+            report.append("title-keystroke " + Self.stats(frames) + " typed=\(host.model.titleEdit.text.count)")
+            host.model.cancelEditing()
+            host.spin(0.3)
+        }
+        host.place(.done)
+        host.model.beginSearch()
+        host.spin(0.6)
+        let searchFrames = host.type("task 12", focusAddBar: false)
+        report.append("search-keystroke " + Self.stats(searchFrames) + " typed=\(host.model.doneSearch.count)")
+        host.model.doneSearch = ""
+        host.place(.now)
 
         print("ATTIC_FRAME_COST " + report.joined(separator: " | "))
         // Sanity only (see the type's comment).
@@ -253,9 +308,11 @@ final class FrameCostHost {
     }
 
     /// Types `text` into the add bar, one key a frame.
-    func type(_ text: String) -> [Double] {
-        focus.addBar = true
-        spin(0.3)
+    func type(_ text: String, focusAddBar: Bool = true) -> [Double] {
+        if focusAddBar {
+            focus.addBar = true
+            spin(0.3)
+        }
         var frames: [Double] = []
         for character in text {
             let characters = String(character)

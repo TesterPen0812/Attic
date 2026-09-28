@@ -698,6 +698,7 @@ final class TasksPageModel: ObservableObject {
         // page is dropped, never finished later by a scroll (round 5, F3).
         pendingReveal = nil
         selection = []
+        if !bySwipe { PerformanceSignposts.beginPageChoice() }
         self.tab = tab
     }
 

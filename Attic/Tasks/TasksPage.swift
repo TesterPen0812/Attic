@@ -107,6 +107,15 @@ struct TasksPage: View {
             tabsBand
             tabs
         }
+        // Files dropped on a row attach to its task (the "Add to page"
+        // label shows on the row under them): one destination for the page,
+        // which finds the row from the rows' frames.
+        .onDrop(of: TaskDropContent.dropTypes, delegate: TasksFileDropDelegate(
+            target: { point in fileDropTarget(at: point) },
+            canAccept: { content, id in content == .files && store.attachmentOwnerID(for: id) != nil },
+            setTargeted: { id in if fileDropRow != id { fileDropRow = id } },
+            perform: { content, providers, id in attachDroppedFiles(content, providers, to: id) }
+        ))
         // The bottom stack owns its whole band (round 7, R4): a row scrolled
         // under the strip, the gaps between its buttons, a selection bar or
         // the add bar is never clicked, right-clicked or dragged through it.
@@ -135,6 +144,8 @@ struct TasksPage: View {
         model.resetForReveal()
         // The page opens where the tab is, without a slide.
         model.showPagerPage(animated: false)
+        // The settle steps on this page's display (round 11).
+        swipe.motion.clockView = { [pointer] in pointer.view }
         swipe.onCancel = { [weak model] in
             // After the navigation that cancelled it has chosen its tab.
             DispatchQueue.main.async { model?.showPagerPage() }
@@ -416,6 +427,7 @@ struct TasksPage: View {
         .animation(searchShown ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)
                                : AtticMotionPreset.popover.exit(reduceMotion: design.reduceMotion), value: searchShown)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.tab == .done)
+        .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
     }
 
     /// The Done search is on the tabs' line while it has the keyboard or a
@@ -749,6 +761,7 @@ struct TasksPage: View {
             // completed takes nothing with it: no row is lit that the person
             // did not reach (round 5).
             .onChange(of: rows.map(\.id)) { old, new in
+                if tab == model.tab { PerformanceSignposts.watchFrames("RowsMotion", seconds: 0.35) }
                 guard tab == model.tab, let focused = focusedRow, !new.contains(focused),
                       let index = old.firstIndex(of: focused), !new.isEmpty else { return }
                 guard focusTracker.isKeyboardDriving else {
@@ -869,16 +882,15 @@ struct TasksPage: View {
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer] frame in pointer.frames[id] = frame }
         .onDisappear { [pointer] in pointer.frames[id] = nil }
-        .onDrop(of: TaskDropContent.dropTypes, delegate: TaskFileDropDelegate(
-            canAccept: { content in content == .files && tab != .done && store.attachmentOwnerID(for: id) != nil },
-            setTargeted: { targeted in fileDropRow = targeted ? id : (fileDropRow == id ? nil : fileDropRow) },
-            perform: { content, providers in attachDroppedFiles(content, providers, to: id) }
-        ))
+        // Files dropped on a row: one drop destination for the page
+        // (`fileDrop`), not one per row (round 11: each row's own cost a
+        // screenful of rows about 15 ms to build).
     }
 
     /// The quick look opens and closes with the expansion motion (review
     /// 21); Reduce Motion shows it at once.
     private func toggleExpanded(_ id: UUID) {
+        PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
         withAnimation(design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
             model.toggleExpanded(id)
         }
@@ -1690,6 +1702,20 @@ struct TasksPage: View {
 
     // MARK: - Files
 
+    /// The row a file over `point` (the page's space) would land on: one
+    /// of the page shown, in the lists' band (not under the tabs or the
+    /// bottom stack). Done's rows take no files.
+    private func fileDropTarget(at point: CGPoint) -> UUID? {
+        guard model.tab != .done, let height = pointer.view?.bounds.height,
+              pagerBand.contains(point, height: height, stackHeight: bottomStack.height) else { return nil }
+        return Self.row(at: point, frames: pointer.frames, among: Set(model.rows(for: model.tab).map(\.id)))
+    }
+
+    /// The row among `ids` whose frame holds `point` (pure, tested).
+    static func row(at point: CGPoint, frames: [UUID: CGRect], among ids: Set<UUID>) -> UUID? {
+        frames.first { ids.contains($0.key) && $0.value.contains(point) }?.key
+    }
+
     private func attachDroppedFiles(_ content: TaskDropContent, _ providers: [NSItemProvider], to id: UUID) {
         fileDropRow = nil
         guard content == .files, let owner = store.attachmentOwnerID(for: id) else { return }
@@ -1738,6 +1764,7 @@ struct TasksPage: View {
         .padding(.bottom, bottomInset)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.selection.count > 1)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.pasteOffer)
+        .onChange(of: model.selection.count > 1) { _, _ in PerformanceSignposts.watchFrames("SelectionBarMotion", seconds: 0.35) }
     }
 
     /// The add bar always adds (Direction A): on Done it adds to Now; the
@@ -2064,6 +2091,7 @@ private struct TasksAddBar: View {
             }
         }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: stripShown)
+        .onChange(of: stripShown) { _, _ in PerformanceSignposts.watchFrames("StripMotion", seconds: 0.35) }
         .onChange(of: datePresented || tagsPresented || priorityPresented) { _, open in
             pickerOpen = open
             // A closed picker hands the keyboard back to the draft, where
@@ -2563,6 +2591,49 @@ private struct TasksPointerProbe: NSViewRepresentable {
     }
 }
 
+/// Files dropped on the Tasks page (round 11): the row under them takes
+/// them. Files are accepted anywhere on the page, so the drop is followed
+/// as it moves; only a row that can hold files highlights and takes them.
+private struct TasksFileDropDelegate: DropDelegate {
+    let target: (CGPoint) -> UUID?
+    let canAccept: (TaskDropContent, UUID) -> Bool
+    let setTargeted: (UUID?) -> Void
+    let perform: (TaskDropContent, [NSItemProvider], UUID) -> Void
+
+    private func row(for info: DropInfo) -> (content: TaskDropContent, id: UUID)? {
+        let content = TaskDropContent.classify(info)
+        guard content == .files, let id = target(info.location), canAccept(content, id) else { return nil }
+        return (content, id)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        TaskDropContent.classify(info) == .files
+    }
+
+    func dropEntered(info: DropInfo) {
+        setTargeted(row(for: info)?.id)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let found = row(for: info)
+        setTargeted(found?.id)
+        return DropProposal(operation: found == nil ? .forbidden : .copy)
+    }
+
+    func dropExited(info: DropInfo) {
+        setTargeted(nil)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        setTargeted(nil)
+        guard let found = row(for: info) else { return false }
+        let providers = TaskDropContent.providers(for: found.content, in: info)
+        guard !providers.isEmpty else { return false }
+        perform(found.content, providers, found.id)
+        return true
+    }
+}
+
 /// A row's open date or tag list, and the tasks it changes.
 struct TasksMetaPopover: Equatable {
     enum Kind { case date, tags }
@@ -2716,9 +2787,9 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// The fade by position in the viewport: nothing over the header, a
-    /// faint trace under the tabs (so they stay readable over scrolled
-    /// text), fully there from the first row's resting place down to the
+    /// The fade by position in the viewport: nothing over the header or
+    /// under the tabs (so they stay readable over scrolled text), fully
+    /// there from the first row's resting place down to the
     /// bottom zone, and receding under the bottom stack.
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
@@ -2728,10 +2799,15 @@ enum TasksViewport {
         // blur, text under see-through glass must be quieter than before.
         let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar * 1.75, listTop)
         let barTop = max(height - bottomStack, fadeStart)
+        // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
+        // readable and clashed with the labels): nothing shows under the
+        // tabs at all, and the rows come back only in the gap under them,
+        // quickly toward their resting place.
+        let gap = max(0, listTop - tabsBottom)
         let points: [(CGFloat, Double)] = [
             (0, 0),
-            (tabsTop - AtticLayout.pageTabsTop / 2, 0.04),
-            (tabsBottom, 0.14),
+            (tabsBottom + min(2, gap / 4), 0),
+            (tabsBottom + gap * 0.6, 0.18),
             (listTop, 1),
             (fadeStart, 1),
             (barTop, 0.22),
