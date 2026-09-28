@@ -327,7 +327,11 @@ final class TasksPageUITests: XCTestCase {
         waitFor(tab("now").exists, "and the tabs return")
         XCTAssertFalse(searchField.exists)
 
-        // ⌘F, and a letter typed with a row focused, open it too.
+        // ⌘F, and a letter typed with a row focused, open it too. The
+        // window is made key again first: twice in CI the app lost it
+        // after the Esc (the screen went dark), and ⌘F went nowhere.
+        app.activate()
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 12)).click()
         app.typeKey("f", modifierFlags: .command)
         waitFor(searchHasKeyboard, "⌘F puts the keyboard in the search")
         app.typeKey(.escape, modifierFlags: [])
@@ -520,8 +524,10 @@ final class TasksPageUITests: XCTestCase {
     func testTheSelectionBarsControlsTakeTheirClicks() throws {
         select("Call the plumber")
         XCUIElement.perform(withKeyModifiers: .command) { select("Email beta testers") }
+        // The app's buttons by label (the bar sits in an overlay that the
+        // window's own query did not reach in CI).
         func barButton(_ label: String) -> XCUIElement {
-            window.descendants(matching: .button).matching(NSPredicate(format: "label == %@", label)).firstMatch
+            app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
         }
         let move = barButton("Move 2 tasks to Later")
         XCTAssertTrue(move.waitForExistence(timeout: 3), "the selection bar shows")

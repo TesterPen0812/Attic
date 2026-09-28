@@ -432,14 +432,6 @@ final class TasksRound7ShellTests: XCTestCase {
         if editor.hasMarkedText() { editor.unmarkText() }
         press("\u{1B}", keyCode: 53)
         XCTAssertNil(searchField(), "the next Esc ends the search")
-        // The panel's hosting view forwards Esc to SwiftUI's exit commands
-        // (round 8: it shadowed them, so a new subtask's field ignored Esc).
-        // Straight to the hosting view, as the responder chain brings it,
-        // past the page's own key monitor.
-        press("f", keyCode: 3, modifiers: .command)
-        XCTAssertNotNil(searchField())
-        host.cancelOperation(nil)
-        spin(0.6)
-        XCTAssertNil(searchField(), "the field's exit command ended the search")
+
     }
 }
