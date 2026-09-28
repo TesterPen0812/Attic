@@ -1618,9 +1618,14 @@ final class TaskStore: ObservableObject {
     /// Several deletes in one save (undoing a batch creation): each task and
     /// its family move to Recently Deleted as their own entry, or nothing
     /// changes when any of them is refused.
+    /// `includingDoneLog` (round 10, Done's Delete): tasks the daily
+    /// cleanup moved to the Done log can be deleted too, with their family;
+    /// restoring them from Recently Deleted puts them back in the log.
     @discardableResult
-    func delete(taskIDs: [UUID]) -> Bool {
-        let visible = taskIDs.compactMap { id in tasks.first(where: { $0.id == id }) }
+    func delete(taskIDs: [UUID], includingDoneLog: Bool = false) -> Bool {
+        let visible = taskIDs.compactMap { id in
+            tasks.first(where: { $0.id == id }) ?? (includingDoneLog ? listedTask(withID: id) : nil)
+        }
         guard !visible.isEmpty, visible.count == Set(taskIDs).count else { return false }
         // Read while the rows are still there: the family a deleted subtask
         // belonged to is the panel the user is looking at, and a refusal has
@@ -2588,6 +2593,144 @@ final class TaskStore: ObservableObject {
         }
         _ = try stageUpdate(task, status: .done, allowingUnfinishedSubtasks: true, at: timestamp)
         return true
+    }
+
+    // MARK: - Round 10: duplicate, and edits on the Done log
+
+    /// Duplicates main tasks (round 10, ⌘D): each copy is an unfinished
+    /// task with its own id, the same title, priority, tags and due date,
+    /// and a copy of every subtask (each with its own id, unfinished, in
+    /// the same order). A copy of a Later task stays in Later, right below
+    /// its original; a copy of a task in Now (to do, in progress or done,
+    /// the Done log's too) is to do in Now, right below its original when
+    /// that is to do, else at the top. Files are not copied: they stay
+    /// with the original. All copies are made in one save, or none.
+    /// Returns the new main tasks, in the order asked.
+    @discardableResult
+    func duplicate(taskIDs: [UUID]) -> [TaskItem]? {
+        let sources = taskIDs.compactMap { listedTask(withID: $0) }
+        guard !sources.isEmpty, sources.count == taskIDs.count,
+              sources.allSatisfy({ $0.parentID == nil || listedTask(withID: $0.parentID!) == nil }) else {
+            report("Only main tasks that are still listed can be duplicated.", owner: nil, retryable: false)
+            return nil
+        }
+        let timestamp = now()
+        var created: [TaskItem] = []
+        do {
+            for source in sources {
+                let status: TaskStatus = source.status == .backlog ? .backlog : .todo
+                var order: Int64?
+                let group = orderedTasks(for: status).filter { $0.parentID == nil || parent(of: $0) == nil }
+                if source.status == status, tasks.contains(where: { $0.id == source.id }),
+                   let index = group.firstIndex(where: { $0.id == source.id }) {
+                    var placed = group
+                    placed.insert(source, at: index + 1)
+                    order = sparseManualOrder(at: index + 1, in: placed)
+                }
+                if order == nil { order = try nextManualOrder(status: status, updatedAt: timestamp) }
+                let copy = TaskItem(title: source.title, status: status, priority: source.priority, createdAt: timestamp,
+                                    completedAt: nil, manualOrder: order, parentID: nil)
+                copy.tags = source.tags
+                copy.dueDay = source.dueDay
+                copy.listOrderVersion = TaskItem.currentListOrderVersion
+                context.insert(copy)
+                tasks.append(copy)
+                let children = task(withID: source.id) != nil ? subtasks(of: source.id) : doneLogSubtasks(of: source.id)
+                // Unfinished, in the order the family shows them (done ones
+                // were listed last; they keep that place as open ones).
+                for (index, child) in children.enumerated() {
+                    let item = TaskItem(title: child.title, status: .todo, priority: child.priority, createdAt: timestamp,
+                                        completedAt: nil, manualOrder: Int64(children.count - index) * Self.manualOrderStride,
+                                        parentID: copy.id)
+                    item.tags = child.tags
+                    item.dueDay = child.dueDay
+                    item.listOrderVersion = TaskItem.currentListOrderVersion
+                    context.insert(item)
+                    tasks.append(item)
+                }
+                created.append(copy)
+            }
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error.localizedDescription, owner: nil)
+            return nil
+        }
+        guard save(owner: nil) else { return nil }
+        return created
+    }
+
+    /// Title, priority, tags or due date on tasks wherever they are
+    /// listed, the Done log included (round 10: Done's Edit Title and its
+    /// metadata), without touching their state: one context, one save,
+    /// every task or none.
+    @discardableResult
+    func updateListed(
+        _ ids: [UUID],
+        title: String? = nil,
+        priority: TaskPriority? = nil,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil,
+        addingTag: String? = nil,
+        removingTag: String? = nil
+    ) -> Bool {
+        guard !ids.isEmpty else { return false }
+        var changed = false
+        do {
+            for id in ids {
+                guard let task = listedTask(withID: id) else { throw TaskReplicaMutationError.missingReplica(id) }
+                var newTags = tags
+                if let addingTag { newTags = AtticTag.normalizedSet((newTags ?? task.tags) + [addingTag]) }
+                if let removingTag {
+                    newTags = (newTags ?? task.tags).filter { $0.caseInsensitiveCompare(removingTag) != .orderedSame }
+                }
+                changed = try stageUpdate(task, title: title, priority: priority, tags: newTags, dueDay: dueDay,
+                                          allowingUnfinishedSubtasks: true) || changed
+            }
+        } catch {
+            context.rollback()
+            try? reloadTasks()
+            report(error.localizedDescription, owner: nil)
+            return false
+        }
+        return changed ? save(owner: nil) : true
+    }
+
+    /// A subtask one place up or down among its siblings (round 10: the
+    /// quick look's ⌘↑ ⌘↓), whatever their states: the quick look lists
+    /// them in one order.
+    @discardableResult
+    func moveSubtask(taskID: UUID, by offset: Int) -> Bool {
+        guard let task = tasks.first(where: { $0.id == taskID }), let parentID = task.parentID else { return false }
+        // Among the siblings in the same state (open ones, or done ones):
+        // the family lists open subtasks first.
+        var siblings = subtasks(of: parentID).filter { ($0.status == .done) == (task.status == .done) }
+        guard let index = siblings.firstIndex(where: { $0.id == taskID }) else { return false }
+        let destination = index + offset
+        guard siblings.indices.contains(destination) else { return true }
+        let owner = familyOwner(of: task)
+        siblings.remove(at: index)
+        siblings.insert(task, at: destination)
+        let timestamp = now()
+        do {
+            if let order = sparseManualOrder(at: destination, in: siblings) {
+                let shown = TaskContentSnapshot(task)
+                for replica in try storedTasks(matching: taskID) {
+                    let agrees = replica === task || TaskContentSnapshot(replica) == shown
+                    replica.manualOrder = order
+                    replica.listOrderVersion = TaskItem.currentListOrderVersion
+                    if agrees { replica.updatedAt = timestamp }
+                }
+            } else {
+                try assignSpacedManualOrders(to: siblings, updatedAt: timestamp)
+            }
+        } catch {
+            context.rollback()
+            refresh()
+            report(error.localizedDescription, owner: owner)
+            return false
+        }
+        return save(owner: owner)
     }
 
     func orderedTasks(for status: TaskStatus) -> [TaskItem] {

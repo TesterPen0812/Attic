@@ -1,0 +1,117 @@
+import Foundation
+
+/// Round 10's task commands (the capability audit): Duplicate, edits and
+/// Delete on the Done page, and a subtask's move in the quick look. Each is
+/// one undoable step in the history it names, recorded only after the store
+/// confirmed the save.
+extension AtticLibrary {
+    /// Duplicates main tasks as one step (`TaskStore.duplicate`): undo
+    /// moves the copies (with their subtasks) to Recently Deleted, redo
+    /// brings them back, as undoing an add does. Returns the copies.
+    @discardableResult
+    func duplicateTasks(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> [TaskItem]? {
+        var created: [TaskItem]?
+        let serial = tasks.errorSerial
+        defer { if created == nil { _ = taskOutcome(false, since: serial, ids: ids) } }
+        undo.perform(in: history) {
+            guard let copies = self.tasks.duplicate(taskIDs: ids), !copies.isEmpty else { return nil }
+            created = copies
+            let newIDs = copies.map(\.id)
+            return UndoStep(
+                name: ids.count == 1 ? "Duplicate Task" : "Duplicate \(ids.count) Tasks",
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.delete(taskIDs: newIDs) { return .applied }
+                    return newIDs.allSatisfy { self.tasks.task(withID: $0) != nil } ? .failed : .obsolete
+                },
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.restoreDeleted(taskIDs: newIDs) { return .applied }
+                    return newIDs.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                }
+            )
+        }
+        return created
+    }
+
+    /// Title, priority, tags or due date on tasks wherever they are listed,
+    /// the Done log included, as one step; their state never changes.
+    @discardableResult
+    func updateListedTasks(
+        _ ids: [UUID],
+        title: String? = nil,
+        priority: TaskPriority? = nil,
+        tags: [String]? = nil,
+        dueDay: DueDay?? = nil,
+        addingTag: String? = nil,
+        removingTag: String? = nil,
+        in history: UndoHistoryID = .tasks
+    ) -> CommandOutcome {
+        let requested = ids
+        let ids = ids.filter { tasks.listedTask(withID: $0) != nil }
+        guard !ids.isEmpty else { return taskOutcome(false, since: tasks.errorSerial, ids: requested) }
+        var succeeded = false
+        let serial = tasks.errorSerial
+        undo.perform(in: history) {
+            let before = ids.compactMap(tasks.listedEditableState(of:))
+            guard tasks.updateListed(ids, title: title, priority: priority, tags: tags, dueDay: dueDay,
+                                     addingTag: addingTag, removingTag: removingTag) else { return nil }
+            succeeded = true
+            let after = ids.compactMap(tasks.listedEditableState(of:))
+            guard before != after else { return nil }
+            return UndoStep(
+                name: ids.count == 1 ? "Edit Task" : "Edit Tasks",
+                undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
+                redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
+            )
+        }
+        return taskOutcome(succeeded, since: serial, ids: ids)
+    }
+
+    /// Deletes tasks wherever they are listed, the Done log included (Done's
+    /// Delete), as one step: each with its family to Recently Deleted; undo
+    /// brings them all back where they were (a Done log task to the log).
+    @discardableResult
+    func deleteListedTasks(_ ids: [UUID], in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        let serial = tasks.errorSerial
+        let deleted = undo.perform(in: history) {
+            guard tasks.delete(taskIDs: ids, includingDoneLog: true) else { return nil }
+            return UndoStep(
+                name: ids.count == 1 ? "Delete Task" : "Delete \(ids.count) Tasks",
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.restoreDeleted(taskIDs: ids) { return .applied }
+                    return ids.allSatisfy { self.state(of: AtticItemRef(.task, $0)) == .deleted } ? .failed : .obsolete
+                },
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    if self.tasks.delete(taskIDs: ids, includingDoneLog: true) { return .applied }
+                    return ids.allSatisfy { self.tasks.listedTask(withID: $0) != nil } ? .failed : .obsolete
+                }
+            )
+        }
+        return taskOutcome(deleted, since: serial, ids: ids)
+    }
+
+    /// A subtask one place up or down among its siblings, as one step.
+    @discardableResult
+    func moveSubtask(_ id: UUID, by offset: Int, in history: UndoHistoryID = .tasks) -> CommandOutcome {
+        var succeeded = false
+        let serial = tasks.errorSerial
+        undo.perform(in: history) {
+            guard let task = tasks.task(withID: id), let parentID = task.parentID else { return nil }
+            let family = tasks.subtasks(of: parentID).map(\.id)
+            let before = family.compactMap(tasks.editableState(of:))
+            guard tasks.moveSubtask(taskID: id, by: offset) else { return nil }
+            succeeded = true
+            let after = family.compactMap(tasks.editableState(of:))
+            guard before != after else { return nil }
+            return UndoStep(
+                name: "Move Subtask",
+                undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
+                redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
+            )
+        }
+        return taskOutcome(succeeded, since: serial, ids: [id])
+    }
+}

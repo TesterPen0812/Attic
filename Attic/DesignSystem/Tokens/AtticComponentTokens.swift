@@ -257,6 +257,14 @@ enum AtticSubtaskChecklistMetrics {
 }
 
 /// "Completed today · N ›": the Now list's done section toggle.
+/// A task row's actions button (round 10).
+enum AtticRowActionsMetrics {
+    static let width: CGFloat = 22
+    static let iconSize: CGFloat = 12
+    /// After the date (or the title when there is none).
+    static let gap: CGFloat = 4
+}
+
 enum AtticCompletedLineMetrics {
     static let height: CGFloat = 24
     /// Visual A: 12 below the last open row, its text on the title line.

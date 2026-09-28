@@ -826,20 +826,29 @@ private struct AtticSmallButtonFace: View {
 }
 
 /// The selection bar: a raised (glass) capsule that floats above a multi-selection
-/// with the count and state, priority, tag, move and delete.
+/// with the count and state, priority, date, tag, move and delete. Round
+/// 10: a choice opens a native menu from a plain button (every click takes
+/// it), and Date and Tags open their pickers (every tag, search and
+/// creation) as pop-overs. VoiceOver reads the count and what the selected
+/// tasks share or not ("mixed priority").
 struct AtticSelectionBar: View {
     struct Action: Identifiable {
         let systemName: String
         let label: String.LocalizationValue
         let handler: () -> Void
-        /// A choice (state, priority, tag): the button opens this native
-        /// menu instead of acting (Phase 1).
-        var menu: [AtticMenuCommand] = []
+        /// A choice (state, priority): the button opens this native menu
+        /// instead of acting, read when it opens.
+        var menu: (() -> [AtticMenuCommand])? = nil
+        /// A picker (date, tags): the button opens it as a pop-over.
+        var popover: AtticAnchoredPopover? = nil
         var id: String { systemName }
     }
 
     let count: Int
     let actions: [Action]
+    /// What VoiceOver says after the count ("mixed priority, tagged
+    /// launch"); nil says nothing more.
+    var summary: String? = nil
 
     @State private var probeID = UUID()
 
@@ -850,15 +859,15 @@ struct AtticSelectionBar: View {
             AtticText(verbatim: String(localized: "\(count) selected"), style: .controlLabel, ink: .body)
                 .padding(.leading, AtticSelectionBarMetrics.countLeading)
                 .padding(.trailing, AtticSelectionBarMetrics.countTrailing)
+                .accessibilityValue(summary ?? "")
             ForEach(actions) { action in
-                if action.menu.isEmpty {
+                if let menu = action.menu {
+                    AtticMenuButton(systemName: action.systemName, label: action.label, commands: menu)
+                } else if let popover = action.popover {
                     AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
+                        .atticPopover(isPresented: popover.isPresented, arrowEdge: .top) { popover.content() }
                 } else {
-                    AtticCommandMenu(commands: action.menu, accessibilityLabel: String(localized: action.label)) {
-                        AtticSmallButton(systemName: action.systemName, label: action.label, action: {})
-                            .allowsHitTesting(false)
-                    }
-                    .help(String(localized: action.label))
+                    AtticSmallButton(systemName: action.systemName, label: action.label, action: action.handler)
                 }
             }
         }
@@ -867,6 +876,7 @@ struct AtticSelectionBar: View {
         .atticRaisedMaterial(cornerRadius: radius, interactive: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "\(count) selected"))
+        .accessibilityValue(summary ?? "")
         .atticControlProbe("Selection bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }
@@ -874,9 +884,12 @@ struct AtticSelectionBar: View {
 // MARK: - Menus
 
 /// One command in a native menu: a title menu, a "More" button, a context
-/// menu. Menus stay the system's own (native first: keyboard navigation,
-/// type-to-select, VoiceOver, system timing); Attic only chooses their
-/// content and the control that opens them.
+/// menu, a row's actions (round 10). Menus stay the system's own (native
+/// first: keyboard navigation, type-to-select, VoiceOver, system timing);
+/// Attic only chooses their content and the control that opens them. The
+/// same list builds a SwiftUI menu (`AtticMenuItems`) and an `NSMenu`
+/// (`AtticNativeMenu`, which a key or a button can open), so a command's
+/// title, shortcut and state are defined once.
 struct AtticMenuCommand: Identifiable {
     let id = UUID()
     let title: String
@@ -886,6 +899,14 @@ struct AtticMenuCommand: Identifiable {
     var isDisabled = false
     /// Starts a new section (the system draws its separator).
     var startsSection = false
+    /// A tick (on), a dash (mixed: some of the targets), or neither.
+    var state: AtticCheckState?
+    /// A quiet trailing detail ("Tue 30 Sep").
+    var detail: String?
+    /// A submenu's commands (the command itself then does nothing).
+    var children: [AtticMenuCommand] = []
+    /// A section's heading ("3 Tasks"): not a command.
+    var isHeader = false
     let action: () -> Void
 
     init(
@@ -909,6 +930,8 @@ struct AtticMenuCommand: Identifiable {
         isDestructive: Bool = false,
         isDisabled: Bool = false,
         startsSection: Bool = false,
+        state: AtticCheckState? = nil,
+        detail: String? = nil,
         action: @escaping () -> Void
     ) {
         self.title = title
@@ -917,7 +940,65 @@ struct AtticMenuCommand: Identifiable {
         self.isDestructive = isDestructive
         self.isDisabled = isDisabled
         self.startsSection = startsSection
+        self.state = state
+        self.detail = detail
         self.action = action
+    }
+
+    /// A submenu.
+    static func submenu(_ title: String, systemImage: String? = nil, startsSection: Bool = false,
+                        isDisabled: Bool = false, _ children: [AtticMenuCommand]) -> AtticMenuCommand {
+        var command = AtticMenuCommand(verbatim: title, systemImage: systemImage, isDisabled: isDisabled || children.isEmpty,
+                                       startsSection: startsSection) {}
+        command.children = children
+        return command
+    }
+
+    /// A section's heading: starts a section, titled.
+    static func header(_ title: String) -> AtticMenuCommand {
+        var command = AtticMenuCommand(verbatim: title, startsSection: true) {}
+        command.isHeader = true
+        return command
+    }
+
+    /// The command a key press runs, searched through submenus: the first
+    /// enabled one with this shortcut.
+    static func command(for shortcut: KeyboardShortcut, in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+        for command in commands {
+            if !command.isDisabled, !command.isHeader, command.children.isEmpty,
+               let own = command.shortcut, own.key == shortcut.key, own.modifiers == shortcut.modifiers {
+                return command
+            }
+            if let found = Self.command(for: shortcut, in: command.children) { return found }
+        }
+        return nil
+    }
+
+    /// The command a key press runs (a subtask's keys, round 10): the
+    /// first enabled one whose shortcut is this key with exactly these
+    /// modifiers; letters by their character, Backspace however it comes.
+    static func command(key: KeyEquivalent, characters: String, modifiers: EventModifiers,
+                        in commands: [AtticMenuCommand]) -> AtticMenuCommand? {
+        let relevant = modifiers.intersection([.command, .shift, .option, .control])
+        let deletes: Set<Character> = [KeyEquivalent.delete.character, KeyEquivalent.deleteForward.character, "\u{7F}", "\u{8}", "\u{F728}"]
+        for command in commands {
+            if let found = Self.command(key: key, characters: characters, modifiers: modifiers, in: command.children) { return found }
+            guard !command.isDisabled, !command.isHeader, command.children.isEmpty, let shortcut = command.shortcut,
+                  shortcut.modifiers == relevant else { continue }
+            if shortcut.key == .delete {
+                if deletes.contains(key.character) || characters.first.map(deletes.contains) == true { return command }
+            } else if shortcut.key == .space {
+                if key == .space || characters == " " || characters == "\u{A0}" { return command }
+            } else if shortcut.key == key || (characters.count == 1 && characters.lowercased() == String(shortcut.key.character)) {
+                return command
+            }
+        }
+        return nil
+    }
+
+    /// Every title, submenus included (tests read what a menu offers).
+    static func titles(in commands: [AtticMenuCommand]) -> [String] {
+        commands.flatMap { [$0.title] + titles(in: $0.children) }
     }
 }
 
@@ -950,36 +1031,253 @@ struct AtticCommandMenu<Label: View>: View {
 }
 
 /// The items of a native menu built from commands: sections separated by the
-/// system's own divider, each item with its symbol and its shortcut shown
-/// (spec: right-click menus show shortcuts too). Used by `AtticCommandMenu`
-/// and inside `.contextMenu`.
+/// system's own divider (or titled), each item with its symbol, its state
+/// and its shortcut shown (spec: right-click menus show shortcuts too);
+/// submenus nest. Used by `AtticCommandMenu` and inside `.contextMenu`.
 struct AtticMenuItems: View {
     let commands: [AtticMenuCommand]
 
     var body: some View {
-        ForEach(commands) { command in
-            if command.startsSection, command.id != commands.first?.id {
-                Divider()
+        ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
+            if let header = section.header {
+                Section(header.title) { items(section.items) }
+            } else {
+                if index > 0 { Divider() }
+                items(section.items)
             }
-            item(command)
         }
+    }
+
+    private struct Group {
+        var header: AtticMenuCommand?
+        var items: [AtticMenuCommand] = []
+    }
+
+    private var sections: [Group] {
+        var result: [Group] = []
+        for command in commands {
+            if command.isHeader {
+                result.append(Group(header: command))
+            } else if command.startsSection || result.isEmpty {
+                result.append(Group(items: [command]))
+            } else {
+                result[result.count - 1].items.append(command)
+            }
+        }
+        return result
+    }
+
+    private func items(_ commands: [AtticMenuCommand]) -> some View {
+        ForEach(commands) { command in item(command) }
     }
 
     @ViewBuilder
     private func item(_ command: AtticMenuCommand) -> some View {
-        let button = Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
-            if let systemImage = command.systemImage {
-                SwiftUI.Label(command.title, systemImage: systemImage)
-            } else {
-                Text(command.title)
+        if !command.children.isEmpty {
+            Menu {
+                AtticMenuItems(commands: command.children)
+            } label: {
+                label(command)
             }
-        }
-        .disabled(command.isDisabled)
-        if let shortcut = command.shortcut {
-            button.keyboardShortcut(shortcut)
+            .disabled(command.isDisabled)
+        } else if let state = command.state, state != .mixed {
+            // A toggle draws the native tick.
+            Toggle(isOn: Binding(get: { state == .on }, set: { _ in command.action() })) { label(command) }
+                .disabled(command.isDisabled)
+                .modifier(AtticMenuShortcut(shortcut: command.shortcut))
+                .modifier(AtticMenuBadge(detail: command.detail))
         } else {
-            button
+            Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
+                if command.state == .mixed {
+                    // Some of the targets have it: a dash.
+                    SwiftUI.Label(command.title, systemImage: "minus")
+                } else {
+                    label(command)
+                }
+            }
+            .disabled(command.isDisabled)
+            .modifier(AtticMenuShortcut(shortcut: command.shortcut))
+            .modifier(AtticMenuBadge(detail: command.detail))
         }
+    }
+
+    @ViewBuilder
+    private func label(_ command: AtticMenuCommand) -> some View {
+        if let systemImage = command.systemImage {
+            SwiftUI.Label(command.title, systemImage: systemImage)
+        } else {
+            Text(verbatim: command.title)
+        }
+    }
+}
+
+private struct AtticMenuShortcut: ViewModifier {
+    let shortcut: KeyboardShortcut?
+
+    func body(content: Content) -> some View {
+        if let shortcut { content.keyboardShortcut(shortcut) } else { content }
+    }
+}
+
+private struct AtticMenuBadge: ViewModifier {
+    let detail: String?
+
+    func body(content: Content) -> some View {
+        if let detail { content.badge(Text(verbatim: detail)) } else { content }
+    }
+}
+
+/// The same commands as an `NSMenu` (round 10): what a row's actions
+/// button, ⇧⌘I and the selection bar open, anchored to a view. Native in
+/// every way (keyboard, type-to-select, VoiceOver), with each command's
+/// state, shortcut and detail as `AtticMenuItems` draws them.
+@MainActor
+enum AtticNativeMenu {
+    /// The menu for `commands`.
+    static func make(_ commands: [AtticMenuCommand], title: String = "") -> NSMenu {
+        let menu = NSMenu(title: title)
+        menu.autoenablesItems = false
+        var first = true
+        for command in commands {
+            if command.isHeader {
+                if !first { menu.addItem(.separator()) }
+                menu.addItem(.sectionHeader(title: command.title))
+                first = false
+                continue
+            }
+            if command.startsSection, !first { menu.addItem(.separator()) }
+            first = false
+            menu.addItem(item(command))
+        }
+        return menu
+    }
+
+    private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
+        let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
+        if let systemImage = command.systemImage, command.state != .mixed {
+            item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        }
+        if !command.children.isEmpty {
+            item.submenu = make(command.children, title: command.title)
+        } else {
+            item.target = AtticMenuTarget.shared
+            item.action = #selector(AtticMenuTarget.perform(_:))
+            item.representedObject = AtticMenuTarget.Box(command.action)
+        }
+        switch command.state {
+        case .on?: item.state = .on
+        case .mixed?: item.state = .mixed
+        case .off?, nil: item.state = .off
+        }
+        item.isEnabled = !command.isDisabled
+        if let shortcut = command.shortcut, let key = keyEquivalent(shortcut.key) {
+            item.keyEquivalent = key
+            item.keyEquivalentModifierMask = modifiers(shortcut.modifiers)
+        }
+        if let detail = command.detail { item.badge = NSMenuItemBadge(string: detail) }
+        return item
+    }
+
+    /// AppKit's key equivalent for a SwiftUI key.
+    nonisolated static func keyEquivalent(_ key: KeyEquivalent) -> String? {
+        func unit(_ value: Int) -> String? { UnicodeScalar(UInt32(value)).map { String(Character($0)) } }
+        switch key {
+        case .return: return "\r"
+        case .space: return " "
+        case .delete: return unit(NSBackspaceCharacter)
+        case .deleteForward: return unit(NSDeleteFunctionKey)
+        case .upArrow: return unit(NSUpArrowFunctionKey)
+        case .downArrow: return unit(NSDownArrowFunctionKey)
+        case .leftArrow: return unit(NSLeftArrowFunctionKey)
+        case .rightArrow: return unit(NSRightArrowFunctionKey)
+        case .escape: return "\u{1B}"
+        case .tab: return "\t"
+        default: return String(key.character)
+        }
+    }
+
+    nonisolated static func modifiers(_ modifiers: EventModifiers) -> NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers.contains(.command) { flags.insert(.command) }
+        if modifiers.contains(.shift) { flags.insert(.shift) }
+        if modifiers.contains(.option) { flags.insert(.option) }
+        if modifiers.contains(.control) { flags.insert(.control) }
+        return flags
+    }
+
+    /// Opens the menu under `view` (at its bottom-left, or at `point` in
+    /// its coordinates), as a pop-up button does. Returns at once: the
+    /// menu tracks on the next turn, so the caller's own event finishes.
+    static func popUp(_ commands: [AtticMenuCommand], in view: NSView, at point: CGPoint? = nil) {
+        let menu = make(commands)
+        menu.appearance = view.window?.effectiveAppearance
+        let location = point ?? CGPoint(x: 0, y: view.isFlipped ? view.bounds.maxY + 4 : -4)
+        DispatchQueue.main.async {
+            guard view.window != nil else { return }
+            menu.popUp(positioning: nil, at: location, in: view)
+        }
+    }
+}
+
+/// Runs a native menu item's command.
+@MainActor
+final class AtticMenuTarget: NSObject {
+    static let shared = AtticMenuTarget()
+
+    final class Box {
+        let action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
+    }
+
+    @objc func perform(_ item: NSMenuItem) {
+        (item.representedObject as? Box)?.action()
+    }
+}
+
+/// The AppKit view behind a SwiftUI control, to anchor a native menu to
+/// (round 10). Click-through; reports itself to its holder.
+struct AtticMenuAnchor: NSViewRepresentable {
+    let holder: AtticMenuAnchor.Holder
+
+    @MainActor
+    final class Holder {
+        weak var view: NSView?
+    }
+
+    func makeNSView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        holder.view = view
+        return view
+    }
+
+    func updateNSView(_ view: AnchorView, context: Context) { holder.view = view }
+
+    final class AnchorView: NSView {
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+/// A small button that opens a native menu under itself (round 10: the
+/// selection bar's choices). A plain button with the menu opened in its
+/// action: every click on it opens the menu (the SwiftUI `Menu` with a
+/// click-through label never took the selection bar's clicks), and a key
+/// can open the same menu (`AtticNativeMenu`). `commands` is read when it
+/// opens, so ticks and dashes are current.
+struct AtticMenuButton: View {
+    let systemName: String
+    let label: String.LocalizationValue
+    let commands: () -> [AtticMenuCommand]
+
+    @State private var anchor = AtticMenuAnchor.Holder()
+
+    var body: some View {
+        AtticSmallButton(systemName: systemName, label: label) {
+            guard let view = anchor.view else { return }
+            AtticNativeMenu.popUp(commands(), in: view)
+        }
+        .background(AtticMenuAnchor(holder: anchor).accessibilityHidden(true))
+        .accessibilityHint(String(localized: "Opens a menu"))
     }
 }
 

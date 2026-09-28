@@ -43,14 +43,19 @@ final class AtticKeyWindowUITests: XCTestCase {
         }
         XCTAssertEqual(addBar.value(forKey: "hasKeyboardFocus") as? Bool, true, "the add bar has the keyboard on open")
 
+        // Captured now, judged after typing: the pixel count takes seconds
+        // on CI, and an idle quick capture with the pointer away rightly
+        // hides after its grace (`MainPanelAutoHidePolicy`), so the text
+        // must be typed while the person would still be typing (round 10:
+        // the panel hid before the text arrived since round 8).
         let image = addBar.screenshot().image
-        attach(image, name: "add-bar-on-open")
-        XCTAssertLessThan(try accentFraction(image), 0.002, "no focus ring on open")
-
         app.typeText("Typed on open")
         let typed = NSPredicate(format: "value CONTAINS %@", "Typed on open")
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: typed, evaluatedWith: addBar)], timeout: 3), .completed,
                        "what is typed on open lands in the add bar")
+
+        attach(image, name: "add-bar-on-open")
+        XCTAssertLessThan(try accentFraction(image), 0.002, "no focus ring on open")
     }
 
     /// The share of pixels in the system's focus-ring blue (Original's accent

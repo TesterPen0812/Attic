@@ -20,11 +20,21 @@ extension TasksPageModel {
     /// The library's tags, most used first.
     var allTags: [String] { library.tags.counts().map(\.name) }
 
-    func dueDay(of id: UUID) -> DueDay? { store.task(withID: id)?.dueDay }
+    func dueDay(of id: UUID) -> DueDay? { store.listedTask(withID: id)?.dueDay }
+
+    /// A task wherever it is listed: the lists, or the Done log (round 10:
+    /// Done's rows take the same edits, without changing completion).
+    func listedTask(_ id: UUID) -> TaskItem? { store.listedTask(withID: id) }
+
+    /// Some of `ids` are only in the Done log: their edits go through the
+    /// listed route (`AtticLibrary.updateListedTasks`).
+    func reachesDoneLog(_ ids: [UUID]) -> Bool {
+        ids.contains { store.task(withID: $0) == nil && store.listedTask(withID: $0) != nil }
+    }
 
     /// The due day of every target, or nil when they differ or have none.
     func commonDueDay(_ ids: [UUID]) -> DueDay? {
-        let days = Set(ids.map { store.task(withID: $0)?.dueDay })
+        let days = Set(ids.map { listedTask($0)?.dueDay })
         return days.count == 1 ? days.first ?? nil : nil
     }
 
@@ -32,10 +42,13 @@ extension TasksPageModel {
     /// (or removed) as one step, with an Undo toast.
     @discardableResult
     func setDueDay(_ day: DueDay?, for ids: [UUID]) -> CommandOutcome {
-        let live = ids.filter { store.task(withID: $0) != nil }
+        let live = ids.filter { listedTask($0) != nil }
         guard !live.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }
-        guard live.contains(where: { store.task(withID: $0)?.dueDay != day }) else { return .applied }
-        let outcome = library.updateTaskFields(live, dueDay: .some(day))
+        guard live.contains(where: { listedTask($0)?.dueDay != day }) else { return .applied }
+        let outcome = reachesDoneLog(live)
+            ? library.updateListedTasks(live, dueDay: .some(day))
+            : library.updateTaskFields(live, dueDay: .some(day))
+        if reachesDoneLogAfterEdit(live) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
         let message: String
         if let day {
@@ -50,7 +63,7 @@ extension TasksPageModel {
 
     /// How many of the targets have `tag`: all (ticked), some (mixed), none.
     func tagState(_ tag: String, for ids: [UUID]) -> AtticCheckState {
-        let tasks = ids.compactMap { store.task(withID: $0) }
+        let tasks = ids.compactMap { listedTask($0) }
         guard !tasks.isEmpty else { return .off }
         let having = tasks.filter { $0.tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }.count
         return having == 0 ? .off : (having == tasks.count ? .on : .mixed)
@@ -62,10 +75,13 @@ extension TasksPageModel {
     @discardableResult
     func toggleTag(_ tag: String, for ids: [UUID]) -> CommandOutcome {
         guard let tag = AtticTag.normalize(tag) else { return .applied }
-        let live = ids.filter { store.task(withID: $0) != nil }
+        let live = ids.filter { listedTask($0) != nil }
         guard !live.isEmpty else { return ids.isEmpty ? .applied : .failed(.taskGone) }
         let removing = tagState(tag, for: live) == .on
-        let outcome = library.updateTaskFields(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil)
+        let outcome = reachesDoneLog(live)
+            ? library.updateListedTasks(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil)
+            : library.updateTaskFields(live, addingTag: removing ? nil : tag, removingTag: removing ? tag : nil)
+        if reachesDoneLogAfterEdit(live) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
         showToast(removing ? String(localized: "Removed #\(tag)") : String(localized: "Tagged #\(tag)"))
         return outcome
@@ -74,7 +90,7 @@ extension TasksPageModel {
     /// The tags the tag list shows for these targets: theirs first, then
     /// the rest of the library's.
     func tagChoices(for ids: [UUID]) -> [String] {
-        let own = AtticTag.normalizedSet(ids.compactMap { store.task(withID: $0) }.flatMap(\.tags))
+        let own = AtticTag.normalizedSet(ids.compactMap { listedTask($0) }.flatMap(\.tags))
         let rest = allTags.filter { tag in !own.contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }
         return own + rest
     }

@@ -191,6 +191,11 @@ final class TasksPageModel: ObservableObject {
     }
     @Published private(set) var newSubtaskParentID: UUID?
     @Published var newSubtaskTitle = ""
+    /// A quick-look subtask being renamed in place (round 10), its text,
+    /// and whether its save failed ("Not saved · Retry").
+    @Published var renamingSubtaskID: UUID?
+    @Published var subtaskRename = ""
+    @Published var subtaskRenameFailed = false
     /// Finished rows held where they were for about a second, with the
     /// list and index they held (spec: "stays in place, then slides").
     @Published private(set) var held: [UUID: HeldPlace] = [:]
@@ -548,7 +553,7 @@ final class TasksPageModel: ObservableObject {
         case .title?, .newSubtask?: return true
         case .paste?, nil: break
         }
-        if let id = editingTitleID, let task = store.task(withID: id), titlePatch(for: task) != nil {
+        if let id = editingTitleID, let task = store.listedTask(withID: id), titlePatch(for: task) != nil {
             return true
         }
         return newSubtaskParentID != nil && !newSubtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -703,6 +708,7 @@ final class TasksPageModel: ObservableObject {
     /// here; Esc in the field is the only discard.
     @discardableResult
     func finishEditing() -> Bool {
+        guard commitSubtaskRename() else { return false }
         if hasUnsavedEdit {
             guard commitTitle(), commitNewSubtask() else { return false }
         }
@@ -872,6 +878,12 @@ final class TasksPageModel: ObservableObject {
 
     func clearSelection() { selection = [] }
 
+    /// Duplicate's copies become the selection (round 10).
+    func selectCopies(_ ids: [UUID]) {
+        selection = Set(ids)
+        selectionAnchor = ids.first
+    }
+
     /// What a key or menu command on `id` acts on: the whole selection when
     /// the row is part of a multi-selection, otherwise the row.
     func targets(for id: UUID) -> [UUID] {
@@ -957,6 +969,17 @@ final class TasksPageModel: ObservableObject {
         return outcome
     }
 
+    /// The Done log's loaded pages after a change to a task in it.
+    func reloadDoneLogAfterEdit() {
+        doneLogRevision = nil
+        loadDoneLogIfNeeded()
+    }
+
+    /// Whether an edit to `ids` touched the Done log's loaded tasks.
+    func reachesDoneLogAfterEdit(_ ids: [UUID]) -> Bool {
+        ids.contains { id in doneLogTasks.contains { $0.id == id } }
+    }
+
     /// The Done log's loaded pages after a task left it.
     private func reloadDoneLogAfterChange() {
         guard doneLogQuery != nil else { return }
@@ -1012,11 +1035,14 @@ final class TasksPageModel: ObservableObject {
     /// one). Nothing to change is not a change.
     @discardableResult
     func setPriority(_ priority: TaskPriority, for ids: [UUID]) -> CommandOutcome {
-        let changing = ids.filter { store.task(withID: $0).map { $0.priority != priority } == true }
+        let changing = ids.filter { store.listedTask(withID: $0).map { $0.priority != priority } == true }
         guard !changing.isEmpty else { return .applied }
-        let outcome = changing.count == 1
-            ? library.updateTask(changing[0], priority: priority)
-            : library.updateTasks(changing, priority: priority)
+        let outcome = reachesDoneLog(changing)
+            ? library.updateListedTasks(changing, priority: priority)
+            : changing.count == 1
+                ? library.updateTask(changing[0], priority: priority)
+                : library.updateTasks(changing, priority: priority)
+        if reachesDoneLogAfterEdit(changing) { reloadDoneLogAfterEdit() }
         guard outcome.isApplied else { return outcome }
         let name = priority.spokenTitle
         showToast(changing.count == 1 ? name : String(localized: "\(changing.count) tasks: \(name)"))
@@ -1079,11 +1105,16 @@ final class TasksPageModel: ObservableObject {
     /// saved; the caller moves focus only then (Astra 6).
     @discardableResult
     func delete(_ ids: [UUID]) -> CommandOutcome {
-        let live = ids.filter { store.task(withID: $0) != nil }
+        // Done's rows too (round 10): a Done log task goes to Recently
+        // Deleted with its family, and Undo puts it back in the log.
+        let live = ids.filter { store.listedTask(withID: $0) != nil }
         guard !live.isEmpty else { return .failed(.taskGone) }
-        let title = live.count == 1 ? store.task(withID: live[0])?.title : nil
-        let outcome = library.deleteTasks(live)
+        let title = live.count == 1 ? store.listedTask(withID: live[0])?.title : nil
+        let archived = reachesDoneLog(live)
+        let outcome = archived ? library.deleteListedTasks(live) : library.deleteTasks(live)
         guard outcome.isApplied else { return outcome }
+        if archived || tab == .done { reloadDoneLogAfterEdit() }
+        if doneDetailID.map(live.contains) == true { doneDetailID = nil }
         selection.subtract(live)
         expanded.subtract(live)
         if let title {
@@ -1123,7 +1154,8 @@ final class TasksPageModel: ObservableObject {
     // MARK: - Title and subtasks
 
     func beginEditingTitle(_ id: UUID) {
-        guard let task = store.task(withID: id), editingTitleID != id else { return }
+        // A Done log task's title too (round 10: Done's Edit Title).
+        guard let task = store.listedTask(withID: id), editingTitleID != id else { return }
         // Another editor's changes are saved first (review 2).
         guard finishEditing() else { return }
         // The words the title already has stay words: only shorthand typed
@@ -1143,13 +1175,18 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func commitTitle() -> Bool {
         guard let id = editingTitleID else { return true }
-        guard let task = store.task(withID: id), let patch = titlePatch(for: task) else {
+        guard let task = store.listedTask(withID: id), let patch = titlePatch(for: task) else {
             editingTitleID = nil
             clearFailure(.title(id))
             return true
         }
-        guard library.updateTask(id, title: patch.title, priority: patch.priority, tags: patch.tags,
-                                 dueDay: patch.dueDay.map { .some($0) }).isApplied else {
+        let saved = store.task(withID: id) == nil
+            ? library.updateListedTasks([id], title: patch.title, priority: patch.priority, tags: patch.tags,
+                                        dueDay: patch.dueDay.map { .some($0) })
+            : library.updateTask(id, title: patch.title, priority: patch.priority, tags: patch.tags,
+                                 dueDay: patch.dueDay.map { .some($0) })
+        if store.task(withID: id) == nil { reloadDoneLogAfterEdit() }
+        guard saved.isApplied else {
             failedSave = .title(id)
             return false
         }
@@ -1189,6 +1226,7 @@ final class TasksPageModel: ObservableObject {
     }
 
     func cancelEditing() {
+        if renamingSubtaskID != nil { cancelSubtaskRename() }
         if case .title? = failedSave { failedSave = nil }
         if case .newSubtask? = failedSave { failedSave = nil }
         editingTitleID = nil
@@ -1227,6 +1265,12 @@ final class TasksPageModel: ObservableObject {
         let new = subtasks.filter { !order.contains($0.id) }
         if !new.isEmpty { quickLookOrder[id] = order + new.map(\.id) }
         return known + new
+    }
+
+    /// A subtask moved on purpose (round 10): the open quick look takes
+    /// the family's order again.
+    func releaseQuickLookOrder(of id: UUID) {
+        quickLookOrder[id] = nil
     }
 
     func setExpanded(_ id: UUID, _ open: Bool) {
@@ -1337,7 +1381,7 @@ final class TasksPageModel: ObservableObject {
 
     /// A task (or the first of pasted tasks) just added: the list brings it
     /// into view without selecting it.
-    @Published private(set) var addedRequest: ScrollRequest?
+    @Published var addedRequest: ScrollRequest?
 
     private var lastPasteAsOne = false
 

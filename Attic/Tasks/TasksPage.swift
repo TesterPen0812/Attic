@@ -34,6 +34,8 @@ struct TasksPage: View {
     @State private var fileDropRow: UUID?
     /// A row's date or tag list that is open (owner fix 5 C and D).
     @State private var metaPopover: TasksMetaPopover?
+    /// The selection bar's Date or Tags picker (round 10).
+    @State private var selectionPicker: SelectionPicker?
     /// The add bar's strip has a picker open.
     @State private var composerPickerOpen = false
     /// "Started tasks stay together" (review 10), while it shows.
@@ -137,7 +139,7 @@ struct TasksPage: View {
             #endif
             if findMonitor == nil {
                 findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    findPressed(event) || searchEscapePressed(event) ? nil : event
+                    findPressed(event) || searchEscapePressed(event) || taskShortcutPressed(event) ? nil : event
                 }
             }
             if scrollMonitor == nil {
@@ -207,12 +209,24 @@ struct TasksPage: View {
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
         .onChange(of: metaPopover) { _, _ in updateTypingLock() }
+        .onChange(of: selectionPicker) { _, _ in updateTypingLock() }
+        // VoiceOver hears how many are selected as the selection grows or
+        // shrinks past one (round 10).
+        .onChange(of: model.selection.count) { old, new in
+            guard new > 1 || old > 1 else { return }
+            if new < 2 { selectionPicker = nil }
+            AccessibilityNotification.Announcement(new > 1 ? String(localized: "\(new) selected") : String(localized: "Selection cleared")).post()
+        }
         .onChange(of: model.editingTitleID) { _, id in
             updateTypingLock()
             // The row gives up the keyboard so its title field can take it.
             if id != nil { focusedRow = nil }
         }
         .onChange(of: model.newSubtaskParentID) { _, id in
+            updateTypingLock()
+            if id != nil { focusedRow = nil }
+        }
+        .onChange(of: model.renamingSubtaskID) { _, id in
             updateTypingLock()
             if id != nil { focusedRow = nil }
         }
@@ -319,8 +333,8 @@ struct TasksPage: View {
         // stays until it closes, wherever the pointer goes. Context menus
         // hold it through the shell's menu-tracking lock; suggestions show
         // only over a draft, which the composer lock holds.
-        chrome.editLock(model.editingTitleID != nil || model.newSubtaskParentID != nil
-            || composerPickerOpen || metaPopover != nil)
+        chrome.editLock(model.editingTitleID != nil || model.newSubtaskParentID != nil || model.renamingSubtaskID != nil
+            || composerPickerOpen || metaPopover != nil || selectionPicker != nil)
     }
 
     /// A drag in progress and a row's pickers end when the panel hides or
@@ -328,6 +342,7 @@ struct TasksPage: View {
     private func cancelTransientState() {
         cancelDrag()
         if metaPopover != nil { metaPopover = nil }
+        if selectionPicker != nil { selectionPicker = nil }
         pointer.endInvocation()
     }
 
@@ -410,6 +425,34 @@ struct TasksPage: View {
         guard Self.answersFind(event: event, pageShown: model.isPageShown, tab: model.tab,
                                pageWindow: pointer.view?.window, popoverOpen: AtticTextInput.isPopoverOpen) else { return false }
         beginSearch()
+        return true
+    }
+
+    /// ⌘C, ⌘D and ⇧⌘I on the row the keyboard is on (or the selection):
+    /// before any menu sees them (round 10), as ⌘F is, since the app's Edit
+    /// menu answers ⌘C itself. ⌘C and ⌘D run the command the row's menu
+    /// holds for their key (`taskCommands`), so the key and the menu can
+    /// never differ; ⇧⌘I opens that menu. A field typing, an editor or a
+    /// picker keeps every key.
+    private func taskShortcutPressed(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, model.isPageShown, let window = pointer.view?.window, event.window === window,
+              window.isKeyWindow, !AtticTextInput.hasKeyboard, model.editingTitleID == nil, model.newSubtaskParentID == nil,
+              model.renamingSubtaskID == nil, !addBarFocused, !searchFocused, metaPopover == nil, drag == nil else { return false }
+        let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate]
+        guard let shortcut = shortcuts.first(where: {
+            AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
+        }) else { return false }
+        let visible = visibleIDs()
+        let current = (focusedRow ?? model.orderedSelection().first).flatMap { visible.contains($0) ? $0 : nil }
+        guard let current else { return false }
+        // No right-click's binding decides a key's targets.
+        pointer.endInvocation()
+        if shortcut == AtticTaskShortcut.actions {
+            showActions(for: current, anchor: nil, tab: model.tab)
+            return true
+        }
+        guard let command = AtticMenuCommand.command(for: shortcut, in: taskCommands(current, tab: model.tab)) else { return false }
+        command.action()
         return true
     }
 
@@ -706,7 +749,10 @@ struct TasksPage: View {
                 onSelect: { rowClicked(id, tab: tab) },
                 focus: live.focus,
                 titleEditing: model.editingTitleID == id ? titleEditing(for: id) : nil,
-                meta: tab == .done || row.status == .done ? nil : rowMeta(for: id, open: live.metaPopover)
+                // Every row, done ones too (round 10): a finished task shows
+                // no date or tags, but its pickers open from its row.
+                meta: rowMeta(for: id, open: live.metaPopover),
+                onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) }
             )
             .contextMenu { rowMenu(row, tab: tab) }
         } below: {
@@ -742,6 +788,12 @@ struct TasksPage: View {
                     onToggle: { subtask in model.report(model.toggleSubtask(subtask.id), on: id) { model.toggleSubtask(subtask.id) } },
                     onAddSubtask: { model.beginAddingSubtask(to: id) },
                     onOpenPage: { model.openPage(id) },
+                    commands: { subtask in subtaskCommands(subtask, of: id, in: row.subtasks) },
+                    renaming: model.renamingSubtaskID.map { renaming in
+                        (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
+                                                     cancel: { model.cancelSubtaskRename() },
+                                                     accessibilityLabel: String(localized: "Rename subtask")))
+                    },
                     newSubtask: model.newSubtaskParentID == id
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
@@ -749,6 +801,11 @@ struct TasksPage: View {
                         : nil
                 )
                 .transition(.opacity)
+                if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
+                   row.subtasks.contains(where: { $0.id == renaming }) {
+                    AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitSubtaskRename() })
+                        .padding(.leading, AtticLayout.textX)
+                }
                 if model.failedSave == .newSubtask(id) {
                     AtticErrorLine(message: String(localized: "Not saved"), onRetry: { _ = model.commitNewSubtask() })
                         .padding(.leading, AtticLayout.textX)
@@ -898,7 +955,7 @@ struct TasksPage: View {
 
     private func rowClicked(_ id: UUID, tab: TasksTab) {
         let modifiers = NSApp.currentEvent?.modifierFlags ?? []
-        if (NSApp.currentEvent?.clickCount ?? 1) >= 2, tab != .done {
+        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
             model.selectOnly(id)
             model.beginEditingTitle(id)
             return
@@ -935,13 +992,25 @@ struct TasksPage: View {
                     model.report(model.toggleDone(targets), on: id) { model.toggleDone(targets) }
                 },
                 openPage: { toggleDetails(id) },
+                // Round 10: Delete (to Recently Deleted), Edit Title and the
+                // metadata edits, without changing completion.
+                delete: { deleteAndMoveFocus(model.targets(for: id)) },
+                editTitle: {
+                    model.selectOnly(id)
+                    model.beginEditingTitle(id)
+                },
                 restoreToNow: {
                     let targets = model.targets(for: id)
                     model.report(model.restoreToNow(targets), on: id) { model.restoreToNow(targets) }
                 },
+                copy: { model.copy(model.targets(for: id)) },
+                duplicate: { runCommand(on: id) { model.duplicate($0) } },
+                changePriority: { showPriority(for: id) },
+                showActions: { showActions(for: id, anchor: nil, tab: tab) },
                 names: .init(openPage: detailsActionName(for: id))
             )
         }
+        let unfinished = store.task(withID: id).map { $0.status != .done } == true
         return AtticTaskActions(
             // The circle's click acts on its row; Space on a row that is part
             // of a multi-selection acts on the selection, as the menu does
@@ -968,14 +1037,27 @@ struct TasksPage: View {
                 model.report(move(), on: id, retry: move)
             },
             delete: { deleteAndMoveFocus(model.targets(for: id)) },
-            // Return: the title in place (not in the Done log).
+            // Return: the title in place.
             editTitle: {
-                guard model.tab != .done else { return }
                 model.selectOnly(id)
                 model.beginEditingTitle(id)
             },
+            moveUp: unfinished ? { moveRow(id, by: -1) } : nil,
+            moveDown: unfinished ? { moveRow(id, by: 1) } : nil,
+            addSubtask: unfinished ? { model.beginAddingSubtask(to: id) } : nil,
+            copy: { model.copy(model.targets(for: id)) },
+            duplicate: { runCommand(on: id) { model.duplicate($0) } },
+            changePriority: { showPriority(for: id) },
+            showActions: { showActions(for: id, anchor: nil, tab: tab) },
             names: .init(openPage: String(localized: "Open files"))
         )
+    }
+
+    /// A key's or VoiceOver's command on the row's targets, with its
+    /// failure under the row (Retry).
+    private func runCommand(on id: UUID, _ command: @escaping ([UUID]) -> CommandOutcome) {
+        let targets = model.targets(for: id)
+        model.report(command(targets), on: id) { command(targets) }
     }
 
     /// ⌘Return on a Done page row: a Done log task's details open or close
@@ -1013,156 +1095,251 @@ struct TasksPage: View {
 
     // MARK: - Right-click menu
 
-    @ViewBuilder
+    /// The right-click menu: the task's commands (`taskCommands`), the
+    /// same list the actions button and ⇧⌘I open.
     private func rowMenu(_ row: TasksListRow, tab: TasksTab) -> some View {
-        // The row the pointer right-clicked (computer-use review, bug 1):
-        // resolved when the menu opens and again when a command runs, never
-        // from whatever this row's menu was built with earlier.
-        let id = menuRowID(row.id)
-        let targets = menuTargets(row.id)
+        AtticMenuItems(commands: taskCommands(row.id, tab: tab))
+    }
+
+    /// Every command a row offers, in one list (round 10: one definition
+    /// for the right-click menu, the actions button, ⇧⌘I, and the keys
+    /// ⌘C and ⌘D, which run the command this list holds for their key).
+    /// It acts on the menu's targets: the row, or the selection it is part
+    /// of. Each command shows its key from `AtticTaskShortcut`.
+    func taskCommands(_ rowID: UUID, tab: TasksTab) -> [AtticMenuCommand] {
+        let id = menuRowID(rowID)
+        let targets = menuTargets(rowID)
         let single = targets.count == 1
-        // The row's date and tag lists live on live, unfinished rows only
-        // (`AtticTaskRow.meta`); the menu offers them only there.
-        let hostsPickers = tab != .done && store.task(withID: id).map { $0.status != .done } == true
+        let listed = targets.compactMap { store.listedTask(withID: $0) }
+        let allDone = !listed.isEmpty && listed.allSatisfy { $0.status == .done }
+        let allWorking = !listed.isEmpty && listed.allSatisfy { $0.status == .inProgress }
+        let unfinished = store.task(withID: id).map { $0.status != .done } == true
+        var list: [AtticMenuCommand] = []
+        // A menu for several tasks says so (bug 1): "3 Tasks".
+        if !single { list.append(.header(String(localized: "\(targets.count) Tasks"))) }
         if tab == .done {
-            // The same commands the row's keys and VoiceOver offer
-            // (`actions(for:)`), for the row the pointer right-clicked.
-            let actions = actions(for: id, in: tab)
-            if let restore = actions.restoreToNow {
-                // On a selection it restores them all, as one step (round 6).
-                if single {
-                    Button(String(localized: "Restore to Now")) { restore() }
-                } else {
-                    Section(String(localized: "\(targets.count) Tasks")) {
-                        Button(String(localized: "Restore \(targets.count) Tasks to Now")) { restore() }
-                    }
-                }
-            }
+            // On a selection it restores them all, as one step (round 6).
+            list.append(AtticMenuCommand(verbatim: single ? String(localized: "Restore to Now")
+                                                          : String(localized: "Restore \(targets.count) Tasks to Now"),
+                                         startsSection: single) {
+                menuCommand(rowID) { model.restoreToNow($0) }
+            })
+            list.append(AtticMenuCommand(verbatim: String(localized: "Mark as Not Done"), shortcut: AtticTaskShortcut.complete) {
+                menuCommand(rowID) { model.toggleDone($0) }
+            })
             if single {
-                Button(detailsMenuTitle(for: id)) {
+                list.append(AtticMenuCommand(verbatim: detailsMenuTitle(for: id), shortcut: AtticTaskShortcut.openPage) {
                     guard !AtticTextInput.ownsCurrentKey else { return }
-                    actions.openPage()
-                }
-                .keyboardShortcut(.return, modifiers: .command)
+                    toggleDetails(menuRowID(rowID))
+                })
             }
         } else {
-            let allDone = targets.allSatisfy { store.listedTask(withID: $0)?.status == .done }
-            let allWorking = targets.allSatisfy { store.task(withID: $0)?.status == .inProgress }
-            // A menu for several tasks says so (bug 1): "3 Tasks".
-            if single {
-                Section { stateCommands(row.id, allDone: allDone, allWorking: allWorking) }
-            } else {
-                Section(String(localized: "\(targets.count) Tasks")) { stateCommands(row.id, allDone: allDone, allWorking: allWorking) }
-            }
-            // Date and Tags beside Priority (owner fixes 3 and 5 D): on
-            // the menu's targets, a multi-selection too; one step each.
-            Menu(String(localized: "Date")) {
-                let choices = model.dateChoices
-                let current = model.commonDueDay(targets)
-                // One tick for one day: on a Sunday, Tomorrow and Next Week
-                // are the same Monday; only the first is ticked.
-                let ticked = choices.quick.first { $0.day == current }?.id
-                ForEach(choices.quick) { quick in
-                    // A toggle draws the native tick for the current day.
-                    Toggle(isOn: Binding(get: { quick.id == ticked },
-                                         set: { _ in menuCommand(row.id) { model.setDueDay(quick.day, for: $0) } })) {
-                        Text(quick.menuTitle)
-                    }
-                    .badge(Text(verbatim: choices.detail(for: quick.day)))
+            list.append(AtticMenuCommand(verbatim: allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
+                                         shortcut: AtticTaskShortcut.complete, startsSection: single) {
+                menuCommand(rowID) { targets in
+                    let outcome = model.toggleDone(targets)
+                    completionFeedback(outcome, targets)
+                    return outcome
                 }
-                // Offered only where the row can show the picker: a
-                // completed-today row has no date control (round 4).
-                if hostsPickers {
-                    Divider()
-                    Button(String(localized: "Pick a Date…")) {
-                        openMeta(.date, on: menuRowID(row.id), targets: menuTargets(row.id))
-                    }
-                }
-                Divider()
-                Button(String(localized: "Remove Date")) { menuCommand(row.id) { model.setDueDay(nil, for: $0) } }
-                    .disabled(targets.allSatisfy { model.dueDay(of: $0) == nil })
-            }
-            Menu(String(localized: "Tags")) {
-                ForEach(model.tagChoices(for: targets).prefix(12), id: \.self) { tag in
-                    let state = model.tagState(tag, for: targets)
-                    if state == .mixed {
-                        // Some of the selected tasks have it: a dash, and a
-                        // click adds it to all (review 17).
-                        Button { menuCommand(row.id) { model.toggleTag(tag, for: $0) } } label: { Label("#" + tag, systemImage: "minus") }
-                    } else {
-                        Toggle(isOn: Binding(get: { state == .on }, set: { _ in menuCommand(row.id) { model.toggleTag(tag, for: $0) } })) {
-                            Text(verbatim: "#" + tag)
-                        }
-                    }
-                }
-                if hostsPickers {
-                    Divider()
-                    Button(String(localized: "New Tag…")) {
-                        openMeta(.tags, on: menuRowID(row.id), targets: menuTargets(row.id), newTag: true)
-                    }
-                }
-            }
-            Menu(String(localized: "Priority")) {
-                let priorities = Set(targets.compactMap { store.task(withID: $0)?.priority })
-                ForEach(TaskPriority.choices(keeping: priorities), id: \.self) { priority in
-                    Toggle(isOn: Binding(get: { priorities == [priority] },
-                                         set: { _ in menuCommand(row.id) { model.setPriority(priority, for: $0) } })) {
-                        Text(priority.menuTitle)
-                    }
-                }
-            }
-            Divider()
-            if tab == .backlog {
-                Button(String(localized: "Move to Now")) { menuCommand(row.id) { model.moveToNow($0) } }
-                    .keyboardShortcut("b", modifiers: .command)
-            } else {
-                Button(String(localized: "Move to Later")) { menuCommand(row.id) { model.moveToBacklog($0) } }
-                    .keyboardShortcut("b", modifiers: .command)
-            }
-            if single {
-                Button(String(localized: "Edit Title")) {
-                    guard !AtticTextInput.ownsCurrentKey else { return }
-                    let id = menuRowID(row.id)
-                    model.selectOnly(id)
-                    model.beginEditingTitle(id)
-                }
-                .keyboardShortcut(.return, modifiers: [])
-                if store.task(withID: id)?.status != .done {
-                    Button(String(localized: "Add Subtask")) { model.beginAddingSubtask(to: menuRowID(row.id)) }
-                }
-                Button(String(localized: "Open Files…")) {
-                    guard !AtticTextInput.ownsCurrentKey else { return }
-                    model.openPage(menuRowID(row.id))
-                }
-                    .keyboardShortcut(.return, modifiers: .command)
-            }
-            Divider()
-            Button(role: .destructive) {
-                // A menu's Delete key equivalent never reaches past a
-                // field that is typing (round 5, the owner's blocker).
+            })
+            list.append(AtticMenuCommand(verbatim: allWorking ? String(localized: "Stop Working") : String(localized: "Start Working"),
+                                         shortcut: AtticTaskShortcut.working) {
+                menuCommand(rowID) { model.toggleWorking($0) }
+            })
+        }
+        if single {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle,
+                                         startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
-                deleteAndMoveFocus(menuTargets(row.id))
-            } label: {
-                Text(single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"))
+                let id = menuRowID(rowID)
+                model.selectOnly(id)
+                model.beginEditingTitle(id)
+            })
+        }
+        // Date, Tags and Priority (owner fixes 3 and 5 D): on the menu's
+        // targets, a multi-selection too; one step each. Done's rows too,
+        // without changing completion (round 10).
+        list.append(.submenu(String(localized: "Date"), startsSection: !single, dateCommands(rowID, targets: targets)))
+        list.append(.submenu(String(localized: "Tags"), tagCommands(rowID, targets: targets)))
+        list.append(.submenu(String(localized: "Priority"), priorityCommands(rowID, targets: targets)))
+        if tab == .backlog {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Now"), shortcut: AtticTaskShortcut.later) {
+                menuCommand(rowID) { model.moveToNow($0) }
+            })
+        } else if tab == .now {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Move to Later"), shortcut: AtticTaskShortcut.later) {
+                menuCommand(rowID) { model.moveToBacklog($0) }
+            })
+        }
+        if single, tab != .done {
+            if unfinished {
+                list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: true) {
+                    model.beginAddingSubtask(to: menuRowID(rowID))
+                })
             }
-            .keyboardShortcut(.delete, modifiers: [])
+            list.append(AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage,
+                                         startsSection: !unfinished) {
+                guard !AtticTextInput.ownsCurrentKey else { return }
+                model.openPage(menuRowID(rowID))
+            })
+            // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
+            if unfinished {
+                list.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
+                                             isDisabled: !canMove(id, by: -1), startsSection: true) {
+                    moveRow(menuRowID(rowID), by: -1)
+                })
+                list.append(AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
+                                             isDisabled: !canMove(id, by: 1)) {
+                    moveRow(menuRowID(rowID), by: 1)
+                })
+            }
+        }
+        list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy, startsSection: true) {
+            model.copy(menuTargets(rowID))
+            pointer.endInvocation()
+        })
+        list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
+            menuCommand(rowID) { model.duplicate($0) }
+        })
+        list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
+                                     shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
+            // A menu's Delete key equivalent never reaches past a field
+            // that is typing (round 5, the owner's blocker).
+            guard !AtticTextInput.ownsCurrentKey else { return }
+            deleteAndMoveFocus(menuTargets(rowID))
+        })
+        return list
+    }
+
+    /// Date ▸: the quick days (one tick for one day: on a Sunday, Tomorrow
+    /// and Next Week are the same Monday; only the first is ticked), Pick
+    /// a Date…, Remove Date.
+    private func dateCommands(_ rowID: UUID, targets: [UUID]) -> [AtticMenuCommand] {
+        let choices = model.dateChoices
+        let current = model.commonDueDay(targets)
+        let ticked = choices.quick.first { $0.day == current }?.id
+        var list = choices.quick.map { quick in
+            AtticMenuCommand(verbatim: quick.menuTitle, state: quick.id == ticked ? .on : .off,
+                             detail: choices.detail(for: quick.day)) {
+                menuCommand(rowID) { model.setDueDay(quick.day, for: $0) }
+            }
+        }
+        list.append(AtticMenuCommand(verbatim: String(localized: "Pick a Date…"), startsSection: true) {
+            openMeta(.date, on: menuRowID(rowID), targets: menuTargets(rowID))
+        })
+        list.append(AtticMenuCommand(verbatim: String(localized: "Remove Date"), isDisabled: targets.allSatisfy { model.dueDay(of: $0) == nil },
+                                     startsSection: true) {
+            menuCommand(rowID) { model.setDueDay(nil, for: $0) }
+        })
+        return list
+    }
+
+    /// Tags ▸: the targets' tags, then the library's most used (twelve), a
+    /// tick when every target has one and a dash when some do (review 17);
+    /// All Tags… opens the searchable picker with every tag and creation.
+    private func tagCommands(_ rowID: UUID, targets: [UUID]) -> [AtticMenuCommand] {
+        var list = model.tagChoices(for: targets).prefix(12).map { tag in
+            AtticMenuCommand(verbatim: "#" + tag, state: model.tagState(tag, for: targets)) {
+                menuCommand(rowID) { model.toggleTag(tag, for: $0) }
+            }
+        }
+        list.append(AtticMenuCommand(verbatim: String(localized: "All Tags…"), startsSection: true) {
+            openMeta(.tags, on: menuRowID(rowID), targets: menuTargets(rowID), newTag: true)
+        })
+        return list
+    }
+
+    /// Priority ▸: No Priority, Medium, High (Low only while every target
+    /// has it, round 7 R6), ticked when every target has it.
+    private func priorityCommands(_ rowID: UUID, targets: [UUID]) -> [AtticMenuCommand] {
+        let priorities = Set(targets.compactMap { store.listedTask(withID: $0)?.priority })
+        return TaskPriority.choices(keeping: priorities).map { priority in
+            AtticMenuCommand(verbatim: priority.menuTitle, state: priorities == [priority] ? .on : .off) {
+                menuCommand(rowID) { model.setPriority(priority, for: $0) }
+            }
         }
     }
 
-    @ViewBuilder
-    private func stateCommands(_ rowID: UUID, allDone: Bool, allWorking: Bool) -> some View {
-        Button(allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete")) {
-            menuCommand(rowID) { targets in
-                let outcome = model.toggleDone(targets)
-                completionFeedback(outcome, targets)
-                return outcome
+    /// A quick-look subtask's commands (round 10), one list for its keys,
+    /// its right-click menu and its VoiceOver actions: done or not (Space),
+    /// Rename (Return), Move Up and Down among the subtasks in its state
+    /// (⌘↑ ⌘↓), Delete (⌫, to Recently Deleted). A failure shows under
+    /// the parent row with Retry.
+    private func subtaskCommands(_ subtask: AtticSubtaskModel, of parentID: UUID,
+                                 in shown: [AtticSubtaskModel]) -> [AtticMenuCommand] {
+        let siblings = shown.filter { $0.isDone == subtask.isDone }
+        let index = siblings.firstIndex { $0.id == subtask.id }
+        let run: (@escaping () -> CommandOutcome) -> Void = { command in
+            model.report(command(), on: parentID, retry: command)
+        }
+        return [
+            AtticMenuCommand(verbatim: subtask.isDone ? String(localized: "Mark as Not Done") : String(localized: "Mark as Done"),
+                             shortcut: AtticTaskShortcut.complete) {
+                run { model.toggleSubtask(subtask.id) }
+            },
+            AtticMenuCommand(verbatim: String(localized: "Rename"), shortcut: AtticTaskShortcut.editTitle) {
+                model.beginRenamingSubtask(subtask.id)
+            },
+            AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
+                             isDisabled: (index ?? 0) == 0, startsSection: true) {
+                run { model.moveSubtask(subtask.id, by: -1) }
+            },
+            AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
+                             isDisabled: index.map { $0 + 1 >= siblings.count } ?? true) {
+                run { model.moveSubtask(subtask.id, by: 1) }
+            },
+            AtticMenuCommand(verbatim: String(localized: "Delete"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
+                             startsSection: true) {
+                guard !AtticTextInput.ownsCurrentKey else { return }
+                run { model.deleteSubtask(subtask.id) }
             }
+        ]
+    }
+
+    /// Whether ⌘↑ (-1) or ⌘↓ (1) can move the row within its group.
+    private func canMove(_ id: UUID, by step: Int) -> Bool {
+        guard model.tab != .done, let task = store.task(withID: id), task.status != .done else { return false }
+        let group = store.orderGroup(of: task)
+        guard let index = group.firstIndex(where: { $0.id == id }) else { return false }
+        return group.indices.contains(index + step)
+    }
+
+    /// ⌘↑ ⌘↓, Move Up and Move Down, VoiceOver's "Move up" and "Move
+    /// down": within the task's group; at the group's edge the hint says
+    /// why (review 10).
+    private func moveRow(_ id: UUID, by step: Int) {
+        guard !AtticTextInput.ownsCurrentKey else { return }
+        pointer.endInvocation()
+        if atGroupEdge(id, step: step) {
+            showBoundaryHint()
+        } else {
+            model.report(model.moveBy(id, offset: step), on: id) { model.moveBy(id, offset: step) }
         }
-        .keyboardShortcut(.space, modifiers: [])
-        Button(allWorking ? String(localized: "Stop Working") : String(localized: "Start Working")) {
-            menuCommand(rowID) { model.toggleWorking($0) }
+    }
+
+    /// ⇧⌘I, the actions button and VoiceOver's "Show actions": the task's
+    /// whole menu (for a selection, the selection's), under `anchor` or at
+    /// the row.
+    private func showActions(for id: UUID, anchor: NSView?, tab: TasksTab) {
+        if !model.selection.contains(id) { model.selectOnly(id) }
+        presentMenu(taskCommands(id, tab: tab), at: id, anchor: anchor)
+    }
+
+    /// Opens a native menu under `anchor`, or at the row's title line.
+    private func presentMenu(_ commands: [AtticMenuCommand], at id: UUID, anchor: NSView?) {
+        if let anchor, anchor.window != nil {
+            AtticNativeMenu.popUp(commands, in: anchor)
+        } else if let view = pointer.view, let frame = pointer.frames[id] {
+            AtticNativeMenu.popUp(commands, in: view, at: CGPoint(x: frame.minX + AtticLayout.textX, y: frame.minY + AtticLayout.rowPitch))
+        } else if let view = pointer.view {
+            AtticNativeMenu.popUp(commands, in: view, at: CGPoint(x: AtticLayout.textX, y: listTop))
         }
-        .keyboardShortcut(.space, modifiers: .shift)
+    }
+
+    /// VoiceOver's "Change priority": the Priority choices at the row.
+    private func showPriority(for id: UUID) {
+        if !model.selection.contains(id) { model.selectOnly(id) }
+        presentMenu(priorityCommands(id, targets: model.targets(for: id)), at: id, anchor: nil)
     }
 
     /// The row a menu command acts from: always the menu's own row.
@@ -1246,7 +1423,8 @@ struct TasksPage: View {
         }
         // Every editor keeps its own keys (review 8): the title, a new
         // subtask, the add bar and Done's search.
-        guard model.editingTitleID == nil, model.newSubtaskParentID == nil, !addBarFocused, !searchFocused else { return .ignored }
+        guard model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
+              !addBarFocused, !searchFocused else { return .ignored }
         // Typing on the Done page starts a search there (owner item 17):
         // the letter is the query's first, the field takes the tabs' line.
         if model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
@@ -1272,11 +1450,8 @@ struct TasksPage: View {
             if modifiers == .command {
                 // The same rule as a drag (review 10): a task moves within
                 // its group; at the group's edge the hint says why.
-                if atGroupEdge(current, step: step) {
-                    showBoundaryHint()
-                } else {
-                    model.report(model.moveBy(current, offset: step), on: current) { model.moveBy(current, offset: step) }
-                }
+                guard model.tab != .done else { return .handled }
+                moveRow(current, by: step)
                 return .handled
             }
             let next = visible[min(max(index + step, 0), visible.count - 1)]
@@ -1284,7 +1459,8 @@ struct TasksPage: View {
             if modifiers == .shift { model.extendSelection(to: next, visible: visible) } else { model.selectOnly(next) }
             return .handled
         case .return where modifiers.isEmpty:
-            guard let current, model.tab != .done else { return .ignored }
+            // Done's rows too (round 10).
+            guard let current else { return .ignored }
             model.beginEditingTitle(current)
             return .handled
         case .rightArrow where modifiers.isEmpty:
@@ -1547,14 +1723,13 @@ struct TasksPage: View {
     private var selectionBar: some View {
         let ids = model.orderedSelection()
         let count = ids.count
-        let tags = model.library.tags.counts().prefix(12).map(\.name)
-        let priorities = Set(ids.compactMap { store.task(withID: $0)?.priority })
+        let first = ids.first
         // Moving off the page ends the selection (computer-use bug 5):
         // Later and Now go through the moves, which clear it and confirm
         // with an Undo toast.
         // A failure shows under the first selected row, with Retry.
         let run: (@escaping () -> CommandOutcome) -> Void = { command in
-            guard let first = ids.first else { return }
+            guard let first else { return }
             model.report(command(), on: first, retry: command)
         }
         let move: (TaskStatus) -> Void = { status in
@@ -1563,32 +1738,114 @@ struct TasksPage: View {
             else { run { model.setStatus(status, for: ids) } }
         }
         // Each button says what it does and to how many (tooltip and
-        // VoiceOver, review UX 4).
+        // VoiceOver, review UX 4). Its choices are read as the menu opens.
         return AtticSelectionBar(count: count, actions: [
-            .init(systemName: "checkmark.circle", label: "Set state of \(count) tasks", handler: {}, menu: [TaskStatus.todo, .inProgress, .done, .backlog].map { status in
-                AtticMenuCommand(status.menuLocalization) { move(status) }
-            }),
-            .init(systemName: "exclamationmark", label: "Set priority of \(count) tasks", handler: {}, menu: TaskPriority.choices(keeping: priorities).map { priority in
-                // Ticked when every selected task has it, as the tags are.
-                AtticMenuCommand(priority.menuLocalization, systemImage: priorities == [priority] ? "checkmark" : nil) {
-                    run { model.setPriority(priority, for: ids) }
+            .init(systemName: "checkmark.circle", label: "Set state of \(count) tasks", handler: {}, menu: {
+                let states = Set(ids.compactMap { store.task(withID: $0)?.status })
+                return [TaskStatus.todo, .inProgress, .done, .backlog].map { status in
+                    AtticMenuCommand(verbatim: status.menuTitle, state: states == [status] ? .on : .off) { move(status) }
                 }
             }),
-            .init(systemName: "number", label: "Tag \(count) tasks", handler: {}, menu: tags.isEmpty
-                ? [AtticMenuCommand("No tags yet: type #tag in a title", isDisabled: true) {}]
-                : tags.map { tag in
-                    // Ticked when every selected task has it (a click removes
-                    // it from all), a dash when some do (a click adds it).
-                    let state = model.tagState(tag, for: ids)
-                    return AtticMenuCommand("#\(tag)", systemImage: state == .on ? "checkmark" : (state == .mixed ? "minus" : nil)) {
-                        run { model.toggleTag(tag, for: ids) }
+            .init(systemName: "exclamationmark", label: "Set priority of \(count) tasks", handler: {}, menu: {
+                let priorities = Set(ids.compactMap { store.task(withID: $0)?.priority })
+                // Ticked when every selected task has it, as the tags are.
+                return TaskPriority.choices(keeping: priorities).map { priority in
+                    AtticMenuCommand(verbatim: priority.menuTitle, state: priorities == [priority] ? .on : .off) {
+                        run { model.setPriority(priority, for: ids) }
                     }
-                }),
+                }
+            }),
+            // Round 10: Date and every tag (search, creation, mixed states)
+            // as the row pickers show them, for the whole selection.
+            .init(systemName: "calendar", label: "Set date of \(count) tasks", handler: { selectionPicker = .date },
+                  popover: AtticAnchoredPopover(isPresented: selectionPickerBinding(.date), content: {
+                      AnyView(selectionDatePicker(ids))
+                  })),
+            .init(systemName: "number", label: "Tag \(count) tasks", handler: { selectionPicker = .tags },
+                  popover: AtticAnchoredPopover(isPresented: selectionPickerBinding(.tags), content: {
+                      AnyView(selectionTagPicker(ids))
+                  })),
             model.tab == .backlog
                 ? .init(systemName: "tray.and.arrow.up", label: "Move \(count) tasks to Now", handler: { run { model.moveToNow(ids) } })
                 : .init(systemName: "tray.and.arrow.down", label: "Move \(count) tasks to Later", handler: { run { model.moveToBacklog(ids) } }),
             .init(systemName: "trash", label: "Delete \(count) tasks", handler: { deleteAndMoveFocus(ids) })
-        ])
+        ], summary: selectionSummary(ids))
+    }
+
+    /// The selection bar's Date or Tags picker, while open (round 10).
+    enum SelectionPicker: Equatable { case date, tags }
+
+    private func selectionPickerBinding(_ picker: SelectionPicker) -> Binding<Bool> {
+        Binding(get: { selectionPicker == picker }, set: { open in
+            if open { selectionPicker = picker } else if selectionPicker == picker { selectionPicker = nil }
+        })
+    }
+
+    private func selectionDatePicker(_ ids: [UUID]) -> some View {
+        let anchor = ids.first ?? UUID()
+        return VStack(alignment: .leading, spacing: 0) {
+            TaskDatePickerView(
+                choices: model.dateChoices,
+                selected: model.commonDueDay(ids),
+                forRow: true,
+                onPick: { day in
+                    if model.pickerChange(on: anchor, { model.setDueDay(day, for: ids) }) { selectionPicker = nil }
+                },
+                onRemove: {
+                    if model.pickerChange(on: anchor, { model.setDueDay(nil, for: ids) }) { selectionPicker = nil }
+                }
+            )
+            TasksPickerFailureLine(model: model, id: anchor) { selectionPicker = nil }
+        }
+        .atticPickerSurface()
+        .onDisappear { model.clearPickerFailure() }
+    }
+
+    private func selectionTagPicker(_ ids: [UUID]) -> some View {
+        let anchor = ids.first ?? UUID()
+        return VStack(alignment: .leading, spacing: 0) {
+            TaskTagPickerView(
+                allTags: model.tagChoices(for: ids),
+                state: { model.tagState($0, for: ids) },
+                onToggle: { tag in model.pickerChange(on: anchor) { model.toggleTag(tag, for: ids) } },
+                onCreate: { tag, completed in
+                    model.pickerChange(on: anchor, onSaved: completed) { model.toggleTag(tag, for: ids) }
+                },
+                focusField: true
+            )
+            TasksPickerFailureLine(model: model, id: anchor, closeOnRetrySuccess: nil)
+        }
+        .atticPickerSurface()
+        .onDisappear { model.clearPickerFailure() }
+    }
+
+    /// What VoiceOver hears after "N selected": what the selected tasks
+    /// share, or that they differ ("mixed priority, due Friday, tagged
+    /// launch, some tagged home").
+    private func selectionSummary(_ ids: [UUID]) -> String {
+        let tasks = ids.compactMap { store.listedTask(withID: $0) }
+        guard !tasks.isEmpty else { return "" }
+        var parts: [String] = []
+        let states = Set(tasks.map(\.status))
+        parts.append(states.count == 1 ? (states.first.map { $0.menuTitle } ?? "") : String(localized: "mixed state"))
+        let priorities = Set(tasks.map(\.priority))
+        if priorities.count > 1 {
+            parts.append(String(localized: "mixed priority"))
+        } else if let priority = priorities.first, priority != .none {
+            parts.append(priority.spokenTitle)
+        }
+        let days = Set(tasks.map(\.dueDay))
+        if days.count > 1 {
+            parts.append(String(localized: "mixed dates"))
+        } else if let day = days.first ?? nil {
+            parts.append(String(localized: "due \(model.dueText(day))"))
+        }
+        let tags = model.tagChoices(for: ids)
+        let all = tags.filter { model.tagState($0, for: ids) == .on }
+        let some = tags.filter { model.tagState($0, for: ids) == .mixed }
+        if !all.isEmpty { parts.append(String(localized: "tagged \(all.joined(separator: ", "))")) }
+        if !some.isEmpty { parts.append(String(localized: "some tagged \(some.joined(separator: ", "))")) }
+        return parts.joined(separator: ", ")
     }
 }
 
