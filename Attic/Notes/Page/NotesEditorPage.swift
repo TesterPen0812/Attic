@@ -27,6 +27,9 @@ struct NotesEditorPage: View {
     @State private var isImporterPresented = false
     @State private var searchFocused = false
     @State private var postedToastID: UUID?
+    /// The history step the delete toast undoes: the toast answers only
+    /// while that step is still the next Undo.
+    @State private var postedToastStep: UUID?
 
     init(controller: NotesPageController, noteStore: NoteStore, noteDraft: NoteDraftController,
          uiState: PanelUIState, layout: PanelPageLayout, exitToOldPage: (() -> Void)? = nil,
@@ -105,6 +108,11 @@ struct NotesEditorPage: View {
             // belongs to the note's own text again. (Deleting the open note
             // leaves no note on screen, and its toast stays.)
             if opened != nil { dismissOwnToast() }
+        }
+        .onChange(of: controller.undoRevision) { _, _ in
+            // Another action (or an Undo) moved the history on: a toast for
+            // a delete that Undo no longer reaches goes away.
+            if let step = postedToastStep, controller.libraryUndoStepID != step { dismissOwnToast() }
         }
         .onChange(of: controller.presentationCount) { _, _ in
             // Back on the page (a page switch, the panel shown again): the
@@ -311,19 +319,23 @@ struct NotesEditorPage: View {
     // MARK: Delete and its Undo
 
     private func delete(_ id: UUID) {
-        let reopen = controller.active?.noteID == id && !controller.isLibraryPresented
         guard controller.deleteNote(noteID: id) else { return }
-        guard let toasts else { return }
+        guard let toasts, let step = controller.libraryUndoStepID else { return }
+        // The toast is one way to Undo; the library's history is the other
+        // (⌘Z, the menus), and it outlives the toast.
         let toast = toasts.show(String(localized: "Note deleted")) { [controller] in
-            controller.restoreDeletedNote(noteID: id, reopen: reopen)
+            guard controller.libraryUndoStepID == step else { return }
+            controller.undoLibrary()
         }
         postedToastID = toast.id
+        postedToastStep = step
     }
 
     private func dismissOwnToast() {
         guard let toasts, let current = toasts.current, current.id == postedToastID else { return }
         toasts.dismiss()
         postedToastID = nil
+        postedToastStep = nil
     }
 
     // MARK: Menus
@@ -407,8 +419,23 @@ struct NotesEditorPage: View {
                 controller.duplicateNote(noteID: id)
             },
             AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
-                             isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }
+                             isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) },
+            // The library's history (pin, duplicate, delete), named for the
+            // step it would reverse; dimmed when there is none.
+            AtticMenuCommand("\(historyTitle(String(localized: "Undo"), step: controller.libraryUndoName))",
+                             shortcut: KeyboardShortcut("z", modifiers: .command),
+                             isDisabled: !controller.canUndoLibrary, startsSection: true,
+                             identifier: NotesLibraryView.undoIdentifier) { controller.undoLibrary() },
+            AtticMenuCommand("\(historyTitle(String(localized: "Redo"), step: controller.libraryRedoName))",
+                             shortcut: KeyboardShortcut("z", modifiers: [.command, .shift]),
+                             isDisabled: !controller.canRedoLibrary,
+                             identifier: NotesLibraryView.redoIdentifier) { controller.redoLibrary() }
         ]
+    }
+
+    /// "Undo Delete Note", or just "Undo" with nothing to reverse.
+    private func historyTitle(_ verb: String, step: String?) -> String {
+        step.map { "\(verb) \($0)" } ?? verb
     }
 
     // MARK: Tags

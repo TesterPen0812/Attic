@@ -10,6 +10,10 @@ enum UndoHistoryID: Hashable {
     /// Changes made across pages from one place (tag management, Recently
     /// Deleted), which belong to no single page.
     case library
+    /// The Notes page's All notes: pin, duplicate and delete of a note
+    /// (⌘Z / ⇧⌘Z while the library has focus). Apart from `.library` so
+    /// Settings' Recently Deleted and tag changes never mix with it.
+    case notesLibrary
 }
 
 /// What happened when a step was undone or redone.

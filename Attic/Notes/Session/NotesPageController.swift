@@ -145,8 +145,16 @@ final class NotesPageController: ObservableObject {
     /// Moves on each `present()`: the page puts the keyboard back in the
     /// note (Notes reopens where you left it, caret included).
     @Published private(set) var presentationCount = 0
+    /// Follows the undo route's revision, so menus that read the library's
+    /// undo names redraw when a step is recorded, undone or dropped.
+    @Published private(set) var undoRevision: UInt64 = 0
 
     let store: NoteStore
+    /// Where All notes' actions are recorded (the app's route once
+    /// `attachUndoRoute` runs; a private one until then, so tests and
+    /// previews work alone).
+    private(set) var undoRoute = UndoRoute()
+    private var undoRevisionSubscription: AnyCancellable?
     let journal: NoteDraftJournaling?
     private let defaults: UserDefaults?
     private let saveDelay: Duration
@@ -187,6 +195,7 @@ final class NotesPageController: ObservableObject {
         self.now = now
         self.imageLoader = imageLoader
         self.prepareDocument = prepareDocument
+        attachUndoRoute(undoRoute)
         store.agentWriteDisposition = { [weak self] id in
             self?.agentDisposition(for: id) ?? .direct
         }
@@ -1345,6 +1354,16 @@ extension NotesPageController {
     /// All notes.
     @discardableResult
     func deleteNote(noteID: UUID) -> Bool {
+        // Deleting the note on screen returns to it on Undo.
+        let reopen = active?.noteID == noteID && !isLibraryPresented
+        guard removeNote(noteID: noteID) else { return false }
+        undoRoute.record(deleteStep(noteID: noteID, reopen: reopen), in: .notesLibrary)
+        return true
+    }
+
+    /// The delete itself, as a history step also runs it (Redo, and Undo of
+    /// a duplicate).
+    private func removeNote(noteID: UUID) -> Bool {
         if legacyNoteID == noteID {
             guard leaveLegacyNote(.openNote) else { return false }
         }
@@ -1414,6 +1433,12 @@ extension NotesPageController {
     /// its images and its tags, titled "… copy", and opened.
     @discardableResult
     func duplicateNote(noteID: UUID) -> Bool {
+        guard let newID = makeDuplicate(noteID: noteID) else { return false }
+        undoRoute.record(duplicateStep(newID: newID), in: .notesLibrary)
+        return true
+    }
+
+    private func makeDuplicate(noteID: UUID) -> UUID? {
         // 1. The gates, before anything is read or written: the source's
         //    activity (composition, Writing Tools), a loading batch, and
         //    leaving the note on screen. A refusal creates nothing.
@@ -1428,10 +1453,10 @@ extension NotesPageController {
                     ? String(localized: "Images are still being added. Duplicate the note when they finish.")
                     : String(localized: "Finish Writing Tools or composing text before duplicating this note.")
                 }
-                return false
+                return nil
             }
         }
-        guard prepareToLeave(.openNote) else { return false }
+        guard prepareToLeave(.openNote) else { return nil }
         // 2. The source as it is now (its latest text was just preserved).
         let document: NoteDocument
         let staged: [StagedNoteAttachment]
@@ -1445,11 +1470,11 @@ extension NotesPageController {
             staged = []
             tags = store.note(withID: noteID)?.tags ?? []
         } else {
-            return false
+            return nil
         }
         guard var (copy, images) = replacementForDeletedNote(document, oldID: noteID, staged: staged) else {
             active?.notice = String(localized: "An image is unavailable, so the note was not duplicated.")
-            return false
+            return nil
         }
         if let first = copy.blocks.first, first.kind == .text, !first.displayText.trimmingCharacters(in: .whitespaces).isEmpty {
             copy.blocks[0].text = first.text.trimmingCharacters(in: .whitespaces) + String(localized: " copy")
@@ -1470,21 +1495,110 @@ extension NotesPageController {
                                                                      tags: tags.isEmpty ? nil : tags),
               let note = store.note(withID: newID), let session = session(for: note).flatMap(presentSession) else {
             active?.notice = String(localized: "The note couldn’t be duplicated: \(storeMessage())")
-            return false
+            return nil
         }
         legacyNoteID = nil
         activate(session)
         isLibraryPresented = false
-        return true
+        return newID
     }
 
     /// Pin to Top / Unpin from Top (metadata; a draft is saved first).
     @discardableResult
     func setPinned(_ pinned: Bool, noteID: UUID) -> Bool {
+        let before = store.note(withID: noteID)?.isPinned
+        guard applyPinned(pinned, noteID: noteID) else { return false }
+        // A pin that changed nothing is not a step.
+        if let before, before != pinned {
+            undoRoute.record(pinStep(pinned, noteID: noteID), in: .notesLibrary)
+        }
+        return true
+    }
+
+    private func applyPinned(_ pinned: Bool, noteID: UUID) -> Bool {
         if let session = cache[noteID], !session.isPersisted {
             guard preserve(session), session.isPersisted else { return false }
         }
         return store.setPinned(pinned, noteID: noteID)
+    }
+
+    // MARK: Library history (Phase 2 audit, item 15)
+
+    /// Follows `route` for the library's actions from now on.
+    func attachUndoRoute(_ route: UndoRoute) {
+        undoRoute = route
+        undoRevision = route.revision
+        undoRevisionSubscription = route.$revision.sink { [weak self] revision in
+            self?.undoRevision = revision
+        }
+    }
+
+    var canUndoLibrary: Bool { undoRoute.canUndo(in: .notesLibrary) }
+    var canRedoLibrary: Bool { undoRoute.canRedo(in: .notesLibrary) }
+    /// "Delete Note", "Pin Note", "Duplicate Note": what Undo would reverse.
+    var libraryUndoName: String? { undoRoute.undoName(in: .notesLibrary) }
+    var libraryRedoName: String? { undoRoute.redoName(in: .notesLibrary) }
+    /// The step an Undo would reverse now (the delete toast is tied to it).
+    var libraryUndoStepID: UUID? { undoRoute.undoStepID(in: .notesLibrary) }
+
+    @discardableResult
+    func undoLibrary() -> Bool { undoRoute.undo(in: .notesLibrary) }
+
+    @discardableResult
+    func redoLibrary() -> Bool { undoRoute.redo(in: .notesLibrary) }
+
+    /// Delete Note: Undo brings the note back from Recently Deleted (and
+    /// shows it again when it was the note on screen); Redo deletes it
+    /// again. A refused restore of a note still in Recently Deleted keeps
+    /// the step; one that can never apply drops it.
+    private func deleteStep(noteID: UUID, reopen: Bool) -> UndoStep {
+        UndoStep(
+            name: String(localized: "Delete Note"),
+            undoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                if self.restoreDeletedNote(noteID: noteID, reopen: reopen) { return .applied }
+                return self.store.recentlyDeletedNotes().contains { $0.ref.id == noteID } ? .failed : .obsolete
+            },
+            redoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                guard self.store.note(withID: noteID) != nil else { return .obsolete }
+                return self.removeNote(noteID: noteID) ? .applied : .failed
+            }
+        )
+    }
+
+    /// Pin or Unpin: undo and redo set the state the step moved between.
+    private func pinStep(_ pinned: Bool, noteID: UUID) -> UndoStep {
+        UndoStep(
+            name: pinned ? String(localized: "Pin Note") : String(localized: "Unpin Note"),
+            undoOutcome: { [weak self] in self?.pinOutcome(!pinned, noteID: noteID) ?? .obsolete },
+            redoOutcome: { [weak self] in self?.pinOutcome(pinned, noteID: noteID) ?? .obsolete }
+        )
+    }
+
+    private func pinOutcome(_ pinned: Bool, noteID: UUID) -> UndoOutcome {
+        guard let note = store.note(withID: noteID) else { return .obsolete }
+        if note.isPinned == pinned { return .applied }
+        return applyPinned(pinned, noteID: noteID) ? .applied : .failed
+    }
+
+    /// Duplicate: Undo deletes the copy (to Recently Deleted, with any text
+    /// typed into it since saved first, so nothing is lost); Redo restores
+    /// it without opening it.
+    private func duplicateStep(newID: UUID) -> UndoStep {
+        UndoStep(
+            name: String(localized: "Duplicate Note"),
+            undoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                guard self.store.note(withID: newID) != nil else { return .obsolete }
+                return self.removeNote(noteID: newID) ? .applied : .failed
+            },
+            redoOutcome: { [weak self] in
+                guard let self else { return .obsolete }
+                if self.restoreDeletedNote(noteID: newID, reopen: false) { return .applied }
+                return self.store.recentlyDeletedNotes().contains { $0.ref.id == newID } ? .failed : .obsolete
+            }
+        )
     }
 
     /// The note as Markdown text (Copy as Markdown): the draft on screen as

@@ -136,7 +136,9 @@ struct NotesLibraryView: View {
         let editor = keys.window?.firstResponder as? NSTextView
         let action = Self.keyAction(keyCode: event.keyCode, modifiers: EventModifiers(event.modifierFlags),
                                     characters: event.charactersIgnoringModifiers,
-                                    composing: editor?.hasMarkedText() == true, fieldFocused: fieldFocused)
+                                    composing: editor?.hasMarkedText() == true, fieldFocused: fieldFocused,
+                                    fieldCanUndo: fieldFocused && editor?.undoManager?.canUndo == true,
+                                    fieldCanRedo: fieldFocused && editor?.undoManager?.canRedo == true)
         switch action {
         case .passThrough:
             return false
@@ -162,6 +164,13 @@ struct NotesLibraryView: View {
         case .copyMarkdown:
             guard let id = model.commandTarget(in: groups, selected: selected) else { return false }
             _ = Self.run(Self.copyMarkdownIdentifier, in: rowCommands(id))
+        case .undo:
+            // The library's own history; with nothing to undo the key goes on.
+            guard controller.canUndoLibrary else { return false }
+            controller.undoLibrary()
+        case .redo:
+            guard controller.canRedoLibrary else { return false }
+            controller.redoLibrary()
         case .startSearch:
             beginSearch(replaying: event)
         }
@@ -170,6 +179,8 @@ struct NotesLibraryView: View {
 
     static let duplicateIdentifier = "notes-row-duplicate"
     static let copyMarkdownIdentifier = "notes-row-copy-markdown"
+    static let undoIdentifier = "notes-row-undo"
+    static let redoIdentifier = "notes-row-redo"
 
     /// Runs the command with this identifier if the list has it and it is
     /// enabled; a disabled command is swallowed, never run. False when the
@@ -201,13 +212,20 @@ struct NotesLibraryView: View {
         case passThrough, escape, find, move(Int), open, delete, startSearch
         /// ⇧⌘I, ⌘D and ⌥⇧⌘C on the row.
         case actions, duplicate, copyMarkdown
+        /// ⌘Z / ⇧⌘Z: the library's history (pin, duplicate, delete).
+        case undo, redo
     }
 
     /// What a key does in All notes. While an input method is composing in
     /// the search field every key is its own (Esc cancels the composition,
     /// the arrows choose a candidate, Return confirms it).
+    ///
+    /// ⌘Z / ⇧⌘Z: text typed in the search field is undone first (the field
+    /// editor's own manager, `fieldCanUndo` / `fieldCanRedo`); when it has
+    /// nothing, the library's history answers.
     static func keyAction(keyCode: UInt16, modifiers: EventModifiers, characters: String?,
-                          composing: Bool, fieldFocused: Bool) -> KeyAction {
+                          composing: Bool, fieldFocused: Bool,
+                          fieldCanUndo: Bool = false, fieldCanRedo: Bool = false) -> KeyAction {
         guard !composing else { return .passThrough }
         let chord = modifiers.intersection([.command, .control, .option, .shift])
         switch keyCode {
@@ -217,6 +235,8 @@ struct NotesLibraryView: View {
         case 126 where chord.isEmpty: return .move(-1)
         case 36 where chord.isEmpty, 76 where chord.isEmpty: return .open
         case 51 where chord == .command: return .delete
+        case 6 where chord == .command: return fieldCanUndo ? .passThrough : .undo
+        case 6 where chord == [.command, .shift]: return fieldCanRedo ? .passThrough : .redo
         case 34 where chord == [.command, .shift]: return .actions
         case 2 where chord == .command: return .duplicate
         case 8 where chord == [.command, .option, .shift]: return .copyMarkdown
