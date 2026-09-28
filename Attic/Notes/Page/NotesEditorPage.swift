@@ -70,6 +70,9 @@ struct NotesEditorPage: View {
             shortcuts
         }
         .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion), value: controller.isLibraryPresented)
+        // A new or another note slides in from the right (keystrokes are
+        // never held back: the text view takes the keyboard at once).
+        .animation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion), value: controller.active?.id)
         .onAppear {
             controller.update(design: design)
             controller.start()
@@ -78,11 +81,12 @@ struct NotesEditorPage: View {
         }
         .onChange(of: design) { _, newValue in controller.update(design: newValue) }
         .onChange(of: controller.legacyNoteID) { _, id in openLegacy(id) }
-        .onChange(of: controller.active?.id) { _, _ in
-            // Opening or starting a note ends the delete's Undo toast: ⌘Z
-            // belongs to the note's own text again.
-            dismissOwnToast()
+        .onChange(of: controller.active?.id) { _, opened in
             chrome.tagEditor = nil
+            // Opening or starting a note ends the delete's Undo toast: ⌘Z
+            // belongs to the note's own text again. (Deleting the open note
+            // leaves no note on screen, and its toast stays.)
+            if opened != nil { dismissOwnToast() }
         }
         .onChange(of: controller.presentationCount) { _, _ in
             // Back on the page (a page switch, the panel shown again): the
@@ -92,7 +96,9 @@ struct NotesEditorPage: View {
         }
         .onChange(of: controller.isLibraryPresented) { _, shown in
             if shown {
+                // Typing searches: the keyboard goes to the search row.
                 library.highlightedID = nil
+                searchFocused = true
             } else {
                 searchFocused = false
             }
@@ -245,7 +251,9 @@ struct NotesEditorPage: View {
 
     private func newNote() {
         library.clearSearch()
-        _ = controller.requestNewNote()
+        guard controller.requestNewNote() else { return }
+        // An untouched draft stays; only the caret moves to its title.
+        DispatchQueue.main.async { chrome.focusText() }
     }
 
     private func openFromLibrary(_ id: UUID) {
@@ -379,6 +387,8 @@ private struct NoteTagEditor: View {
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
+        // The engine's tags are not observable: a change bumps `revision`.
+        let _ = revision
         let current = Set(session.engine.tags)
         let counts = tagCounts(current)
         let typed = AtticTag.normalize(query)
@@ -390,8 +400,8 @@ private struct NoteTagEditor: View {
                                     query = ""
                                 },
                                 fieldFocused: $fieldFocused)
-            .id(revision)
             .onAppear { fieldFocused = true }
+            .onDisappear { onClose() }
             .onExitCommand { onClose() }
             .accessibilityIdentifier("notes-tag-editor")
     }

@@ -36,7 +36,8 @@ struct NotesLibraryView: View {
             AtticListSearchField(
                 placeholder: placeholder, text: $model.query, isFocused: $searchFocused,
                 iconX: AtticNoteMetrics.searchIconX, textX: AtticNoteMetrics.searchTextX,
-                onKeyPress: { press in key(press, groups: groups, selected: selected) }
+                onKeyPress: { press in key(press, groups: groups, selected: selected, inField: true) },
+                onEscapeWhenEmpty: onBack
             )
             .accessibilityIdentifier("notes-library-search")
             list(groups, selected: selected)
@@ -45,7 +46,7 @@ struct NotesLibraryView: View {
         .onExitCommand {
             if model.isSearching { model.clearSearch() } else { onBack() }
         }
-        .onKeyPress(phases: .down) { press in key(press, groups: groups, selected: selected) }
+        .onKeyPress(phases: .down) { press in key(press, groups: groups, selected: selected, inField: false) }
         .accessibilityIdentifier("notes-library")
     }
 
@@ -121,7 +122,7 @@ struct NotesLibraryView: View {
             .accessibilityIdentifier("notes-library-empty")
     }
 
-    private func key(_ press: KeyPress, groups: [NotesLibraryModel.Group], selected: UUID?) -> KeyPress.Result {
+    private func key(_ press: KeyPress, groups: [NotesLibraryModel.Group], selected: UUID?, inField: Bool) -> KeyPress.Result {
         switch press.key {
         case .downArrow:
             model.moveHighlight(by: 1, in: groups, from: selected)
@@ -136,7 +137,8 @@ struct NotesLibraryView: View {
             onOpen(id)
             return .handled
         case .delete where press.modifiers.contains(.command):
-            guard let id = model.highlightedID ?? selected else { return .ignored }
+            // In the search field ⌘⌫ edits the text until ↑ ↓ picked a row.
+            guard let id = model.highlightedID ?? (inField ? nil : selected) else { return .ignored }
             onDelete(id)
             return .handled
         default:

@@ -323,6 +323,17 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(payload["count"] as? Int, 2)
     }
 
+    func testListNotesSaysWhichNotesArePinned() throws {
+        let (noteStore, handler) = try makeNoteHandler()
+        let pinned = try XCTUnwrap(noteStore.create(title: "Pinned", body: "a"))
+        _ = noteStore.create(title: "Plain", body: "b")
+        XCTAssertTrue(noteStore.setPinned(true, noteID: pinned.id))
+        let payload = try callNoteTool(handler, "list_notes", [:])
+        let notes = try XCTUnwrap(payload["notes"] as? [[String: Any]])
+        XCTAssertEqual(notes.first { $0["title"] as? String == "Pinned" }?["pinned"] as? Bool, true)
+        XCTAssertNil(notes.first { $0["title"] as? String == "Plain" }?["pinned"])
+    }
+
     func testUpdateNoteChangesBody() throws {
         let (noteStore, handler) = try makeNoteHandler()
         let note = try XCTUnwrap(noteStore.create(title: "Title", body: "old"))

@@ -842,6 +842,8 @@ final class AgentTaskTools {
             "tags": note.tags,
             "revision": note.revisionToken
         ]
+        // Pinned to the top of All notes (the person's choice; read-only here).
+        if note.isPinned { payload["pinned"] = true }
         if note.usesDocumentFormat, let data = note.content {
             switch NoteContentCodec.decode(data) {
             case let .editable(document):

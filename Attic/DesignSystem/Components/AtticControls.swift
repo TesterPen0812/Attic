@@ -511,6 +511,9 @@ struct AtticListSearchField: View {
     /// Keys the field passes on (All notes: ↑ ↓ move through the list,
     /// Return opens).
     var onKeyPress: ((KeyPress) -> KeyPress.Result)?
+    /// Esc in the empty field goes back (All notes) instead of only
+    /// leaving the field.
+    var onEscapeWhenEmpty: (() -> Void)?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -539,7 +542,7 @@ struct AtticListSearchField: View {
                         .foregroundStyle(tokens.color(.heading))
                         .focused($focused)
                         .onExitCommand {
-                            if text.isEmpty { focused = false } else { text = "" }
+                            if !text.isEmpty { text = "" } else if let onEscapeWhenEmpty { onEscapeWhenEmpty() } else { focused = false }
                         }
                         .onKeyPress(phases: .down) { press in onKeyPress?(press) ?? .ignored }
                         .accessibilityLabel(placeholder)

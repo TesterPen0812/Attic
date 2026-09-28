@@ -5,6 +5,47 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Notes rebuild, slice 2 (redesign/phase-2)
+
+Requested by the slice 2 brief (the writing view, the bottom row and slot,
+All notes). Every addition reuses existing tokens: no colour, radius or
+type size changed, except the one type change below, which is the owner's
+decision.
+
+- **`noteTitle` and `noteBody` are SF Pro Rounded** (`AtticTextStyle.isNoteText`):
+  owner decision 4 (2026-09-27), the Tasks list's voice for the page of text.
+  Sizes and weights unchanged (17 bold, 14 regular).
+- **`AtticMenuCommand` gains `submenu`, `isChecked` and `identifier`**, and
+  `AtticMenuItems` draws submenus and checkmarks (the note menu's Insert ▸ and
+  Format ▸). **New `AtticNativeMenu`**: the same commands as an `NSMenu` popped
+  up from an AppKit view (the ⋯ lives inside the note's text view, and ⇧⌘I
+  opens the menu from the keyboard). Menus stay native.
+- **New `AtticNoteMenuButton`** (the ⋯, a 28 pt target, icon ink, hover and
+  pressed fills from `chipHover`/`chipSelected`), **`AtticNoteTagLine`**
+  (tags under a title: the `tag` style in the secondary ink, 12 apart,
+  wrapping) with **`AtticWrapLayout`** (items and lines with their own gaps),
+  and **`AtticHeaderTitle`** (a scrolled-away title in the header: a raised
+  control 36 tall with the `panelHeading` title and the title menu's chevron).
+- **New `AtticNoteRow`, `AtticNoteRowModel` and `AtticNoteGroupHeading`**: All
+  notes' 48 pt rows (the task row's metrics: title line, details line,
+  highlight inset) with the time, a warning glyph beside it, a preview and
+  counts; group headings like the Done log's days.
+- **New `AtticNoteTagList`**: the note's tag editor ("Find or add a tag",
+  ticked rows with counts, "New tag"). It follows Phase 1's tag list and should
+  be unified with `AtticTagPicker` when Phase 1's final rounds are merged into
+  this branch.
+- **New `AtticStatusItem`, `AtticStatusPill` and `AtticStatusDetails`**: the
+  Notes status slot (a raised capsule 36 tall, at most 176 wide, with the
+  warning ink for problems, an inline action chip, "+N" or ✕) and its details.
+  The toast's inner button gains `answersUndoKey` so the pill's Retry never
+  takes ⌘Z.
+- **`AtticListSearchField` gains `iconX`/`textX`, `onKeyPress` and
+  `onEscapeWhenEmpty`** (defaults keep the Tasks Done search exactly as it
+  was): All notes puts the search on the note column, ↑ ↓ and Return reach the
+  list, and Esc in the empty field goes back.
+- **New `AtticNoteMetrics`** (column, ⋯, tag line, header title, slot and
+  All notes geometry).
+
 ### Notes rebuild, slice 1 (redesign/phase-2)
 
 - **New `AtticDateChip`** (and `AtticDateChipMetrics`: a 10 pt calendar glyph,
