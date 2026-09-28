@@ -1710,6 +1710,9 @@ final class NoteSessionMatrixTests: XCTestCase {
         case writingToolsBeginOK, writingToolsBeginFails, writingToolsBypass, writingToolsEnd
         case compositionBegin, compositionEnd, externalChange, externalDelete
         case retry, keepAsNew, launchRecovery, evict
+        // Slice 2: Delete Note, its Undo, leaving and reopening the note,
+        // and the title's hashtag shorthand.
+        case deleteNote, restoreDeleted, reopenLast, titleTag
     }
 
     /// A = handled, R = refused, N = not applicable, P = proposal,
@@ -1739,7 +1742,11 @@ final class NoteSessionMatrixTests: XCTestCase {
         (.retry,                   "NNAAARNNNNNNNN"),
         (.keepAsNew,               "NNNNNANNNNNNNN"),
         (.launchRecovery,          "NNNANANNNNNANN"),
-        (.evict,                   "NNNNNNNNNNANNN")
+        (.evict,                   "NNNNNNNNNNANNN"),
+        (.deleteNote,              "RAAAARARRRAARR"),
+        (.restoreDeleted,          "NAAAANANNNAANN"),
+        (.reopenLast,              "AAAAAAARRRNNAN"),
+        (.titleTag,                "AAAAAARNNNNNAN")
     ]
 
     func testEveryStateEventPair() async throws {
@@ -2070,8 +2077,31 @@ final class NoteSessionMatrixTests: XCTestCase {
                 let presence: NoteSessionPolicy.Presence = onScreen ? .onScreen : .background
                 return NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
                     hasBatch: session.isImporting, presence: presence) ? "A" : "N"
+            case .deleteNote:
+                textBeforeDelete = session.engine.document()
+                return controller.deleteNote(noteID: session.noteID) ? "A" : "R"
+            case .restoreDeleted:
+                textBeforeDelete = session.engine.document()
+                guard controller.deleteNote(noteID: session.noteID) else { return "N" }
+                return controller.restoreDeletedNote(noteID: session.noteID, reopen: true) ? "A" : "R"
+            case .reopenLast:
+                guard controller.active === session else { return "N" }
+                textBeforeDelete = session.engine.document()
+                guard controller.prepareToLeave(.pageSwitch) else { return "R" }
+                controller.present()
+                return controller.active === session ? "A" : "R"
+            case .titleTag:
+                guard onScreen, session.engine.activity == .idle else { return "N" }
+                let title = session.engine.titleParagraphRange
+                textView.setSelectedRange(NSRange(location: NSMaxRange(title), length: 0))
+                textView.insertText(" #matrix", replacementRange: NSRange(location: NSNotFound, length: 0))
+                textView.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
+                return session.engine.tags.contains("matrix") ? "A" : "R"
             }
         }
+
+        /// The note's text before a delete or a leave (checked after).
+        var textBeforeDelete: NoteDocument?
 
         func assertInvariants(after event: Event, decision: Character,
                               initialState: NoteSession.State, initialActivity: NoteEditorEngine.Activity,
@@ -2164,7 +2194,7 @@ final class NoteSessionMatrixTests: XCTestCase {
             }
             if session.engine.activity == .idle,
                (session.state.isJournalProblem),
-               event != .edit && event != .command && event != .compositionBegin,
+               event != .edit && event != .command && event != .compositionBegin && event != .titleTag,
                let entry = try journal.entries().first(where: { $0.0.noteID == session.noteID })?.0 {
                 XCTAssertEqual(NoteContentCodec.decode(entry.content).document,
                                session.engine.checkpointDocument(), context)
@@ -2173,6 +2203,39 @@ final class NoteSessionMatrixTests: XCTestCase {
                 XCTAssertEqual(controller.statusItems(for: session).first?.label, "Only in memory")
                 XCTAssertFalse(NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
                     hasBatch: session.isImporting, presence: .background))
+            }
+            // Slice 2: a deleted note leaves no session, no recovery copy and
+            // no store row; its latest text is what Restore brings back.
+            if event == .deleteNote && decision == "A" {
+                XCTAssertNil(store.note(withID: session.noteID), context)
+                XCTAssertEqual(store.agentWriteDisposition(session.noteID), .direct, context)
+                XCTAssertFalse(try journal.entries().contains { $0.0.noteID == session.noteID }, context)
+                XCTAssertTrue(store.recentlyDeletedNotes().contains { $0.ref.id == session.noteID }, context)
+                XCTAssertFalse(controller.failedDrafts.contains { $0.noteID == session.noteID }, context)
+            }
+            if event == .restoreDeleted && decision == "A" {
+                let restored = try XCTUnwrap(controller.active, context)
+                XCTAssertEqual(restored.noteID, session.noteID, context)
+                XCTAssertEqual(restored.state, session.isReadOnly ? .readOnly : .clean, context)
+                if !session.isReadOnly {
+                    XCTAssertEqual(store.loadDocument(noteID: session.noteID)?.content.document, textBeforeDelete, context)
+                }
+                XCTAssertEqual(store.agentWriteDisposition(session.noteID), .proposal, context)
+            }
+            if event == .reopenLast && decision == "A" {
+                XCTAssertEqual(session.engine.document(), textBeforeDelete, context)
+                XCTAssertFalse(session.state == .dirty, context)
+            }
+            if event == .titleTag && decision == "A" {
+                XCTAssertFalse(session.engine.titleParagraphRange.length > 0
+                    && session.engine.lineText(at: 0).contains("#matrix"), context)
+                XCTAssertTrue(NoteSessionPolicy.hasPendingWork(session.state), context)
+                // One Undo brings the text back and takes the tag away.
+                XCTAssertTrue(session.engine.history.undo(), context)
+                XCTAssertTrue(session.engine.lineText(at: 0).contains("#matrix"), context)
+                XCTAssertFalse(session.engine.tags.contains("matrix"), context)
+                XCTAssertTrue(session.engine.history.redo(), context)
+                XCTAssertTrue(session.engine.tags.contains("matrix"), context)
             }
             // I2: every committed editor save used the revision it saw.
             XCTAssertLessThanOrEqual(committedPairs.count, attemptPairs.count, context)

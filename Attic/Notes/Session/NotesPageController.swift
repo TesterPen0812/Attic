@@ -932,7 +932,8 @@ final class NotesPageController: ObservableObject {
                 continue
             }
             let stored = store.loadDocument(noteID: entry.noteID)
-            if stored?.content.document == document {
+            let storedTags = store.note(withID: entry.noteID)?.tags ?? []
+            if stored?.content.document == document, entry.tags == nil || entry.tags == storedTags {
                 try? journal.remove(noteID: entry.noteID)
                 continue
             }
@@ -942,7 +943,6 @@ final class NotesPageController: ObservableObject {
                 recoveryWarnings.append("Recovery copy for \(entry.noteID.uuidString) refers to an image that is missing from both the checkpoint and the note store.")
                 continue
             }
-            let storedTags = store.note(withID: entry.noteID)?.tags ?? []
             let session = NoteSession(noteID: entry.noteID,
                 isPersisted: stored != nil || entry.baseRevisionID != nil || !replicas.isEmpty,
                 baseRevisionID: entry.baseRevisionID,
