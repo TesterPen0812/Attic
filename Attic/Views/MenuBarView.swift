@@ -17,7 +17,9 @@ struct MenuBarView: View {
             openSettings: coordinator.openSettings,
             quit: { NSApp.terminate(nil) },
             openPage: coordinator.showPage,
-            togglePin: coordinator.togglePin,
+            // Pins or unpins as the menu shows it (never a blind toggle), so
+            // a second route to the same key can never undo it.
+            togglePin: { [pinned = coordinator.isPanelPinned] in coordinator.setPinned(!pinned) },
             isPinned: coordinator.isPanelPinned
         ))
     }

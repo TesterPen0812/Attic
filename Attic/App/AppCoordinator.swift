@@ -900,9 +900,9 @@ final class AppCoordinator: ObservableObject {
 
     /// The menu bar's Open ▸ Pin Panel: pinning shows the panel too (a
     /// pinned panel is one that stays open).
-    func togglePin() {
-        uiState.isPanelPinned.toggle()
-        if uiState.isPanelPinned { showPanel() }
+    func setPinned(_ pinned: Bool) {
+        if uiState.isPanelPinned != pinned { uiState.isPanelPinned = pinned }
+        if pinned { showPanel() }
     }
 
     func showNewNote() {
