@@ -22,6 +22,9 @@ struct NoteDraftJournalEntry: Codable, Equatable {
     var scrollOffset: Double? = nil
     var staged: [StagedFile]
     var savedAt: Date
+    /// The draft's tags when the person changed them (nil: the stored tags
+    /// stand). Optional, so older recovery files still read.
+    var tags: [String]? = nil
 }
 
 enum NoteDraftRecoveryEntry {

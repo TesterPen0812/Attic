@@ -66,6 +66,9 @@ final class NoteSession: ObservableObject, Identifiable {
     @Published private(set) var noteID: UUID
     @Published fileprivate(set) var isPersisted: Bool
     fileprivate(set) var baseRevisionID: UUID?
+    /// The tags the store holds for this note (as loaded or last saved). A
+    /// save writes the engine's tags only when they differ.
+    fileprivate(set) var baseTags: [String] = []
     @Published private(set) var engine: NoteEditorEngine
     let readOnlyReason: NoteReadOnlyReason?
     @Published fileprivate(set) var state: State {
@@ -111,10 +114,13 @@ final class NoteSession: ObservableObject, Identifiable {
     var isConflict: Bool { if case .conflict = state { true } else { false } }
     var isImporting: Bool { importBatch != nil }
 
-    /// Untouched: never saved, no text, no objects.
+    /// Untouched: never saved, no text, no objects, no tags.
     var isUntouchedDraft: Bool {
-        !isPersisted && importBatch == nil && engine.document().isEmpty && engine.objectIDs().isEmpty
+        !isPersisted && importBatch == nil && engine.tags.isEmpty && engine.document().isEmpty && engine.objectIDs().isEmpty
     }
+
+    /// The tags to write with the next save: only a change the person made.
+    var pendingTags: [String]? { engine.tags == baseTags ? nil : engine.tags }
 }
 
 /// The new Notes page's sessions (Phase 2): opening, creating, saving and
@@ -153,6 +159,9 @@ final class NotesPageController: ObservableObject {
     private var didRecoverAtLaunch = false
     private var newestRecovered: NoteSession?
     private var isPageVisible = false
+    /// New Note from the menu bar before the page first appeared: honoured
+    /// by `start()` (after a recovered draft, which always opens first).
+    private var pendingNewNote = false
     /// Saves and closes the old editor's draft before the page moves on
     /// from a legacy note (set by `NoteDraftController`).
     var leaveLegacyNote: (LeaveReason) -> Bool = { _ in true }
@@ -290,10 +299,16 @@ final class NotesPageController: ObservableObject {
         pruneObsoleteViewState()
         if let recovered = newestRecovered {
             newestRecovered = nil
+            pendingNewNote = false
             if let shown = presentSession(recovered) {
                 activate(shown)
                 return
             }
+        }
+        if pendingNewNote {
+            pendingNewNote = false
+            _ = newNote()
+            return
         }
         if let last = lastViewedNoteID, store.note(withID: last) != nil, open(noteID: last) {
             if !recoveryWarnings.isEmpty { active?.notice = recoveryWarnings.joined(separator: " ") }
@@ -350,8 +365,10 @@ final class NotesPageController: ObservableObject {
             .unreadable("missing document bytes")
         }
         let session = NoteSession(noteID: note.id, isPersisted: true, baseRevisionID: load?.revisionID,
-                                  engine: makeEngine(noteID: note.id, document: document, readOnly: readOnlyReason != nil),
+                                  engine: makeEngine(noteID: note.id, document: document, readOnly: readOnlyReason != nil,
+                                                     tags: note.tags),
                                   readOnlyReason: readOnlyReason)
+        session.baseTags = note.tags
         if let state = defaults?.dictionary(forKey: Self.viewStateKey(note.id)) {
             session.selection = NSRange(location: state["location"] as? Int ?? 0,
                                         length: state["length"] as? Int ?? 0)
@@ -361,9 +378,10 @@ final class NotesPageController: ObservableObject {
     }
 
     private func makeEngine(noteID: UUID, document: NoteDocument, readOnly: Bool,
-                            staged: [StagedNoteAttachment] = []) -> NoteEditorEngine {
+                            staged: [StagedNoteAttachment] = [], tags: [String] = []) -> NoteEditorEngine {
         let engine = NoteEditorEngine(noteID: noteID, document: document, readOnly: readOnly, design: design,
-                                      today: NoteDay(date: now()), imageProvider: self, stagedAttachments: staged)
+                                      today: NoteDay(date: now()), imageProvider: self, stagedAttachments: staged,
+                                      tags: tags)
         return engine
     }
 
@@ -388,7 +406,14 @@ final class NotesPageController: ObservableObject {
             session.engine.detachView()
             return nil
         }
-        guard session.baseRevisionID != note.revisionID else { return session }
+        guard session.baseRevisionID != note.revisionID else {
+            // Tags set elsewhere (an agent, another page) move no revision.
+            if note.tags != session.baseTags, session.engine.tags == session.baseTags {
+                session.baseTags = note.tags
+                session.engine.setTags(note.tags)
+            }
+            return session
+        }
         cache[session.noteID] = nil
         session.engine.detachView()
         return self.session(for: note)
@@ -427,6 +452,12 @@ final class NotesPageController: ObservableObject {
             self.updateWritingToolsAvailability(for: session)
         }
         engine.onNotice = { [weak session] message in session?.notice = message }
+        engine.onTagsChange = { [weak self, weak session] in
+            guard let self, let session else { return }
+            // A refresh to the stored tags is not an edit.
+            if !NoteSessionPolicy.hasPendingWork(session.state), session.engine.tags == session.baseTags { return }
+            self.textDidChange(in: session)
+        }
         engine.onWritingToolsWillBegin = { [weak self, weak session] in
             guard let self, let session else { return false }
             guard NoteSessionPolicy.writingToolsAvailable(session.state, activity: engine.activity,
@@ -562,6 +593,12 @@ final class NotesPageController: ObservableObject {
 
     func dismissLibrary() {
         isLibraryPresented = false
+        guard active != nil || legacyNoteID != nil else {
+            // The note on screen was deleted: the last note visited, else a new draft.
+            if let last = lastViewedNoteID, store.note(withID: last) != nil, open(noteID: last) { return }
+            _ = newNote()
+            return
+        }
         present()
     }
 
@@ -647,7 +684,8 @@ final class NotesPageController: ObservableObject {
             scrollOffset: Double(session.scrollOffset),
             staged: staged.map { .init(id: $0.id, filename: $0.filename, contentTypeIdentifier: $0.contentTypeIdentifier,
                                        byteCount: $0.byteCount, digest: $0.digest) },
-            savedAt: now()
+            savedAt: now(),
+            tags: session.isPersisted ? session.pendingTags : (session.engine.tags.isEmpty ? nil : session.engine.tags)
         )
     }
 
@@ -711,16 +749,18 @@ final class NotesPageController: ObservableObject {
         let engine = session.engine
         let document = snapshot ?? engine.document()
         let staged = stagedSnapshot ?? engine.stagedAttachments(for: document)
+        let tags = session.engine.tags
         if !session.isPersisted {
-            guard !document.isEmpty || !document.objectIDs.isEmpty else {
+            guard !document.isEmpty || !document.objectIDs.isEmpty || !tags.isEmpty else {
                 session.state = .untouched
                 return true
             }
             switch store.createDocumentNote(id: session.noteID, document: document, staged: staged,
-                                            prepared: prepared) {
+                                            prepared: prepared, tags: tags.isEmpty ? nil : tags) {
             case let .success((noteID, revisionID)):
                 session.isPersisted = true
                 session.baseRevisionID = revisionID
+                session.baseTags = tags
                 didSave(session, staged: staged)
                 remember(noteID)
                 return true
@@ -734,10 +774,13 @@ final class NotesPageController: ObservableObject {
                 return false
             }
         }
+        let pendingTags = session.pendingTags
         switch store.saveDocument(noteID: session.noteID, document: document,
-                                  baseRevisionID: session.baseRevisionID, staged: staged, prepared: prepared) {
+                                  baseRevisionID: session.baseRevisionID, staged: staged, prepared: prepared,
+                                  tags: pendingTags) {
         case let .success(revisionID):
             session.baseRevisionID = revisionID
+            if let pendingTags { session.baseTags = pendingTags }
             didSave(session, staged: staged)
             return true
         case .failure(.noteMissing):
@@ -776,11 +819,17 @@ final class NotesPageController: ObservableObject {
             session.notice = String(localized: "An image is unavailable, so this draft remains in recovery until it can be restored.")
             return false
         }
+        let tags = session.engine.tags
         guard case let .success((newID, revisionID)) = store.createDocumentNote(id: UUID(), document: replacement,
-                                                                                  staged: images) else { return false }
+                                                                                  staged: images,
+                                                                                  tags: tags.isEmpty ? nil : tags) else {
+            session.notice = String(localized: "Couldn’t save a new note; your text is still in recovery.")
+            return false
+        }
         cache[oldID] = nil
         session.adopt(noteID: newID)
-        session.replaceEngine(makeEngine(noteID: newID, document: replacement, readOnly: false))
+        session.replaceEngine(makeEngine(noteID: newID, document: replacement, readOnly: false, tags: tags))
+        session.baseTags = tags
         wire(session)
         if active === session { active = session }
         cache[newID] = session
@@ -893,11 +942,14 @@ final class NotesPageController: ObservableObject {
                 recoveryWarnings.append("Recovery copy for \(entry.noteID.uuidString) refers to an image that is missing from both the checkpoint and the note store.")
                 continue
             }
+            let storedTags = store.note(withID: entry.noteID)?.tags ?? []
             let session = NoteSession(noteID: entry.noteID,
                 isPersisted: stored != nil || entry.baseRevisionID != nil || !replicas.isEmpty,
                 baseRevisionID: entry.baseRevisionID,
-                engine: makeEngine(noteID: entry.noteID, document: document, readOnly: false, staged: staged),
+                engine: makeEngine(noteID: entry.noteID, document: document, readOnly: false, staged: staged,
+                                   tags: entry.tags ?? storedTags),
                 readOnlyReason: nil)
+            session.baseTags = storedTags
             wire(session)
             session.selection = NSRange(location: entry.selectionLocation, length: entry.selectionLength)
             session.scrollOffset = CGFloat(entry.scrollOffset ?? 0)
@@ -1209,10 +1261,194 @@ enum NoteSessionPolicy {
         }
     }
 
+    /// Delete Note: never during an activity or while images load, and
+    /// never from a conflict (its text lives only in its draft until Keep).
+    static func deleteAllowed(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
+                              hasBatch: Bool, hasMarkedText: Bool = false) -> Bool {
+        guard activity == .idle, !hasBatch, !hasMarkedText else { return false }
+        if case .conflict = state { return false }
+        return true
+    }
+
     static func keepAsNewAllowed(_ state: NoteSession.State, activity: NoteEditorEngine.Activity,
                                  hasBatch: Bool, hasMarkedText: Bool = false) -> Bool {
         guard activity == .idle, !hasBatch, !hasMarkedText else { return false }
         if case .conflict = state { return true }
         return false
+    }
+}
+
+// MARK: - Note actions (Phase 2, slice 2)
+
+/// The ⋯ menu's and All notes' note actions. Each goes through the session
+/// rules: a note's pending text is preserved before anything that could
+/// lose it, and nothing here saves document text by another path.
+extension NotesPageController {
+    /// New Note from the menu bar or ⌘N: always a fresh draft (a recovered
+    /// draft still opens first when the page has not started yet).
+    @discardableResult
+    func requestNewNote() -> Bool {
+        guard didStart else {
+            pendingNewNote = true
+            return true
+        }
+        guard newNote() else { return false }
+        isLibraryPresented = false
+        return true
+    }
+
+    /// Delete Note (⋯, or right-click and ⌘⌫ in All notes): an intentional
+    /// leave, never "Deleted elsewhere". Pending text is saved first, so
+    /// Restore brings back the latest; the session and its recovery copy go;
+    /// then the note moves to Recently Deleted. A refused step changes
+    /// nothing and says why in the slot. Deleting the note on screen shows
+    /// All notes.
+    @discardableResult
+    func deleteNote(noteID: UUID) -> Bool {
+        if legacyNoteID == noteID {
+            guard leaveLegacyNote(.openNote) else { return false }
+        }
+        let session = cache[noteID]
+        if let session {
+            session.engine.refreshCompositionActivity()
+            guard NoteSessionPolicy.deleteAllowed(session.state, activity: session.engine.activity,
+                    hasBatch: session.isImporting, hasMarkedText: session.engine.textView?.hasMarkedText() == true) else {
+                session.notice = switch session.state {
+                case .conflict: String(localized: "Keep this text as a new note before deleting it.")
+                default: session.isImporting
+                    ? String(localized: "Images are still being added. Delete the note when they finish.")
+                    : String(localized: "Finish Writing Tools or composing text before deleting this note.")
+                }
+                return false
+            }
+            if NoteSessionPolicy.hasPendingWork(session.state) || !session.isPersisted {
+                guard preserve(session), session.isPersisted, !NoteSessionPolicy.hasPendingWork(session.state) else {
+                    session.notice = String(localized: "The latest text couldn’t be saved, so the note was not deleted.")
+                    return false
+                }
+            }
+        }
+        guard let note = store.note(withID: noteID) else { return false }
+        if let session {
+            session.saveTask?.cancel()
+            session.pauseTask?.cancel()
+            cache[noteID] = nil
+        }
+        guard store.delete(note) else {
+            if let session {
+                cache[noteID] = session
+                touch(noteID)
+                session.notice = storeMessage()
+            }
+            return false
+        }
+        recency.removeAll { $0 == noteID }
+        clearRecoveryCopy(noteID: noteID)
+        if legacyNoteID == noteID { legacyNoteID = nil }
+        if lastViewedNoteID == noteID { defaults?.removeObject(forKey: Self.lastViewedKey) }
+        if let session, active === session {
+            active = nil
+            isLibraryPresented = true
+        }
+        session?.engine.detachView()
+        return true
+    }
+
+    /// The Undo toast after Delete Note: the note comes back from Recently
+    /// Deleted with its text, tags and images; `reopen` shows it again.
+    @discardableResult
+    func restoreDeletedNote(noteID: UUID, reopen: Bool) -> Bool {
+        guard store.restoreDeleted(noteID: noteID) else { return false }
+        if reopen, open(noteID: noteID) { isLibraryPresented = false }
+        return true
+    }
+
+    /// Duplicate (⌘D): a new note with this note's current text, copies of
+    /// its images and its tags, titled "… copy", and opened.
+    @discardableResult
+    func duplicateNote(noteID: UUID) -> Bool {
+        let document: NoteDocument
+        let staged: [StagedNoteAttachment]
+        let tags: [String]
+        if let session = cache[noteID] {
+            guard !session.isReadOnly else { return false }
+            document = session.engine.document()
+            staged = session.engine.stagedAttachments(for: document)
+            tags = session.engine.tags
+        } else if let load = store.loadDocument(noteID: noteID), case let .editable(stored) = load.content {
+            document = stored
+            staged = []
+            tags = store.note(withID: noteID)?.tags ?? []
+        } else {
+            return false
+        }
+        guard var (copy, images) = replacementForDeletedNote(document, oldID: noteID, staged: staged) else {
+            active?.notice = String(localized: "An image is unavailable, so the note was not duplicated.")
+            return false
+        }
+        if let first = copy.blocks.first, first.kind == .text, !first.displayText.trimmingCharacters(in: .whitespaces).isEmpty {
+            copy.blocks[0].text = first.text.trimmingCharacters(in: .whitespaces) + String(localized: " copy")
+        }
+        copy.blocks = copy.blocks.map { block in
+            var block = block
+            if block.kind == .checklist { block.id = UUID() }
+            block.inlines = block.inlines.map { inline in
+                var inline = inline
+                inline.id = UUID()
+                return inline
+            }
+            return block
+        }
+        images = images.filter { image in copy.attachmentIDs.contains(image.id) }
+        guard case let .success((newID, _)) = store.createDocumentNote(id: UUID(), document: copy, staged: images,
+                                                                     tags: tags.isEmpty ? nil : tags) else {
+            active?.notice = String(localized: "The note couldn’t be duplicated: \(storeMessage())")
+            return false
+        }
+        if open(noteID: newID) { isLibraryPresented = false }
+        return true
+    }
+
+    /// Pin to Top / Unpin from Top (metadata; a draft is saved first).
+    @discardableResult
+    func setPinned(_ pinned: Bool, noteID: UUID) -> Bool {
+        if let session = cache[noteID], !session.isPersisted {
+            guard preserve(session), session.isPersisted else { return false }
+        }
+        return store.setPinned(pinned, noteID: noteID)
+    }
+
+    /// The note as Markdown text (Copy as Markdown): the draft on screen as
+    /// it is now, or the stored note.
+    func markdown(noteID: UUID) -> String? {
+        let document: NoteDocument
+        let staged: [UUID: String]
+        if let session = cache[noteID] {
+            document = session.engine.document()
+            staged = session.engine.staged.mapValues(\.filename)
+        } else if let stored = store.loadDocument(noteID: noteID)?.content.document {
+            document = stored
+            staged = [:]
+        } else if let note = store.note(withID: noteID), !note.usesDocumentFormat {
+            return NoteMarkdownExport.markdown(title: note.title, body: note.body)
+        } else {
+            return nil
+        }
+        return NoteMarkdownExport.markdown(document) { id in staged[id] ?? self.filename(forAttachment: id) }
+    }
+
+    func copyMarkdown(noteID: UUID) {
+        guard let text = markdown(noteID: noteID) else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// The note the library selects: the one on screen, else (from a new
+    /// draft or after a delete) the last note visited.
+    var librarySelectionID: UUID? {
+        if let legacyNoteID { return legacyNoteID }
+        if let active, active.isPersisted { return active.noteID }
+        return lastViewedNoteID
     }
 }

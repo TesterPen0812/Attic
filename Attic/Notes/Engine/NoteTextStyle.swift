@@ -22,8 +22,25 @@ final class NoteBlockExtras: NSObject {
 
 /// The editor's look, from the design system only (fonts from the note text
 /// styles, inks from the resolved tokens).
+///
+/// The title is 17 bold on a 22 pt line; the body 14 regular on a 21 pt
+/// line with paragraphs 7 apart (UX plan § 2), both SF Pro Rounded (owner
+/// decision 4). With tags, the title's paragraph reserves room under it for
+/// the tag line (4 above it, 8 below); its lines keep clear of the ⋯ at the
+/// end of the first line (`titleTrailingReserve`).
 struct NoteTextStyle: Equatable {
     var design: AtticDesignContext = .default
+    /// Height of the tag line drawn under the title (0: no tags).
+    var tagLineHeight: CGFloat = 0
+    /// Room kept at the end of the title's lines for the note menu button.
+    var titleTrailingReserve: CGFloat = 0
+
+    static let titleLineHeight: CGFloat = 22
+    static let bodyLineHeight: CGFloat = 21
+    static let bodyParagraphGap: CGFloat = 7
+    static let titleToBody: CGFloat = 8
+    static let titleToTags: CGFloat = 4
+    static let tagsToBody: CGFloat = 8
 
     var titleFont: NSFont { AtticTextStyle.noteTitle.nsFont }
     var bodyFont: NSFont { AtticTextStyle.noteBody.nsFont }
@@ -32,6 +49,7 @@ struct NoteTextStyle: Equatable {
     var titleColor: NSColor { tokens.ink(.heading).nsColor }
     var bodyColor: NSColor { tokens.ink(.body).nsColor }
     var secondaryColor: NSColor { tokens.ink(.helper).nsColor }
+    var placeholderColor: NSColor { tokens.ink(.placeholder).nsColor }
 
     var titleAttributes: [NSAttributedString.Key: Any] {
         [.font: titleFont, .foregroundColor: titleColor, .paragraphStyle: titleParagraphStyle]
@@ -41,16 +59,29 @@ struct NoteTextStyle: Equatable {
         [.font: bodyFont, .foregroundColor: bodyColor, .paragraphStyle: bodyParagraphStyle]
     }
 
+    /// The gap from the title's last line to the body's first.
+    var titleParagraphSpacing: CGFloat {
+        tagLineHeight > 0 ? Self.titleToTags + tagLineHeight + Self.tagsToBody : Self.titleToBody
+    }
+
     var titleParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = 6
+        style.lineSpacing = Self.lineSpacing(for: titleFont, lineHeight: Self.titleLineHeight)
+        style.paragraphSpacing = titleParagraphSpacing
+        style.tailIndent = -titleTrailingReserve
         return style
     }
 
     var bodyParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 2
-        style.paragraphSpacing = 5
+        style.lineSpacing = Self.lineSpacing(for: bodyFont, lineHeight: Self.bodyLineHeight)
+        style.paragraphSpacing = Self.bodyParagraphGap
         return style
+    }
+
+    /// Extra space between lines that brings the font's own line to `lineHeight`.
+    static func lineSpacing(for font: NSFont, lineHeight: CGFloat) -> CGFloat {
+        let natural = font.ascender - font.descender + font.leading
+        return max(0, lineHeight - natural)
     }
 }

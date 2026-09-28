@@ -31,6 +31,10 @@ final class NoteUndoHistory {
         fileprivate(set) var name: String
         fileprivate(set) var isInert = false
         fileprivate let group: Int
+        /// A tag the step's change added to the note (the title shorthand):
+        /// `adds` says what flipping the step does next time. The tag is a
+        /// delta, so tags changed elsewhere since are never overwritten.
+        fileprivate(set) var tagDelta: (tag: String, adds: Bool)?
 
         fileprivate init(range: NSRange, current: NSAttributedString, other: NSAttributedString, name: String, group: Int) {
             self.range = range
@@ -60,6 +64,9 @@ final class NoteUndoHistory {
     /// A refused Writing Tools session freezes all history operations.
     var canReplay: (() -> Bool)?
     var onReplay: ((NSRange) -> Void)?
+    /// A step carrying a tag delta was flipped: add (true) or remove the tag.
+    /// The range is the step's text after the flip.
+    var onTagFlip: ((_ tag: String, _ add: Bool, _ range: NSRange) -> Void)?
 
     private(set) var undoOps: [Op] = []
     private(set) var redoOps: [Op] = []
@@ -119,14 +126,15 @@ final class NoteUndoHistory {
     /// The whole history as it stands, copied (steps are rebased in place,
     /// so their fields are saved too).
     struct Checkpoint {
-        fileprivate let undo: [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)]
-        fileprivate let redo: [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)]
+        fileprivate typealias Saved = (Op, NSRange, NSAttributedString, NSAttributedString, Bool, (tag: String, adds: Bool)?)
+        fileprivate let undo: [Saved]
+        fileprivate let redo: [Saved]
     }
 
     func checkpoint() -> Checkpoint {
         open = nil
-        func copy(_ ops: [Op]) -> [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)] {
-            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert) }
+        func copy(_ ops: [Op]) -> [Checkpoint.Saved] {
+            ops.map { ($0, $0.range, $0.current, $0.other, $0.isInert, $0.tagDelta) }
         }
         return Checkpoint(undo: copy(undoOps), redo: copy(redoOps))
     }
@@ -134,12 +142,13 @@ final class NoteUndoHistory {
     /// Puts the history back to a checkpoint taken when the text was what it
     /// is now (the caller restored the text first).
     func rewind(to checkpoint: Checkpoint) {
-        func restore(_ saved: [(Op, NSRange, NSAttributedString, NSAttributedString, Bool)]) -> [Op] {
-            saved.map { op, range, current, other, inert in
+        func restore(_ saved: [Checkpoint.Saved]) -> [Op] {
+            saved.map { op, range, current, other, inert, tagDelta in
                 op.range = range
                 op.current = current
                 op.other = other
                 op.isInert = inert
+                op.tagDelta = tagDelta
                 return op
             }
         }
@@ -321,6 +330,12 @@ final class NoteUndoHistory {
         undoOps.last?.name = name
     }
 
+    /// The last step also added `tag` to the note: undo removes it, redo
+    /// adds it back (one step for the text and the tag).
+    func attachTagToLast(_ tag: String) {
+        undoOps.last?.tagDelta = (tag, false)
+    }
+
     /// Runs a storage change that must not become a step (a restore the
     /// history is being rewound to).
     func performUnrecorded(_ body: () -> Void) {
@@ -396,6 +411,10 @@ final class NoteUndoHistory {
         op.current = replacement
         op.range = NSRange(location: op.range.location, length: replacement.length)
         textView?.setSelectedRange(NSRange(location: NSMaxRange(op.range), length: 0))
+        if let delta = op.tagDelta {
+            op.tagDelta = (delta.tag, !delta.adds)
+            onTagFlip?(delta.tag, delta.adds, op.range)
+        }
         onReplay?(op.range)
         return true
     }

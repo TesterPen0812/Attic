@@ -21,6 +21,10 @@ final class NoteItem {
     var deletedAttachmentIDsRaw: String? = nil
     /// Normalised tags (see `AtticTag`), space-separated and sorted.
     var tagsRaw: String = ""
+    /// Pinned to the top of All notes ("Pin to Top", Phase 2); nil when not
+    /// pinned. Metadata, like tags: pinning never moves the note in the
+    /// newest-first order or changes its revision, on every replica.
+    var pinnedAt: Date? = nil
 
     // MARK: Phase 2 note format (`attic.note/1`, see `NoteDocument`)
     //
@@ -72,6 +76,8 @@ final class NoteItem {
         get { AtticTag.decode(tagsRaw) }
         set { tagsRaw = AtticTag.encode(newValue) }
     }
+
+    var isPinned: Bool { pinnedAt != nil }
 
     /// Stored in the new format (editable or not): the new editor owns it.
     var usesDocumentFormat: Bool { contentFormat >= 1 }

@@ -45,7 +45,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var template: NoteDocument
     private(set) weak var textView: NoteEditorTextView?
     private(set) var scrollView: NSScrollView?
-    private var layoutManager: NSTextLayoutManager?
+    private(set) var layoutManager: NSTextLayoutManager?
 
     weak var imageProvider: NoteImageProviding?
     /// The text changed through editing, undo or an editor command.
@@ -59,6 +59,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onWritingToolsWillBegin: (() -> Bool)?
     /// The controller keeps the caret position with its session.
     var onSelectionChange: ((NSRange) -> Void)?
+    /// The note's tags changed (the title shorthand, its Undo or Redo, or
+    /// the tag editor). Tags are saved with the document.
+    var onTagsChange: (() -> Void)?
+
+    /// The note's tags: normalised, unique, sorted (`AtticTag`). Metadata
+    /// kept beside the text, saved with the document in one transaction.
+    private(set) var tags: [String]
+    /// The `#` of a hashtag in the title that stays text (Esc, or an Undo of
+    /// its conversion) until it is typed again. Follows edits like the
+    /// import anchor.
+    var literalHashLocation: Int?
 
     /// Images imported in this session but not yet saved.
     private(set) var staged: [UUID: StagedNoteAttachment] = [:]
@@ -98,8 +109,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
          design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date()),
          imageProvider: NoteImageProviding? = nil,
-         stagedAttachments: [StagedNoteAttachment] = []) {
+         stagedAttachments: [StagedNoteAttachment] = [], tags: [String] = []) {
         self.noteID = noteID
+        self.tags = AtticTag.normalizedSet(tags)
         self.isReadOnly = readOnly
         self.style = NoteTextStyle(design: design)
         self.renderer = NoteObjectRenderer(design: design)
@@ -115,6 +127,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textStorage.delegate = self
         renderObjects(in: NSRange(location: 0, length: textStorage.length))
         history.onReplay = { [weak self] range in self?.didReplay(range) }
+        history.onTagFlip = { [weak self] tag, add, range in self?.didFlipTag(tag, add: add, range: range) }
         history.canReplay = { [weak self] in self?.activity == .idle }
     }
 
@@ -265,9 +278,28 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     // MARK: Look
 
+    /// Room under the title for the tag line and at the end of its lines for
+    /// the note menu. Attributes only (never an Undo step).
+    func setTitleReserves(tagLine: CGFloat, trailing: CGFloat) {
+        guard style.tagLineHeight != tagLine || style.titleTrailingReserve != trailing else { return }
+        style.tagLineHeight = tagLine
+        style.titleTrailingReserve = trailing
+        let title = titleParagraphRange
+        guard title.length > 0 else {
+            textView?.typingAttributes = attributes(forParagraphAt: textView?.selectedRange().location ?? 0)
+            return
+        }
+        restyle(title)
+        invalidateLayout(title)
+        if let textView, paragraphRange(at: textView.selectedRange().location).location == 0 {
+            textView.typingAttributes = style.titleAttributes
+        }
+    }
+
     func update(design: AtticDesignContext) {
         guard renderer.update(design: design) else { return }
-        style = NoteTextStyle(design: design)
+        style = NoteTextStyle(design: design, tagLineHeight: style.tagLineHeight,
+                              titleTrailingReserve: style.titleTrailingReserve)
         restyle(NSRange(location: 0, length: textStorage.length))
         renderObjects(in: NSRange(location: 0, length: textStorage.length), force: true)
         textView?.insertionPointColor = style.bodyColor
@@ -290,7 +322,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Fonts, inks and paragraph styles for the given paragraphs: the first
     /// paragraph is the title. Attributes only; never a history step.
-    private func restyle(_ range: NSRange) {
+    func restyle(_ range: NSRange) {
         let string = textStorage.string as NSString
         guard string.length > 0 else { return }
         let firstBreak = string.range(of: "\n", options: .literal)
@@ -338,7 +370,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
     }
 
-    private func invalidateLayout(_ range: NSRange) {
+    func invalidateLayout(_ range: NSRange) {
         guard let layoutManager, let textRange = textRange(for: range) else { return }
         layoutManager.invalidateLayout(for: textRange)
         textView?.needsDisplay = true
@@ -500,7 +532,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return NSRange(location: lineRange(at: location).location, length: 1)
     }
 
-    private func attributes(forParagraphAt location: Int) -> [NSAttributedString.Key: Any] {
+    func attributes(forParagraphAt location: Int) -> [NSAttributedString.Key: Any] {
         paragraphRange(at: location).location == 0 ? style.titleAttributes : style.bodyAttributes
     }
 
@@ -648,6 +680,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// line it ends the list (the box goes).
     func handleNewline() -> Bool {
         guard let textView, !textView.hasMarkedText() else { return false }
+        if enterBodyFromTitleEnd() { return true }
         let selection = textView.selectedRange()
         guard selection.length == 0, checklistBox(inParagraphAt: selection.location) != nil else { return false }
         let line = lineRange(at: selection.location)
@@ -677,6 +710,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard selection.length == 0, selection.location > 0 else { return false }
         let location = selection.location
         let line = lineRange(at: location)
+        // A line that starts with an image never joins the line above (the
+        // title least of all): the image is selected first.
+        // An empty line above (not the title) simply goes.
+        if location == line.location, isBlockObject(at: location) {
+            let previous = lineRange(at: location - 1)
+            if previous.length > 0 || previous.location == 0 {
+                textView.setSelectedRange(NSRange(location: location, length: 1))
+                return true
+            }
+        }
         if location == line.location + 1, checklistBox(inParagraphAt: location) != nil {
             performEdit(NSRange(location: line.location, length: 1), with: NSAttributedString(),
                         name: String(localized: "Remove Checkbox"), selection: NSRange(location: line.location, length: 0))
@@ -702,6 +745,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let string = textStorage.string as NSString
         if isBlockObject(at: location) {
             textView.setSelectedRange(NSRange(location: location, length: 1))
+            return true
+        }
+        // Forward Delete at a line's end never pulls a checkbox into it:
+        // the box goes first (the marker-first rule, from the other side).
+        if location < string.length, string.character(at: location) == 0x0A,
+           checklistBox(inParagraphAt: location + 1) != nil {
+            performEdit(NSRange(location: location + 1, length: 1), with: NSAttributedString(),
+                        name: String(localized: "Remove Checkbox"), selection: NSRange(location: location, length: 0))
             return true
         }
         if location < string.length, string.character(at: location) == 0x0A, isBlockObject(at: location + 1) {
@@ -907,6 +958,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 importAnchor = max(0, anchor + delta)
             } else if editedRange.location <= anchor {
                 importAnchor = editedRange.location
+            }
+        }
+        if let hash = literalHashLocation {
+            let oldLength = max(0, editedRange.length - delta)
+            if editedRange.location + oldLength <= hash {
+                literalHashLocation = hash + delta
+            } else if editedRange.location > hash {
+                // After the `#`: the word may grow, it stays literal.
+            } else {
+                literalHashLocation = nil
             }
         }
         if var cached = documentCache {
@@ -1145,5 +1206,137 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
         guard object is NoteChecklistAttachment else { return false }
         MainActor.assumeIsolated { engine?.toggleCheckbox(atLineOf: range.location) }
         return true
+    }
+}
+
+// MARK: - Title and tags (Phase 2, slice 2)
+
+/// The first paragraph is the title (UX plan § 3.3): it wraps without a
+/// limit, Return moves into the body, Backspace at the body's start joins
+/// ordinary text into it (an object is selected first and never joins), and
+/// `#word` then Space or Return takes a tag as one Undo step. Pasted
+/// hashtags stay text: only a typed Space or Return converts.
+extension NoteEditorEngine {
+    /// The title paragraph, without its line break.
+    var titleParagraphRange: NSRange { lineRange(at: 0) }
+
+    /// Replaces the note's tags (the tag editor, a store refresh). Not an
+    /// Undo step: tags are metadata, and the title shorthand's own steps
+    /// carry only the tag they added.
+    func setTags(_ newTags: [String]) {
+        let normalized = AtticTag.normalizedSet(newTags)
+        guard normalized != tags else { return }
+        tags = normalized
+        onTagsChange?()
+    }
+
+    /// The `#word` just before the caret in the title, when it would become
+    /// a tag: at a word boundary, letters, numbers, `-` and `_`, with a
+    /// letter (the add bar's rule, so "#42" stays text).
+    private func pendingTitleHashtag() -> (range: NSRange, tag: String)? {
+        guard !isReadOnly, let textView, !textView.hasMarkedText() else { return nil }
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return nil }
+        let title = titleParagraphRange
+        guard selection.location > title.location, selection.location <= NSMaxRange(title) else { return nil }
+        let string = textStorage.string as NSString
+        var start = selection.location
+        while start > title.location {
+            let unit = string.character(at: start - 1)
+            if unit == 0x23 {
+                start -= 1
+                break
+            }
+            guard let scalar = UnicodeScalar(unit),
+                  CharacterSet.alphanumerics.contains(scalar) || unit == 0x2D || unit == 0x5F else { return nil }
+            start -= 1
+        }
+        guard start < selection.location, string.character(at: start) == 0x23 else { return nil }
+        if start > title.location {
+            guard let scalar = UnicodeScalar(string.character(at: start - 1)),
+                  CharacterSet.whitespaces.contains(scalar) else { return nil }
+        }
+        let range = NSRange(location: start, length: selection.location - start)
+        guard !rangeContainsObject(range), let tag = TaskTextParser.tag(string.substring(with: range)) else { return nil }
+        return (range, tag)
+    }
+
+    /// Space or Return after `#word` in the title: the word leaves the title
+    /// and joins the tags at once, as one Undo step (one ⌘Z brings the text
+    /// back and removes the tag). Returns false when nothing was taken.
+    @discardableResult
+    func takeTitleHashtag() -> Bool {
+        guard activity == .idle, let (range, tag) = pendingTitleHashtag(), literalHashLocation != range.location else {
+            return false
+        }
+        let isNew = !tags.contains(tag)
+        guard performEdit(range, with: NSAttributedString(), name: String(localized: "Add Tag"),
+                          selection: NSRange(location: range.location, length: 0)) else { return false }
+        if isNew {
+            history.attachTagToLast(tag)
+            tags = AtticTag.normalizedSet(tags + [tag])
+            onTagsChange?()
+        }
+        return true
+    }
+
+    /// Esc right after a `#word` that would become a tag: it stays text and
+    /// does not convert again until its `#` is typed again.
+    func keepTitleHashtagLiteral() -> Bool {
+        guard let (range, _) = pendingTitleHashtag(), literalHashLocation != range.location else { return false }
+        literalHashLocation = range.location
+        return true
+    }
+
+    /// An Undo or Redo of a title shorthand step. Undo leaves the hashtag
+    /// literal, so the next Space does not take it again.
+    fileprivate func didFlipTag(_ tag: String, add: Bool, range: NSRange) {
+        if add {
+            tags = AtticTag.normalizedSet(tags + [tag])
+        } else {
+            tags.removeAll { $0 == tag }
+            let string = textStorage.string as NSString
+            if range.length > 0, NSMaxRange(range) <= string.length, string.character(at: range.location) == 0x23 {
+                literalHashLocation = range.location
+            }
+        }
+        onTagsChange?()
+    }
+
+    // MARK: Title boundaries
+
+    /// Return at the end of the title when the body's first line is empty:
+    /// the caret moves into it instead of adding another empty line.
+    func enterBodyFromTitleEnd() -> Bool {
+        guard let textView, !textView.hasMarkedText() else { return false }
+        let selection = textView.selectedRange()
+        let title = titleParagraphRange
+        guard selection.length == 0, selection.location == NSMaxRange(title),
+              NSMaxRange(title) < textStorage.length else { return false }
+        let next = lineRange(at: NSMaxRange(title) + 1)
+        guard next.length == 0 else { return false }
+        textView.setSelectedRange(NSRange(location: next.location, length: 0))
+        return true
+    }
+
+    /// The title's first and last line, in the text view's coordinates
+    /// (only the title is laid out). An empty note gives its first line.
+    func titleLineRects() -> (first: NSRect, last: NSRect)? {
+        guard let layoutManager, let textView else { return nil }
+        let origin = textView.textContainerOrigin
+        let empty = NSRect(x: origin.x, y: origin.y, width: 0, height: NoteTextStyle.titleLineHeight)
+        guard textStorage.length > 0 else { return (empty, empty) }
+        let start = contentStorage.documentRange.location
+        layoutManager.ensureLayout(for: NSTextRange(location: start))
+        guard let fragment = layoutManager.textLayoutFragment(for: start),
+              let firstLine = fragment.textLineFragments.first,
+              let lastLine = fragment.textLineFragments.last else { return (empty, empty) }
+        let frame = fragment.layoutFragmentFrame
+        func rect(_ line: NSTextLineFragment) -> NSRect {
+            let bounds = line.typographicBounds
+            return NSRect(x: origin.x + frame.minX + bounds.minX, y: origin.y + frame.minY + bounds.minY,
+                          width: bounds.width, height: bounds.height)
+        }
+        return (rect(firstLine), rect(lastLine))
     }
 }

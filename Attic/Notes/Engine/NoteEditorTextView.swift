@@ -16,6 +16,12 @@ import UniformTypeIdentifiers
 final class NoteEditorTextView: NSTextView {
     weak var engine: NoteEditorEngine?
     private(set) lazy var undoShim = NoteUndoManagerShim(textView: self)
+    /// After each layout pass: the page keeps the title's accessories (the
+    /// note menu button and the tag line) on the title's lines.
+    var onLayout: (() -> Void)?
+    /// Views laid over the text (the title's accessories), read by
+    /// VoiceOver after the text.
+    var accessoryViews: [NSView] = []
 
     // MARK: A person's own editing
 
@@ -46,6 +52,19 @@ final class NoteEditorTextView: NSTextView {
     override func layout() {
         super.layout()
         PerformanceSignposts.noteDidLayout()
+        onLayout?()
+    }
+
+    /// "Title" on a new note's empty first line.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let engine, engine.textStorage.length == 0, !hasMarkedText() else { return }
+        let origin = textContainerOrigin
+        let placeholder = NSAttributedString(string: String(localized: "Title"), attributes: [
+            .font: engine.style.titleFont,
+            .foregroundColor: engine.style.placeholderColor
+        ])
+        placeholder.draw(at: NSPoint(x: origin.x + (textContainer?.lineFragmentPadding ?? 0), y: origin.y))
     }
 
     override func viewWillDraw() {
@@ -59,6 +78,9 @@ final class NoteEditorTextView: NSTextView {
         }
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        // A typed Space after `#word` in the title takes the tag (the space
+        // itself is not inserted). A paste never reaches here.
+        if text == " ", !hasMarkedText(), range == selectedRange(), engine.takeTitleHashtag() { return }
         let wrap = hasMarkedText() ? (before: false, after: false) : engine.adjustedInsertion(text, at: range)
         var payload: Any = string
         if wrap.before || wrap.after {
@@ -87,6 +109,8 @@ final class NoteEditorTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
+        // Return after `#word` in the title takes the tag, then moves on.
+        if !hasMarkedText() { engine?.takeTitleHashtag() }
         if engine?.handleNewline() == true { return }
         asUserEdit { super.insertNewline(sender) }
     }
@@ -99,6 +123,13 @@ final class NoteEditorTextView: NSTextView {
     override func deleteForward(_ sender: Any?) {
         if engine?.handleDeleteForward() == true { return }
         asUserEdit { super.deleteForward(sender) }
+    }
+
+    /// Esc right after `#word` in the title keeps it as text; otherwise Esc
+    /// goes on as usual.
+    override func cancelOperation(_ sender: Any?) {
+        if engine?.keepTitleHashtagLiteral() == true { return }
+        super.cancelOperation(sender)
     }
 
     override func cut(_ sender: Any?) { asUserEdit { super.cut(sender) } }
@@ -239,7 +270,8 @@ final class NoteEditorTextView: NSTextView {
     override func accessibilityChildren() -> [Any]? {
         let base = super.accessibilityChildren() ?? []
         guard let engine else { return base }
-        return base + engine.accessibilityElements(for: self)
+        let accessories = accessoryViews.filter { view in !view.isHidden && !base.contains { ($0 as AnyObject) === view } }
+        return base + engine.accessibilityElements(for: self) + accessories
     }
 
     override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {

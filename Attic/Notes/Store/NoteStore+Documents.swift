@@ -159,6 +159,26 @@ extension NoteStore {
         return inserted
     }
 
+    // MARK: Metadata
+
+    /// Pin to Top / Unpin from Top, on every replica. Metadata, like tags:
+    /// the note keeps its place in the newest-first order and its revision.
+    @discardableResult
+    func setPinned(_ pinned: Bool, noteID: UUID) -> Bool {
+        do {
+            let replicas = try liveReplicas(of: noteID)
+            guard !replicas.isEmpty else { throw NoteDocumentStoreError.noteMissing(noteID) }
+            guard replicas.contains(where: { $0.isPinned != pinned }) else { return true }
+            let timestamp = pinned ? currentDate : nil
+            for replica in replicas { replica.pinnedAt = timestamp }
+        } catch {
+            modelContext.rollback()
+            recordError(error.localizedDescription)
+            return false
+        }
+        return commitStagedChanges()
+    }
+
     // MARK: Loading
 
     func loadDocument(noteID: UUID) -> NoteDocumentLoad? {
@@ -174,7 +194,8 @@ extension NoteStore {
         id: UUID,
         document: NoteDocument,
         staged: [StagedNoteAttachment] = [],
-        prepared: PreparedNoteDocument? = nil
+        prepared: PreparedNoteDocument? = nil,
+        tags: [String]? = nil
     ) -> Result<(noteID: UUID, revisionID: UUID), NoteDocumentStoreError> {
         let context = modelContext
         if let existing = try? replicasIncludingDeleted(of: id), !existing.isEmpty {
@@ -188,7 +209,8 @@ extension NoteStore {
         let note = NoteItem(id: id, createdAt: timestamp, updatedAt: timestamp)
         let revisionID: UUID
         do {
-            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: prepared)
+            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: prepared,
+                                   tags: tags.map(AtticTag.encode))
             try stageAttachments(staged, referencedBy: document, noteID: id, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
             context.rollback()
@@ -209,12 +231,19 @@ extension NoteStore {
     /// Saves an editor's document to every replica. When the presented copy
     /// moved past `baseRevisionID`, reject the draft. Divergent secondary
     /// replicas are preserved as versions before the family is converged.
+    ///
+    /// `tags` (the editor's tag set, when the person changed it) is written
+    /// in the same transaction as the text, so a title shorthand's text and
+    /// tag commit together. When only the tags changed (every replica already
+    /// holds this exact document), only the tags are written: like
+    /// `setTags`, that neither moves the note nor changes its revision.
     func saveDocument(
         noteID: UUID,
         document: NoteDocument,
         baseRevisionID: UUID?,
         staged: [StagedNoteAttachment] = [],
-        prepared: PreparedNoteDocument? = nil
+        prepared: PreparedNoteDocument? = nil,
+        tags: [String]? = nil
     ) -> Result<UUID, NoteDocumentStoreError> {
         let preflight: NoteMutationPreflight
         do {
@@ -234,13 +263,27 @@ extension NoteStore {
             return .failure(.staleRevision(expected: baseRevisionID?.uuidString ?? NoteItem.initialRevisionToken,
                                            current: main.revisionToken))
         }
+        let encodedTags = tags.map(AtticTag.encode)
+        if staged.isEmpty, let encodedTags, let presentedRevisionID,
+           let projection = try? prepared ?? PreparedNoteDocument(document),
+           replicas.allSatisfy({ $0.content == projection.content && $0.contentFormat == document.format
+               && $0.revisionID == presentedRevisionID }) {
+            guard replicas.contains(where: { $0.tagsRaw != encodedTags }) else { return .success(presentedRevisionID) }
+            for replica in replicas { replica.tagsRaw = encodedTags }
+            guard commitStagedChanges() else {
+                return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
+            }
+            documentSaveCommitted?(baseRevisionID, presentedRevisionID)
+            return .success(presentedRevisionID)
+        }
         let timestamp = currentDate
         let context = modelContext
         stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
                                excludingUnchangedBase: baseRevisionID)
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
-                                       revision: replicas.map(\.revision).max() ?? 0, prepared: prepared)
+                                       revision: replicas.map(\.revision).max() ?? 0, prepared: prepared,
+                                       tags: encodedTags)
             try stageAttachments(staged, referencedBy: document, noteID: noteID, context: context, timestamp: timestamp)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
@@ -260,7 +303,7 @@ extension NoteStore {
     /// Writes `document` and its derived columns onto rows (not saved).
     @discardableResult
     private func stage(_ document: NoteDocument, on replicas: [NoteItem], timestamp: Date, revision: Int64,
-                       prepared: PreparedNoteDocument? = nil) throws -> UUID {
+                       prepared: PreparedNoteDocument? = nil, tags: String? = nil) throws -> UUID {
         guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
         let projection: PreparedNoteDocument
         do { projection = try prepared ?? PreparedNoteDocument(document) }
@@ -283,7 +326,9 @@ extension NoteStore {
                 replica.createdAt = canonical.createdAt
                 replica.tagsRaw = canonical.tagsRaw
                 replica.taskID = canonical.taskID
+                replica.pinnedAt = canonical.pinnedAt
             }
+            if let tags { replica.tagsRaw = tags }
         }
         return revisionID
     }

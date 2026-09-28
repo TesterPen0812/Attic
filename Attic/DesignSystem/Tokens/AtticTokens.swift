@@ -247,9 +247,14 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
         }
     }
 
+    /// Note text is SF Pro Rounded too (owner decision 4, Phase 2): the
+    /// Tasks list's voice for the page of text.
+    var isNoteText: Bool { self == .noteTitle || self == .noteBody }
+
     var spec: Spec {
         let base = baseSpec
-        return Spec(size: base.size, weight: base.weight, italic: base.italic, monospacedDigits: base.monospacedDigits, rounded: isListText)
+        return Spec(size: base.size, weight: base.weight, italic: base.italic, monospacedDigits: base.monospacedDigits,
+                    rounded: isListText || isNoteText)
     }
 
     private var baseSpec: Spec {
