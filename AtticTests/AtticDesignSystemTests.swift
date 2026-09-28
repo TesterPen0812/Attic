@@ -54,12 +54,19 @@ final class AtticDesignSystemTests: XCTestCase {
         XCTAssertEqual(m.circleCentreY(twoLine: true), 15)
     }
 
-    func testMotionPresetsAreCalmSpringsWithReduceMotionFallbacks() {
+    /// Round 9 (owner item 26): springy by default, pages firm (never a
+    /// visible overshoot), crossfades and hover never bounce; every preset
+    /// keeps its Reduce Motion fallback.
+    func testMotionPresetsAreLivelySpringsWithReduceMotionFallbacks() {
         for preset in AtticMotionPreset.allCases {
-            XCTAssertLessThanOrEqual(preset.duration, 0.3, "\(preset) is longer than the calm budget")
-            XCTAssertEqual(preset.bounce, 0, "\(preset) bounces")
+            XCTAssertLessThanOrEqual(preset.duration, 0.35, "\(preset) drags")
+            XCTAssertLessThanOrEqual(preset.bounce, 0.3, "\(preset) wobbles")
             XCTAssertNotNil(preset.animation(reduceMotion: false))
         }
+        XCTAssertGreaterThan(AtticMotionPreset.popover.bounce, 0, "things that appear land with a bounce")
+        XCTAssertGreaterThan(AtticMotionPreset.settle.bounce, 0, "rows settle with a bounce")
+        XCTAssertLessThanOrEqual(AtticMotionPreset.slide.bounce, 0.15, "pages bounce no more than snappy")
+        XCTAssertEqual(AtticMotionPreset.pageSwitch.bounce, 0)
         XCTAssertNil(AtticMotionPreset.pageSwitch.animation(reduceMotion: true), "Page switch is instant under Reduce Motion")
         XCTAssertNil(AtticMotionPreset.expand.animation(reduceMotion: true), "Card expand is instant under Reduce Motion")
         XCTAssertNotNil(AtticMotionPreset.slide.animation(reduceMotion: true), "Slides crossfade under Reduce Motion")

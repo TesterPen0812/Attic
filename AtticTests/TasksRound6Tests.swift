@@ -9,100 +9,6 @@ import XCTest
 /// Later), plus Done rows taking clicks.
 @MainActor
 final class TasksRound6Tests: XCTestCase {
-    // MARK: - One swipe, one page, from where it started (the owner's item 21)
-
-    private let width: CGFloat = 320
-
-    /// The whole phase sequence of a hard swipe from Now: the gesture's
-    /// page is taken when the pager leaves idle, every projected target is
-    /// clamped to it, nothing changes the tab until the pager is idle, and
-    /// then the tab is Later.
-    func testAHardSwipeFromNowStopsAtLaterThroughEveryPhase() {
-        let swipe = TasksPagerSwipe(count: 3)
-        swipe.geometry = .init(offset: 0, width: width)
-        XCTAssertNil(swipe.phaseChanged(to: .interacting, shown: 0))
-        XCTAssertEqual(swipe.origin, 0, "the swipe's page is taken as it starts")
-        // The fingers carry the pager past halfway; it reports Later.
-        swipe.geometry.offset = width * 0.7
-        swipe.report(1)
-        XCTAssertEqual(swipe.shownDuringSwipe, .backlog, "a redraw mid-swipe keeps the pager where the fingers are")
-        // Released hard: the momentum projects far past Done.
-        XCTAssertEqual(target(10 * width, swipe), 1, "the projected target is clamped to Later")
-        XCTAssertNil(swipe.phaseChanged(to: .decelerating, shown: 0), "no tab changes while it moves")
-        XCTAssertEqual(swipe.origin, 0, "the clamp does not move with the pager")
-        swipe.geometry.offset = width * 1.6
-        XCTAssertEqual(target(3 * width, swipe), 1, "asked again mid-momentum, still Later")
-        XCTAssertNil(swipe.phaseChanged(to: .animating, shown: 0))
-        swipe.geometry.offset = width
-        XCTAssertEqual(swipe.phaseChanged(to: .idle, shown: 0), 1, "settled: the tab becomes Later")
-        XCTAssertNil(swipe.origin)
-        XCTAssertNil(swipe.shownDuringSwipe)
-    }
-
-    func testAHardSwipeFromDoneStopsAtLater() {
-        let swipe = TasksPagerSwipe(count: 3)
-        swipe.geometry = .init(offset: 2 * width, width: width)
-        XCTAssertNil(swipe.phaseChanged(to: .tracking, shown: 2))
-        XCTAssertEqual(target(-8 * width, swipe), 1)
-        swipe.geometry.offset = width
-        XCTAssertEqual(swipe.phaseChanged(to: .idle, shown: 2), 1)
-    }
-
-    /// Even if a scroll went two pages (it should not), the tab it settles
-    /// on is one page from the start, and the pager is brought back to it.
-    func testASwipeThatOvershotSettlesOnePageAway() {
-        let swipe = TasksPagerSwipe(count: 3)
-        swipe.geometry = .init(offset: 0, width: width)
-        _ = swipe.phaseChanged(to: .interacting, shown: 0)
-        swipe.geometry.offset = 2 * width
-        XCTAssertEqual(swipe.phaseChanged(to: .idle, shown: 0), 1)
-    }
-
-    func testAShortOrGentleSwipeSettlesAsItShould() {
-        let swipe = TasksPagerSwipe(count: 3)
-        swipe.geometry = .init(offset: 0, width: width)
-        _ = swipe.phaseChanged(to: .interacting, shown: 1)
-        XCTAssertEqual(target(width * 1.4, swipe), 1, "a short drag settles back")
-        XCTAssertEqual(target(width * 0.4, swipe), 0, "past halfway it turns the page")
-        swipe.geometry.offset = width
-        XCTAssertEqual(swipe.phaseChanged(to: .idle, shown: 1), 1, "settled back where it began")
-        XCTAssertEqual(TasksPagerSwipe.page(proposed: 500, width: 0, origin: 1, count: 3), 1, "no width yet: stay")
-        XCTAssertEqual(TasksPagerSwipe.page(proposed: 3 * width, width: width, origin: 2, count: 3), 2, "never past the last page")
-        XCTAssertEqual(TasksPagerSwipe.page(proposed: -width, width: width, origin: 0, count: 3), 0, "nor before the first")
-    }
-
-    // MARK: - A page chosen any other way is never clamped (the owner's item 22)
-
-    /// A tab click, a key, `show` or Search scrolls the pager (`.animating`
-    /// from `.idle`): no origin, so Done from Now lands on Done, and the
-    /// pager's idle again selects nothing.
-    func testATabClickIsNeverClampedToOnePage() {
-        let swipe = TasksPagerSwipe(count: 3)
-        swipe.geometry = .init(offset: 0, width: width)
-        XCTAssertNil(swipe.phaseChanged(to: .animating, shown: 2))
-        XCTAssertNil(swipe.origin)
-        XCTAssertEqual(target(2 * width, swipe), 2, "Done from Now lands on Done")
-        swipe.geometry.offset = 2 * width
-        XCTAssertNil(swipe.phaseChanged(to: .idle, shown: 2), "a scroll no one swiped selects nothing")
-        XCTAssertNil(swipe.phaseChanged(to: .animating, shown: 0))
-        XCTAssertEqual(target(0, swipe), 0, "Now from Done lands on Now")
-        swipe.report(1)
-        XCTAssertNil(swipe.shownDuringSwipe, "its reports never move the pager's binding")
-    }
-
-    func testAPageChosenDuringASwipeWins() {
-        let swipe = TasksPagerSwipe(count: 3)
-        swipe.geometry = .init(offset: 0, width: width)
-        _ = swipe.phaseChanged(to: .interacting, shown: 0)
-        swipe.cancel()
-        XCTAssertEqual(target(2 * width, swipe), 2, "unclamped once another way chose the page")
-        XCTAssertNil(swipe.phaseChanged(to: .idle, shown: 2))
-    }
-
-    private func target(_ x: CGFloat, _ swipe: TasksPagerSwipe) -> Int {
-        TasksPagerSwipe.page(proposed: x, width: width, origin: swipe.origin, count: swipe.count)
-    }
-
     // MARK: - The real pager: every tab from every other
 
     /// The page hosted in a window, as the panel hosts it: selecting a tab
@@ -312,24 +218,23 @@ final class Hosted {
         spin(1.2)
     }
 
-    /// The page the pager shows, from its scroll offset.
+    /// The page the pager shows (round 9: its position, once it has
+    /// settled on a whole page), and only if exactly one list is drawn in
+    /// the window (the others lie beside it, off the page).
     func shownPage() -> Int? {
-        guard let pager = pager(in: window.contentView) else { return nil }
-        let clip = pager.contentView
-        guard clip.bounds.width > 0 else { return nil }
-        return Int((clip.bounds.origin.x / clip.bounds.width).rounded())
+        let position = model.pagerSwipe.motion.position
+        guard position == position.rounded(), let content = window.contentView else { return nil }
+        let onPage = lists(in: content).filter { list in
+            let frame = list.convert(list.bounds, to: nil)
+            return frame.height > content.bounds.height / 2 && frame.minX > -1 && frame.minX < content.bounds.width / 2
+        }
+        return onPage.count == 1 ? Int(position) : nil
     }
 
-    func pager(in view: NSView?) -> NSScrollView? {
-        guard let view else { return nil }
-        if let scroll = view as? NSScrollView, let document = scroll.documentView,
-           document.frame.width > scroll.contentView.bounds.width * 1.5 {
-            return scroll
-        }
-        for child in view.subviews {
-            if let found = pager(in: child) { return found }
-        }
-        return nil
+    /// The vertical lists (each page's scroll view).
+    func lists(in view: NSView) -> [NSScrollView] {
+        if let scroll = view as? NSScrollView { return [scroll] }
+        return view.subviews.flatMap { lists(in: $0) }
     }
 
     /// A key press through the app's queue (key equivalents included).

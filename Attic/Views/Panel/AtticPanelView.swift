@@ -302,6 +302,7 @@ struct AtticPanelView: View {
                 tint: settings.panelTint,
                 tintLength: settings.panelTintLength,
                 hapticsEnabled: settings.panelHapticsEnabled,
+                animations: settings.animations,
                 controls: PanelKeyTreatment.controls(isPanelKey: uiState.isPanelKey, surface: settings.panelSurfaceStyle)
             )
             // Native menus (context menus, pop-ups) follow Attic's chosen
@@ -372,7 +373,7 @@ struct AtticPanelView: View {
             uiState.selectSection(section)
             if section.isNotes { openMostRecentNoteIfNeeded() }
         }
-        withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion)) { selection() }
+        withAnimation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced)) { selection() }
     }
 
     /// Pages with their own bottom controls (the Tasks add bar) report their

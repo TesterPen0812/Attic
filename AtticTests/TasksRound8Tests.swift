@@ -107,47 +107,6 @@ final class TasksRound8Tests: XCTestCase {
         XCTAssertFalse(TasksPage.isComposing(nil))
     }
 
-    // MARK: - G3: a queued correction yields to anything newer
-
-    /// The pager comes to rest off its page and queues a correction; before
-    /// it runs, a tab (even the one shown), `show`, Search, a reveal or a
-    /// new gesture happens. The correction does not run; with nothing in
-    /// between, it does.
-    func testAQueuedCorrectionYieldsToNewerNavigationOrAGesture() throws {
-        let task = try XCTUnwrap(store.create(title: "Call the plumber"))
-        let swipe = model.pagerSwipe
-        let newer: [(String, () -> Void)] = [
-            ("the tab shown", { self.model.select(tab: self.model.tab) }),
-            ("another tab", { self.model.select(tab: .done) }),
-            ("show", { _ = self.model.show(task.id) }),
-            ("Search", { self.model.beginSearch() }),
-            ("a reveal", { self.model.resetForReveal() }),
-            ("a new gesture", { _ = swipe.phaseChanged(to: .interacting, shown: 0) }),
-            ("a programmatic scroll", { _ = swipe.phaseChanged(to: .animating, shown: 0) })
-        ]
-        for (name, happen) in newer {
-            model.select(tab: .now)
-            _ = swipe.phaseChanged(to: .idle, shown: 0)
-            let ticket = swipe.correctionTicket()
-            XCTAssertTrue(swipe.mayCorrect(ticket, to: 0, shown: 0), "\(name): nothing yet, it may run")
-            happen()
-            let shown = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
-            XCTAssertFalse(swipe.mayCorrect(ticket, to: 0, shown: shown), "\(name) came after: the queued correction is stale")
-            _ = swipe.phaseChanged(to: .idle, shown: shown)
-        }
-        // The still-pager check: off its page with no swipe holding it.
-        swipe.geometry = .init(offset: 640, width: 320)
-        XCTAssertTrue(swipe.needsRestCorrection(page: 1), "Done shown under a Later tab")
-        XCTAssertFalse(swipe.needsRestCorrection(page: 2))
-        _ = swipe.phaseChanged(to: .interacting, shown: 1)
-        XCTAssertFalse(swipe.needsRestCorrection(page: 1), "a swipe in progress keeps its place")
-        _ = swipe.phaseChanged(to: .idle, shown: 1)
-        // The model's page changed without a navigation (a failed settle):
-        // the destination no longer matches.
-        let ticket = swipe.correctionTicket()
-        XCTAssertFalse(swipe.mayCorrect(ticket, to: 1, shown: 0))
-    }
-
     // MARK: - Typing on Done faster than the field takes the keyboard
 
     func testFastTypingOnDoneKeepsEveryLetter() throws {

@@ -653,7 +653,8 @@ final class TasksPageModel: ObservableObject {
         pickerRetrySaved = nil
     }
 
-    /// The pager's swipe (owner items 21 and 22). Every explicit way of
+    /// The pager's swipe (owner items 21, 22, 24 and 25; round 9: the page
+    /// owns the gesture, `TasksPager.swift`). Every explicit way of
     /// choosing a page (a tab, a key, `show`, Search, a reveal) cancels a
     /// swipe in progress, even when it chooses the page already shown
     /// (round 7, R5).
@@ -666,7 +667,8 @@ final class TasksPageModel: ObservableObject {
 
     /// Moving to another page saves an open edit first; if that save
     /// fails, the page stays with the text and Retry (Esc discards it).
-    /// `bySwipe`: a settled swipe's own choice (it cancels nothing).
+    /// `bySwipe`: a swipe's own choice, live as its page crosses halfway
+    /// (it cancels nothing).
     func select(tab: TasksTab, bySwipe: Bool = false) {
         if !bySwipe { pagerSwipe.cancel() }
         guard tab != self.tab else { return }
@@ -948,7 +950,7 @@ final class TasksPageModel: ObservableObject {
         guard held[id] != nil else { return }
         // Reduce Motion: no travel at all (review 22); a shorter slide is
         // still a slide.
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduceMotion = AtticMotionPreference.reducesMotion
         withAnimation(reduceMotion ? nil : AtticMotionPreset.doneSlide.animation(reduceMotion: false)) {
             _ = held.removeValue(forKey: id)
         }
@@ -1069,7 +1071,7 @@ final class TasksPageModel: ObservableObject {
         guard group.indices.contains(destination) else { return .applied }
         var outcome = CommandOutcome.applied
         // Reduce Motion: the row is simply in its new place (no travel).
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduceMotion = AtticMotionPreference.reducesMotion
         withAnimation(reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
             outcome = library.moveTask(id, toIndex: destination)
         }

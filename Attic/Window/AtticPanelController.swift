@@ -976,7 +976,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         contentContainer?.setCollapseProgress(
             interactiveSwipeStartProgress + (1 - interactiveSwipeStartProgress) * progress,
             corner: currentCorner,
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            reduceMotion: AtticMotionPreference.reducesMotion
         )
     }
 
@@ -1055,7 +1055,7 @@ final class AtticPanelController: NSObject, NSWindowDelegate {
         let generation = visibilityTransition.generation
         isPanelMotionActive = true
         contentContainer?.allowsContentInteraction = false
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduceMotion = AtticMotionPreference.reducesMotion
         let currentScale = contentContainer?.presentationTransform.m11 ?? 1
         let targetScale = 1 - collapseProgress * (1 - PanelCollapseGeometry.collapsedScale)
         let remaining = min(1, abs(currentScale - targetScale) / (1 - PanelCollapseGeometry.collapsedScale))

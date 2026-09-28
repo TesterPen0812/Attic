@@ -66,7 +66,8 @@ struct SettingsView: View {
             // 8 pt from the window's edges; the sidebar rows' own 8 pt inset
             // makes the gap to the sidebar.
             .padding([.top, .bottom, .trailing], AtticSpacing.settingsCardInset)
-            .animation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion), value: navigation.selection)
+            .animation(AtticMotionPreset.pageSwitch.animation(reduceMotion: reduceMotion || settings.animations == .reduced),
+                       value: navigation.selection)
         }
         .background(AtticSidebarBackground())
         .ignoresSafeArea()
@@ -83,7 +84,8 @@ struct SettingsView: View {
             surface: settings.panelSurfaceStyle,
             tint: settings.panelTint,
             tintLength: settings.panelTintLength,
-            hapticsEnabled: settings.hapticsEnabled
+            hapticsEnabled: settings.hapticsEnabled,
+            animations: settings.animations
         )
         .atticWindowAppearance(SettingsAppearance.mode(for: settings.appearance))
         .environment(\.atticPanelUsesSystemAccent, settings.panelTheme.usesSystemAccent)

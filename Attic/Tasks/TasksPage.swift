@@ -51,14 +51,17 @@ struct TasksPage: View {
     /// sent it to whichever text view had the keyboard, the add bar or a
     /// field editor left behind, and the search never opened).
     @State private var findMonitor: Any?
+    /// Scroll events, before a list or the panel sees them: the pager's
+    /// swipe (round 9).
+    @State private var scrollMonitor: Any?
     /// The add bar's text, edited the way typing does (the strip, suggestions).
     @State private var addBarEditor = AtticTokenFieldEditor()
 
     /// The Done page's search field has the keyboard.
     @State private var searchFocused = false
-    /// A person's swipe between the pages (round 6, the owner's items 21
-    /// and 22): the model's, so every navigation route cancels it (round 7,
-    /// R5). Not observed: nothing redraws while a swipe moves.
+    /// A person's swipe between the pages (round 9: the page owns the
+    /// gesture): the model's, so every navigation route cancels it. Not
+    /// observed: only the pages' placement redraws while a swipe moves.
     private var swipe: TasksPagerSwipe { model.pagerSwipe }
     /// The bottom stack's height: the add bar, plus the selection bar, a
     /// paste offer or an error line while they show.
@@ -105,6 +108,12 @@ struct TasksPage: View {
         .onKeyPress(phases: .down) { press in pageKey(press) }
         .onAppear {
             model.resetForReveal()
+            // The page opens where the tab is, without a slide.
+            model.showPagerPage(animated: false)
+            swipe.onCancel = { [weak model] in
+                // After the navigation that cancelled it has chosen its tab.
+                DispatchQueue.main.async { model?.showPagerPage() }
+            }
             chrome.bottomControlsHeight(footerZone)
             // After the first frame: the parser's and the date words' first
             // use (formatters, calendars) happens here, not in the first
@@ -129,6 +138,16 @@ struct TasksPage: View {
                     findPressed(event) || searchEscapePressed(event) ? nil : event
                 }
             }
+            if scrollMonitor == nil {
+                // The pager reads scroll events itself (round 9): a
+                // horizontal swipe over the lists is its own, every other
+                // scroll goes on to the list (or the panel) untouched.
+                scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack] event in
+                    let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
+                                                  stackHeight: bottomStack.height, pageShown: model.isPageShown)
+                    return model.pagerScrolled(TasksPagerSwipe.Sample(event), allowed: allowed) ? nil : event
+                }
+            }
             if rightClickMonitor == nil {
                 // Every mouse press: a secondary click or a Control-click
                 // binds the menu about to open to its row; any other press
@@ -140,6 +159,8 @@ struct TasksPage: View {
             }
         }
         .onDisappear {
+            if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+            scrollMonitor = nil
             if let rightClickMonitor { NSEvent.removeMonitor(rightClickMonitor) }
             rightClickMonitor = nil
             if let findMonitor { NSEvent.removeMonitor(findMonitor) }
@@ -206,7 +227,14 @@ struct TasksPage: View {
             cancelTransientState()
             // The last page's row keeps no claim on the keyboard.
             focusedRow = nil
+            // A tab, a key, ⌘1–3, `show` or Search: the page goes straight
+            // there. A swipe's own live tab leaves the page with the fingers.
+            if !swipe.isTracking { model.showPagerPage() }
         }
+        // What the scroll monitor reads that lives in the view.
+        .onChange(of: design.reduceMotion, initial: true) { _, reduced in swipe.reduced = reduced }
+        .onChange(of: drag != nil, initial: true) { _, dragging in swipe.dragActive = dragging }
+        .onChange(of: pagerBand, initial: true) { _, band in swipe.band = band }
         // Done's rows come into view as the keyboard reaches them too.
         .onChange(of: focusedRow) { _, id in
             guard let id, model.tab == .done, focusTracker.isKeyboardDriving else { return }
@@ -263,7 +291,10 @@ struct TasksPage: View {
                     .accessibilityIdentifier("tasks-done-search")
                     // Centred on the tabs' line.
                     .padding(.top, tabsTop - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
-                    .transition(.opacity)
+                    // It comes in from the magnifier's end, the tabs leave
+                    // toward the other (round 9: springy, a fade when
+                    // motion is reduced).
+                    .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: .trailing))
             } else {
                 HStack(spacing: 0) {
                     AtticPageTabs(
@@ -286,12 +317,15 @@ struct TasksPage: View {
                 }
                 .frame(height: AtticLayout.pageTabsHeight)
                 .padding(.top, tabsTop)
-                .transition(.opacity)
+                .transition(AtticMotionPreset.popover.transition(reduceMotion: design.reduceMotion, edge: .leading))
             }
         }
         .padding(.horizontal, cornerInset)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: searchShown)
+        // The search springs in and leaves at once (its field lets the
+        // keyboard go with it).
+        .animation(searchShown ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)
+                               : AtticMotionPreset.popover.exit(reduceMotion: design.reduceMotion), value: searchShown)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.tab == .done)
     }
 
@@ -342,6 +376,23 @@ struct TasksPage: View {
     /// composing).
     static func isComposing(_ responder: NSResponder?) -> Bool {
         (responder as? NSTextView)?.hasMarkedText() == true
+    }
+
+    /// Where the pager takes a swipe or a wheel: over the lists, between
+    /// the tabs' band and the bottom stack's (the header, the tabs and the
+    /// add bar keep theirs; over the header a swipe toward the panel's
+    /// edge still hides the panel), on the page the shell shows, with no
+    /// ⌘, ⌥ or ⌃ held.
+    static func pagerTakes(_ event: NSEvent, pointer: TasksPointer, band: TasksPagerBand, stackHeight: CGFloat,
+                           pageShown: Bool) -> Bool {
+        guard pageShown, event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+              let point = pointer.location(of: event), let view = pointer.view else { return false }
+        return band.contains(point, height: view.bounds.height, stackHeight: stackHeight)
+    }
+
+    /// The pager's band in the page (see `pagerTakes`).
+    private var pagerBand: TasksPagerBand {
+        TasksPagerBand(top: listTop - AtticLayout.pageTabsToList / 2, bottomInset: bottomInset)
     }
 
     /// Whether ⌘F belongs to the Done search (pure, tested directly).
@@ -400,79 +451,39 @@ struct TasksPage: View {
 
     // MARK: - Pages
 
+    /// The three pages side by side, placed by the pager's position (round
+    /// 9: the page owns the swipe, see `TasksPager.swift`). The pages
+    /// beside the one shown are built for the swipe (and stay built, so
+    /// their lists keep their place); VoiceOver reads only the page shown,
+    /// and only it takes clicks.
     private var pager: some View {
-        ScrollViewReader { proxy in
-        ScrollView(.horizontal) {
-            LazyHStack(spacing: 0) {
-                ForEach(TasksTab.allCases) { tab in
-                    page(tab)
-                        .containerRelativeFrame(.horizontal)
-                        // The pages beside the current one are built for the
-                        // swipe; VoiceOver reads only the page shown.
-                        .accessibilityHidden(tab != model.tab)
-                        .id(tab)
-                }
-            }
-            .scrollTargetLayout()
-        }
-        // One swipe moves one page at most, from the page it started on
-        // (round 6, the owner's item 21); a tab click, a key, `show` and the
-        // menu-bar Search go straight to their page (item 22).
-        .scrollTargetBehavior(TasksPagerBehavior(swipe: swipe))
-        // The pager shows the model's page. A swipe never writes the tab
-        // while it moves (the old clamp followed that tab): it changes once,
-        // when the swipe settles. While one moves, the pager's own report
-        // is what it shows, so a redraw mid-swipe never pulls it back.
-        .scrollPosition(id: Binding(get: { Optional(swipe.shownDuringSwipe ?? model.tab) }, set: { [swipe] reported in
-            swipe.report(reported.flatMap { TasksTab.allCases.firstIndex(of: $0) })
-        }))
-        .onScrollGeometryChange(for: TasksPagerSwipe.Geometry.self) { geometry in
-            TasksPagerSwipe.Geometry(offset: geometry.contentOffset.x + geometry.contentInsets.leading,
-                                     width: geometry.containerSize.width)
-        } action: { [swipe] _, geometry in
-            swipe.geometry = geometry
-            // Once the pager has stood still a moment with no swipe in
-            // progress, it must show the model's page (round 8, CI run 1:
-            // the idle correction was not enough; a synthetic swipe still
-            // left Done under a Later tab). The check reads everything when
-            // it runs, so newer navigation simply wins.
-            swipe.scheduleRestCheck {
-                let page = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
-                guard swipe.needsRestCorrection(page: page) else { return }
-                withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
-                    proxy.scrollTo(model.tab, anchor: .leading)
-                }
-            }
-        }
-        .onScrollPhaseChange { _, phase in
+        GeometryReader { proxy in
+            let width = proxy.size.width
             let shown = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
-            if let settled = swipe.phaseChanged(to: phase, shown: shown) {
-                model.select(tab: TasksTab.allCases[settled], bySwipe: true)
-            }
-            guard phase == .idle else { return }
-            // At rest the pager shows exactly the model's page (round 7,
-            // CI run 3): a scroll that ran past the clamp (a wheel's
-            // unphased events, or momentum the target did not govern) left
-            // Done on screen under a Later tab. The tabs and the page shown
-            // always agree; a swipe the page could not follow (an edit that
-            // can't be saved) goes back the same way. The correction runs a
-            // turn later, and only if nothing newer happened meanwhile (a
-            // tab, a key, `show`, Search, a new gesture; round 8, G3).
-            let target = model.tab
-            guard TasksPagerSwipe.isOffPage(geometry: swipe.geometry, page: TasksTab.allCases.firstIndex(of: target) ?? 0) else { return }
-            let ticket = swipe.correctionTicket()
-            DispatchQueue.main.async {
-                guard swipe.mayCorrect(ticket, to: TasksTab.allCases.firstIndex(of: target) ?? 0,
-                                       shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0) else { return }
-                withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
-                    proxy.scrollTo(target, anchor: .leading)
+            let built = swipe.build(around: shown)
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(TasksTab.allCases.enumerated()), id: \.element) { index, tab in
+                    Group {
+                        if built.contains(index) {
+                            page(tab)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(width: width, height: proxy.size.height)
+                    .modifier(TasksPagerSlot(motion: swipe.motion, index: index, width: width))
+                    .allowsHitTesting(tab == model.tab)
+                    .accessibilityHidden(tab != model.tab)
+                }
+                if TasksPagerMotion.tracing {
+                    TasksPagerTrace(motion: swipe.motion)
                 }
             }
+            .onChange(of: width, initial: true) { _, width in swipe.width = width }
         }
-        .scrollIndicators(.never)
-        .scrollDisabled(drag != nil)
-        .scrollEdgeEffectHidden(true, for: .all)
-        }
+        // The neighbours are drawn only as they slide in, never past the
+        // page's edge (the panel's shadow margin lies beyond it).
+        .clipped()
     }
 
     private func page(_ tab: TasksTab) -> some View {
@@ -511,7 +522,9 @@ struct TasksPage: View {
                     ForEach(sections.open) { row in
                         cell(row, tab: tab, group: groups[row.status] ?? [])
                             .id(row.id)
-                            .transition(.opacity)
+                            // A row added or leaving drops into or rises
+                            // out of its place (round 9).
+                            .transition(AtticMotionPreset.settle.transition(reduceMotion: design.reduceMotion, edge: .top))
                     }
                     if sections.open.isEmpty, let message = model.emptyMessage[tab] {
                         AtticEmptyLine(text: message)
@@ -1623,6 +1636,8 @@ private struct TasksAddBar: View {
                 // never builds the strip (spec: one frame per keystroke).
                 .frame(height: stripShown ? AtticControlSize.smallHeight : 0, alignment: .top)
                 .opacity(stripShown ? 1 : 0)
+                // It rises into place with the bar's spring (round 9).
+                .offset(y: stripShown || design.reduceMotion ? 0 : AtticMotionPreset.popover.rise)
                 .allowsHitTesting(stripShown)
                 .accessibilityHidden(!stripShown)
                 .padding(.bottom, stripShown ? 0 : -AtticPickerMetrics.stripToBar)
@@ -2363,178 +2378,5 @@ enum TasksViewport {
             last = location
         }
         return result
-    }
-}
-
-/// The pager's paging: it lands on a whole page. A person's swipe lands at
-/// most one page from the page it started on, however hard it was (the
-/// momentum's projected target is clamped); anything else (a tab click, a
-/// key, `show`, the menu-bar Search, a reveal) lands on the page it asked
-/// for.
-struct TasksPagerBehavior: ScrollTargetBehavior {
-    let swipe: TasksPagerSwipe
-
-    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
-        let width = context.containerSize.width
-        guard width > 0 else { return }
-        let page = TasksPagerSwipe.page(proposed: target.rect.minX, width: width, origin: swipe.origin, count: swipe.count)
-        target.rect.origin.x = CGFloat(page) * width
-    }
-}
-
-/// A person's swipe between the pages (round 6, the owner's items 21 and
-/// 22). Round 5 clamped a swipe to the model's tab ± 1, but the pager wrote
-/// that tab while the swipe moved, so the clamp moved with it (a hard swipe
-/// still crossed all three pages), and it clamped a tab click too (Done from
-/// Now landed on Later). Now:
-///
-/// - The page is captured when the pager leaves `.idle` for a person's
-///   scroll (`.interacting`, `.tracking`, `.decelerating`), and every target
-///   of that gesture is clamped to it ± 1, whatever the momentum projects.
-/// - Nothing selects a tab while the swipe moves; the tab changes once,
-///   when the pager is idle again, to the page it settled on (again within
-///   one of where it started).
-/// - A scroll no person started (`.animating` from `.idle`: a tab click, a
-///   key, `show`, Search) has no origin and is never clamped; a tab chosen
-///   during a swipe cancels its origin.
-///
-/// Main-thread only (SwiftUI calls the behaviour and the callbacks there);
-/// a class so the pager reads it live without redrawing the page.
-final class TasksPagerSwipe {
-    struct Geometry: Equatable {
-        var offset: CGFloat = 0
-        var width: CGFloat = 0
-    }
-
-    let count: Int
-    /// The page the current swipe started on; nil while no one swipes.
-    private(set) var origin: Int?
-    /// The pager's phase, as last reported.
-    private(set) var phase: ScrollPhase = .idle
-    /// A page chosen another way during a swipe (a tab, a key, `show`,
-    /// Search, even the page already shown): the rest of that scroll is
-    /// not a swipe, and takes no new origin, until the pager is idle
-    /// (round 7, R5).
-    private(set) var isCancelledUntilIdle = false
-    /// The page the pager reported during this swipe (for its position
-    /// binding, so a redraw mid-swipe keeps it where the fingers are).
-    private var reported: Int?
-    /// Where the pager is (its offset and page width), from its geometry.
-    var geometry = Geometry()
-
-    init(count: Int) {
-        self.count = count
-    }
-
-    /// The page the position binding shows while a swipe moves.
-    var shownDuringSwipe: TasksTab? {
-        guard origin != nil, let reported, TasksTab.allCases.indices.contains(reported) else { return nil }
-        return TasksTab.allCases[reported]
-    }
-
-    /// The pager reported the page at its position.
-    func report(_ page: Int?) {
-        guard origin != nil else { return }
-        reported = page
-    }
-
-    /// The pager's phase changed; `shown` is the page the model shows. A
-    /// person's scroll that starts records its page; the return value is
-    /// the page to select once that swipe has settled (nil otherwise).
-    func phaseChanged(to phase: ScrollPhase, shown: Int) -> Int? {
-        self.phase = phase
-        // Anything moving makes a correction queued at the last rest stale.
-        if phase != .idle { generation &+= 1 }
-        switch phase {
-        case .interacting, .tracking, .decelerating:
-            if origin == nil, !isCancelledUntilIdle {
-                origin = shown
-                reported = nil
-            }
-            return nil
-        case .animating:
-            return nil
-        case .idle:
-            isCancelledUntilIdle = false
-            guard let origin else { return nil }
-            let settled = Self.settled(offset: geometry.offset, width: geometry.width, origin: origin, count: count)
-            reset()
-            return settled
-        @unknown default:
-            return nil
-        }
-    }
-
-    /// A page was chosen another way (explicit navigation): the swipe in
-    /// progress no longer decides the page, and none starts again until
-    /// the pager is idle.
-    func cancel() {
-        reset()
-        generation &+= 1
-        if phase != .idle { isCancelledUntilIdle = true }
-    }
-
-    /// Counts what happened (a gesture, explicit navigation): a correction
-    /// queued at rest runs only if nothing has since (round 8, G3).
-    private(set) var generation = 0
-
-    /// The pending check that the pager, standing still, shows its page.
-    private var restCheck: DispatchWorkItem?
-
-    /// How long the pager must stand still before it is checked.
-    static let restDelay: TimeInterval = 0.35
-
-    /// (Re)starts the still-pager check: every geometry change moves it on.
-    func scheduleRestCheck(_ check: @escaping @MainActor () -> Void) {
-        restCheck?.cancel()
-        let work = DispatchWorkItem { MainActor.assumeIsolated { check() } }
-        restCheck = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.restDelay, execute: work)
-    }
-
-    /// The pager, still, is off `page` and no swipe holds it there (a swipe
-    /// in progress, fingers resting, keeps its place).
-    func needsRestCorrection(page: Int) -> Bool {
-        origin == nil && Self.isOffPage(geometry: geometry, page: page)
-    }
-
-    /// Taken when a correction is queued at rest.
-    func correctionTicket() -> Int { generation }
-
-    /// Whether a correction queued with `ticket` to page `target` may still
-    /// run: nothing happened since, the pager is still at rest, and the
-    /// model still shows that page.
-    func mayCorrect(_ ticket: Int, to target: Int, shown: Int) -> Bool {
-        ticket == generation && phase == .idle && shown == target
-    }
-
-    private func reset() {
-        origin = nil
-        reported = nil
-    }
-
-    /// The page a scroll lands on: the nearest to where it would come to
-    /// rest, within the pages there are, and, for a person's swipe (an
-    /// `origin`), at most one away from the page it started on.
-    static func page(proposed x: CGFloat, width: CGFloat, origin: Int?, count: Int) -> Int {
-        guard width > 0, count > 0 else { return origin ?? 0 }
-        var page = Int((x / width).rounded())
-        if let origin { page = min(max(page, origin - 1), origin + 1) }
-        return min(max(page, 0), count - 1)
-    }
-
-    /// The pager at rest is not exactly on `page` (another page, or between
-    /// two). Unknown geometry (no width yet) is never off.
-    static func isOffPage(geometry: Geometry, page: Int) -> Bool {
-        guard geometry.width > 0 else { return false }
-        return abs(geometry.offset - CGFloat(page) * geometry.width) > 0.5
-    }
-
-    /// The page a swipe settled on (the nearest to the pager's offset),
-    /// never more than one from its start, even if the scroll itself went
-    /// further (then the pager is brought back to it).
-    static func settled(offset: CGFloat, width: CGFloat, origin: Int, count: Int) -> Int {
-        guard width > 0 else { return origin }
-        return page(proposed: offset, width: width, origin: origin, count: count)
     }
 }

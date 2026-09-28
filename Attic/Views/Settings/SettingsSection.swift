@@ -149,4 +149,12 @@ enum SettingsVisibility {
     static func globalShortcutFailure(_ registration: GlobalHotKeyRegistration) -> GlobalHotKeyFailure? {
         registration.failure
     }
+
+    /// Under Haptics and Animations: what each does, and why motion is
+    /// reduced whatever Animations says while the Mac's Reduce Motion is on.
+    static func behaviourFootnote(systemReducesMotion: Bool) -> String {
+        systemReducesMotion
+            ? String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Reduce Motion is on in System Settings, so animations are reduced.")
+            : String(localized: "Haptics: a light tap on the trackpad when you complete a task or drop something into place. Reduced animations fade instead of moving.")
+    }
 }

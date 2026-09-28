@@ -107,6 +107,7 @@ final class AppSettings: ObservableObject {
         static let panelHeight = "panelHeight"
         static let pinnedSubtaskWindowFrame = "pinnedSubtaskWindowFrame"
         static let hapticsEnabled = "hapticsEnabled"
+        static let animations = "animations"
     }
 
     @Published var corner: ScreenCorner {
@@ -152,6 +153,16 @@ final class AppSettings: ObservableObject {
     /// snaps into place (spec § Touch and sound). On by default.
     @Published var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Key.hapticsEnabled) }
+    }
+
+    /// Full springs or Reduced motion (round 9, owner item 26). Reduced,
+    /// like macOS Reduce Motion, turns every movement into a crossfade or
+    /// an instant change. Full by default.
+    @Published var animations: AtticAnimationLevel {
+        didSet {
+            defaults.set(animations.rawValue, forKey: Key.animations)
+            AtticMotionPreference.level = animations
+        }
     }
 
     @Published var panelCornerSize: Double {
@@ -302,6 +313,9 @@ final class AppSettings: ObservableObject {
         }
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
+        let storedAnimations = AtticAnimationLevel(rawValue: defaults.string(forKey: Key.animations) ?? "") ?? .full
+        animations = storedAnimations
+        AtticMotionPreference.level = storedAnimations
         panelCornerSize = Self.clamp(
             defaults.object(forKey: Key.panelCornerSize) as? Double ?? PanelCornerSize.defaultValue,
             to: PanelCornerSize.min...PanelCornerSize.max,

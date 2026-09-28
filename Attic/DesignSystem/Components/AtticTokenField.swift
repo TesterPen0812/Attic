@@ -399,7 +399,7 @@ final class AtticTokenFieldView: NSView {
             return 0
         }
         iconProgress = carried
-        if style?.reduceMotion == true || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        if style?.reduceMotion == true || AtticMotionPreference.reducesMotion {
             iconProgress = iconProgress.map { _ in 1 }
         }
         restyle()
