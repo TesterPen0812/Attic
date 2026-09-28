@@ -81,6 +81,30 @@ extension TasksPageModel {
 
     // MARK: - The add bar's strip and suggestions
 
+    /// The add bar's field is about to replace `range` with `replacement`
+    /// (typing, paste, an edit the field makes): one step of the draft's
+    /// history, the pieces moved along.
+    func addBarEdited(_ range: NSRange, replacement: String) {
+        let state = addBarState
+        state.history.willEdit(state.text, selection: state.currentSelection, range: range, replacement: replacement)
+        state.text.edited(range, replacement: replacement)
+        state.hiddenSuggestion = nil
+        state.highlighted = 0
+    }
+
+    /// The add bar's insertion point moved (every edit reports it): pieces
+    /// it has left are finished (drawn as chips), and a finished date or
+    /// priority typed after a pick replaces the pick (round 7, R1: never a
+    /// word still being typed at the caret).
+    func addBarCaretMoved(_ caret: Int) {
+        if addBarState.caret != caret { addBarState.caret = caret }
+        // Assign only a change: every assignment redraws the bar.
+        var shown = addBar
+        let marked = shown.markShown(parser: parser, caret: caret)
+        let replaced = shown.typedReplacesPicks(parser: parser, caret: caret)
+        if marked || replaced { addBar = shown }
+    }
+
     /// The day's words as a row shows them ("Tomorrow", "Tue", "30 Sep").
     func dueText(_ day: DueDay) -> String {
         TaskRowPresentation.due(day, today: dateChoices.today, calendar: services.calendar(), locale: services.locale).text

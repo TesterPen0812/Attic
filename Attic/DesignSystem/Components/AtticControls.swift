@@ -607,7 +607,8 @@ struct AtticTabsSearchField: View {
     /// focus asked for did not land, the window's first responder becomes
     /// this field's own text field.
     private func takeKeyboard() {
-        guard let window = NSApp.keyWindow else { return }
+        // Only while the page still wants it (a page hidden since, R2).
+        guard isFocused?.wrappedValue ?? true, let window = NSApp.keyWindow else { return }
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
            let owner = editor.delegate as? NSTextField, Self.isSearchField(owner, placeholder: placeholder) {
             caretToEnd()

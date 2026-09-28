@@ -153,12 +153,16 @@ struct TaskAddBarText: Equatable {
     }
 
     /// A date or priority typed after one was picked replaces the pick (the
-    /// latest wins, as picking replaces a typed one). Returns whether a
-    /// pick went.
+    /// latest wins, as picking replaces a typed one), but only once the
+    /// typed piece is committed: its word finished (a chip) or a suggestion
+    /// taken. A word still being typed at the caret never does ("fri" on
+    /// the way to "friend", "mon" to "money"; round 7, R1). Returns whether
+    /// a pick went.
     @discardableResult
-    mutating func typedReplacesPicks(parser: TaskTextParser) -> Bool {
+    mutating func typedReplacesPicks(parser: TaskTextParser, caret: Int?) -> Bool {
         guard picked.day != nil || picked.priority != nil else { return false }
-        let tokens = activeTokens(parser: parser)
+        let committed = Set(tokenChips(parser: parser, caret: caret).map(\.range))
+        let tokens = activeTokens(parser: parser).filter { committed.contains($0.utf16Range(in: text)) }
         var changed = false
         if picked.day != nil, tokens.contains(where: { PieceKind.date.matches($0.value) }) {
             picked.day = nil

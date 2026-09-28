@@ -231,18 +231,27 @@ struct AtticTokenField: NSViewRepresentable {
             }
             if !isApplyingModel {
                 parent.actions.edited(range, replacement)
+                // The selection moves before the text is reported: that
+                // caret waits for `textDidChange`, which reports it with the
+                // new text (round 7, R1: a caret one past the old text made
+                // the word being typed look finished).
+                isEditPending = true
             }
             return true
         }
 
+        /// An edit is under way: its text is not reported yet.
+        private var isEditPending = false
+
         func textDidChange(_ notification: Notification) {
+            isEditPending = false
             guard !isApplyingModel, let textView = view?.textView else { return }
             if parent.text != textView.string { parent.text = textView.string }
             reportSelection(of: textView)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView = view?.textView else { return }
+            guard let textView = view?.textView, !isEditPending else { return }
             reportSelection(of: textView)
         }
 

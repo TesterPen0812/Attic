@@ -532,6 +532,7 @@ final class TasksPageModel: ObservableObject {
         if hasUnsavedEdit { return }
         // Assign only what changes: every assignment redraws the page.
         let target = revealTab ?? .now
+        pagerSwipe.cancel()
         if tab != target { tab = target }
         if revealTab == nil, !selection.isEmpty { selection = [] }
         if editingTitleID != nil || newSubtaskParentID != nil { cancelEditing() }
@@ -652,9 +653,22 @@ final class TasksPageModel: ObservableObject {
         pickerRetrySaved = nil
     }
 
+    /// The pager's swipe (owner items 21 and 22). Every explicit way of
+    /// choosing a page (a tab, a key, `show`, Search, a reveal) cancels a
+    /// swipe in progress, even when it chooses the page already shown
+    /// (round 7, R5).
+    let pagerSwipe = TasksPagerSwipe(count: TasksTab.allCases.count)
+
+    /// Whether the shell shows the Tasks page (not kept built behind Notes
+    /// or Canvas): only then does it answer page shortcuts such as ⌘F
+    /// (round 7, R2).
+    @Published var isPageShown = true
+
     /// Moving to another page saves an open edit first; if that save
     /// fails, the page stays with the text and Retry (Esc discards it).
-    func select(tab: TasksTab) {
+    /// `bySwipe`: a settled swipe's own choice (it cancels nothing).
+    func select(tab: TasksTab, bySwipe: Bool = false) {
+        if !bySwipe { pagerSwipe.cancel() }
         guard tab != self.tab else { return }
         guard finishEditing() else { return }
         revealTab = nil
@@ -682,6 +696,7 @@ final class TasksPageModel: ObservableObject {
     /// Search (the menu-bar item): the Done page, with the keyboard in the
     /// search field at the top of its list.
     func beginSearch() {
+        pagerSwipe.cancel()
         guard finishEditing() else { return }
         selection = []
         tab = .done
@@ -709,6 +724,7 @@ final class TasksPageModel: ObservableObject {
     @discardableResult
     func show(_ id: UUID) -> ShowOutcome {
         guard let found = store.listedTask(withID: id) else { return .missing }
+        pagerSwipe.cancel()
         // A subtask shows in its parent's quick look (live) or its parent's
         // details (in the Done log).
         let parent = found.parentID.flatMap { store.listedTask(withID: $0) }

@@ -252,7 +252,7 @@ final class TasksRound6Tests: XCTestCase {
 /// The Tasks page with the demo tasks in a window off screen, as the panel
 /// hosts it, driven with real mouse events.
 @MainActor
-private final class Hosted {
+final class Hosted {
     let store: TaskStore
     let model: TasksPageModel
     let page: TasksPage
@@ -268,11 +268,11 @@ private final class Hosted {
     final class Focus { var addBar = false }
     let focus = Focus()
 
-    init(height: CGFloat, addBarFocused: Bool = false) throws {
+    init(height: CGFloat, addBarFocused: Bool = false, long: Bool = false) throws {
         focus.addBar = addBarFocused
         self.height = height
         let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
-        try TasksPagePreview.seedDemo(in: container)
+        try TasksPagePreview.seedDemo(in: container, long: long)
         store = TaskStore(container: container)
         model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
         let size = CGSize(width: AtticLayout.panelSize.width, height: height)
@@ -520,12 +520,12 @@ final class TasksRound6ComposerTests: XCTestCase {
         model.pickDate(day("2026-10-01"), editor: editor)
         model.pickPriority(.high, editor: editor)
         var text = model.addBar
-        text.text = "Pay rent fri !"
-        XCTAssertTrue(text.typedReplacesPicks(parser: model.parser))
+        text.text = "Pay rent fri ! "
+        XCTAssertTrue(text.typedReplacesPicks(parser: model.parser, caret: 15))
         XCTAssertNil(text.picked.day)
         XCTAssertNil(text.picked.priority)
         XCTAssertEqual(text.parts(parser: model.parser).priority, .medium)
-        XCTAssertFalse(text.typedReplacesPicks(parser: model.parser), "nothing left to replace")
+        XCTAssertFalse(text.typedReplacesPicks(parser: model.parser, caret: 15), "nothing left to replace")
     }
 
     // MARK: Typed pieces (option H)

@@ -225,11 +225,12 @@ struct TaskPriorityPickerView: View {
 extension TaskPriority {
     /// What every priority menu offers (the row menu, the strip, the bulk
     /// bar, the details panel; owner item 19): No Priority, Medium and
-    /// High. Low has no mark, so it looked like none; it is offered only
-    /// while one of the tasks has it, so it shows ticked until changed. The
-    /// model, storage and agents keep it.
+    /// High. Low has no mark, so it looked like none; it shows only while
+    /// every target already has it (ticked until changed), so it is never
+    /// offered as a new value, not even to the rest of a mixed selection
+    /// (round 7, R6). The model, storage and agents keep it.
     static func choices(keeping current: some Sequence<TaskPriority>) -> [TaskPriority] {
-        Array(current).contains(.low) ? [.none, .low, .medium, .high] : [.none, .medium, .high]
+        Set(current) == [.low] ? [.none, .low, .medium, .high] : [.none, .medium, .high]
     }
 
     /// The toast's wording: "High priority", "Priority removed".

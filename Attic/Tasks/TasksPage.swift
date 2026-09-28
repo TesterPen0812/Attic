@@ -57,9 +57,9 @@ struct TasksPage: View {
     /// The Done page's search field has the keyboard.
     @State private var searchFocused = false
     /// A person's swipe between the pages (round 6, the owner's items 21
-    /// and 22): the page it started on, where the pager is. Not observed:
-    /// nothing redraws while a swipe moves.
-    @State private var swipe = TasksPagerSwipe(count: TasksTab.allCases.count)
+    /// and 22): the model's, so every navigation route cancels it (round 7,
+    /// R5). Not observed: nothing redraws while a swipe moves.
+    private var swipe: TasksPagerSwipe { model.pagerSwipe }
     /// Bumped when a settled swipe's page was refused, to redraw the pager.
     @State private var pagerRefused = 0
     /// The bottom stack's height: the add bar, plus the selection bar, a
@@ -95,6 +95,12 @@ struct TasksPage: View {
             tabsBand
             tabs
         }
+        // The bottom stack owns its whole band (round 7, R4): a row scrolled
+        // under the strip, the gaps between its buttons, a selection bar or
+        // the add bar is never clicked, right-clicked or dragged through it.
+        .overlay(alignment: .bottom) {
+            TasksBottomBand(stack: bottomStack, bottomInset: bottomInset)
+        }
         .overlay(alignment: .bottom) { bottomControls }
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
@@ -122,7 +128,7 @@ struct TasksPage: View {
             #endif
             if findMonitor == nil {
                 findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    findPressed(event) ? nil : event
+                    findPressed(event) || searchEscapePressed(event) ? nil : event
                 }
             }
             if rightClickMonitor == nil {
@@ -151,13 +157,27 @@ struct TasksPage: View {
             if focused { focusedRow = nil }
             // A draft of only spaces is no draft: the placeholder returns
             // (bug 7).
-            if !focused, model.addBar.text.trimmingCharacters(in: .whitespaces).isEmpty, !model.addBar.text.isEmpty {
+            // Leaving a bar with no words also lets its strip picks go (round
+            // 7: they came back unseen with the next keystroke).
+            if !focused, model.addBar.text.trimmingCharacters(in: .whitespaces).isEmpty,
+               !model.addBar.text.isEmpty || model.addBar.picked != TaskAddBarText.Picks() {
                 model.addBarState.clearDraft()
             }
         }
         .onChange(of: searchFocused) { _, focused in
             updateTypingLock()
-            if focused { focusedRow = nil }
+            // Into the search, however it got there (the magnifier, ⌘F,
+            // typing, or a click back into a search already open): no row
+            // stays lit behind it (round 7, R3).
+            if focused {
+                focusedRow = nil
+                if !model.selection.isEmpty { model.clearSelection() }
+            }
+        }
+        // Hidden behind another page, the search lets the keyboard go: its
+        // pending focus is cancelled and nothing typed reaches it (R2).
+        .onChange(of: model.isPageShown) { _, shown in
+            if !shown, searchFocused { searchFocused = false }
         }
         .onChange(of: composerPickerOpen) { _, _ in updateTypingLock() }
         .onChange(of: metaPopover) { _, _ in updateTypingLock() }
@@ -185,9 +205,6 @@ struct TasksPage: View {
             pointer.menuBegan(with: NSApp.currentEvent)
         }
         .onChange(of: model.tab) { _, _ in
-            // A page chosen any other way while a swipe moves (a click, a
-            // key, `show`) wins: the pager goes there, unclamped.
-            swipe.cancel()
             cancelTransientState()
             // The last page's row keeps no claim on the keyboard.
             focusedRow = nil
@@ -296,14 +313,35 @@ struct TasksPage: View {
         searchFocused = true
     }
 
-    /// ⌘F in this page's window while Done is shown (and no pop-over has
-    /// the keyboard): the search takes the tabs' line. True when it took
-    /// the key.
+    /// ⌘F while this page is the one the shell shows, on Done, in its own
+    /// key window, with no pop-over open: the search takes the tabs' line.
+    /// True when it took the key. A Tasks page kept built behind Notes or
+    /// Canvas never answers (round 7, R2).
     private func findPressed(_ event: NSEvent) -> Bool {
-        guard model.tab == .done, event.window != nil, event.window === pointer.view?.window,
+        guard Self.answersFind(event: event, pageShown: model.isPageShown, tab: model.tab,
+                               pageWindow: pointer.view?.window, popoverOpen: AtticTextInput.isPopoverOpen) else { return false }
+        beginSearch()
+        return true
+    }
+
+    /// Esc with the keyboard in the Done search ends it. Here, not in the
+    /// field's exit command: the panel's hosting view answers Esc itself
+    /// (it ends a resize or move, else passes it up), so SwiftUI's exit
+    /// command never reached the field inside the panel (round 7, found by
+    /// the shell test).
+    private func searchEscapePressed(_ event: NSEvent) -> Bool {
+        guard searchFocused, model.isPageShown, model.tab == .done, event.keyCode == 53,
+              event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
+              !AtticTextInput.isPopoverOpen, let window = pointer.view?.window, event.window === window else { return false }
+        endSearch()
+        return true
+    }
+
+    /// Whether ⌘F belongs to the Done search (pure, tested directly).
+    static func answersFind(event: NSEvent, pageShown: Bool, tab: TasksTab, pageWindow: NSWindow?, popoverOpen: Bool) -> Bool {
+        guard pageShown, tab == .done, !popoverOpen, let pageWindow, event.window === pageWindow, pageWindow.isKeyWindow,
               event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
               event.charactersIgnoringModifiers?.lowercased() == "f" else { return false }
-        beginSearch()
         return true
     }
 
@@ -390,7 +428,7 @@ struct TasksPage: View {
             let shown = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
             guard let settled = swipe.phaseChanged(to: phase, shown: shown) else { return }
             let tab = TasksTab.allCases[settled]
-            model.select(tab: tab)
+            model.select(tab: tab, bySwipe: true)
             // A swipe the page could not follow (an edit that can't be
             // saved keeps the page) goes back to where it was: a redraw
             // gives the pager the model's page again.
@@ -1053,12 +1091,24 @@ struct TasksPage: View {
         // rows, a day heading, Done's search) clears the selection and the
         // keyboard's row, as in a native list (round 5: the owner's Done
         // row stayed lit after a click elsewhere).
-        if pointer.isPlainPressOutsideRows(event, top: listTop - AtticLayout.pageTabsToList / 2,
-                                           bottomInset: bottomStack.height + AtticSpacing.panelMargin) {
+        let bandTop = TasksBottomBand.height(stack: bottomStack.height, bottomInset: bottomInset)
+        // A plain click on Done's tabs' line (the search field, or back
+        // into a search already open): no row stays lit (round 7, R3).
+        if model.tab == .done, event.type == .leftMouseDown,
+           event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty,
+           let point = pointer.location(of: event), point.y < listTop - AtticLayout.pageTabsToList / 2,
+           point.y > layout.headerBottom {
             if !model.selection.isEmpty { model.clearSelection() }
             if focusedRow != nil { focusedRow = nil }
         }
-        pointer.press(event, below: listTop - AtticLayout.pageTabsToList / 2) { id in
+        if pointer.isPlainPressOutsideRows(event, top: listTop - AtticLayout.pageTabsToList / 2,
+                                           bottomInset: bandTop) {
+            if !model.selection.isEmpty { model.clearSelection() }
+            if focusedRow != nil { focusedRow = nil }
+        }
+        // Only the rows' visible part: between the tabs' band and the
+        // bottom stack's band (round 7, R4).
+        pointer.press(event, below: listTop - AtticLayout.pageTabsToList / 2, aboveBottom: bandTop) { id in
             if !model.selection.contains(id) { model.selectOnly(id) }
             return model.targets(for: id)
         }
@@ -1087,7 +1137,7 @@ struct TasksPage: View {
         guard model.editingTitleID == nil, model.newSubtaskParentID == nil, !addBarFocused, !searchFocused else { return .ignored }
         // Typing on the Done page starts a search there (owner item 17):
         // the letter is the query's first, the field takes the tabs' line.
-        if model.tab == .done, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
+        if model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift, Self.startsSearch(press.characters) {
             model.doneSearch = press.characters
             beginSearch()
             return .handled
@@ -1556,21 +1606,8 @@ private struct TasksAddBar: View {
                             if model.pasteOffer != nil { model.dismissPasteOffer(); return true }
                             return leave()
                         },
-                        edited: { range, replacement in
-                            text.history.willEdit(text.text, selection: text.currentSelection, range: range, replacement: replacement)
-                            text.text.edited(range, replacement: replacement)
-                            text.hiddenSuggestion = nil
-                            text.highlighted = 0
-                        },
-                        caretMoved: { caret in
-                            if text.caret != caret { text.caret = caret }
-                            // Assign only a change: every assignment redraws the bar.
-                            var shown = text.text
-                            let marked = shown.markShown(parser: model.parser, caret: caret)
-                            // A date or priority typed after a pick replaces it.
-                            let replaced = shown.typedReplacesPicks(parser: model.parser)
-                            if marked || replaced { text.text = shown }
-                        },
+                        edited: { range, replacement in model.addBarEdited(range, replacement: replacement) },
+                        caretMoved: { caret in model.addBarCaretMoved(caret) },
                         suggestionKey: { key in suggestionKey(key) },
                         undoDraft: { text.undoDraft() },
                         redoDraft: { text.redoDraft() },
@@ -2045,9 +2082,11 @@ final class TasksPointer {
     /// to that row, with the targets `select` returns (it selects the row
     /// unless it is part of the selection); any other press, or one off the
     /// rows or in another window, ends the previous binding.
-    func press(_ event: NSEvent, below minY: CGFloat, select: (UUID) -> [UUID]) {
+    func press(_ event: NSEvent, below minY: CGFloat, aboveBottom bottomBand: CGFloat = 0, select: (UUID) -> [UUID]) {
         guard MenuPress(type: event.type, modifiers: event.modifierFlags) != .none,
-              let point = location(of: event), point.y >= minY, let id = row(at: point) else {
+              let point = location(of: event), point.y >= minY,
+              point.y <= (view?.bounds.height ?? .greatestFiniteMagnitude) - bottomBand,
+              let id = row(at: point) else {
             invocation = nil
             return
         }
@@ -2150,6 +2189,32 @@ private struct TasksViewportMask: View {
             )
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// The bottom stack's band (round 7, R4): from the panel's bottom edge to
+/// just above the top of what the stack shows (the add bar, the strip and
+/// its gaps, a selection bar or paste offer), across the page's width. It
+/// takes every press there, so nothing reaches a row scrolled beneath;
+/// the stack's own controls sit above it and keep theirs.
+struct TasksBottomBand: View {
+    @ObservedObject var stack: TasksBottomStackHeight
+    let bottomInset: CGFloat
+
+    /// The band's height: the stack, its bottom margin, and half the gap
+    /// the list keeps above it.
+    nonisolated static func height(stack: CGFloat, bottomInset: CGFloat) -> CGFloat {
+        max(stack, AtticControlSize.addBarHeight) + bottomInset + AtticPickerMetrics.stripToBar / 2
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(height: Self.height(stack: stack.height, bottomInset: bottomInset))
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {}
+            .gesture(DragGesture(minimumDistance: 0))
+            .accessibilityHidden(true)
     }
 }
 
@@ -2301,6 +2366,13 @@ final class TasksPagerSwipe {
     let count: Int
     /// The page the current swipe started on; nil while no one swipes.
     private(set) var origin: Int?
+    /// The pager's phase, as last reported.
+    private(set) var phase: ScrollPhase = .idle
+    /// A page chosen another way during a swipe (a tab, a key, `show`,
+    /// Search, even the page already shown): the rest of that scroll is
+    /// not a swipe, and takes no new origin, until the pager is idle
+    /// (round 7, R5).
+    private(set) var isCancelledUntilIdle = false
     /// The page the pager reported during this swipe (for its position
     /// binding, so a redraw mid-swipe keeps it where the fingers are).
     private var reported: Int?
@@ -2327,9 +2399,10 @@ final class TasksPagerSwipe {
     /// person's scroll that starts records its page; the return value is
     /// the page to select once that swipe has settled (nil otherwise).
     func phaseChanged(to phase: ScrollPhase, shown: Int) -> Int? {
+        self.phase = phase
         switch phase {
         case .interacting, .tracking, .decelerating:
-            if origin == nil {
+            if origin == nil, !isCancelledUntilIdle {
                 origin = shown
                 reported = nil
             }
@@ -2337,17 +2410,25 @@ final class TasksPagerSwipe {
         case .animating:
             return nil
         case .idle:
+            isCancelledUntilIdle = false
             guard let origin else { return nil }
             let settled = Self.settled(offset: geometry.offset, width: geometry.width, origin: origin, count: count)
-            cancel()
+            reset()
             return settled
         @unknown default:
             return nil
         }
     }
 
-    /// The swipe no longer decides the page.
+    /// A page was chosen another way (explicit navigation): the swipe in
+    /// progress no longer decides the page, and none starts again until
+    /// the pager is idle.
     func cancel() {
+        reset()
+        if phase != .idle { isCancelledUntilIdle = true }
+    }
+
+    private func reset() {
         origin = nil
         reported = nil
     }

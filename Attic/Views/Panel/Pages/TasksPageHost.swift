@@ -63,7 +63,10 @@ struct TasksPageHost: View {
         .equatable()
         // Edit mode holds the panel only for the page being shown (round
         // 5): an editor left open behind Notes never keeps Notes up.
-        .onChange(of: isCurrent) { _, current in editHold.setSuspended(!current) }
+        .onChange(of: isCurrent) { _, current in
+            editHold.setSuspended(!current)
+            model.isPageShown = current
+        }
         .onDisappear { editHold.setSuspended(true) }
         // Kept built behind another page, it is opened again when it shows.
         .onChange(of: isCurrent) { _, current in
@@ -91,6 +94,7 @@ struct TasksPageHost: View {
                 subtaskPanels.openFilesPanel(for: id)
             }
             editHold.setSuspended(!isCurrent)
+            if model.isPageShown != isCurrent { model.isPageShown = isCurrent }
             // Only the page shown takes the shell's focus (a page built
             // behind Notes, or prepared on approach, never takes it).
             if isCurrent, primaryInputFocus.wrappedValue || uiState.isComposerPresented { addBarFocused = true }
