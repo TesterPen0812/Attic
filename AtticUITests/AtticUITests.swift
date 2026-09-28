@@ -595,6 +595,46 @@ final class AtticUITests: XCTestCase {
         haptics.click()
     }
 
+    /// Round 10: the quick capture shortcut is recorded, refused when it
+    /// would take a key other apps use, reset, and turned off and on.
+    func testTheQuickCaptureShortcutIsRecordedResetAndTurnedOff() throws {
+        func waitFor(_ message: @autoclosure () -> String, _ condition: @escaping () -> Bool) {
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed, message())
+        }
+        let settings = openSettings(section: "settings-nav-general")
+        let page = settings.descendants(matching: .any)["settings-page-general"]
+        let recorder = settings.descendants(matching: .any)["setting-quick-capture-shortcut"]
+        XCTAssertTrue(recorder.waitForExistence(timeout: 3))
+        revealSettingsControl(recorder, in: settings, page: page)
+        XCTAssertEqual(recorder.value as? String, "Control Option Space", "the default, read by name")
+        let reset = settings.descendants(matching: .any)["setting-quick-capture-shortcut-reset"]
+        XCTAssertFalse(reset.isEnabled, "nothing to reset")
+
+        recorder.click()
+        waitFor("It records") { (self.recorder(in: settings).value as? String)?.hasPrefix("Recording") == true }
+        settings.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(settings.descendants(matching: .any)["setting-quick-capture-shortcut-problem"].waitForExistence(timeout: 3),
+                      "⌘K alone is refused, with the reason")
+        settings.typeKey("k", modifierFlags: [.control, .option])
+        waitFor("⌃⌥K is recorded") { (self.recorder(in: settings).value as? String) == "Control Option K" }
+        XCTAssertTrue(reset.isEnabled)
+
+        reset.click()
+        waitFor("Reset goes back to ⌃⌥Space") { (self.recorder(in: settings).value as? String) == "Control Option Space" }
+
+        let toggle = settings.descendants(matching: .any)["setting-quick-capture"]
+        revealSettingsControl(toggle, in: settings, page: page)
+        toggle.click()
+        waitFor("Off: the recorder rests") { !self.recorder(in: settings).isEnabled }
+        toggle.click()
+        waitFor("On again") { self.recorder(in: settings).isEnabled }
+    }
+
+    private func recorder(in settings: XCUIElement) -> XCUIElement {
+        settings.descendants(matching: .any)["setting-quick-capture-shortcut"]
+    }
+
     /// Recently Deleted lists what was deleted (a task with its subtask, a
     /// note; seeded in the UI-test store), searches it, restores an item,
     /// and empties the rest after a clear confirmation.

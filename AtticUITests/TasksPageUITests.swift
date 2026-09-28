@@ -524,8 +524,9 @@ final class TasksPageUITests: XCTestCase {
     func testTheSelectionBarsControlsTakeTheirClicks() throws {
         select("Call the plumber")
         XCUIElement.perform(withKeyModifiers: .command) { select("Email beta testers") }
-        // By label, any kind: the bar's choices are menu buttons (CI run 3:
-        // "Set priority of 2 tasks" is a MenuButton, not a Button).
+        // By label, any kind (round 10: the bar's choices are plain buttons
+        // that open a native menu; they were SwiftUI menu buttons whose
+        // click-through label never took the click under XCUITest).
         func barButton(_ label: String) -> XCUIElement {
             app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
         }
@@ -543,6 +544,100 @@ final class TasksPageUITests: XCTestCase {
         waitFor(!row("Call the plumber").exists && !row("Email beta testers").exists, "the bar moved both to Later")
         app.typeKey("z", modifierFlags: .command)
         waitFor(row("Call the plumber").exists && row("Email beta testers").exists, "⌘Z brings them back")
+    }
+
+    // MARK: - Round 10: full control
+
+    /// Rows whose label starts with the title (a title and its copies).
+    private func rows(_ title: String) -> XCUIElementQuery {
+        window.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title + ","))
+    }
+
+    /// ⇧⌘I opens the task's whole menu, every command with its key; a
+    /// command chosen there runs (Move Down, then Duplicate).
+    func testShiftCommandIOpensTheTasksActions() throws {
+        select("Email beta testers")
+        app.typeKey("i", modifierFlags: [.command, .shift])
+        let moveDown = menuItem("Move Down")
+        XCTAssertTrue(moveDown.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
+        for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
+                      "Add Subtask", "Move Up", "Copy", "Duplicate", "Delete"] {
+            XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
+        }
+        XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
+        moveDown.click()
+        waitFor(!menuItem("Move Down").exists, "the menu closes")
+        waitFor(row("Email beta testers").frame.minY > row("Book dentist").frame.minY, "Move Down moved it one place down")
+        select("Email beta testers")
+        app.typeKey("i", modifierFlags: [.command, .shift])
+        XCTAssertTrue(menuItem("Duplicate").waitForExistence(timeout: 3))
+        menuItem("Duplicate").click()
+        waitFor(rows("Email beta testers").count == 2, "Duplicate from the menu makes a copy")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    /// ⌘D duplicates the selected task (its subtasks too); ⌘Z takes the
+    /// copy away in one step.
+    func testCommandDDuplicatesAndUndoTakesItBack() throws {
+        select("Ship appearance PR")
+        app.typeKey("d", modifierFlags: .command)
+        waitFor(rows("Ship appearance PR").count == 2, "⌘D makes a copy")
+        let labels = rows("Ship appearance PR").allElementsBoundByIndex.map(\.label)
+        XCTAssertTrue(labels.allSatisfy { $0.contains("of 4 subtasks") }, "with its subtasks: \(labels)")
+        XCTAssertTrue(labels.contains { $0.contains("0 of 4 subtasks") }, "unfinished in the copy: \(labels)")
+        app.typeKey("z", modifierFlags: .command)
+        waitFor(rows("Ship appearance PR").count == 1, "⌘Z takes the copy away")
+    }
+
+    /// A subtask in the quick look: Rename from its menu, then Delete with
+    /// its key once it has the keyboard; ⌘Z brings it back.
+    func testASubtaskIsRenamedAndDeletedInTheQuickLook() throws {
+        select("Ship appearance PR")
+        app.typeKey(.rightArrow, modifierFlags: [])
+        let merge = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Merge")).firstMatch
+        XCTAssertTrue(merge.waitForExistence(timeout: 3), "the quick look lists the subtasks")
+        merge.rightClick()
+        XCTAssertTrue(menuItem("Rename").waitForExistence(timeout: 3), "its menu offers Rename")
+        XCTAssertTrue(menuItem("Delete").exists)
+        XCTAssertTrue(menuItem("Move Up").exists)
+        menuItem("Rename").click()
+        let field = app.textFields.matching(NSPredicate(format: "label == %@", "Rename subtask")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3), "the title is edited in place")
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText("Merge the PR\r")
+        let renamed = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Merge the PR")).firstMatch
+        waitFor(renamed.exists, "Return saves the new name")
+
+        renamed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        app.typeKey(.delete, modifierFlags: [])
+        waitFor(!renamed.exists, "⌫ deletes the subtask with the keyboard on it")
+        waitFor(row("Ship appearance PR").label.contains("of 3 subtasks"), "the row counts one fewer")
+        XCTAssertTrue(row("Ship appearance PR").exists, "the task stays")
+        app.typeKey("z", modifierFlags: .command)
+        waitFor(renamed.exists, "⌘Z brings it back")
+    }
+
+    /// Done: ⌫ deletes a finished task (to Recently Deleted), ⌘Z puts it
+    /// back in the log; Return edits its title, and it stays done.
+    func testDoneRowsAreDeletedAndRenamedWithTheirKeys() throws {
+        tab("done").click()
+        XCTAssertTrue(row("Pay rent").waitForExistence(timeout: 3))
+        select("Pay rent")
+        app.typeKey(.delete, modifierFlags: [])
+        waitFor(!row("Pay rent").exists, "⌫ deletes it from the log")
+        let toast = window.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Deleted")).firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 3), "with an Undo toast")
+        app.typeKey("z", modifierFlags: .command)
+        waitFor(row("Pay rent").exists, "⌘Z puts it back in the log")
+
+        select("Call the bank")
+        app.typeKey(.return, modifierFlags: [])
+        let field = window.descendants(matching: .any).matching(identifier: "AtticTitleField").firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 3), "Return edits a Done title")
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText("Call the bank again\r")
+        waitFor(row("Call the bank again").exists, "the title is saved")
+        XCTAssertTrue(label("Call the bank again").contains("done"), "and the task stays done: \(label("Call the bank again"))")
     }
 
     /// Suggestions while typing (owner fix 5 B, review 15): Tab takes the
@@ -576,7 +671,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
         menuItem("Tags").hover()
         XCTAssertTrue(menuItem("#launch").waitForExistence(timeout: 3), "the library's tags")
-        XCTAssertTrue(menuItem("New Tag…").exists)
+        XCTAssertTrue(menuItem("All Tags…").exists)
         menuItem("#launch").click()
         waitFor(label("Call the plumber").contains("tagged launch"), "the tag is added")
         row("Call the plumber").rightClick()
@@ -621,8 +716,8 @@ final class TasksPageUITests: XCTestCase {
         row("Call the plumber").rightClick()
         XCTAssertTrue(menuItem("Tags").waitForExistence(timeout: 3))
         menuItem("Tags").hover()
-        XCTAssertTrue(menuItem("New Tag…").waitForExistence(timeout: 3))
-        menuItem("New Tag…").click()
+        XCTAssertTrue(menuItem("All Tags…").waitForExistence(timeout: 3))
+        menuItem("All Tags…").click()
         let field = app.descendants(matching: .textField)
             .matching(NSPredicate(format: "label == %@", "Find or add a tag")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the tag picker opens with its field")

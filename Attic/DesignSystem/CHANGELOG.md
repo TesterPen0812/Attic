@@ -340,3 +340,43 @@ The look ported, not the code: the design system's surface model now carries Pha
   (`atticDesignFromSystem(animations:)`), so every component and page following
   `design.reduceMotion` (the Notes branch too) needs nothing more. Code outside a view reads
   `AtticMotionPreference.reducesMotion` (the choice or the Mac's setting).
+
+### Phase 1 round 10: full control (the capability audit, owner-approved, 2026-09-28)
+
+The owner's principle: a calm look, never a cut capability. Every change is
+additive; no token, colour, radius or type style changed.
+
+- **`AtticMenuCommand` gains submenus, states, details and headings**
+  (`children`, `state`, `detail`, `isHeader`, `.submenu`, `.header`), and
+  finds the command for a key (`command(for:in:)`, `command(key:…)`). One
+  list now draws a SwiftUI menu (`AtticMenuItems`: sections, headings, ticks,
+  dashes, badges, submenus) and an `NSMenu` (**new `AtticNativeMenu`**) that a
+  key or a button opens under an anchor (**new `AtticMenuAnchor`**). Why: one
+  command definition drives the right-click menu, the actions button, ⇧⌘I, the
+  keys and VoiceOver.
+- **New `AtticMenuButton`**: a small button that opens a native menu from its
+  own action. The selection bar's State and Priority use it (the SwiftUI
+  `Menu` with a click-through label never took the click under XCUITest).
+- **`AtticSelectionBar`**: an action may open a pop-over picker (Date, and the
+  full tag picker with search and creation) instead of a menu; its menus are
+  read when they open; VoiceOver reads a summary of what the selection shares
+  or not. Same look.
+- **New `AtticTaskShortcut`**: every task command's key in one place (⌘C,
+  ⌘D and ⇧⌘I added; checked against the spec's key map). `AtticTaskKeys`
+  answers ⌘C, ⌘D and ⇧⌘I, and only when the task offers the command.
+- **`AtticTaskActions`** gains Move Up/Down, Add Subtask, Copy, Duplicate,
+  Change Priority and Show Actions, each a VoiceOver action when offered.
+- **`AtticTaskRow`** gains `onActions`: **new `AtticRowActionsButton`** ("…",
+  the icon ink, the date's hover pill, 22 × 18, `AtticRowActionsMetrics`) on
+  the title line only while the pointer or the keyboard is on the row; the
+  date steps aside for it. Nothing shows at rest.
+- **`AtticSubtaskRow` / `AtticQuickLook`**: a subtask may take `commands`
+  (a keyboard stop with the commands' keys, its right-click menu and its
+  VoiceOver actions, one list) and be renamed in place (`renaming`). The
+  checkbox and the line look the same; a keyboard-driven focus ring shows.
+- **New `AtticShortcutRecorderRow`** (Settings): the title, a raised key cap
+  with the combination (Type a Shortcut while recording), and Reset; the
+  refusal's reason in the warning ink under it.
+- **`AtticTabsSearchField`** gives the keyboard to its own AppKit field from a
+  probe beside it (**new `AtticFieldClaimProbe`**) the moment it is in the
+  window: the ⌘F-after-Esc flake gave it to the field still fading out.

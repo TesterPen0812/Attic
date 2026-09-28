@@ -1697,6 +1697,9 @@ private struct AtticSubtaskCommands: ViewModifier {
                 .focusable()
                 .focused(focused)
                 .focusEffectDisabled()
+                // A click on the line gives it the keyboard (its box keeps
+                // its own click).
+                .onTapGesture { focused.wrappedValue = true }
                 .onKeyPress(phases: .down) { press in
                     guard !AtticTextInput.hasKeyboard,
                           let command = AtticMenuCommand.command(key: press.key, characters: press.characters,
