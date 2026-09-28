@@ -901,8 +901,8 @@ struct TasksPage: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer] frame in pointer.frames[id] = frame }
         .onDisappear { [pointer] in pointer.frames[id] = nil }
         // Files dropped on a row: one drop destination for the page
-        // (`fileDrop`), not one per row (round 11: each row's own cost a
-        // screenful of rows about 15 ms to build).
+        // (`fileDropTarget(at:)`), not one per row (round 11: a drop
+        // destination on every row made a screenful of rows slower to build).
     }
 
     /// The quick look opens and closes with the expansion motion (review
