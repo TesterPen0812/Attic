@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftData
 
@@ -33,6 +34,11 @@ final class AtticLibrary {
     /// The last task command that changed nothing, and why (Astra 6). Also
     /// set by `createTasks`, which returns the tasks instead of an outcome.
     private(set) var lastFailure: CommandFailure?
+    /// A main task's subtasks were reordered on purpose (moved, or a move
+    /// undone or redone, from any history that reaches this library): the
+    /// id is the main task's. A page holding the quick look's order lets go
+    /// of it, so the open list shows the new order (round 10b).
+    let subtaskOrderChanges = PassthroughSubject<UUID, Never>()
 
     init(
         tasks: TaskStore,

@@ -105,11 +105,22 @@ extension AtticLibrary {
             guard tasks.moveSubtask(taskID: id, by: offset) else { return nil }
             succeeded = true
             let after = family.compactMap(tasks.editableState(of:))
+            subtaskOrderChanges.send(parentID)
             guard before != after else { return nil }
             return UndoStep(
                 name: "Move Subtask",
-                undoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: after, to: before) },
-                redoOutcome: { [tasks = self.tasks] in tasks.applyEditableTransition(from: before, to: after) }
+                undoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    let outcome = self.tasks.applyEditableTransition(from: after, to: before)
+                    if outcome == .applied { self.subtaskOrderChanges.send(parentID) }
+                    return outcome
+                },
+                redoOutcome: { [weak self] in
+                    guard let self else { return .obsolete }
+                    let outcome = self.tasks.applyEditableTransition(from: before, to: after)
+                    if outcome == .applied { self.subtaskOrderChanges.send(parentID) }
+                    return outcome
+                }
             )
         }
         return taskOutcome(succeeded, since: serial, ids: [id])

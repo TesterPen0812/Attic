@@ -260,6 +260,11 @@ final class TasksPageModel: ObservableObject {
         library.tasks.$revision
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pruneMissing() } }
             .store(in: &cancellables)
+        // A subtask moved, or a move undone or redone (from here or the
+        // shared history): the open quick look takes the new order.
+        library.subtaskOrderChanges
+            .sink { [weak self] parentID in self?.releaseQuickLookOrder(of: parentID) }
+            .store(in: &cancellables)
         // `$revision` publishes before the history changes: check after it.
         library.undo.$revision
             .sink { [weak self] _ in DispatchQueue.main.async { self?.dismissToastIfSuperseded() } }
@@ -1278,10 +1283,13 @@ final class TasksPageModel: ObservableObject {
         return known + new
     }
 
-    /// A subtask moved on purpose (round 10): the open quick look takes
-    /// the family's order again.
+    /// A subtask moved on purpose (round 10; also its Undo and Redo, round
+    /// 10b): the open quick look takes the family's order again, and the
+    /// rows built with the held order are dropped. (Ticking a box does not
+    /// come here: it keeps the hold.)
     func releaseQuickLookOrder(of id: UUID) {
         quickLookOrder[id] = nil
+        rowsCache = [:]
     }
 
     func setExpanded(_ id: UUID, _ open: Bool) {

@@ -112,12 +112,10 @@ extension TasksPageModel {
         let siblings = store.subtasks(of: parentID).filter { ($0.status == .done) == (task.status == .done) }
         guard let index = siblings.firstIndex(where: { $0.id == id }),
               siblings.indices.contains(index + offset) else { return .applied }
-        let outcome = library.moveSubtask(id, by: offset)
-        guard outcome.isApplied else { return outcome }
         // The quick look keeps its order while open (review 21); a move is
-        // the person's own choice of order, so it shows.
-        releaseQuickLookOrder(of: parentID)
-        return outcome
+        // the person's own choice of order, so it shows: the library tells
+        // the page (`subtaskOrderChanges`), as for its Undo and Redo.
+        return library.moveSubtask(id, by: offset)
     }
 
     /// The subtasks a quick look's keys and menu act on, in the order it

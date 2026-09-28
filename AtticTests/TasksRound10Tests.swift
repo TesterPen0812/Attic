@@ -279,8 +279,14 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertTrue(model.moveSubtask(b.id, by: 2).isApplied)
         XCTAssertEqual(titles(), ["A", "C", "B"])
         XCTAssertTrue(model.undo().isApplied)
-        model.releaseQuickLookOrder(of: parent.id)
-        XCTAssertEqual(titles(), ["B", "A", "C"], "one Undo per move")
+        XCTAssertEqual(titles(), ["B", "A", "C"], "one Undo per move, shown at once (round 10b)")
+        XCTAssertTrue(model.redo().isApplied)
+        XCTAssertEqual(titles(), ["A", "C", "B"], "Redo shows at once too")
+        // The shared library history reaches the page the same way.
+        XCTAssertTrue(library.undo(in: .tasks).isApplied)
+        XCTAssertEqual(titles(), ["B", "A", "C"])
+        XCTAssertTrue(library.redo(in: .tasks).isApplied)
+        XCTAssertEqual(titles(), ["A", "C", "B"])
     }
 
     // MARK: - One command list
