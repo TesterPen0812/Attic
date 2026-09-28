@@ -131,8 +131,7 @@ struct TasksPageHost: View {
         // An agent's `show` of a task: its tab, the row selected in view.
         .onReceive(uiState.$shownItem) { item in showItemIfNeeded(model, item) }
         // A deferred `show` runs once the edit that blocked it has ended.
-        .onReceive(model.$editingTitleID.combineLatest(model.$newSubtaskParentID)) { title, subtask in
-            guard title == nil, subtask == nil else { return }
+        .onReceive(model.editorsIdle) { _ in
             DispatchQueue.main.async { showItemIfNeeded(model, uiState.shownItem) }
         }
         // Quick capture (the global shortcut) and the shell's own focus

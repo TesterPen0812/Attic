@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import SwiftData
 import SwiftUI
 import XCTest
@@ -302,6 +303,103 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertTrue(model.toggleSubtask(a.id).isApplied)
         XCTAssertEqual(store.subtasks(of: parent.id).map(\.title).last, "A", "the store settles the ticked one last")
         XCTAssertEqual(titles(), ["A", "B", "C"], "the open list holds still while ticking")
+    }
+
+    // MARK: - Round 10b: a subtask rename is an editor like the older ones
+
+    private func renameFixture() throws -> (gate: PersistenceGate, model: TasksPageModel, parent: TaskItem, child: TaskItem) {
+        let gate = PersistenceGate()
+        let store = try makeTestStore(persist: gate.save)
+        let library = AtticLibrary(tasks: store, persist: gate.save)
+        let model = TasksPageModel(library: library, services: TasksPageServices())
+        let parent = try XCTUnwrap(store.create(title: "Plan the trip"))
+        let child = try XCTUnwrap(store.create(title: "Book flights", parentID: parent.id))
+        model.setExpanded(parent.id, true)
+        self.store = store
+        self.library = library
+        return (gate, model, parent, child)
+    }
+
+    /// Finding 5: collapsing the quick look needs the rename to save; a
+    /// failed save keeps it open with the text, and the page's reveal and
+    /// `hasUnsavedEdit` cover a changed or failed rename.
+    func testARenameIsProtectedLikeTheOtherEditors() throws {
+        let (gate, model, parent, child) = try renameFixture()
+        model.beginRenamingSubtask(child.id)
+        XCTAssertFalse(model.hasUnsavedEdit, "an untouched rename has nothing to save")
+        model.subtaskRename = "Book flights to Lisbon"
+        XCTAssertTrue(model.hasUnsavedEdit, "a changed rename is unsaved")
+
+        // Save failure, then collapse: stays open with the text and Retry.
+        gate.shouldFail = true
+        model.toggleExpanded(parent.id)
+        XCTAssertTrue(model.expanded.contains(parent.id), "the quick look stays open")
+        XCTAssertEqual(model.renamingSubtaskID, child.id)
+        XCTAssertEqual(model.subtaskRename, "Book flights to Lisbon")
+        XCTAssertTrue(model.subtaskRenameFailed)
+        XCTAssertTrue(model.hasUnsavedEdit, "a failed rename is unsaved")
+
+        // Hide and reveal keep it, text and failure both.
+        model.pageDidHide()
+        model.resetForReveal()
+        XCTAssertEqual(model.renamingSubtaskID, child.id)
+        XCTAssertEqual(model.subtaskRename, "Book flights to Lisbon")
+        XCTAssertTrue(model.subtaskRenameFailed)
+
+        // Retry saves it; then collapsing works.
+        gate.shouldFail = false
+        XCTAssertTrue(model.commitSubtaskRename())
+        XCTAssertEqual(store.task(withID: child.id)?.title, "Book flights to Lisbon")
+        model.toggleExpanded(parent.id)
+        XCTAssertFalse(model.expanded.contains(parent.id))
+
+        // A changed rename that can save is saved by the collapse.
+        model.setExpanded(parent.id, true)
+        model.beginRenamingSubtask(child.id)
+        model.subtaskRename = "Rebook flights"
+        model.toggleExpanded(parent.id)
+        XCTAssertFalse(model.expanded.contains(parent.id))
+        XCTAssertNil(model.renamingSubtaskID)
+        XCTAssertEqual(store.task(withID: child.id)?.title, "Rebook flights")
+
+        // An untouched rename ends at a reveal, as an untouched title does.
+        model.setExpanded(parent.id, true)
+        model.beginRenamingSubtask(child.id)
+        model.pageDidHide()
+        model.resetForReveal()
+        XCTAssertNil(model.renamingSubtaskID)
+    }
+
+    /// Finding 5: a `show` an unsaved rename blocked runs again once the
+    /// rename ends, by Retry or by Esc.
+    func testABlockedShowResumesWhenARenameEnds() throws {
+        let (gate, model, parent, child) = try renameFixture()
+        var idle = 0
+        var subscription: AnyCancellable?
+        func startRename(_ text: String) {
+            gate.shouldFail = false
+            model.beginRenamingSubtask(child.id)
+            model.subtaskRename = text
+            gate.shouldFail = true
+            XCTAssertEqual(model.show(parent.id), .blocked, "the unsaved rename holds the page")
+            XCTAssertTrue(model.subtaskRenameFailed)
+        }
+        startRename("One")
+        subscription = model.editorsIdle.sink { idle += 1 }
+        XCTAssertEqual(idle, 0, "nothing while the rename is open")
+
+        gate.shouldFail = false
+        XCTAssertTrue(model.commitSubtaskRename(), "Retry saves")
+        XCTAssertGreaterThan(idle, 0, "Retry lets the show run")
+        XCTAssertEqual(model.show(parent.id), .shown)
+
+        startRename("Two")
+        idle = 0
+        XCTAssertEqual(idle, 0, "nothing while the second rename is open")
+        model.cancelSubtaskRename()
+        XCTAssertGreaterThan(idle, 0, "Esc lets the show run")
+        XCTAssertEqual(model.show(parent.id), .shown)
+        subscription?.cancel()
     }
 
     // MARK: - One command list

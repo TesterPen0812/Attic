@@ -551,11 +551,11 @@ final class TasksPageModel: ObservableObject {
         pagerSwipe.cancel()
         if tab != target { tab = target }
         if revealTab == nil, !selection.isEmpty { selection = [] }
-        if editingTitleID != nil || newSubtaskParentID != nil { cancelEditing() }
+        if editingTitleID != nil || newSubtaskParentID != nil || renamingSubtaskID != nil { cancelEditing() }
     }
 
-    /// A title or new subtask holds text that is not saved: it was changed,
-    /// or its save failed.
+    /// A title, new subtask or subtask rename holds text that is not saved:
+    /// it was changed, or its save failed.
     var hasUnsavedEdit: Bool {
         switch failedSave {
         case .title?, .newSubtask?: return true
@@ -563,6 +563,11 @@ final class TasksPageModel: ObservableObject {
         }
         if let id = editingTitleID, let task = store.listedTask(withID: id), titlePatch(for: task) != nil {
             return true
+        }
+        if subtaskRenameFailed { return true }
+        if let id = renamingSubtaskID, let task = store.task(withID: id) {
+            let draft = subtaskRename.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !draft.isEmpty, draft != task.title { return true }
         }
         return newSubtaskParentID != nil && !newSubtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -574,6 +579,16 @@ final class TasksPageModel: ObservableObject {
         revealTab = tab
     }
     #endif
+
+    /// Emits whenever no title, new subtask or subtask rename is being
+    /// edited: the moment a `show` an unsaved edit blocked can run again
+    /// (round 10b: a rename's Retry or Esc counts, as the older editors').
+    var editorsIdle: AnyPublisher<Void, Never> {
+        Publishers.CombineLatest3($editingTitleID, $newSubtaskParentID, $renamingSubtaskID)
+            .filter { title, subtask, renaming in title == nil && subtask == nil && renaming == nil }
+            .map { _, _, _ in () }
+            .eraseToAnyPublisher()
+    }
 
     /// Where the current reveal opened the page (Search, an agent's `show`);
     /// nil opens on Now. Cleared when the panel hides or the person moves.
@@ -1258,6 +1273,11 @@ final class TasksPageModel: ObservableObject {
                 guard commitNewSubtask() else { return }
                 newSubtaskParentID = nil
                 newSubtaskTitle = ""
+            }
+            // Likewise a subtask being renamed here: a failed save keeps
+            // the quick look open with the text and Retry (round 10b).
+            if let renaming = renamingSubtaskID, store.task(withID: renaming)?.parentID == id {
+                guard commitSubtaskRename() else { return }
             }
             expanded.remove(id)
             quickLookOrder[id] = nil
