@@ -84,6 +84,12 @@ struct NotesEditorPage: View {
             dismissOwnToast()
             chrome.tagEditor = nil
         }
+        .onChange(of: controller.presentationCount) { _, _ in
+            // Back on the page (a page switch, the panel shown again): the
+            // keyboard returns to the note, where the caret was.
+            guard showsEditor else { return }
+            DispatchQueue.main.async { chrome.focusText() }
+        }
         .onChange(of: controller.isLibraryPresented) { _, shown in
             if shown {
                 library.highlightedID = nil

@@ -37,8 +37,11 @@ final class NotesPageRenderTests: XCTestCase {
         var controller: NotesPageController { noteDraft.pages }
     }
 
+    private let gate = PersistenceGate()
+
     private func makeHarness(context: AtticDesignContext, seed: (NoteStore) throws -> Void) throws -> Harness {
-        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let gate = gate
+        let store = try makeTestNoteStore(persist: { try gate.save($0) }, attachmentFileStore: makeTestAttachmentFileStore())
         try seed(store)
         let noteDraft = NoteDraftController(noteStore: store)
         let uiState = PanelUIState()
@@ -154,6 +157,28 @@ final class NotesPageRenderTests: XCTestCase {
         XCTAssertTrue(harness.controller.showLibrary())
         spin(0.5)
         write(harness.host, name: "library-light")
+    }
+
+    func testTheSlotShowsTheMostUrgentStateAndHowManyMore() throws {
+        let harness = try makeHarness(context: AtticDesignContext(controls: .craft)) { try Self.seedPricing($0) }
+        let pricing = try XCTUnwrap(harness.store.notes.first { $0.title.hasPrefix("Pricing") })
+        XCTAssertTrue(harness.controller.open(noteID: pricing.id))
+        spin(0.3)
+        let session = try XCTUnwrap(harness.controller.active)
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                                   with: NSAttributedString(string: " more"), name: "Typing")
+        gate.shouldFail = true
+        _ = harness.controller.preserve(session)
+        gate.shouldFail = false
+        spin(0.3)
+        let items = harness.controller.statusItems(for: session)
+        // No recovery folder in this harness, so the text is only in memory.
+        XCTAssertEqual(items.first?.label, "Only in memory")
+        write(harness.host, name: "slot-not-saved-light")
+        session.notice = "Restored unsaved text."
+        spin(0.3)
+        XCTAssertEqual(harness.controller.statusItems(for: session).count, 2)
+        write(harness.host, name: "slot-two-states-light")
     }
 
     func testDarkWritingAndLibrary() throws {

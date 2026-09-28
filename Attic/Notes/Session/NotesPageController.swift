@@ -142,6 +142,9 @@ final class NotesPageController: ObservableObject {
     @Published var isLibraryPresented = false
     @Published private(set) var design: AtticDesignContext = .default
     @Published private(set) var recoveryWarnings: [String] = []
+    /// Moves on each `present()`: the page puts the keyboard back in the
+    /// note (Notes reopens where you left it, caret included).
+    @Published private(set) var presentationCount = 0
 
     let store: NoteStore
     let journal: NoteDraftJournaling?
@@ -421,6 +424,7 @@ final class NotesPageController: ObservableObject {
 
     func present() {
         isPageVisible = true
+        presentationCount &+= 1
         if let current = active {
             if let shown = presentSession(current) {
                 if shown !== current { activate(shown) }

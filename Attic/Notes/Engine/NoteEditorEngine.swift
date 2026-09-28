@@ -281,6 +281,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView.writingToolsBehavior = writingToolsAvailable ? .complete : .none
         textView.allowedWritingToolsResultOptions = [.plainText]
         textView.setAccessibilityLabel(String(localized: "Note"))
+        textView.setAccessibilityIdentifier("note-text")
     }
 
     // MARK: Look

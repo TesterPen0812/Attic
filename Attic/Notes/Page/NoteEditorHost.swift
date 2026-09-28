@@ -48,6 +48,10 @@ final class NoteTitleAccessories {
     private let tagHost: NSHostingView<AnyView>
     /// Measures the tag line's wrapped height at the column's width.
     private let tagMeasure = NSHostingController(rootView: AnyView(EmptyView()))
+    /// The measured tag line, kept until the tags or the width change (the
+    /// layout pass runs on every keystroke).
+    private var measuredTagLine: (tags: [String], width: CGFloat, height: CGFloat)?
+    private var spokenTitle = ""
     private var boundsObserver: NSObjectProtocol?
     private var shownTags: [String] = []
     var design: AtticDesignContext { didSet { if design != oldValue { rebuild() } } }
@@ -143,7 +147,12 @@ final class NoteTitleAccessories {
         var tagHeight: CGFloat = 0
         let width = max(0, columnRight - columnLeft)
         if !engine.tags.isEmpty, width > 0 {
-            tagHeight = ceil(tagMeasure.sizeThatFits(in: NSSize(width: width, height: 10_000)).height)
+            if let measured = measuredTagLine, measured.tags == engine.tags, measured.width == width {
+                tagHeight = measured.height
+            } else {
+                tagHeight = ceil(tagMeasure.sizeThatFits(in: NSSize(width: width, height: 10_000)).height)
+                measuredTagLine = (engine.tags, width, tagHeight)
+            }
             let frame = NSRect(x: columnLeft, y: rects.last.minY + NoteTextStyle.titleLineHeight + NoteTextStyle.titleToTags,
                                width: width, height: tagHeight)
             if tagHost.frame != frame { tagHost.frame = frame }
@@ -152,7 +161,15 @@ final class NoteTitleAccessories {
             tagHost.isHidden = true
         }
         engine.setTitleReserves(tagLine: tagHeight, trailing: m.titleTrailingReserve)
-        updateHeaderTitle()
+        // Layout can run inside a SwiftUI update: publish on the next turn.
+        DispatchQueue.main.async { [weak self] in self?.updateHeaderTitle() }
+        // VoiceOver: "Note, Pricing page".
+        let title = engine.lineText(at: 0).trimmingCharacters(in: .whitespaces)
+        if title != spokenTitle {
+            spokenTitle = title
+            textView.setAccessibilityLabel(title.isEmpty ? String(localized: "Note")
+                                                         : String(localized: "Note, \(title)"))
+        }
     }
 
     /// The header title fades in as the title passes under the header.
