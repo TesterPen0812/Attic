@@ -147,4 +147,22 @@ final class TasksRound8Tests: XCTestCase {
         let ticket = swipe.correctionTicket()
         XCTAssertFalse(swipe.mayCorrect(ticket, to: 1, shown: 0))
     }
+
+    // MARK: - Typing on Done faster than the field takes the keyboard
+
+    func testFastTypingOnDoneKeepsEveryLetter() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.go(to: .done)
+        let listTop = TasksViewport.listTop(tabsTop: PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: 520)).headerBottom
+            + AtticLayout.pageTabsTop)
+        var y = listTop + 4
+        while hosted.model.selection.isEmpty, y < listTop + 160 {
+            hosted.click(y: y)
+            y += 8
+        }
+        XCTAssertFalse(hosted.model.selection.isEmpty, "a row has the keyboard")
+        hosted.typeQuickly("inv", keyCodes: ["i": 34, "n": 45, "v": 9])
+        XCTAssertEqual(hosted.model.doneSearch, "inv", "every letter reached the search")
+    }
 }

@@ -1167,6 +1167,14 @@ struct TasksPage: View {
             if modifiers == .command { model.undo(); return .handled }
             if modifiers == [.command, .shift] { model.redo(); return .handled }
         }
+        // Typing on Done faster than the search field takes the keyboard
+        // (it appears, then focuses): the letters join the query, never
+        // lost (round 8, CI run 3: "inv" became "i").
+        if searchFocused, model.tab == .done, model.isPageShown, modifiers.isEmpty || modifiers == .shift,
+           Self.startsSearch(press.characters) {
+            model.doneSearch += press.characters
+            return .handled
+        }
         // Every editor keeps its own keys (review 8): the title, a new
         // subtask, the add bar and Done's search.
         guard model.editingTitleID == nil, model.newSubtaskParentID == nil, !addBarFocused, !searchFocused else { return .ignored }

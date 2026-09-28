@@ -345,6 +345,22 @@ final class Hosted {
         spin(0.4)
     }
 
+    /// Key presses queued together and delivered at once, as fast typing
+    /// arrives (no pause for the search field to take the keyboard).
+    func typeQuickly(_ text: String, keyCodes: [Character: UInt16]) {
+        for character in text {
+            let characters = String(character)
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, characters: characters,
+                                             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCodes[character] ?? 0)!
+                NSApp.postEvent(event, atStart: false)
+            }
+        }
+        Hosted.pumpEvents()
+        spin(0.6)
+    }
+
     /// The keyboard is in a plain text field (the search), not the add bar.
     var searchHasKeyboard: Bool {
         (window.firstResponder as? NSTextView)?.isFieldEditor == true

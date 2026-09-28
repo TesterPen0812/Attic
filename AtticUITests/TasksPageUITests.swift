@@ -524,10 +524,10 @@ final class TasksPageUITests: XCTestCase {
     func testTheSelectionBarsControlsTakeTheirClicks() throws {
         select("Call the plumber")
         XCUIElement.perform(withKeyModifiers: .command) { select("Email beta testers") }
-        // The app's buttons by label (the bar sits in an overlay that the
-        // window's own query did not reach in CI).
+        // By label, any kind: the bar's choices are menu buttons (CI run 3:
+        // "Set priority of 2 tasks" is a MenuButton, not a Button).
         func barButton(_ label: String) -> XCUIElement {
-            app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+            app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
         }
         let move = barButton("Move 2 tasks to Later")
         XCTAssertTrue(move.waitForExistence(timeout: 3), "the selection bar shows")
