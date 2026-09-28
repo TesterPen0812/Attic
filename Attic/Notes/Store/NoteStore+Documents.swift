@@ -790,6 +790,7 @@ extension NoteStore {
                 replica.createdAt = preflight.canonical.createdAt
                 replica.tagsRaw = preflight.canonical.tagsRaw
                 replica.taskID = preflight.canonical.taskID
+                replica.pinnedAt = preflight.canonical.pinnedAt
             }
         }
         guard commitStagedChanges() else {

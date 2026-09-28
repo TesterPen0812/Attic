@@ -635,3 +635,132 @@ final class NotesLibraryModelTests: XCTestCase {
         XCTAssertEqual(library.highlightedID, a)
     }
 }
+
+/// Legacy notes through the migration gate and into the new page (fixtures
+/// only; the real-store dry run waits for the owner's approval at slice 6).
+@MainActor
+final class NotesSlice2MigrationTests: XCTestCase {
+    private var store: NoteStore!
+    private var directory: URL!
+
+    override func setUp() async throws {
+        store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticSlice2Migration-\(UUID().uuidString)")
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func png() throws -> Data {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
+                                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                                   bytesPerRow: 0, bitsPerPixel: 0))
+        return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    /// A legacy note written the way the old page wrote them.
+    private func legacyNote(title: String, body: String,
+                            attachments: [(name: String, offset: Int?, sort: Int64, payload: Data?)]) throws -> UUID {
+        let note = NoteItem(id: UUID(), title: title, body: body)
+        note.plainText = NoteStore.legacyPlainText(title: title, body: body)
+        store.modelContext.insert(note)
+        for item in attachments {
+            let digest = item.payload.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "missing"
+            let row = NoteAttachment(id: UUID(), noteID: note.id, originalFilename: item.name,
+                                     contentTypeIdentifier: "public.png", byteCount: Int64(item.payload?.count ?? 0),
+                                     sortIndex: item.sort, contentDigest: digest, payload: item.payload)
+            row.inlineOffset = item.offset
+            store.modelContext.insert(row)
+        }
+        try store.modelContext.save()
+        try store.reloadPresentation()
+        return note.id
+    }
+
+    private func migrate(_ id: UUID) throws -> NoteDocument {
+        guard case let .success(snapshot) = store.legacySnapshot(noteID: id),
+              case let .success(plan) = LegacyNoteMigration.plan(snapshot),
+              case let .success(verified) = LegacyNoteMigration.verify(plan, roundTrip: {
+                  NoteTextKitRoundTrip.document(afterRoundTrip: $0)
+              }),
+              case .success = store.commitMigration(verified) else {
+            throw NSError(domain: "migration", code: 1)
+        }
+        return try XCTUnwrap(store.loadDocument(noteID: id)?.content.document)
+    }
+
+    func testAnAttachmentOnlyNoteMigratesAndOpensInTheNewPageTitledByItsFile() throws {
+        let data = try png()
+        let id = try legacyNote(title: "", body: "", attachments: [
+            (name: "receipt.png", offset: nil, sort: 0, payload: data),
+            (name: "second.png", offset: 0, sort: 1, payload: data)
+        ])
+        let before = NoteRowSummary(note: try XCTUnwrap(store.note(withID: id)), attachments: store.attachments(for: id))
+        XCTAssertEqual(before.title, "receipt.png", "the old page's file-only note keeps its file name as title")
+        XCTAssertEqual(before.preview, "2 images")
+
+        let document = try migrate(id)
+        XCTAssertEqual(document.blocks.map(\.kind), [.text, .image, .image], "the tray becomes trailing images")
+        XCTAssertEqual(document.title, "")
+        let rows = try store.attachmentRows(forNoteID: id)
+        XCTAssertEqual(Set(document.attachmentIDs), Set(rows.map(\.id)), "every attachment keeps its row and id")
+
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                             saveDelay: .seconds(60))
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertNil(controller.legacyNoteID, "a migrated note opens in the new editor")
+        XCTAssertEqual(session.engine.objectIDs().count, 2)
+        XCTAssertEqual(session.state, .clean, "opening writes nothing")
+        let after = NoteRowSummary(note: try XCTUnwrap(store.note(withID: id)), attachments: store.attachments(for: id))
+        XCTAssertEqual(after.title, "receipt.png")
+        XCTAssertEqual(after.preview, "2 images")
+    }
+
+    func testNilAndEndAnchorsTiesAndATextNoteMigrate() throws {
+        let data = try png()
+        let id = try legacyNote(title: "Trip", body: "Tickets\nHotel", attachments: [
+            (name: "a.png", offset: 99, sort: 2, payload: data),
+            (name: "b.png", offset: 8, sort: 1, payload: data),
+            (name: "c.png", offset: 8, sort: 0, payload: data),
+            (name: "d.png", offset: nil, sort: 3, payload: data)
+        ])
+        let document = try migrate(id)
+        XCTAssertEqual(document.blocks.map { $0.kind == .image ? "img" : $0.text },
+                       ["Trip", "Tickets", "img", "img", "Hotel", "img", "img"])
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                             saveDelay: .seconds(60))
+        XCTAssertTrue(controller.open(noteID: id))
+        XCTAssertEqual(controller.markdown(noteID: id)?.hasPrefix("# Trip\n\nTickets"), true)
+    }
+
+    func testAMissingPayloadKeepsItsPlaceAndItsRow() throws {
+        let id = try legacyNote(title: "Scan", body: "Page", attachments: [
+            (name: "lost.png", offset: nil, sort: 0, payload: nil)
+        ])
+        let document = try migrate(id)
+        XCTAssertEqual(document.blocks.map(\.kind), [.text, .text, .image], "the image is never dropped")
+        XCTAssertEqual(try store.attachmentRows(forNoteID: id).count, 1)
+    }
+
+    func testAFileAttachmentKeepsTheNoteInTheOldEditor() throws {
+        let note = NoteItem(id: UUID(), title: "Contract", body: "See file")
+        store.modelContext.insert(note)
+        let row = NoteAttachment(id: UUID(), noteID: note.id, originalFilename: "contract.pdf",
+                                 contentTypeIdentifier: "com.adobe.pdf", byteCount: 3, sortIndex: 0,
+                                 contentDigest: "x", payload: Data([1, 2, 3]))
+        store.modelContext.insert(row)
+        try store.modelContext.save()
+        try store.reloadPresentation()
+        guard case let .success(snapshot) = store.legacySnapshot(noteID: note.id) else { return XCTFail("snapshot") }
+        guard case .failure(.fileAttachment) = LegacyNoteMigration.plan(snapshot) else { return XCTFail("refused") }
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+                                             saveDelay: .seconds(60))
+        XCTAssertTrue(controller.open(noteID: note.id))
+        XCTAssertEqual(controller.legacyNoteID, note.id, "the old editor keeps a note the gate refused")
+        let summary = NoteRowSummary(note: try XCTUnwrap(store.note(withID: note.id)), attachments: store.attachments(for: note.id))
+        XCTAssertEqual(summary.files, 1)
+    }
+}
