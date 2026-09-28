@@ -852,27 +852,64 @@ final class TasksPageUITests: XCTestCase {
         }
     }
 
-    /// One hard swipe from Now stops at Later, never Done (owner item 21).
-    /// The scroll's sign differs between Xcode versions: if the first
-    /// swipe goes the other way (Now stays), the second is the same swipe
-    /// forwards.
-    func testAHardSwipeFromNowStopsAtLater() throws {
+    /// One hard swipe from Now lands on Later with no overshoot, and the
+    /// tab turns before the page comes to rest (owner items 24 and 25,
+    /// round 9). The page's trace (DEBUG) reports how far the gesture took
+    /// the page ("reach", in pages) and how long before its page came to
+    /// rest the tab changed ("lead", seconds). The scroll's sign differs
+    /// between Xcode versions: if the first swipe goes the other way (Now
+    /// stays), the second is the same swipe forwards.
+    func testAHardSwipeLandsOnTheNeighbourAndTheTabLeadsIt() throws {
+        app.terminate()
+        app.launchEnvironment["ATTIC_UI_TEST_PAGER_TRACE"] = "1"
+        app.launch()
+        let opened = Date().addingTimeInterval(15)
+        while Date() < opened, !window.exists {
+            app.activate()
+            _ = window.waitForExistence(timeout: 1)
+        }
+        XCTAssertTrue(row("Call the plumber").waitForExistence(timeout: 5), "the demo tasks are listed")
         waitForPage("now", "the panel opens on Now")
+        let trace = window.descendants(matching: .any)["tasks-pager-trace"]
+        XCTAssertTrue(trace.waitForExistence(timeout: 5), "the pager's trace is there")
         let point = row("Call the plumber").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         point.hover()
-        // Synthesized scrolls carry no trackpad phases or momentum and are
+        // Synthesized scrolls carry no trackpad phases or momentum (the
+        // pager reads them as a wheel: one page per burst) and are
         // sometimes dropped on a busy runner: a gesture that moved nothing
-        // is sent again (it proves one gesture never crosses two pages, not
-        // a real trackpad's feel).
+        // is sent again.
         for delta in [-2_000.0, 2_000.0, -2_000.0, 2_000.0] {
             point.scroll(byDeltaX: delta, deltaY: 0)
             let deadline = Date().addingTimeInterval(3)
-            while Date() < deadline, tab("now").isSelected { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
-            // Let any momentum finish before judging where it stopped.
-            RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+            while Date() < deadline, tab("now").isSelected {
+                XCTAssertFalse(tab("done").isSelected, "a hard swipe never reaches Done")
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            // Watch it come to rest: never Done, on the way or after.
+            let rest = Date().addingTimeInterval(1.5)
+            while Date() < rest {
+                XCTAssertFalse(tab("done").isSelected, "a hard swipe never reaches Done")
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
             if !tab("now").isSelected { break }
         }
-        XCTAssertFalse(tab("done").isSelected, "a hard swipe never crosses two pages")
-        waitForPage("backlog", "a hard swipe from Now stops at Later")
+        waitForPage("backlog", "a hard swipe from Now lands on Later")
+        waitFor((trace.value as? String)?.contains("page=1") == true, "the pager came to rest on Later: \(String(describing: trace.value))")
+        let values = Self.traceValues(trace.value as? String ?? "")
+        let reach = try XCTUnwrap(values["reach"], "trace: \(String(describing: trace.value))")
+        let lead = try XCTUnwrap(values["lead"], "trace: \(String(describing: trace.value))")
+        XCTAssertLessThanOrEqual(reach, 1.1, "the page never travelled past Later (reach \(reach) pages)")
+        XCTAssertGreaterThanOrEqual(reach, 0.9, "it travelled one page")
+        XCTAssertGreaterThan(lead, 0.1, "the tab turned before the page came to rest (lead \(lead) s)")
+    }
+
+    /// "reach=1.00 lead=0.33 page=1" as numbers.
+    private static func traceValues(_ trace: String) -> [String: Double] {
+        var values: [String: Double] = [:]
+        for part in trace.split(separator: " ") {
+            let pair = part.split(separator: "=")
+            if pair.count == 2, let value = Double(pair[1]) { values[String(pair[0])] = value }
+        }
+        return values
     }
 }

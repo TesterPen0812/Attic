@@ -363,7 +363,12 @@ final class TasksPagerSwipe {
             return .pass
         case .began:
             begin(allowed: allowed)
-            return .pass
+            // AppKit usually begins with a still event, which goes on so the
+            // list (and the panel) see a whole gesture. One that already
+            // moves decides the axis now: sideways, not even the panel's
+            // own swipe-to-hide sees it.
+            guard sample.dx != 0 || sample.dy != 0 else { return .pass }
+            return changed(sample, shown: shown)
         case .changed:
             if axis == nil { begin(allowed: allowed) }
             return changed(sample, shown: shown)

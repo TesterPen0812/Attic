@@ -177,6 +177,18 @@ final class TasksRound9Tests: XCTestCase {
         XCTAssertNil(swipe.axis)
     }
 
+    /// A gesture whose first event already moves decides on it: sideways,
+    /// even that first event is the pager's (the panel's swipe-to-hide
+    /// never sees a sample of it); up or down, it goes on.
+    func testAGestureThatBeginsMovingDecidesOnItsFirstEvent() {
+        XCTAssertTrue(send(.began, dx: -6), "a moving start sideways is the pager's")
+        XCTAssertTrue(swipe.isTracking)
+        send(.ended, gap: 0.3)
+        XCTAssertFalse(send(.began, dx: -1, dy: -6), "a moving start up or down is the list's")
+        XCTAssertEqual(swipe.axis, .vertical)
+        send(.ended)
+    }
+
     /// A gesture that starts outside the lists (the header, the add bar,
     /// another page of the shell) or during a row drag is never a swipe.
     func testASwipeStartsOnlyOverTheListsAndNeverDuringADrag() {

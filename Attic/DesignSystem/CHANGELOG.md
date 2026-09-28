@@ -318,3 +318,25 @@ The look ported, not the code: the design system's surface model now carries Pha
 - **Find highlight** (`AtticColorTokens.findHighlight`, `AtticText.highlights`,
   `AtticTaskRowModel.titleMatch`): a search match in a title sits on a soft yellow (Light 48 %,
   Dark 30 %; Increase Contrast 70 % / 42 %), its letters in the primary ink.
+
+### Phase 1 round 9: motion (owner items 24–26, 2026-09-28)
+
+- **Springy presets** (`AtticMotionPreset`): `bounce` is now per preset (was 0 everywhere).
+  Things that appear land with a bounce: `popover` 0.3 (0.26 s, rise 6, was 0.12 s and 4),
+  `toast` and `settle` 0.25 (`settle` gains a 6 pt rise for rows added or removed), `expand` and
+  `doneSlide` 0.2, `failReturn` 0.15. Pages stay firm: `slide` 0.15, `.snappy`'s bounce (about
+  2 pt on a 360 pt page), 0.32 s; `pageSwitch` (a crossfade) and `hover` never bounce. Durations
+  are at most 0.35 s. Reduce Motion fallbacks are unchanged.
+- **`AtticMotionPreset.release(velocity:distance:reduceMotion:)`**: a page released by a swipe
+  settles with the slide's duration, critically damped, starting at the fingers' speed, capped
+  below the speed that would carry it past the page (`releaseVelocity`). Owner item 25: no
+  overshoot, no spring-back.
+- **`AtticMotionPreset.exit(reduceMotion:)`**: leaving is a short fade-out with no bounce (the
+  Done search's field lets the keyboard go at once).
+- **`transition(reduceMotion:edge:)`** takes `.leading` and `.trailing` too (a sideways move of
+  twice the rise): the Done search comes in from the magnifier's end as the tabs leave.
+- **Settings › General › Animations** (`AtticAnimationLevel`: Full, Reduced): the design
+  context's `reduceMotion` is on for Reduced as for macOS Reduce Motion
+  (`atticDesignFromSystem(animations:)`), so every component and page following
+  `design.reduceMotion` (the Notes branch too) needs nothing more. Code outside a view reads
+  `AtticMotionPreference.reducesMotion` (the choice or the Mac's setting).
