@@ -32,6 +32,8 @@ struct AtticUndoToast: View {
 private struct AtticToastButton: View {
     let title: String
     let outerRadius: CGFloat
+    /// The toast's Undo also answers ⌘Z; the status pill's Retry does not.
+    var answersUndoKey = true
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -50,7 +52,7 @@ private struct AtticToastButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
-        .keyboardShortcut("z", modifiers: .command)
+        .keyboardShortcut(answersUndoKey ? KeyboardShortcut("z", modifiers: .command) : nil)
     }
 }
 
@@ -366,5 +368,181 @@ struct AtticReorderLift<Content: View>: View {
                 .padding(.horizontal, AtticLayout.rowHighlightInset)
                 .padding(.vertical, AtticTaskRowMetrics.pitchTopInset)
             }
+    }
+}
+
+// MARK: - Status slot (Phase 2, Notes)
+
+/// One state in the Notes status slot (UX plan § 3.12): its glyph, label,
+/// why, and what can be done. The slot's pill shows the most urgent; the
+/// details pop-over lists every one.
+struct AtticStatusItem: Identifiable {
+    enum Tone: Equatable { case warning, normal, quiet }
+    struct Action: Identifiable {
+        let title: String
+        var identifier: String?
+        let handler: () -> Void
+        var id: String { title }
+    }
+
+    let id: String
+    /// nil shows the small spinner (work in progress).
+    let systemName: String?
+    let title: String
+    var explanation: String?
+    var tone: Tone = .normal
+    var actions: [Action] = []
+}
+
+/// The status slot's pill between the Notes bottom buttons (p2-05, p2-15):
+/// a raised capsule, 36 tall, at most 176 wide, with the most urgent
+/// state's glyph and label (the warning colour for a problem), then the
+/// state's inline action ("Retry"), or "+N" when there is more, or ✕ for a
+/// batch that can be cancelled. A click, Return or VoiceOver opens the
+/// details; nothing needs hover.
+struct AtticStatusPill: View {
+    let item: AtticStatusItem
+    /// How many more states the details list.
+    var more = 0
+    /// Shown as a chip inside the pill (only when there is nothing more).
+    var inlineAction: AtticStatusItem.Action?
+    /// ✕ inside the pill (an import).
+    var onCancel: (() -> Void)?
+    let onOpen: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @State private var probeID = UUID()
+
+    var body: some View {
+        let m = AtticNoteMetrics.self
+        let radius = AtticRadius.control(height: m.pillHeight)
+        let ink: AtticInk = switch item.tone {
+        case .warning: .warningText
+        case .normal: .body
+        case .quiet: .helper
+        }
+        HStack(spacing: m.pillGap) {
+            Button(action: onOpen) {
+                HStack(spacing: m.pillGap) {
+                    if let systemName = item.systemName {
+                        AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium,
+                                  ink: item.tone == .warning ? .warningText : .icon)
+                    } else {
+                        AtticSpinner()
+                    }
+                    AtticText(verbatim: item.title, style: .toast, ink: ink, truncates: true)
+                    if more > 0 {
+                        AtticText(verbatim: "+\(more)", style: .count, ink: .body)
+                            .padding(.horizontal, AtticTagMetrics.horizontalPadding)
+                            .frame(height: AtticControlSize.tagHeight)
+                            .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: AtticControlSize.tagHeight), style: .continuous)
+                                .fill(design.tokens.chipHover.color))
+                    }
+                }
+                .frame(height: m.pillHeight)
+                .padding(.leading, m.pillPadding)
+                .padding(.trailing, inlineAction == nil && onCancel == nil ? m.pillPadding : 0)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(AtticUndimmedButtonStyle())
+            .focusEffectDisabled()
+            .accessibilityLabel(more > 0 ? String(localized: "\(item.title), and \(more) more") : item.title)
+            .accessibilityHint(String(localized: "Shows details"))
+            .accessibilityIdentifier("notes-status-primary")
+            if let inlineAction {
+                AtticToastButton(title: inlineAction.title, outerRadius: radius, answersUndoKey: false, action: inlineAction.handler)
+                    .accessibilityIdentifier(inlineAction.identifier ?? "notes-status-action")
+            } else if let onCancel {
+                AtticSmallButton(systemName: "xmark", label: "Cancel", action: onCancel)
+                    .accessibilityIdentifier("notes-status-cancel")
+            }
+        }
+        .padding(.trailing, inlineAction == nil && onCancel == nil ? 0 : AtticControlSize.capsuleInset)
+        .frame(maxWidth: m.pillMaxWidth)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: m.pillHeight)
+        .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+        .accessibilityElement(children: .contain)
+        .atticControlProbe("Status pill", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
+    }
+}
+
+/// The slot's details (p2-15 #2): every state with why and what to do, the
+/// first action as a button, the others quieter; hairlines between states.
+struct AtticStatusDetails: View {
+    let items: [AtticStatusItem]
+
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        let m = AtticNoteMetrics.self
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 {
+                    Rectangle().fill(design.tokens.divider.color).frame(height: AtticHairline.width)
+                        .padding(.vertical, m.detailsItemGap / 2)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: m.pillGap + 2) {
+                    Group {
+                        if let systemName = item.systemName {
+                            AtticIcon(systemName: systemName, size: m.pillIconSize, weight: .medium,
+                                      ink: item.tone == .warning ? .warningText : .icon)
+                        } else {
+                            AtticSpinner()
+                        }
+                    }
+                    .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 4) {
+                        AtticText(verbatim: item.title, style: .panelHeading, ink: item.tone == .warning ? .warningText : .heading)
+                        if let explanation = item.explanation {
+                            Text(verbatim: explanation)
+                                .font(AtticTextStyle.settingsHelper.font)
+                                .foregroundStyle(design.tokens.color(.helper))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if !item.actions.isEmpty {
+                            HStack(spacing: 4) {
+                                ForEach(Array(item.actions.enumerated()), id: \.element.id) { actionIndex, action in
+                                    AtticStatusDetailButton(title: action.title, prominent: actionIndex == 0, action: action.handler)
+                                        .accessibilityIdentifier(action.identifier ?? "")
+                                }
+                            }
+                            .padding(.top, 6)
+                            .padding(.leading, -AtticToastMetrics.buttonPadding)
+                        }
+                    }
+                }
+                .accessibilityElement(children: .contain)
+            }
+        }
+        .padding(m.detailsPadding)
+        .frame(width: m.detailsWidth, alignment: .leading)
+        .accessibilityIdentifier("notes-status-details")
+    }
+}
+
+private struct AtticStatusDetailButton: View {
+    let title: String
+    let prominent: Bool
+    let action: () -> Void
+
+    @Environment(\.atticDesign) private var design
+    @State private var hovered = false
+
+    var body: some View {
+        let height = AtticControlSize.smallHeight
+        let radius = AtticRadius.control(height: height)
+        let fill: AtticRGBA = prominent ? (hovered ? design.tokens.chipSelected : design.tokens.chipHover)
+            : (hovered ? design.tokens.chipHover : .clear)
+        Button(action: action) {
+            AtticText(verbatim: title, style: .controlLabel, ink: prominent ? .heading : .body)
+                .padding(.horizontal, AtticToastMetrics.buttonPadding)
+                .frame(height: height)
+                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill.color))
+                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .onHover { hovered = $0 }
+        .accessibilityLabel(title)
     }
 }

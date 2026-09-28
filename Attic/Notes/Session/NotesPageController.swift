@@ -1294,6 +1294,7 @@ extension NotesPageController {
         }
         guard newNote() else { return false }
         isLibraryPresented = false
+        present()
         return true
     }
 

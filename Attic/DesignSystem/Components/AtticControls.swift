@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private struct AtticControlStateKey: EnvironmentKey {
@@ -503,6 +504,13 @@ struct AtticListSearchField: View {
     let placeholder: String
     @Binding var text: String
     var isFocused: Binding<Bool>?
+    /// The magnifier's and the text's lines (Tasks: the circles' and the
+    /// titles'; All notes: the note column, `AtticNoteMetrics`).
+    var iconX: CGFloat = AtticLayout.circleX
+    var textX: CGFloat = AtticLayout.textX
+    /// Keys the field passes on (All notes: ↑ ↓ move through the list,
+    /// Return opens).
+    var onKeyPress: ((KeyPress) -> KeyPress.Result)?
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticCapture) private var capture
@@ -522,7 +530,7 @@ struct AtticListSearchField: View {
             }
             AtticIcon(systemName: "magnifyingglass", size: m.iconSize, weight: AtticIconWeight.outline, ink: .helper)
                 .frame(width: AtticControlSize.statusCircle)
-                .padding(.leading, AtticLayout.circleX)
+                .padding(.leading, iconX)
             HStack(spacing: AtticTaskRowMetrics.trailingMinGap) {
                 if capture == nil {
                     TextField("", text: $text, prompt: Text(verbatim: placeholder).foregroundStyle(tokens.color(.helper)))
@@ -533,6 +541,7 @@ struct AtticListSearchField: View {
                         .onExitCommand {
                             if text.isEmpty { focused = false } else { text = "" }
                         }
+                        .onKeyPress(phases: .down) { press in onKeyPress?(press) ?? .ignored }
                         .accessibilityLabel(placeholder)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -550,7 +559,7 @@ struct AtticListSearchField: View {
                     .accessibilityLabel(String(localized: "Clear search"))
                 }
             }
-            .padding(.leading, AtticLayout.textX)
+            .padding(.leading, textX)
             .padding(.trailing, AtticLayout.rowHighlightInset + AtticTaskRowMetrics.dateInset)
         }
         .frame(height: AtticLayout.rowPitch)
@@ -731,6 +740,13 @@ struct AtticMenuCommand: Identifiable {
     var isDisabled = false
     /// Starts a new section (the system draws its separator).
     var startsSection = false
+    /// A choice that is on (the system's checkmark).
+    var isChecked = false
+    /// Items of a submenu (Insert ▸, Format ▸): the command opens them
+    /// instead of acting.
+    var submenu: [AtticMenuCommand] = []
+    /// For UI tests and automation.
+    var identifier: String?
     let action: () -> Void
 
     init(
@@ -740,6 +756,8 @@ struct AtticMenuCommand: Identifiable {
         isDestructive: Bool = false,
         isDisabled: Bool = false,
         startsSection: Bool = false,
+        isChecked: Bool = false,
+        identifier: String? = nil,
         action: @escaping () -> Void
     ) {
         self.title = String(localized: title)
@@ -748,7 +766,16 @@ struct AtticMenuCommand: Identifiable {
         self.isDestructive = isDestructive
         self.isDisabled = isDisabled
         self.startsSection = startsSection
+        self.isChecked = isChecked
+        self.identifier = identifier
         self.action = action
+    }
+
+    /// A submenu.
+    init(_ title: String.LocalizationValue, startsSection: Bool = false, identifier: String? = nil,
+         submenu: [AtticMenuCommand]) {
+        self.init(title, startsSection: startsSection, identifier: identifier, action: {})
+        self.submenu = submenu
     }
 }
 
@@ -798,20 +825,103 @@ struct AtticMenuItems: View {
 
     @ViewBuilder
     private func item(_ command: AtticMenuCommand) -> some View {
-        let button = Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
-            if let systemImage = command.systemImage {
-                SwiftUI.Label(command.title, systemImage: systemImage)
+        if !command.submenu.isEmpty {
+            Menu(command.title) { AtticMenuItems(commands: command.submenu) }
+                .disabled(command.isDisabled)
+        } else {
+            let button = Button(role: command.isDestructive ? .destructive : nil, action: command.action) {
+                if command.isChecked {
+                    SwiftUI.Label(command.title, systemImage: "checkmark")
+                } else if let systemImage = command.systemImage {
+                    SwiftUI.Label(command.title, systemImage: systemImage)
+                } else {
+                    Text(command.title)
+                }
+            }
+            .disabled(command.isDisabled)
+            if let shortcut = command.shortcut {
+                button.keyboardShortcut(shortcut)
             } else {
-                Text(command.title)
+                button
             }
         }
-        .disabled(command.isDisabled)
-        if let shortcut = command.shortcut {
-            button.keyboardShortcut(shortcut)
-        } else {
-            button
+    }
+}
+
+/// The same commands as a native `NSMenu`, popped up from an AppKit view:
+/// for a menu a key opens (the note's ⇧⌘I) or a button that lives inside
+/// an AppKit view (the ⋯ on a note's title). Items, sections, checkmarks,
+/// submenus and shortcuts match `AtticMenuItems`; the menu follows the
+/// window's appearance, as every native menu in Attic does.
+@MainActor
+enum AtticNativeMenu {
+    static func make(_ commands: [AtticMenuCommand]) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for command in commands {
+            if command.startsSection, command.id != commands.first?.id { menu.addItem(.separator()) }
+            menu.addItem(item(command))
+        }
+        return menu
+    }
+
+    /// Opens the menu under `rect` (in `view`'s coordinates), aligned to
+    /// its leading edge; returns when the menu closes.
+    static func popUp(_ commands: [AtticMenuCommand], below rect: NSRect, in view: NSView) {
+        let menu = make(commands)
+        let point = NSPoint(x: rect.minX, y: view.isFlipped ? rect.maxY + 4 : rect.minY - 4)
+        menu.popUp(positioning: nil, at: point, in: view)
+    }
+
+    private static func item(_ command: AtticMenuCommand) -> NSMenuItem {
+        let item = NSMenuItem(title: command.title, action: nil, keyEquivalent: "")
+        item.isEnabled = !command.isDisabled
+        item.state = command.isChecked ? .on : .off
+        if let identifier = command.identifier {
+            item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            item.setAccessibilityIdentifier(identifier)
+        }
+        if !command.submenu.isEmpty {
+            let submenu = make(command.submenu)
+            submenu.title = command.title
+            item.submenu = submenu
+            return item
+        }
+        let target = AtticMenuAction(command.action)
+        item.target = target
+        item.action = #selector(AtticMenuAction.perform(_:))
+        item.representedObject = target
+        if let shortcut = command.shortcut, let key = keyEquivalent(shortcut.key) {
+            item.keyEquivalent = key
+            item.keyEquivalentModifierMask = modifiers(shortcut.modifiers)
+        }
+        return item
+    }
+
+    private static func keyEquivalent(_ key: KeyEquivalent) -> String? {
+        switch key {
+        case .delete: "\u{8}"
+        case .return: "\r"
+        case .escape: "\u{1b}"
+        default: String(key.character)
         }
     }
+
+    private static func modifiers(_ modifiers: EventModifiers) -> NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers.contains(.command) { flags.insert(.command) }
+        if modifiers.contains(.shift) { flags.insert(.shift) }
+        if modifiers.contains(.option) { flags.insert(.option) }
+        if modifiers.contains(.control) { flags.insert(.control) }
+        return flags
+    }
+}
+
+/// Runs a native menu item's closure (the item keeps it alive).
+private final class AtticMenuAction: NSObject {
+    let action: () -> Void
+    init(_ action: @escaping () -> Void) { self.action = action }
+    @objc func perform(_ sender: Any?) { action() }
 }
 
 /// A title that opens its item's native menu (spec § Minimalism: anything

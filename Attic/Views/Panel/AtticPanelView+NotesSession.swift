@@ -5,6 +5,8 @@ import SwiftUI
 /// store changes while it shows. Rebuilt with Notes in phase 2.
 extension AtticPanelView {
     func openMostRecentNoteIfNeeded() {
+        // The new Notes page reopens the last note itself (Phase 2).
+        guard !NotesEditorSetting.isEnabled() else { return }
         guard hasRestoredNoteSession,
               uiState.selectedSection.isNotes,
               !uiState.isComposerPresented,

@@ -441,3 +441,49 @@ enum AtticPaletteTileMetrics {
 enum AtticTagMetrics {
     static let horizontalPadding: CGFloat = 6
 }
+
+// MARK: - Notes (Phase 2, slice 2)
+
+/// The writing view and All notes (UX plan § 2, mockups p2-01, p2-02,
+/// p2-05, p2-15).
+enum AtticNoteMetrics {
+    /// The note's text column: 4 inside the chrome's 24 pt line (28 from
+    /// the panel's edge, the Tasks circles' line), moving inward with it.
+    static let columnInset: CGFloat = 4
+    /// The title's first line sits 16 under the header (y = 76 in a
+    /// 320 × 520 panel).
+    static let titleTopGap: CGFloat = 16
+    /// The ⋯ at the end of the title's first line: a 28 pt target, its
+    /// glyph on the column's trailing edge; the title's lines keep 32 clear.
+    static let menuButtonSize: CGFloat = 28
+    static let menuGlyphSize: CGFloat = 15
+    static let titleTrailingReserve: CGFloat = 32
+    /// Tags under the title: 12 apart, lines 4 apart.
+    static let tagSpacing: CGFloat = 12
+    static let tagLineSpacing: CGFloat = 2
+    /// The header title (a scrolled-away title): 36 tall, at most as wide as
+    /// the room between the pin and the page button.
+    static let headerTitlePadding: CGFloat = 14
+    /// The status slot's pill: 36 tall, at most 176 wide (12 clear of each
+    /// bottom button in a 320 pt panel).
+    static let pillHeight: CGFloat = 36
+    static let pillMaxWidth: CGFloat = 176
+    static let pillIconSize: CGFloat = 13
+    static let pillGap: CGFloat = 6
+    static let pillPadding: CGFloat = 12
+    /// The details pop-over (p2-15 #2): 280 wide, items 14 apart.
+    static let detailsWidth: CGFloat = 280
+    static let detailsPadding: CGFloat = 16
+    static let detailsItemGap: CGFloat = 14
+    /// All notes: the search row's magnifier and text, and the rows' text,
+    /// on the note column (16 inside the list's 12 pt page edge).
+    static let searchIconX: CGFloat = 14
+    static let searchTextX: CGFloat = 36
+    static let rowTextX: CGFloat = 16
+    static let countIconSize: CGFloat = 10
+    static let countGap: CGFloat = 3
+    static let countsSpacing: CGFloat = 8
+    /// The tag editor: 240 wide, at most 8 rows before it scrolls.
+    static let tagEditorWidth: CGFloat = 240
+    static let tagEditorMaxListHeight: CGFloat = 8 * 28
+}

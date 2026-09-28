@@ -273,7 +273,9 @@ final class CornerHoverMonitor {
         let targetSection = section ?? uiState.selectedSection
 
         if targetSection != uiState.selectedSection {
-            if uiState.selectedSection.isNotes, noteDraft.isActive {
+            if uiState.selectedSection.isNotes, NotesEditorSetting.isEnabled() {
+                guard noteDraft.prepareToLeave(.pageSwitch) else { return .unsavedNote }
+            } else if uiState.selectedSection.isNotes, noteDraft.isActive {
                 guard noteDraft.close() else { return .unsavedNote }
             }
             PerformanceSignposts.beginPageSwitch()
@@ -281,6 +283,14 @@ final class CornerHoverMonitor {
         }
 
         guard openComposer else { return nil }
+        if targetSection.isNotes, NotesEditorSetting.isEnabled() {
+            // The new Notes page: New Note always starts a fresh draft.
+            guard noteDraft.pages.requestNewNote() else {
+                PerformanceSignposts.cancelPageSwitch()
+                return .unsavedNote
+            }
+            return nil
+        }
         if targetSection.isNotes {
             guard noteDraft.beginNew() else {
                 PerformanceSignposts.cancelPageSwitch()

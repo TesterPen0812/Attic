@@ -54,9 +54,8 @@ enum NoteMarkdownExport {
 
     /// A date as the note shows it, with the year: "Thu, 1 Oct 2026".
     static func dateText(_ day: NoteDay, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        var style = Date.FormatStyle(date: .omitted, time: .omitted, locale: locale, calendar: calendar)
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
             .weekday(.abbreviated).day().month(.abbreviated).year()
-        style.timeZone = calendar.timeZone
         return day.date(in: calendar).formatted(style)
     }
 

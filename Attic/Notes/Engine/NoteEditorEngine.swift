@@ -62,6 +62,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// The note's tags changed (the title shorthand, its Undo or Redo, or
     /// the tag editor). Tags are saved with the document.
     var onTagsChange: (() -> Void)?
+    /// The tag line redraws (the page's; separate from the session's save hook).
+    var onTagsDisplayChange: (() -> Void)?
+
+    fileprivate func notifyTagsChanged() {
+        onTagsChange?()
+        onTagsDisplayChange?()
+    }
 
     /// The note's tags: normalised, unique, sorted (`AtticTag`). Metadata
     /// kept beside the text, saved with the document in one transaction.
@@ -1227,7 +1234,7 @@ extension NoteEditorEngine {
         let normalized = AtticTag.normalizedSet(newTags)
         guard normalized != tags else { return }
         tags = normalized
-        onTagsChange?()
+        notifyTagsChanged()
     }
 
     /// The `#word` just before the caret in the title, when it would become
@@ -1275,7 +1282,7 @@ extension NoteEditorEngine {
         if isNew {
             history.attachTagToLast(tag)
             tags = AtticTag.normalizedSet(tags + [tag])
-            onTagsChange?()
+            notifyTagsChanged()
         }
         return true
     }
@@ -1300,7 +1307,7 @@ extension NoteEditorEngine {
                 literalHashLocation = range.location
             }
         }
-        onTagsChange?()
+        notifyTagsChanged()
     }
 
     // MARK: Title boundaries

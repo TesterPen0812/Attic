@@ -224,8 +224,12 @@ final class NoteObjectRenderer {
 
     func checkbox(checked: Bool) -> NSImage {
         if let image = checkboxes[checked] { return image }
-        let image = render(AtticSubtaskCheckbox(isDone: checked))
-            ?? NSImage(size: CGSize(width: NoteChecklistAttachment.boxSize, height: NoteChecklistAttachment.boxSize))
+        // The attachment is the box plus its gap before the text: the image
+        // is that wide too, so the box is never stretched.
+        let size = CGSize(width: NoteChecklistAttachment.boxSize + NoteChecklistAttachment.trailingGap,
+                          height: NoteChecklistAttachment.boxSize)
+        let image = render(AtticSubtaskCheckbox(isDone: checked).frame(width: size.width, height: size.height, alignment: .leading))
+            ?? NSImage(size: size)
         checkboxes[checked] = image
         return image
     }

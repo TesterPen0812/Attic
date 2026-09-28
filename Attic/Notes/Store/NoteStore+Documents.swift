@@ -179,6 +179,31 @@ extension NoteStore {
         return commitStagedChanges()
     }
 
+    // MARK: Search
+
+    /// All notes' search: titles, text and image or file names. Read from
+    /// its own context away from the main actor, so typing never waits for
+    /// it; the caller keeps its earlier results on screen meanwhile.
+    func searchNoteIDs(matching query: String) async throws -> Set<UUID> {
+        let container = self.container
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        return try await Task.detached(priority: .userInitiated) {
+            let context = ModelContext(container)
+            let notes = try context.fetch(FetchDescriptor<NoteItem>(predicate: #Predicate { note in
+                note.deletedAt == nil && (note.title.localizedStandardContains(text)
+                    || note.plainText.localizedStandardContains(text)
+                    || note.body.localizedStandardContains(text))
+            }))
+            var ids = Set(notes.map(\.id))
+            let files = try context.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { attachment in
+                attachment.deletedAt == nil && attachment.originalFilename.localizedStandardContains(text)
+            }))
+            ids.formUnion(files.map(\.noteID))
+            return ids
+        }.value
+    }
+
     // MARK: Loading
 
     func loadDocument(noteID: UUID) -> NoteDocumentLoad? {
