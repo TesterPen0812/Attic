@@ -281,6 +281,80 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         XCTAssertNotNil(session.notice, "and says why")
     }
 
+    // MARK: Recheck — a tag-only change survives an external delete
+
+    /// Opens a tagged note, changes only its tags, deletes the note
+    /// elsewhere, checkpoints, optionally rewrites the recovery file in the
+    /// older JSON format, relaunches and keeps the draft as a new note.
+    private func tagOnlyChangeSurvivesExternalDelete(from original: [String], to changed: [String],
+                                                     olderFormat: Bool) throws {
+        let id = try create([.text("Trip"), .text("Body")], tags: original)
+        let first = makeController()
+        XCTAssertTrue(first.open(noteID: id))
+        let session = try XCTUnwrap(first.active)
+        session.engine.setTags(changed)
+        XCTAssertEqual(session.state, .dirty)
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))), "deleted elsewhere")
+        XCTAssertTrue(first.preserve(session))
+        XCTAssertEqual(session.state, .conflict(.deleted))
+        let file = directory.appendingPathComponent("\(id.uuidString).json")
+        if olderFormat {
+            // The format before `tagsChanged`: `tags` present only for a change.
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+            XCTAssertNotNil(json.removeValue(forKey: "tagsChanged"))
+            try JSONSerialization.data(withJSONObject: json).write(to: file)
+            let decoded = try XCTUnwrap(try NoteDraftJournal(directory: directory).entries().first?.0)
+            XCTAssertNil(decoded.tagsChanged, "decoded from the older format")
+            XCTAssertEqual(decoded.changedTags, AtticTag.normalizedSet(changed))
+        }
+        let relaunched = makeController()
+        relaunched.recoverAtLaunch()
+        relaunched.start()
+        let recovered = try XCTUnwrap(relaunched.active, "the draft is recovered, not dropped")
+        XCTAssertEqual(recovered.noteID, id)
+        XCTAssertEqual(recovered.state, .conflict(.deleted))
+        XCTAssertEqual(recovered.engine.tags, AtticTag.normalizedSet(changed))
+        XCTAssertTrue(relaunched.keepAsNewNote())
+        let kept = try XCTUnwrap(relaunched.active)
+        XCTAssertNotEqual(kept.noteID, id)
+        XCTAssertEqual(store.note(withID: kept.noteID)?.tags ?? [], AtticTag.normalizedSet(changed),
+                       "Keep as new note keeps the changed tags")
+        XCTAssertEqual(store.loadDocument(noteID: kept.noteID)?.content.document?.title, "Trip")
+    }
+
+    func testAnAddedTagSurvivesAnExternalDeleteAndRelaunch() throws {
+        try tagOnlyChangeSurvivesExternalDelete(from: ["travel"], to: ["travel", "kyoto"], olderFormat: false)
+    }
+
+    func testARemovedTagSurvivesAnExternalDeleteAndRelaunch() throws {
+        try tagOnlyChangeSurvivesExternalDelete(from: ["travel", "kyoto"], to: ["travel"], olderFormat: false)
+    }
+
+    func testAnAddedTagInAnOlderRecoveryFileSurvivesAnExternalDelete() throws {
+        try tagOnlyChangeSurvivesExternalDelete(from: ["travel"], to: ["travel", "kyoto"], olderFormat: true)
+    }
+
+    func testARemovedTagInAnOlderRecoveryFileSurvivesAnExternalDelete() throws {
+        try tagOnlyChangeSurvivesExternalDelete(from: ["travel", "kyoto"], to: [], olderFormat: true)
+    }
+
+    func testAHighlightedFailedDraftStaysHighlightedWhileItStillMatches() async throws {
+        let draftID = UUID()
+        let library = NotesLibraryModel(search: { _ in [] })
+        library.failedDraftText = { $0 == draftID ? "Draft\nhidden kyoto detail" : nil }
+        library.query = "kyo"
+        for _ in 0..<100 where library.matches == nil { try await Task.sleep(for: .milliseconds(10)) }
+        library.highlightedID = draftID
+        library.retry()
+        for _ in 0..<100 where library.searchState != .idle { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(library.highlightedID, draftID, "the draft still matches")
+        library.failedDraftText = { _ in nil }
+        library.retry()
+        for _ in 0..<100 where library.highlightedID != nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNil(library.highlightedID, "a draft that no longer matches loses the highlight")
+    }
+
     // MARK: Should fix
 
     func testReturnInTheTagEditorActsOnlyOnWhatWasTyped() {

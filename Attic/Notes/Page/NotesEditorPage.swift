@@ -78,6 +78,11 @@ struct NotesEditorPage: View {
             controller.start()
             controller.present()
             chrome.menuCommands = { noteMenuCommands() }
+            library.failedDraftText = { [controller, noteStore] id in
+                guard noteStore.note(withID: id) == nil,
+                      let draft = controller.failedDrafts.first(where: { $0.noteID == id }) else { return nil }
+                return NoteTextExport.plainText(draft.engine.document())
+            }
         }
         .onChange(of: design) { _, newValue in controller.update(design: newValue) }
         .onChange(of: controller.legacyNoteID) { _, id in openLegacy(id) }

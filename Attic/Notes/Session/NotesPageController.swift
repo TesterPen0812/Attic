@@ -950,10 +950,12 @@ final class NotesPageController: ObservableObject {
             // A copy that matches the note as it was deleted (a delete made
             // here whose recovery copy could not be removed) holds nothing the
             // deleted note doesn't: it is retired, never a conflict.
+            // Its tags must match too: a tag-only change is unsaved work.
             if stored == nil, let base = entry.baseRevisionID,
                replicas.contains(where: { replica in
                    replica.deletedAt != nil && replica.revisionID == base
                        && replica.content.flatMap { NoteContentCodec.decode($0).document } == document
+                       && (entry.changedTags == nil || entry.changedTags == replica.tags)
                }) {
                 try? journal.remove(noteID: entry.noteID)
                 continue

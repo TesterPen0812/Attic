@@ -40,6 +40,9 @@ final class NotesLibraryModel: ObservableObject {
 
     /// Runs a search; tests inject failures and delays.
     var search: (String) async throws -> Set<UUID>
+    /// The whole text of a never-saved failed draft (they are searched here,
+    /// not in the store), so a highlighted draft that still matches stays.
+    var failedDraftText: (UUID) -> String? = { _ in nil }
     private let now: () -> Date
     private let calendar: Calendar
     private var searchTask: Task<Void, Never>?
@@ -95,7 +98,10 @@ final class NotesLibraryModel: ObservableObject {
                 let found = try await run(text)
                 guard !Task.isCancelled, let self else { return }
                 // A highlight on a row the results no longer show goes.
-                if let highlighted = self.highlightedID, !found.contains(highlighted) { self.highlightedID = nil }
+                if let highlighted = self.highlightedID, !found.contains(highlighted),
+                   self.failedDraftText(highlighted)?.localizedStandardContains(text) != true {
+                    self.highlightedID = nil
+                }
                 self.matches = found
                 self.matchedQuery = text
                 self.searchState = .idle
