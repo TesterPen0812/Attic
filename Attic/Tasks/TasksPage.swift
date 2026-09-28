@@ -563,6 +563,11 @@ struct TasksPage: View {
                     }
                 }
                 .animation(travel, value: rows.map(\.id))
+                // The pages beside the one shown are built for the swipe;
+                // VoiceOver reads only the page shown. Hidden here, inside
+                // the list, too: the page's own `accessibilityHidden` does
+                // not reach into the list's scroll view (round 9, CI run 1).
+                .accessibilityHidden(tab != model.tab)
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
                 .padding(.bottom, bottomClearance - bottomMargin)

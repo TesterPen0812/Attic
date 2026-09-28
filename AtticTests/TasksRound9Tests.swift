@@ -310,6 +310,26 @@ final class TasksRound9Tests: XCTestCase {
         XCTAssertEqual(hosted.shownPage(), 0, "Now from Done lands on Now")
     }
 
+    /// On Later (hosted, settled), every click on a row reaches a Later
+    /// row, never one of the pages beside it.
+    func testTheHostedPageShownTakesTheClicks() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.go(to: .backlog)
+        let later = Set(hosted.model.rows(for: .backlog).map(\.id))
+        var hits: [UUID] = []
+        var y: CGFloat = 60
+        while y < 300 {
+            hosted.model.clearSelection()
+            hosted.spin(0.02)
+            hosted.click(y: y)
+            hits += hosted.model.selection
+            y += 8
+        }
+        XCTAssertFalse(hits.isEmpty, "clicks on Later select rows")
+        XCTAssertTrue(hits.allSatisfy(later.contains), "every click lands on a Later row")
+    }
+
     // MARK: - Settings › Animations
 
     func testAnimationsIsASettingThatReducesMotion() throws {

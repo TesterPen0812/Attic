@@ -46,7 +46,7 @@ final class TasksPagerMotion: ObservableObject {
     @Published private(set) var fadingOut: Int?
     @Published private(set) var fade: CGFloat = 1
     /// What the UI tests read (DEBUG, `ATTIC_UI_TEST_PAGER_TRACE`).
-    @Published private(set) var trace = ""
+    @Published private(set) var trace = "reach=0.00 lead=-1.00 page=0"
 
     /// A settle is (probably) still moving: a new swipe then catches the
     /// page with a short spring instead of jumping from where it is heading.
