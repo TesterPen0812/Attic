@@ -520,9 +520,12 @@ final class TasksPageUITests: XCTestCase {
     func testTheSelectionBarsControlsTakeTheirClicks() throws {
         select("Call the plumber")
         XCUIElement.perform(withKeyModifiers: .command) { select("Email beta testers") }
-        let move = window.buttons["Move 2 tasks to Later"]
+        func barButton(_ label: String) -> XCUIElement {
+            window.descendants(matching: .button).matching(NSPredicate(format: "label == %@", label)).firstMatch
+        }
+        let move = barButton("Move 2 tasks to Later")
         XCTAssertTrue(move.waitForExistence(timeout: 3), "the selection bar shows")
-        window.buttons["Set priority of 2 tasks"].click()
+        barButton("Set priority of 2 tasks").click()
         let high = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3), "its priority menu opens")
         XCTAssertFalse(app.menuItems.matching(NSPredicate(format: "title == %@", "Low")).firstMatch.exists, "no Low")

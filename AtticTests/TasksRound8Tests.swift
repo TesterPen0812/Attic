@@ -135,6 +135,13 @@ final class TasksRound8Tests: XCTestCase {
             XCTAssertFalse(swipe.mayCorrect(ticket, to: 0, shown: shown), "\(name) came after: the queued correction is stale")
             _ = swipe.phaseChanged(to: .idle, shown: shown)
         }
+        // The still-pager check: off its page with no swipe holding it.
+        swipe.geometry = .init(offset: 640, width: 320)
+        XCTAssertTrue(swipe.needsRestCorrection(page: 1), "Done shown under a Later tab")
+        XCTAssertFalse(swipe.needsRestCorrection(page: 2))
+        _ = swipe.phaseChanged(to: .interacting, shown: 1)
+        XCTAssertFalse(swipe.needsRestCorrection(page: 1), "a swipe in progress keeps its place")
+        _ = swipe.phaseChanged(to: .idle, shown: 1)
         // The model's page changed without a navigation (a failed settle):
         // the destination no longer matches.
         let ticket = swipe.correctionTicket()

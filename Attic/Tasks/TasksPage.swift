@@ -431,6 +431,18 @@ struct TasksPage: View {
                                      width: geometry.containerSize.width)
         } action: { [swipe] _, geometry in
             swipe.geometry = geometry
+            // Once the pager has stood still a moment with no swipe in
+            // progress, it must show the model's page (round 8, CI run 1:
+            // the idle correction was not enough; a synthetic swipe still
+            // left Done under a Later tab). The check reads everything when
+            // it runs, so newer navigation simply wins.
+            swipe.scheduleRestCheck {
+                let page = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
+                guard swipe.needsRestCorrection(page: page) else { return }
+                withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
+                    proxy.scrollTo(model.tab, anchor: .leading)
+                }
+            }
         }
         .onScrollPhaseChange { _, phase in
             let shown = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
@@ -2457,6 +2469,26 @@ final class TasksPagerSwipe {
     /// Counts what happened (a gesture, explicit navigation): a correction
     /// queued at rest runs only if nothing has since (round 8, G3).
     private(set) var generation = 0
+
+    /// The pending check that the pager, standing still, shows its page.
+    private var restCheck: DispatchWorkItem?
+
+    /// How long the pager must stand still before it is checked.
+    static let restDelay: TimeInterval = 0.35
+
+    /// (Re)starts the still-pager check: every geometry change moves it on.
+    func scheduleRestCheck(_ check: @escaping @MainActor () -> Void) {
+        restCheck?.cancel()
+        let work = DispatchWorkItem { MainActor.assumeIsolated { check() } }
+        restCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.restDelay, execute: work)
+    }
+
+    /// The pager, still, is off `page` and no swipe holds it there (a swipe
+    /// in progress, fingers resting, keeps its place).
+    func needsRestCorrection(page: Int) -> Bool {
+        origin == nil && Self.isOffPage(geometry: geometry, page: page)
+    }
 
     /// Taken when a correction is queued at rest.
     func correctionTicket() -> Int { generation }

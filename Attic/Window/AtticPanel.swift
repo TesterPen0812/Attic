@@ -1290,12 +1290,29 @@ final class AtticPanelHostingView: NSHostingView<AtticPanelView> {
 
     override func cancelOperation(_ sender: Any?) {
         guard interactionLifecycle.activeInteraction != nil else {
-            // NSView (and so the hosting view) declares but does not
-            // implement cancelOperation:; `super` would raise.
+            // SwiftUI's exit commands (`onExitCommand`: a new subtask's
+            // field, a title editor, Done's details) are reached through
+            // the hosting view's own forwarding for the command; this
+            // override shadowed it, so Esc never reached them inside the
+            // panel (round 8: the quick look's CI test). Forward first;
+            // otherwise pass Esc up. `super` itself would raise: NSView
+            // declares cancelOperation: without implementing it.
+            if let target = Self.exitCommandTarget(super.forwardingTarget(for: #selector(cancelOperation(_:))), excluding: self) {
+                _ = target.tryToPerform(#selector(cancelOperation(_:)), with: sender)
+                return
+            }
             passUp(#selector(cancelOperation(_:)), sender)
             return
         }
         cancelActiveInteraction(reason: .escape)
+    }
+
+    /// The responder SwiftUI forwards an exit command to, if one answers it
+    /// (never this view itself).
+    static func exitCommandTarget(_ forwarded: Any?, excluding view: NSView) -> NSResponder? {
+        guard let responder = forwarded as? NSResponder, responder !== view,
+              responder.responds(to: #selector(NSResponder.cancelOperation(_:))) else { return nil }
+        return responder
     }
 
     func cancelActiveInteraction(
