@@ -146,4 +146,78 @@ final class NoteFormatTests: XCTestCase {
         XCTAssertNil(NoteDay(isoString: "26-02-01"))
         XCTAssertNil(NoteDay(isoString: "2026-2-1"))
     }
+
+    @MainActor func testStructureAndMarksRoundTripWithDeepHeadingAndObjectBoundary() throws {
+        var heading = NoteBlock.text("Imported", style: "heading")
+        heading.level = 5
+        var list = NoteBlock.text("A😀B\u{FFFC}C", style: "bullet")
+        list.indent = 2
+        list.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        list.marks = [NoteMark(.bold, offset: 0, length: 4),
+                      NoteMark(.link, offset: 5, length: 1, url: "https://example.com")]
+        let document = NoteDocument(blocks: [.text("Title"), heading, list, .divider()])
+        let bytes = try NoteContentCodec.encode(document)
+        let json = try XCTUnwrap(JSONDecoder().decode(NoteJSON.self, from: bytes).objectValue)
+        XCTAssertEqual(Set(json["requires"]?.arrayValue?.compactMap(\.stringValue) ?? []),
+                       ["structure-v1", "inline-marks-v1"])
+        guard case let .editable(decoded) = NoteContentCodec.decode(bytes) else { return XCTFail("not editable") }
+        XCTAssertEqual(decoded.blocks, document.blocks)
+        XCTAssertEqual(decoded.blocks[1].level, 5)
+        XCTAssertEqual(try NoteContentCodec.encode(decoded), bytes)
+        XCTAssertEqual(NoteTextKitRoundTrip.document(afterRoundTrip: decoded).blocks, document.blocks)
+        XCTAssertTrue(NoteMarkdownExport.markdown(decoded).contains("##### Imported"))
+    }
+
+    func testOlderEditorRejectsNewCapabilitiesWithoutChangingBytes() throws {
+        var block = NoteBlock.text("bold")
+        block.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        let bytes = try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), block]))
+        let json = try XCTUnwrap(JSONDecoder().decode(NoteJSON.self, from: bytes).objectValue)
+        let required = Set(json["requires"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+        XCTAssertFalse(required.isSubset(of: ["text", "checklist", "image", "date"]), "older slice-1 preview must open read-only")
+        let olderFixture = Data(#"{"format":1,"requires":["inline-marks-v1"],"blocks":[{"kind":"text","text":"T"}]}"#.utf8)
+        XCTAssertEqual(NoteContentCodec.decode(olderFixture).isEditable, true, "this build knows the capability")
+        let corrupt = Data(#"{"format":1,"requires":["inline-marks-v1"],"blocks":[{"kind":"text","text":"T"},{"kind":"text","text":"abc","marks":[{"kind":"bold","offset":2,"length":2}]}]}"#.utf8)
+        guard case let .readOnly(original, .unsupportedContent, _) = NoteContentCodec.decode(corrupt) else { return XCTFail() }
+        XCTAssertEqual(original, corrupt)
+    }
+
+    func testMarkOffsetFuzzNeverProducesWritableShiftedRange() {
+        for offset in -2...7 {
+            for length in -1...7 {
+                let json = #"{"format":1,"requires":["inline-marks-v1"],"blocks":[{"kind":"text","text":"T"},{"kind":"text","text":"A😀￼B","inline":[{"kind":"date","id":"\#(dateID.uuidString)","offset":3,"date":"2026-10-01"}],"marks":[{"kind":"bold","offset":\#(offset),"length":\#(length)}]}]}"#
+                let editable = NoteContentCodec.decode(Data(json.utf8)).isEditable
+                let units = Array("A😀\u{FFFC}B".utf16)
+                let valid = offset >= 0 && length > 0 && offset + length <= units.count &&
+                    !units[offset..<min(units.count, offset + length)].contains(NoteDocument.objectUnit) &&
+                    offset != 2 && offset + length != 2
+                XCTAssertEqual(editable, valid, "offset \(offset), length \(length)")
+            }
+        }
+    }
+
+    func testEncoderRefusesMarkAcrossObjectOrEmojiBoundary() {
+        var block = NoteBlock.text("A😀\u{FFFC}B")
+        block.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        block.marks = [NoteMark(.bold, offset: 2, length: 1)]
+        XCTAssertThrowsError(try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), block])))
+        block.marks = [NoteMark(.bold, offset: 1, length: 3)]
+        XCTAssertThrowsError(try NoteContentCodec.encode(NoteDocument(blocks: [.text("T"), block])))
+    }
+
+    func testStyledFirstBlockIsReadOnlyInsteadOfSilentlyBecomingATitle() {
+        let raw = Data(#"{"format":1,"requires":["structure-v1"],"blocks":[{"kind":"text","text":"T","style":"heading","level":2}]}"#.utf8)
+        guard case let .readOnly(original, .unsupportedContent, _) = NoteContentCodec.decode(raw) else { return XCTFail() }
+        XCTAssertEqual(original, raw)
+    }
+
+    func testMarkdownExportsNumberedSequenceAndAllMarks() {
+        var first = NoteBlock.text("Read", style: "number")
+        first.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        var second = NoteBlock.text("Visit", style: "number")
+        second.marks = [NoteMark(.link, offset: 0, length: 5, url: "https://example.com")]
+        let document = NoteDocument(blocks: [.text("Plan"), first, second])
+        XCTAssertEqual(NoteMarkdownExport.markdown(document),
+                       "# Plan\n\n1. **Read**\n2. [Visit](https://example.com)")
+    }
 }

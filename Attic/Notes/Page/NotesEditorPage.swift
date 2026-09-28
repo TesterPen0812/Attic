@@ -340,18 +340,18 @@ struct NotesEditorPage: View {
             let current = engine.paragraphFormat(in: selection)
             commands.append(AtticMenuCommand("Insert", identifier: "notes-menu-insert", submenu: [
                 AtticMenuCommand("Image…", identifier: "notes-menu-insert-image") { isImporterPresented = true },
-                AtticMenuCommand("Today’s Date", startsSection: true) { engine.insertDate(NoteDay(date: Date())) },
+                AtticMenuCommand("Today’s Date", startsSection: true) { engine.perform(.date(NoteDay(date: Date()))) },
                 AtticMenuCommand("Tomorrow’s Date") {
                     let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-                    engine.insertDate(NoteDay(date: tomorrow))
+                    engine.perform(.date(NoteDay(date: tomorrow)))
                 }
             ]))
             commands.append(AtticMenuCommand("Format", identifier: "notes-menu-format", submenu: [
                 AtticMenuCommand("Body", isDisabled: current == nil, isChecked: current == .body) {
-                    engine.applyParagraphFormat(.body, to: selection)
+                    engine.perform(.paragraph(.body), selection: selection)
                 },
                 AtticMenuCommand("Checklist", isDisabled: current == nil, isChecked: current == .checklist) {
-                    engine.applyParagraphFormat(.checklist, to: selection)
+                    engine.perform(.paragraph(.checklist), selection: selection)
                 }
             ]))
         }
@@ -464,7 +464,7 @@ private struct NoteTagEditor: View {
     private func toggle(_ name: String, on: Bool) {
         var tags = session.engine.tags
         if on { tags.append(name) } else { tags.removeAll { $0 == name } }
-        session.engine.setTags(tags)
+        session.engine.setTagsFromPicker(tags)
         revision += 1
     }
 }
