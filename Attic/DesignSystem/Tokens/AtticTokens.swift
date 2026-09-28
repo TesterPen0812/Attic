@@ -449,28 +449,26 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
         }
     }
 
-    /// A page released by a swipe (round 9): the slide's duration,
-    /// critically damped so it never passes the page, starting at the
-    /// fingers' speed. `velocity` is in points per second toward the page,
-    /// `distance` the points still to go. The speed is capped just below
-    /// what would carry a critically damped spring past its target
-    /// (`2π / duration` of the distance per second), so a hard flick lands
-    /// quickly and still stops dead on the page. Reduce Motion: the slide's
-    /// crossfade.
+    /// A page released by a swipe (round 9): a critically damped spring,
+    /// so it never passes the page, whose length follows the fingers'
+    /// speed: a flick lands quickly, a slow release takes the slide's full
+    /// time. `velocity` is in points per second toward the page,
+    /// `distance` the points still to go. (Not an interpolating spring with
+    /// an initial velocity: those add to what runs and left the page drawn
+    /// where the fingers had it once the view next changed, CI run 2.)
+    /// Reduce Motion: the slide's crossfade.
     static func release(velocity: CGFloat, distance: CGFloat, reduceMotion: Bool) -> Animation? {
         if reduceMotion { return slide.animation(reduceMotion: true) }
-        let duration = slide.duration
-        let relative = releaseVelocity(velocity: velocity, distance: distance, duration: duration)
-        return .interpolatingSpring(duration: duration, bounce: 0, initialVelocity: relative)
+        return .spring(duration: releaseDuration(velocity: velocity, distance: distance), bounce: 0)
     }
 
-    /// The release's initial velocity as SwiftUI takes it: a fraction of
-    /// the distance per second, never negative and never enough to
-    /// overshoot (tested directly).
-    static func releaseVelocity(velocity: CGFloat, distance: CGFloat, duration: Double) -> Double {
-        guard distance > 0.5, velocity.isFinite, velocity > 0, duration > 0 else { return 0 }
-        let overshootsAbove = 2 * Double.pi / duration
-        return min(Double(velocity / distance), overshootsAbove * 0.9)
+    /// The release's duration: about twice the time the fingers' speed
+    /// would take to cover the rest, between 0.16 s and the slide's
+    /// duration (tested directly).
+    static func releaseDuration(velocity: CGFloat, distance: CGFloat) -> Double {
+        let longest = slide.duration
+        guard distance > 0.5, velocity.isFinite, velocity > 0 else { return longest }
+        return min(longest, max(0.16, Double(2.2 * distance / velocity)))
     }
 
     /// How long the finished state holds before `doneSlide` (spec: about 1 s).

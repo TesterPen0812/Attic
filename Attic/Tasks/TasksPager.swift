@@ -34,6 +34,18 @@ import SwiftUI
 //   page travels. A swipe past a quarter of a page crossfades to the
 //   neighbour.
 
+/// The pages that exist in the view: the one shown, plus, only while a
+/// swipe or a slide shows them, the pages it passes (round 9, CI run 2).
+/// A page off screen is not built at all, so VoiceOver never reads it and
+/// never keeps a stale "hidden" on it (hiding a built page did not reach
+/// the rows inside its list, and once hidden, a list's rows stayed hidden
+/// after it was shown). Observed only by the pages' container: it changes
+/// when a gesture or a slide starts and ends, never while it moves.
+@MainActor
+final class TasksPagerSpan: ObservableObject {
+    @Published var pages: ClosedRange<Int> = 0...0
+}
+
 /// Where the pager shows its pages: `position` is in pages (0 is Now, 1
 /// Later, 2 Done), fractional while a swipe moves. Observed only by the
 /// pages' placement (`TasksPagerSlot`), so a swipe redraws their offsets,
@@ -52,6 +64,45 @@ final class TasksPagerMotion: ObservableObject {
     /// page with a short spring instead of jumping from where it is heading.
     private var settlesUntil: TimeInterval = 0
     private var generation = 0
+    /// The pages drawn (the swipe owns it and gives it here).
+    weak var span: TasksPagerSpan?
+    var count = 3
+
+    /// Draws the pages from `lower` to `upper` (clamped), if they are not
+    /// drawn already.
+    private func setSpan(_ lower: Int, _ upper: Int) {
+        guard let span else { return }
+        let range = max(0, min(lower, upper))...min(max(count - 1, 0), max(lower, upper))
+        if span.pages != range { span.pages = range }
+    }
+
+    /// A swipe from `page` may show either neighbour.
+    func draw(around page: Int) {
+        guard let span else { return }
+        setSpan(min(span.pages.lowerBound, page - 1), max(span.pages.upperBound, page + 1))
+    }
+
+    /// Settled on `page`: only it stays drawn, unless something newer
+    /// (`ticket`) moves the pages meanwhile.
+    private func rest(on page: Int, ticket: Int, now: Bool = false) {
+        guard ticket == generation else { return }
+        if now {
+            setSpan(page, page)
+            return
+        }
+        // A moment later, outside the animation's own turn and with no
+        // animation: pages removed right as a quick release ended left the
+        // page shown drawn where the fingers had it (CI run 2).
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.restDelay) { [weak self] in
+            guard let self, self.generation == ticket else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { self.setSpan(page, page) }
+        }
+    }
+
+    /// How long after a move ends the pages it passed are let go.
+    static let restDelay: TimeInterval = 0.3
 
     /// The furthest the last gesture took the page from where it started
     /// (pages), and when its tab changed and its page came to rest, for the
@@ -104,11 +155,15 @@ final class TasksPagerMotion: ObservableObject {
     func show(_ page: Int, width: CGFloat, velocity: CGFloat = 0, reduced: Bool, animated: Bool = true) {
         let target = CGFloat(page)
         guard target != position || fadingOut != nil else {
+            generation &+= 1
+            rest(on: page, ticket: generation, now: !animated)
             if animated { settled() }
             return
         }
         generation &+= 1
         let ticket = generation
+        // Every page the move passes is drawn until it ends.
+        setSpan(min(Int(position.rounded(.down)), page), max(Int(position.rounded(.up)), page))
         reach = max(reach, abs(target - gestureStart))
         var instant = Transaction()
         instant.disablesAnimations = true
@@ -119,6 +174,7 @@ final class TasksPagerMotion: ObservableObject {
                 fade = 1
             }
             settlesUntil = 0
+            rest(on: page, ticket: ticket, now: true)
             settled()
             return
         }
@@ -135,15 +191,17 @@ final class TasksPagerMotion: ObservableObject {
                     fadingOut = nil
                     fade = 1
                 }
+                rest(on: page, ticket: ticket)
                 settled()
                 return
             }
             // The next turn: the old page is drawn over the new one first.
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == ticket else { return }
-                withAnimation(crossfade) { self.fade = 1 } completion: { [weak self] in
+                withAnimation(crossfade, completionCriteria: .removed) { self.fade = 1 } completion: { [weak self] in
                     guard let self, self.generation == ticket else { return }
                     withTransaction(instant) { self.fadingOut = nil }
+                    self.rest(on: page, ticket: ticket)
                     self.settled()
                 }
             }
@@ -155,7 +213,7 @@ final class TasksPagerMotion: ObservableObject {
                 ? AtticMotionPreset.release(velocity: velocity, distance: distance, reduceMotion: false)
                 : AtticMotionPreset.slide.animation(reduceMotion: false))
         settlesUntil = ProcessInfo.processInfo.systemUptime + (Self.settleOverride ?? AtticMotionPreset.slide.duration) + 0.05
-        withAnimation(animation) {
+        withAnimation(animation, completionCriteria: .removed) {
             position = target
             if fadingOut != nil {
                 fadingOut = nil
@@ -163,7 +221,14 @@ final class TasksPagerMotion: ObservableObject {
             }
         } completion: { [weak self] in
             guard let self, self.generation == ticket else { return }
+            self.rest(on: page, ticket: ticket)
             self.settled()
+        }
+        // Should the completion never come (an interrupted animation), the
+        // pages passed still go once the move is long over.
+        let deadline = (Self.settleOverride ?? AtticMotionPreset.slide.duration) + 0.6
+        DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self] in
+            self?.rest(on: page, ticket: ticket)
         }
     }
 
@@ -182,6 +247,39 @@ final class TasksPagerMotion: ObservableObject {
         nil
         #endif
     }()
+}
+
+/// The pager's pages: those in the span (and always the one shown), each
+/// placed by `TasksPagerSlot`; the rest are not built.
+struct TasksPagerPages<Page: View>: View {
+    @ObservedObject var span: TasksPagerSpan
+    let motion: TasksPagerMotion
+    let count: Int
+    let shown: Int
+    let size: CGSize
+    let page: (Int) -> Page
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Every slot stays (removing one left its neighbour's list
+            // drawn where the last swipe had it); only its content comes
+            // and goes.
+            ForEach(0..<count, id: \.self) { index in
+                Group {
+                    if index == shown || span.pages.contains(index) {
+                        page(index)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(width: size.width, height: size.height)
+                .modifier(TasksPagerSlot(motion: motion, index: index, width: size.width))
+                // Only the page shown takes clicks and is read.
+                .allowsHitTesting(index == shown)
+                .accessibilityHidden(index != shown)
+            }
+        }
+    }
 }
 
 /// One page's place: beside the page shown, by `position`; while reduced
@@ -329,25 +427,17 @@ final class TasksPagerSwipe {
     private var wheelTravel: CGFloat = 0
     private var wheelLast: TimeInterval = -.infinity
     private var wheelBurstUntil: TimeInterval = -.infinity
-    /// The pages built so far: the one shown and its neighbours, kept once
-    /// built (their lists keep their place).
-    private(set) var built: Set<Int> = []
-
     init(count: Int) {
         self.count = count
+        motion.span = span
+        motion.count = count
     }
+
+    /// The pages drawn (see `TasksPagerSpan`).
+    let span = TasksPagerSpan()
 
     /// A swipe is moving the page (fingers down).
     var isTracking: Bool { axis == .horizontal || axis == .turned }
-
-    /// Records that `page` and its neighbours are built; returns every
-    /// page built so far.
-    func build(around page: Int) -> Set<Int> {
-        for candidate in (page - 1)...(page + 1) where (0..<count).contains(candidate) {
-            built.insert(candidate)
-        }
-        return built
-    }
 
     /// A scroll event reached the page. `shown` is the model's page;
     /// `allowed` says whether it is over the pager's lists, on the page the
@@ -413,6 +503,7 @@ final class TasksPagerSwipe {
             axis = .horizontal
             origin = shown
             motion.beginGesture()
+            motion.draw(around: shown)
             return move(sample)
         case .horizontal?:
             return move(sample)

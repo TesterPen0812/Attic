@@ -328,9 +328,11 @@ The look ported, not the code: the design system's surface model now carries Pha
   2 pt on a 360 pt page), 0.32 s; `pageSwitch` (a crossfade) and `hover` never bounce. Durations
   are at most 0.35 s. Reduce Motion fallbacks are unchanged.
 - **`AtticMotionPreset.release(velocity:distance:reduceMotion:)`**: a page released by a swipe
-  settles with the slide's duration, critically damped, starting at the fingers' speed, capped
-  below the speed that would carry it past the page (`releaseVelocity`). Owner item 25: no
-  overshoot, no spring-back.
+  settles with a critically damped spring (never past the page) whose length follows the fingers'
+  speed (`releaseDuration`: about twice the time that speed takes to cover the rest, 0.16 s to the
+  slide's 0.32 s). Owner item 25: no overshoot, no spring-back. An interpolating spring with an
+  initial velocity was tried and dropped: it is additive and left the page drawn where the fingers
+  had it once the view next changed.
 - **`AtticMotionPreset.exit(reduceMotion:)`**: leaving is a short fade-out with no bounce (the
   Done search's field lets the keyboard go at once).
 - **`transition(reduceMotion:edge:)`** takes `.leading` and `.trailing` too (a sideways move of

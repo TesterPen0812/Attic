@@ -452,28 +452,17 @@ struct TasksPage: View {
     // MARK: - Pages
 
     /// The three pages side by side, placed by the pager's position (round
-    /// 9: the page owns the swipe, see `TasksPager.swift`). The pages
-    /// beside the one shown are built for the swipe (and stay built, so
-    /// their lists keep their place); VoiceOver reads only the page shown,
-    /// and only it takes clicks.
+    /// 9: the page owns the swipe, see `TasksPager.swift`). Only the page
+    /// shown is built, and the pages beside it only while a swipe or a
+    /// slide shows them (`TasksPagerSpan`); only the page shown takes
+    /// clicks and is read by VoiceOver.
     private var pager: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
-            let shown = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
-            let built = swipe.build(around: shown)
             ZStack(alignment: .topLeading) {
-                ForEach(Array(TasksTab.allCases.enumerated()), id: \.element) { index, tab in
-                    Group {
-                        if built.contains(index) {
-                            page(tab)
-                        } else {
-                            Color.clear
-                        }
-                    }
-                    .frame(width: width, height: proxy.size.height)
-                    .modifier(TasksPagerSlot(motion: swipe.motion, index: index, width: width))
-                    .allowsHitTesting(tab == model.tab)
-                    .accessibilityHidden(tab != model.tab)
+                TasksPagerPages(span: swipe.span, motion: swipe.motion, count: TasksTab.allCases.count,
+                                shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size) { index in
+                    page(TasksTab.allCases[index])
                 }
                 if TasksPagerMotion.tracing {
                     TasksPagerTrace(motion: swipe.motion)
@@ -563,11 +552,6 @@ struct TasksPage: View {
                     }
                 }
                 .animation(travel, value: rows.map(\.id))
-                // The pages beside the one shown are built for the swipe;
-                // VoiceOver reads only the page shown. Hidden here, inside
-                // the list, too: the page's own `accessibilityHidden` does
-                // not reach into the list's scroll view (round 9, CI run 1).
-                .accessibilityHidden(tab != model.tab)
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
                 .padding(.bottom, bottomClearance - bottomMargin)

@@ -93,15 +93,14 @@ final class TasksRound9Tests: XCTestCase {
         XCTAssertEqual(TasksPagerSwipe.livePage(origin: 0, travel: -0.8, count: 3), 0, "nothing before Now")
     }
 
-    /// A released page's speed never carries it past the page: the
-    /// critically damped spring's start is capped below 2π / duration.
-    func testTheReleaseNeverOvershoots() {
-        let duration = AtticMotionPreset.slide.duration
-        let limit = 2 * Double.pi / duration
-        XCTAssertLessThan(AtticMotionPreset.releaseVelocity(velocity: 50_000, distance: 40, duration: duration), limit)
-        XCTAssertEqual(AtticMotionPreset.releaseVelocity(velocity: 600, distance: 200, duration: duration), 3, accuracy: 0.0001)
-        XCTAssertEqual(AtticMotionPreset.releaseVelocity(velocity: -600, distance: 200, duration: duration), 0, "moving away: from rest")
-        XCTAssertEqual(AtticMotionPreset.releaseVelocity(velocity: 600, distance: 0, duration: duration), 0, "already there")
+    /// A released page never passes the page (a critically damped
+    /// spring); a flick lands sooner than a slow release.
+    func testTheReleaseFollowsTheFingersSpeedWithoutOvershoot() {
+        let slide = AtticMotionPreset.slide.duration
+        XCTAssertEqual(AtticMotionPreset.releaseDuration(velocity: 0, distance: 200), slide, "a slow release: the slide")
+        XCTAssertEqual(AtticMotionPreset.releaseDuration(velocity: 50_000, distance: 200), 0.16, "a hard flick: quick")
+        XCTAssertLessThan(AtticMotionPreset.releaseDuration(velocity: 2_000, distance: 200), slide)
+        XCTAssertEqual(AtticMotionPreset.releaseDuration(velocity: 600, distance: 0), slide, "already there")
         XCTAssertNotNil(AtticMotionPreset.release(velocity: 600, distance: 200, reduceMotion: false))
     }
 
@@ -241,6 +240,27 @@ final class TasksRound9Tests: XCTestCase {
         XCTAssertEqual(model.tab, .backlog)
     }
 
+    /// Only the page shown is built at rest; a swipe draws the pages
+    /// beside it while it moves, and a slide the pages it passes (CI run 2:
+    /// a page built hidden stayed hidden to VoiceOver once shown).
+    func testOnlyThePagesOnScreenAreBuilt() {
+        XCTAssertEqual(swipe.span.pages, 0...0)
+        send(.began)
+        send(.changed, dx: -30)
+        XCTAssertEqual(swipe.span.pages, 0...1, "a swipe from Now draws Later")
+        for _ in 0..<8 { send(.changed, dx: -30) }
+        send(.ended)
+        XCTAssertEqual(model.tab, .backlog)
+        let settled = expectation(description: "the slide ends")
+        DispatchQueue.main.asyncAfter(deadline: .now() + AtticMotionPreset.slide.duration + 0.8) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+        XCTAssertEqual(swipe.span.pages, 1...1, "at rest only Later is built")
+        model.showPagerPage(animated: false)
+        model.select(tab: .now)
+        model.showPagerPage(animated: false)
+        XCTAssertEqual(swipe.span.pages, 0...0, "placed at once: only Now")
+    }
+
     // MARK: - A wheel: one page per burst
 
     /// A mouse's horizontal wheel (or any scroll without trackpad phases,
@@ -303,7 +323,7 @@ final class TasksRound9Tests: XCTestCase {
         XCTAssertEqual(model.tab, .backlog, "the tab turned while the fingers were down")
         send(.ended)
         hosted.spin(1)
-        XCTAssertEqual(hosted.shownPage(), 1)
+        XCTAssertEqual(hosted.shownPage(), 1, "position \(model.pagerSwipe.motion.position), span \(model.pagerSwipe.span.pages), lists \(hosted.window.contentView.map { hosted.lists(in: $0).map { $0.convert($0.bounds, to: nil) } } ?? [])")
         hosted.go(to: .done)
         XCTAssertEqual(hosted.shownPage(), 2)
         hosted.go(to: .now)

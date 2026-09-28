@@ -77,8 +77,6 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                 }
             }
             .padding(.bottom, bottomClearance - bottomMargin)
-            // Read only while Done is the page shown (see `TasksPage.listPage`).
-            .accessibilityHidden(model.tab != .done)
         }
         .contentMargins(.top, listTop, for: .scrollContent)
         .contentMargins(.bottom, bottomMargin, for: .scrollContent)
