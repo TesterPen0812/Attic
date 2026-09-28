@@ -515,6 +515,9 @@ final class AppCoordinator: ObservableObject {
         // Both kinds of test host avoid Keychain. In normal use, credential
         // loading starts only after opt-in and runs away from the main thread.
         let library = AtticLibrary(tasks: store, notes: noteStore, canvases: canvasStore)
+        // The Notes page records its library actions (pin, duplicate,
+        // delete) on the app's one undo route.
+        noteDraft.pages.attachUndoRoute(library.undo)
         let shellTools = AgentShellTools()
         let agentHandler = MCPRequestHandler(
             tools: AgentTaskTools(

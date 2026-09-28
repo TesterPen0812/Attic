@@ -184,6 +184,17 @@ final class NotesLibraryModel: ObservableObject {
         return selected
     }
 
+    /// The row the library's actions (⇧⌘I, ⌘D, ⌥⇧⌘C, ⌘Z) act on: the
+    /// keyboard's row, else the selected note, and only ever a row the list
+    /// shows now. Unlike ⌘⌫ this also works with the search field focused
+    /// (those chords are not text editing), so it never depends on focus.
+    func commandTarget(in groups: [Group], selected: UUID?) -> UUID? {
+        let visible = Set(orderedIDs(groups))
+        if let highlightedID { return visible.contains(highlightedID) ? highlightedID : nil }
+        guard let selected, visible.contains(selected) else { return nil }
+        return selected
+    }
+
     func moveHighlight(by step: Int, in groups: [Group], from selected: UUID?) {
         let ids = orderedIDs(groups)
         guard !ids.isEmpty else { return }
