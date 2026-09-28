@@ -83,6 +83,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var writingToolsObjectsBefore = Set<UUID>()
     private var restoringWritingToolsSnapshot = false
     private var writingToolsAvailable = true
+    private var beginningWritingTools = false
     var isPerformingSelfMove = false
     private(set) var refusals: [String] = []
     private(set) var writingToolsRecoveries = 0
@@ -155,7 +156,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func setWritingToolsAvailable(_ available: Bool) {
         writingToolsAvailable = available
-        if activity == .idle { textView?.writingToolsBehavior = available ? .complete : .none }
+        if activity == .idle && !beginningWritingTools {
+            textView?.writingToolsBehavior = available ? .complete : .none
+        }
+    }
+
+    /// AppKit can discard marked text without sending a text-change callback.
+    func refreshCompositionActivity() {
+        if activity == .composing && textView?.hasMarkedText() != true { setActivity(.idle) }
     }
 
     private static func isSimpleTextBlock(_ block: NoteBlock) -> Bool {
@@ -211,6 +219,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func detachView() {
+        let wasComposing = activity == .composing
         if let layoutManager { contentStorage.removeTextLayoutManager(layoutManager) }
         textView?.engine = nil
         textView?.delegate = nil
@@ -218,6 +227,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         textView = nil
         scrollView = nil
         history.textView = nil
+        if wasComposing { setActivity(.idle) }
     }
 
     private func configure(_ textView: NoteEditorTextView) {
@@ -725,6 +735,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// the editor's own commands may remove an object.
     func allowsChange(ranges: [NSRange]) -> Bool {
         if history.isReplaying || engineEditDepth > 0 { return true }
+        if writingToolsBeganInView, writingToolsBlocked,
+           textView?.isWritingToolsActive == false { writingToolsDidEnd() }
         if writingToolsBlocked, isWritingToolsSessionActive || (textView?.isWritingToolsActive ?? false) {
             return refuse(writingToolsRefusalReason ?? String(localized: "Writing Tools can’t change this note until a recovery version is saved. Retry after saving the note."))
         }
@@ -825,7 +837,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         writingToolsHistory = history.checkpoint()
         writingToolsObjectsBefore = Set(objectIDs())
         writingToolsRefusalReason = nil
+        beginningWritingTools = true
         let preserved = onWritingToolsWillBegin?() ?? true
+        beginningWritingTools = false
         writingToolsBlocked = !preserved
         isWritingToolsSessionActive = true
         setActivity(preserved ? .writingToolsSafe : .writingToolsRefused)

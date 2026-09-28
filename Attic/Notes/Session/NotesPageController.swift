@@ -378,6 +378,10 @@ final class NotesPageController: ObservableObject {
     /// A clean cached session is rebuilt once, at presentation, if its store
     /// revision moved. A missing clean note is dropped.
     private func presentSession(_ session: NoteSession) -> NoteSession? {
+        if case .conflict = session.state {
+            session.state = .conflict(store.note(withID: session.noteID) == nil ? .deleted : .changed)
+            return session
+        }
         guard case .clean = session.state, session.isPersisted else { return session }
         guard let note = store.note(withID: session.noteID) else {
             cache[session.noteID] = nil
@@ -500,17 +504,17 @@ final class NotesPageController: ObservableObject {
         if let session = active {
             captureViewState(session)
             guard preserve(session) else { return false }
-            if session.isPersisted, !NoteSessionPolicy.hasPendingWork(session.state) {
-                store.recordVersion(noteID: session.noteID, reason: .leave)
-                if store.applyPendingEdits(noteID: session.noteID) > 0 {
-                    cache[session.noteID] = nil
-                }
-            }
-            if session.isUntouchedDraft { cache[session.noteID] = nil }
-            session.pauseTask?.cancel()
         }
         if reason == .hide || reason == .quit {
             guard preserveAll() else { return false }
+        }
+        if let session = active {
+            if session.isPersisted, !NoteSessionPolicy.hasPendingWork(session.state) {
+                store.recordVersion(noteID: session.noteID, reason: .leave)
+                _ = store.applyPendingEdits(noteID: session.noteID)
+            }
+            if session.isUntouchedDraft { cache[session.noteID] = nil }
+            session.pauseTask?.cancel()
         }
         if reason == .pageSwitch || reason == .hide || reason == .quit || reason == .exitToOldPage {
             isPageVisible = false
@@ -519,6 +523,7 @@ final class NotesPageController: ObservableObject {
     }
 
     private func canLeaveComposition(in session: NoteSession) -> Bool {
+        session.engine.refreshCompositionActivity()
         if session.engine.writingToolsBeganInView,
            let textView = session.engine.textView,
            textView.isWritingToolsActive,
@@ -565,7 +570,6 @@ final class NotesPageController: ObservableObject {
     /// in memory alone.
     @discardableResult
     func preserveAll() -> Bool {
-        if let active, !canLeaveComposition(in: active) { return false }
         if let active { captureViewState(active) }
         var ok = true
         for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) {
@@ -578,6 +582,7 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func preserve(_ session: NoteSession) -> Bool {
         session.saveTask?.cancel()
+        session.engine.refreshCompositionActivity()
         if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
                 hasMarkedText: session.engine.textView?.hasMarkedText() == true) == .checkpointOnly {
             return checkpoint(session, silent: true)
@@ -677,6 +682,7 @@ final class NotesPageController: ObservableObject {
     /// The timer body is separate so the lifecycle matrix can fire it without
     /// wall-clock waits; production still waits for the coalescing delay.
     func runDueSave(_ session: NoteSession) async {
+        session.engine.refreshCompositionActivity()
         if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
                 hasMarkedText: session.engine.textView?.hasMarkedText() == true) == .checkpointOnly {
             _ = checkpoint(session, silent: true)
@@ -710,20 +716,17 @@ final class NotesPageController: ObservableObject {
                 session.state = .untouched
                 return true
             }
-            switch store.createDocumentNote(id: session.noteID, document: document, staged: staged, prepared: prepared) {
+            switch store.createDocumentNote(id: session.noteID, document: document, staged: staged,
+                                            prepared: prepared) {
             case let .success((noteID, revisionID)):
-                let formerID = noteID == session.noteID ? nil : session.noteID
-                if noteID != session.noteID {
-                    cache[session.noteID] = nil
-                    session.adopt(noteID: noteID)
-                    cache[noteID] = session
-                    touch(noteID)
-                }
                 session.isPersisted = true
                 session.baseRevisionID = revisionID
-                didSave(session, staged: staged, clearOldCheckpoint: formerID)
+                didSave(session, staged: staged)
                 remember(noteID)
                 return true
+            case .failure(.noteMissing):
+                session.state = .conflict(.deleted)
+                return false
             case .failure(.staleRevision):
                 session.state = .conflict(.changed)
                 return false
@@ -1041,8 +1044,14 @@ final class NotesPageController: ObservableObject {
         guard let batch = session.importBatch, let loaded = batch.loaded else { return }
         guard session.engine.activity == .idle else { return }
         if session.isPersisted && store.note(withID: session.noteID) == nil {
-            session.state = .conflict(.deleted)
-            _ = checkpoint(session, silent: true)
+            if NoteSessionPolicy.hasPendingWork(session.state) {
+                session.state = .conflict(.deleted)
+                _ = checkpoint(session, silent: true)
+            } else {
+                dropImport(in: session, batchID: batch.id,
+                    notice: String(localized: "The note was deleted or is read only, so the images were not added."))
+                return
+            }
         }
         switch NoteSessionPolicy.importCompletion(session.state, activity: session.engine.activity) {
         case .deferUntilIdle:

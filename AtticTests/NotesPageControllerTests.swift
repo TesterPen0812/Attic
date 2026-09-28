@@ -221,11 +221,43 @@ final class NotesPageControllerTests: XCTestCase {
         textView.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
                                replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(textView.hasMarkedText())
-        XCTAssertFalse(controller.preserveAll())
+        XCTAssertTrue(controller.preserveAll(), "a flush checkpoints without ending composition")
         XCTAssertFalse(controller.prepareToLeave(.pageSwitch))
         XCTAssertNotNil(session.notice)
         textView.unmarkText()
         XCTAssertTrue(controller.prepareToLeave(.pageSwitch))
+    }
+
+    func testCancelledNativeCompositionSelfHealsOnLeaveHideAndQuit() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let (_, textView) = session.engine.makeView()
+        for reason in [NotesPageController.LeaveReason.pageSwitch, .hide, .quit] {
+            textView.setMarkedText("中", selectedRange: NSRange(location: 1, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(textView.hasMarkedText())
+            // The no-window test view needs its delegate notification for the begin.
+            session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+            XCTAssertEqual(session.engine.activity, .composing)
+            // Simulate an IME cancelling the marked text without delivering a
+            // final delegate text-change notification.
+            textView.delegate = nil
+            textView.setMarkedText("", selectedRange: NSRange(location: 0, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            textView.unmarkText()
+            textView.delegate = session.engine
+            XCTAssertFalse(textView.hasMarkedText())
+            XCTAssertEqual(session.engine.textStorage.string, "Before")
+            XCTAssertEqual(session.engine.activity, .composing,
+                "ending marked text did not send a text-change callback")
+            XCTAssertTrue(controller.prepareToLeave(reason))
+            XCTAssertEqual(session.engine.activity, .idle)
+            XCTAssertFalse(NoteSessionPolicy.needsAttention(session.state))
+            controller.present()
+        }
     }
 
     func testRecoveredDraftOpensFirstAndIsSaved() throws {
@@ -316,6 +348,39 @@ final class NotesPageControllerTests: XCTestCase {
         type(" plus mine", into: reloaded)
         XCTAssertTrue(controller.preserveAll())
         XCTAssertEqual(store.note(withID: id)?.title, "Agent plus mine")
+    }
+
+    func testRefusedHideKeepsOnScreenProposalAndCurrentBase() throws {
+        let controller = makeController(journal: FailingJournal())
+        controller.start()
+        let onScreen = try XCTUnwrap(controller.active)
+        type("On screen", into: onScreen)
+        XCTAssertTrue(controller.preserveAll())
+        let id = onScreen.noteID
+        XCTAssertTrue(controller.newNote())
+        let background = try XCTUnwrap(controller.active)
+        type("Background", into: background)
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertTrue(controller.open(noteID: id))
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        guard case .success(.pending) = store.agentWrite(noteID: id, baseRevisionToken: token,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude",
+            disposition: store.agentWriteDisposition(id)) else { return XCTFail("proposal fixture") }
+        gate.shouldFail = true
+        type(" unsaved", into: background)
+        XCTAssertFalse(controller.preserve(background))
+        guard case .onlyInMemory = background.state else { return XCTFail("background must be in memory") }
+        XCTAssertFalse(controller.prepareToLeave(.hide))
+        XCTAssertTrue(controller.active === onScreen)
+        XCTAssertEqual(store.note(withID: id)?.title, "On screen")
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
+        XCTAssertEqual(store.agentWriteDisposition(id), .proposal)
+        gate.shouldFail = false
+        type(" typed", into: onScreen)
+        XCTAssertTrue(controller.preserve(onScreen))
+        XCTAssertEqual(onScreen.state, .clean)
+        XCTAssertEqual(store.note(withID: id)?.title, "On screen typed")
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1)
     }
 
     func testAgentWriteInLibraryCannotStaleSaveOnReopen() throws {
@@ -915,6 +980,26 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
     }
 
+    func testLateImageImportOnCleanDeletedNoteDoesNotCreateRecoveryConflict() async throws {
+        let image = try realImage()
+        let loader = DelayedImageLoader()
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            saveDelay: .seconds(60), imageLoader: { url in await loader.load(url, template: image) })
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Saved", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        controller.importImages([URL(fileURLWithPath: "/tmp/late.png")])
+        await waitForImageRequests(loader, count: 1)
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: session.noteID))))
+        await loader.releaseNext(success: true)
+        for _ in 0..<100 where session.isImporting { await Task.yield() }
+        XCTAssertFalse(session.isImporting)
+        XCTAssertEqual(session.state, .clean)
+        XCTAssertFalse(controller.failedDrafts.contains { $0 === session })
+        XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
+    }
+
     func testImageBatchFailureCancelsEveryReservation() async throws {
         let image = try realImage()
         let loader = DelayedImageLoader()
@@ -1366,6 +1451,65 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(controller.prepareToLeave(.hide))
     }
 
+    func testFlushDoesNotEndRunningWritingTools() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let (_, textView) = session.engine.makeView()
+        session.engine.textViewWritingToolsWillBegin(textView)
+        XCTAssertEqual(session.engine.activity, .writingToolsSafe)
+        session.engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: 1), with: "Z")
+        session.engine.textDidChange(Notification(name: NSText.didChangeNotification))
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(session.engine.activity, .writingToolsSafe)
+        XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
+        session.engine.writingToolsDidEnd()
+    }
+
+    func testWritingToolsAvailabilityDoesNotChangeInsideStartCallback() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let (_, textView) = session.engine.makeView()
+        let original = try XCTUnwrap(session.engine.onWritingToolsWillBegin)
+        gate.shouldFail = true
+        session.engine.onWritingToolsWillBegin = {
+            let availableBefore = textView.writingToolsBehavior
+            let result = original()
+            XCTAssertEqual(textView.writingToolsBehavior, availableBefore)
+            return result
+        }
+        session.engine.writingToolsWillBegin()
+        XCTAssertEqual(session.engine.activity, .writingToolsRefused)
+        session.engine.writingToolsDidEnd()
+        gate.shouldFail = false
+        XCTAssertEqual(textView.writingToolsBehavior, .none)
+    }
+
+    func testRefusedWritingToolsSelfHealsWhenTheViewEndsBeforeNextEdit() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Before", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let (_, textView) = session.engine.makeView()
+        gate.shouldFail = true
+        session.engine.textViewWritingToolsWillBegin(textView)
+        gate.shouldFail = false
+        XCTAssertEqual(session.engine.activity, .writingToolsRefused)
+        XCTAssertFalse(textView.isWritingToolsActive)
+        textView.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
+        textView.insertText(" after", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(session.engine.activity, .idle)
+        XCTAssertEqual(session.engine.document().title, "Before after")
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertEqual(store.note(withID: session.noteID)?.title, "Before after")
+    }
+
     func testWritingToolsReturnsAfterTheNextSuccessfulStoreSave() throws {
         let controller = makeController()
         controller.start()
@@ -1417,6 +1561,29 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(controller.keepAsNewNote())
         XCTAssertNotEqual(draft.noteID, oldID)
         XCTAssertEqual(store.note(withID: draft.noteID)?.title, "Original later")
+    }
+
+    func testPresentRechecksConflictKindAfterDeleteAndRestore() throws {
+        let controller = makeController()
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Mine", into: session)
+        XCTAssertTrue(controller.preserveAll())
+        let id = session.noteID
+        type(" later", into: session)
+        let note = try XCTUnwrap(store.note(withID: id))
+        guard case .success = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
+            document: NoteDocument(blocks: [.text("Agent")]), agentName: "Claude", disposition: .direct)
+        else { return XCTFail("external change fixture") }
+        XCTAssertTrue(controller.preserve(session))
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: id))))
+        controller.present()
+        XCTAssertEqual(session.state, .conflict(.deleted))
+        XCTAssertTrue(store.restoreDeleted(noteID: id))
+        controller.present()
+        XCTAssertEqual(session.state, .conflict(.changed))
+        XCTAssertEqual(session.engine.document().title, "Mine later")
     }
 }
 
@@ -1549,7 +1716,7 @@ final class NoteSessionMatrixTests: XCTestCase {
     /// D = direct, J = journal checkpoint, S = store path.
     /// Each row is in Column.allCases order, including both batch variants.
     private let expected: [(Event, String)] = [
-        (.edit,                    "AAAAAARRRRNNAN"),
+        (.edit,                    "AAAAAARAARNNAN"),
         (.command,                 "AAAAAARRRRNNAN"),
         (.timerOK,                 "NNSSSJ N JJJNNNN"),
         (.timerStoreFails,         "NNSSSJ N JJJNNNN"),
@@ -1588,13 +1755,20 @@ final class NoteSessionMatrixTests: XCTestCase {
                 let initialState = fixture.session.state
                 let initialActivity = fixture.session.engine.activity
                 let priorCommits = fixture.committedPairs.count
+                let priorAttempts = fixture.attemptPairs.count
                 let priorJournalWrites = fixture.journal.writeCount
                 let priorProposals = fixture.store.pendingEdits(noteID: fixture.session.noteID).count
+                if column == .z && event == .writingToolsEnd {
+                    let bypass = try await fixture.perform(.writingToolsBypass)
+                    XCTAssertEqual(bypass, "A")
+                    XCTAssertNotEqual(fixture.session.engine.document(), fixture.startingText)
+                }
                 let observed = try await fixture.perform(event)
                 XCTAssertEqual(observed, cell, "\(column.rawValue) × \(event.rawValue)")
                 try fixture.assertInvariants(after: event, decision: observed,
                     initialState: initialState, initialActivity: initialActivity,
-                    priorCommits: priorCommits, priorJournalWrites: priorJournalWrites,
+                    priorCommits: priorCommits, priorAttempts: priorAttempts,
+                    priorJournalWrites: priorJournalWrites,
                     priorProposals: priorProposals)
             }
         }
@@ -1775,9 +1949,16 @@ final class NoteSessionMatrixTests: XCTestCase {
             case .edit, .command:
                 guard onScreen else { return "N" }
                 if session.isReadOnly { return "R" }
-                if event == .edit && session.engine.activity == .writingToolsSafe { return "R" }
                 let before = session.engine.document()
-                if event == .edit { Self.type("!", in: session) }
+                if event == .edit {
+                    if session.engine.activity == .composing {
+                        textView.setMarkedText("中!", selectedRange: NSRange(location: 2, length: 0),
+                            replacementRange: NSRange(location: NSNotFound, length: 0))
+                    } else {
+                        textView.setSelectedRange(NSRange(location: session.engine.textStorage.length, length: 0))
+                        textView.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+                    }
+                }
                 else { session.engine.insertDate(NoteDay(year: 2026, month: 10, day: 1)!) }
                 return session.engine.document() == before ? "R" : "A"
             case .timerOK, .timerStoreFails, .timerBothFail:
@@ -1894,7 +2075,8 @@ final class NoteSessionMatrixTests: XCTestCase {
 
         func assertInvariants(after event: Event, decision: Character,
                               initialState: NoteSession.State, initialActivity: NoteEditorEngine.Activity,
-                              priorCommits: Int, priorJournalWrites: Int, priorProposals: Int) throws {
+                              priorCommits: Int, priorAttempts: Int,
+                              priorJournalWrites: Int, priorProposals: Int) throws {
             let context = "\(column) × \(event)"
             let committed = committedPairs.count - priorCommits
             let checkpoints = journal.writeCount - priorJournalWrites
@@ -1995,6 +2177,11 @@ final class NoteSessionMatrixTests: XCTestCase {
             // I2: every committed editor save used the revision it saw.
             XCTAssertLessThanOrEqual(committedPairs.count, attemptPairs.count, context)
             for (base, presented) in committedPairs { XCTAssertEqual(base, presented, context) }
+            // I2/I6: conflicts, read-only notes and active text services never reach the store writer.
+            if initialState.isConflictOrReadOnly || initialActivity != .idle,
+               event != .writingToolsEnd && event != .compositionEnd {
+                XCTAssertEqual(attemptPairs.count, priorAttempts, context)
+            }
             // I4: the refused Writing Tools end rewinds text and Undo.
             if column == .z && event == .writingToolsEnd {
                 XCTAssertEqual(session.engine.document(), startingText)
@@ -2020,6 +2207,13 @@ final class NoteSessionMatrixTests: XCTestCase {
 }
 
 private extension NoteSession.State {
+    var isConflictOrReadOnly: Bool {
+        switch self {
+        case .conflict, .readOnly: true
+        default: false
+        }
+    }
+
     var needsStoreSave: Bool {
         switch self {
         case .dirty, .notSaved, .onlyInMemory: true

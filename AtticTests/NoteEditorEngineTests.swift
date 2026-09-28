@@ -324,6 +324,11 @@ final class NoteEditorEngineTests: XCTestCase {
 
     // MARK: Writing Tools (requirement 3)
 
+    func testStockTextViewDoesNotExposeAWritingToolsCoordinator() {
+        let (_, textView) = makeEngine()
+        XCTAssertNil(textView.writingToolsCoordinator)
+    }
+
     func testWritingToolsCannotRemoveObjectsDuringASession() {
         let (engine, textView) = makeEngine()
         engine.writingToolsWillBegin()
