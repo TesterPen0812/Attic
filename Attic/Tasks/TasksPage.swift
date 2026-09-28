@@ -91,6 +91,13 @@ struct TasksPage: View {
     static let listFooter: CGFloat = AtticControlSize.addBarHeight + AtticStyle.chromeMinimumInset + AtticLayout.contentToAddBar
 
     var body: some View {
+        // In three parts (round 10: one chain was too long for the
+        // compiler to type-check in time on CI).
+        observingModel(observingEdits(frame))
+    }
+
+    /// The page, its overlays, its keys and its monitors.
+    private var frame: some View {
         // One full-height viewport (owner fix 8, review 9): the lists run
         // to the panel's top edge and fade under the tabs and the header,
         // which float above them; at rest the first row sits where it
@@ -110,63 +117,7 @@ struct TasksPage: View {
         .coordinateSpace(Self.space)
         .atticKeyboardFocusTracking(focusTracker)
         .onKeyPress(phases: .down) { press in pageKey(press) }
-        .onAppear {
-            model.resetForReveal()
-            // The page opens where the tab is, without a slide.
-            model.showPagerPage(animated: false)
-            swipe.onCancel = { [weak model] in
-                // After the navigation that cancelled it has chosen its tab.
-                DispatchQueue.main.async { model?.showPagerPage() }
-            }
-            chrome.bottomControlsHeight(footerZone)
-            // After the first frame: the parser's and the date words' first
-            // use (formatters, calendars) happens here, not in the first
-            // keystroke (round 4).
-            DispatchQueue.main.async { model.warmUpShorthand() }
-            #if DEBUG
-            // Capture seam (`ATTIC_UI_TEST_META=date|tags`): a row's date or
-            // tag list opens by itself for hands-off captures.
-            if let kind = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_META"] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                    let rows = model.rows(for: model.tab)
-                    if kind == "date", let row = rows.first(where: { $0.model.due != nil && $0.model.state != .inProgress }) {
-                        openMeta(.date, on: row.id)
-                    } else if kind == "tags", let row = rows.first(where: { !$0.model.tags.isEmpty }) {
-                        openMeta(.tags, on: row.id)
-                    }
-                }
-            }
-            #endif
-            if findMonitor == nil {
-                findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    findPressed(event) || searchEscapePressed(event) || taskShortcutPressed(event) ? nil : event
-                }
-            }
-            if scrollMonitor == nil {
-                // The pager reads scroll events itself (round 9): a
-                // horizontal swipe over the lists is its own, every other
-                // scroll goes on to the list (or the panel) untouched.
-                scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack] event in
-                    // Gated before any state is read (round 10): a page that
-                    // is not shown, or not in this event's visible window,
-                    // takes nothing, not even a gesture it owned before.
-                    guard model.isPageShown, let window = pointer.view?.window, window.isVisible,
-                          event.window === window else { return event }
-                    let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
-                                                  stackHeight: bottomStack.height, pageShown: model.isPageShown)
-                    return model.pagerScrolled(TasksPagerSwipe.Sample(event), allowed: allowed) ? nil : event
-                }
-            }
-            if rightClickMonitor == nil {
-                // Every mouse press: a secondary click or a Control-click
-                // binds the menu about to open to its row; any other press
-                // ends the last menu's binding (round 4, Astra's final 3).
-                rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { event in
-                    mousePressed(event)
-                    return event
-                }
-            }
-        }
+        .onAppear { pageAppeared() }
         .onDisappear {
             if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
             scrollMonitor = nil
@@ -178,6 +129,69 @@ struct TasksPage: View {
         // The page's own view, so a press is placed from its event (its
         // window, its location), never from a remembered hover point.
         .background(TasksPointerProbe(pointer: pointer).accessibilityHidden(true))
+    }
+
+    private func pageAppeared() {
+        model.resetForReveal()
+        // The page opens where the tab is, without a slide.
+        model.showPagerPage(animated: false)
+        swipe.onCancel = { [weak model] in
+            // After the navigation that cancelled it has chosen its tab.
+            DispatchQueue.main.async { model?.showPagerPage() }
+        }
+        chrome.bottomControlsHeight(footerZone)
+        // After the first frame: the parser's and the date words' first
+        // use (formatters, calendars) happens here, not in the first
+        // keystroke (round 4).
+        DispatchQueue.main.async { model.warmUpShorthand() }
+        #if DEBUG
+        // Capture seam (`ATTIC_UI_TEST_META=date|tags`): a row's date or
+        // tag list opens by itself for hands-off captures.
+        if let kind = ProcessInfo.processInfo.environment["ATTIC_UI_TEST_META"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                let rows = model.rows(for: model.tab)
+                if kind == "date", let row = rows.first(where: { $0.model.due != nil && $0.model.state != .inProgress }) {
+                    openMeta(.date, on: row.id)
+                } else if kind == "tags", let row = rows.first(where: { !$0.model.tags.isEmpty }) {
+                    openMeta(.tags, on: row.id)
+                }
+            }
+        }
+        #endif
+        if findMonitor == nil {
+            findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                findPressed(event) || searchEscapePressed(event) || taskShortcutPressed(event) ? nil : event
+            }
+        }
+        if scrollMonitor == nil {
+            // The pager reads scroll events itself (round 9): a
+            // horizontal swipe over the lists is its own, every other
+            // scroll goes on to the list (or the panel) untouched.
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model, pointer, swipe, bottomStack] event in
+                // Gated before any state is read (round 10): a page that
+                // is not shown, or not in this event's visible window,
+                // takes nothing, not even a gesture it owned before.
+                guard model.isPageShown, let window = pointer.view?.window, window.isVisible,
+                      event.window === window else { return event }
+                let allowed = Self.pagerTakes(event, pointer: pointer, band: swipe.band,
+                                              stackHeight: bottomStack.height, pageShown: model.isPageShown)
+                return model.pagerScrolled(TasksPagerSwipe.Sample(event), allowed: allowed) ? nil : event
+            }
+        }
+        if rightClickMonitor == nil {
+            // Every mouse press: a secondary click or a Control-click
+            // binds the menu about to open to its row; any other press
+            // ends the last menu's binding (round 4, Astra's final 3).
+            rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { event in
+                mousePressed(event)
+                return event
+            }
+        }
+    }
+
+    /// What the editors, fields and pickers change.
+    private func observingEdits<Content: View>(_ content: Content) -> some View {
+        content
         .onChange(of: addBarFocused) { _, focused in
             updateTypingLock()
             // A field that takes the keyboard takes it from the list: a row
@@ -230,6 +244,11 @@ struct TasksPage: View {
             updateTypingLock()
             if id != nil { focusedRow = nil }
         }
+    }
+
+    /// What the model and the view's own state change.
+    private func observingModel<Content: View>(_ content: Content) -> some View {
+        content
         // An agent's `show`: the row it brought into view takes the
         // keyboard (round 5, F3), once the list has it.
         .onChange(of: model.scrollRequest) { _, request in
