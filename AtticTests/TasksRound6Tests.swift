@@ -320,7 +320,7 @@ final class Hosted {
         return Int((clip.bounds.origin.x / clip.bounds.width).rounded())
     }
 
-    private func pager(in view: NSView?) -> NSScrollView? {
+    func pager(in view: NSView?) -> NSScrollView? {
         guard let view else { return nil }
         if let scroll = view as? NSScrollView, let document = scroll.documentView,
            document.frame.width > scroll.contentView.bounds.width * 1.5 {

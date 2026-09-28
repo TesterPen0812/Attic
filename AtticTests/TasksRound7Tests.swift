@@ -193,6 +193,23 @@ final class TasksRound7Tests: XCTestCase {
         XCTAssertFalse(swipe.isCancelledUntilIdle)
     }
 
+    // MARK: - At rest, the page shown is the tab's (CI run 3)
+
+    /// CI run 3's synthetic swipe ended with Done on screen under a Later
+    /// tab. At rest the pager is brought to the model's page whenever it is
+    /// not exactly there: on another page or between two.
+    func testThePagerAtRestIsOffPageUnlessExactlyOnTheTabsPage() {
+        let width: CGFloat = 320
+        func off(_ offset: CGFloat, _ page: Int) -> Bool {
+            TasksPagerSwipe.isOffPage(geometry: .init(offset: offset, width: width), page: page)
+        }
+        XCTAssertTrue(off(2 * width, 1), "Done shown under a Later tab")
+        XCTAssertTrue(off(width * 1.4, 1), "between two pages")
+        XCTAssertFalse(off(width, 1), "on the tab's page")
+        XCTAssertFalse(off(width + 0.3, 1), "sub-point rounding is on the page")
+        XCTAssertFalse(TasksPagerSwipe.isOffPage(geometry: .init(offset: 500, width: 0), page: 1), "no width yet: leave it")
+    }
+
     // MARK: - R6: mixed selections never offer Low
 
     func testLowIsNeverOfferedToAMixedSelection() {

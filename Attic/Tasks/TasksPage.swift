@@ -60,8 +60,6 @@ struct TasksPage: View {
     /// and 22): the model's, so every navigation route cancels it (round 7,
     /// R5). Not observed: nothing redraws while a swipe moves.
     private var swipe: TasksPagerSwipe { model.pagerSwipe }
-    /// Bumped when a settled swipe's page was refused, to redraw the pager.
-    @State private var pagerRefused = 0
     /// The bottom stack's height: the add bar, plus the selection bar, a
     /// paste offer or an error line while they show.
     @State private var bottomControlsHeight: CGFloat = TasksViewport.reservedStack
@@ -394,6 +392,7 @@ struct TasksPage: View {
     // MARK: - Pages
 
     private var pager: some View {
+        ScrollViewReader { proxy in
         ScrollView(.horizontal) {
             LazyHStack(spacing: 0) {
                 ForEach(TasksTab.allCases) { tab in
@@ -426,18 +425,29 @@ struct TasksPage: View {
         }
         .onScrollPhaseChange { _, phase in
             let shown = TasksTab.allCases.firstIndex(of: model.tab) ?? 0
-            guard let settled = swipe.phaseChanged(to: phase, shown: shown) else { return }
-            let tab = TasksTab.allCases[settled]
-            model.select(tab: tab, bySwipe: true)
-            // A swipe the page could not follow (an edit that can't be
-            // saved keeps the page) goes back to where it was: a redraw
-            // gives the pager the model's page again.
-            if model.tab != tab { pagerRefused &+= 1 }
+            if let settled = swipe.phaseChanged(to: phase, shown: shown) {
+                model.select(tab: TasksTab.allCases[settled], bySwipe: true)
+            }
+            guard phase == .idle else { return }
+            // At rest the pager shows exactly the model's page (round 7,
+            // CI run 3): a scroll that ran past the clamp (a wheel's
+            // unphased events, or momentum the target did not govern) left
+            // Done on screen under a Later tab. The tabs and the page shown
+            // always agree; a swipe the page could not follow (an edit that
+            // can't be saved) goes back the same way.
+            let target = model.tab
+            if TasksPagerSwipe.isOffPage(geometry: swipe.geometry, page: TasksTab.allCases.firstIndex(of: target) ?? 0) {
+                DispatchQueue.main.async {
+                    withAnimation(AtticMotionPreset.slide.animation(reduceMotion: design.reduceMotion)) {
+                        proxy.scrollTo(target, anchor: .leading)
+                    }
+                }
+            }
         }
-        .onChange(of: pagerRefused) { _, _ in }
         .scrollIndicators(.never)
         .scrollDisabled(drag != nil)
         .scrollEdgeEffectHidden(true, for: .all)
+        }
     }
 
     private func page(_ tab: TasksTab) -> some View {
@@ -2441,6 +2451,13 @@ final class TasksPagerSwipe {
         var page = Int((x / width).rounded())
         if let origin { page = min(max(page, origin - 1), origin + 1) }
         return min(max(page, 0), count - 1)
+    }
+
+    /// The pager at rest is not exactly on `page` (another page, or between
+    /// two). Unknown geometry (no width yet) is never off.
+    static func isOffPage(geometry: Geometry, page: Int) -> Bool {
+        guard geometry.width > 0 else { return false }
+        return abs(geometry.offset - CGFloat(page) * geometry.width) > 0.5
     }
 
     /// The page a swipe settled on (the nearest to the pager's offset),
