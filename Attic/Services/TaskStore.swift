@@ -2270,21 +2270,47 @@ final class TaskStore: ObservableObject {
         return Set(rows.map(\.id)).count
     }
 
-    /// The subtasks of a task in the Done log (they left with it).
+    /// The subtasks of a task in the Done log (they left with it). A read
+    /// that fails is reported and shows none; a command that copies the
+    /// family uses `readDoneLogSubtasks(of:)` and stops instead.
     func doneLogSubtasks(of parentID: UUID) -> [TaskItem] {
         do {
-            let children = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == parentID }))
-            let ids = Array(Set(children.map(\.id)))
-            guard !ids.isEmpty else { return [] }
-            let replicas = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
-            return Self.canonicalReplicas(from: replicas)
-                .filter { $0.parentID == parentID && $0.deletedAt == nil }
-                .sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) }
+            return try readDoneLogSubtasks(of: parentID)
         } catch {
             report(error.localizedDescription, owner: nil)
             return []
         }
     }
+
+    /// The same family, but a failed read throws, so no caller can mistake
+    /// an unreadable family for an empty one (round 10b: Duplicate saved a
+    /// copy without its subtasks).
+    func readDoneLogSubtasks(of parentID: UUID) throws -> [TaskItem] {
+        let children = try readDoneFamily(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == parentID }))
+        let ids = Array(Set(children.map(\.id)))
+        guard !ids.isEmpty else { return [] }
+        let replicas = try readDoneFamily(FetchDescriptor<TaskItem>(predicate: #Predicate { ids.contains($0.id) }))
+        return Self.canonicalReplicas(from: replicas)
+            .filter { $0.parentID == parentID && $0.deletedAt == nil }
+            .sorted { ($0.completedAt ?? $0.createdAt) < ($1.completedAt ?? $1.createdAt) }
+    }
+
+    /// Both reads of a Done-log family go through here, so tests can make
+    /// either fail (`doneFamilyReadsToSkipBeforeFailing`).
+    private func readDoneFamily(_ descriptor: FetchDescriptor<TaskItem>) throws -> [TaskItem] {
+        if let skip = doneFamilyReadsToSkipBeforeFailing {
+            if skip <= 0 {
+                doneFamilyReadsToSkipBeforeFailing = nil
+                throw DoneLogReadFailure()
+            }
+            doneFamilyReadsToSkipBeforeFailing = skip - 1
+        }
+        return try context.fetch(descriptor)
+    }
+
+    /// Test seam: nil reads normally; N lets N family reads through, then
+    /// the next one fails (once).
+    var doneFamilyReadsToSkipBeforeFailing: Int?
 
     /// A task by id wherever it lives in the lists: shown, or in the Done
     /// log (never one in Recently Deleted). Resolved over all replicas.
@@ -2643,7 +2669,8 @@ final class TaskStore: ObservableObject {
                 copy.listOrderVersion = TaskItem.currentListOrderVersion
                 context.insert(copy)
                 tasks.append(copy)
-                let children = task(withID: source.id) != nil ? subtasks(of: source.id) : doneLogSubtasks(of: source.id)
+                // An unreadable Done-log family fails the whole batch (round 10b).
+                let children = try task(withID: source.id) != nil ? subtasks(of: source.id) : readDoneLogSubtasks(of: source.id)
                 // Unfinished, in the order the family shows them (done ones
                 // were listed last; they keep that place as open ones).
                 for (index, child) in children.enumerated() {

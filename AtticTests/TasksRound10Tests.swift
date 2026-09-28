@@ -289,6 +289,21 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertEqual(titles(), ["A", "C", "B"])
     }
 
+    /// Round 10b, finding 3's other half: ticking a box keeps the quick
+    /// look's held order (review 21), and a move released only its own.
+    func testTickingASubtaskKeepsTheQuickLooksOrder() throws {
+        let parent = try make("Launch")
+        let a = try make("A", parent: parent.id)
+        _ = try make("B", parent: parent.id)
+        _ = try make("C", parent: parent.id)
+        model.setExpanded(parent.id, true)
+        let titles = { self.model.rows(for: .now).first { $0.id == parent.id }?.subtasks.map(\.title) ?? [] }
+        XCTAssertEqual(titles(), ["A", "B", "C"])
+        XCTAssertTrue(model.toggleSubtask(a.id).isApplied)
+        XCTAssertEqual(store.subtasks(of: parent.id).map(\.title).last, "A", "the store settles the ticked one last")
+        XCTAssertEqual(titles(), ["A", "B", "C"], "the open list holds still while ticking")
+    }
+
     // MARK: - One command list
 
     /// The row's menu offers every command with its key, and ⌘C / ⌘D find
@@ -451,6 +466,40 @@ final class TasksRound10Tests: XCTestCase {
         XCTAssertNil(model.shortcutRow(focusedRow: parent.id, visible: visible))
         model.focusedSubtaskID = nil
         XCTAssertEqual(model.shortcutRow(focusedRow: nil, visible: visible), parent.id)
+    }
+
+    /// Round 10b, finding 4: when a Done-log family cannot be read while
+    /// duplicating, nothing is saved (no copy without its subtasks), the
+    /// error stays, and no Undo step is recorded. Covers both of the
+    /// family's reads, and a batch whose earlier copy was already staged.
+    func testDuplicatingAnUnreadableDoneFamilyChangesNothing() throws {
+        let first = try make("First trip")
+        _ = try make("Book flights", parent: first.id)
+        let second = try make("Second trip")
+        _ = try make("Pack", parent: second.id)
+        log(first)
+        log(second)
+        let all = { try ModelContext(self.store.container).fetch(FetchDescriptor<TaskItem>()).count }
+        let rowsBefore = try all()
+        let shownBefore = store.tasks.map(\.id)
+        // Reads in order: first's children, first's replicas, second's
+        // children, second's replicas. Failing at 0/1 is the first copy's
+        // stage; at 2/3 the first copy is already staged in the batch.
+        for skip in 0...3 {
+            store.doneFamilyReadsToSkipBeforeFailing = skip
+            let undoDepth = library.undo.undoCount(in: .tasks)
+            XCTAssertNil(library.duplicateTasks([first.id, second.id]), "read \(skip) fails: no copy")
+            XCTAssertNil(store.doneFamilyReadsToSkipBeforeFailing, "the injected failure was reached (\(skip))")
+            XCTAssertEqual(try all(), rowsBefore, "nothing saved (\(skip))")
+            XCTAssertEqual(store.tasks.map(\.id), shownBefore, "no half-made copy is shown (\(skip))")
+            XCTAssertEqual(library.undo.undoCount(in: .tasks), undoDepth, "no Undo step (\(skip))")
+            XCTAssertEqual(store.lastErrorMessage, "The Done log could not be read.", "the error is kept (\(skip))")
+            XCTAssertNotNil(library.lastFailure)
+        }
+        // Read normally, the same batch duplicates both families.
+        let copies = try XCTUnwrap(library.duplicateTasks([first.id, second.id]))
+        XCTAssertEqual(copies.count, 2)
+        XCTAssertEqual(copies.map { store.subtasks(of: $0.id).map(\.title) }, [["Book flights"], ["Pack"]])
     }
 
     // MARK: - Agent tools
