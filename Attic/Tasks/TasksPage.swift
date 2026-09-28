@@ -1153,7 +1153,7 @@ struct TasksPage: View {
     /// The right-click menu: the task's commands (`taskCommands`), the
     /// same list the actions button and ⇧⌘I open.
     private func rowMenu(_ row: TasksListRow, tab: TasksTab) -> some View {
-        AtticMenuItems(commands: taskCommands(row.id, tab: tab))
+        AtticMenuItems { taskCommands(row.id, tab: tab) }
     }
 
     /// Every command a row offers, in one list (round 10: one definition

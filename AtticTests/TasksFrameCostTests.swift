@@ -1,0 +1,276 @@
+import AppKit
+import QuartzCore
+import SwiftData
+import SwiftUI
+import XCTest
+@testable import Attic
+
+/// Round 11 (performance): what each interaction costs the main thread,
+/// headless, on the spec's seeded sizes (500 open tasks, 500 in Later,
+/// 5,000 in the Done log, with dates, tags and priorities mixed in). Each
+/// "frame" is the change, then the run loop turn, layout, display and the
+/// Core Animation commit that put it on screen, timed together. It prints
+/// what it measures (`ATTIC_FRAME_COST`) and sets no budget of its own: a
+/// 120 Hz frame is 8.3 ms, the spec's page switch budget is 50 ms, and the
+/// judgement is made on an optimized build (`Scripts/run_optimized_tests.zsh`)
+/// and the owner's Mac, not here. Only coarse sanity bounds are asserted,
+/// far above any budget, so a slow CI runner never fails it.
+@MainActor
+final class TasksFrameCostTests: XCTestCase {
+    private var hosted: FrameCostHost?
+
+    override func tearDown() async throws {
+        hosted?.close()
+        hosted = nil
+        try await super.tearDown()
+    }
+
+    func testMeasuresWhatEachInteractionCostsTheMainThread() throws {
+        let host = try FrameCostHost()
+        hosted = host
+        var report: [String] = []
+
+        // A tab click, as `AtticPageTabs` makes it, to each page and back;
+        // the first frame (the model's change, the page's build, the
+        // slide's first step) and the whole slide's frames.
+        var clickFirst: [TasksTab: [Double]] = [:]
+        var clickFrames: [Double] = []
+        for _ in 0..<3 {
+            for tab in [TasksTab.backlog, .done, .now] {
+                let result = host.click(tab)
+                clickFirst[tab, default: []].append(result.first)
+                clickFrames += result.frames
+            }
+        }
+        report.append("click-first " + Self.byTab(clickFirst))
+        report.append("click-slide-frames " + Self.stats(clickFrames))
+        // Where a click's first frame goes (to Later, cold or not).
+        let phases = host.framePhases {
+            withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { host.model.select(tab: .backlog) }
+        }
+        report.append("click-first-parts " + phases.map { String(format: "%.1f", $0) }.joined(separator: "/"))
+        host.place(.now)
+
+        // A swipe from Now to Later: the first sideways movement (it
+        // draws Later), the frames that follow the fingers, then the
+        // release's settle.
+        var swipeFirst: [Double] = []
+        var swipeFrames: [Double] = []
+        var settleFrames: [Double] = []
+        for _ in 0..<3 {
+            let result = host.swipe(from: .now, steps: 40, dx: -9)
+            swipeFirst.append(result.first)
+            swipeFrames += result.follow
+            settleFrames += result.settle
+            host.place(.now)
+        }
+        report.append("swipe-first " + Self.stats(swipeFirst))
+        report.append("swipe-follow-frames " + Self.stats(swipeFrames))
+        report.append("swipe-settle-frames " + Self.stats(settleFrames))
+
+        // Typing in the add bar on Now (500 rows behind it).
+        host.place(.now)
+        let keys = host.type("Call the plumber tomorrow #home")
+        report.append("keystroke " + Self.stats(keys))
+
+        print("ATTIC_FRAME_COST " + report.joined(separator: " | "))
+        // Sanity only (see the type's comment).
+        XCTAssertLessThan(Self.median(keys), 500)
+        XCTAssertEqual(host.model.tab, .now)
+    }
+
+    // MARK: Reporting
+
+    static func median(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
+    }
+
+    static func percentile(_ values: [Double], _ p: Double) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        return sorted[min(sorted.count - 1, Int((Double(sorted.count - 1) * p).rounded()))]
+    }
+
+    static func stats(_ values: [Double]) -> String {
+        String(format: "n=%d median=%.1fms p90=%.1fms max=%.1fms over8.3=%d", values.count, median(values),
+               percentile(values, 0.9), values.max() ?? 0, values.filter { $0 > 1000.0 / 120 }.count)
+    }
+
+    static func byTab(_ samples: [TasksTab: [Double]]) -> String {
+        [TasksTab.now, .backlog, .done].map { tab in
+            "\(tab.identifier)=" + String(format: "%.1fms", median(samples[tab] ?? []))
+        }.joined(separator: " ")
+    }
+}
+
+/// The Tasks page on the spec's seeded sizes, in a window off screen, as
+/// the panel hosts it; each step is timed as one frame.
+@MainActor
+final class FrameCostHost {
+    let store: TaskStore
+    let model: TasksPageModel
+    let window: NSPanel
+    let focus = Hosted.Focus()
+    private var time: TimeInterval = 1_000
+
+    private final class Panel: NSPanel {
+        override var canBecomeKey: Bool { true }
+    }
+
+    init() throws {
+        let container = try PersistenceController.makeContainer(inMemory: true, cloudSyncEnabled: false)
+        try Self.seed(container)
+        store = TaskStore(container: container)
+        model = TasksPageModel(library: AtticLibrary(tasks: store), services: TasksPageServices())
+        let size = CGSize(width: AtticLayout.panelSize.width, height: 560)
+        let focus = focus
+        let page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
+                             addBarFocused: Binding(get: { focus.addBar }, set: { focus.addBar = $0 }))
+        window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
+                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: page.atticDesign(AtticDesignContext(mode: .light))
+            .frame(width: size.width, height: size.height))
+        window.orderFront(nil)
+        window.makeKey()
+        spin(1)
+    }
+
+    /// 500 open (some in progress), 500 in Later, 5,000 in the Done log;
+    /// dates, tags and priorities on some, as real lists have.
+    static func seed(_ container: ModelContainer) throws {
+        let context = ModelContext(container)
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+        var order: Int64 = 10_000_000
+        let priorities: [TaskPriority] = [.none, .none, .medium, .none, .high]
+        func insert(_ index: Int, _ title: String, _ status: TaskStatus, logged: Bool = false, completed: Date? = nil) {
+            order -= 1_024
+            let item = TaskItem(title: title, status: status, priority: priorities[index % priorities.count], createdAt: now,
+                                completedAt: completed, manualOrder: order, parentID: nil)
+            if index % 3 == 0, let date = calendar.date(byAdding: .day, value: index % 9 - 2, to: now) {
+                item.dueDay = DueDay(date: date, calendar: calendar)
+            }
+            if index % 4 == 0 { item.tags = ["home", "work", "errands"].prefix(index % 3 + 1).map { $0 } }
+            item.listOrderVersion = TaskItem.currentListOrderVersion
+            if logged { item.doneLoggedAt = now }
+            context.insert(item)
+        }
+        for index in 0..<500 { insert(index, "Open task number \(index) with a title", index % 25 == 0 ? .inProgress : .todo) }
+        for index in 0..<500 { insert(index, "Later task number \(index)", .backlog) }
+        for index in 0..<5_000 {
+            insert(index, "Finished task \(index)", .done, logged: true, completed: now.addingTimeInterval(-Double(index + 1) * 3_600))
+        }
+        try context.save()
+    }
+
+    func close() { window.close() }
+
+    func spin(_ seconds: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// One frame: the change, a run loop turn, layout, display and the
+    /// commit, in milliseconds.
+    func frame(_ change: () -> Void = {}) -> Double {
+        let start = DispatchTime.now().uptimeNanoseconds
+        change()
+        RunLoop.current.run(until: Date())
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        CATransaction.flush()
+        return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+    }
+
+    /// One frame split into its parts (change, run loop, layout, display,
+    /// commit), in milliseconds.
+    func framePhases(_ change: () -> Void) -> [Double] {
+        var marks = [DispatchTime.now().uptimeNanoseconds]
+        change()
+        marks.append(DispatchTime.now().uptimeNanoseconds)
+        RunLoop.current.run(until: Date())
+        marks.append(DispatchTime.now().uptimeNanoseconds)
+        window.contentView?.layoutSubtreeIfNeeded()
+        marks.append(DispatchTime.now().uptimeNanoseconds)
+        window.displayIfNeeded()
+        marks.append(DispatchTime.now().uptimeNanoseconds)
+        CATransaction.flush()
+        marks.append(DispatchTime.now().uptimeNanoseconds)
+        return zip(marks.dropFirst(), marks).map { Double($0 - $1) / 1_000_000 }
+    }
+
+    /// The pager's position changes over its settle, one frame each,
+    /// until it rests (at most two seconds).
+    private func settleFrames() -> [Double] {
+        var frames: [Double] = []
+        let motion = model.pagerSwipe.motion
+        let deadline = Date().addingTimeInterval(2)
+        var last = motion.position
+        while motion.isSettling, Date() < deadline {
+            // Wait for the driver's next step, then time the frame it asks for.
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(1.0 / 240))
+            guard motion.position != last else { continue }
+            last = motion.position
+            frames.append(frame())
+        }
+        return frames
+    }
+
+    /// Places the page on `tab` at once and lets it rest.
+    func place(_ tab: TasksTab) {
+        model.select(tab: tab)
+        model.showPagerPage(animated: false)
+        spin(0.6)
+    }
+
+    /// A tab click (as the tabs make it): its first frame, then the frames
+    /// of its slide.
+    func click(_ tab: TasksTab) -> (first: Double, frames: [Double]) {
+        let first = frame {
+            withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) { model.select(tab: tab) }
+        }
+        let frames = settleFrames()
+        spin(0.6)
+        return (first, frames)
+    }
+
+    /// A swipe of `steps` sideways movements of `dx` from `tab`, released.
+    func swipe(from tab: TasksTab, steps: Int, dx: CGFloat) -> (first: Double, follow: [Double], settle: [Double]) {
+        func send(_ phase: TasksPagerSwipe.Sample.Phase, dx: CGFloat = 0) {
+            time += 1.0 / 120
+            _ = model.pagerScrolled(.init(phase: phase, dx: dx, time: time), allowed: true)
+        }
+        _ = frame { send(.began) }
+        let first = frame { send(.changed, dx: dx) }
+        var follow: [Double] = []
+        for _ in 1..<steps { follow.append(frame { send(.changed, dx: dx) }) }
+        var settle = [frame { send(.ended) }]
+        settle += settleFrames()
+        spin(0.6)
+        return (first, follow, settle)
+    }
+
+    /// Types `text` into the add bar, one key a frame.
+    func type(_ text: String) -> [Double] {
+        focus.addBar = true
+        spin(0.3)
+        var frames: [Double] = []
+        for character in text {
+            let characters = String(character)
+            frames.append(frame {
+                for type in [NSEvent.EventType.keyDown, .keyUp] {
+                    let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                                                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                 context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                                                 isARepeat: false, keyCode: 0)!
+                    NSApp.postEvent(event, atStart: false)
+                }
+                Hosted.pumpEvents()
+            })
+        }
+        spin(0.3)
+        return frames
+    }
+}
