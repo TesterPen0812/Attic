@@ -236,7 +236,10 @@ struct NotesEditorPage: View {
     }
 
     /// Keys whose commands live in the note's menu (the menu shows them;
-    /// these make them work while it is closed).
+    /// these make them work while it is closed). They are the OPEN NOTE's
+    /// scope and are off while All notes shows: there ⇧⌘I, ⌘D and ⌥⇧⌘C act
+    /// on the library's row (`NotesLibraryView` handles them from
+    /// `rowCommands`), so the two scopes never both answer one key.
     private var shortcuts: some View {
         ZStack {
             Button("") { chrome.presentMenu() }
@@ -379,19 +382,32 @@ struct NotesEditorPage: View {
         return commands
     }
 
-    /// A row's right-click menu in All notes.
+    /// The library's command list: a row's right-click menu, its ⋯, ⇧⌘I
+    /// and VoiceOver's named actions, and the source of the library's keys
+    /// (⌘D, ⌥⇧⌘C, ⌘⌫ find their command here by identifier). ONE list per
+    /// scope: this is the library row's; `noteMenuCommands` is the open
+    /// note's. A command that cannot run is dimmed here, and its key does
+    /// nothing.
     private func rowCommands(_ id: UUID) -> [AtticMenuCommand] {
-        let pinned = noteStore.note(withID: id)?.isPinned ?? false
         let stored = noteStore.note(withID: id)
+        let pinned = stored?.isPinned ?? false
         return [
-            AtticMenuCommand("Open") { openFromLibrary(id) },
-            AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: stored == nil, startsSection: true) {
+            AtticMenuCommand("Open", identifier: "notes-row-open") { openFromLibrary(id) },
+            AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: stored == nil, startsSection: true,
+                             identifier: "notes-row-pin") {
                 controller.setPinned(!pinned, noteID: id)
             },
-            AtticMenuCommand("Copy as Markdown", startsSection: true) { controller.copyMarkdown(noteID: id) },
-            AtticMenuCommand("Duplicate", isDisabled: stored?.usesDocumentFormat != true) { controller.duplicateNote(noteID: id) },
+            AtticMenuCommand("Copy as Markdown", shortcut: KeyboardShortcut("c", modifiers: [.command, .option, .shift]),
+                             startsSection: true, identifier: NotesLibraryView.copyMarkdownIdentifier) {
+                controller.copyMarkdown(noteID: id)
+            },
+            AtticMenuCommand("Duplicate", shortcut: KeyboardShortcut("d", modifiers: .command),
+                             isDisabled: stored?.usesDocumentFormat != true,
+                             identifier: NotesLibraryView.duplicateIdentifier) {
+                controller.duplicateNote(noteID: id)
+            },
             AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
-                             isDisabled: stored == nil, startsSection: true) { delete(id) }
+                             isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }
         ]
     }
 

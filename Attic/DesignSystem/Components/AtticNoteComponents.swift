@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A date inside note text (Phase 2): the tag chip's recessed pill (18 tall,
@@ -219,23 +220,80 @@ struct AtticNoteRowModel: Identifiable, Equatable {
 
 /// An All notes row: 48 pt (the two-line row), its highlight 44 and 8 in
 /// from the list's edge; the text on the note column.
+///
+/// Its actions: a quiet ⋯ takes the time's place while the row is hovered,
+/// highlighted (↑ ↓) or the ⋯ has keyboard focus, and opens the row's menu;
+/// VoiceOver reads the same commands as the row's named actions. Both come
+/// from the ONE command list the page builds for the row (`commands`), the
+/// list the right-click menu and ⇧⌘I show.
 struct AtticNoteRow: View {
     let model: AtticNoteRowModel
     var isSelected = false
     /// The list's keyboard selection (↑ ↓) is on this row.
     var isHighlighted = false
+    /// The row's commands, read only when VoiceOver builds its actions.
+    var commands: (() -> [AtticMenuCommand])?
+    /// Where the row's ⋯ is, for the menu to open under.
+    var anchors: AtticNoteRowAnchors?
+    /// The ⋯ was pressed (nil: the row has no ⋯).
+    var onShowActions: (() -> Void)?
     let onOpen: () -> Void
 
     @Environment(\.atticDesign) private var design
     @Environment(\.atticForcedState) private var forced
     @State private var hovered = false
+    @FocusState private var actionsFocused: Bool
+
+    /// VoiceOver's named actions: every enabled command except Open (the
+    /// row's own action) and submenus.
+    static func spokenActions(_ commands: [AtticMenuCommand]) -> [AtticMenuCommand] {
+        commands.filter { !$0.isDisabled && $0.submenu.isEmpty && $0.identifier != "notes-row-open" }
+    }
 
     var body: some View {
         let tokens = design.tokens
-        let m = AtticNoteMetrics.self
         let hover = forced == .hover || hovered
         let fill: AtticRGBA? = isSelected || isHighlighted ? tokens.selected : (hover ? tokens.hover : nil)
-        Button(action: onOpen) {
+        let showsActions = onShowActions != nil && (hover || isHighlighted || actionsFocused)
+        ZStack(alignment: .topTrailing) {
+            openButton(fill: fill, hidesTime: showsActions)
+            if let onShowActions {
+                actionsButton(action: onShowActions, shown: showsActions)
+            }
+        }
+        .onHover { hovered = $0 }
+    }
+
+    private func actionsButton(action: @escaping () -> Void, shown: Bool) -> some View {
+        let radius = AtticRadius.control(height: Self.actionsHeight)
+        return Button(action: action) {
+            AtticIcon(systemName: "ellipsis", size: AtticNoteMetrics.rowActionsGlyphSize, weight: .medium, ink: .icon)
+                .frame(width: Self.actionsWidth, height: Self.actionsHeight)
+                .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        }
+        .buttonStyle(AtticUndimmedButtonStyle())
+        .focusEffectDisabled()
+        .focused($actionsFocused)
+        .atticOwnFocusRing(.rounded(radius: radius, height: Self.actionsHeight))
+        .background {
+            if let anchors { AtticNoteRowAnchor(id: model.id, anchors: anchors) }
+        }
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(shown)
+        .padding(.trailing, AtticNoteMetrics.rowTextX - 4)
+        .padding(.top, AtticTaskRowMetrics.titleTop(twoLine: true)
+            + (AtticTaskRowMetrics.titleLineHeight - Self.actionsHeight) / 2)
+        .help(String(localized: "Note actions (⇧⌘I)"))
+        .accessibilityLabel(String(localized: "Actions for \(model.title)"))
+        .accessibilityIdentifier("notes-row-actions")
+    }
+
+    private static let actionsWidth: CGFloat = 26
+    private static let actionsHeight: CGFloat = 20
+
+    private func openButton(fill: AtticRGBA?, hidesTime: Bool) -> some View {
+        let m = AtticNoteMetrics.self
+        return Button(action: onOpen) {
             ZStack(alignment: .topLeading) {
                 if let fill {
                     AtticHighlight(fill: fill)
@@ -253,6 +311,7 @@ struct AtticNoteRow: View {
                                           weight: .medium, ink: .warningText)
                             }
                             AtticText(verbatim: model.time, style: .rowMeta, ink: .helper)
+                                .opacity(hidesTime ? 0 : 1)
                         }
                         .fixedSize()
                     }
@@ -273,10 +332,16 @@ struct AtticNoteRow: View {
         }
         .buttonStyle(AtticUndimmedButtonStyle())
         .focusEffectDisabled()
-        .onHover { hovered = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(model.spoken)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityActions {
+            if let commands {
+                ForEach(Self.spokenActions(commands())) { command in
+                    Button(command.title, action: command.action)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -567,5 +632,41 @@ struct AtticNoteLibraryLine: View {
         .contentShape(Rectangle())
         .onTapGesture { fieldFocused.wrappedValue = true }
         .padding(.horizontal, AtticLayout.rowHighlightInset)
+    }
+}
+
+
+// MARK: - Row anchors
+
+/// Where each visible All notes row's ⋯ is, so a menu a key opens (⇧⌘I)
+/// pops up under the highlighted row, as the ⋯ does when pressed. A row
+/// that is not on screen has none (the caller falls back to the pointer).
+/// Views are held weakly: a row that scrolled away drops out on its own.
+@MainActor
+final class AtticNoteRowAnchors {
+    private struct Weak { weak var view: NSView? }
+    private var views: [UUID: Weak] = [:]
+
+    func view(for id: UUID) -> NSView? { views[id]?.view }
+    func register(_ view: NSView, for id: UUID) { views[id] = Weak(view: view) }
+}
+
+/// A click-through view behind a row's ⋯ that registers itself.
+struct AtticNoteRowAnchor: NSViewRepresentable {
+    let id: UUID
+    let anchors: AtticNoteRowAnchors
+
+    func makeNSView(context: Context) -> NSView {
+        let view = PassthroughView()
+        anchors.register(view, for: id)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        anchors.register(view, for: id)
+    }
+
+    private final class PassthroughView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

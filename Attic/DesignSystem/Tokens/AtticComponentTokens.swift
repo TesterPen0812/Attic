@@ -482,6 +482,8 @@ enum AtticNoteMetrics {
     static let searchHintPadding: CGFloat = 10
     static let searchTextX: CGFloat = 36
     static let rowTextX: CGFloat = 16
+    /// The ⋯ at the end of a row's title line (in the time's place).
+    static let rowActionsGlyphSize: CGFloat = 14
     static let countIconSize: CGFloat = 10
     static let countGap: CGFloat = 3
     static let countsSpacing: CGFloat = 8

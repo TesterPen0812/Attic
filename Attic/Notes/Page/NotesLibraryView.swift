@@ -26,6 +26,8 @@ struct NotesLibraryView: View {
     /// there yet is lost).
     @State private var searchOpen = false
     @StateObject private var keys = NotesLibraryKeys()
+    /// Where the rows' ⋯ are: ⇧⌘I opens the menu under the highlighted one.
+    @State private var anchors = AtticNoteRowAnchors()
 
     static let space = NamedCoordinateSpace.named("AtticNotesLibrary")
 
@@ -121,7 +123,13 @@ struct NotesLibraryView: View {
     }
 
     /// The library's keys, in its own window only: Esc, ⌘F, ↑ ↓, Return,
-    /// ⌘⌫ and type-to-search. Returns true when the key was used.
+    /// ⌘⌫, the row's actions (⇧⌘I, ⌘D, ⌥⇧⌘C), ⌘Z / ⇧⌘Z and type-to-search.
+    /// Returns true when the key was used.
+    ///
+    /// Scope: while All notes shows, these keys act on its row (the
+    /// keyboard's, else the selected note); the open note's own shortcuts
+    /// (the page's hidden buttons) are off then. Every row command comes
+    /// from `rowCommands`, the one list the menu shows.
     private func handle(_ event: NSEvent) -> Bool {
         let groups = model.groups(store: store, drafts: controller.failedDrafts)
         let selected = controller.librarySelectionID
@@ -145,14 +153,54 @@ struct NotesLibraryView: View {
             // In the search field ⌘⌫ edits the text until ↑ ↓ picked a row.
             guard let id = model.deleteTarget(in: groups, selected: selected, inField: fieldFocused) else { return false }
             onDelete(id)
+        case .actions:
+            guard let id = model.commandTarget(in: groups, selected: selected) else { return false }
+            showActions(for: id)
+        case .duplicate:
+            guard let id = model.commandTarget(in: groups, selected: selected) else { return false }
+            _ = Self.run(Self.duplicateIdentifier, in: rowCommands(id))
+        case .copyMarkdown:
+            guard let id = model.commandTarget(in: groups, selected: selected) else { return false }
+            _ = Self.run(Self.copyMarkdownIdentifier, in: rowCommands(id))
         case .startSearch:
             beginSearch(replaying: event)
         }
         return true
     }
 
+    static let duplicateIdentifier = "notes-row-duplicate"
+    static let copyMarkdownIdentifier = "notes-row-copy-markdown"
+
+    /// Runs the command with this identifier if the list has it and it is
+    /// enabled; a disabled command is swallowed, never run. False when the
+    /// list has no such command.
+    @discardableResult
+    static func run(_ identifier: String, in commands: [AtticMenuCommand]) -> Bool {
+        guard let command = commands.first(where: { $0.identifier == identifier }) else { return false }
+        if !command.isDisabled { command.action() }
+        return true
+    }
+
+    /// The row's actions menu under its ⋯ (or under the pointer when the
+    /// row is not on screen). Opened on the next turn: the menu tracks
+    /// events itself and must not start inside the key monitor.
+    private func showActions(for id: UUID) {
+        let commands = rowCommands(id)
+        let anchor = anchors.view(for: id)
+        DispatchQueue.main.async { [keys] in
+            if let anchor, anchor.window != nil {
+                AtticNativeMenu.popUp(commands, below: anchor.bounds, in: anchor)
+            } else if let window = keys.window, let content = window.contentView {
+                let point = content.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+                AtticNativeMenu.popUp(commands, below: NSRect(origin: point, size: .zero), in: content)
+            }
+        }
+    }
+
     enum KeyAction: Equatable {
         case passThrough, escape, find, move(Int), open, delete, startSearch
+        /// ⇧⌘I, ⌘D and ⌥⇧⌘C on the row.
+        case actions, duplicate, copyMarkdown
     }
 
     /// What a key does in All notes. While an input method is composing in
@@ -169,6 +217,9 @@ struct NotesLibraryView: View {
         case 126 where chord.isEmpty: return .move(-1)
         case 36 where chord.isEmpty, 76 where chord.isEmpty: return .open
         case 51 where chord == .command: return .delete
+        case 34 where chord == [.command, .shift]: return .actions
+        case 2 where chord == .command: return .duplicate
+        case 8 where chord == [.command, .option, .shift]: return .copyMarkdown
         default:
             guard !fieldFocused, let first = characters?.first,
                   typedSearchText(KeyEquivalent(first), modifiers: modifiers) != nil else { return .passThrough }
@@ -191,7 +242,10 @@ struct NotesLibraryView: View {
                             .modifier(AtticScrollEdgeFade(space: Self.space, top: TasksPage.listTopFade, bottom: AtticEdgeBlur.panelBottom))
                         ForEach(group.rows) { row in
                             AtticNoteRow(model: row, isSelected: row.id == selected && model.highlightedID == nil,
-                                         isHighlighted: row.id == model.highlightedID) { onOpen(row.id) }
+                                         isHighlighted: row.id == model.highlightedID,
+                                         commands: { rowCommands(row.id) }, anchors: anchors,
+                                         onShowActions: { showActions(for: row.id) },
+                                         onOpen: { onOpen(row.id) })
                                 .id(row.id)
                                 .contextMenu { AtticMenuItems(commands: rowCommands(row.id)) }
                                 // Delete and restore: the row folds away or springs back.
