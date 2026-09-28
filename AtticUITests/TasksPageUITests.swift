@@ -548,6 +548,13 @@ final class TasksPageUITests: XCTestCase {
 
     // MARK: - Round 10: full control
 
+    /// A menu item on screen with this title: an open pop-up or context
+    /// menu's, never the menu bar's own (those have no size until opened).
+    private func openItem(_ title: String) -> XCUIElement {
+        let items = app.menuItems.matching(NSPredicate(format: "title == %@", title)).allElementsBoundByIndex
+        return items.first { $0.frame.width > 0 && $0.frame.height > 0 } ?? app.menuItems[title]
+    }
+
     /// Rows whose label starts with the title (a title and its copies).
     private func rows(_ title: String) -> XCUIElementQuery {
         window.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title + ","))
@@ -565,13 +572,13 @@ final class TasksPageUITests: XCTestCase {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
-        moveDown.click()
+        openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
         waitFor(row("Email beta testers").frame.minY > row("Book dentist").frame.minY, "Move Down moved it one place down")
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
         XCTAssertTrue(menuItem("Duplicate").waitForExistence(timeout: 3))
-        menuItem("Duplicate").click()
+        openItem("Duplicate").click()
         waitFor(rows("Email beta testers").count == 2, "Duplicate from the menu makes a copy")
         app.typeKey(.escape, modifierFlags: [])
     }
@@ -600,7 +607,7 @@ final class TasksPageUITests: XCTestCase {
         XCTAssertTrue(menuItem("Rename").waitForExistence(timeout: 3), "its menu offers Rename")
         XCTAssertTrue(menuItem("Delete").exists)
         XCTAssertTrue(menuItem("Move Up").exists)
-        menuItem("Rename").click()
+        openItem("Rename").click()
         let field = app.textFields.matching(NSPredicate(format: "label == %@", "Rename subtask")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 3), "the title is edited in place")
         field.typeKey("a", modifierFlags: .command)
