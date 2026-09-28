@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct GeneralSettingsView: View {
@@ -63,15 +64,75 @@ struct GeneralSettingsView: View {
                 .help(String(localized: "Reduced fades or changes at once instead of moving"))
             }
 
-            // Nothing is shown while the shortcut works: the menu already
-            // advertises it. Only a refusal needs explaining.
-            if let failure = SettingsVisibility.globalShortcutFailure(globalHotKey.registration) {
-                SettingsGroup(title: String(localized: "Shortcut")) {
+            // Round 10 (the capability audit): the global quick capture
+            // shortcut can be recorded, reset, turned off, and tried again
+            // after a refusal.
+            SettingsGroup(
+                title: String(localized: "Quick Capture"),
+                footnote: String(localized: "From any app, the shortcut opens Attic on Tasks with the add bar ready.")
+            ) {
+                AtticSwitchRow(
+                    title: String(localized: "Quick capture shortcut"),
+                    isOn: $settings.quickCaptureEnabled,
+                    identifier: "setting-quick-capture"
+                )
+                AtticGroupDivider()
+                AtticShortcutRecorderRow(
+                    title: String(localized: "Shortcut"),
+                    value: settings.quickCaptureShortcut.displayName ?? "",
+                    spokenValue: settings.quickCaptureShortcut.spokenName ?? "",
+                    isDefault: settings.quickCaptureShortcut == .newTask,
+                    identifier: "setting-quick-capture-shortcut",
+                    recordingChanged: recordingChanged,
+                    record: record,
+                    reset: { settings.quickCaptureShortcut = .newTask }
+                )
+                .disabled(!settings.quickCaptureEnabled)
+                // Only a refusal needs explaining: while it works, the menu
+                // bar's menu advertises it.
+                if settings.quickCaptureEnabled, let failure = SettingsVisibility.globalShortcutFailure(globalHotKey.registration) {
+                    AtticGroupDivider()
                     AtticGroupMessage(text: failure.settingsMessage, tone: .warning)
                         .accessibilityIdentifier("settings-global-shortcut-unavailable")
+                    AtticGroupDivider()
+                    AtticActionRow(
+                        title: String(localized: "Shortcut is off"),
+                        actionTitle: String(localized: "Try Again"),
+                        actionIdentifier: "settings-global-shortcut-retry",
+                        actionHelp: String(localized: "Claim the shortcut again")
+                    ) {
+                        globalHotKey.retry()
+                    }
                 }
             }
         }
+    }
+
+    /// Whether the claim was held when recording began: while a new
+    /// combination is typed the old one is released (else pressing it
+    /// would open the panel instead of being recorded), and it is claimed
+    /// again if the recording ends without a new one.
+    @State private var claimedBeforeRecording = false
+
+    private func recordingChanged(_ recording: Bool) {
+        if recording {
+            claimedBeforeRecording = globalHotKey.registration.isActive
+            if claimedBeforeRecording { globalHotKey.unregister() }
+        } else if claimedBeforeRecording, !globalHotKey.registration.isActive {
+            // Unchanged (Esc, or the same combination): claim it again. A
+            // new combination is claimed by the app as the setting changes.
+            globalHotKey.apply(settings.quickCaptureShortcut, enabled: settings.quickCaptureEnabled)
+        }
+    }
+
+    /// A key pressed while recording: taken when Attic can claim it
+    /// (`GlobalHotKeyCombination.recordingProblem`), else why not.
+    private func record(_ event: NSEvent) -> String? {
+        let combination = GlobalHotKeyCombination(keyCode: UInt32(event.keyCode),
+                                                  modifiers: GlobalHotKeyCombination.carbonModifiers(event.modifierFlags))
+        if let problem = combination.recordingProblem { return problem }
+        settings.quickCaptureShortcut = combination
+        return nil
     }
 
     private var loginBinding: Binding<Bool> {

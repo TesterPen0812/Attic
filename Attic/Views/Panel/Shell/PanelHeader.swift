@@ -14,6 +14,9 @@ struct PanelHeader: View {
     /// The pointer rests on the page switch: the pages it leads to are
     /// built behind the current one, so the click only shows them.
     var onApproachPageSwitch: () -> Void = {}
+    /// ⇧⌘N and ⇧⌘F (round 10).
+    var onNewNote: () -> Void = { AppCoordinator.shared.showNewNote() }
+    var onSearch: () -> Void = { AppCoordinator.shared.showSearch() }
 
     var body: some View {
         AtticControlGroup {
@@ -31,6 +34,19 @@ struct PanelHeader: View {
                 )
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .accessibilityIdentifier("panel-pin-button")
+                // The menu bar menu's New note and Search Done Tasks keys,
+                // answered wherever the panel has the keyboard (round 10).
+                .background {
+                    Group {
+                        Button("New note", action: onNewNote).keyboardShortcut(MenuBarCommands.newNoteShortcut)
+                        Button("Search Done Tasks", action: onSearch).keyboardShortcut(MenuBarCommands.searchShortcut)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
                 Spacer(minLength: AtticSpacing.betweenControls)
                 AtticPageButton(
                     items: PanelPage.switchItems,

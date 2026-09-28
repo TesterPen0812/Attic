@@ -306,8 +306,17 @@ final class AppCoordinator: ObservableObject {
     /// during `start()`, which can land after a menu has already been built.
     @Published private(set) var globalShortcutRegistration: GlobalHotKeyRegistration = .notRegistered
 
+    /// Whether the panel is pinned, mirrored for the menu bar's Open ▸ Pin
+    /// Panel tick (the menu observes nothing else of the shell).
+    @Published private(set) var isPanelPinned = false
+    private var pinObservation: AnyCancellable?
+
     /// The combination that shortcut claims, for the menu that advertises it.
     var globalShortcutCombination: GlobalHotKeyCombination { newTaskHotKey.combination }
+
+    /// The hot key itself, for Settings' recorder (it releases the claim
+    /// while a new combination is typed).
+    var quickCaptureHotKey: GlobalHotKey { newTaskHotKey }
 
     let settings: AppSettings
     let store: TaskStore
@@ -365,6 +374,7 @@ final class AppCoordinator: ObservableObject {
     private var menuTrackingState = PanelMenuTrackingState()
     private var agentAccessObservation: AnyCancellable?
     private var globalShortcutObservation: AnyCancellable?
+    private var quickCaptureObservation: AnyCancellable?
     private var appearanceObservation: AnyCancellable?
     private var hasStarted = false
     private let newTaskHotKey: GlobalHotKey
@@ -533,7 +543,8 @@ final class AppCoordinator: ObservableObject {
         }
         // Built before the window so Settings observes the same hot key it
         // reports on; its action is bound once `self` exists.
-        let newTaskHotKey = GlobalHotKey()
+        // The combination Settings chose (round 10: the recorder).
+        let newTaskHotKey = GlobalHotKey(combination: settings.quickCaptureShortcut)
         let settingsWindowController = SettingsWindowController(
             settings: settings,
             loginItemService: loginItemService,
@@ -588,6 +599,9 @@ final class AppCoordinator: ObservableObject {
         )
         newTaskHotKey.action = { [weak self] in self?.showNewTask() }
         shellTools.presenter = agentPresenter
+        pinObservation = uiState.$isPanelPinned
+            .removeDuplicates()
+            .sink { [weak self] pinned in self?.isPanelPinned = pinned }
         globalShortcutObservation = newTaskHotKey.$registration
             .sink { [weak self] registration in
                 self?.globalShortcutRegistration = registration
@@ -798,7 +812,16 @@ final class AppCoordinator: ObservableObject {
             return
         }
 
-        newTaskHotKey.register()
+        if settings.quickCaptureEnabled { newTaskHotKey.register() }
+        // Settings › General › Quick Capture (round 10): a new combination
+        // or the switch releases the old claim and makes the new one.
+        quickCaptureObservation = settings.$quickCaptureShortcut
+            .combineLatest(settings.$quickCaptureEnabled)
+            .dropFirst()
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
+            .sink { [weak self] combination, enabled in
+                self?.newTaskHotKey.apply(combination, enabled: enabled)
+            }
         hoverMonitor.start()
         if !isRunningTests {
             // Once per launch, on the persistent store only (tests and UI
@@ -867,6 +890,19 @@ final class AppCoordinator: ObservableObject {
 
     func showNewTask() {
         hoverMonitor.revealProgrammatically(openComposer: true, section: .tasks)
+    }
+
+    /// The menu bar's Open ▸ Tasks, Notes, Canvas (round 10): the panel on
+    /// that page.
+    func showPage(_ page: PanelPage) {
+        hoverMonitor.revealProgrammatically(section: page.section)
+    }
+
+    /// The menu bar's Open ▸ Pin Panel: pinning shows the panel too (a
+    /// pinned panel is one that stays open).
+    func togglePin() {
+        uiState.isPanelPinned.toggle()
+        if uiState.isPanelPinned { showPanel() }
     }
 
     func showNewNote() {

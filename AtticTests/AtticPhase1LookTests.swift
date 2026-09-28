@@ -188,7 +188,7 @@ final class AtticPhase1LookTests: XCTestCase {
     func testTheMenuBarSaysWhatSearchOpens() {
         let menu = MenuBarCommands.commands(advertisedNewTaskShortcut: nil, showPanel: {}, newTask: {}, newNote: {},
                                             search: {}, openSettings: {}, quit: {})
-        XCTAssertEqual(menu.map(\.title), ["Show Attic", "New task", "New note", "Search Done Tasks…", "Settings…", "Quit Attic"])
+        XCTAssertEqual(menu.map(\.title), ["Show Attic", "New task", "New note", "Search Done Tasks…", "Open", "Settings…", "Quit Attic"])
     }
 
     /// One design: every combination once (the full matrix's own guard).

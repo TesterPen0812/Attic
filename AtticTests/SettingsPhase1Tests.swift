@@ -369,8 +369,11 @@ final class SettingsPhase1Tests: XCTestCase {
         let result = try object(tools.call(name: "get_settings", arguments: [:]))
         XCTAssertEqual(Set(result.keys), [
             "appearance", "palette", "surface", "tint", "tint_length", "reveal_corner", "reveal_delay",
-            "hide_delay", "corner_size", "panel_width", "haptics", "animations", "launch_at_login"
+            "hide_delay", "corner_size", "panel_width", "haptics", "animations", "launch_at_login",
+            "quick_capture", "quick_capture_shortcut"
         ])
+        XCTAssertEqual(result["quick_capture"] as? Bool, true)
+        XCTAssertEqual(result["quick_capture_shortcut"] as? String, "⌃⌥Space", "reported, read only")
         XCTAssertEqual(result["corner_size"] as? Double, 52)
         XCTAssertEqual(result["haptics"] as? Bool, true)
         XCTAssertEqual(result["animations"] as? String, "full")
