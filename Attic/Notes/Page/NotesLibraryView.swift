@@ -21,14 +21,19 @@ struct NotesLibraryView: View {
 
     @Environment(\.atticDesign) private var design
     @FocusState private var fieldFocused: Bool
+    /// The search was opened (the magnifier, ⌘F, typing): the field shows
+    /// first, then takes the keyboard (a focus set on a field that isn't
+    /// there yet is lost).
+    @State private var searchOpen = false
     @StateObject private var keys = NotesLibraryKeys()
 
     static let space = NamedCoordinateSpace.named("AtticNotesLibrary")
 
     private var pageEdge: CGFloat { max(0, layout.chromeInsets.leading - AtticSpacing.panelMargin) }
 
-    /// The search holds the label line while it has the keyboard or a query.
-    static func searchShown(focused: Bool, query: String) -> Bool { focused || !query.isEmpty }
+    /// The search holds the label line from when it is opened, and while it
+    /// has the keyboard or a query.
+    static func searchShown(open: Bool, focused: Bool, query: String) -> Bool { open || focused || !query.isEmpty }
 
     /// What a key typed in the list starts a search with: a printable,
     /// non-blank character without ⌘, ⌃ or ⌥ (never an arrow or a shortcut).
@@ -44,7 +49,7 @@ struct NotesLibraryView: View {
     var body: some View {
         let groups = model.groups(store: store, drafts: controller.failedDrafts)
         let selected = controller.librarySelectionID
-        let shown = Self.searchShown(focused: fieldFocused, query: model.query)
+        let shown = Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query)
         VStack(alignment: .leading, spacing: 0) {
             AtticNoteLibraryLine(title: String(localized: "All notes"), placeholder: placeholder, query: $model.query,
                                  searchShown: shown, fieldFocused: $fieldFocused,
@@ -65,7 +70,11 @@ struct NotesLibraryView: View {
         }
         .onDisappear { keys.stop() }
         .onChange(of: searchFocused) { _, wanted in if wanted { beginSearch() } }
-        .onChange(of: fieldFocused) { _, focused in if searchFocused != focused { searchFocused = focused } }
+        .onChange(of: fieldFocused) { _, focused in
+            if searchFocused != focused { searchFocused = focused }
+            // Leaving an empty search gives the line back.
+            if !focused, model.query.isEmpty { searchOpen = false }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("notes-library")
     }
@@ -73,12 +82,15 @@ struct NotesLibraryView: View {
     // MARK: Search
 
     private func beginSearch() {
-        fieldFocused = true
-        // A focused field selects its text; the insertion point goes after
-        // what is there, as if it had been typed.
-        for delay in [0.0, 0.15] {
+        searchOpen = true
+        // Once the field is there it takes the keyboard; a focused field
+        // selects its text, so the insertion point then goes after what is
+        // there, as if it had been typed.
+        for delay in [0.0, 0.1, 0.3] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard fieldFocused, let editor = keys.window?.firstResponder as? NSTextView else { return }
+                guard searchOpen || !model.query.isEmpty else { return }
+                if !fieldFocused { fieldFocused = true }
+                guard let editor = keys.window?.firstResponder as? NSTextView else { return }
                 editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
             }
         }
@@ -86,6 +98,7 @@ struct NotesLibraryView: View {
 
     private func endSearch() {
         model.clearSearch()
+        searchOpen = false
         fieldFocused = false
         searchFocused = false
     }
@@ -98,7 +111,7 @@ struct NotesLibraryView: View {
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         switch event.keyCode {
         case 53 where modifiers.isEmpty:
-            if Self.searchShown(focused: fieldFocused, query: model.query) { endSearch() } else { onBack() }
+            if Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query) { endSearch() } else { onBack() }
             return true
         case 3 where modifiers == .command: // ⌘F
             beginSearch()

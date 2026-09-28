@@ -177,9 +177,11 @@ final class NotesOwnerFeedbackTests: XCTestCase {
     // MARK: 4. The quiet search
 
     func testSearchTakesTheLabelLineOnlyWhileItIsInUse() {
-        XCTAssertFalse(NotesLibraryView.searchShown(focused: false, query: ""))
-        XCTAssertTrue(NotesLibraryView.searchShown(focused: true, query: ""))
-        XCTAssertTrue(NotesLibraryView.searchShown(focused: false, query: "kyoto"), "a query keeps the field")
+        XCTAssertFalse(NotesLibraryView.searchShown(open: false, focused: false, query: ""))
+        XCTAssertTrue(NotesLibraryView.searchShown(open: true, focused: false, query: ""),
+                      "opening shows the field before it can take the keyboard")
+        XCTAssertTrue(NotesLibraryView.searchShown(open: false, focused: true, query: ""))
+        XCTAssertTrue(NotesLibraryView.searchShown(open: false, focused: false, query: "kyoto"), "a query keeps the field")
         XCTAssertEqual(NotesLibraryView.typedSearchText(KeyEquivalent("k"), modifiers: []), "k")
         XCTAssertEqual(NotesLibraryView.typedSearchText(KeyEquivalent("K"), modifiers: .shift), "K")
         XCTAssertNil(NotesLibraryView.typedSearchText(KeyEquivalent("f"), modifiers: .command), "shortcuts don't type")
