@@ -53,7 +53,7 @@ struct NotesLibraryView: View {
         VStack(alignment: .leading, spacing: 0) {
             AtticNoteLibraryLine(title: String(localized: "All notes"), placeholder: placeholder, query: $model.query,
                                  searchShown: shown, fieldFocused: $fieldFocused,
-                                 onBeginSearch: beginSearch, onEndSearch: endSearch)
+                                 onBeginSearch: { beginSearch() }, onEndSearch: endSearch)
                 // Centred on the tabs' line, as on Tasks.
                 .padding(.top, layout.headerBottom + AtticLayout.pageTabsTop
                     - (AtticControlSize.smallHeight - AtticLayout.pageTabsHeight) / 2)
@@ -81,17 +81,34 @@ struct NotesLibraryView: View {
 
     // MARK: Search
 
-    private func beginSearch() {
+    /// Opens the search. `replaying` is the keystroke that opened it by
+    /// typing: once the field has the keyboard it is delivered through the
+    /// text-input system (so an input method composes it), never inserted
+    /// as raw characters.
+    private func beginSearch(replaying event: NSEvent? = nil) {
         searchOpen = true
-        // Once the field is there it takes the keyboard; a focused field
-        // selects its text, so the insertion point then goes after what is
-        // there, as if it had been typed.
+        var pending = event
+        var placedCaret = false
+        // Once the field is there it takes the keyboard. A focused field
+        // selects all its text: the first time only, the insertion point
+        // goes after it, as if typed; a selection the person makes after
+        // that is left alone.
         for delay in [0.0, 0.1, 0.3] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 guard searchOpen || !model.query.isEmpty else { return }
                 if !fieldFocused { fieldFocused = true }
                 guard let editor = keys.window?.firstResponder as? NSTextView else { return }
-                editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+                if !placedCaret {
+                    placedCaret = true
+                    let length = (editor.string as NSString).length
+                    if length > 0, editor.selectedRange() == NSRange(location: 0, length: length) {
+                        editor.setSelectedRange(NSRange(location: length, length: 0))
+                    }
+                }
+                if let event = pending {
+                    pending = nil
+                    NotesLibraryKeys.deliver(event, to: editor)
+                }
             }
         }
     }
@@ -108,36 +125,54 @@ struct NotesLibraryView: View {
     private func handle(_ event: NSEvent) -> Bool {
         let groups = model.groups(store: store, drafts: controller.failedDrafts)
         let selected = controller.librarySelectionID
-        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-        switch event.keyCode {
-        case 53 where modifiers.isEmpty:
+        let editor = keys.window?.firstResponder as? NSTextView
+        let action = Self.keyAction(keyCode: event.keyCode, modifiers: EventModifiers(event.modifierFlags),
+                                    characters: event.charactersIgnoringModifiers,
+                                    composing: editor?.hasMarkedText() == true, fieldFocused: fieldFocused)
+        switch action {
+        case .passThrough:
+            return false
+        case .escape:
             if Self.searchShown(open: searchOpen, focused: fieldFocused, query: model.query) { endSearch() } else { onBack() }
-            return true
-        case 3 where modifiers == .command: // ⌘F
+        case .find:
             beginSearch()
-            return true
-        case 125 where modifiers.isEmpty:
-            model.moveHighlight(by: 1, in: groups, from: selected)
-            return true
-        case 126 where modifiers.isEmpty:
-            model.moveHighlight(by: -1, in: groups, from: selected)
-            return true
-        case 36 where modifiers.isEmpty, 76 where modifiers.isEmpty:
+        case let .move(step):
+            model.moveHighlight(by: step, in: groups, from: selected)
+        case .open:
             guard let id = model.openTarget(in: groups) else { return false }
             onOpen(id)
-            return true
-        case 51 where modifiers == .command:
+        case .delete:
             // In the search field ⌘⌫ edits the text until ↑ ↓ picked a row.
             guard let id = model.deleteTarget(in: groups, selected: selected, inField: fieldFocused) else { return false }
             onDelete(id)
-            return true
+        case .startSearch:
+            beginSearch(replaying: event)
+        }
+        return true
+    }
+
+    enum KeyAction: Equatable {
+        case passThrough, escape, find, move(Int), open, delete, startSearch
+    }
+
+    /// What a key does in All notes. While an input method is composing in
+    /// the search field every key is its own (Esc cancels the composition,
+    /// the arrows choose a candidate, Return confirms it).
+    static func keyAction(keyCode: UInt16, modifiers: EventModifiers, characters: String?,
+                          composing: Bool, fieldFocused: Bool) -> KeyAction {
+        guard !composing else { return .passThrough }
+        let chord = modifiers.intersection([.command, .control, .option, .shift])
+        switch keyCode {
+        case 53 where chord.isEmpty: return .escape
+        case 3 where chord == .command: return .find
+        case 125 where chord.isEmpty: return .move(1)
+        case 126 where chord.isEmpty: return .move(-1)
+        case 36 where chord.isEmpty, 76 where chord.isEmpty: return .open
+        case 51 where chord == .command: return .delete
         default:
-            guard !fieldFocused, let characters = event.charactersIgnoringModifiers, let first = characters.first,
-                  let typed = Self.typedSearchText(KeyEquivalent(first), modifiers: EventModifiers(event.modifierFlags))
-            else { return false }
-            model.query += event.characters ?? typed
-            beginSearch()
-            return true
+            guard !fieldFocused, let first = characters?.first,
+                  typedSearchText(KeyEquivalent(first), modifiers: modifiers) != nil else { return .passThrough }
+            return .startSearch
         }
     }
 
@@ -242,6 +277,12 @@ final class NotesLibraryKeys: ObservableObject {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
     }
+
+    /// Gives a keystroke to a text view through the text-input system
+    /// (its input method composes it), as if it had been typed there.
+    static func deliver(_ event: NSEvent, to editor: NSTextView) {
+        editor.interpretKeyEvents([event])
+    }
 }
 
 private struct NotesWindowReader: NSViewRepresentable {
@@ -266,7 +307,8 @@ private struct NotesWindowReader: NSViewRepresentable {
     }
 }
 
-private extension EventModifiers {
+extension EventModifiers {
+    /// The SwiftUI form of an AppKit event's modifier flags.
     init(_ flags: NSEvent.ModifierFlags) {
         var result: EventModifiers = []
         if flags.contains(.command) { result.insert(.command) }

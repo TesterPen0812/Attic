@@ -188,6 +188,47 @@ final class NotesOwnerFeedbackTests: XCTestCase {
         XCTAssertNil(NotesLibraryView.typedSearchText(.downArrow, modifiers: []))
         XCTAssertNil(NotesLibraryView.typedSearchText(.space, modifiers: []), "a leading space starts nothing")
     }
+
+    // MARK: 4b. The search's keys never take an input method's keys
+
+    func testWhileComposingEscTheArrowsAndReturnBelongToTheInputMethod() {
+        for keyCode: UInt16 in [53, 125, 126, 36, 76] {
+            XCTAssertEqual(NotesLibraryView.keyAction(keyCode: keyCode, modifiers: [], characters: nil,
+                                                      composing: true, fieldFocused: true), .passThrough, "key \(keyCode)")
+        }
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 51, modifiers: .command, characters: nil,
+                                                  composing: true, fieldFocused: true), .passThrough)
+        // Without a composition they are the list's.
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 53, modifiers: [], characters: nil, composing: false, fieldFocused: true), .escape)
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 125, modifiers: [], characters: nil, composing: false, fieldFocused: true), .move(1))
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 126, modifiers: [], characters: nil, composing: false, fieldFocused: false), .move(-1))
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 36, modifiers: [], characters: "\r", composing: false, fieldFocused: true), .open)
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 3, modifiers: .command, characters: "f", composing: false, fieldFocused: false), .find)
+    }
+
+    func testTypingStartsTheSearchOnlyOutsideTheFieldAndNeverAsRawText() {
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 40, modifiers: [], characters: "k",
+                                                  composing: false, fieldFocused: false), .startSearch)
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 40, modifiers: [], characters: "k",
+                                                  composing: false, fieldFocused: true), .passThrough,
+                       "in the field, the field types")
+        XCTAssertEqual(NotesLibraryView.keyAction(keyCode: 40, modifiers: .command, characters: "k",
+                                                  composing: false, fieldFocused: false), .passThrough)
+    }
+
+    func testTheKeystrokeThatStartsASearchGoesThroughTheTextInputSystem() throws {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
+        let window = NSWindow(contentRect: textView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = textView
+        windows.append(window)
+        window.makeFirstResponder(textView)
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "k", charactersIgnoringModifiers: "k", isARepeat: false, keyCode: 40))
+        NotesLibraryKeys.deliver(event, to: textView)
+        XCTAssertEqual(textView.string, "k", "delivered as a keystroke the text system interprets")
+    }
 }
 
 @MainActor
