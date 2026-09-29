@@ -99,7 +99,7 @@ enum NoteFormatCaptureScene {
         case "barclick":
             // A real click path (NSWindow.sendEvent → hit test → the bar's Bold),
             // then a note of what happened for the check.
-            textView.setSelectedRange(range(of: "most people only need the panel", in: textView))
+            textView.setSelectedRange(range(of: "Student pricing", in: textView))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 guard let window = textView.window else { return }
                 let bar = controls.barFrame
@@ -116,12 +116,11 @@ enum NoteFormatCaptureScene {
                                                       clickCount: 1, pressure: 1) { window.sendEvent(event) }
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    let marks = controls.engine.document().blocks.dropFirst().first?.marks.map(\.kind.rawValue) ?? []
+                    let marks = controls.engine.document().blocks.last?.marks.map(\.kind.rawValue) ?? []
                     let report = "hit=\(hit.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
                         + "responder=\(window.firstResponder.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
                         + "selection=\(NSStringFromRange(textView.selectedRange())) barShown=\(controls.formatModel.barShown) marks=\(marks)"
-                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("barclick.txt")
-                    try? report.write(to: url, atomically: true, encoding: .utf8)
+                    NSLog("ATTIC_BARCLICK %@", report)
                 }
             }
         case "aa":
