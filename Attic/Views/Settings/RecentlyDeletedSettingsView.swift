@@ -2,8 +2,14 @@ import SwiftUI
 
 /// Recently Deleted (spec § Shared systems): every deleted task, note,
 /// canvas and removed attachment, restorable for 30 days; search; Restore
-/// puts an item back where it was, links included; Empty removes
+/// puts an item back where it was, links included; Empty All removes
 /// everything here for good after a clear confirmation.
+///
+/// Control audit item 11: entries can be selected (click, ⌘-click,
+/// ⇧-click, ⌘A, ↑ ↓ and ⇧↑ ⇧↓), then restored together (⌘R, one Undo
+/// step) or deleted permanently (⌘⌫, always after a confirmation that
+/// counts them). A row's right-click menu and its VoiceOver actions offer
+/// the same commands, counted when they act on the selection.
 struct RecentlyDeletedSettingsView: View {
     @StateObject private var model: RecentlyDeletedModel
     @FocusState private var searchFocused: Bool
@@ -15,51 +21,12 @@ struct RecentlyDeletedSettingsView: View {
 
     var body: some View {
         SettingsPage(section: .recentlyDeleted) {
-            summary
-            if !model.entries.isEmpty {
-                AtticSearchField(
-                    placeholder: String(localized: "Search Recently Deleted"),
-                    text: $model.query,
-                    identifier: "recently-deleted-search",
-                    focus: $searchFocused
-                )
-                .padding(.bottom, AtticSpacing.s20)
-            }
-            if let message = model.message {
-                SettingsGroup {
-                    AtticGroupMessage(
-                        text: message.text,
-                        tone: message.tone,
-                        actionTitle: String(localized: "OK"),
-                        action: model.dismissMessage
-                    )
-                }
-                .accessibilityIdentifier("recently-deleted-message")
-            }
-            let sections = model.sections
-            if sections.isEmpty, !model.entries.isEmpty {
-                SettingsGroup {
-                    AtticGroupEmptyRow(text: String(localized: "Nothing here matches “\(model.query)”."))
-                }
-                .accessibilityIdentifier("recently-deleted-no-results")
-            }
-            ForEach(sections, id: \.kind) { section in
-                SettingsGroup(title: section.kind.sectionTitle, identifier: "recently-deleted-\(section.kind.rawValue)") {
-                    ForEach(Array(section.entries.enumerated()), id: \.element.id) { index, entry in
-                        if index > 0 {
-                            AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
-                        }
-                        AtticDeletedItemRow(
-                            systemName: entry.kind.systemImage,
-                            kind: entry.kind.noun,
-                            title: entry.title,
-                            detail: entry.detail,
-                            restoreIdentifier: "recently-deleted-restore-\(entry.id)"
-                        ) {
-                            model.restore(entry)
-                        }
+            ScrollViewReader { proxy in
+                VStack(alignment: .leading, spacing: 0) { content }
+                    // The keyboard's row stays in view as ↑ ↓ move it.
+                    .onChange(of: model.cursor) { _, cursor in
+                        if let cursor { proxy.scrollTo(cursor) }
                     }
-                }
             }
         }
         // Follow the stores only while the page is on screen in the active
@@ -72,23 +39,14 @@ struct RecentlyDeletedSettingsView: View {
         .onChange(of: appearsActive) { _, active in
             if active { model.start() } else { model.stop() }
         }
-        .background {
-            // ⌘Z undoes the last restore, unless the search field is
-            // editing (then it undoes typing, as everywhere).
-            Button("Undo") { model.undo() }
-                .keyboardShortcut("z", modifiers: .command)
-                .disabled(searchFocused || !model.canUndo)
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
-        }
+        .background { keys }
         .alert(
-            String(localized: "Empty Recently Deleted?"),
+            model.emptyRequest?.title ?? "",
             isPresented: Binding(get: { model.emptyRequest != nil }, set: { if !$0 { model.cancelEmpty() } }),
             presenting: model.emptyRequest
-        ) { _ in
+        ) { request in
             // Removes exactly the items this confirmation counted.
-            Button(String(localized: "Empty"), role: .destructive) {
+            Button(request.confirmTitle, role: .destructive) {
                 model.confirmEmpty()
             }
             .accessibilityIdentifier("recently-deleted-confirm-empty")
@@ -98,7 +56,93 @@ struct RecentlyDeletedSettingsView: View {
         }
     }
 
-    /// How much is here, the rule, and Empty.
+    @ViewBuilder
+    private var content: some View {
+        summary
+        if !model.entries.isEmpty {
+            AtticSearchField(
+                placeholder: String(localized: "Search Recently Deleted"),
+                text: $model.query,
+                identifier: "recently-deleted-search",
+                focus: $searchFocused
+            )
+            .padding(.bottom, AtticSpacing.s20)
+        }
+        if let message = model.message {
+            SettingsGroup {
+                AtticGroupMessage(
+                    text: message.text,
+                    tone: message.tone,
+                    actionTitle: String(localized: "OK"),
+                    action: model.dismissMessage
+                )
+            }
+            .accessibilityIdentifier("recently-deleted-message")
+        }
+        let sections = model.sections
+        if sections.isEmpty, !model.entries.isEmpty {
+            SettingsGroup {
+                AtticGroupEmptyRow(text: String(localized: "Nothing here matches “\(model.query)”."))
+            }
+            .accessibilityIdentifier("recently-deleted-no-results")
+        }
+        ForEach(sections, id: \.kind) { section in
+            SettingsGroup(title: section.kind.sectionTitle, identifier: "recently-deleted-\(section.kind.rawValue)") {
+                ForEach(Array(section.entries.enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 {
+                        AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
+                    }
+                    row(entry)
+                        .id(entry.id)
+                }
+            }
+        }
+    }
+
+    private func row(_ entry: RecentlyDeletedEntry) -> some View {
+        AtticDeletedItemRow(
+            systemName: entry.kind.systemImage,
+            kind: entry.kind.noun,
+            title: entry.title,
+            detail: entry.detail,
+            restoreIdentifier: "recently-deleted-restore-\(entry.id)",
+            isSelected: model.selection.contains(entry.id),
+            onSelect: { flags in
+                model.click(entry, command: flags.contains(.command), shift: flags.contains(.shift))
+            },
+            commands: { commands(for: entry) },
+            onToggleSelection: { model.toggleSelection(entry) }
+        ) {
+            model.restore(entry)
+        }
+        .accessibilityIdentifier("recently-deleted-row-\(entry.id)")
+    }
+
+    /// A row's commands: on the selection when the row is part of it,
+    /// otherwise on the row alone.
+    private func commands(for entry: RecentlyDeletedEntry) -> [AtticMenuCommand] {
+        let targets = model.targets(for: entry)
+        // ⌘R and ⌘⌫ act on the selection: shown when the menu does too.
+        let onSelection = model.selection.contains(entry.id)
+        return [
+            AtticMenuCommand(verbatim: RecentlyDeletedPresentation.restoreTitle(count: targets.count),
+                             shortcut: onSelection ? RecentlyDeletedKeys.restore : nil) {
+                model.restore(targets)
+            },
+            AtticMenuCommand(verbatim: RecentlyDeletedPresentation.deleteTitle(count: targets.count),
+                             shortcut: onSelection ? RecentlyDeletedKeys.delete : nil,
+                             isDestructive: true, startsSection: true) {
+                model.requestDelete(targets)
+            },
+            AtticMenuCommand(verbatim: String(localized: "Select All"), shortcut: RecentlyDeletedKeys.selectAll,
+                             isDisabled: model.listedEntries.count < 2, startsSection: true) {
+                model.selectAll()
+            }
+        ]
+    }
+
+    /// How much is here, the rule, and Empty All; with a selection, what is
+    /// selected and what can be done with it.
     private var summary: some View {
         SettingsGroup(
             footnote: String(localized: "Deleted tasks, notes, canvases and attachments stay here for 30 days, then are removed for good.")
@@ -109,13 +153,72 @@ struct RecentlyDeletedSettingsView: View {
             } else {
                 AtticActionRow(
                     title: RecentlyDeletedPresentation.countPhrase(model.entries.count),
-                    actionTitle: String(localized: "Empty…"),
+                    actionTitle: String(localized: "Empty All…"),
                     actionIdentifier: "recently-deleted-empty",
-                    actionHelp: String(localized: "Remove everything in Recently Deleted for good")
+                    actionHelp: String(localized: "Remove everything in Recently Deleted for good, searched for or not")
                 ) {
                     model.requestEmpty()
+                }
+                let selected = model.selectedEntries
+                if !selected.isEmpty {
+                    AtticGroupDivider()
+                    AtticActionRow(
+                        title: RecentlyDeletedPresentation.selectedPhrase(selected.count),
+                        actionTitle: String(localized: "Restore"),
+                        actionIdentifier: "recently-deleted-restore-selected",
+                        actionHelp: String(localized: "Put the selected items back (⌘R)"),
+                        secondary: AtticRowAction(
+                            title: String(localized: "Delete Permanently…"),
+                            identifier: "recently-deleted-delete-selected",
+                            help: String(localized: "Remove the selected items for good (⌘⌫)"),
+                            action: { model.requestDeleteSelected() }
+                        )
+                    ) {
+                        model.restoreSelected()
+                    }
+                    .accessibilityIdentifier("recently-deleted-selection")
                 }
             }
         }
     }
+
+    /// The page's keys. None answers while the search field is editing,
+    /// so it keeps its own ⌘A, ⌘Z, arrows and Delete.
+    private var keys: some View {
+        let listed = !model.listedEntries.isEmpty
+        let selected = !model.selection.isEmpty
+        return ZStack {
+            // ⌘Z undoes the last restore, unless the search field is
+            // editing (then it undoes typing, as everywhere).
+            hidden("Undo", RecentlyDeletedKeys.undo, enabled: !searchFocused && model.canUndo) { model.undo() }
+            hidden("Select All", RecentlyDeletedKeys.selectAll, enabled: !searchFocused && listed) { model.selectAll() }
+            hidden("Restore Selected", RecentlyDeletedKeys.restore, enabled: selected) { model.restoreSelected() }
+            hidden("Delete Permanently", RecentlyDeletedKeys.delete, enabled: !searchFocused && selected) { model.requestDeleteSelected() }
+            hidden("Next", KeyboardShortcut(.downArrow, modifiers: []), enabled: !searchFocused && listed) { model.moveCursor(by: 1) }
+            hidden("Previous", KeyboardShortcut(.upArrow, modifiers: []), enabled: !searchFocused && listed) { model.moveCursor(by: -1) }
+            hidden("Extend Down", KeyboardShortcut(.downArrow, modifiers: .shift), enabled: !searchFocused && listed) {
+                model.moveCursor(by: 1, extending: true)
+            }
+            hidden("Extend Up", KeyboardShortcut(.upArrow, modifiers: .shift), enabled: !searchFocused && listed) {
+                model.moveCursor(by: -1, extending: true)
+            }
+        }
+    }
+
+    private func hidden(_ title: String, _ shortcut: KeyboardShortcut, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .keyboardShortcut(shortcut)
+            .disabled(!enabled)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Recently Deleted's keys (control audit item 11), shown in its menus.
+enum RecentlyDeletedKeys {
+    static let undo = KeyboardShortcut("z", modifiers: .command)
+    static let selectAll = KeyboardShortcut("a", modifiers: .command)
+    static let restore = KeyboardShortcut("r", modifiers: .command)
+    static let delete = KeyboardShortcut(.delete, modifiers: .command)
 }

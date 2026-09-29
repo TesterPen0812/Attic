@@ -467,7 +467,7 @@ final class AtticLibrary {
 
     /// Undo of an attachment restore: remove it again, if it is still shown
     /// on its live task or note.
-    private func removeAttachmentOutcome(_ summary: DeletedAttachmentSummary) -> UndoOutcome {
+    func removeAttachmentOutcome(_ summary: DeletedAttachmentSummary) -> UndoOutcome {
         switch summary.owner.kind {
         case .task:
             guard tasks.task(withID: summary.owner.id)?.attachments.contains(where: { $0.id == summary.attachmentID }) == true else {
@@ -491,7 +491,7 @@ final class AtticLibrary {
         return recentlyDeletedAttachments().contains { $0.attachmentID == summary.attachmentID } ? .failed : .obsolete
     }
 
-    private func performRestoreAttachment(_ summary: DeletedAttachmentSummary) -> Bool {
+    func performRestoreAttachment(_ summary: DeletedAttachmentSummary) -> Bool {
         switch summary.owner.kind {
         case .task:
             return tasks.restoreAttachment(summary.attachmentID) || fail(tasks.lastErrorMessage)
@@ -680,7 +680,7 @@ final class AtticLibrary {
         }
     }
 
-    private func performRestore(_ ref: AtticItemRef) -> Bool {
+    func performRestore(_ ref: AtticItemRef) -> Bool {
         switch ref.kind {
         case .task:
             return tasks.restoreDeleted(taskID: ref.id) || fail(tasks.lastErrorMessage)
@@ -696,7 +696,7 @@ final class AtticLibrary {
     /// Undo/redo of a delete: moving an item that is no longer shown (gone,
     /// already in Recently Deleted, or a task the daily cleanup moved to the
     /// Done log) can never apply again.
-    private func deleteOutcome(_ ref: AtticItemRef) -> UndoOutcome {
+    func deleteOutcome(_ ref: AtticItemRef) -> UndoOutcome {
         if performDelete(ref) { return .applied }
         let shown: Bool = switch ref.kind {
         case .task: tasks.task(withID: ref.id) != nil

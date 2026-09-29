@@ -410,6 +410,37 @@ final class AgentTaskTools {
             ]
         ],
         [
+            "name": "restore_items",
+            "title": "Restore Several Attic Items",
+            "description": "Bring several items back from Recently Deleted as one undoable step, as the person's Restore Selected does: each with its subtasks, attachments and links. Items that can't come back (a subtask whose main task is still deleted, unless it is in the same request) stay in Recently Deleted and are listed with the reason; the rest are restored. Nothing is ever deleted permanently.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "items": [
+                        "type": "array",
+                        "minItems": 1,
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "kind": ["type": "string", "enum": AtticItemKind.allCases.map(\.rawValue)],
+                                "id": ["type": "string", "description": "The item's UUID, from list_deleted."]
+                            ],
+                            "required": ["kind", "id"],
+                            "additionalProperties": false
+                        ]
+                    ]
+                ],
+                "required": ["items"],
+                "additionalProperties": false
+            ]
+        ],
+        [
             "name": "list_deleted",
             "title": "List Recently Deleted",
             "description": "List what is in Recently Deleted, newest first, with when each item will be removed for good.",
@@ -514,6 +545,7 @@ final class AgentTaskTools {
         case "delete_note": try deleteNote(arguments)
         case "delete_item": try deleteItem(arguments)
         case "restore_item": try restoreItem(arguments)
+        case "restore_items": try restoreItems(arguments)
         case "list_deleted": try listDeleted(arguments)
         case "list_tags": try listTags(arguments)
         case "update_tags": try updateTags(arguments)
@@ -952,6 +984,26 @@ final class AgentTaskTools {
         }
         try performLibrary { library.restore(ref) }
         return try encode(["restored": ref.id.uuidString, "kind": ref.kind.rawValue])
+    }
+
+    /// Restore Selected (control audit item 11), one step.
+    private func restoreItems(_ arguments: [String: Any]) throws -> String {
+        guard let raw = arguments["items"] as? [[String: Any]], !raw.isEmpty else {
+            throw AgentToolError.invalidArguments("items must be a non-empty array of {kind, id}.")
+        }
+        let refs = try raw.map { try itemRef(from: $0, field: "Each item") }
+        if let missing = refs.first(where: { library.state(of: $0) != .deleted }) {
+            throw AgentToolError.invalidArguments("No \(missing.kind.rawValue) with id \(missing.id.uuidString) is in Recently Deleted. Nothing was restored.")
+        }
+        let report = library.restoreRecentlyDeleted(items: refs, attachments: [])
+        let failed = Set(report.failures.compactMap(\.item))
+        return try encode([
+            "restored": refs.filter { !failed.contains($0) }.map { ["kind": $0.kind.rawValue, "id": $0.id.uuidString] },
+            "failed": report.failures.compactMap { failure -> [String: Any]? in
+                guard let item = failure.item else { return nil }
+                return ["kind": item.kind.rawValue, "id": item.id.uuidString, "reason": failure.message]
+            }
+        ])
     }
 
     private func listDeleted(_ arguments: [String: Any]) throws -> String {
