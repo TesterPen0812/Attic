@@ -490,18 +490,11 @@ extension NoteStore {
         }) else {
             throw NoteDocumentStoreError.invalidDocument("An image has no complete payload.")
         }
-        for family in Dictionary(grouping: rows, by: \.id).values {
-            guard let first = family.first,
-                  family.allSatisfy({ $0.noteID == first.noteID && $0.byteCount == first.byteCount
-                      && $0.contentDigest == first.contentDigest
-                      && $0.originalFilename == first.originalFilename
-                      && $0.contentTypeIdentifier == first.contentTypeIdentifier }) else {
-                throw NoteDocumentStoreError.invalidDocument("Copies of a file disagree.")
-            }
-        }
+        // Divergent replicas of an existing file never block a save; its
+        // largest replica counts toward the limits.
         let existing = Set(rows.map(\.id))
         let visible = Dictionary(rows.filter { shown.contains($0.id) }.map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first }).values
+            uniquingKeysWith: { first, other in other.byteCount > first.byteCount ? other : first }).values
         let new = staged.filter { shown.contains($0.id) && !existing.contains($0.id) }
         let baseIDs = Set(base?.attachmentIDs ?? [])
         let addedIDs = shown.subtracting(baseIDs)
@@ -680,7 +673,11 @@ extension NoteStore {
         for version in all {
             let family = copies[version.id] ?? []
             guard NotePhysicalFamilyRetention.mayDelete(family, decision: { replica in
-                guard replica.noteID == noteID, replica.reason != nil else { return .unknown }
+                // A divergent replica keeps the family until replicas agree.
+                guard replica.noteID == noteID, replica.reason != nil,
+                      replica.createdAt == version.createdAt, replica.content == version.content,
+                      replica.contentFormat == version.contentFormat,
+                      replica.sourceRevisionID == version.sourceRevisionID else { return .unknown }
                 if protectedIDs.contains(replica.id)
                     || replica.sourceRevisionID.map(recoveryBases.contains) == true { return .protected }
                 return .eligible

@@ -418,6 +418,125 @@ final class NoteDocumentStoreTests: XCTestCase {
             baseRevisionID: revision) else { return XCTFail("unknown retention must not block text save") }
     }
 
+    /// Family-retention invariant: every destructive store operation keeps a
+    /// complete physical family when any member is protected, divergent or
+    /// unreadable, deletes an agreeing unprotected family, and never blocks an
+    /// ordinary save.
+    func testPhysicalFamilyInvariantEveryDestructiveOperationKeepsProtectedOrUnknownFamilies() throws {
+        func bytes(_ text: String) -> StagedNoteAttachment {
+            let data = Data(text.utf8)
+            return StagedNoteAttachment(id: UUID(), filename: "\(text).pdf", contentTypeIdentifier: "com.adobe.pdf",
+                byteCount: Int64(data.count), digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                data: data)
+        }
+        func fileBlock(_ item: StagedNoteAttachment) -> NoteBlock {
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                  byteCount: item.byteCount)
+        }
+        func physicalVersions(_ id: UUID) throws -> [NoteVersion] {
+            try store.modelContext.fetch(FetchDescriptor<NoteVersion>(predicate: #Predicate { $0.id == id }))
+        }
+        func physicalAttachments(_ id: UUID) throws -> [NoteAttachment] {
+            try store.modelContext.fetch(FetchDescriptor<NoteAttachment>(predicate: #Predicate { $0.id == id }))
+        }
+        let removed = bytes("removed"), divergent = bytes("divergent")
+        let (id, firstRevision) = try create(NoteDocument(blocks: [.text("Current"), fileBlock(removed),
+                                                                   fileBlock(divergent)]), staged: [removed, divergent])
+        var revision = firstRevision
+        func ordinarySave(_ step: String) {
+            guard case let .success(next) = store.saveDocument(noteID: id, document: document("Current", [step]),
+                baseRevisionID: revision) else { return XCTFail("\(step): an ordinary save must succeed") }
+            revision = next
+        }
+
+        // Version thinning: agreeing, protected, divergent and unreadable families.
+        let old = Date().addingTimeInterval(-40 * 86_400)
+        let protectedRevision = UUID()
+        let agreeing = UUID(), protected = UUID(), split = UUID(), unread = UUID()
+        // Distinct instants: same-instant families are kept together.
+        for (offset, (family, sources, contents)) in [
+            (agreeing, [UUID?.none, nil], [Data?.none, nil]),
+            (protected, [protectedRevision, protectedRevision], [nil, nil]),
+            (split, [nil, nil], [nil, Data("other".utf8)]),
+        ].enumerated() {
+            for index in 0..<2 {
+                store.modelContext.insert(NoteVersion(id: family, noteID: id,
+                    createdAt: old.addingTimeInterval(-Double(offset) * 60), reason: .pause,
+                    content: contents[index], contentFormat: 0, title: "v", body: "", attachmentIDs: [],
+                    sourceRevisionID: sources[index]))
+            }
+        }
+        try store.modelContext.save()
+        store.recoveryProtectedRevisionIDs = { [protectedRevision] }
+        store.thinVersions(noteID: id)
+        XCTAssertTrue(try physicalVersions(agreeing).isEmpty, "an agreeing unprotected family is thinned")
+        XCTAssertEqual(try physicalVersions(protected).count, 2, "a protected family is kept whole")
+        XCTAssertEqual(try physicalVersions(split).count, 2, "a divergent family is kept whole")
+        for _ in 0..<2 {
+            store.modelContext.insert(NoteVersion(id: unread, noteID: id, createdAt: old, reason: .pause,
+                content: nil, contentFormat: 0, title: "v", body: "", attachmentIDs: [], sourceRevisionID: nil))
+        }
+        try store.modelContext.save()
+        store.recoveryProtectedRevisionIDs = { throw CocoaError(.fileReadCorruptFile) }
+        store.thinVersions(noteID: id)
+        XCTAssertEqual(try physicalVersions(unread).count, 2, "unreadable recovery ownership keeps history")
+        ordinarySave("after thinning, files removed")
+
+        // Attachment expiry: a divergent removed file and an unreadable scan.
+        let removedRow = try XCTUnwrap(physicalAttachments(divergent.id).first)
+        store.modelContext.insert(NoteAttachment(id: divergent.id, noteID: id, originalFilename: divergent.filename,
+            contentTypeIdentifier: divergent.contentTypeIdentifier, byteCount: 5, sortIndex: 9,
+            contentDigest: "different", createdAt: removedRow.createdAt, updatedAt: removedRow.updatedAt,
+            payload: Data("other".utf8)))
+        try physicalAttachments(divergent.id).forEach { $0.deletedAt = removedRow.deletedAt }
+        // The displaced version that still shows both files has expired.
+        for version in try store.modelContext.fetch(FetchDescriptor<NoteVersion>())
+        where !Set(version.attachmentIDs).isDisjoint(with: [removed.id, divergent.id]) {
+            store.modelContext.delete(version)
+        }
+        try store.modelContext.save()
+        store.recoveryReferencedAttachmentIDs = { throw CocoaError(.fileReadCorruptFile) }
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0, "an unreadable scan purges nothing")
+        store.recoveryReferencedAttachmentIDs = { [] }
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1, "only the agreeing file is purged")
+        XCTAssertTrue(try physicalAttachments(removed.id).isEmpty)
+        XCTAssertEqual(try physicalAttachments(divergent.id).count, 2, "the divergent file family is kept whole")
+        ordinarySave("after attachment expiry")
+
+        // Recently Deleted expiry: an unreadable scan and a history family
+        // shared with a live note (history removal decides whole families).
+        let kept = bytes("kept")
+        let (deletedID, _) = try create(NoteDocument(blocks: [.text("Doomed"), fileBlock(kept)]), staged: [kept])
+        let shared = UUID()
+        for noteID in [deletedID, id] {
+            store.modelContext.insert(NoteVersion(id: shared, noteID: noteID, createdAt: old, reason: .pause,
+                content: nil, contentFormat: 0, title: "shared", body: "", attachmentIDs: [], sourceRevisionID: nil))
+        }
+        try store.modelContext.save()
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: deletedID))))
+        store.recoveryReferencedAttachmentIDs = { throw CocoaError(.fileReadCorruptFile) }
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty, "an unreadable scan purges nothing")
+        store.recoveryReferencedAttachmentIDs = { [] }
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty, "a shared history family keeps the note")
+        XCTAssertEqual(try physicalVersions(shared).count, 2)
+        XCTAssertEqual(try physicalAttachments(kept.id).first?.payload, Data("kept".utf8))
+        ordinarySave("after deleted-note expiry")
+
+        // Proposal application: a divergent proposal family neither applies
+        // nor loses a replica.
+        let proposal = UUID()
+        let token = try XCTUnwrap(store.note(withID: id)).revisionToken
+        for content in [try NoteContentCodec.encode(document("Agent A")), try NoteContentCodec.encode(document("Agent B"))] {
+            store.modelContext.insert(NotePendingEdit(id: proposal, noteID: id, baseRevisionToken: token,
+                proposedContent: content, agentName: "Agent", createdAt: Date()))
+        }
+        try store.modelContext.save()
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        XCTAssertEqual(try store.modelContext.fetch(FetchDescriptor<NotePendingEdit>(
+            predicate: #Predicate { $0.id == proposal })).count, 2)
+        ordinarySave("after proposals")
+    }
+
     func testStepBackDeletedNotePurgeKeepsSharedPhysicalHistoryFamilyAndBytes() throws {
         let data = Data("retained bytes".utf8)
         let item = StagedNoteAttachment(id: UUID(), filename: "proof.pdf", contentTypeIdentifier: "com.adobe.pdf",

@@ -1285,6 +1285,68 @@ final class NoteSlice3bTests: XCTestCase {
         }
     }
 
+    /// Admission invariant: the pre-edit gate and the final save agree on
+    /// every candidate kind, a missing original or divergent file replicas
+    /// never block an ordinary save, and a refusal deletes no bytes.
+    func testAdmissionInvariantPreEditGateAgreesWithSaveAndKeepsBytes() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let missing = staged("missing.pdf"), split = staged("split.pdf"), present = staged("present.pdf")
+        func block(_ item: StagedNoteAttachment) -> NoteBlock {
+            .file(attachmentID: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                  byteCount: item.byteCount)
+        }
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan"),
+            block(missing), block(split), block(present)]), staged: [missing, split, present]) else {
+            return XCTFail("fixture")
+        }
+        // Unknown store state: one original lost, one file with divergent replicas.
+        for row in try store.attachmentRows(forNoteID: id) where row.id == missing.id { store.modelContext.delete(row) }
+        let other = Data("other bytes".utf8)
+        store.modelContext.insert(NoteAttachment(id: split.id, noteID: id, originalFilename: split.filename,
+            contentTypeIdentifier: split.contentTypeIdentifier, byteCount: Int64(other.count), sortIndex: 7,
+            contentDigest: SHA256.hash(data: other).map { String(format: "%02x", $0) }.joined(), payload: other))
+        try store.modelContext.save()
+        store.refresh()
+        func payloads() throws -> [Data?] {
+            try store.attachmentRows(forNoteID: id).filter { $0.id != missing.id }
+                .sorted { ($0.id.uuidString, $0.sortIndex) < ($1.id.uuidString, $1.sortIndex) }.map(\.payload)
+        }
+        let added = staged("added.pdf")
+        var damaged = staged("damaged.pdf")
+        damaged = StagedNoteAttachment(id: damaged.id, filename: damaged.filename,
+            contentTypeIdentifier: damaged.contentTypeIdentifier, byteCount: damaged.byteCount,
+            digest: String(repeating: "0", count: 64), data: damaged.data)
+        let cases: [(String, (NoteDocument) -> NoteDocument, [StagedNoteAttachment], Bool)] = [
+            ("prose", { var d = $0; d.blocks.append(.text("safe edit")); return d }, [], true),
+            ("copy of a missing original", { var d = $0; d.blocks.append(block(missing)); return d }, [], false),
+            ("invented reference", { var d = $0; d.blocks.append(.file(attachmentID: UUID(), filename: "x.pdf",
+                contentTypeIdentifier: "com.adobe.pdf", byteCount: 3)); return d }, [], false),
+            ("incomplete payload", { var d = $0; d.blocks.append(block(damaged)); return d }, [damaged], false),
+            // While an original is missing its size is unknown, so no new
+            // file is admitted; both gates say so.
+            ("new file beside a missing original", { var d = $0; d.blocks.append(block(added)); return d }, [added], false),
+            ("formatted text", { var d = $0; d.blocks.append(.text("quoted", style: "quote")); return d }, [], true),
+            ("removing the unknown objects", { var d = $0; d.blocks.removeAll { [missing.id, split.id].contains($0.attachmentID) }
+                return d }, [], true),
+            ("new file", { var d = $0; d.blocks.append(block(added)); return d }, [added], true),
+        ]
+        for (name, transform, items, admitted) in cases {
+            let base = try XCTUnwrap(store.loadDocument(noteID: id))
+            let candidate = transform(try XCTUnwrap(base.content.document))
+            let before = try payloads()
+            XCTAssertEqual(store.attachmentAdmissionFailure(noteID: id, document: candidate, staged: items) == nil,
+                admitted, "\(name): pre-edit admission")
+            let save = store.saveDocument(noteID: id, document: candidate, baseRevisionID: base.revisionID, staged: items)
+            switch (save, admitted) {
+            case (.success, true): break
+            case (.failure(.invalidDocument), false):
+                XCTAssertEqual(try payloads(), before, "\(name): a refusal deletes no bytes")
+            default: XCTFail("\(name): final save disagrees with admission: \(save)")
+            }
+        }
+    }
+
     func testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport() async throws {
         let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
         let data = Data(repeating: 0x42, count: 14 * 1024 * 1024)
