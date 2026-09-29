@@ -1604,17 +1604,19 @@ extension NotesPageController: NoteImageProviding {
         if let cached = verifiedAvailability[id], cached.revision == revision,
            cached.digest == row.contentDigest { return cached.available }
         if verifyingAvailability.insert(id).inserted {
-            let payload = row.payload
+            let payloads = store.attachmentFamily(id).compactMap(\.payload)
             let digest = row.contentDigest
             let size = row.byteCount
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let available: Bool
-                if let payload {
+                if !payloads.isEmpty {
                     available = await Task.detached(priority: .utility) {
-                        Int64(payload.count) == size && SHA256.hash(data: payload).map {
-                            String(format: "%02x", $0)
-                        }.joined() == digest
+                        payloads.allSatisfy { payload in
+                            Int64(payload.count) == size && SHA256.hash(data: payload).map {
+                                String(format: "%02x", $0)
+                            }.joined() == digest
+                        }
                     }.value
                 } else {
                     available = await self.store.materializedURL(for: row, allowRetained: true) != nil
