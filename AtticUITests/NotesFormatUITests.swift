@@ -22,6 +22,12 @@ final class NotesFormatUITests: XCTestCase {
         require(button, "the New note button")
         button.click()
         waitFor(noteValue.isEmpty, "a new note starts empty (\(noteValue))")
+        // The new note's text view replaces the old one: wait until the new
+        // one is on screen before clicking it (the first launch is slowest).
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline, !(noteText.exists && noteText.isHittable) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
         require(noteText, "the new note's text")
         noteText.click()
     }
