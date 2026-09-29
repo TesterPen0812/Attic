@@ -681,6 +681,355 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.tags, ["work"])
     }
 
+    func testTagPickerUndoReplaysOnlyItsDeltaAfterExternalRefresh() {
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body")]))
+        engine.setTags(["base"])
+        engine.setTagsFromPicker(["base", "picker"])
+        engine.setTags(["base", "picker", "external"])
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(Set(engine.tags), ["base", "external"])
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(Set(engine.tags), ["base", "picker", "external"])
+    }
+
+    func testIndentedChecklistMarkerRemovalNormalizesAndRoundTripsThroughUndo() throws {
+        var item = NoteBlock.checklist("Read")
+        item.indent = 2
+        item.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        for route in 0..<3 {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), item]))
+            let line = location(of: String(NoteDocument.objectCharacter), in: engine)
+            if route == 0 { view.setSelectedRange(NSRange(location: line + 1, length: 0)); view.deleteBackward(nil) }
+            if route == 1 { view.setSelectedRange(NSRange(location: line + 1, length: 0)); engine.toggleChecklistLine() }
+            if route == 2 { view.setSelectedRange(NSRange(location: line, length: 1)); view.deleteBackward(nil) }
+            let block = engine.document().blocks[1]
+            XCTAssertEqual(block.kind, .text)
+            XCTAssertNil(block.indent)
+            XCTAssertEqual(block.marks, item.marks)
+            XCTAssertNoThrow(try NoteContentCodec.encode(engine.document()))
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1], item)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertNil(engine.document().blocks[1].indent)
+        }
+        let (empty, view) = makeEngine(NoteDocument(blocks: [.text("T"), {
+            var block = NoteBlock.checklist("")
+            block.indent = 2
+            return block
+        }()]))
+        view.setSelectedRange(NSRange(location: empty.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        XCTAssertEqual(empty.document().blocks[1].kind, .text)
+        XCTAssertNil(empty.document().blocks[1].indent)
+        XCTAssertNoThrow(try NoteContentCodec.encode(empty.document()))
+    }
+
+    func testStyledFragmentCopyAndPastePreservesMarksDatesAndImageIdentity() throws {
+        var heading = NoteBlock.text("Head \u{FFFC}", style: "heading")
+        heading.level = 2
+        heading.marks = [NoteMark(.bold, offset: 0, length: 5)]
+        heading.inlines = [NoteInline(id: UUID(), kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        let image = NoteBlock.image(attachmentID: UUID())
+        let (source, _) = makeEngine(NoteDocument(blocks: [.text("T"), heading, image]))
+        let range = NSRange(location: 2, length: source.textStorage.length - 2)
+        let board = NSPasteboard.withUniqueName()
+        XCTAssertTrue(source.writeSelection(range, to: board, types: [NoteEditorEngine.fragmentType, .string]))
+        let bytes = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+        guard case let .editable(fragment) = NoteContentCodec.decode(bytes, context: .fragment) else { return XCTFail() }
+        XCTAssertEqual(fragment.blocks.first?.style, "heading")
+        XCTAssertEqual(fragment.blocks.first?.marks, heading.marks)
+        XCTAssertEqual(fragment.blocks.first?.inlines.count, 1)
+        let (target, _) = makeEngine(NoteDocument(blocks: [.text("Other"), .text("")]))
+        XCTAssertTrue(target.paste(fragmentData: bytes, at: NSRange(location: 6, length: 0)))
+        XCTAssertTrue(target.document().blocks.contains { $0.style == "heading" && !$0.marks.isEmpty })
+        let partial = NSPasteboard.withUniqueName()
+        XCTAssertTrue(source.writeSelection(NSRange(location: 2, length: 4), to: partial,
+                                            types: [NoteEditorEngine.fragmentType]))
+        let partialBytes = try XCTUnwrap(partial.data(forType: NoteEditorEngine.fragmentType))
+        guard case let .editable(partialDocument) = NoteContentCodec.decode(partialBytes, context: .fragment) else { return XCTFail() }
+        XCTAssertEqual(partialDocument.blocks.first?.text, "Head")
+        XCTAssertEqual(partialDocument.blocks.first?.style, "heading")
+    }
+
+    func testSlashTargetsInvalidateOnDeletionSelectionAndUndo() {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        type("/da", view)
+        view.deleteBackward(nil)
+        XCTAssertEqual(engine.slashSession?.query, "d")
+        type("a", view)
+        XCTAssertTrue(engine.acceptSlashItem(.date))
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertFalse(engine.commitSlashDate(NoteDay(year: 2026, month: 10, day: 1)!))
+        XCTAssertEqual(engine.document().blocks[1].text, "/da")
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type(" /da", view)
+        XCTAssertNotNil(engine.slashSession)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertFalse(engine.acceptSlashItem(.date))
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        type(" /im", view)
+        XCTAssertTrue(engine.acceptSlashItem(.imageOrFile))
+        let image = StagedNoteAttachment(id: UUID(), filename: "x.png", contentTypeIdentifier: "public.png",
+                                         byteCount: 0, digest: "", data: Data())
+        XCTAssertTrue(engine.performEdit(NSRange(location: 2, length: 0),
+                                         with: NSAttributedString(string: "before "), name: "Edit"))
+        let before = engine.textStorage.string
+        XCTAssertFalse(engine.commitSlashImage(image, pixelSize: nil))
+        XCTAssertEqual(engine.textStorage.string, before)
+    }
+
+    func testDateUsesCapturedRangeAndLinkTargetRevalidatesCaretEdit() {
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("Title"), .text("Visit site")]))
+        let body = NSRange(location: location(of: "site", in: engine), length: 4)
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertTrue(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!), selection: body))
+        XCTAssertEqual(engine.document().blocks[0].text, "Title")
+        XCTAssertEqual(engine.document().blocks[1].inlines.count, 1)
+        XCTAssertFalse(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!),
+                                      selection: NSRange(location: 0, length: 0)))
+        XCTAssertFalse(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!), selection: NSRange(location: 999, length: 0)))
+        XCTAssertFalse(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!),
+                                      selection: NSRange(location: NSNotFound, length: 1)))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(engine.perform(.link("https://one.example"), selection: body))
+        view.setSelectedRange(NSRange(location: body.location + 2, length: 0))
+        var captured: NoteLinkTarget?
+        engine.onLinkRequest = { captured = $0 }
+        XCTAssertTrue(engine.perform(.mark(.link)))
+        let target = captured!
+        XCTAssertEqual(target.range, body)
+        XCTAssertEqual(target.url, "https://one.example")
+        XCTAssertTrue(engine.commitLink("https://two.example", target: target))
+        XCTAssertEqual(engine.document().blocks[1].marks.first(where: { $0.kind == .link })?.url, "https://two.example")
+        XCTAssertTrue(engine.perform(.mark(.link)))
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertFalse(engine.commitLink("https://three.example", target: captured!))
+    }
+
+    func testChecklistTypingBoldDelimiterRunsAndDividerReturnUndo() {
+        for literal in ["-[] ", "- [ ] ", "- [x] "] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            type(literal, view)
+            XCTAssertEqual(engine.document().blocks[1].kind, .checklist, literal)
+            XCTAssertEqual(engine.document().blocks[1].checked, literal.contains("x"), literal)
+            XCTAssertTrue(engine.history.undo())
+            XCTAssertEqual(engine.document().blocks[1].text, literal, literal)
+            XCTAssertTrue(engine.history.redo())
+            XCTAssertEqual(engine.document().blocks[1].kind, .checklist, literal)
+        }
+        let (bold, boldView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        boldView.setSelectedRange(NSRange(location: 2, length: 0))
+        type("say **bold**", boldView)
+        XCTAssertEqual(bold.document().blocks[1].text, "say bold")
+        XCTAssertEqual(bold.document().blocks[1].marks, [NoteMark(.bold, offset: 4, length: 4)])
+        let (divider, dividerView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("---")]))
+        dividerView.setSelectedRange(NSRange(location: divider.textStorage.length, length: 0))
+        dividerView.insertNewline(nil)
+        XCTAssertEqual(divider.document().blocks[1].kind, .divider)
+        XCTAssertTrue(divider.history.undo())
+        XCTAssertTrue(divider.textStorage.string.contains("---\n"))
+        XCTAssertTrue(divider.history.redo())
+        let (mono, monoView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("---", style: "mono")]))
+        monoView.setSelectedRange(NSRange(location: mono.textStorage.length, length: 0))
+        monoView.insertNewline(nil)
+        XCTAssertFalse(mono.document().blocks.contains { $0.kind == .divider })
+        var codeLine = NoteBlock.text("---")
+        codeLine.marks = [NoteMark(.code, offset: 0, length: 3)]
+        let (code, codeView) = makeEngine(NoteDocument(blocks: [.text("T"), codeLine]))
+        codeView.setSelectedRange(NSRange(location: code.textStorage.length, length: 0))
+        codeView.insertNewline(nil)
+        XCTAssertFalse(code.document().blocks.contains { $0.kind == .divider })
+    }
+
+    func testListIdentityNumberingAndPendingIndent() {
+        var child = NoteBlock.text("Child", style: "number")
+        child.indent = 1
+        let blocks: [NoteBlock] = [.text("T"), .text("Parent", style: "number"), child, .text("Again", style: "number")]
+        let (engine, view) = makeEngine(NoteDocument(blocks: blocks))
+        let first = location(of: "Parent", in: engine)
+        let middle = location(of: "Child", in: engine)
+        let last = location(of: "Again", in: engine)
+        let rootLists = (engine.textStorage.attribute(.paragraphStyle, at: first, effectiveRange: nil) as? NSParagraphStyle)?.textLists
+        let childLists = (engine.textStorage.attribute(.paragraphStyle, at: middle, effectiveRange: nil) as? NSParagraphStyle)?.textLists
+        let lastLists = (engine.textStorage.attribute(.paragraphStyle, at: last, effectiveRange: nil) as? NSParagraphStyle)?.textLists
+        XCTAssertTrue(rootLists?.first === childLists?.first)
+        XCTAssertTrue(rootLists?.first === lastLists?.first)
+        XCTAssertEqual(childLists?.count, 2)
+        XCTAssertEqual(engine.accessibilityParagraphs(in: NSRange(location: last, length: 5)).first?.listOrdinal, 2)
+        view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+        view.insertNewline(nil)
+        XCTAssertEqual(engine.document().blocks.last?.style, "number")
+        XCTAssertTrue(engine.perform(.indent))
+        XCTAssertEqual(engine.document().blocks.last?.indent, 1)
+        XCTAssertEqual(engine.formattingState(for: NSRange(location: engine.textStorage.length, length: 0)).indent, 1)
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertNil(engine.document().blocks.last?.indent)
+        XCTAssertTrue(engine.history.redo())
+        type("Next", view)
+        XCTAssertEqual(engine.document().blocks.last?.indent, 1)
+    }
+
+    func testReturnAndPendingTabDepthAtEverySupportedListLevel() {
+        for depth in 0...2 {
+            var number = NoteBlock.text("Parent", style: "number")
+            number.indent = depth == 0 ? nil : depth
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), number]))
+            view.setSelectedRange(NSRange(location: engine.textStorage.length, length: 0))
+            view.insertNewline(nil)
+            XCTAssertEqual(engine.document().blocks.last?.indent ?? 0, depth)
+            if depth < 2 {
+                XCTAssertTrue(engine.perform(.indent))
+                XCTAssertEqual(engine.document().blocks.last?.indent, depth + 1)
+                XCTAssertTrue(engine.perform(.outdent))
+                XCTAssertEqual(engine.document().blocks.last?.indent ?? 0, depth)
+            }
+            type("Child", view)
+            XCTAssertEqual(engine.document().blocks.last?.style, "number")
+            XCTAssertEqual(engine.document().blocks.last?.indent ?? 0, depth)
+
+            var checklist = NoteBlock.checklist("Item")
+            checklist.indent = depth == 0 ? nil : depth
+            let (boxes, boxView) = makeEngine(NoteDocument(blocks: [.text("T"), checklist]))
+            boxView.setSelectedRange(NSRange(location: boxes.textStorage.length, length: 0))
+            boxView.insertNewline(nil)
+            XCTAssertEqual(boxes.document().blocks.last?.kind, .checklist)
+            XCTAssertEqual(boxes.document().blocks.last?.indent ?? 0, depth)
+        }
+    }
+
+    func testOverlappingMarksComposeActualFontTraits() {
+        var block = NoteBlock.text("Bold Italic Code")
+        block.marks = [NoteMark(.bold, offset: 0, length: 16), NoteMark(.italic, offset: 0, length: 16),
+                       NoteMark(.code, offset: 12, length: 4)]
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), block]))
+        let start = location(of: "Bold", in: engine)
+        func traits(_ at: Int) -> NSFontDescriptor.SymbolicTraits {
+            (engine.textStorage.attribute(.font, at: at, effectiveRange: nil) as! NSFont).fontDescriptor.symbolicTraits
+        }
+        XCTAssertTrue(traits(start).contains(.bold))
+        XCTAssertTrue(traits(start).contains(.italic))
+        XCTAssertTrue(traits(start + 12).contains(.monoSpace))
+        engine.restyle(NSRange(location: start, length: block.text.utf16.count))
+        XCTAssertTrue(traits(start).contains(.bold))
+        XCTAssertTrue(traits(start).contains(.italic))
+        XCTAssertTrue(engine.perform(.mark(.italic), selection: NSRange(location: start, length: 4)))
+        XCTAssertTrue(traits(start).contains(.bold))
+        XCTAssertFalse(traits(start).contains(.italic))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertTrue(traits(start).contains(.italic))
+        let (plain, plainView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Plain")]))
+        plainView.setSelectedRange(NSRange(location: plain.textStorage.length, length: 0))
+        XCTAssertTrue(plain.perform(.mark(.bold)))
+        XCTAssertTrue(plain.perform(.mark(.italic)))
+        let typing = plainView.typingAttributes[.font] as? NSFont
+        XCTAssertTrue(typing?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+        XCTAssertTrue(typing?.fontDescriptor.symbolicTraits.contains(.italic) == true)
+        XCTAssertTrue(plain.history.undo())
+        let afterUndo = plainView.typingAttributes[.font] as? NSFont
+        XCTAssertTrue(afterUndo?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+        XCTAssertFalse(afterUndo?.fontDescriptor.symbolicTraits.contains(.italic) == true)
+        let (inline, inlineView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        inlineView.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertTrue(inline.perform(.mark(.italic)))
+        type("**word**", inlineView)
+        let word = location(of: "word", in: inline)
+        let inlineFont = inline.textStorage.attribute(.font, at: word, effectiveRange: nil) as? NSFont
+        XCTAssertTrue(inlineFont?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+        XCTAssertTrue(inlineFont?.fontDescriptor.symbolicTraits.contains(.italic) == true)
+    }
+
+    func testRichPasteKeepsLargeBodyAndUnsupportedListKindsLiteral() throws {
+        let source = NSMutableAttributedString(string: "Large small\nAlpha\nRoman\nDeep")
+        source.addAttribute(.font, value: NSFont.systemFont(ofSize: 24), range: NSRange(location: 0, length: 5))
+        source.addAttribute(.font, value: NSFont.systemFont(ofSize: 12), range: NSRange(location: 6, length: 5))
+        let alpha = NSMutableParagraphStyle()
+        alpha.textLists = [NSTextList(markerFormat: .lowercaseAlpha, options: 0)]
+        source.addAttribute(.paragraphStyle, value: alpha, range: NSRange(location: 12, length: 6))
+        let roman = NSMutableParagraphStyle()
+        roman.textLists = [NSTextList(markerFormat: .uppercaseRoman, options: 0)]
+        source.addAttribute(.paragraphStyle, value: roman, range: NSRange(location: 18, length: 6))
+        let deep = NSMutableParagraphStyle()
+        deep.textLists = (0..<4).map { _ in NSTextList(markerFormat: .decimal, options: 0) }
+        source.addAttribute(.paragraphStyle, value: deep, range: NSRange(location: 24, length: 4))
+        let rtf = try source.data(from: NSRange(location: 0, length: source.length),
+                                  documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
+        let (engine, _) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        XCTAssertTrue(engine.pasteRichText(rtf, type: .rtf, at: NSRange(location: 2, length: 0)))
+        let blocks = engine.document().blocks
+        XCTAssertFalse(blocks.contains { $0.style == "heading" || $0.style == "bullet" || $0.style == "number" })
+        XCTAssertTrue(blocks.map(\.text).contains { $0.contains("Large small") })
+        XCTAssertTrue(blocks.map(\.text).contains { $0.contains("Alpha") && $0.contains("a") })
+        XCTAssertTrue(blocks.map(\.text).contains { $0.contains("Roman") && $0.contains("I") })
+        XCTAssertTrue(blocks.map(\.text).contains { $0.contains("Deep") && $0.contains("1") })
+    }
+
+    func testShiftedNumericShortcutsUseRealKeyEventsAndReservedChordsAreAbsent() {
+        for (code, shifted, style) in [(UInt16(26), "&", NoteParagraphStyle.bullet),
+                                       (UInt16(28), "*", .number), (UInt16(25), "(", .checklist)] {
+            let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body")]))
+            view.setSelectedRange(NSRange(location: 2, length: 0))
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift],
+                                        timestamp: 0, windowNumber: 0, context: nil,
+                                        characters: shifted, charactersIgnoringModifiers: shifted,
+                                        isARepeat: false, keyCode: code)!
+            XCTAssertTrue(engine.handleShortcut(event))
+            XCTAssertEqual(engine.paragraphStyle(at: 2), style)
+        }
+        XCTAssertNil(NoteFormatCommand.paragraph(.quote).shortcut)
+        XCTAssertNil(NoteFormatCommand.paragraph(.mono).shortcut)
+        let (engine, view) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Body")]))
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        for (key, code) in [("q", UInt16(12)), ("m", UInt16(46))] {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .option],
+                                        timestamp: 0, windowNumber: 0, context: nil,
+                                        characters: key, charactersIgnoringModifiers: key,
+                                        isARepeat: false, keyCode: code)!
+            XCTAssertFalse(engine.handleShortcut(event))
+        }
+    }
+
+    func testEditingSequenceFuzzRoundTripsAfterSplitsJoinsMovesAndMarks() throws {
+        let (engine, _) = makeEngine(NoteDocument(blocks: [
+            .text("T"), .text("abcdefgh"), .checklist("object"), .text("tail")
+        ]))
+        var seed: UInt64 = 0xA771C
+        func next() -> Int {
+            seed = 2862933555777941757 &* seed &+ 3037000493
+            return Int((seed >> 32) % 4)
+        }
+        for step in 0..<96 {
+            switch next() {
+            case 0:
+                let joined = (engine.textStorage.string as NSString).range(of: "abc\ndefgh")
+                let whole = (engine.textStorage.string as NSString).range(of: "abcdefgh")
+                if joined.location != NSNotFound {
+                    let location = joined.location + 3
+                    XCTAssertTrue(engine.performEdit(NSRange(location: location, length: 1), with: NSAttributedString(), name: "Join"))
+                } else if whole.location != NSNotFound {
+                    let location = whole.location + 3
+                    XCTAssertTrue(engine.performEdit(NSRange(location: location, length: 0),
+                                                     with: NSAttributedString(string: "\n"), name: "Split"))
+                }
+            case 1, 2:
+                let box = location(of: String(NoteDocument.objectCharacter), in: engine)
+                _ = engine.perform(next() == 1 ? .moveUp : .moveDown,
+                                   selection: NSRange(location: box, length: 0))
+            default:
+                let target = next() == 0 ? "bc" : "ef"
+                let at = location(of: target, in: engine)
+                XCTAssertTrue(engine.perform(.mark(next() == 0 ? .bold : .italic),
+                                             selection: NSRange(location: at, length: 2)))
+            }
+            let document = engine.document()
+            let bytes = try NoteContentCodec.encode(document)
+            guard case let .editable(decoded) = NoteContentCodec.decode(bytes) else { return XCTFail("step \(step)") }
+            XCTAssertEqual(decoded.blocks, document.blocks, "step \(step)")
+            XCTAssertEqual(NoteTextKitRoundTrip.document(afterRoundTrip: document).blocks, document.blocks, "step \(step)")
+        }
+    }
+
     func testListContinuationIndentMarkerFirstBackspaceAndMove() {
         let initial = NoteDocument(blocks: [.text("T"), .text("First"), .text("Second")])
         let (engine, textView) = makeEngine(initial)

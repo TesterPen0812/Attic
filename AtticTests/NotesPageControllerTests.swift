@@ -63,6 +63,72 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(session.isPersisted)
     }
 
+    func testInvalidCheckpointNeverWritesEmptyBytesOrClaimsRecoveryAfterRestart() throws {
+        let journal = NoteDraftJournal(directory: directory)
+        let controller = makeController(journal: journal)
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        type("Title\nBody", into: session)
+        let body = (session.engine.textStorage.string as NSString).range(of: "Body")
+        session.engine.textStorage.addAttribute(.noteBlockIndent, value: 2, range: body)
+        gate.shouldFail = true
+        XCTAssertFalse(controller.preserveAll())
+        if case .onlyInMemory = session.state {} else { XCTFail("encoding failure must remain only in memory") }
+        XCTAssertTrue(try journal.entries().isEmpty)
+        let restarted = makeController(journal: NoteDraftJournal(directory: directory))
+        restarted.start()
+        XCTAssertNotEqual(restarted.active?.noteID, session.noteID)
+    }
+
+    func testIndentedChecklistRemovalRecoversAfterFailedSaveAndRestart() throws {
+        var item = NoteBlock.checklist("Keep marks")
+        item.indent = 2
+        item.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("T"), item])) else {
+            return XCTFail("fixture")
+        }
+        let journal = NoteDraftJournal(directory: directory)
+        let controller = makeController(journal: journal)
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let (_, view) = session.engine.makeView()
+        view.setSelectedRange(NSRange(location: 3, length: 0))
+        view.deleteBackward(nil)
+        XCTAssertEqual(session.engine.document().blocks[1].kind, .text)
+        gate.shouldFail = true
+        XCTAssertTrue(controller.preserveAll())
+        let checkpoint = try XCTUnwrap(journal.entries().first?.0)
+        XCTAssertFalse(checkpoint.content.isEmpty)
+        let restarted = makeController(journal: NoteDraftJournal(directory: directory))
+        restarted.start()
+        XCTAssertTrue(restarted.open(noteID: id))
+        let recovered = try XCTUnwrap(restarted.active?.engine.document().blocks[1])
+        XCTAssertEqual(recovered.kind, .text)
+        XCTAssertEqual(recovered.text, "Keep marks")
+        XCTAssertEqual(recovered.marks, item.marks)
+        XCTAssertNil(recovered.indent)
+    }
+
+    func testTagPickerUndoPreservesExternalTagAfterSessionRefresh() throws {
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("T"), .text("Body")])) else {
+            return XCTFail("fixture")
+        }
+        let controller = makeController()
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        session.engine.setTagsFromPicker(["picker"])
+        XCTAssertTrue(controller.preserveAll())
+        XCTAssertTrue(store.setTags(["picker", "external"], for: try XCTUnwrap(store.note(withID: id))))
+        controller.present()
+        XCTAssertEqual(Set(session.engine.tags), ["picker", "external"])
+        XCTAssertTrue(session.engine.history.undo())
+        XCTAssertEqual(Set(session.engine.tags), ["external"])
+        XCTAssertTrue(session.engine.history.redo())
+        XCTAssertEqual(Set(session.engine.tags), ["picker", "external"])
+    }
+
     func testTypingIsSavedWithinTheCoalescingDelay() async throws {
         let controller = makeController(delay: .milliseconds(50))
         controller.start()
@@ -1720,7 +1786,9 @@ final class NoteSessionMatrixTests: XCTestCase {
     /// Each row is in Column.allCases order, including both batch variants.
     private let expected: [(Event, String)] = [
         (.edit,                    "AAAAAARAARNNAN"),
-        (.command,                 "AAAAAARRRRNNAN"),
+        // Matrix fixtures contain only a title; Date correctly refuses that
+        // range. Body-targeted command acceptance is covered by engine tests.
+        (.command,                 "RRRRRRRRRRNNRN"),
         (.timerOK,                 "NNSSSJ N JJJNNNN"),
         (.timerStoreFails,         "NNSSSJ N JJJNNNN"),
         (.timerBothFail,           "NNSSSJ N JJJNNNN"),

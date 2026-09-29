@@ -685,13 +685,13 @@ final class NotesPageController: ObservableObject {
         session.engine.checkpointDocument()
     }
 
-    private func journalEntry(for session: NoteSession, document: NoteDocument) -> NoteDraftJournalEntry {
+    private func journalEntry(for session: NoteSession, document: NoteDocument) throws -> NoteDraftJournalEntry {
         let staged = session.engine.stagedAttachments(for: document)
         return NoteDraftJournalEntry(
             noteID: session.noteID,
             isPersisted: session.isPersisted,
             baseRevisionID: session.baseRevisionID,
-            content: (try? NoteContentCodec.encode(document)) ?? Data(),
+            content: try NoteContentCodec.encode(document),
             selectionLocation: session.selection.location,
             selectionLength: session.selection.length,
             scrollOffset: Double(session.scrollOffset),

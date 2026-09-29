@@ -42,7 +42,8 @@ enum NoteReadOnlyReason: Equatable, Sendable {
 /// so equal documents give equal bytes.
 enum NoteContentCodec {
     enum EncodingError: Error { case invalidStructure }
-    static func decode(_ data: Data) -> NoteContent {
+    enum Context { case document, fragment }
+    static func decode(_ data: Data, context: Context = .document) -> NoteContent {
         let root: NoteJSON
         do {
             root = try JSONDecoder().decode(NoteJSON.self, from: data)
@@ -85,17 +86,17 @@ enum NoteContentCodec {
         }) {
             return .readOnly(original: data, reason: .unsupportedContent, preview: document)
         }
-        if let first = document.blocks.first, first.kind == .text,
+        if context == .document, let first = document.blocks.first, first.kind == .text,
            first.style != nil || first.level != nil || first.indent != nil {
             return .readOnly(original: data, reason: .unsupportedContent, preview: document)
         }
         return .editable(document)
     }
 
-    static func encode(_ document: NoteDocument) throws -> Data {
+    static func encode(_ document: NoteDocument, context: Context = .document) throws -> Data {
         var document = document
         document.refreshRequiredCapabilities()
-        if let first = document.blocks.first, first.kind == .text,
+        if context == .document, let first = document.blocks.first, first.kind == .text,
            first.style != nil || first.level != nil || first.indent != nil {
             throw EncodingError.invalidStructure
         }

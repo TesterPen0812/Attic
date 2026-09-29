@@ -611,6 +611,10 @@ extension NoteStore {
         guard current.revisionToken == baseRevisionToken else {
             return .failure(.staleRevision(expected: baseRevisionToken, current: current.revisionToken))
         }
+        if let content = current.content, case let .editable(base) = NoteContentCodec.decode(content) {
+            do { try NoteAgentTextSafety.validate(base: base, proposed: document) }
+            catch { return .failure(.saveFailed(error.localizedDescription)) }
+        }
         let data: Data
         guard document.isWritableByThisBuild else { return .failure(.readOnly) }
         do {
@@ -688,7 +692,10 @@ extension NoteStore {
             let editRows = pendingEditRows(edit.id)
             guard current.revisionToken == edit.baseRevisionToken,
                   let data = edit.proposedContent,
-                  case let .editable(document) = NoteContentCodec.decode(data) else {
+                  case let .editable(document) = NoteContentCodec.decode(data),
+                  let baseData = current.content,
+                  case let .editable(base) = NoteContentCodec.decode(baseData),
+                  (try? NoteAgentTextSafety.validate(base: base, proposed: document)) != nil else {
                 if editRows.contains(where: { !$0.needsReview }) {
                     editRows.forEach { $0.needsReview = true }
                     _ = commitStagedChanges()

@@ -13,9 +13,29 @@ enum NoteTextCodec {
         firstBlockIsTitle: Bool = true
     ) -> NSMutableAttributedString {
         let result = NSMutableAttributedString()
+        var listStack: [NSTextList] = []
+        var previousListKind: String?
         for (index, block) in document.blocks.enumerated() {
             let isTitle = firstBlockIsTitle && index == 0
             var attributes = isTitle ? style.titleAttributes : style.paragraphAttributes(style: block.style, level: block.level, indent: block.indent)
+            if !isTitle, block.kind == .text, let kind = block.style, ["bullet", "number"].contains(kind) {
+                let depth = block.indent ?? 0
+                let marker: NSTextList.MarkerFormat = kind == "number" ? .decimal : .disc
+                if previousListKind == nil { listStack.removeAll() }
+                if listStack.count > depth + 1 { listStack = Array(listStack.prefix(depth + 1)) }
+                while listStack.count <= depth { listStack.append(NSTextList(markerFormat: marker, options: 0)) }
+                if previousListKind != kind, listStack.count == depth + 1,
+                   listStack[depth].markerFormat != marker {
+                    listStack[depth] = NSTextList(markerFormat: marker, options: 0)
+                }
+                let paragraph = (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                paragraph.textLists = listStack
+                attributes[.paragraphStyle] = paragraph
+                previousListKind = kind
+            } else {
+                listStack.removeAll()
+                previousListKind = nil
+            }
             if let id = block.id, block.kind == .text { attributes[.noteBlockID] = id }
             if !block.extras.isEmpty { attributes[.noteBlockExtras] = NoteBlockExtras(block.extras) }
             if let blockStyle = block.style, block.kind == .text { attributes[.noteBlockStyle] = blockStyle }
@@ -89,12 +109,19 @@ enum NoteTextCodec {
             result.append(attachmentString(attachment, attributes: attributes))
         }
         flush()
-        let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
         for mark in block.marks where mark.offset >= 0 && mark.length > 0 && mark.offset + mark.length <= result.length {
             let range = NSRange(location: mark.offset, length: mark.length)
             result.addAttribute(.noteMark(mark.kind), value: mark.url ?? true, range: range)
-            result.addAttributes(style.markedAttributes(kind: mark.kind, baseFont: baseFont, url: mark.url), range: range)
         }
+        let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
+        var runs: [([NoteMark.Kind: Any], NSRange)] = []
+        result.enumerateAttributes(in: NSRange(location: 0, length: result.length)) { values, range, _ in
+            let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { kind in
+                values[.noteMark(kind)].map { (kind, $0) }
+            })
+            runs.append((marks, range))
+        }
+        for (marks, range) in runs { result.addAttributes(style.markedAttributes(marks: marks, baseFont: baseFont), range: range) }
         return result
     }
 
