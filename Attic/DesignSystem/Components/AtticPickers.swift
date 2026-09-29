@@ -410,13 +410,17 @@ struct AtticComposerStrip<DateContent: View, TagContent: View, PriorityContent: 
         HStack(spacing: AtticPickerMetrics.stripSpacing) {
             AtticStripButton(systemName: "calendar", title: String(localized: "Date"), value: date, isOpen: datePresented,
                              identifier: "composer-date",
+                             keepsPrefix: 5, keptPrefixWidth: AtticPickerMetrics.stripDatePrefix,
                              clearLabel: String(localized: "Clear date"), open: { datePresented = true }, clear: onClearDate)
-                .fixedSize(horizontal: true, vertical: false)
+                // With all three set, a long date gives way after the tag
+                // (never below its first words).
+                .layoutPriority(-0.5)
                 .atticPopover(isPresented: $datePresented, arrowEdge: .top) {
                     datePicker().atticPickerSurface()
                 }
             AtticStripButton(systemName: "tag", title: String(localized: "Tag"), value: tags, isOpen: tagsPresented,
                              identifier: "composer-tag",
+                             keepsPrefix: 4, keptPrefixWidth: AtticPickerMetrics.stripTagPrefix,
                              clearLabel: String(localized: "Clear tags"), open: { tagsPresented = true }, clear: onClearTags)
                 .layoutPriority(-1)
                 .atticPopover(isPresented: $tagsPresented, arrowEdge: .top) {
@@ -455,6 +459,12 @@ private struct AtticStripButton: View {
     let isOpen: Bool
     /// For UI tests: the button's; its × adds "-clear".
     let identifier: String
+    /// How many characters of a long value always stay (then "…"): a tag
+    /// squeezed by a date and a priority still says what it is ("#laun…"),
+    /// never a lone "#".
+    var keepsPrefix = 0
+    /// The room those characters and their "…" take (a token, not measured).
+    var keptPrefixWidth: CGFloat = 0
     let clearLabel: String
     let open: () -> Void
     let clear: () -> Void
@@ -463,6 +473,15 @@ private struct AtticStripButton: View {
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
     @State private var clearHovered = false
+
+    /// The least the button keeps: its name's minimum; a value's icon and
+    /// the first characters of a long one (then "…").
+    private var labelFloor: CGFloat {
+        let m = AtticSmallControlMetrics.self
+        guard let value else { return AtticControlSize.smallMinWidth }
+        guard value.text.count > keepsPrefix + 1 else { return 0 }
+        return m.labelPadding + m.iconSize + m.iconLabelGap + keptPrefixWidth + AtticPickerMetrics.stripClearGap
+    }
 
     var body: some View {
         let m = AtticSmallControlMetrics.self
@@ -491,7 +510,7 @@ private struct AtticStripButton: View {
                 }
                 .padding(.leading, m.labelPadding)
                 .padding(.trailing, value == nil ? m.labelPadding : AtticPickerMetrics.stripClearGap)
-                .frame(minWidth: value == nil ? AtticControlSize.smallMinWidth : 0, minHeight: height, maxHeight: height)
+                .frame(minWidth: labelFloor, minHeight: height, maxHeight: height)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

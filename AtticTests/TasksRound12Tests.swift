@@ -479,6 +479,71 @@ final class TasksRound12Tests: XCTestCase {
         let squeezed = selectionBarWidth(count: 3, at: full - 8)
         XCTAssertLessThan(squeezed, full - 30, "the words give way whole, not by a few points")
     }
+
+    // MARK: - Visual 2: the tag keeps a meaningful prefix
+
+    /// The widths of the strip's filled pills (Date, Tag, Priority: each a
+    /// run of non-background pixels along the strip's middle), as drawn in
+    /// `width` points.
+    private func stripPills(date: String?, tag: String?, priority: String?, width: CGFloat) throws -> [CGFloat] {
+        func value(_ text: String?) -> AtticStripValue? { text.map { AtticStripValue(text: $0, spoken: $0) } }
+        let context = AtticDesignContext(mode: .light)
+        let strip = AtticGallerySamples.strip(date: value(date), tags: value(tag), priority: value(priority))
+            .frame(width: width, height: AtticControlSize.smallHeight, alignment: .leading)
+            .frame(width: 340, height: 40, alignment: .leading)
+            .background(context.tokens.panel.base.color)
+            .atticDesign(context)
+        let host = NSHostingView(rootView: strip)
+        host.frame = CGRect(x: 0, y: 0, width: 340, height: 40)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        host.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsWide) / host.bounds.width
+        let y = Int(20 * scale)
+        func pixel(_ x: Int) -> [Int] {
+            let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) ?? .clear
+            return [Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255)]
+        }
+        let background = pixel(rep.pixelsWide - 2)
+        var runs: [CGFloat] = []
+        var start: Int?
+        for x in 0..<Int((width + 4) * scale) {
+            let differs = zip(pixel(x), background).contains { abs($0 - $1) > 2 }
+            if differs, start == nil { start = x }
+            if !differs, let s = start {
+                runs.append(CGFloat(x - s) / scale)
+                start = nil
+            }
+        }
+        if let s = start { runs.append(CGFloat(Int((width + 4) * scale) - s) / scale) }
+        return runs
+    }
+
+    /// Date, Tag and Priority all set, in the room the add bar gives them
+    /// (a rounder corner takes more): the tag keeps a meaningful prefix
+    /// ("#laun..."), the date gives way after it, and a short tag is not
+    /// padded.
+    func testTheStripKeepsAMeaningfulTagPrefix() throws {
+        let iconAndPaddings: CGFloat = 55
+        for width in [296.0, 280.0, 264.0] {
+            let pills = try stripPills(date: "Wed 14 Oct", tag: "#launch-checklist +1", priority: "!!", width: width)
+            XCTAssertEqual(pills.count, 3, "three pills at \(width): \(pills)")
+            guard pills.count == 3 else { continue }
+            XCTAssertGreaterThanOrEqual(pills[1] - iconAndPaddings, 30, "the tag shows a prefix, not '#', at \(width): \(pills)")
+            XCTAssertLessThanOrEqual(pills.reduce(0, +) + 8, width + 1, "the strip fits \(width): \(pills)")
+        }
+        let short = try stripPills(date: nil, tag: "#a", priority: nil, width: 296)
+        let alone = try stripPills(date: nil, tag: "#a", priority: nil, width: 120)
+        XCTAssertEqual(short.first ?? 0, alone.first ?? -1, accuracy: 1, "a short tag is as wide as it is")
+        XCTAssertLessThan(short.first ?? 999, 80, "and not padded to a prefix's width")
+    }
 }
 
 extension Hosted {
