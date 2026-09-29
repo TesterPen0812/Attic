@@ -78,6 +78,16 @@ final class NoteCommandRouter {
         return applied
     }
 
+    /// The link card's commit: the engine revalidates its captured target
+    /// and refuses a stale one without editing.
+    @discardableResult
+    func commitLink(_ url: String, target: NoteLinkTarget, from surface: NoteCommandSurface) -> Bool {
+        onRun?(.link(url), surface)
+        let applied = engine.commitLink(url, target: target)
+        onChange?()
+        return applied
+    }
+
     func insert(_ action: NoteInsertAction, from surface: NoteCommandSurface) {
         onInsert?(action, surface)
         switch action {

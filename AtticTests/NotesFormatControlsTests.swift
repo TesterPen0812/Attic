@@ -438,6 +438,38 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(engine.history.undoActionName, "Remove Link")
     }
 
+    func testEditLinkAtACaretUpdatesTheWholeLinkAndAStaleTargetCancelsQuietly() throws {
+        let (controls, engine, textView) = make()
+        let target = range("free tier", textView)
+        controls.router.run(.link("https://example.com"), from: .linkPopover, selection: target)
+        textView.setSelectedRange(NSRange(location: target.location + 3, length: 0))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertEqual(controls.cardModel.card, .link(hasLink: true), "⇧⌘K at a caret inside a link edits it")
+        XCTAssertEqual(controls.cardModel.linkText, "https://example.com")
+        controls.cardModel.linkText = "example.org"
+        controls.cardModel.submitLink()
+        let link = try XCTUnwrap(engine.document().blocks[1].marks.first)
+        XCTAssertEqual(link.url, "https://example.org")
+        XCTAssertEqual(NSRange(location: link.offset, length: link.length),
+                       NSRange(location: target.location - range("Lead", textView).location, length: target.length),
+                       "the whole link, not just the caret")
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: target.location + 3, length: 0), "the caret comes back")
+
+        textView.setSelectedRange(range("most people", textView))
+        controls.router.run(.mark(.link), from: .shortcut)
+        XCTAssertTrue(controls.isCardOpen)
+        // The note changes under the open card (an agent, Undo): the target is stale.
+        textView.insertText("So: ", replacementRange: NSRange(location: range("Lead", textView).location, length: 0))
+        textView.setSelectedRange(range("most people", textView))
+        let before = engine.document()
+        controls.cardModel.linkText = "example.com"
+        controls.cardModel.submitLink()
+        XCTAssertFalse(controls.isCardOpen, "the card closes")
+        XCTAssertNil(controls.cardModel.linkError, "no error for a stale target: it just cancels")
+        XCTAssertEqual(engine.document().blocks[1].marks.filter { $0.kind == .link }.count,
+                       before.blocks[1].marks.filter { $0.kind == .link }.count, "and nothing was linked")
+    }
+
     func testRightClickOnALinkOffersEditCopyAndRemove() throws {
         let (controls, _, textView) = make()
         let target = range("free tier", textView)

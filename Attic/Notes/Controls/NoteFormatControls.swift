@@ -172,10 +172,7 @@ final class NoteFormatControls: NSObject {
         engine.onSlashSessionChange = { [weak self] session in self?.slashSessionChanged(session) }
         engine.onSlashDateRequest = { [weak self] in self?.openDateCard(fromSlash: true) }
         engine.onSlashFileRequest = { [weak self] in self?.requestFile?(true) }
-        engine.onLinkRequest = { [weak self] url in
-            guard let self else { return }
-            self.openLinkCard(url: url, range: self.selection)
-        }
+        engine.onLinkRequest = { [weak self] target in self?.openLinkCard(target: target) }
         previousActivity = engine.onActivityChanged
         engine.onActivityChanged = { [weak self] old, new in
             self?.previousActivity?(old, new)
@@ -611,16 +608,20 @@ final class NoteFormatControls: NSObject {
         presentCard()
     }
 
-    /// The link card for the engine's link target: its range (a selection,
-    /// or an existing link around the caret) and its current address.
-    func openLinkCard(url: String?, range: NSRange) {
+    /// The link card for the engine's captured link target: its range (the
+    /// selection, or the whole link around a caret), the selection to come
+    /// back to, and the current address.
+    func openLinkCard(target: NoteLinkTarget) {
         hideBar()
         cardFromSlash = false
-        cardSelection = range
-        cardAnchor = range
-        cardModel.openLink(url: url)
+        linkTarget = target
+        cardSelection = target.selection
+        cardAnchor = target.range
+        cardModel.openLink(url: target.url)
         presentCard()
     }
+
+    private var linkTarget: NoteLinkTarget?
 
     private var cardSize = NSSize.zero
 
@@ -725,22 +726,32 @@ final class NoteFormatControls: NSObject {
         }
     }
 
+    /// A bad address keeps the card and says so; a target that went stale
+    /// while the card was open is dropped quietly (the engine refuses it).
     private func commitLink(_ url: String) -> Bool {
-        guard let range = cardSelection, router.validation(.link(url), selection: range).enabled else { return false }
-        closeCard(refocus: true, restoring: range)
-        router.run(.link(url), from: .linkPopover, selection: range)
+        guard let target = linkTarget else { return false }
+        guard engine.validate(.link(url), selection: target.range).enabled else { return false }
+        linkTarget = nil
+        closeCard(refocus: true, restoring: target.selection)
+        router.commitLink(url, target: target, from: .linkPopover)
         return true
     }
 
     private func removeLink() {
-        guard let range = cardSelection else { return }
-        closeCard(refocus: true, restoring: range)
-        router.run(.removeLink, from: .linkPopover, selection: range)
+        guard let target = linkTarget else { return }
+        linkTarget = nil
+        engine.cancelLinkRequest()
+        closeCard(refocus: true, restoring: target.selection)
+        router.run(.removeLink, from: .linkPopover, selection: target.range)
     }
 
     func cancelCard(refocus: Bool = true) {
         guard cardModel.card != nil else { return }
         if cardFromSlash, engine.pendingSlashDate != nil { engine.cancelSlashDate() }
+        if linkTarget != nil {
+            linkTarget = nil
+            engine.cancelLinkRequest()
+        }
         let range = cardFromSlash ? nil : cardSelection
         closeCard(refocus: refocus, restoring: range)
     }
