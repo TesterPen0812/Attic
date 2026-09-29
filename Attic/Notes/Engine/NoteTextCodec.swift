@@ -89,12 +89,19 @@ enum NoteTextCodec {
             result.append(attachmentString(attachment, attributes: attributes))
         }
         flush()
-        let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
         for mark in block.marks where mark.offset >= 0 && mark.length > 0 && mark.offset + mark.length <= result.length {
             let range = NSRange(location: mark.offset, length: mark.length)
             result.addAttribute(.noteMark(mark.kind), value: mark.url ?? true, range: range)
-            result.addAttributes(style.markedAttributes(kind: mark.kind, baseFont: baseFont, url: mark.url), range: range)
         }
+        let baseFont = attributes[.font] as? NSFont ?? style.bodyFont
+        var runs: [([NoteMark.Kind: Any], NSRange)] = []
+        result.enumerateAttributes(in: NSRange(location: 0, length: result.length)) { values, range, _ in
+            let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { kind in
+                values[.noteMark(kind)].map { (kind, $0) }
+            })
+            runs.append((marks, range))
+        }
+        for (marks, range) in runs { result.addAttributes(style.markedAttributes(marks: marks, baseFont: baseFont), range: range) }
         return result
     }
 

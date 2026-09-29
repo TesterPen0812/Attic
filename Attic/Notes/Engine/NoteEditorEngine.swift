@@ -396,16 +396,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     private func restyleMarks(in range: NSRange, base: [NSAttributedString.Key: Any]) {
-        for kind in NoteMark.Kind.allCases {
-            var runs: [(Any, NSRange)] = []
-            textStorage.enumerateAttribute(.noteMark(kind), in: range) { value, markRange, _ in
-                if let value { runs.append((value, markRange)) }
-            }
-            for (value, markRange) in runs {
-                let font = base[.font] as? NSFont ?? style.bodyFont
-                textStorage.addAttributes(style.markedAttributes(kind: kind, baseFont: font,
-                                                                  url: value as? String), range: markRange)
-            }
+        var runs: [([NoteMark.Kind: Any], NSRange)] = []
+        textStorage.enumerateAttributes(in: range) { values, markRange, _ in
+            let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { kind in
+                values[.noteMark(kind)].map { (kind, $0) }
+            })
+            runs.append((marks, markRange))
+        }
+        for key in [NSAttributedString.Key.link, .underlineStyle, .strikethroughStyle, .backgroundColor] {
+            textStorage.removeAttribute(key, range: range)
+        }
+        let font = base[.font] as? NSFont ?? style.bodyFont
+        for (marks, markRange) in runs {
+            textStorage.addAttributes(style.markedAttributes(marks: marks, baseFont: font), range: markRange)
         }
     }
 
@@ -1898,18 +1901,12 @@ extension NoteEditorEngine {
         guard let textView else { return }
         var attributes = textView.typingAttributes
         attributes[.noteMark(kind)] = enabled ? true : nil
-        if enabled {
-            let font = attributes[.font] as? NSFont ?? style.bodyFont
-            attributes.merge(style.markedAttributes(kind: kind, baseFont: font)) { _, new in new }
-        } else {
-            switch kind {
-            case .bold, .italic, .code: attributes[.font] = self.attributes(forParagraphAt: textView.selectedRange().location)[.font]
-            case .underline: attributes[.underlineStyle] = nil
-            case .strikethrough: attributes[.strikethroughStyle] = nil
-            case .highlight: attributes[.backgroundColor] = nil
-            case .link: attributes[.link] = nil
-            }
-        }
+        for key in [NSAttributedString.Key.link, .underlineStyle, .strikethroughStyle, .backgroundColor] { attributes[key] = nil }
+        let base = self.attributes(forParagraphAt: textView.selectedRange().location)
+        let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { mark in
+            attributes[.noteMark(mark)].map { (mark, $0) }
+        })
+        attributes.merge(style.markedAttributes(marks: marks, baseFont: base[.font] as? NSFont ?? style.bodyFont)) { _, new in new }
         textView.typingAttributes = attributes
     }
 

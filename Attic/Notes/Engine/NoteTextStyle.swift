@@ -112,6 +112,35 @@ struct NoteTextStyle: Equatable {
         }
     }
 
+    /// Presentation always comes from the complete semantic mark set. In
+    /// particular, code chooses the family before bold/italic add traits.
+    func markedAttributes(marks: [NoteMark.Kind: Any], baseFont: NSFont) -> [NSAttributedString.Key: Any] {
+        let source = marks[.code] == nil ? baseFont : monoFont
+        var desired = source.fontDescriptor.symbolicTraits
+        if marks[.bold] != nil { desired.insert(.bold) }
+        if marks[.italic] != nil { desired.insert(.italic) }
+        var font = NSFont(descriptor: source.fontDescriptor.withSymbolicTraits(desired), size: source.pointSize) ?? source
+        if desired.contains(.italic), !font.fontDescriptor.symbolicTraits.contains(.italic) {
+            let fallback = marks[.code] == nil
+                ? NSFont.systemFont(ofSize: source.pointSize, weight: desired.contains(.bold) ? .bold : .regular)
+                : NSFont.monospacedSystemFont(ofSize: source.pointSize, weight: desired.contains(.bold) ? .bold : .regular)
+            font = NSFont(descriptor: fallback.fontDescriptor.withSymbolicTraits(desired), size: source.pointSize)
+                ?? NSFontManager.shared.convert(fallback, toHaveTrait: .italicFontMask)
+        }
+        var result: [NSAttributedString.Key: Any] = [.font: font]
+        if marks[.code] != nil { result[.backgroundColor] = codeColor }
+        if marks[.highlight] != nil { result[.backgroundColor] = highlightColor }
+        if marks[.underline] != nil || marks[.link] != nil {
+            result[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        }
+        if marks[.strikethrough] != nil { result[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+        if let url = marks[.link] as? String, let value = URL(string: url) {
+            result[.link] = value
+            result[.foregroundColor] = bodyColor
+        }
+        return result
+    }
+
     /// The gap from the title's last line to the body's first.
     var titleParagraphSpacing: CGFloat {
         tagLineHeight > 0 ? Self.titleToTags + tagLineHeight + Self.tagsToBody : Self.titleToBody
