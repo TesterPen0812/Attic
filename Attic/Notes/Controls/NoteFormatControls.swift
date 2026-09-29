@@ -409,10 +409,22 @@ final class NoteFormatControls: NSObject {
         return (area.minY, max(0, roomAbove))
     }
 
+    /// The page's root view: the panel's hosting view (its hit test and the
+    /// panel's motion include its subviews; the content container above it
+    /// only hit-tests the hosting view), or a plain window's content view.
+    private var overlayParent: NSView? {
+        var view = textView?.superview
+        while let candidate = view {
+            if candidate is AtticPanelHostingView { return candidate }
+            view = candidate.superview
+        }
+        return textView?.window?.contentView
+    }
+
     /// Lists and cards float over the whole page (above the bottom row), in
-    /// the window's content view, placed from text-view coordinates.
+    /// the page's root view, placed from text-view coordinates.
     private func placeOverlay(_ host: NoteOverlayHostingView, rect: NSRect) {
-        guard let textView, let parent = textView.window?.contentView else { return }
+        guard let textView, let parent = overlayParent else { return }
         if host.superview !== parent { parent.addSubview(host, positioned: .above, relativeTo: nil) }
         let frame = parent.convert(rect, from: textView).integral
         if host.frame != frame { host.frame = frame }
