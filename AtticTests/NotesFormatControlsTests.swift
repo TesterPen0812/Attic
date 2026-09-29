@@ -547,6 +547,104 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertNil(day("xyzzy"))
     }
 
+    // MARK: The Esc chain: the innermost thing closes, never the panel too
+
+    private func escape(in window: NSWindow) -> NSEvent {
+        keyEvent("\u{1b}", "\u{1b}", keyCode: 53, [], window: window)
+    }
+
+    func testEscClosesTheBarThenTheListAndOnlyThenReachesThePanel() {
+        let (controls, _, textView) = make()
+        var panelHides = 0
+        textView.escapeFallback = { panelHides += 1 }
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        XCTAssertTrue(controls.formatModel.barShown)
+        textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(controls.formatModel.barShown, "Esc closes the bar")
+        XCTAssertEqual(panelHides, 0, "and is used up there")
+
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("\n/", textView)
+        XCTAssertTrue(controls.slashModel.shown)
+        textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(controls.slashModel.shown, "Esc closes the / list")
+        XCTAssertEqual(panelHides, 0)
+        XCTAssertTrue(textView.string.hasSuffix("\n/"), "and leaves the /")
+
+        textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertEqual(panelHides, 1, "with nothing left to close, Esc goes on to the panel")
+    }
+
+    func testEscInTheBarsKeyboardModeLeavesTheBarNotThePanel() {
+        let (controls, _, textView) = make()
+        var panelHides = 0
+        textView.escapeFallback = { panelHides += 1 }
+        textView.setSelectedRange(range("most people", textView))
+        controls.refresh()
+        controls.enterBarKeyboard()
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)), "the monitor uses it up")
+        XCTAssertNil(controls.formatModel.barKeyboardIndex)
+        XCTAssertTrue(controls.formatModel.barShown, "the first Esc only leaves the bar's keyboard mode")
+        XCTAssertEqual(panelHides, 0)
+    }
+
+    func testEscInAaClosesAaOnlyAndIsUsedUp() {
+        let (controls, _, textView) = make()
+        let popover = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
+                               backing: .buffered, defer: false)
+        popover.isReleasedWhenClosed = false
+        windows.append(popover)
+        var closed = 0
+        controls.closeFormatPopover = { closed += 1; controls.isFormatPopoverOpen = false }
+        controls.isFormatPopoverOpen = true
+        XCTAssertTrue(controls.handleKey(escape(in: popover)), "Esc in Aa's window is taken before it can travel on")
+        XCTAssertEqual(closed, 1)
+        XCTAssertFalse(controls.handleKey(escape(in: popover)), "with Aa closed, it isn't the chain's")
+        XCTAssertTrue(textView.window?.firstResponder === textView, "the note keeps the keyboard")
+    }
+
+    func testEscInACardClosesTheCardOnlyAndIsUsedUp() throws {
+        let (controls, engine, textView) = make()
+        let target = range("free tier", textView)
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        settle { controls.cardHasKeyboard }
+        XCTAssertTrue(controls.cardHasKeyboard)
+        let before = engine.document()
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertFalse(controls.isCardOpen, "Esc closes the link card")
+        XCTAssertTrue(textView.window?.firstResponder === textView, "the keyboard is back in the note")
+        XCTAssertEqual(textView.selectedRange(), target)
+        XCTAssertEqual(engine.document(), before, "nothing changed")
+        XCTAssertNil(controls.closeInnermostOnEscape(escape(in: textView.window!)),
+                     "the next Esc is the text view's own (the bar, then the panel)")
+
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        type("\n/da", textView)
+        XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
+        settle { controls.cardHasKeyboard }
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertFalse(controls.isCardOpen, "Esc closes the date card")
+        XCTAssertTrue(textView.string.hasSuffix("/da"), "and puts /da back")
+    }
+
+    func testThePanelIgnoresAnEscTypedInAnotherWindow() {
+        let panel = AtticPanel(contentRect: CGRect(x: 0, y: 0, width: 332, height: 480),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let popover = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
+                               backing: .buffered, defer: false)
+        popover.isReleasedWhenClosed = false
+        windows += [panel, popover]
+        var hides = 0
+        panel.onUnhandledEscape = { hides += 1 }
+        panel.keyDown(with: escape(in: popover))
+        XCTAssertEqual(hides, 0, "a pop-over's Esc never hides the panel as well")
+        panel.keyDown(with: escape(in: panel))
+        XCTAssertEqual(hides, 1, "the panel's own Esc, with nothing to close, still hides it")
+    }
+
     // MARK: Performance (the engine's 5,000-line stress note)
 
     /// Keystrokes with the controls installed read no state and cost what

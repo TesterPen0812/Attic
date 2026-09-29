@@ -180,6 +180,11 @@ struct NoteFormatPopoverView: View {
             model.run(command, from: .formatPopover)
             return .handled
         }
+        .onKeyPress(.escape) {
+            // Used up here: Esc closes Aa and nothing behind it.
+            onClose()
+            return .handled
+        }
         .onExitCommand { onClose() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Format"))

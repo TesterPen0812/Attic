@@ -470,6 +470,7 @@ final class NoteFormatControls: NSObject {
     /// ⌃Tab, the bar's keyboard mode and the format shortcuts, before the
     /// text view sees them (never during a composition).
     func handleKey(_ event: NSEvent) -> Bool {
+        if event.keyCode == 53, let closed = closeInnermostOnEscape(event) { return closed }
         guard let textView, let window = textView.window, event.window === window,
               window.firstResponder === textView, !textView.hasMarkedText() else { return false }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
@@ -487,6 +488,29 @@ final class NoteFormatControls: NSObject {
         guard flags.contains(.command), let command = NoteCommandCatalog.command(for: event) else { return false }
         router.run(command, from: .shortcut)
         return true
+    }
+
+    /// Esc closes the innermost open thing and is used up there, so it can
+    /// never also reach the panel's "nothing left to close" (which hides the
+    /// panel): Aa's pop-over (its own window), then a date or link card
+    /// (its field has the keyboard). The bar, the bar's keyboard mode and
+    /// the `/` list take Esc in the text view's own command path. Returns
+    /// nil when Esc isn't this chain's.
+    func closeInnermostOnEscape(_ event: NSEvent) -> Bool? {
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        guard event.type == .keyDown, flags.isEmpty, let window = textView?.window else { return nil }
+        if isFormatPopoverOpen, let other = event.window, other !== window {
+            // An input method in Aa's field keeps its Esc (Aa has none today).
+            if let editor = other.firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
+            closeFormatPopover?()
+            return true
+        }
+        if cardModel.card != nil, event.window === window, cardHasKeyboard {
+            if let editor = window.firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
+            cancelCard()
+            return true
+        }
+        return nil
     }
 
     func enterBarKeyboard() {

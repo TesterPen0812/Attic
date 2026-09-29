@@ -78,11 +78,20 @@ final class AtticPanel: NSPanel {
     /// clearing a selection) and an open menu all see it first. A text view
     /// never passes Esc on here (it has its own completion behaviour), so
     /// the field's owner decides whether Esc leaves it.
+    /// An Esc typed in another window (a pop-over over the panel, such as
+    /// Notes' Aa) closes that window only: AppKit can hand the pop-over's
+    /// unhandled key on to the window it came from, and it must not hide
+    /// the panel as well.
+    private static func isOwnEscape(_ event: NSEvent?, in window: NSWindow) -> Bool {
+        guard let event, event.type == .keyDown else { return true }
+        return event.window == nil || event.window === window
+    }
+
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53,
            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
            !(firstResponder is NSTextView) {
-            onUnhandledEscape?()
+            if Self.isOwnEscape(event, in: self) { onUnhandledEscape?() }
             return
         }
         super.keyDown(with: event)
@@ -93,6 +102,7 @@ final class AtticPanel: NSPanel {
             super.cancelOperation(sender)
             return
         }
+        guard Self.isOwnEscape(NSApp.currentEvent, in: self) else { return }
         onUnhandledEscape?()
     }
 
