@@ -789,13 +789,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if current.length == 0 {
             let line = lineRange(at: current.location)
             if line.location > 0, current.location == NSMaxRange(line),
-               (textStorage.string as NSString).substring(with: line) == "---" {
+               (textStorage.string as NSString).substring(with: line) == "---",
+               conversionEligible(line: line) {
                 let divider = NoteDividerAttachment()
                 renderer.apply(to: divider, today: today)
                 let replacement = NSMutableAttributedString(attributedString: NoteTextCodec.attachmentString(divider, attributes: style.bodyAttributes))
                 replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
-                return performEdit(line, with: replacement, name: "Divider",
-                                   selection: NSRange(location: line.location + replacement.length, length: 0))
+                let applied = performEdit(line, with: replacement, name: "Divider",
+                                          selection: NSRange(location: line.location + replacement.length, length: 0))
+                if applied { history.setLastRestoredText(NSAttributedString(string: "---\n", attributes: style.bodyAttributes)) }
+                return applied
             }
             if let format = paragraphStyle(at: current.location), format == .bullet || format == .number {
                 let content = (textStorage.string as NSString).substring(with: line)
@@ -2251,13 +2254,29 @@ extension NoteEditorEngine {
     }
 
     private func convertParagraphHabit(line: NSRange) -> Bool {
+        guard conversionEligible(line: line) else { return false }
         let value = (textStorage.string as NSString).substring(with: line)
+        let isBullet = paragraphStyle(at: line.location) == .bullet
         let choices: [(String, NoteParagraphStyle)] = [
+            ("[ ] ", .checklist), ("[x] ", .checklist), ("[X] ", .checklist),
             ("# ", .heading(2)), ("- ", .bullet), ("* ", .bullet), ("1. ", .number),
             ("-[] ", .checklist), ("- [ ] ", .checklist), ("- [x] ", .checklist), ("> ", .quote)
         ]
         guard let (prefix, format) = choices.first(where: { value.hasPrefix($0.0) }),
               let textView, textView.selectedRange().location == line.location + (prefix as NSString).length else { return false }
+        if prefix.hasPrefix("[") && !isBullet { return false }
+        if prefix.hasPrefix("[") {
+            let checked = prefix != "[ ] "
+            let box = NoteChecklistAttachment(isChecked: checked)
+            renderer.apply(to: box, today: today)
+            let replacement = NoteTextCodec.attachmentString(box, attributes: style.bodyAttributes)
+            let applied = performEdit(line, with: replacement, name: "Checklist",
+                                      selection: NSRange(location: line.location + 1, length: 0))
+            if applied {
+                history.setLastRestoredText(NSAttributedString(string: "- " + prefix, attributes: style.bodyAttributes))
+            }
+            return applied
+        }
         history.beginGroup()
         defer { history.endGroup() }
         let length = (prefix as NSString).length
@@ -2270,13 +2289,18 @@ extension NoteEditorEngine {
     }
 
     private func convertInlineHabit(line: NSRange, caret: Int) -> Bool {
+        guard conversionEligible(line: line) else { return false }
         let before = (textStorage.string as NSString).substring(with: NSRange(location: line.location, length: caret - line.location))
         let patterns: [(String, NoteMark.Kind)] = [("**", .bold), ("*", .italic), ("_", .italic), ("`", .code)]
         for (delimiter, kind) in patterns {
             guard before.hasSuffix(delimiter) else { continue }
-            if delimiter == "*", before.hasPrefix("**"), !before.hasSuffix("**") { continue }
+            if delimiter.count == 1, let last = before.dropLast().last, String(last) == delimiter { continue }
             let end = before.index(before.endIndex, offsetBy: -delimiter.count)
             guard let open = before[..<end].range(of: delimiter, options: .backwards), open.upperBound < end else { continue }
+            if delimiter.count == 1 {
+                let prefix = before[..<open.lowerBound]
+                if prefix.last.map(String.init) == delimiter { continue }
+            }
             let content = String(before[open.upperBound..<end])
             guard !content.isEmpty, !content.contains("\n") else { continue }
             let start = line.location + (String(before[..<open.lowerBound]) as NSString).length
@@ -2291,6 +2315,17 @@ extension NoteEditorEngine {
                                selection: NSRange(location: start + replacement.length, length: 0))
         }
         return false
+    }
+
+    private func conversionEligible(line: NSRange) -> Bool {
+        guard line.location > 0, paragraphStyle(at: line.location) != .mono else { return false }
+        var blocked = false
+        if line.length > 0 {
+            textStorage.enumerateAttribute(.noteMark(.code), in: line) { value, _, stop in
+                if value != nil { blocked = true; stop.pointee = true }
+            }
+        }
+        return !blocked
     }
 
     private func linkURLBeforeCaret() {

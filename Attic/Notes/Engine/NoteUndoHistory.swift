@@ -345,6 +345,12 @@ final class NoteUndoHistory {
         undoOps.last?.name = name
     }
 
+    /// A conversion intercepting Return restores the literal Return input
+    /// on its first Undo, including the newline that AppKit did not insert.
+    func setLastRestoredText(_ text: NSAttributedString) {
+        undoOps.last?.other = text
+    }
+
     /// The last step was the title shorthand for `tag` (and added it to the
     /// note when `changesTags`): undo removes it, redo adds it back (one step
     /// for the text and the tag).
