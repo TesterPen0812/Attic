@@ -1179,7 +1179,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         for type in types {
             switch type {
             case Self.fragmentType:
-                if let data = try? NoteContentCodec.encode(fragment) { wrote = pasteboard.setData(data, forType: type) || wrote }
+                if let data = try? NoteContentCodec.encode(fragment, context: .fragment) { wrote = pasteboard.setData(data, forType: type) || wrote }
             case .string:
                 wrote = pasteboard.setString(NoteTextExport.plainText(fragment), forType: .string) || wrote
             case .rtf:
@@ -1254,7 +1254,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Inserts a pasted fragment over the selection as one step.
     func paste(fragmentData data: Data, at selection: NSRange) -> Bool {
-        guard !isReadOnly, case let .editable(decoded) = NoteContentCodec.decode(data) else { return false }
+        guard !isReadOnly, case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
         let before = Set(staged.keys)
         let fragment = preparePaste(decoded)
         guard !fragment.blocks.isEmpty else { return false }
