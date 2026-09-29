@@ -123,7 +123,7 @@ final class TasksPagerMotion: ObservableObject {
         let next = current.upperBound < all.upperBound
             ? current.lowerBound...(current.upperBound + 1)
             : (current.lowerBound - 1)...current.upperBound
-        PerformanceSignposts.beginPageBuild(next)
+        PerformanceSignposts.pageWarmed(next)
         span.warm = next
         if next != all { warmUp(after: Self.warmStep, isAllowed: isAllowed) }
     }

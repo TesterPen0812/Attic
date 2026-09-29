@@ -170,6 +170,13 @@ enum PerformanceSignposts {
         pageBuild = signposter.beginInterval("PageBuildToFrame", "pages \(pages.lowerBound)-\(pages.upperBound)")
     }
 
+    /// A page built beside the one shown while idle (not waiting for a frame).
+    static func pageWarmed(_ pages: ClosedRange<Int>) {
+        echo("page-warm \(pages.lowerBound)-\(pages.upperBound)")
+        guard signposter.isEnabled else { return }
+        signposter.emitEvent("PageWarm", "pages \(pages.lowerBound)-\(pages.upperBound)")
+    }
+
     /// The pages a finished move passed are let go.
     static func pagesReleased(_ pages: ClosedRange<Int>) {
         echo("page-release to \(pages.lowerBound)-\(pages.upperBound)")
