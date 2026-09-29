@@ -107,6 +107,10 @@ probe root. Names describe the actual endpoint:
 | `PageSwitch` | section selection to the next main turn after SwiftUI observes it, not a pixel-visible frame. |
 | `StoreOpen`, `StoreSave` | SwiftData container construction and task/note/canvas context save. |
 | `NoteKeystrokeToDraw`, `CanvasDragToDraw` | native input event to view draw callback. |
+| `PageChoiceToFirstFrame` | a Tasks tab chosen (a click, a key, ⌘1–3) to the first display frame of its slide (round 11). |
+| `PagerSettle` | a Tasks page's settle, first step to rest; ends with `frames=… late=…` (refreshes it missed). |
+| `PageBuildToFrame` | a Tasks page built for a move, to the next displayed frame; `PageWarm` events mark pages built while idle. |
+| `SwipeFrames` and `*Motion` | with `ATTIC_FRAME_SIGNPOSTS=1` (or the `AtticFrameSignposts` default): frames and missed refreshes during a swipe and the page's small animations. |
 
 The automated harness records the first three intervals and `StoreOpen`.
 It does not drive note typing, canvas drawing, or a store save, so those three
@@ -114,6 +118,23 @@ intervals require a separate interactive Instruments trace. None of these
 signposts proves scan-out latency. The spec's only fixed perception budgets
 remain reveal ≤100 ms, page switch ≤50 ms, and note keystroke to screen ≤16 ms;
 use a frame trace to judge those endpoints.
+
+## Frame costs (round 11)
+
+- `Scripts/run_optimized_tests.zsh AtticTests/TasksFrameCostTests` runs unit
+  tests in an optimized hosted build (`.build/dd-opt`); the test host alone is
+  built without the hardened runtime, whose library validation refused the
+  ad-hoc signed test bundle. `TasksFrameCostTests` prints `ATTIC_FRAME_COST`:
+  a tab click's first frame and its slide, a swipe's first movement, its
+  frames and settle, a selection change, and keystrokes in the add bar, a
+  title and the Done search, on the spec's 500/500/5,000 seed
+  (`ATTIC_UI_TEST_SEED=scale` gives a preview the same seed). No budget is
+  asserted: it is a measure, judged against the spec's budgets.
+- On screen, a DEBUG preview with `ATTIC_FRAME_MONITOR=1` prints every frame
+  the main thread saw (`ATTIC_FRAME <time> <gap ms>`) and the pager's moments
+  (`ATTIC_EVENT`), so synthetic input (CGEvent clicks and trackpad-phased
+  scroll events) can be judged frame by frame without the Animation Hitches
+  template.
 
 ## CI comparison
 
