@@ -325,6 +325,42 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertTrue(versions(id).contains { $0.id == old.id })
     }
 
+    func testF5FailedProposalRetentionScanKeepsEveryVersion() throws {
+        let (id, _) = try create(document("Current"))
+        let expired = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
+            reason: .pause, content: nil, contentFormat: 0, title: "old", body: "",
+            attachmentIDs: [], sourceRevisionID: UUID())
+        store.modelContext.insert(expired)
+        try store.modelContext.save()
+        store.pendingEditRetentionRowsOverride = { _ in throw NoteDocumentStoreError.invalidDocument("fetch failed") }
+        store.thinVersions(noteID: id)
+        XCTAssertTrue(versions(id).contains { $0.id == expired.id })
+        store.pendingEditRetentionRowsOverride = nil
+        store.thinVersions(noteID: id)
+        XCTAssertFalse(versions(id).contains { $0.id == expired.id })
+    }
+
+    func testF5DivergentPhysicalProposalReplicasProtectBothBaseVersions() throws {
+        let (id, _) = try create(document("Current"))
+        let first = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-40 * 86_400),
+            reason: .pause, content: nil, contentFormat: 0, title: "first", body: "",
+            attachmentIDs: [], sourceRevisionID: UUID())
+        let second = NoteVersion(noteID: id, createdAt: Date().addingTimeInterval(-39 * 86_400),
+            reason: .pause, content: nil, contentFormat: 0, title: "second", body: "",
+            attachmentIDs: [], sourceRevisionID: UUID())
+        let proposalID = UUID()
+        for version in [first, second] { store.modelContext.insert(version) }
+        for version in [first, second] {
+            store.modelContext.insert(NotePendingEdit(id: proposalID, noteID: id,
+                baseRevisionToken: "old", proposedContent: Data(), agentName: "Agent",
+                createdAt: Date(), baseVersionID: version.id))
+        }
+        try store.modelContext.save()
+        XCTAssertEqual(store.pendingEdits(noteID: id).count, 1, "presentation deduplicates the proposal UUID")
+        store.thinVersions(noteID: id)
+        XCTAssertTrue(Set(versions(id).map(\.id)).isSuperset(of: [first.id, second.id]))
+    }
+
     func testRestoreIsTransactional() throws {
         let (id, first) = try create(document("First"))
         store.recordVersion(noteID: id, reason: .pause)

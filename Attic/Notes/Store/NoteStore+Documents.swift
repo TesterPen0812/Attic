@@ -383,7 +383,9 @@ extension NoteStore {
         do {
             guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
             projection = try prepared ?? PreparedNoteDocument(document)
-            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID)
+            let base = main.content.flatMap { NoteContentCodec.decode($0).document }
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID,
+                previouslyReferencedBy: base)
         } catch let error as NoteDocumentStoreError {
             return .failure(error)
         } catch {
@@ -464,7 +466,8 @@ extension NoteStore {
     private func attachmentStagePlan(
         _ staged: [StagedNoteAttachment],
         referencedBy document: NoteDocument,
-        noteID: UUID
+        noteID: UUID,
+        previouslyReferencedBy base: NoteDocument? = nil
     ) throws -> AttachmentStagePlan {
         let shown = Set(document.attachmentIDs)
         guard staged.filter({ shown.contains($0.id) }).allSatisfy({
@@ -479,11 +482,35 @@ extension NoteStore {
         let visible = Dictionary(rows.filter { shown.contains($0.id) }.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }).values
         let new = staged.filter { shown.contains($0.id) && !existing.contains($0.id) }
-        guard shown.count <= AttachmentLimits.maxAttachmentsPerNote,
-              shown.isSubset(of: existing.union(new.map(\.id))),
-              visible.allSatisfy({ $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment }),
-              visible.reduce(Int64.zero, { $0 + $1.byteCount }) + new.reduce(Int64.zero, { $0 + $1.byteCount })
-                <= AttachmentLimits.maxBytesPerNote else {
+        let baseIDs = Set(base?.attachmentIDs ?? [])
+        let addedIDs = shown.subtracting(baseIDs)
+        let missing = shown.subtracting(existing).subtracting(new.map(\.id))
+        let baseBlocks = Dictionary(grouping: (base?.blocks ?? []).compactMap { block -> (UUID, NoteBlock)? in
+            guard let id = block.attachmentID, block.kind == .image || block.kind == .file else { return nil }
+            return (id, block)
+        }, by: { $0.0 })
+        let unchangedMissing = document.blocks.filter { $0.attachmentID.map(missing.contains) == true }.allSatisfy { block in
+            guard let id = block.attachmentID, let originals = baseBlocks[id] else { return false }
+            return originals.contains { pair in
+                let original = pair.1
+                return block.id == original.id && block.kind == original.kind && block.filename == original.filename
+                    && block.contentTypeIdentifier == original.contentTypeIdentifier
+                    && block.byteCount == original.byteCount
+                    && block.pixelWidth == original.pixelWidth && block.pixelHeight == original.pixelHeight
+            }
+        }
+        let noIncrease = addedIDs.isEmpty
+        let total = visible.map(\.byteCount) + new.map(\.byteCount)
+        let totalBytes = total.reduce(Int64.zero) { partial, size in
+            let (sum, overflow) = partial.addingReportingOverflow(size)
+            return overflow ? Int64.max : sum
+        }
+        guard shown.count <= AttachmentLimits.maxAttachmentsPerNote || (noIncrease && shown.count <= baseIDs.count),
+              missing.isSubset(of: baseIDs), unchangedMissing,
+              missing.isEmpty || noIncrease,
+              visible.allSatisfy({ $0.byteCount > 0 && ($0.byteCount <= AttachmentLimits.maxBytesPerAttachment
+                  || (noIncrease && baseIDs.contains($0.id))) }),
+              totalBytes <= AttachmentLimits.maxBytesPerNote || noIncrease else {
             throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
         }
         return AttachmentStagePlan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1)
@@ -565,16 +592,31 @@ extension NoteStore {
     /// remain until their owner is gone. Safety versions taken at exactly the
     /// same instant are kept together so divergent replicas are not collapsed.
     func thinVersions(noteID: UUID) {
-        let all = versions(noteID: noteID)
         let targetID = noteID
-        let physical = (try? modelContext.fetch(FetchDescriptor<NoteVersion>(
-            predicate: #Predicate { $0.noteID == targetID }
-        ))) ?? []
+        let physical: [NoteVersion]
+        let protectedIDs: Set<UUID>
+        let recoveryBases: Set<UUID>
+        do {
+            physical = try modelContext.fetch(FetchDescriptor<NoteVersion>(
+                predicate: #Predicate { $0.noteID == targetID }))
+            let proposals: [NotePendingEdit]
+            if let override = pendingEditRetentionRowsOverride {
+                proposals = try override(noteID)
+            } else {
+                proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>(
+                    predicate: #Predicate { $0.noteID == targetID }))
+            }
+            protectedIDs = Set(proposals.compactMap(\.baseVersionID))
+            recoveryBases = try recoveryProtectedRevisionIDs()
+        } catch {
+            // Unknown proposal, version or recovery ownership keeps history.
+            return
+        }
+        var seen = Set<UUID>()
+        let all = physical.sorted { lhs, rhs in
+            lhs.createdAt != rhs.createdAt ? lhs.createdAt > rhs.createdAt : lhs.id.uuidString > rhs.id.uuidString
+        }.filter { seen.insert($0.id).inserted }
         let copies = Dictionary(grouping: physical, by: \.id)
-        let protectedIDs = Set(pendingEdits(noteID: noteID).compactMap(\.baseVersionID))
-        // If any recovery entry is unreadable, its base is unknown. Keep the
-        // whole history until the entry can be inspected safely.
-        guard let recoveryBases = try? recoveryProtectedRevisionIDs() else { return }
         let day: TimeInterval = 86_400
         let hour: TimeInterval = 3_600
         let now = currentDate

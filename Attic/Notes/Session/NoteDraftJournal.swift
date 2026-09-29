@@ -143,7 +143,10 @@ final class NoteDraftJournal: NoteDraftJournaling {
 
     func remove(noteID: UUID) throws {
         let file = url(for: noteID)
-        let staged = (try? read(file))?.staged ?? []
+        guard fileManager.fileExists(atPath: file.path) else { return }
+        // A malformed checkpoint may be the only owner of staged bytes. A
+        // failed read is not an empty checkpoint and must never unlink it.
+        let staged = try read(file).staged
         do {
             try fileManager.removeItem(at: file)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {

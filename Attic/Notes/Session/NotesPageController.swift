@@ -967,10 +967,10 @@ final class NotesPageController: ObservableObject {
         }
     }
 
-    /// Removes a note's recovery copy, or, if removal fails, writes the
-    /// stored state over it (recovery drops a copy that matches its note,
-    /// live or deleted). False only when neither worked, so a stale copy
-    /// is still there.
+    /// Removes a note's recovery copy. An unlink failure may use a stored
+    /// replacement only after the recovery reader proves that its ownership
+    /// is known and already contained in the saved note. Unknown ownership
+    /// remains on disk with its staged bytes.
     fileprivate func retireRecoveryCopy(noteID: UUID) -> Bool {
         guard let journal else { return true }
         do {
@@ -979,7 +979,17 @@ final class NotesPageController: ObservableObject {
         } catch {
             guard let stored = store.loadDocument(noteID: noteID),
                   let document = stored.content.document,
-                  let content = try? NoteContentCodec.encode(document) else { return false }
+                  let content = try? NoteContentCodec.encode(document),
+                  let recovery = try? journal.recoveryEntries(),
+                  recovery.allSatisfy({ if case .valid = $0 { return true }; return false }),
+                  let candidate = recovery.compactMap({ item -> NoteDraftJournalEntry? in
+                      if case let .valid(entry, _) = item, entry.noteID == noteID { return entry }
+                      return nil
+                  }).first,
+                  candidate.pendingImport == nil,
+                  NoteContentCodec.decode(candidate.content).document == document,
+                  candidate.changedTags == nil || candidate.changedTags == (store.note(withID: noteID)?.tags ?? []),
+                  Set(candidate.staged.map(\.id)).isSubset(of: Set(document.attachmentIDs)) else { return false }
             let saved = NoteDraftJournalEntry(noteID: noteID, isPersisted: true,
                 baseRevisionID: stored.revisionID, content: content,
                 selectionLocation: 0, selectionLength: 0, staged: [], savedAt: now(),

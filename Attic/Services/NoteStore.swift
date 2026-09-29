@@ -197,6 +197,9 @@ final class NoteStore: ObservableObject {
     /// for identical bytes instead of decoding every replica on each autosave.
     var documentReplicaCapabilityCache: [ObjectIdentifier: (revisionID: UUID?, content: Data, editable: Bool)] = [:]
     var pendingEditFetchCount = 0
+    /// Test seam for a failed destructive-retention scan. Presentation reads
+    /// continue to use their own deduplicated query.
+    var pendingEditRetentionRowsOverride: ((UUID) throws -> [NotePendingEdit])?
     private(set) var documentReplicaDecodeCount = 0
     func countDocumentReplicaDecode() { documentReplicaDecodeCount += 1 }
     private var presentationIndex: PresentationIndex?
