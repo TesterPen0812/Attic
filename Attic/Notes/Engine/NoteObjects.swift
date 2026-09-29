@@ -142,6 +142,7 @@ final class NoteImageAttachment: NoteObjectAttachment {
     var filename: String = ""
     /// Missing: the row or its bytes are gone; a placeholder keeps its place.
     var isMissing = false
+    var failureMessage: String?
 
     init(objectID: UUID = UUID(), attachmentID: UUID, preferredWidth: Double? = nil,
          preferredWidthFraction: Double? = nil,
@@ -169,7 +170,7 @@ final class NoteImageAttachment: NoteObjectAttachment {
         let natural = pixelSize.width / 2
         let wanted = preferredWidthFraction.map { column * CGFloat($0) }
             ?? preferredWidth.map { CGFloat($0) } ?? natural
-        let width = min(column, max(40, min(wanted, max(natural, 40))))
+        let width = min(column, max(1, min(wanted, natural)))
         return CGSize(width: width.rounded(), height: (width * pixelSize.height / pixelSize.width).rounded())
     }
 
@@ -182,8 +183,55 @@ final class NoteImageAttachment: NoteObjectAttachment {
     }
 
     override var accessibilityDescription: String {
-        filename.isEmpty ? String(localized: "Image") : String(localized: "Image, \(filename)")
+        let label = filename.isEmpty ? String(localized: "Image") : String(localized: "Image, \(filename)")
+        return label + failureMessage.map { ", \($0)" }.orEmpty
     }
+}
+
+/// A file card has a stable footprint even before its bytes are available.
+final class NoteFileAttachment: NoteObjectAttachment {
+    let attachmentID: UUID?
+    let filename: String
+    let contentTypeIdentifier: String
+    let byteCount: Int64
+    let importFailure: String?
+    let extras: [String: NoteJSON]
+    var originalMissing = false
+    var previewUnavailable = false
+
+    init(objectID: UUID = UUID(), attachmentID: UUID?, filename: String,
+         contentTypeIdentifier: String, byteCount: Int64, importFailure: String? = nil,
+         extras: [String: NoteJSON] = [:]) {
+        self.attachmentID = attachmentID
+        self.filename = filename
+        self.contentTypeIdentifier = contentTypeIdentifier
+        self.byteCount = byteCount
+        self.importFailure = importFailure
+        self.extras = extras
+        super.init(objectID: objectID)
+    }
+
+    override var isBlockObject: Bool { true }
+    static let cardHeight: CGFloat = 54
+
+    override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
+                                   textContainer: NSTextContainer?, proposedLineFragment: CGRect,
+                                   position: CGPoint) -> CGRect {
+        let padding = textContainer?.lineFragmentPadding ?? 0
+        return CGRect(x: 0, y: 0, width: min(300, max(40, proposedLineFragment.width - padding * 2)),
+                      height: Self.cardHeight)
+    }
+
+    override var accessibilityDescription: String {
+        let size = ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+        let detail = importFailure.map { "Import failed: \($0)" }
+            ?? (originalMissing ? "Original missing" : (previewUnavailable ? "Preview unavailable" : nil))
+        return "File, \(filename), \(size)" + detail.map { ", \($0)" }.orEmpty
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var orEmpty: String { self ?? "" }
 }
 
 /// A block or inline object this build cannot read: shown as a placeholder,
@@ -266,6 +314,11 @@ final class NoteObjectRenderer {
             ?? NSImage(size: size)
     }
 
+    func fileCard(name: String, detail: String) -> NSImage {
+        render(NoteFileCardPreview(name: name, detail: detail).frame(width: 300, height: NoteFileAttachment.cardHeight))
+            ?? NSImage(size: CGSize(width: 300, height: NoteFileAttachment.cardHeight))
+    }
+
     private func render<Content: View>(_ view: Content) -> NSImage? {
         let renderer = ImageRenderer(content: view.atticDesign(design))
         renderer.scale = scale
@@ -288,6 +341,11 @@ final class NoteObjectRenderer {
         case let divider as NoteDividerAttachment:
             divider.renderedImage = render(Rectangle().fill(design.tokens.ink(.helper).color)
                 .frame(height: 1).frame(height: NoteTextStyle.bodyLineHeight))
+        case let file as NoteFileAttachment:
+            let size = ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)
+            let detail = file.importFailure.map { "Import failed: \($0)" }
+                ?? (file.originalMissing ? String(localized: "Original missing") : size)
+            file.renderedImage = fileCard(name: file.filename, detail: detail)
         default:
             break
         }
@@ -303,6 +361,30 @@ private struct NoteObjectPlaceholder: View {
         AtticText(verbatim: text, style: .chipLabel, ink: .helper)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(design.tokens.tagFill.color))
+    }
+}
+
+private struct NoteFileCardPreview: View {
+    let name: String
+    let detail: String
+    @Environment(\.atticDesign) private var design
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc")
+                .foregroundStyle(design.tokens.ink(.helper).color)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                AtticText(verbatim: name, style: .chipLabel, ink: .body)
+                    .lineLimit(1)
+                AtticText(verbatim: detail, style: .chipLabel, ink: .helper)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .background(RoundedRectangle(cornerRadius: AtticRadius.control(height: NoteFileAttachment.cardHeight),
+                                     style: .continuous).fill(design.tokens.tagFill.color))
     }
 }
 

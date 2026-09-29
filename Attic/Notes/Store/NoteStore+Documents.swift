@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SwiftData
 
 /// An image imported by the editor but not yet saved. Its bytes stay with
@@ -20,12 +21,18 @@ struct PreparedNoteDocument: Sendable {
     let title: String
     let body: String
     let plainText: String
+    let imageCount: Int
+    let fileCount: Int
+    let firstFileName: String?
 
     init(_ document: NoteDocument) throws {
         content = try NoteContentCodec.encode(document)
         title = NoteStore.normalizedTitle(document.title)
         body = NoteTextExport.plainBody(document)
         plainText = NoteTextExport.plainText(document)
+        imageCount = document.blocks.filter { $0.kind == .image }.count
+        fileCount = document.blocks.filter { $0.kind == .file }.count
+        firstFileName = document.blocks.first { $0.kind == .file }?.filename
     }
 }
 
@@ -324,17 +331,21 @@ extension NoteStore {
         }
         let timestamp = currentDate
         let context = modelContext
+        let priorIDs = Set((NoteContentCodec.decode(main.content ?? Data()).document)?.attachmentIDs ?? [])
+        let removedIDs = priorIDs.subtracting(document.attachmentIDs)
         stageDisplacedReplicas(replicas, reason: .replacedByDraft, timestamp: timestamp,
-                               excludingUnchangedBase: baseRevisionID)
+                               excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
                                        revision: replicas.map(\.revision).max() ?? 0, prepared: prepared,
                                        tags: encodedTags)
             try stageAttachments(staged, referencedBy: document, noteID: noteID, context: context, timestamp: timestamp)
+            let visibilityChanged = try stageAttachmentVisibility(referencedBy: document, noteID: noteID,
+                timestamp: timestamp)
             guard commitStagedChanges() else {
                 return .failure(.saveFailed(lastErrorMessage ?? "The note could not be saved."))
             }
-            refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty)
+            refreshAfterDocumentSave(insertedAttachments: !staged.isEmpty || visibilityChanged)
             documentSaveCommitted?(baseRevisionID, presentedRevisionID)
             return .success(revisionID)
         } catch let error as NoteDocumentStoreError {
@@ -362,6 +373,9 @@ extension NoteStore {
             replica.title = projection.title
             replica.body = projection.body
             replica.plainText = projection.plainText
+            replica.imageCount = projection.imageCount
+            replica.fileCount = projection.fileCount
+            replica.firstFileName = projection.firstFileName
             replica.revision = revision &+ 1
             replica.revisionID = revisionID
             replica.updatedAt = timestamp
@@ -393,11 +407,21 @@ extension NoteStore {
         let shown = Set(document.attachmentIDs)
         guard staged.filter({ shown.contains($0.id) }).allSatisfy({
             $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment
-                && $0.byteCount == Int64($0.data.count) && !$0.digest.isEmpty
+                && $0.byteCount == Int64($0.data.count)
+                && $0.digest == SHA256.hash(data: $0.data).map { String(format: "%02x", $0) }.joined()
         }) else {
             throw NoteDocumentStoreError.invalidDocument("An image has no complete payload.")
         }
         let existing = Set((try? attachmentRows(forNoteID: noteID))?.map(\.id) ?? [])
+        let rows = try attachmentRows(forNoteID: noteID)
+        let visible = Dictionary(rows.filter { shown.contains($0.id) }.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }).values
+        let new = staged.filter { shown.contains($0.id) && !existing.contains($0.id) }
+        guard Set(visible.map(\.id)).count + new.count <= AttachmentLimits.maxAttachmentsPerNote,
+              visible.reduce(Int64.zero, { $0 + $1.byteCount }) + new.reduce(Int64.zero, { $0 + $1.byteCount })
+                <= AttachmentLimits.maxBytesPerNote else {
+            throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
+        }
         let highest = (try? attachmentRows(forNoteID: noteID))?.map(\.sortIndex).max() ?? -1
         var nextIndex = highest &+ 1
         for item in staged where shown.contains(item.id) && !existing.contains(item.id) {
@@ -415,6 +439,30 @@ extension NoteStore {
             nextIndex &+= 1
             context.insert(row)
         }
+    }
+
+    /// The document, deletion timestamp and displaced version commit in the
+    /// same SwiftData save. Undo can restore the same row by referencing it
+    /// again; purge waits for versions, drafts and proposals to release it.
+    @discardableResult
+    private func stageAttachmentVisibility(referencedBy document: NoteDocument, noteID: UUID,
+                                           timestamp: Date) throws -> Bool {
+        let shown = Set(document.attachmentIDs)
+        var changed = false
+        for row in try attachmentRows(forNoteID: noteID) {
+            if shown.contains(row.id) {
+                if row.deletedAt != nil {
+                    changed = true
+                    row.updatedAt = timestamp
+                }
+                row.deletedAt = nil
+            } else if row.deletedAt == nil {
+                row.deletedAt = timestamp
+                row.updatedAt = timestamp
+                changed = true
+            }
+        }
+        return changed
     }
 
     private func refreshAfterDocumentSave(insertedAttachments: Bool) {
@@ -539,6 +587,9 @@ extension NoteStore {
             replica.title = derived.title
             replica.body = derived.body
             replica.plainText = derived.plainText
+            replica.imageCount = derived.imageCount
+            replica.fileCount = derived.fileCount
+            replica.firstFileName = derived.firstFileName
             replica.revision = revision
             replica.revisionID = revisionID
             replica.updatedAt = timestamp
@@ -548,6 +599,13 @@ extension NoteStore {
                 replica.createdAt = preflight.canonical.createdAt
                 replica.tagsRaw = preflight.canonical.tagsRaw
                 replica.taskID = preflight.canonical.taskID
+            }
+        }
+        if let data = version.content, let restored = NoteContentCodec.decode(data).document {
+            do { try stageAttachmentVisibility(referencedBy: restored, noteID: noteID, timestamp: timestamp) }
+            catch {
+                context.rollback()
+                return .failure(.saveFailed(error.localizedDescription))
             }
         }
         guard commitStagedChanges() else {
@@ -600,12 +658,15 @@ extension NoteStore {
     }
 
     static func derivedColumns(content: Data?, format: Int, title: String, body: String)
-        -> (title: String, body: String, plainText: String) {
+        -> (title: String, body: String, plainText: String, imageCount: Int, fileCount: Int, firstFileName: String?) {
         guard format >= 1, let content else {
-            return (title, body, legacyPlainText(title: title, body: body))
+            return (title, body, legacyPlainText(title: title, body: body), 0, 0, nil)
         }
-        guard let document = NoteContentCodec.decode(content).document else { return (title, body, title) }
-        return (normalizedTitle(document.title), NoteTextExport.plainBody(document), NoteTextExport.plainText(document))
+        guard let document = NoteContentCodec.decode(content).document else { return (title, body, title, 0, 0, nil) }
+        return (normalizedTitle(document.title), NoteTextExport.plainBody(document), NoteTextExport.plainText(document),
+                document.blocks.filter { $0.kind == .image }.count,
+                document.blocks.filter { $0.kind == .file }.count,
+                document.blocks.first { $0.kind == .file }?.filename)
     }
 
     // MARK: Agent edits (requirement 5)
@@ -767,6 +828,8 @@ extension NoteStore {
             if let seen = byID[row.id] {
                 guard seen.inlineOffset == row.inlineOffset, seen.sortIndex == row.sortIndex,
                       seen.createdAt == row.createdAt, seen.isImage == row.isImage,
+                      seen.originalFilename == row.originalFilename,
+                      seen.contentTypeIdentifier == row.contentTypeIdentifier,
                       seen.byteCount == row.byteCount, seen.contentDigest == row.contentDigest,
                       seen.payload == row.payload else { return .failure(.replicasDisagree) }
             } else {
@@ -779,7 +842,9 @@ extension NoteStore {
             body: current.body,
             attachments: LegacyNoteMigration.displayOrder(byID.values.map {
                 .init(id: $0.id, inlineOffset: $0.inlineOffset, sortIndex: $0.sortIndex,
-                      createdAt: $0.createdAt, isImage: $0.isImage, payload: $0.payload)
+                      createdAt: $0.createdAt, isImage: $0.isImage,
+                      filename: $0.originalFilename, contentTypeIdentifier: $0.contentTypeIdentifier,
+                      byteCount: $0.byteCount, payload: $0.payload)
             }),
             revisionToken: current.revisionToken
         ))
@@ -812,6 +877,9 @@ extension NoteStore {
             replica.content = data
             replica.contentFormat = plan.document.format
             replica.plainText = NoteTextExport.plainText(plan.document)
+            replica.imageCount = plan.document.blocks.filter { $0.kind == .image }.count
+            replica.fileCount = plan.document.blocks.filter { $0.kind == .file }.count
+            replica.firstFileName = plan.document.blocks.first { $0.kind == .file }?.filename
             replica.revision = revision
             replica.revisionID = revisionID
             if replica !== preflight.canonical {

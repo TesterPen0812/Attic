@@ -51,6 +51,9 @@ private struct NoteReplicaSnapshot: Equatable {
     let content: Data?
     let contentFormat: Int
     let plainText: String
+    let imageCount: Int
+    let fileCount: Int
+    let firstFileName: String?
     let taskID: UUID?
     let revision: Int64
     let revisionID: UUID?
@@ -67,6 +70,9 @@ private struct NoteReplicaSnapshot: Equatable {
         content = note.content
         contentFormat = note.contentFormat
         plainText = note.plainText
+        imageCount = note.imageCount
+        fileCount = note.fileCount
+        firstFileName = note.firstFileName
         taskID = note.taskID
         revision = note.revision
         revisionID = note.revisionID

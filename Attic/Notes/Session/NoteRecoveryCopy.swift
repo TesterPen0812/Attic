@@ -73,6 +73,9 @@ enum NoteRecoveryCopy {
         var markdownFile: String
         var images: [Image]
         var unavailableImageIDs: [UUID]
+        /// Added in version 2; optional so version-1 folders still decode.
+        var files: [Image]? = nil
+        var unavailableFileIDs: [UUID]? = nil
     }
 
     /// "Groceries recovery copy" for the save panel's name field.
@@ -103,7 +106,10 @@ enum NoteRecoveryCopy {
         let staging = scratch.appendingPathComponent(destination.lastPathComponent, isDirectory: true)
         try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
 
+        let document = NoteContentCodec.decode(snapshot.content).document
+        let fileIDs = Set(document?.blocks.compactMap { $0.kind == .file ? $0.attachmentID : nil } ?? [])
         var images: [Manifest.Image] = []
+        var files: [Manifest.Image] = []
         if !snapshot.attachments.isEmpty {
             let folder = staging.appendingPathComponent(attachmentsFolder, isDirectory: true)
             try fileManager.createDirectory(at: folder, withIntermediateDirectories: false)
@@ -111,16 +117,17 @@ enum NoteRecoveryCopy {
             for attachment in snapshot.attachments {
                 let name = uniqueName(attachment.filename, among: &used)
                 try attachment.data.write(to: folder.appendingPathComponent(name), options: .atomic)
-                images.append(Manifest.Image(id: attachment.id, filename: attachment.filename,
-                                             contentType: attachment.contentTypeIdentifier,
-                                             byteCount: attachment.byteCount, digest: attachment.digest,
-                                             file: "\(attachmentsFolder)/\(name)"))
+                let entry = Manifest.Image(id: attachment.id, filename: attachment.filename,
+                    contentType: attachment.contentTypeIdentifier, byteCount: attachment.byteCount,
+                    digest: attachment.digest, file: "\(attachmentsFolder)/\(name)")
+                if fileIDs.contains(attachment.id) { files.append(entry) } else { images.append(entry) }
             }
         }
-        let manifest = Manifest(format: formatName, version: 1, noteID: snapshot.noteID, title: snapshot.title,
+        let manifest = Manifest(format: formatName, version: 2, noteID: snapshot.noteID, title: snapshot.title,
                                 savedAt: snapshot.savedAt, reason: snapshot.reason, tags: snapshot.tags,
                                 noteFile: noteFile, markdownFile: markdownFile, images: images,
-                                unavailableImageIDs: snapshot.unavailableAttachmentIDs)
+                                unavailableImageIDs: snapshot.unavailableAttachmentIDs.filter { !fileIDs.contains($0) },
+                                files: files, unavailableFileIDs: snapshot.unavailableAttachmentIDs.filter(fileIDs.contains))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -153,17 +160,18 @@ enum NoteRecoveryCopy {
         - note.json: the whole note in Attic's own format, with its structure
           (checklists, dates, image positions). This is the file to keep if
           you want the note restored exactly.
-        - attachments/: the images the note shows, as ordinary files.
-        - manifest.json: the note's id, tags, and which file is which image
-          (each image's id, name, type, size and SHA-256 digest).
+        - attachments/: the images and files the note shows, as ordinary files.
+        - manifest.json: the note's id, tags, and each attachment's id, name,
+          type, size and SHA-256 digest.
 
         """
-        if !manifest.unavailableImageIDs.isEmpty {
-            let ids = manifest.unavailableImageIDs.map(\.uuidString).joined(separator: ", ")
+        let unavailable = manifest.unavailableImageIDs + (manifest.unavailableFileIDs ?? [])
+        if !unavailable.isEmpty {
+            let ids = unavailable.map(\.uuidString).joined(separator: ", ")
             text += """
 
             Not included
-            \(manifest.unavailableImageIDs.count) image(s) could not be read when this copy was made, so their
+            \(unavailable.count) attachment(s) could not be read when this copy was made, so their
             files are missing here: \(ids)
 
             """
@@ -171,7 +179,7 @@ enum NoteRecoveryCopy {
         text += """
 
         To bring it back: copy the text from note.md into a new Attic note,
-        and add the images from attachments/. To restore it exactly, keep
+        and add the images and files from attachments/. To restore it exactly, keep
         note.json and manifest.json together with attachments/.
         """
         return text

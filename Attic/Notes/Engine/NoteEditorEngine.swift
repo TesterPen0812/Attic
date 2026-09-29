@@ -10,6 +10,48 @@ protocol NoteImageProviding: AnyObject {
     func filename(forAttachment id: UUID) -> String?
     /// Bytes of another note's image, for a paste that copies it here.
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment?
+    func attachmentBytes(forAttachment id: UUID) -> StagedNoteAttachment?
+    func hasAttachmentBytes(_ id: UUID) -> Bool
+    func locateAttachment(_ id: UUID, at url: URL) async -> Bool
+}
+
+/// One accepted source in an import batch. A failed source has no stored
+/// bytes; it remains an inline card with Retry and Remove actions.
+struct NoteImportedObject: Sendable {
+    let filename: String
+    let contentTypeIdentifier: String
+    let byteCount: Int64
+    let staged: StagedNoteAttachment?
+    let pixelSize: CGSize?
+    let failure: String?
+
+    init(staged: StagedNoteAttachment, pixelSize: CGSize?) {
+        filename = staged.filename
+        contentTypeIdentifier = staged.contentTypeIdentifier
+        byteCount = staged.byteCount
+        self.staged = staged
+        self.pixelSize = pixelSize
+        failure = nil
+    }
+
+    init(filename: String, contentTypeIdentifier: String, byteCount: Int64, failure: String) {
+        self.filename = filename
+        self.contentTypeIdentifier = contentTypeIdentifier
+        self.byteCount = byteCount
+        staged = nil
+        pixelSize = nil
+        self.failure = failure
+    }
+}
+
+extension NoteImageProviding {
+    func attachmentBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
+        imageBytes(forAttachment: id)
+    }
+    func hasAttachmentBytes(_ id: UUID) -> Bool {
+        attachmentBytes(forAttachment: id) != nil
+    }
+    func locateAttachment(_ id: UUID, at url: URL) async -> Bool { false }
 }
 
 /// One note's text engine: a stock TextKit 2 text system whose storage,
@@ -71,6 +113,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onSlashDateRequest: (() -> Void)?
     var onSlashFileRequest: (() -> Void)?
     var onLinkRequest: ((NoteLinkTarget) -> Void)?
+    var onRetryImportObject: ((UUID) -> Void)?
+    var onLocateObject: ((UUID) -> Void)?
+    var onFileBatchRequest: (([URL], String, NSRange) -> Void)?
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
@@ -92,6 +137,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// Images imported in this session but not yet saved.
     private(set) var staged: [UUID: StagedNoteAttachment] = [:]
+    func stageImported(_ item: StagedNoteAttachment) { staged[item.id] = item }
+    func unstageImported(_ id: UUID) { staged[id] = nil }
 
     // Guard state.
     var userEditDepth = 0
@@ -130,6 +177,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var documentCache: (document: NoteDocument, finalParagraphStart: Int, finalParagraphDirty: Bool)?
     private var pendingImageLoads = Set<ObjectIdentifier>()
     private var importAnchor: Int?
+    var currentImportAnchor: Int? { importAnchor }
+    private var importNoteID: UUID?
 
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
          design: AtticDesignContext = .default, today: NoteDay = NoteDay(date: Date()),
@@ -474,6 +523,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 // A decoded image looks the same in every appearance: only a
                 // missing one's placeholder is drawn again.
                 if image.renderedImage == nil || (force && image.isMissing) { loadImage(image) }
+            } else if let file = object as? NoteFileAttachment {
+                if let id = file.attachmentID {
+                    file.originalMissing = staged[id] == nil && imageProvider?.hasAttachmentBytes(id) != true
+                }
+                if force || file.renderedImage == nil { renderer.apply(to: file, today: today) }
             } else if force || object.renderedImage == nil {
                 renderer.apply(to: object, today: today)
             }
@@ -516,22 +570,37 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         Task { [weak self, weak image] in
             var url: URL?
             if stagedData == nil { url = await provider?.fileURL(forAttachment: attachmentID) }
-            let decoded: (CGImage?, CGSize?) = await Task.detached(priority: .userInitiated) {
-                if let stagedData {
-                    return (NoteImageDecoder.thumbnail(of: stagedData, maxPixel: maxPixel),
-                            NoteImageDecoder.pixelSize(of: stagedData))
-                }
-                guard let url else { return (nil, nil) }
-                return (NoteImageDecoder.thumbnail(at: url, maxPixel: maxPixel), NoteImageDecoder.pixelSize(at: url))
+            let header = await Task.detached(priority: .userInitiated) {
+                if let stagedData { return NoteImageDecoder.pixelSize(of: stagedData) }
+                guard let url else { return nil }
+                return NoteImageDecoder.pixelSize(at: url)
             }.value
             guard let self, let image else { return }
+            if image.pixelSize == nil, let header {
+                image.pixelSize = header
+                image.renderedImage = self.renderer.placeholder(
+                    size: image.displaySize(columnWidth: self.textView?.textContainer?.size.width ?? 320),
+                    text: String(localized: "Loading image…"))
+                if let range = self.range(of: image) { self.invalidateLayout(range) }
+            }
+            let decoded = await Task.detached(priority: .userInitiated) {
+                if let stagedData { return NoteImageDecoder.thumbnail(of: stagedData, maxPixel: maxPixel) }
+                guard let url else { return nil }
+                return NoteImageDecoder.thumbnail(at: url, maxPixel: maxPixel)
+            }.value
             self.pendingImageLoads.remove(ObjectIdentifier(image))
             if self.staged[attachmentID]?.data != stagedData {
                 self.loadImage(image)
                 return
             }
-            self.finishImageLoad(image, cgImage: decoded.0, pixelSize: decoded.1)
+            self.finishImageLoad(image, cgImage: decoded, pixelSize: header)
         }
+    }
+
+    func retryImagePreview(_ image: NoteImageAttachment) {
+        image.renderedImage = nil
+        image.isMissing = false
+        loadImage(image)
     }
 
     private func finishImageLoad(_ image: NoteImageAttachment, cgImage: CGImage?, pixelSize: CGSize?) {
@@ -542,9 +611,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         }
         if let cgImage {
             image.isMissing = false
+            image.failureMessage = nil
             image.renderedImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
         } else {
             image.isMissing = true
+            image.failureMessage = staged[image.attachmentID] != nil
+                || imageProvider?.hasAttachmentBytes(image.attachmentID) == true
+                    ? String(localized: "Preview unavailable") : String(localized: "Original missing")
             image.renderedImage = renderer.placeholder(
                 size: image.displaySize(columnWidth: textView?.textContainer?.size.width ?? 320),
                 text: String(localized: "Image unavailable")
@@ -774,33 +847,53 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         return inserted
     }
 
-    func beginImageImport() {
-        importAnchor = textView?.selectedRange().location ?? textStorage.length
+    func beginImageImport(at selection: NSRange? = nil) {
+        importAnchor = selection?.location ?? textView?.selectedRange().location ?? textStorage.length
+        importNoteID = noteID
     }
 
-    func cancelImageImport() { importAnchor = nil }
+    func cancelImageImport() { importAnchor = nil; importNoteID = nil }
 
     /// The complete batch is one document change and one Undo step.
     @discardableResult
     func insertImportedImages(_ items: [(StagedNoteAttachment, CGSize?)]) -> Bool {
-        guard let anchor = importAnchor, !items.isEmpty else { return false }
+        insertImportedObjects(items.map { NoteImportedObject(staged: $0.0, pixelSize: $0.1) })
+    }
+
+    /// One editor-history step for text and every accepted object. The
+    /// transformed anchor follows typing while a loader works; it is never
+    /// resolved from the caret at completion.
+    @discardableResult
+    func insertImportedObjects(_ items: [NoteImportedObject], acceptedText: String = "") -> Bool {
+        guard let anchor = importAnchor, importNoteID == noteID,
+              !items.isEmpty || !acceptedText.isEmpty else { return false }
         importAnchor = nil
+        importNoteID = nil
         let at = NSMaxRange(lineRange(at: min(anchor, textStorage.length)))
         let insertion = NSMutableAttributedString(string: "")
-        for (item, pixelSize) in items {
-            staged[item.id] = item
-            let image = NoteImageAttachment(attachmentID: item.id, preferredWidthFraction: 1, pixelSize: pixelSize)
-            image.filename = item.filename
+        if !acceptedText.isEmpty { insertion.append(NSAttributedString(string: "\n" + acceptedText, attributes: style.bodyAttributes)) }
+        for item in items {
             insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
-            insertion.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
+            if let stagedItem = item.staged { staged[stagedItem.id] = stagedItem }
+            if let stagedItem = item.staged, let pixelSize = item.pixelSize {
+                let image = NoteImageAttachment(attachmentID: stagedItem.id, preferredWidthFraction: 1, pixelSize: pixelSize)
+                image.filename = item.filename
+                insertion.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
+            } else {
+                let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
+                    contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
+                    importFailure: item.failure)
+                renderer.apply(to: file, today: today)
+                insertion.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
+            }
         }
         if at == textStorage.length {
             insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
         let inserted = performEdit(NSRange(location: at, length: 0), with: insertion,
-                                   name: String(localized: "Add Images"),
+                                   name: String(localized: "Add Files"),
                                    selection: NSRange(location: at + insertion.length, length: 0))
-        if !inserted { for (item, _) in items { staged[item.id] = nil } }
+        if !inserted { for item in items { if let id = item.staged?.id { staged[id] = nil } } }
         return inserted
     }
 
@@ -1310,13 +1403,19 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             switch block.kind {
             case .checklist, .divider:
                 block.id = fresh(block.id)
-            case .image:
-                guard let attachmentID = block.attachmentID else { continue }
+            case .image, .file:
+                guard let attachmentID = block.attachmentID else {
+                    if block.kind == .file, block.importFailure != nil {
+                        block.id = fresh(block.id)
+                        break
+                    }
+                    continue
+                }
                 // An image from this note keeps its attachment (its row is
                 // retained while any version or text shows it).
                 if sameNote {
                     block.id = fresh(block.id)
-                } else if var copy = imageProvider?.imageBytes(forAttachment: attachmentID) {
+                } else if var copy = imageProvider?.attachmentBytes(forAttachment: attachmentID) {
                     let newID = UUID()
                     copy = StagedNoteAttachment(id: newID, filename: copy.filename, contentTypeIdentifier: copy.contentTypeIdentifier,
                                                 byteCount: copy.byteCount, digest: copy.digest, data: copy.data)
@@ -1324,7 +1423,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     block.attachmentID = newID
                     block.id = fresh(nil)
                 } else {
-                    onNotice?(String(localized: "An image couldn’t be copied, so it was left out."))
+                    onNotice?(String(localized: "An attachment couldn’t be copied, so it was left out."))
                     continue
                 }
             case .text, .opaque:
@@ -1351,7 +1450,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let result = NSMutableAttributedString(attributedString: pasted)
         let string = textStorage.string as NSString
         let startsWithObject = fragment.blocks.first.map { $0.kind != .text } ?? false
-        let endsWithBlockObject = fragment.blocks.last.map { $0.kind == .image || $0.kind == .opaque } ?? false
+        let endsWithBlockObject = fragment.blocks.last.map { $0.kind == .image || $0.kind == .file || $0.kind == .opaque } ?? false
         let atLineStart = selection.location == 0 || string.character(at: selection.location - 1) == 0x0A
         if startsWithObject, !atLineStart || selection.location == 0 {
             result.insert(NSAttributedString(string: "\n", attributes: style.bodyAttributes), at: 0)
@@ -1444,12 +1543,42 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
         case is NoteImageAttachment:
             setAccessibilityRole(.image)
             setAccessibilityLabel(object.accessibilityDescription)
+        case is NoteFileAttachment:
+            setAccessibilityRole(.button)
+            setAccessibilityLabel(object.accessibilityDescription)
         case is NoteDateAttachment:
             setAccessibilityRole(.button)
             setAccessibilityLabel(object.accessibilityDescription)
         default:
             setAccessibilityRole(.staticText)
             setAccessibilityLabel(object.accessibilityDescription)
+        }
+        if object is NoteImageAttachment || object is NoteFileAttachment {
+            let actions: [(String, NoteObjectCommand)] = [
+                (String(localized: "Quick Look"), .quickLook),
+                (String(localized: "Open"), .open),
+                (String(localized: "Copy Image"), .copyImage),
+                (String(localized: "Copy File"), .copyFile),
+                (String(localized: "Export Copy"), .exportCopy(nil)),
+                (String(localized: "Show in Finder"), .showInFinder),
+                (String(localized: "Small"), .sizePreset(.small)),
+                (String(localized: "Medium"), .sizePreset(.medium)),
+                (String(localized: "Full"), .sizePreset(.full)),
+                (String(localized: "Retry"), .retry),
+                (String(localized: "Retry Preview"), .retryPreview),
+                (String(localized: "Locate"), .locate),
+                (String(localized: "Delete"), .delete)
+            ]
+            setAccessibilityCustomActions(actions.compactMap { title, command in
+                guard engine.validate(command, objectID: object.objectID).enabled else { return nil }
+                return NSAccessibilityCustomAction(name: title) { [weak engine, id = object.objectID] in
+                    MainActor.assumeIsolated {
+                        guard let engine, engine.validate(command, objectID: id).enabled else { return false }
+                        Task { _ = await engine.perform(command, objectID: id) }
+                        return true
+                    }
+                }
+            })
         }
     }
 
@@ -1466,9 +1595,18 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
     }
 
     override func accessibilityPerformPress() -> Bool {
-        guard object is NoteChecklistAttachment else { return false }
-        MainActor.assumeIsolated { engine?.toggleCheckbox(atLineOf: range.location) }
-        return true
+        if object is NoteChecklistAttachment {
+            MainActor.assumeIsolated { engine?.toggleCheckbox(atLineOf: range.location) }
+            return true
+        }
+        if object is NoteImageAttachment || object is NoteFileAttachment {
+            return MainActor.assumeIsolated {
+                guard let engine, engine.validate(.quickLook, objectID: object.objectID).enabled else { return false }
+                Task { _ = await engine.perform(.quickLook, objectID: object.objectID) }
+                return true
+            }
+        }
+        return false
     }
 }
 
@@ -1907,7 +2045,9 @@ extension NoteEditorEngine {
             return false
         }
         pendingLinkTarget = nil
-        return applyMark(.link, url: url, selection: target.range)
+        let applied = applyMark(.link, url: url, selection: target.range)
+        if applied { textView?.setSelectedRange(target.selection) }
+        return applied
     }
 
     func cancelLinkRequest() { pendingLinkTarget = nil }
@@ -2693,21 +2833,34 @@ extension NoteEditorEngine {
     /// has produced a staged image. Cancel leaves the literal command intact.
     @discardableResult
     func commitSlashImage(_ item: StagedNoteAttachment, pixelSize: CGSize?) -> Bool {
+        commitSlashObject(NoteImportedObject(staged: item, pixelSize: pixelSize))
+    }
+
+    @discardableResult
+    func commitSlashObject(_ item: NoteImportedObject) -> Bool {
         guard let session = pendingSlashFile else { return false }
         pendingSlashFile = nil
         guard validSlashTarget(session, needsCaret: false) else { return false }
         let line = lineRange(at: session.range.location)
         let atLineStart = session.range.location == line.location
-        let image = NoteImageAttachment(attachmentID: item.id, preferredWidthFraction: 1, pixelSize: pixelSize)
-        image.filename = item.filename
-        var replacement = NSMutableAttributedString()
+        let replacement = NSMutableAttributedString()
         if !atLineStart { replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes)) }
-        replacement.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
+        if let stagedItem = item.staged, let pixelSize = item.pixelSize {
+            let image = NoteImageAttachment(attachmentID: stagedItem.id, preferredWidthFraction: 1, pixelSize: pixelSize)
+            image.filename = item.filename
+            replacement.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
+        } else {
+            let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
+                importFailure: item.failure)
+            renderer.apply(to: file, today: today)
+            replacement.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
+        }
         replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
-        staged[item.id] = item
-        let applied = performEdit(session.range, with: replacement, name: "Insert Image",
+        if let stagedItem = item.staged { staged[stagedItem.id] = stagedItem }
+        let applied = performEdit(session.range, with: replacement, name: "Insert File",
                                   selection: NSRange(location: session.range.location + replacement.length, length: 0))
-        if !applied { staged[item.id] = nil }
+        if !applied, let id = item.staged?.id { staged[id] = nil }
         return applied
     }
 }

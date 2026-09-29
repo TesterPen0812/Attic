@@ -310,6 +310,11 @@ struct NotesEditorPage: View {
             Button("") { if let id = currentNoteID { controller.copyMarkdown(noteID: id) } }
                 .keyboardShortcut("c", modifiers: [.command, .option, .shift])
                 .disabled(!showsEditor)
+            Button("") {
+                if let engine = controller.active?.engine { Task { _ = await engine.printNote() } }
+            }
+            .keyboardShortcut("p", modifiers: .command)
+            .disabled(!showsEditor)
             Button("") { Task { await controller.saveRecoveryCopy() } }
                 .keyboardShortcut(Self.saveRecoveryCopyShortcut)
                 .disabled(!showsEditor || !controller.canSaveRecoveryCopy(controller.active))

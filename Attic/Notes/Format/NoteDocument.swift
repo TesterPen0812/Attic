@@ -43,7 +43,7 @@ struct NoteDocument: Equatable, Sendable {
     static let currentFormat = 1
     /// What this build can edit. A document requiring anything else opens
     /// read-only.
-    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date", "structure-v1", "inline-marks-v1"]
+    static let editableCapabilities: Set<String> = ["text", "checklist", "image", "date", "structure-v1", "inline-marks-v1", "file-v1"]
     /// U+FFFC, the character an inline object occupies in a block's text.
     static let objectCharacter: Character = "\u{FFFC}"
     static let objectUnit: unichar = 0xFFFC
@@ -76,7 +76,7 @@ struct NoteDocument: Equatable, Sendable {
         var ids: [UUID] = []
         for block in blocks {
             switch block.kind {
-            case .checklist, .image, .divider:
+            case .checklist, .image, .file, .divider:
                 if let id = block.id { ids.append(id) }
             case .opaque:
                 if let id = block.opaqueID { ids.append(id) }
@@ -90,7 +90,7 @@ struct NoteDocument: Equatable, Sendable {
 
     /// The NoteAttachment rows this document displays.
     var attachmentIDs: [UUID] {
-        blocks.compactMap { $0.kind == .image ? $0.attachmentID : nil }
+        blocks.compactMap { ($0.kind == .image || $0.kind == .file) ? $0.attachmentID : nil }
     }
 
     var isEmpty: Bool {
@@ -121,8 +121,10 @@ struct NoteDocument: Equatable, Sendable {
                 (block.style != nil && block.style != "body")
         }
         let marked = blocks.contains { !$0.marks.isEmpty }
+        let files = blocks.contains { $0.kind == .file }
         if structured && !requires.contains("structure-v1") { requires.append("structure-v1") }
         if marked && !requires.contains("inline-marks-v1") { requires.append("inline-marks-v1") }
+        if files && !requires.contains("file-v1") { requires.append("file-v1") }
     }
 }
 
@@ -130,6 +132,7 @@ enum NoteBlockKind: String, Sendable {
     case text
     case checklist
     case image
+    case file
     case divider
     /// A block this build cannot read; `NoteBlock.opaque` holds it verbatim.
     case opaque
@@ -152,6 +155,12 @@ struct NoteBlock: Equatable, Sendable {
     var marks: [NoteMark] = []
     var checked = false
     var attachmentID: UUID?
+    /// File-card metadata stays readable when the original bytes are missing.
+    var filename: String?
+    var contentTypeIdentifier: String?
+    var byteCount: Int64?
+    /// A failed import has no stored attachment row and no attachment ID.
+    var importFailure: String?
     /// Fraction of the available text column. Old `width` values remain
     /// absolute points for compatibility with notes saved before this field.
     var widthFraction: Double?
@@ -179,6 +188,14 @@ struct NoteBlock: Equatable, Sendable {
                       pixelWidth: Int? = nil, pixelHeight: Int? = nil) -> NoteBlock {
         NoteBlock(kind: .image, id: id, attachmentID: attachmentID, widthFraction: widthFraction, width: width,
                   pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    }
+
+    static func file(id: UUID = UUID(), attachmentID: UUID? = nil, filename: String,
+                     contentTypeIdentifier: String, byteCount: Int64,
+                     importFailure: String? = nil) -> NoteBlock {
+        NoteBlock(kind: .file, id: id, attachmentID: attachmentID, filename: filename,
+                  contentTypeIdentifier: contentTypeIdentifier, byteCount: byteCount,
+                  importFailure: importFailure)
     }
 
     static func divider(id: UUID = UUID()) -> NoteBlock {

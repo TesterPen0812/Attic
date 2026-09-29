@@ -59,6 +59,11 @@ enum NoteTextCodec {
                     extras: block.extras
                 )
                 paragraph.append(attachmentString(image, attributes: attributes))
+            case .file:
+                let file = NoteFileAttachment(objectID: block.id ?? UUID(), attachmentID: block.attachmentID,
+                    filename: block.filename ?? "file", contentTypeIdentifier: block.contentTypeIdentifier ?? "public.data",
+                    byteCount: block.byteCount ?? 0, importFailure: block.importFailure, extras: block.extras)
+                paragraph.append(attachmentString(file, attributes: attributes))
             case .divider:
                 paragraph.append(attachmentString(NoteDividerAttachment(objectID: block.id ?? UUID()), attributes: attributes))
             case .opaque:
@@ -81,7 +86,8 @@ enum NoteTextCodec {
     static func attachmentString(_ attachment: NoteObjectAttachment,
                                  attributes: [NSAttributedString.Key: Any]) -> NSMutableAttributedString {
         let string = NSMutableAttributedString(attachment: attachment)
-        string.addAttributes(attributes, range: NSRange(location: 0, length: string.length))
+        string.addAttributes(attributes.filter { $0.key != .attachment },
+            range: NSRange(location: 0, length: string.length))
         return string
     }
 
@@ -264,6 +270,13 @@ enum NoteTextCodec {
                                             pixelWidth: image.pixelSize.map { Int($0.width) },
                                             pixelHeight: image.pixelSize.map { Int($0.height) })
                 block.extras = image.extras
+                blocks.append(block)
+            case let file as NoteFileAttachment:
+                finishCurrent()
+                var block = NoteBlock.file(id: file.objectID, attachmentID: file.attachmentID,
+                    filename: file.filename, contentTypeIdentifier: file.contentTypeIdentifier,
+                    byteCount: file.byteCount, importFailure: file.importFailure)
+                block.extras = file.extras
                 blocks.append(block)
             case let opaque as NoteOpaqueAttachment where !opaque.isInline:
                 finishCurrent()
