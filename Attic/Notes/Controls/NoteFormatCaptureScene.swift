@@ -117,8 +117,8 @@ enum NoteFormatCaptureScene {
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     let marks = controls.engine.document().blocks.dropFirst().first?.marks.map(\.kind.rawValue) ?? []
-                    let report = "hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil") "
-                        + "responder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil") "
+                    let report = "hit=\(hit.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
+                        + "responder=\(window.firstResponder.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
                         + "selection=\(NSStringFromRange(textView.selectedRange())) barShown=\(controls.formatModel.barShown) marks=\(marks)"
                     let url = FileManager.default.temporaryDirectory.appendingPathComponent("barclick.txt")
                     try? report.write(to: url, atomically: true, encoding: .utf8)
