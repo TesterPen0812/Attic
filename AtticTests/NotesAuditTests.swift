@@ -338,9 +338,10 @@ final class NotesAuditTests: XCTestCase {
 
     private final class DeadJournal: NoteDraftJournaling {
         struct Failure: Error {}
-        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws { throw Failure() }
-        func remove(noteID: UUID) throws {}
-        func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { [] }
+        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+                   replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim { throw Failure() }
+        func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {}
+        func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { [] }
     }
 
     private func pixel(_ name: String = "pixel.png") throws -> StagedNoteAttachment {

@@ -50,19 +50,16 @@ private final class OnDemandFailingJournal: NoteDraftJournaling {
     var failNextWrite = false
     var failNextRemove = false
     init(_ base: NoteDraftJournal) { self.base = base }
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+               replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
         if failNextWrite { failNextWrite = false; throw Failure() }
-        try base.write(entry, staged: staged)
+        return try base.write(entry, staged: staged, replacing: claim)
     }
-    func remove(noteID: UUID) throws {
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
         if failNextRemove { failNextRemove = false; throw Failure() }
-        try base.remove(noteID: noteID)
+        try base.retire(noteID: noteID, claim: claim, saved: saved)
     }
-    func cancelPending(noteID: UUID) throws {
-        if failNextRemove { failNextRemove = false; throw Failure() }
-        try base.cancelPending(noteID: noteID)
-    }
-    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
+    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
 }
 
 @MainActor
@@ -405,9 +402,9 @@ final class NoteSlice3bTests: XCTestCase {
                     digest: $0.digest) }, savedAt: Date())
         }
         let stagedFile = directory.appendingPathComponent("staged/\(item.id.uuidString)")
-        try journal.write(entry([item]), staged: [item])
+        let claim = try journal.write(entry([item]), staged: [item])
         XCTAssertTrue(FileManager.default.fileExists(atPath: stagedFile.path))
-        try journal.write(entry([]), staged: [])
+        try journal.write(entry([]), staged: [], replacing: claim)
         XCTAssertFalse(FileManager.default.fileExists(atPath: stagedFile.path))
         try item.data.write(to: stagedFile)
         _ = try journal.recoveryEntries()
@@ -552,52 +549,105 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: payload), unknown)
     }
 
-    func testStepBackRecoveryOwnershipRejectsEveryMutationAndKeepsUnknownBytes() throws {
-        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
-        let id = UUID()
-        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
-            return XCTFail("fixture")
+    /// Recovery-ownership invariant: every public journal operation, given
+    /// damaged or foreign checkpoint state, keeps that state and every byte
+    /// it may own, and never blocks an ordinary note save.
+    func testRecoveryOwnershipInvariantEveryOperationKeepsUnknownStateAndBytes() throws {
+        enum Kind: CaseIterable { case malformedEnvelope, unreadableContent, damagedStagedBytes, foreignValid, foreignPending }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        // A claim the caller holds for some other checkpoint.
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("AtticForeignClaim-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let foreignClaim = try NoteDraftJournal(directory: scratch).write(NoteDraftJournalEntry(noteID: UUID(),
+            isPersisted: false, baseRevisionID: nil, content: try NoteContentCodec.encode(.blank),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
+        for kind in Kind.allCases {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let id = UUID(), item = staged()
+            let stored = NoteDocument(blocks: [.text("Stored")])
+            guard case .success = store.createDocumentNote(id: id, document: stored) else { return XCTFail("fixture") }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOwnership-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let stagedDirectory = directory.appendingPathComponent("staged", isDirectory: true)
+            try FileManager.default.createDirectory(at: stagedDirectory, withIntermediateDirectories: true)
+            let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
+            let payload = stagedDirectory.appendingPathComponent(item.id.uuidString)
+            var entry = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil,
+                content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Other draft")])),
+                selectionLocation: 0, selectionLength: 0,
+                staged: [.init(id: item.id, filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                               byteCount: item.byteCount, digest: item.digest)], savedAt: Date())
+            var bytes = item.data
+            switch kind {
+            case .malformedEnvelope:
+                try Data("{damaged".utf8).write(to: checkpoint)
+            case .unreadableContent:
+                entry.content = Data("unreadable note content".utf8)
+                try encoder.encode(entry).write(to: checkpoint)
+            case .damagedStagedBytes:
+                bytes = Data("changed bytes".utf8)
+                try encoder.encode(entry).write(to: checkpoint)
+            case .foreignValid:
+                try encoder.encode(entry).write(to: checkpoint)
+            case .foreignPending:
+                entry.pendingImport = .init(anchor: 0, acceptedText: "", items: [.init(filename: item.filename,
+                    contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount, stagedID: item.id,
+                    pixelWidth: nil, pixelHeight: nil, failure: nil)], remainingNames: ["later.pdf"])
+                try encoder.encode(entry).write(to: checkpoint)
+            }
+            try bytes.write(to: payload)
+            let original = try Data(contentsOf: checkpoint)
+            func assertKept(_ step: String) {
+                XCTAssertEqual(try? Data(contentsOf: checkpoint), original, "\(kind) checkpoint after \(step)")
+                XCTAssertEqual(try? Data(contentsOf: payload), bytes, "\(kind) staged bytes after \(step)")
+            }
+            let journal = NoteDraftJournal(directory: directory)
+            let replacement = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil,
+                content: try NoteContentCodec.encode(stored), selectionLocation: 0, selectionLength: 0,
+                staged: [], savedAt: Date())
+            XCTAssertThrowsError(try journal.write(replacement, staged: []), "\(kind) write")
+            assertKept("write")
+            XCTAssertThrowsError(try journal.write(replacement, staged: [], replacing: foreignClaim), "\(kind) write with a foreign claim")
+            assertKept("write with a foreign claim")
+            XCTAssertThrowsError(try journal.retire(noteID: id, claim: nil, saved: nil), "\(kind) retire")
+            assertKept("retire")
+            XCTAssertThrowsError(try journal.retire(noteID: id, claim: foreignClaim,
+                saved: .init(document: stored, tags: [])), "\(kind) retire against a different saved note")
+            assertKept("retire against a different saved note")
+            let recovered = try journal.recoveryEntries()
+            XCTAssertEqual(recovered.count, 1, "\(kind) startup still lists it")
+            assertKept("recovery enumeration")
+            // Staged-byte collection runs after another note's write and retire.
+            let unrelatedID = UUID()
+            let unrelatedClaim = try journal.write(NoteDraftJournalEntry(noteID: unrelatedID, isPersisted: false,
+                baseRevisionID: nil, content: try NoteContentCodec.encode(.blank), selectionLocation: 0,
+                selectionLength: 0, staged: [], savedAt: Date()), staged: [])
+            try journal.retire(noteID: unrelatedID, claim: unrelatedClaim, saved: nil)
+            assertKept("collection")
+            // An ordinary save of the stored note still succeeds. Damaged
+            // state is never adopted; foreign state is exercised with the
+            // store directly so launch recovery does not claim it.
+            if kind != .foreignValid && kind != .foreignPending {
+                let controller = NotesPageController(store: store, journal: journal)
+                controller.start()
+                XCTAssertTrue(controller.open(noteID: id))
+                let session = try XCTUnwrap(controller.active)
+                XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+                    with: NSAttributedString(string: "\nordinary save"), name: "Typing"))
+                XCTAssertTrue(controller.save(session), "\(kind) ordinary save")
+                assertKept("ordinary save")
+                XCTAssertTrue(controller.deleteNote(noteID: id) == false, "\(kind) delete keeps the note while its copy is unknown")
+                assertKept("delete")
+            } else {
+                let base = try XCTUnwrap(store.note(withID: id)?.revisionID)
+                guard case .success = store.saveDocument(noteID: id,
+                    document: NoteDocument(blocks: [.text("Stored"), .text("ordinary save")]), baseRevisionID: base) else {
+                    return XCTFail("\(kind) ordinary save")
+                }
+                assertKept("ordinary save")
+            }
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOwnership-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory.appendingPathComponent("staged"),
-            withIntermediateDirectories: true)
-        let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
-        let payload = directory.appendingPathComponent("staged/\(UUID().uuidString)")
-        let unique = Data("unique unsaved bytes".utf8)
-        try Data("{damaged".utf8).write(to: checkpoint)
-        try unique.write(to: payload)
-        let journal = NoteDraftJournal(directory: directory)
-        let replacement = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil,
-            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Stored")])),
-            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
-        XCTAssertThrowsError(try journal.write(replacement, staged: []), "replace")
-        XCTAssertThrowsError(try journal.remove(noteID: id), "retire")
-        XCTAssertThrowsError(try journal.retireIfSaved(noteID: id,
-            document: NoteDocument(blocks: [.text("Stored")]), tags: []), "proved retirement")
-        XCTAssertThrowsError(try journal.cancelPending(noteID: id), "pending cancellation")
-        XCTAssertThrowsError(try journal.retireIfTransferred(noteID: id,
-            document: NoteDocument(blocks: [.text("Stored")]), tags: [], copiedDigests: []),
-            "recovery-copy transfer")
-        XCTAssertTrue(try journal.entries().isEmpty, "presentation skips damaged state")
-        XCTAssertEqual(try journal.recoveryEntries().count, 1, "startup reports damaged state")
-        let unrelated = NoteDraftJournalEntry(noteID: UUID(), isPersisted: false, baseRevisionID: nil,
-            content: try NoteContentCodec.encode(.blank), selectionLocation: 0, selectionLength: 0,
-            staged: [], savedAt: Date())
-        try journal.write(unrelated, staged: []) // staged-byte collection must keep unknown ownership
-        XCTAssertThrowsError(try journal.retireIfSaved(noteID: unrelated.noteID,
-            document: NoteDocument(blocks: [.text("different")]), tags: []),
-            "a readable but different draft remains owned")
-        XCTAssertEqual(try Data(contentsOf: payload), unique)
-        let controller = NotesPageController(store: store, journal: journal)
-        controller.start()
-        XCTAssertTrue(controller.open(noteID: id))
-        let session = try XCTUnwrap(controller.active)
-        XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
-            with: NSAttributedString(string: "\nordinary save"), name: "Typing"))
-        XCTAssertTrue(controller.save(session))
-        XCTAssertEqual(try Data(contentsOf: checkpoint), Data("{damaged".utf8))
-        XCTAssertEqual(try Data(contentsOf: payload), unique)
     }
 
     func testStepBackDamagedCheckpointSurvivesImportCheckpoint() async throws {
@@ -660,7 +710,8 @@ final class NoteSlice3bTests: XCTestCase {
         try envelope.write(to: checkpoint)
         try item.data.write(to: payload)
         let journal = NoteDraftJournal(directory: directory)
-        XCTAssertThrowsError(try journal.remove(noteID: id))
+        XCTAssertThrowsError(try journal.retire(noteID: id, claim: nil,
+            saved: .init(document: NoteDocument(blocks: [.text("Stored")]), tags: [])))
         let controller = NotesPageController(store: store, journal: journal)
         controller.start()
         XCTAssertTrue(controller.open(noteID: id))
@@ -1315,5 +1366,89 @@ final class NoteSlice3bTests: XCTestCase {
             }
         }
         XCTAssertEqual(pagesWithImage.count, 1, "the tall image is rendered whole on one PDF page")
+    }
+
+    // MARK: Step-back finish: checkpoint claims
+
+    func testOwnCheckpointIsRetiredWhenALaterSaveHoldsNewerText() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: { [gate] in try gate.save($0) },
+            attachmentFileStore: makeTestAttachmentFileStore())
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProbeA-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            saveDelay: .seconds(60), pauseVersionDelay: .seconds(600))
+        controller.start()
+        let session = try XCTUnwrap(controller.active)
+        session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Draft one"), name: "Typing")
+        gate.shouldFail = true
+        XCTAssertTrue(controller.preserve(session))
+        XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().count, 1)
+        gate.shouldFail = false
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: " more"), name: "Typing")
+        XCTAssertTrue(controller.preserve(session))
+        XCTAssertTrue(try NoteDraftJournal(directory: directory).recoveryEntries().isEmpty, "the session's own older checkpoint is retired")
+        let relaunched = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory))
+        relaunched.start()
+        XCTAssertTrue(relaunched.failedDrafts.isEmpty, "no stale conflict after restart")
+    }
+
+    func testCompletedImportRetiresItsPendingCheckpoint() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Plan")])) else {
+            return XCTFail("fixture")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProbeB-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = try stagedImage()
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            imageLoader: { _ in (image, CGSize(width: 8, height: 8)) })
+        controller.start()
+        XCTAssertTrue(controller.open(noteID: id))
+        controller.importFiles([URL(fileURLWithPath: "/tmp/probe.png")])
+        try await waitFor { controller.active?.isImporting == false }
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.attachmentIDs.count, 1)
+        XCTAssertTrue(try NoteDraftJournal(directory: directory).recoveryEntries().isEmpty, "a completed batch retires its checkpoint")
+        let relaunched = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory))
+        relaunched.start()
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.attachmentIDs.count, 1, "restart adds nothing again")
+    }
+
+    func testUnadoptedCheckpointSurvivesAnotherSessionsCheckpointAndSave() throws {
+        let gate = PersistenceGate()
+        let store = try makeTestNoteStore(persist: { [gate] in try gate.save($0) },
+            attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
+            return XCTFail("fixture")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticProbeC-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let orphan = NoteDocument(blocks: [.text("Unadopted draft"), .image(attachmentID: UUID())])
+        try NoteDraftJournal(directory: directory).write(NoteDraftJournalEntry(noteID: id, isPersisted: true,
+            baseRevisionID: nil, content: try NoteContentCodec.encode(orphan), selectionLocation: 0,
+            selectionLength: 0, staged: [], savedAt: Date()), staged: [])
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory))
+        controller.start()
+        XCTAssertFalse(controller.recoveryWarnings.isEmpty, "not adopted")
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: "\nnew"), name: "Typing")
+        gate.shouldFail = true
+        _ = controller.preserve(session)
+        let texts = try NoteDraftJournal(directory: directory).entries().compactMap {
+            NoteContentCodec.decode($0.0.content).document.map(NoteTextExport.plainText)
+        }
+        XCTAssertTrue(texts.count == 1 && texts[0].hasPrefix("Unadopted draft"),
+            "the unadopted checkpoint is neither overwritten nor joined: \(texts)")
+        guard case .onlyInMemory = session.state else { return XCTFail("the refused checkpoint is reported") }
+        gate.shouldFail = false
+        XCTAssertTrue(controller.save(session), "an ordinary save still succeeds")
+        XCTAssertEqual(try NoteDraftJournal(directory: directory).entries().compactMap {
+            NoteContentCodec.decode($0.0.content).document.map(NoteTextExport.plainText)
+        }, texts, "a different saved note does not retire it")
     }
 }

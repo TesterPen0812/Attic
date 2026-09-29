@@ -61,8 +61,23 @@ struct NoteDraftJournalEntry: Codable, Equatable {
     }
 }
 
+/// Names the exact checkpoint a session wrote or adopted: the SHA-256 of
+/// its file bytes. Only the holder of the current claim may replace or
+/// retire a checkpoint that holds work the store does not.
+struct NoteRecoveryClaim: Equatable, Sendable {
+    fileprivate let digest: String
+}
+
+/// The note as the store holds it after a successful save. A checkpoint
+/// that adds nothing to it (same document and tags, every staged byte
+/// already saved) may be retired without a claim.
+struct NoteRecoverySavedState {
+    let document: NoteDocument
+    let tags: [String]
+}
+
 enum NoteDraftRecoveryEntry {
-    case valid(NoteDraftJournalEntry, [StagedNoteAttachment])
+    case valid(NoteDraftJournalEntry, [StagedNoteAttachment], NoteRecoveryClaim)
     case damaged(String)
 }
 
@@ -75,7 +90,7 @@ private enum NoteDraftJournalError: LocalizedError {
         switch self {
         case .incompleteStaging: "The recovery copy has missing or damaged image bytes."
         case .conflictingStaging: "An earlier recovery copy owns different bytes at this image ID."
-        case .unknownOwnership: "The existing recovery copy is unreadable; its files are being kept."
+        case .unknownOwnership: "Another recovery copy of this note is being kept, with its files, until it can be checked."
         }
     }
 }
@@ -85,80 +100,67 @@ private enum NoteDraftJournalError: LocalizedError {
 /// unknowable, even if the JSON envelope happens to decode.
 private enum NoteRecoveryOwnership {
     case absent
-    case valid(NoteDraftJournalEntry, [StagedNoteAttachment])
-    case pending(NoteDraftJournalEntry, [StagedNoteAttachment])
+    case valid(NoteDraftJournalEntry, [StagedNoteAttachment], NoteRecoveryClaim)
+    case pending(NoteDraftJournalEntry, [StagedNoteAttachment], NoteRecoveryClaim)
     case damaged(String)
     case retired
 
     var retainedIDs: Set<UUID>? {
         switch self {
         case .absent, .retired: []
-        case let .valid(entry, _), let .pending(entry, _): Set(entry.staged.map(\.id))
+        case let .valid(entry, _, _), let .pending(entry, _, _): Set(entry.staged.map(\.id))
         case .damaged: nil
+        }
+    }
+
+    /// Whether a caller may replace or retire this state. Unknown state is
+    /// never released; known work needs the caller's claim, or proof that
+    /// the saved note already holds all of it.
+    func mayRelease(claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) -> Bool {
+        switch self {
+        case .absent, .retired: return true
+        case .damaged: return false
+        case let .pending(_, _, current): return claim == current
+        case let .valid(entry, _, current):
+            if claim == current { return true }
+            guard let saved else { return false }
+            return NoteContentCodec.decode(entry.content).document == saved.document
+                && (entry.changedTags == nil || entry.changedTags == saved.tags)
+                && Set(entry.staged.map(\.id)).isSubset(of: Set(saved.document.attachmentIDs))
         }
     }
 }
 
-/// Where drafts are checkpointed when the store can't save them.
+/// Where drafts are checkpointed when the store can't save them. Every
+/// checkpoint change goes through these two operations; callers never touch
+/// the journal's files.
 @MainActor
 protocol NoteDraftJournaling: AnyObject {
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws
-    func remove(noteID: UUID) throws
-    func retireIfSaved(noteID: UUID, document: NoteDocument?, tags: [String]) throws
-    func cancelPending(noteID: UUID) throws
-    func retireIfTransferred(noteID: UUID, document: NoteDocument, tags: [String], copiedDigests: Set<String>) throws
-    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])]
+    /// Writes a checkpoint over state the caller owns (`replacing` is its
+    /// current claim) and returns the new claim. Refuses damaged state and
+    /// another owner's checkpoint, keeping both and their bytes.
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+               replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim
+    /// Retires a checkpoint the caller owns, or one `saved` proves redundant.
+    /// Damaged or foreign state throws and stays on disk with its bytes.
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws
+    /// Every checkpoint, damaged ones included, for startup and retention.
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry]
 }
 
 extension NoteDraftJournaling {
-    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] {
-        try entries().map { .valid($0.0, $0.1) }
+    /// A first checkpoint for a note with none.
+    @discardableResult
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws -> NoteRecoveryClaim {
+        try write(entry, staged: staged, replacing: nil)
     }
 
-    /// Mock journals retain the same proof rule before forwarding to remove.
-    func retireIfSaved(noteID: UUID, document: NoteDocument?, tags: [String]) throws {
-        let entries = try recoveryEntries()
-        guard entries.allSatisfy({ if case .valid = $0 { return true }; return false }) else {
-            throw NoteDraftJournalError.unknownOwnership
-        }
-        guard let candidate = entries.compactMap({ item -> NoteDraftJournalEntry? in
-            if case let .valid(entry, _) = item, entry.noteID == noteID { return entry }
+    /// Readable checkpoints only (tests and presentation).
+    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] {
+        try recoveryEntries().compactMap {
+            if case let .valid(entry, staged, _) = $0 { return (entry, staged) }
             return nil
-        }).first else {
-            // A wrapper may be unable to prove removal even when its
-            // enumeration found no row; preserve that failure signal.
-            try remove(noteID: noteID)
-            return
         }
-        guard let document, candidate.pendingImport == nil,
-              NoteContentCodec.decode(candidate.content).document == document,
-              candidate.changedTags == nil || candidate.changedTags == tags,
-              Set(candidate.staged.map(\.id)).isSubset(of: Set(document.attachmentIDs)) else {
-            throw NoteDraftJournalError.unknownOwnership
-        }
-        try remove(noteID: noteID)
-    }
-
-    func cancelPending(noteID: UUID) throws { try remove(noteID: noteID) }
-
-    func retireIfTransferred(noteID: UUID, document: NoteDocument, tags: [String],
-                             copiedDigests: Set<String>) throws {
-        let entries = try recoveryEntries()
-        guard entries.allSatisfy({ if case .valid = $0 { return true }; return false }) else {
-            throw NoteDraftJournalError.unknownOwnership
-        }
-        guard let candidate = entries.compactMap({ item -> NoteDraftJournalEntry? in
-            if case let .valid(entry, _) = item, entry.noteID == noteID { return entry }
-            return nil
-        }).first else { return }
-        guard candidate.pendingImport == nil,
-              NoteContentCodec.decode(candidate.content).document == document,
-              candidate.changedTags == nil || candidate.changedTags == tags,
-              Set(candidate.staged.map(\.digest)).isSubset(of: copiedDigests) else {
-            throw NoteDraftJournalError.unknownOwnership
-        }
-        try remove(noteID: noteID)
     }
 }
 
@@ -180,6 +182,10 @@ final class NoteDraftJournal: NoteDraftJournaling {
 
     private func url(for noteID: UUID) -> URL {
         directory.appendingPathComponent("\(noteID.uuidString).json")
+    }
+
+    private static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private func ownership(of file: URL) -> NoteRecoveryOwnership {
@@ -204,34 +210,31 @@ final class NoteDraftJournal: NoteDraftJournaling {
             var staged: [StagedNoteAttachment] = []
             for meta in entry.staged {
                 let bytes = try Data(contentsOf: stagedDirectory.appendingPathComponent(meta.id.uuidString))
-                let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-                guard Int64(bytes.count) == meta.byteCount, digest == meta.digest else {
+                guard Int64(bytes.count) == meta.byteCount, Self.digest(bytes) == meta.digest else {
                     return .damaged("Recovery copy for \(entry.noteID.uuidString) has a damaged file: \(meta.filename).")
                 }
                 staged.append(StagedNoteAttachment(id: meta.id, filename: meta.filename,
                     contentTypeIdentifier: meta.contentTypeIdentifier, byteCount: meta.byteCount,
                     digest: meta.digest, data: bytes))
             }
+            let claim = NoteRecoveryClaim(digest: Self.digest(data))
             if let pending = entry.pendingImport {
                 guard Set(pending.items.compactMap(\.stagedID)).isSubset(of: Set(entry.staged.map(\.id))) else {
                     return .damaged("Recovery copy for \(entry.noteID.uuidString) has unknown pending file ownership.")
                 }
-                return .pending(entry, staged)
+                return .pending(entry, staged, claim)
             }
-            return .valid(entry, staged)
+            return .valid(entry, staged, claim)
         } catch {
             return .damaged("Recovery copy \(file.lastPathComponent) is incomplete or unreadable: \(error.localizedDescription)")
         }
     }
 
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
-        guard case .damaged = ownership(of: url(for: entry.noteID)) else {
-            return try writeKnown(entry, staged: staged)
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+               replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
+        guard ownership(of: url(for: entry.noteID)).mayRelease(claim: claim, saved: nil) else {
+            throw NoteDraftJournalError.unknownOwnership
         }
-        throw NoteDraftJournalError.unknownOwnership
-    }
-
-    private func writeKnown(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
         guard case .editable = NoteContentCodec.decode(entry.content),
               Set(entry.staged.map(\.id)).count == entry.staged.count,
               Set(entry.pendingImport?.items.compactMap(\.stagedID) ?? []).isSubset(of: Set(entry.staged.map(\.id))) else {
@@ -241,8 +244,7 @@ final class NoteDraftJournal: NoteDraftJournaling {
             throw NoteDraftJournalError.incompleteStaging
         }
         for item in staged {
-            let digest = SHA256.hash(data: item.data).map { String(format: "%02x", $0) }.joined()
-            guard item.byteCount == Int64(item.data.count), item.digest == digest,
+            guard item.byteCount == Int64(item.data.count), item.digest == Self.digest(item.data),
                   entry.staged.contains(where: { $0.id == item.id && $0.byteCount == item.byteCount && $0.digest == item.digest }) else {
                 throw NoteDraftJournalError.incompleteStaging
             }
@@ -260,73 +262,36 @@ final class NoteDraftJournal: NoteDraftJournaling {
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(entry).write(to: url(for: entry.noteID), options: .atomic)
+        let data = try encoder.encode(entry)
+        try data.write(to: url(for: entry.noteID), options: .atomic)
         removeUnreferencedStagedFiles()
+        return NoteRecoveryClaim(digest: Self.digest(data))
     }
 
-    func remove(noteID: UUID) throws {
+    /// If the file cannot be unlinked, an empty retired marker replaces it,
+    /// so it can never come back as unsaved work.
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
         let file = url(for: noteID)
         let state = ownership(of: file)
-        switch state {
-        case .absent: return
-        case .damaged, .pending: throw NoteDraftJournalError.unknownOwnership
-        case .retired, .valid: break
-        }
+        if case .absent = state { return }
+        guard state.mayRelease(claim: claim, saved: saved) else { throw NoteDraftJournalError.unknownOwnership }
         do {
             try fileManager.removeItem(at: file)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             // Already absent.
+        } catch {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let blank = NoteDraftJournalEntry(noteID: noteID, isPersisted: true, baseRevisionID: nil,
+                content: try NoteContentCodec.encode(.blank), selectionLocation: 0, selectionLength: 0,
+                staged: [], savedAt: Date())
+            guard var object = try JSONSerialization.jsonObject(with: encoder.encode(blank)) as? [String: Any] else {
+                throw error
+            }
+            object["retired"] = true
+            try JSONSerialization.data(withJSONObject: object).write(to: file, options: .atomic)
         }
         removeUnreferencedStagedFiles()
-    }
-
-    func retireIfSaved(noteID: UUID, document: NoteDocument?, tags: [String]) throws {
-        switch ownership(of: url(for: noteID)) {
-        case .absent: return
-        case .retired: try remove(noteID: noteID)
-        case let .valid(entry, _):
-            guard let document,
-                  NoteContentCodec.decode(entry.content).document == document,
-                  entry.changedTags == nil || entry.changedTags == tags,
-                  Set(entry.staged.map(\.id)).isSubset(of: Set(document.attachmentIDs)) else {
-                throw NoteDraftJournalError.unknownOwnership
-            }
-            try remove(noteID: noteID)
-        case .pending, .damaged: throw NoteDraftJournalError.unknownOwnership
-        }
-    }
-
-    func cancelPending(noteID: UUID) throws {
-        let file = url(for: noteID)
-        switch ownership(of: file) {
-        case .absent: return
-        case .pending:
-            try fileManager.removeItem(at: file)
-            removeUnreferencedStagedFiles()
-        case .valid, .retired, .damaged: throw NoteDraftJournalError.unknownOwnership
-        }
-    }
-
-    func retireIfTransferred(noteID: UUID, document: NoteDocument, tags: [String],
-                             copiedDigests: Set<String>) throws {
-        switch ownership(of: url(for: noteID)) {
-        case .absent: return
-        case let .valid(entry, _):
-            guard NoteContentCodec.decode(entry.content).document == document,
-                  entry.changedTags == nil || entry.changedTags == tags,
-                  Set(entry.staged.map(\.digest)).isSubset(of: copiedDigests) else {
-                throw NoteDraftJournalError.unknownOwnership
-            }
-            try remove(noteID: noteID)
-        case .pending, .damaged, .retired: throw NoteDraftJournalError.unknownOwnership
-        }
-    }
-
-    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] {
-        try recoveryEntries().compactMap {
-            if case let .valid(entry, staged) = $0 { return (entry, staged) }
-            return nil
-        }
     }
 
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] {
@@ -335,7 +300,8 @@ final class NoteDraftJournal: NoteDraftJournaling {
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         let results: [NoteDraftRecoveryEntry] = files.compactMap { file in
             switch ownership(of: file) {
-            case let .valid(entry, staged), let .pending(entry, staged): return .valid(entry, staged)
+            case let .valid(entry, staged, claim), let .pending(entry, staged, claim):
+                return .valid(entry, staged, claim)
             case let .damaged(message): return .damaged(message)
             case .retired:
                 try? fileManager.removeItem(at: file)
@@ -344,7 +310,7 @@ final class NoteDraftJournal: NoteDraftJournaling {
             }
         }.sorted { lhs, rhs in
             switch (lhs, rhs) {
-            case let (.valid(left, _), .valid(right, _)): left.savedAt < right.savedAt
+            case let (.valid(left, _, _), .valid(right, _, _)): left.savedAt < right.savedAt
             case (.valid, .damaged): true
             case (.damaged, .valid): false
             case let (.damaged(left), .damaged(right)): left < right

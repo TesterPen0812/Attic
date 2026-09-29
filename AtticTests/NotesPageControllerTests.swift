@@ -768,26 +768,27 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(try journal.entries().isEmpty)
     }
 
-    func testFailedJournalRemovalIsOverwrittenWithSavedState() throws {
-        let realJournal = NoteDraftJournal(directory: directory)
-        let journal = RemoveFailingJournal(base: realJournal)
+    func testFailedJournalRemovalIsReplacedByARetiredMarker() throws {
+        let journal = RemoveFailingJournal(directory: directory)
         let controller = makeController(journal: journal)
         controller.start()
         let session = try XCTUnwrap(controller.active)
         type("Person", into: session)
-        try realJournal.write(NoteDraftJournalEntry(noteID: session.noteID, isPersisted: false,
+        // A copy the session never claimed, which the save makes redundant.
+        try journal.base.write(NoteDraftJournalEntry(noteID: session.noteID, isPersisted: false,
             baseRevisionID: nil, content: try NoteContentCodec.encode(session.engine.document()),
             selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
         journal.failNextRemove = true
         XCTAssertTrue(controller.save(session))
-        let savedEntry = try XCTUnwrap(realJournal.entries().first?.0)
-        XCTAssertEqual(savedEntry.baseRevisionID, store.note(withID: session.noteID)?.revisionID)
-        XCTAssertEqual(NoteContentCodec.decode(savedEntry.content).document,
-                       store.loadDocument(noteID: session.noteID)?.content.document)
-        let relaunched = makeController(journal: realJournal)
+        let file = directory.appendingPathComponent("\(session.noteID.uuidString).json")
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        XCTAssertEqual(object["retired"] as? Bool, true, "an unremovable copy becomes a retired marker")
+        XCTAssertTrue(try journal.entries().isEmpty)
+        let relaunched = makeController(journal: NoteDraftJournal(directory: directory))
         relaunched.start()
         XCTAssertEqual(store.note(withID: session.noteID)?.title, "Person")
-        XCTAssertTrue(try realJournal.entries().isEmpty)
+        XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
     func testLegacyRetiredMarkerIsIgnoredWithoutReplayingBlankText() throws {
@@ -1360,9 +1361,9 @@ final class NotesPageControllerTests: XCTestCase {
         let entry = NoteDraftJournalEntry(noteID: draftID, isPersisted: false, baseRevisionID: nil,
                                           content: bytes, selectionLocation: 0, selectionLength: 0,
                                           staged: [], savedAt: Date())
-        try journal.write(entry, staged: [])
+        let claim = try journal.write(entry, staged: [])
         XCTAssertEqual(store.purgeRemovedAttachments(before: Date()), 0)
-        try journal.remove(noteID: draftID)
+        try journal.retire(noteID: draftID, claim: claim, saved: nil)
         XCTAssertEqual(store.purgeRemovedAttachments(before: Date()), 1)
 
         let secondImage = try realImage()
@@ -1373,11 +1374,11 @@ final class NotesPageControllerTests: XCTestCase {
         let otherDraftID = UUID()
         let otherBytes = try NoteContentCodec.encode(NoteDocument(blocks: [.text("Recovered"),
                                                                      .image(attachmentID: secondImage.id)]))
-        try journal.write(NoteDraftJournalEntry(noteID: otherDraftID, isPersisted: false, baseRevisionID: nil,
-                                                content: otherBytes, selectionLocation: 0, selectionLength: 0,
-                                                staged: [], savedAt: Date()), staged: [])
+        let otherClaim = try journal.write(NoteDraftJournalEntry(noteID: otherDraftID, isPersisted: false,
+                                                baseRevisionID: nil, content: otherBytes, selectionLocation: 0,
+                                                selectionLength: 0, staged: [], savedAt: Date()), staged: [])
         XCTAssertFalse(store.purgeDeleted(before: .distantFuture).contains(id))
-        try journal.remove(noteID: otherDraftID)
+        try journal.retire(noteID: otherDraftID, claim: otherClaim, saved: nil)
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).contains(id))
     }
 
@@ -1660,30 +1661,31 @@ final class NotesPageControllerTests: XCTestCase {
 @MainActor
 private final class FailingJournal: NoteDraftJournaling {
     struct Failure: Error {}
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws { throw Failure() }
-    func remove(noteID: UUID) throws {}
-    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { [] }
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+               replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim { throw Failure() }
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {}
+    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { [] }
 }
 
 @MainActor
 private final class RemoveFailingJournal: NoteDraftJournaling {
-    struct Failure: Error {}
     let base: NoteDraftJournal
-    var failNextRemove = false
+    private let fileManager = UnlinkFailingFileManager()
+    /// The next checkpoint unlink fails; the journal's own marker fallback runs.
+    var failNextRemove: Bool {
+        get { fileManager.failNextCheckpointRemoval }
+        set { fileManager.failNextCheckpointRemoval = newValue }
+    }
 
-    init(base: NoteDraftJournal) { self.base = base }
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
-        try base.write(entry, staged: staged)
+    init(directory: URL) { base = NoteDraftJournal(directory: directory, fileManager: fileManager) }
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+               replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
+        try base.write(entry, staged: staged, replacing: claim)
     }
-    func remove(noteID: UUID) throws {
-        if failNextRemove { failNextRemove = false; throw Failure() }
-        try base.remove(noteID: noteID)
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+        try base.retire(noteID: noteID, claim: claim, saved: saved)
     }
-    func cancelPending(noteID: UUID) throws {
-        if failNextRemove { failNextRemove = false; throw Failure() }
-        try base.cancelPending(noteID: noteID)
-    }
-    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
+    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
 }
 
 private actor DelayedDocumentPreparer {
@@ -1881,14 +1883,16 @@ final class NoteSessionMatrixTests: XCTestCase {
         var failWrites = false
         private(set) var writeCount = 0
         init(directory: URL) { base = NoteDraftJournal(directory: directory) }
-        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+        func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+                   replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
             if failWrites { throw Failure() }
-            try base.write(entry, staged: staged)
+            let result = try base.write(entry, staged: staged, replacing: claim)
             writeCount += 1
+            return result
         }
-        func remove(noteID: UUID) throws { try base.remove(noteID: noteID) }
-        func cancelPending(noteID: UUID) throws { try base.cancelPending(noteID: noteID) }
-        func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
+        func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+            try base.retire(noteID: noteID, claim: claim, saved: saved)
+        }
         func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
     }
 

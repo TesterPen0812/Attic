@@ -100,6 +100,9 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate var refusedWritingToolsSinceSave = false
     fileprivate var saveTask: Task<Void, Never>?
     fileprivate var pauseTask: Task<Void, Never>?
+    /// The recovery checkpoint this session wrote or adopted. Only its
+    /// holder may replace or retire a checkpoint holding unsaved work.
+    fileprivate var recoveryClaim: NoteRecoveryClaim?
 
     fileprivate init(noteID: UUID, isPersisted: Bool, baseRevisionID: UUID?, engine: NoteEditorEngine,
                      readOnlyReason: NoteReadOnlyReason?) {
@@ -235,7 +238,7 @@ final class NotesPageController: ObservableObject {
                 throw error
             }
             for item in entries {
-                guard case let .valid(entry, _) = item,
+                guard case let .valid(entry, _, _) = item,
                       let document = NoteContentCodec.decode(entry.content).document else {
                     self.reportRecoveryRetentionWarning("A damaged recovery copy is keeping removed images safe until it is repaired.")
                     throw DamagedNoteRecovery()
@@ -251,7 +254,7 @@ final class NotesPageController: ObservableObject {
             let entries = try journal.recoveryEntries()
             var bases = Set<UUID>()
             for item in entries {
-                guard case let .valid(entry, _) = item else { throw DamagedNoteRecovery() }
+                guard case let .valid(entry, _, _) = item else { throw DamagedNoteRecovery() }
                 if let base = entry.baseRevisionID { bases.insert(base) }
             }
             return bases
@@ -492,7 +495,9 @@ final class NotesPageController: ObservableObject {
         }
         cache[session.noteID] = nil
         session.engine.detachView()
-        return self.session(for: note)
+        let rebuilt = self.session(for: note)
+        rebuilt?.recoveryClaim = session.recoveryClaim
+        return rebuilt
     }
 
     func present() {
@@ -523,7 +528,7 @@ final class NotesPageController: ObservableObject {
                 if NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
                     _ = self.preserve(session)
                 } else {
-                    self.clearRecoveryCopy(noteID: session.noteID)
+                    self.clearRecoveryCopy(for: session)
                 }
             }
             self.updateWritingToolsAvailability(for: session)
@@ -598,7 +603,9 @@ final class NotesPageController: ObservableObject {
             guard let session = cache[id] else { return true }
             let presence: NoteSessionPolicy.Presence = isPageVisible && !isLibraryPresented && active === session
                 ? .onScreen : .background
-            return NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
+            // A session still holding a checkpoint claim keeps it reachable.
+            return session.recoveryClaim == nil
+                && NoteSessionPolicy.canEvict(session.state, activity: session.engine.activity,
                                               hasBatch: session.isImporting, presence: presence)
         }) {
             recency.removeAll { $0 == evict }
@@ -733,8 +740,8 @@ final class NotesPageController: ObservableObject {
         }
         do {
             let document = checkpointDocument(for: session)
-            try journal.write(journalEntry(for: session, document: document),
-                              staged: journalStaged(for: session, document: document))
+            session.recoveryClaim = try journal.write(journalEntry(for: session, document: document),
+                staged: journalStaged(for: session, document: document), replacing: session.recoveryClaim)
             if case .conflict = session.state {
                 // Conflicted text stays a conflict while its recovery copy is updated.
             } else if !(session.engine.isWritingToolsSessionActive && session.engine.isWritingToolsBlocked) {
@@ -755,8 +762,8 @@ final class NotesPageController: ObservableObject {
         }
         do {
             let document = checkpointDocument(for: session)
-            try journal.write(journalEntry(for: session, document: document),
-                              staged: journalStaged(for: session, document: document))
+            session.recoveryClaim = try journal.write(journalEntry(for: session, document: document),
+                staged: journalStaged(for: session, document: document), replacing: session.recoveryClaim)
             if !silent, !NoteSessionPolicy.needsAttention(session.state) { session.state = .notSaved(storeMessage()) }
             return true
         } catch {
@@ -939,6 +946,9 @@ final class NotesPageController: ObservableObject {
             return false
         }
         cache[oldID] = nil
+        // The old checkpoint belongs to the old ID; the new note has none.
+        let oldClaim = session.recoveryClaim
+        session.recoveryClaim = nil
         session.adopt(noteID: newID)
         session.replaceEngine(makeEngine(noteID: newID, document: replacement, readOnly: false, tags: tags))
         session.baseTags = tags
@@ -951,8 +961,7 @@ final class NotesPageController: ObservableObject {
         didSave(session, staged: images)
         if let journal {
             do {
-                try journal.retireIfTransferred(noteID: oldID, document: document, tags: tags,
-                    copiedDigests: Set(images.map(\.digest)))
+                try journal.retire(noteID: oldID, claim: oldClaim, saved: nil)
             } catch {
                 session.notice = String(localized: "Your text was saved, but its old recovery copy is being kept until it can be checked.")
             }
@@ -967,51 +976,32 @@ final class NotesPageController: ObservableObject {
         session.refusedWritingToolsSinceSave = false
         updateWritingToolsAvailability(for: session)
         session.engine.forgetStaged(Set(staged.map(\.id)))
-        clearRecoveryCopy(noteID: session.noteID)
+        clearRecoveryCopy(for: session)
         schedulePauseVersion(session)
     }
 
-    private func clearRecoveryCopy(noteID: UUID) {
-        if !retireRecoveryCopy(noteID: noteID) {
+    private func clearRecoveryCopy(for session: NoteSession) {
+        if !retireRecoveryCopy(noteID: session.noteID, session: session) {
             active?.notice = String(localized: "Saved, but an old recovery copy could not be cleared.")
         }
     }
 
-    /// Removes a note's recovery copy. An unlink failure may use a stored
-    /// replacement only after the recovery reader proves that its ownership
-    /// is known and already contained in the saved note. Unknown ownership
-    /// remains on disk with its staged bytes.
-    fileprivate func retireRecoveryCopy(noteID: UUID) -> Bool {
+    /// Retires a note's recovery copy through the journal's ownership rule:
+    /// the session's own checkpoint, or one the saved note proves redundant.
+    /// A live file batch keeps its checkpoint. Unknown ownership remains on
+    /// disk with its staged bytes.
+    fileprivate func retireRecoveryCopy(noteID: UUID, session: NoteSession?) -> Bool {
         guard let journal else { return true }
-        let stored = store.loadDocument(noteID: noteID)
-        let document = stored?.content.document
-        let tags = store.note(withID: noteID)?.tags ?? []
+        guard session?.isImporting != true else { return false }
+        let saved = store.loadDocument(noteID: noteID)?.content.document.map {
+            NoteRecoverySavedState(document: $0, tags: store.note(withID: noteID)?.tags ?? [])
+        }
         do {
-            try journal.retireIfSaved(noteID: noteID, document: document, tags: tags)
+            try journal.retire(noteID: noteID, claim: session?.recoveryClaim, saved: saved)
+            session?.recoveryClaim = nil
             return true
         } catch {
-            guard let stored, let document,
-                  let content = try? NoteContentCodec.encode(document),
-                  let recovery = try? journal.recoveryEntries(),
-                  recovery.allSatisfy({ if case .valid = $0 { return true }; return false }),
-                  let candidate = recovery.compactMap({ item -> NoteDraftJournalEntry? in
-                      if case let .valid(entry, _) = item, entry.noteID == noteID { return entry }
-                      return nil
-                  }).first,
-                  candidate.pendingImport == nil,
-                  NoteContentCodec.decode(candidate.content).document == document,
-                  candidate.changedTags == nil || candidate.changedTags == tags,
-                  Set(candidate.staged.map(\.id)).isSubset(of: Set(document.attachmentIDs)) else { return false }
-            let saved = NoteDraftJournalEntry(noteID: noteID, isPersisted: true,
-                baseRevisionID: stored.revisionID, content: content,
-                selectionLocation: 0, selectionLength: 0, staged: [], savedAt: now(),
-                tags: tags, tagsChanged: false)
-            do {
-                try journal.write(saved, staged: [])
-                return true
-            } catch {
-                return false
-            }
+            return false
         }
     }
 
@@ -1158,7 +1148,7 @@ final class NotesPageController: ObservableObject {
             return
         }
         for item in entries {
-            guard case let .valid(entry, staged) = item else {
+            guard case let .valid(entry, staged, claim) = item else {
                 if case let .damaged(message) = item { recoveryWarnings.append(message) }
                 continue
             }
@@ -1183,13 +1173,13 @@ final class NotesPageController: ObservableObject {
                        && replica.content.flatMap { NoteContentCodec.decode($0).document } == document
                        && (entry.changedTags == nil || entry.changedTags == replica.tags)
                }) {
-                try? journal.remove(noteID: entry.noteID)
+                try? journal.retire(noteID: entry.noteID, claim: claim, saved: nil)
                 continue
             }
             let storedTags = store.note(withID: entry.noteID)?.tags ?? []
             if entry.pendingImport == nil, stored?.content.document == document,
                entry.changedTags == nil || entry.changedTags == storedTags {
-                try? journal.remove(noteID: entry.noteID)
+                try? journal.retire(noteID: entry.noteID, claim: claim, saved: nil)
                 continue
             }
             let available = Set(staged.map(\.id))
@@ -1212,6 +1202,7 @@ final class NotesPageController: ObservableObject {
             // Unchanged tags stay the stored ones' business (nothing is written
             // over them), yet the draft keeps them, even if its note is gone.
             session.baseTags = entry.changedTags == nil ? (entry.tags ?? storedTags) : storedTags
+            session.recoveryClaim = claim
             wire(session)
             session.selection = NSRange(location: entry.selectionLocation, length: entry.selectionLength)
             session.scrollOffset = CGFloat(entry.scrollOffset ?? 0)
@@ -1280,7 +1271,7 @@ final class NotesPageController: ObservableObject {
         // A damaged journal may still own a draft whose ID cannot be decoded.
         guard recovery.allSatisfy({ if case .valid = $0 { return true }; return false }) else { return }
         let retained = Set(store.notes.map(\.id)).union(recovery.compactMap { item -> UUID? in
-            if case let .valid(entry, _) = item { return entry.noteID }
+            if case let .valid(entry, _, _) = item { return entry.noteID }
             return nil
         })
         let prefix = "notes.viewState."
@@ -1522,18 +1513,23 @@ final class NotesPageController: ObservableObject {
         guard let batch = session.importBatch, batch.id == batchID else { return }
         // Retire pending metadata durably before releasing the live batch.
         // A failed replacement leaves the old checkpoint and the batch live.
+        // A session holding no claim has no pending metadata on disk.
         session.importBatch = nil
+        let ownsCheckpoint = session.recoveryClaim != nil
         let retired: Bool
         if let journal {
             if NoteSessionPolicy.hasPendingWork(session.state) {
-                retired = checkpoint(session, silent: true)
-            } else {
+                retired = checkpoint(session, silent: true) || !ownsCheckpoint
+            } else if ownsCheckpoint {
                 do {
-                    try journal.cancelPending(noteID: session.noteID)
+                    try journal.retire(noteID: session.noteID, claim: session.recoveryClaim, saved: nil)
+                    session.recoveryClaim = nil
                     retired = true
                 } catch {
                     retired = false
                 }
+            } else {
+                retired = true
             }
         } else { retired = true }
         if !retired {
@@ -1865,9 +1861,9 @@ extension NotesPageController {
         }
         guard let note = store.note(withID: noteID) else { return false }
         // Retire the recovery copy while the note is live, so a copy that
-        // can't be removed is replaced by the saved state; if neither works,
-        // nothing is deleted (the copy would come back as a conflict).
-        guard retireRecoveryCopy(noteID: noteID) else {
+        // can't be removed is replaced by a retired marker; if neither
+        // works, nothing is deleted (the copy would come back as a conflict).
+        guard retireRecoveryCopy(noteID: noteID, session: session) else {
             let message = String(localized: "An old recovery copy of this note couldn’t be cleared, so the note was not deleted. Try again.")
             if let session { session.notice = message } else { active?.notice = message }
             return false

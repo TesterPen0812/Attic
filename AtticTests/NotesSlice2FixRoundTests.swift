@@ -471,21 +471,23 @@ private extension NotesSlice2FixRoundTests {
 private final class RefusingJournal: NoteDraftJournaling {
     struct Failure: Error {}
     let base: NoteDraftJournal
+    private let fileManager = UnlinkFailingFileManager()
     var failWrites = false
-    var failRemovals = false
-    init(directory: URL) { base = NoteDraftJournal(directory: directory) }
-    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+    /// Checkpoint unlinks fail, so the journal falls back to a retired
+    /// marker; with `failWrites` too, retirement fails outright.
+    var failRemovals: Bool {
+        get { fileManager.failCheckpointRemovals }
+        set { fileManager.failCheckpointRemovals = newValue }
+    }
+    init(directory: URL) { base = NoteDraftJournal(directory: directory, fileManager: fileManager) }
+    func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
+               replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
         if failWrites { throw Failure() }
-        try base.write(entry, staged: staged)
+        return try base.write(entry, staged: staged, replacing: claim)
     }
-    func remove(noteID: UUID) throws {
-        if failRemovals { throw Failure() }
-        try base.remove(noteID: noteID)
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+        if failRemovals && failWrites { throw Failure() }
+        try base.retire(noteID: noteID, claim: claim, saved: saved)
     }
-    func cancelPending(noteID: UUID) throws {
-        if failRemovals { throw Failure() }
-        try base.cancelPending(noteID: noteID)
-    }
-    func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
 }

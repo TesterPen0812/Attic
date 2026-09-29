@@ -64,3 +64,19 @@ final class PersistenceGate {
         saveCount += 1
     }
 }
+
+/// Fails recovery-checkpoint unlinks on request, so tests reach the
+/// journal's own retired-marker fallback.
+final class UnlinkFailingFileManager: FileManager, @unchecked Sendable {
+    struct Failure: Error {}
+    var failCheckpointRemovals = false
+    var failNextCheckpointRemoval = false
+
+    override func removeItem(at url: URL) throws {
+        if url.pathExtension == "json", failCheckpointRemovals || failNextCheckpointRemoval {
+            failNextCheckpointRemoval = false
+            throw Failure()
+        }
+        try super.removeItem(at: url)
+    }
+}
