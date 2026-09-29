@@ -189,6 +189,53 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(controller.libraryUndoName, "Unpin Note")
     }
 
+    /// B1: pinning is decided across the whole UUID family. The presentation
+    /// representative agreeing with the request must not hide a replica that
+    /// disagrees, in the initial pin or in Undo and Redo.
+    func testPinHistoryFollowsEveryReplicaNotTheRepresentative() throws {
+        let controller = makeController()
+        let a = try create([.text("Alpha")])
+        XCTAssertTrue(store.setPinned(true, noteID: a))
+        // A second physical row of the same note, unpinned: the presented
+        // representative is the pinned one.
+        let other = NoteItem(id: a, title: "Alpha", body: "Alpha")
+        store.modelContext.insert(other)
+        try store.modelContext.save()
+        func replicas() throws -> [NoteItem] { try store.liveReplicas(of: a) }
+        XCTAssertEqual(try replicas().count, 2)
+        XCTAssertEqual(store.note(withID: a)?.isPinned, true, "the representative is already pinned")
+        XCTAssertEqual(try replicas().filter(\.isPinned).count, 1)
+
+        // Initial pin: the representative already agrees, but a replica does not.
+        XCTAssertTrue(controller.setPinned(true, noteID: a))
+        XCTAssertEqual(try replicas().map(\.isPinned), [true, true], "every replica is pinned")
+        XCTAssertEqual(controller.libraryUndoName, "Pin Note", "the mutation is a history step")
+
+        // Undo with the replicas diverged the other way round.
+        let representative = try XCTUnwrap(store.note(withID: a))
+        let sibling = try XCTUnwrap(try replicas().first { $0 !== representative })
+        representative.pinnedAt = nil
+        try store.modelContext.save()
+        XCTAssertFalse(representative.isPinned)
+        XCTAssertTrue(sibling.isPinned)
+        XCTAssertTrue(controller.undoLibrary())
+        XCTAssertEqual(try replicas().map(\.isPinned), [false, false], "Undo unpins every replica")
+
+        // Redo with the representative agreeing and the sibling not.
+        representative.pinnedAt = Date()
+        try store.modelContext.save()
+        XCTAssertTrue(representative.isPinned)
+        XCTAssertFalse(sibling.isPinned)
+        XCTAssertTrue(controller.redoLibrary())
+        XCTAssertEqual(try replicas().map(\.isPinned), [true, true], "Redo pins every replica")
+
+        // Every replica already agrees: nothing changes and no step is added.
+        XCTAssertTrue(controller.undoLibrary())
+        XCTAssertEqual(try replicas().map(\.isPinned), [false, false])
+        XCTAssertTrue(controller.setPinned(false, noteID: a), "all replicas already unpinned")
+        XCTAssertNil(controller.libraryUndoName, "a no-op is not a step")
+    }
+
     func testUndoOfDeleteReopensTheNoteOnlyWhenItWasOnScreen() throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
