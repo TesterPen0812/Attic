@@ -2330,10 +2330,6 @@ extension NoteEditorEngine {
                 if traits.contains(.bold) { result.addAttribute(.noteMark(.bold), value: true, range: range) }
                 if traits.contains(.italic) { result.addAttribute(.noteMark(.italic), value: true, range: range) }
                 if traits.contains(.monoSpace) { result.addAttribute(.noteMark(.code), value: true, range: range) }
-                if font.pointSize >= 16 {
-                    result.addAttribute(.noteBlockStyle, value: "heading", range: range)
-                    result.addAttribute(.noteBlockLevel, value: font.pointSize >= 18 ? 1 : 2, range: range)
-                }
             }
             if attributes[.underlineStyle] != nil { result.addAttribute(.noteMark(.underline), value: true, range: range) }
             if attributes[.strikethroughStyle] != nil { result.addAttribute(.noteMark(.strikethrough), value: true, range: range) }
@@ -2341,11 +2337,36 @@ extension NoteEditorEngine {
             if let url = (attributes[.link] as? URL)?.absoluteString ?? attributes[.link] as? String {
                 result.addAttribute(.noteMark(.link), value: url, range: range)
             }
-            if let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle,
-               let list = paragraph.textLists.last {
-                result.addAttribute(.noteBlockStyle, value: list.markerFormat == .decimal ? "number" : "bullet", range: range)
-                result.addAttribute(.noteBlockIndent, value: min(2, max(0, paragraph.textLists.count - 1)), range: range)
+        }
+        // List identity is a paragraph property. A foreign list kind or an
+        // unsupported depth stays readable as literal marker text.
+        var paragraphs: [(range: NSRange, lists: [NSTextList])] = []
+        let sourceString = source.string as NSString
+        var start = 0
+        while start < sourceString.length {
+            let paragraph = sourceString.paragraphRange(for: NSRange(location: start, length: 0))
+            let lists = (source.attribute(.paragraphStyle, at: start, effectiveRange: nil) as? NSParagraphStyle)?.textLists ?? []
+            paragraphs.append((paragraph, lists))
+            start = NSMaxRange(paragraph)
+        }
+        var ordinals: [Int: Int] = [:]
+        var literals: [(Int, String)] = []
+        for entry in paragraphs {
+            guard let list = entry.lists.last else { ordinals.removeAll(); continue }
+            let depth = entry.lists.count - 1
+            ordinals = ordinals.filter { $0.key <= depth }
+            let ordinal = (ordinals[depth] ?? 0) + 1
+            ordinals[depth] = ordinal
+            let supported = depth <= 2 && entry.lists.allSatisfy { $0.markerFormat == .disc || $0.markerFormat == .decimal }
+            if supported {
+                result.addAttribute(.noteBlockStyle, value: list.markerFormat == .decimal ? "number" : "bullet", range: entry.range)
+                if depth > 0 { result.addAttribute(.noteBlockIndent, value: depth, range: entry.range) }
+            } else {
+                literals.append((entry.range.location, String(repeating: "  ", count: max(0, depth)) + list.marker(forItemNumber: ordinal) + " "))
             }
+        }
+        for (at, marker) in literals.reversed() {
+            result.insert(NSAttributedString(string: marker, attributes: style.bodyAttributes), at: at)
         }
         let normalized = NoteTextCodec.document(from: result, firstBlockIsTitle: false)
         let attributed = NoteTextCodec.attributedString(from: normalized, style: style, firstBlockIsTitle: false)
