@@ -369,6 +369,82 @@ struct AtticTagPicker: View {
     }
 }
 
+// MARK: - Task picker
+
+/// "Move to Task…" (control audit item 5): the tag picker's pattern for
+/// tasks. "Find a task", then the tasks it can go to, each with where it
+/// is listed ("Now", "Later"); typing filters, the arrows move the one
+/// highlight, Return or a click chooses. Rows are built only as they
+/// scroll into view, so a long list costs a screenful per keystroke.
+struct AtticTaskPicker: View {
+    struct Choice: Identifiable, Equatable {
+        let id: UUID
+        let title: String
+        /// Where the task is listed ("Now", "Later").
+        let detail: String?
+    }
+
+    @Binding var query: String
+    let choices: [Choice]
+    /// The list's one highlight (index into `choices`): the keyboard's, and
+    /// the pointer moves it (`onHover`).
+    var highlighted: Int?
+    /// No task at all to choose (not a query with no match).
+    var emptyText = String(localized: "No other tasks")
+    let onChoose: (UUID) -> Void
+    var fieldFocused: FocusState<Bool>.Binding
+    var onHover: ((_ index: Int, _ inside: Bool) -> Void)? = nil
+
+    var body: some View {
+        let m = AtticPickerMetrics.self
+        let rowHeight = AtticControlSize.smallHeight
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("", text: $query, prompt: Text(String(localized: "Find a task")))
+                .textFieldStyle(.plain)
+                .font(AtticTextStyle.menuRow.font)
+                .focused(fieldFocused)
+                .padding(.horizontal, AtticPopoverMetrics.rowPadding)
+                .frame(height: rowHeight)
+                .background(AtticPickerFieldBackground())
+                .padding(.bottom, m.dividerGap)
+                .accessibilityLabel(String(localized: "Find a task"))
+            if choices.isEmpty {
+                AtticText(verbatim: query.trimmingCharacters(in: .whitespaces).isEmpty ? emptyText : String(localized: "No task matches"),
+                          style: .menuRow, ink: .helper)
+                    .padding(.horizontal, AtticPopoverMetrics.rowPadding)
+                    .frame(height: rowHeight)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
+                                AtticChoiceRow(title: choice.title, detail: choice.detail, isHighlighted: highlighted == index,
+                                               onHover: hover(index)) {
+                                    onChoose(choice.id)
+                                }
+                                .id(index)
+                            }
+                        }
+                    }
+                    // The height is known without laying every row out.
+                    .frame(height: min(CGFloat(choices.count) * rowHeight, m.taskListMaxHeight))
+                    .onChange(of: highlighted) { _, index in
+                        guard let index, !AtticListHighlight.isPointerMove(NSApp.currentEvent) else { return }
+                        proxy.scrollTo(index)
+                    }
+                }
+            }
+        }
+        .frame(width: m.taskWidth)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Move to Task"))
+    }
+
+    private func hover(_ index: Int) -> ((Bool) -> Void)? {
+        onHover.map { report in { inside in report(index, inside) } }
+    }
+}
+
 private struct AtticPickerFieldBackground: View {
     @Environment(\.atticDesign) private var design
 

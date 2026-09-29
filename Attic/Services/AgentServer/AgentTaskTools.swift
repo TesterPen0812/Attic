@@ -231,6 +231,32 @@ final class AgentTaskTools {
                 "required": ["id"],
                 "additionalProperties": false
             ]
+        ],
+        [
+            "name": "move_subtask",
+            "title": "Move Attic Subtask",
+            "description": "Move a subtask to another main task, or make it a main task of its own, as the person's Move to Task… and Make Standalone Task do. It keeps its id, title, state, priority, tags, date and its own files; files attached to its old main task stay there. Moved, it goes to the end of the new task's subtasks; the new task must be an unfinished main task (not the subtask's own). Made standalone (parent_id null), it goes right below its old main task, in Later when that task is in Later. Subtasks stay one level deep: a task with subtasks never becomes a subtask. One undoable step. Returns the task.",
+            "annotations": [
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            ],
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": [
+                        "type": "string",
+                        "description": "Subtask id returned by list_tasks (with parent_id)."
+                    ],
+                    "parent_id": [
+                        "type": ["string", "null"],
+                        "description": "The main task to move it to, or null to make it a main task of its own."
+                    ]
+                ],
+                "required": ["id", "parent_id"],
+                "additionalProperties": false
+            ]
         ]
     ]
 
@@ -481,6 +507,7 @@ final class AgentTaskTools {
         case "update_task": try updateTask(arguments)
         case "delete_task": try deleteTask(arguments)
         case "duplicate_task": try duplicateTask(arguments)
+        case "move_subtask": try moveSubtask(arguments)
         case "list_notes": try listNotes(arguments)
         case "create_note": try createNote(arguments)
         case "update_note": try updateNote(arguments)
@@ -676,6 +703,26 @@ final class AgentTaskTools {
             throw AgentToolError.storeFailure(library.lastFailure?.message ?? store.lastErrorMessage ?? "Unknown error.")
         }
         return try encode(["task": serialize(copy)])
+    }
+
+    /// Move to Task… and Make Standalone Task (control audit item 5).
+    private func moveSubtask(_ arguments: [String: Any]) throws -> String {
+        let task = try findTask(arguments)
+        guard task.parentID != nil, store.parent(of: task) != nil else {
+            throw AgentToolError.invalidArguments("Only a subtask can be moved; this is a main task.")
+        }
+        guard arguments.keys.contains("parent_id") else {
+            throw AgentToolError.invalidArguments("parent_id is required: a main task id, or null to make it a main task.")
+        }
+        var newParentID: UUID?
+        if let raw = arguments["parent_id"], !(raw is NSNull) {
+            guard let string = raw as? String, let id = UUID(uuidString: string) else {
+                throw AgentToolError.invalidArguments("parent_id must be a main task UUID or null.")
+            }
+            newParentID = id
+        }
+        try perform { library.moveSubtask(task.id, toTask: newParentID) }
+        return try encode(["task": serialize(store.task(withID: task.id) ?? task)])
     }
 
     private func findTask(_ arguments: [String: Any], includingDoneLog: Bool = false) throws -> TaskItem {

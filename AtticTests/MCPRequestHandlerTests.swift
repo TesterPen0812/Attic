@@ -137,7 +137,7 @@ final class MCPRequestHandlerTests: XCTestCase {
             // Phase 0 adds Recently Deleted, tag and link tools; the original
             // four keep their names.
             ["create_task", "delete_item", "delete_task", "duplicate_task", "link", "list_deleted", "list_tags",
-             "list_tasks", "restore_item", "update_tags", "update_task"]
+             "list_tasks", "move_subtask", "restore_item", "update_tags", "update_task"]
         )
         let listTool = try XCTUnwrap(tools.first { $0["name"] as? String == "list_tasks" })
         let annotations = try XCTUnwrap(listTool["annotations"] as? [String: Any])
@@ -285,7 +285,7 @@ final class MCPRequestHandlerTests: XCTestCase {
         XCTAssertEqual(
             names.sorted(),
             ["create_note", "create_task", "delete_item", "delete_note", "delete_task", "duplicate_task", "link", "list_deleted",
-             "list_notes", "list_tags", "list_tasks", "restore_item", "update_note", "update_tags", "update_task"]
+             "list_notes", "list_tags", "list_tasks", "move_subtask", "restore_item", "update_note", "update_tags", "update_task"]
         )
     }
 

@@ -236,6 +236,10 @@ struct TaskEditableState: Equatable {
     /// its completion, so an undo puts it back with the state.
     let completedFromRaw: String?
     let completedFromOrder: Int64?
+    /// The main task a subtask belongs to (nil for a main task): Move to
+    /// Task… and Make Standalone Task change it (control audit item 5), so
+    /// their undo puts it back like any other field.
+    let parentID: UUID?
 
     init(_ task: TaskItem) {
         id = task.id
@@ -248,6 +252,7 @@ struct TaskEditableState: Equatable {
         dueDayRaw = task.dueDayRaw
         completedFromRaw = task.completedFromRaw
         completedFromOrder = task.completedFromOrder
+        parentID = task.parentID
     }
 }
 
@@ -1094,6 +1099,20 @@ final class TaskStore: ObservableObject {
             }
             winners[state.id] = winner
         }
+        // A step that puts a task back under a main task (undoing Make
+        // Standalone Task, or either side of Move to Task…) applies only
+        // while that main task can still hold it: live, a main task, not
+        // finished while the subtask is open, and the task itself has no
+        // subtasks of its own (one level). Checked before anything is
+        // written, so a refusal leaves the context untouched.
+        let doneRawForParents = TaskStatus.done.rawValue
+        for state in target {
+            guard let from = expectedByID[state.id], from.parentID != state.parentID,
+                  let newParentID = state.parentID, winners[state.id]?.parentID == from.parentID else { continue }
+            guard try canHoldSubtask(state.id, under: newParentID, isOpen: state.statusRaw != doneRawForParents) else {
+                return .obsolete("Its main task is no longer available, so this step can’t be undone.")
+            }
+        }
 
         struct Completion: Equatable {
             let statusRaw: String
@@ -1141,6 +1160,7 @@ final class TaskStore: ObservableObject {
                 $0.completedFromOrder = state.completedFromOrder
             }
             field({ $0.manualOrder }, from.manualOrder, state.manualOrder) { $0.manualOrder = state.manualOrder }
+            field({ $0.parentID }, from.parentID, state.parentID) { $0.parentID = state.parentID }
             field({ $0.dueDayRaw }, from.dueDayRaw, state.dueDayRaw) { $0.dueDayRaw = state.dueDayRaw }
             let fromTags = Set(AtticTag.decode(from.tagsRaw))
             let toTags = Set(AtticTag.decode(state.tagsRaw))
@@ -2766,6 +2786,130 @@ final class TaskStore: ObservableObject {
             return false
         }
         return save(owner: owner)
+    }
+
+    // MARK: - Control audit item 5: Move to Task… and Make Standalone Task
+
+    /// Where a subtask can go: every unfinished main task listed in Now and
+    /// Later, except its own (in list order: Now's, then Later's). A main
+    /// task that is itself a stray link (shown as a root) is left out.
+    func moveTargets(forSubtask id: UUID) -> [TaskItem] {
+        guard let task = task(withID: id), let parentID = task.parentID, parent(of: task) != nil else { return [] }
+        return [TaskStatus.inProgress, .todo, .backlog].flatMap { status in
+            orderedTasks(for: status).filter { $0.parentID == nil && $0.id != parentID && $0.id != id }
+        }
+    }
+
+    /// The tasks `reparentSubtask(_:to:)` may write, read before it runs so
+    /// an undo step can record them: the subtask, and the group it joins
+    /// (its new family, or the main tasks of the state it takes), whose
+    /// orders a placement can re-space.
+    func reparentScope(of id: UUID, to newParentID: UUID?) -> [UUID] {
+        guard let task = task(withID: id), let parent = parent(of: task) else { return [id] }
+        if let newParentID {
+            return [id] + subtasks(of: newParentID).map(\.id)
+        }
+        let status = Self.standaloneStatus(of: task, parent: parent)
+        return [id] + orderedTasks(for: status).filter { $0.parentID == nil || self.parent(of: $0) == nil }.map(\.id)
+    }
+
+    /// The state a subtask has once it is a task of its own: its own, except
+    /// that an open subtask of a Later task stays in Later with it.
+    private static func standaloneStatus(of task: TaskItem, parent: TaskItem) -> TaskStatus {
+        task.status != .done && parent.status == .backlog ? .backlog : task.status
+    }
+
+    /// Moves a subtask to another main task (`newParentID`), or makes it a
+    /// main task of its own (nil), in one save on every replica (control
+    /// audit item 5). It keeps its id, title, state, priority, tags, date
+    /// and its own files; the files attached to its old main task stay
+    /// there. Moved, it goes to the end of its new family's open (or done)
+    /// subtasks. Made standalone, it goes right below its old main task
+    /// when they share a state group, else to the top of its group; an open
+    /// subtask of a Later task stays in Later.
+    ///
+    /// Refused (nothing written, not retryable): a task that is not a
+    /// subtask, a destination that is not an unfinished main task, a task
+    /// that has subtasks of its own (one level), or copies that disagree
+    /// about where the subtask belongs.
+    @discardableResult
+    func reparentSubtask(_ id: UUID, to newParentID: UUID?) -> Bool {
+        guard let task = tasks.first(where: { $0.id == id }), let oldParentID = task.parentID,
+              let oldParent = parent(of: task) else {
+            report("Only a subtask can move to another task or become a task of its own.", owner: nil, retryable: false)
+            return false
+        }
+        if newParentID == oldParentID { return true }
+        let owner = oldParentID
+        let timestamp = now()
+        // A refusal is decided before anything is written: only a failure
+        // after the first write needs the list reloaded.
+        var wrote = false
+        do {
+            let replicas = try storedTasks(matching: id)
+            guard Set(replicas.map(\.parentID)).count == 1 else {
+                throw TaskEditRefusal("This subtask’s copies disagree about where it belongs. Refresh and try again.")
+            }
+            var status = task.status
+            var order: Int64?
+            if let newParentID {
+                guard try canHoldSubtask(id, under: newParentID, isOpen: task.status != .done),
+                      self.task(withID: newParentID)?.status != .done else {
+                    throw TaskEditRefusal("A subtask can only move to an unfinished main task.")
+                }
+                let group = subtasks(of: newParentID).filter { ($0.status == .done) == (task.status == .done) }
+                let placed = group + [task]
+                order = sparseManualOrder(at: placed.count - 1, in: placed)
+                if order == nil {
+                    wrote = true
+                    try assignSpacedManualOrders(to: placed, updatedAt: timestamp)
+                    order = Self.manualOrderStride
+                }
+            } else {
+                status = Self.standaloneStatus(of: task, parent: oldParent)
+                let group = orderedTasks(for: status).filter { $0.parentID == nil || parent(of: $0) == nil }
+                if oldParent.status == status, let index = group.firstIndex(where: { $0.id == oldParentID }) {
+                    var placed = group
+                    placed.insert(task, at: index + 1)
+                    order = sparseManualOrder(at: index + 1, in: placed)
+                }
+                if order == nil {
+                    wrote = true
+                    order = try nextManualOrder(status: status, excluding: id, updatedAt: timestamp)
+                }
+            }
+            wrote = true
+            let shown = TaskContentSnapshot(task)
+            let agreeing = Set(replicas.filter { $0 === task || TaskContentSnapshot($0) == shown }.map(\.persistentModelID))
+            for replica in replicas {
+                replica.parentID = newParentID
+                if replica.status != status { replica.status = status }
+                replica.manualOrder = order
+                replica.listOrderVersion = TaskItem.currentListOrderVersion
+                if agreeing.contains(replica.persistentModelID) { replica.updatedAt = timestamp }
+            }
+        } catch {
+            context.rollback()
+            if wrote { try? reloadTasks() }
+            report(error, owner: owner)
+            return false
+        }
+        return save(owner: owner)
+    }
+
+    /// Whether `parentID` can hold `childID` as a subtask: a different task,
+    /// live on every copy (not in Recently Deleted or the Done log), a main
+    /// task, not finished while the subtask is open; and the child has no
+    /// subtasks of its own, so the hierarchy stays one level deep.
+    private func canHoldSubtask(_ childID: UUID, under parentID: UUID, isOpen: Bool) throws -> Bool {
+        guard parentID != childID, let shownParent = task(withID: parentID), shownParent.parentID == nil else { return false }
+        let doneRaw = TaskStatus.done.rawValue
+        let parents = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.id == parentID }))
+        guard !parents.isEmpty, parents.allSatisfy({ $0.parentID == nil && $0.deletedAt == nil && $0.doneLoggedAt == nil }),
+              !isOpen || shownParent.statusRaw != doneRaw else { return false }
+        var children = FetchDescriptor<TaskItem>(predicate: #Predicate { $0.parentID == childID && $0.deletedAt == nil })
+        children.fetchLimit = 1
+        return try context.fetch(children).isEmpty
     }
 
     func orderedTasks(for status: TaskStatus) -> [TaskItem] {

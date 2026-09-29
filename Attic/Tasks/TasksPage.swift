@@ -916,7 +916,7 @@ struct TasksPage: View {
                 .contextMenu { rowMenu(row, tab: tab) }
             }
             .equatable()
-        } below: {
+        } below: { live in
             // Read here, in the cell's own body, as `live.isActive` is.
             let active = model.tab == tab && model.isPageShown
             // A Done log task's details open under its row (Esc or the
@@ -964,7 +964,8 @@ struct TasksPage: View {
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
                                             accessibilityLabel: String(localized: "New subtask of \(row.model.title)"))
-                        : nil
+                        : nil,
+                    popover: movePopover(parentID: id, open: live.metaPopover)
                 )
                 .transition(.opacity)
                 if model.subtaskRenameFailed, let renaming = model.renamingSubtaskID,
@@ -1435,7 +1436,7 @@ struct TasksPage: View {
     /// Rename (Return), Move Up and Down among the subtasks in its state
     /// (⌘↑ ⌘↓), Delete (⌫, to Recently Deleted). A failure shows under
     /// the parent row with Retry.
-    private func subtaskCommands(_ subtask: AtticSubtaskModel, of parentID: UUID,
+    func subtaskCommands(_ subtask: AtticSubtaskModel, of parentID: UUID,
                                  in shown: [AtticSubtaskModel]) -> [AtticMenuCommand] {
         let siblings = shown.filter { $0.isDone == subtask.isDone }
         let index = siblings.firstIndex { $0.id == subtask.id }
@@ -1458,12 +1459,47 @@ struct TasksPage: View {
                              isDisabled: index.map { $0 + 1 >= siblings.count } ?? true) {
                 run { model.moveSubtask(subtask.id, by: 1) }
             },
+            // Control audit item 5: to another task, or a task of its own.
+            AtticMenuCommand(verbatim: String(localized: "Move to Task…"), startsSection: true) {
+                openMeta(.move, on: parentID, targets: [subtask.id])
+            },
+            AtticMenuCommand(verbatim: String(localized: "Make Standalone Task")) {
+                run {
+                    let outcome = model.makeStandalone(subtask.id)
+                    // The keyboard follows it to its new row.
+                    if outcome.isApplied { setFocus(subtask.id) }
+                    return outcome
+                }
+            },
             AtticMenuCommand(verbatim: String(localized: "Delete"), shortcut: AtticTaskShortcut.delete, isDestructive: true,
                              startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
                 run { model.deleteSubtask(subtask.id) }
             }
         ]
+    }
+
+    /// Move to Task…'s list, pointing at the subtask's line, while it is
+    /// open on this row (control audit item 5). Choosing a task moves the
+    /// subtask there and closes it; a failure stays in it with Retry.
+    private func movePopover(parentID: UUID, open: TasksMetaPopover?) -> (id: UUID, popover: AtticAnchoredPopover)? {
+        guard let open, open.kind == .move, let subtaskID = open.targets.first else { return nil }
+        let popover = AtticAnchoredPopover(isPresented: metaBinding(.move, id: parentID, open: open)) {
+            AnyView(
+                VStack(alignment: .leading, spacing: 0) {
+                    TaskMovePickerView(choices: model.moveChoices(forSubtask: subtaskID)) { destination in
+                        if model.pickerChange(on: parentID, { model.moveSubtask(subtaskID, toTask: destination) }) {
+                            metaPopover = nil
+                            setFocus(parentID)
+                        }
+                    }
+                    TasksPickerFailureLine(model: model, id: parentID) { metaPopover = nil }
+                }
+                .atticPickerSurface()
+                .onDisappear { model.clearPickerFailure() }
+            )
+        }
+        return (subtaskID, popover)
     }
 
     /// Whether ⌘↑ (-1) or ⌘↓ (1) can move the row within its group.
@@ -2432,7 +2468,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     let onEnd: (TasksDrag) -> Void
     let onPushPastGroup: () -> Void
     @ViewBuilder let row: (TasksCellLive) -> Row
-    @ViewBuilder let below: () -> Below
+    @ViewBuilder let below: (TasksCellLive) -> Below
 
     @Environment(\.atticDesign) private var design
     @GestureState private var translation: CGFloat?
@@ -2463,7 +2499,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
                     MainActor.assumeIsolated { session.controlFrames[TasksRowID(tab: tab, id: id)] = frames }
                 }
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
-            below()
+            below(live)
         }
         .modifier(AtticReorderLiftModifier(lifted: lifted))
         // The lifted row follows the pointer, plus whatever the list has
@@ -2812,7 +2848,9 @@ private struct TasksFileDropDelegate: DropDelegate {
 
 /// A row's open date or tag list, and the tasks it changes.
 struct TasksMetaPopover: Equatable {
-    enum Kind { case date, tags }
+    /// `move`: Move to Task… for the subtask in `targets` (control audit
+    /// item 5), from its line in the quick look of row `id`.
+    enum Kind { case date, tags, move }
     let id: UUID
     /// The page whose copy of the row opened it (a task can be listed by two).
     let tab: TasksTab

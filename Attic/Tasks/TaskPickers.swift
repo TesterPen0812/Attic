@@ -177,6 +177,60 @@ struct TaskTagPickerView: View {
     }
 }
 
+/// Move to Task… (control audit item 5): the task list with its state (the
+/// query, the keyboard highlight), as `TaskTagPickerView` is the tag list's.
+/// `choices` are read once when it opens; typing filters them.
+struct TaskMovePickerView: View {
+    let choices: [AtticTaskPicker.Choice]
+    let onChoose: (UUID) -> Void
+
+    @State private var query = ""
+    @State private var highlighted: Int?
+    @FocusState private var fieldFocused: Bool
+
+    /// What `query` leaves, in list order (tests read it).
+    static func filter(_ choices: [AtticTaskPicker.Choice], query: String) -> [AtticTaskPicker.Choice] {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        return needle.isEmpty ? choices : choices.filter { $0.title.localizedStandardContains(needle) }
+    }
+
+    var body: some View {
+        let filtered = Self.filter(choices, query: query)
+        AtticTaskPicker(
+            query: $query,
+            choices: filtered,
+            highlighted: highlighted,
+            onChoose: onChoose,
+            fieldFocused: $fieldFocused,
+            onHover: { index, inside in
+                let next = AtticListHighlight.hovered(index, inside: inside, current: highlighted)
+                if next != highlighted { highlighted = next }
+            }
+        )
+        .onAppear { fieldFocused = true }
+        // Typing highlights the first match, so Return chooses it.
+        .onChange(of: query) { _, now in highlighted = now.isEmpty || Self.filter(choices, query: now).isEmpty ? nil : 0 }
+        .onKeyPress(phases: .down) { press in
+            switch press.key {
+            case .downArrow:
+                guard !filtered.isEmpty else { return .ignored }
+                highlighted = min((highlighted ?? -1) + 1, filtered.count - 1)
+                return .handled
+            case .upArrow:
+                guard !filtered.isEmpty else { return .ignored }
+                highlighted = max((highlighted ?? filtered.count) - 1, 0)
+                return .handled
+            case .return:
+                guard let highlighted, filtered.indices.contains(highlighted) else { return .ignored }
+                onChoose(filtered[highlighted].id)
+                return .handled
+            default:
+                return .ignored
+            }
+        }
+    }
+}
+
 /// Priority as a short list (the strip's Priority): None, ! Medium,
 /// !! High. A task that already has the legacy Low keeps it representable
 /// (review 17): it shows, ticked, until another is chosen.

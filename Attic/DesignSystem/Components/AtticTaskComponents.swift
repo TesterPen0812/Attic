@@ -1665,10 +1665,15 @@ struct AtticSubtaskRow: View {
     /// Told when the line gains or loses the keyboard (round 10b), so the
     /// page knows a shortcut is not about the main task.
     var onFocusChange: (Bool) -> Void = { _ in }
+    /// A pop-over the page opens from this line (Move to Task…, control
+    /// audit item 5), pointing at it.
+    var popover: AtticAnchoredPopover? = nil
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticKeyboardFocusVisible) private var keyboardFocusVisible
     @FocusState private var focused: Bool
+    @State private var hovered = false
+    @State private var anchor = AtticMenuAnchor.Holder()
 
     var body: some View {
         let m = AtticSubtaskMetrics.self
@@ -1687,6 +1692,12 @@ struct AtticSubtaskRow: View {
                 AtticText(verbatim: subtask.title, style: .listBody, ink: subtask.isDone ? .helper : .body, strikethrough: subtask.isDone, truncates: true)
             }
             Spacer(minLength: 0)
+            if managed, renaming == nil, hovered || (focused && keyboardFocusVisible) {
+                // The main row's quiet actions button (control audit item
+                // 5): only while the pointer or the keyboard is on the line.
+                AtticRowActionsButton { view in showActions(in: view) }
+                    .transition(.opacity)
+            }
         }
         .frame(height: AtticLayout.subtaskPitch)
         .background(alignment: .leading) {
@@ -1697,10 +1708,16 @@ struct AtticSubtaskRow: View {
                     .padding(.vertical, 2)
             }
         }
+        .background(alignment: .bottomLeading) {
+            if managed { AtticMenuAnchor(holder: anchor).frame(width: 1, height: 1).accessibilityHidden(true) }
+        }
         .contentShape(Rectangle())
-        .modifier(AtticSubtaskCommands(commands: managed && renaming == nil ? commands : [], focused: $focused))
+        .modifier(AtticSubtaskCommands(commands: managed && renaming == nil ? commands : [], focused: $focused,
+                                       showActions: { showActions(in: nil) }))
+        .onHover { inside in if managed, hovered != inside { hovered = inside } }
         .onChange(of: focused) { _, now in onFocusChange(now) }
         .onDisappear { if focused { onFocusChange(false) } }
+        .atticPopover(isPresented: popover?.isPresented ?? .constant(false), arrowEdge: .bottom) { popover?.content() }
         .accessibilityElement(children: renaming == nil ? .combine : .contain)
         .accessibilityLabel(subtask.title)
         .accessibilityValue(subtask.isDone ? String(localized: "done") : String(localized: "to do"))
@@ -1715,12 +1732,21 @@ struct AtticSubtaskRow: View {
             }
         }
     }
+
+    /// ⇧⌘I and the actions button: the line's commands as a native menu
+    /// (type-select and Return work in it), under the button or the line.
+    private func showActions(in view: NSView?) {
+        guard !commands.isEmpty, let view = view ?? anchor.view else { return }
+        AtticNativeMenu.popUp(commands, in: view)
+    }
 }
 
-/// A managed subtask's focus, keys and right-click menu (round 10).
+/// A managed subtask's focus, keys and right-click menu (round 10; ⇧⌘I
+/// opens the same menu, control audit item 5).
 private struct AtticSubtaskCommands: ViewModifier {
     let commands: [AtticMenuCommand]
     var focused: FocusState<Bool>.Binding
+    let showActions: () -> Void
 
     func body(content: Content) -> some View {
         if commands.isEmpty {
@@ -1736,7 +1762,7 @@ private struct AtticSubtaskCommands: ViewModifier {
                 .onKeyPress(phases: .down) { press in
                     guard !AtticTextInput.hasKeyboard else { return .ignored }
                     return AtticMenuCommand.performSubtaskKey(key: press.key, characters: press.characters,
-                                                              modifiers: press.modifiers, in: commands)
+                                                              modifiers: press.modifiers, in: commands, showActions: showActions)
                 }
                 .contextMenu { AtticMenuItems(commands: commands) }
         }
@@ -1761,6 +1787,8 @@ struct AtticQuickLook: View {
     /// title field in place of "Add subtask". Return adds it and keeps the
     /// field for the next one; Esc stops.
     var newSubtask: AtticTitleEditing? = nil
+    /// A pop-over open from one subtask's line (Move to Task…).
+    var popover: (id: UUID, popover: AtticAnchoredPopover)? = nil
 
     @Environment(\.atticCapture) private var capture
     @Environment(\.atticDesign) private var design
@@ -1770,7 +1798,8 @@ struct AtticQuickLook: View {
             ForEach(subtasks) { subtask in
                 AtticSubtaskRow(subtask: subtask, onToggle: { onToggle(subtask) }, commands: commands(subtask),
                                 renaming: renaming?.id == subtask.id ? renaming?.editing : nil,
-                                onFocusChange: { onFocusChange(subtask.id, $0) })
+                                onFocusChange: { onFocusChange(subtask.id, $0) },
+                                popover: popover?.id == subtask.id ? popover?.popover : nil)
             }
             if let newSubtask, capture == nil {
                 HStack(spacing: AtticSubtaskMetrics.titleGap) {

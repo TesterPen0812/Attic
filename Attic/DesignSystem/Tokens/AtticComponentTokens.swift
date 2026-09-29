@@ -474,6 +474,10 @@ enum AtticPickerMetrics {
     static let dateWidth: CGFloat = 212
     static let tagWidth: CGFloat = 200
     static let tagListMaxHeight: CGFloat = 196
+    /// Move to Task… (control audit item 5): wider than the tag list, for
+    /// task titles and where each is listed; seven rows before it scrolls.
+    static let taskWidth: CGFloat = 260
+    static let taskListMaxHeight: CGFloat = 196
     static let suggestionWidth: CGFloat = 220
     static let monthHeaderHeight: CGFloat = 26
     static let monthButton: CGFloat = 20
