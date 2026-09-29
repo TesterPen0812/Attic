@@ -29,7 +29,6 @@ struct NotesEditorPage: View {
     @Environment(\.atticPanelToasts) private var toasts
     @StateObject private var chrome = NotesPageChrome()
     @StateObject private var library: NotesLibraryModel
-    @State private var isImporterPresented = false
     @State private var searchFocused = false
     @State private var postedToastID: UUID?
     /// The history step the delete toast undoes: the toast answers only
@@ -134,8 +133,16 @@ struct NotesEditorPage: View {
                 searchFocused = false
             }
         }
-        .fileImporter(isPresented: $isImporterPresented, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
-            if case let .success(urls) = result { controller.importImages(urls) }
+        .fileImporter(isPresented: Binding(get: { chrome.fileRequest != nil },
+                                           set: { if !$0 { chrome.fileRequest = nil } }),
+                      allowedContentTypes: [.image], allowsMultipleSelection: chrome.fileRequest != .slash) { result in
+            finishFileRequest(result)
+        } onCancellation: {
+            finishFileRequest(nil)
+        }
+        .onChange(of: chrome.isFormatPopoverOpen) { _, open in
+            chrome.controls?.isFormatPopoverOpen = open
+            if !open { DispatchQueue.main.async { chrome.focusText() } }
         }
         .preference(key: PanelPageNoticeClearancePreferenceKey.self, value: noticeClearance)
         // A group, so its identifier never replaces its controls' own.
@@ -232,6 +239,11 @@ struct NotesEditorPage: View {
                         .transition(.opacity)
                 }
                 Spacer(minLength: AtticSpacing.s12)
+                if showsEditor, controller.active?.isReadOnly == false {
+                    formatButton
+                        .padding(.trailing, AtticSpacing.s8)
+                        .transition(.opacity)
+                }
                 AtticRaisedButton(systemName: "square.and.pencil", label: "New note", help: String(localized: "New note (⌘N)")) {
                     newNote()
                 }
@@ -239,6 +251,35 @@ struct NotesEditorPage: View {
                 .accessibilityIdentifier("notes-new-note")
             }
             .frame(height: buttonHeight)
+        }
+    }
+
+    /// Aa (mockup p2-16 D): every style and format, with or without a
+    /// selection. ⌘T and ⌃Tab (without a selection bar) open it too.
+    private var formatButton: some View {
+        AtticRaisedButton(systemName: "textformat", label: "Format", help: String(localized: "Format (⌘T)")) {
+            chrome.openFormatPopover(keyboard: false)
+        }
+        .accessibilityIdentifier("notes-format-button")
+        .popover(isPresented: $chrome.isFormatPopoverOpen, arrowEdge: .top) {
+            if let controls = chrome.controls {
+                NoteFormatPopoverView(model: controls.formatModel, openedByKeyboard: chrome.formatPopoverByKeyboard) {
+                    chrome.isFormatPopoverOpen = false
+                }
+                .atticDesign(design)
+            }
+        }
+    }
+
+    private func finishFileRequest(_ result: Result<[URL], Error>?) {
+        let request = chrome.fileRequest
+        chrome.fileRequest = nil
+        let urls: [URL] = if case let .success(urls)? = result { urls } else { [] }
+        switch request {
+        case .slash:
+            if let url = urls.first { controller.importSlashImage(url) } else { controller.active?.engine.cancelSlashFile() }
+        case .insert, nil:
+            if !urls.isEmpty { controller.importImages(urls) }
         }
     }
 
@@ -269,6 +310,9 @@ struct NotesEditorPage: View {
                 .disabled(!showsEditor || !controller.canSaveRecoveryCopy(controller.active))
             Button("") { showLibrary(focusSearch: true) }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("") { chrome.openFormatPopover(keyboard: true) }
+                .keyboardShortcut(NoteCommandCatalog.formatPopoverShortcut)
+                .disabled(!showsEditor || controller.active?.isReadOnly != false)
         }
         .frame(width: 0, height: 0)
         .opacity(0)
@@ -358,25 +402,10 @@ struct NotesEditorPage: View {
         let editable = !session.isReadOnly
         var commands: [AtticMenuCommand] = []
         if editable {
-            let selection = engine.textView?.selectedRange() ?? NSRange(location: engine.textStorage.length, length: 0)
-            // Format acts on the paragraphs at the caret or selection only.
-            let current = engine.paragraphFormat(in: selection)
-            commands.append(AtticMenuCommand("Insert", identifier: "notes-menu-insert", submenu: [
-                AtticMenuCommand("Image…", identifier: "notes-menu-insert-image") { isImporterPresented = true },
-                AtticMenuCommand("Today’s Date", startsSection: true) { engine.perform(.date(NoteDay(date: Date()))) },
-                AtticMenuCommand("Tomorrow’s Date") {
-                    let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-                    engine.perform(.date(NoteDay(date: tomorrow)))
-                }
-            ]))
-            commands.append(AtticMenuCommand("Format", identifier: "notes-menu-format", submenu: [
-                AtticMenuCommand("Body", isDisabled: current == nil, isChecked: current == .body) {
-                    engine.perform(.paragraph(.body), selection: selection)
-                },
-                AtticMenuCommand("Checklist", isDisabled: current == nil, isChecked: current == .checklist) {
-                    engine.perform(.paragraph(.checklist), selection: selection)
-                }
-            ]))
+            // Insert ▸ and Format ▸: the same command list as the selection
+            // bar, Aa, the right-click menu and the menu bar.
+            let router = chrome.controls?.router ?? NoteCommandRouter(engine: engine)
+            commands += router.menuCommands(from: .noteMenu)
         }
         let pinned = noteStore.note(withID: id)?.isPinned ?? false
         commands.append(AtticMenuCommand(pinned ? "Unpin from Top" : "Pin to Top", isDisabled: !session.isPersisted && session.isUntouchedDraft,

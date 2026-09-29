@@ -309,9 +309,18 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
 
     // MARK: Context menu
 
+    /// The page's format controls add their Format, Insert and link rows
+    /// from the one command catalog (slice 3a UI); the rows below remain
+    /// the fallback for a text view without them.
+    var contextMenuProvider: ((NSMenu, NSEvent) -> Void)?
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu()
         guard engine != nil, isEditable else { return menu }
+        if let contextMenuProvider {
+            contextMenuProvider(menu, event)
+            return menu
+        }
         menu.insertItem(.separator(), at: 0)
         let insert = NSMenuItem(title: String(localized: "Insert"), action: nil, keyEquivalent: "")
         insert.submenu = NoteEditorTextView.insertMenu(target: self)

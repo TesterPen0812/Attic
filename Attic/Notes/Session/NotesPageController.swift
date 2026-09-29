@@ -160,7 +160,7 @@ final class NotesPageController: ObservableObject {
     private let saveDelay: Duration
     private let pauseVersionDelay: Duration
     private let now: () -> Date
-    private let imageLoader: @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)?
+    let imageLoader: @Sendable (URL) async -> (StagedNoteAttachment, CGSize?)?
     private let prepareDocument: @Sendable (NoteDocument) async -> PreparedNoteDocument?
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []

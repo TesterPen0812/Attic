@@ -16,9 +16,24 @@ final class NotesPageChrome: ObservableObject {
     /// The tag editor is open, from the tag line or from the menu button.
     @Published var tagEditor: TagEditorAnchor?
 
+    /// Aa's pop-over is open; `formatPopoverByKeyboard` when ⌘T or ⌃Tab
+    /// opened it (its keyboard ring shows at once).
+    @Published var isFormatPopoverOpen = false
+    var formatPopoverByKeyboard = false
+    /// The open panel for Insert › Image or File… or the `/` row (one image).
+    enum FileRequest: Equatable { case insert, slash }
+    @Published var fileRequest: FileRequest?
+
     /// The note menu's commands for the note on screen (built by the page).
     var menuCommands: () -> [AtticMenuCommand] = { [] }
     fileprivate weak var accessories: NoteTitleAccessories?
+    /// The format controls over the note on screen (bar, `/`, cards).
+    fileprivate(set) weak var controls: NoteFormatControls?
+
+    func openFormatPopover(keyboard: Bool) {
+        formatPopoverByKeyboard = keyboard
+        if !isFormatPopoverOpen { isFormatPopoverOpen = true }
+    }
 
     /// ⇧⌘I, the ⋯ and the header title: the note's native menu, under the
     /// ⋯ while the title shows, under the header title once it has scrolled.
@@ -385,6 +400,7 @@ struct NoteEditorRepresentable: NSViewRepresentable {
     final class Coordinator {
         var engine: NoteEditorEngine?
         var accessories: NoteTitleAccessories?
+        var controls: NoteFormatControls?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -408,6 +424,15 @@ struct NoteEditorRepresentable: NSViewRepresentable {
             },
             tagEditor: tagEditor)
         context.coordinator.accessories?.tagCounts = tagCounts
+        let controls = NoteFormatControls(engine: engine, textView: textView, scrollView: scrollView, design: design,
+                                          noteID: session.noteID,
+                                          isNewDraft: !session.isPersisted && session.isUntouchedDraft)
+        let chrome = chrome
+        controls.requestFormatPopover = { [weak chrome] keyboard in chrome?.openFormatPopover(keyboard: keyboard) }
+        controls.closeFormatPopover = { [weak chrome] in chrome?.isFormatPopoverOpen = false }
+        controls.requestFile = { [weak chrome] fromSlash in chrome?.fileRequest = fromSlash ? .slash : .insert }
+        context.coordinator.controls = controls
+        chrome.controls = controls
         let selection = session.selection
         DispatchQueue.main.async {
             let length = engine.textStorage.length
@@ -436,11 +461,14 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         }
         context.coordinator.accessories?.design = design
         context.coordinator.accessories?.headerBottom = headerBottom
+        context.coordinator.controls?.update(design: design)
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.accessories?.invalidate()
         coordinator.accessories = nil
+        coordinator.controls?.invalidate()
+        coordinator.controls = nil
         if coordinator.engine?.scrollView === scrollView { coordinator.engine?.detachView() }
     }
 }

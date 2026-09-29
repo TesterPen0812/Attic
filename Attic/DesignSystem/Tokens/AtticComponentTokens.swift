@@ -496,3 +496,35 @@ enum AtticNoteMetrics {
     static let tagEditorWidth: CGFloat = 240
     static let tagEditorMaxListHeight: CGFloat = 8 * 28
 }
+
+/// Notes' format controls (Phase 2 slice 3, mockups p2-16 D and p2-03):
+/// the selection bar, Aa's pop-over, the `/` list and its date card, and
+/// the link card. The bar is a raised capsule 36 tall (28 pt controls in a
+/// 4 pt inset, like the selection bar), 24 pt toggles so it fits a 320 pt
+/// panel; it floats 6 above the selection (below when there is no room).
+enum AtticNoteFormatMetrics {
+    static let barHeight: CGFloat = AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
+    static let barToggleWidth: CGFloat = 24
+    static let barGroupGap: CGFloat = 4
+    static let barStylePadding: CGFloat = 7
+    static let barStyleChevron: CGFloat = 8
+    /// From the selection's line to the bar, and from the panel's edge.
+    static let barGap: CGFloat = 6
+    static let barEdgeMargin: CGFloat = 4
+    /// Aa's pop-over: 32 pt toggles, rows 8 apart.
+    static let popoverToggleWidth: CGFloat = 32
+    static let popoverWidth: CGFloat = 272
+    static let popoverPadding: CGFloat = 10
+    static let popoverRowGap: CGFloat = 8
+    static let popoverGroupGap: CGFloat = 10
+    static let styleChipPadding: CGFloat = 7
+    /// The `/` list, the date card and the link card, 6 below the line.
+    static let slashWidth: CGFloat = 232
+    static let slashMaxVisibleRows = 9
+    static let dateCardWidth: CGFloat = 236
+    static let calendarCell: CGFloat = 30
+    static let linkCardWidth: CGFloat = 272
+    static let cardGap: CGFloat = 6
+    /// Room around a floating control for its shadow.
+    static let shadowRoom: CGFloat = 12
+}
