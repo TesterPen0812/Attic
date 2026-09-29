@@ -70,11 +70,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onSlashSessionChange: ((NoteSlashSession?) -> Void)?
     var onSlashDateRequest: (() -> Void)?
     var onSlashFileRequest: (() -> Void)?
-    var onLinkRequest: ((String?) -> Void)?
+    var onLinkRequest: ((NoteLinkTarget) -> Void)?
+    private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
     private var pendingSlashFile: NoteSlashSession?
-    private var pendingParagraphStyle: (location: Int, style: NoteParagraphStyle)?
+    private var pendingParagraphStyle: (location: Int, state: NoteUndoHistory.ParagraphState)?
 
     fileprivate func notifyTagsChanged() {
         onTagsChange?()
@@ -100,6 +101,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private(set) var activity: Activity = .idle
     private func setActivity(_ next: Activity) {
         guard next != activity else { return }
+        if next != .idle {
+            slashSession = nil
+            pendingSlashDate = nil
+            pendingSlashFile = nil
+            pendingLinkTarget = nil
+        }
         let previous = activity
         activity = next
         onActivityChanged?(previous, next)
@@ -208,6 +215,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     /// AppKit can discard marked text without sending a text-change callback.
     func refreshCompositionActivity() {
+        if textView?.hasMarkedText() == true {
+            slashSession = nil
+            pendingSlashDate = nil
+            pendingSlashFile = nil
+        }
         if activity == .composing && textView?.hasMarkedText() != true { setActivity(.idle) }
     }
 
@@ -622,7 +634,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     @discardableResult
     func performEdit(_ range: NSRange, with replacement: NSAttributedString, name: String,
                      selection: NSRange? = nil) -> Bool {
-        guard !isReadOnly, NSMaxRange(range) <= textStorage.length else { return false }
+        guard !isReadOnly, rangeIsInStorage(range) else { return false }
         guard activity == .idle else {
             return refuse(String(localized: "Finish Writing Tools or composing text before editing this note."))
         }
@@ -702,14 +714,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     selection: selection)
     }
 
-    /// Inserts a date at the caret (replacing a selection).
-    func insertDate(_ day: NoteDay) {
-        let selection = textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
+    /// Inserts a date at the validated captured range (replacing a selection).
+    @discardableResult
+    func insertDate(_ day: NoteDay, at selection: NSRange? = nil) -> Bool {
+        let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
+        guard validate(.date(day), selection: selection).enabled else { return false }
         let date = NoteDateAttachment(day: day)
         renderer.apply(to: date, today: today)
         let text = NoteTextCodec.attachmentString(date, attributes: attributes(forParagraphAt: selection.location))
-        performEdit(selection, with: text, name: String(localized: "Insert Date"),
-                    selection: NSRange(location: selection.location + 1, length: 0))
+        return performEdit(selection, with: text, name: String(localized: "Insert Date"),
+                           selection: NSRange(location: selection.location + 1, length: 0))
     }
 
     /// Adds an imported image on its own line after the caret's line.
@@ -934,6 +948,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
 
     func textDidChange(_ notification: Notification) {
         history.didChange()
+        refreshSlashAfterEdit()
+        pendingLinkTarget = nil
         guard !restoringWritingToolsSnapshot else { return }
         if !(writingToolsBlocked && isWritingToolsSessionActive) { onTextChange?() }
         if !isWritingToolsSessionActive {
@@ -951,6 +967,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textViewDidChangeSelection(_ notification: Notification) {
         guard let textView = textView else { return }
         let selection = textView.selectedRange()
+        if userEditDepth == 0 && engineEditDepth == 0 && !history.isChangeInFlight {
+            if let session = slashSession,
+               selection != NSRange(location: NSMaxRange(session.range), length: 0) { slashSession = nil }
+            if let session = pendingSlashDate,
+               selection != NSRange(location: NSMaxRange(session.range), length: 0) { pendingSlashDate = nil }
+            if let session = pendingSlashFile,
+               selection != NSRange(location: NSMaxRange(session.range), length: 0) { pendingSlashFile = nil }
+            if let target = pendingLinkTarget, selection != target.selection { pendingLinkTarget = nil }
+        }
         if !history.isChangeInFlight, let open = history.openStep,
            !(selection.length == 0 && selection.location >= open.range.location && selection.location <= NSMaxRange(open.range)) {
             history.breakCoalescing()
@@ -1081,6 +1106,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
+        if let activeSlashSession, editedRange.location < activeSlashSession.range.location {
+            slashSession = nil
+        }
         // TextKit can replace the whole paragraph run when one character is
         // inserted at its start. The inserted prefix then lacks our semantic
         // paragraph attributes even though the surviving text still has them.
@@ -1731,9 +1759,26 @@ struct NoteCommandValidation: Equatable {
 }
 struct NoteFormattingState {
     var paragraph: NoteParagraphStyle?
+    var indent: Int?
     var marks: [NoteMark.Kind: NoteFormatState]
     var linkURL: String?
     var commands: [NoteFormatCommand: NoteCommandValidation]
+}
+
+struct NoteLinkTarget: Equatable {
+    var noteID: UUID
+    /// Full linked run when a caret is inside one; otherwise the selection.
+    var range: NSRange
+    var selection: NSRange
+    var text: String
+    var url: String?
+    var capturedText: NoteCapturedTextTarget { .init(noteID: noteID, range: range, literal: text) }
+}
+
+struct NoteCapturedTextTarget: Equatable {
+    var noteID: UUID
+    var range: NSRange
+    var literal: String
 }
 
 @MainActor
@@ -1741,7 +1786,7 @@ extension NoteEditorEngine {
     func paragraphStyle(at location: Int) -> NoteParagraphStyle? {
         let line = lineRange(at: location)
         guard line.location > 0, !isBlockObject(at: line.location) else { return nil }
-        if let pending = pendingParagraphStyle, pending.location == line.location { return pending.style }
+        if let pending = pendingParagraphStyle, pending.location == line.location { return pending.state.style }
         if checklistBox(inParagraphAt: location) != nil { return .checklist }
         guard line.location < textStorage.length else { return .body }
         let attrs = textStorage.attributes(at: line.location, effectiveRange: nil)
@@ -1759,6 +1804,8 @@ extension NoteEditorEngine {
         let lines = formattableParagraphs(in: selection)
         let styles = lines.compactMap { paragraphStyle(at: $0.location) }
         let paragraph = styles.first.flatMap { first in styles.allSatisfy { $0 == first } ? first : nil }
+        let depths = lines.map { indentAt($0.location) ?? 0 }
+        let indent = depths.first.flatMap { first in depths.allSatisfy { $0 == first } ? first : nil }
         var marks: [NoteMark.Kind: NoteFormatState] = [:]
         for kind in NoteMark.Kind.allCases { marks[kind] = markState(kind, selection: selection) }
         let index = min(selection.location, max(0, textStorage.length - 1))
@@ -1768,13 +1815,55 @@ extension NoteEditorEngine {
             .paragraph(.bullet), .paragraph(.number), .paragraph(.checklist), .paragraph(.quote), .paragraph(.mono),
             .indent, .outdent, .divider, .toggleChecklist, .moveUp, .moveDown
         ] + NoteMark.Kind.allCases.map { .mark($0) }
-        return NoteFormattingState(paragraph: paragraph, marks: marks, linkURL: url,
+        return NoteFormattingState(paragraph: paragraph, indent: indent, marks: marks, linkURL: url,
                                    commands: Dictionary(uniqueKeysWithValues: commands.map { ($0, validate($0, selection: selection)) }))
     }
 
+    func captureLinkTarget(selection: NSRange? = nil) -> NoteLinkTarget? {
+        let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
+        guard !isReadOnly, activity == .idle, selection.location > titleParagraphRange.length,
+              rangeIsInStorage(selection) else { return nil }
+        var range = selection
+        var url: String?
+        if selection.length == 0 {
+            guard selection.location < textStorage.length else { return nil }
+            var effective = NSRange()
+            url = textStorage.attribute(.noteMark(.link), at: selection.location, effectiveRange: &effective) as? String
+            guard url != nil, selection.location > effective.location,
+                  selection.location < NSMaxRange(effective) else { return nil }
+            range = effective
+        } else {
+            var effective = NSRange()
+            if let existing = textStorage.attribute(.noteMark(.link), at: selection.location, effectiveRange: &effective) as? String,
+               NSMaxRange(selection) <= NSMaxRange(effective) {
+                range = effective
+                url = existing
+            }
+        }
+        guard range.length > 0 else { return nil }
+        return NoteLinkTarget(noteID: noteID, range: range, selection: selection,
+                              text: (textStorage.string as NSString).substring(with: range), url: url)
+    }
+
+    @discardableResult
+    func commitLink(_ url: String, target: NoteLinkTarget) -> Bool {
+        guard pendingLinkTarget == target, target.noteID == noteID,
+              textView?.selectedRange() == target.selection,
+              validCapturedText(target.capturedText),
+              validate(.link(url), selection: target.range).enabled,
+              captureLinkTarget(selection: target.selection)?.url == target.url else {
+            pendingLinkTarget = nil
+            return false
+        }
+        pendingLinkTarget = nil
+        return applyMark(.link, url: url, selection: target.range)
+    }
+
+    func cancelLinkRequest() { pendingLinkTarget = nil }
+
     func validate(_ command: NoteFormatCommand, selection: NSRange? = nil) -> NoteCommandValidation {
         let selection = selection ?? textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
-        guard !isReadOnly, activity == .idle, NSMaxRange(selection) <= textStorage.length else {
+        guard !isReadOnly, activity == .idle, rangeIsInStorage(selection) else {
             return NoteCommandValidation(enabled: false, state: .off)
         }
         let lines = formattableParagraphs(in: selection)
@@ -1786,11 +1875,11 @@ extension NoteEditorEngine {
             return NoteCommandValidation(enabled: !lines.isEmpty, state: state)
         case let .mark(kind):
             let inBody = selection.location > titleParagraphRange.length || selection.length > 0
-            return NoteCommandValidation(enabled: inBody && (kind != .link || selection.length > 0),
+            return NoteCommandValidation(enabled: inBody && (kind != .link || captureLinkTarget(selection: selection) != nil),
                                          state: markState(kind, selection: selection))
         case let .link(url):
             let parsed = URL(string: url)
-            return NoteCommandValidation(enabled: selection.length > 0 && selection.location > titleParagraphRange.length &&
+            return NoteCommandValidation(enabled: captureLinkTarget(selection: selection) != nil &&
                                          (parsed?.scheme == "https" || parsed?.scheme == "http") && parsed?.host != nil,
                                          state: markState(.link, selection: selection))
         case .removeLink:
@@ -1824,8 +1913,9 @@ extension NoteEditorEngine {
         case let .paragraph(style): return applyStyle(style, selection: selection)
         case let .mark(kind):
             if kind == .link {
-                guard let onLinkRequest else { return false }
-                onLinkRequest(formattingState(for: selection).linkURL)
+                guard let onLinkRequest, let target = captureLinkTarget(selection: selection) else { return false }
+                pendingLinkTarget = target
+                onLinkRequest(target)
                 return true
             }
             return applyMark(kind, url: nil, selection: selection)
@@ -1839,11 +1929,14 @@ extension NoteEditorEngine {
             return true
         case .moveUp: return moveLine(up: true, selection: selection)
         case .moveDown: return moveLine(up: false, selection: selection)
-        case let .date(day): insertDate(day); return true
+        case let .date(day): return insertDate(day, at: selection)
         }
     }
 
     private func indentAt(_ location: Int) -> Int? {
+        if let pending = pendingParagraphStyle, pending.location == lineRange(at: location).location {
+            return pending.state.indent
+        }
         guard location < textStorage.length else { return nil }
         return textStorage.attribute(.noteBlockIndent, at: location, effectiveRange: nil) as? Int
     }
@@ -2084,8 +2177,11 @@ struct NoteSlashItem: Hashable, Identifiable {
 }
 
 struct NoteSlashSession {
+    var noteID: UUID
     var range: NSRange
     var query: String
+    var literal: String { "/" + query }
+    var capturedText: NoteCapturedTextTarget { .init(noteID: noteID, range: range, literal: literal) }
     var items: [NoteSlashItem] {
         guard !query.isEmpty else { return NoteSlashItem.all }
         return NoteSlashItem.all.filter { item in
@@ -2096,6 +2192,17 @@ struct NoteSlashSession {
 
 @MainActor
 extension NoteEditorEngine {
+    private func rangeIsInStorage(_ range: NSRange) -> Bool {
+        range.location >= 0 && range.length >= 0 && range.location <= textStorage.length
+            && range.length <= textStorage.length - range.location
+    }
+
+    private func validCapturedText(_ target: NoteCapturedTextTarget) -> Bool {
+        target.noteID == noteID && !isReadOnly && activity == .idle && target.range.length > 0
+            && rangeIsInStorage(target.range)
+            && (textStorage.string as NSString).substring(with: target.range) == target.literal
+    }
+
     var slashSession: NoteSlashSession? {
         get { activeSlashSession }
         set { activeSlashSession = newValue; onSlashSessionChange?(newValue) }
@@ -2103,6 +2210,28 @@ extension NoteEditorEngine {
     var pendingSlashDate: NoteSlashSession? {
         get { slashDateRequest }
         set { slashDateRequest = newValue }
+    }
+
+    private func validSlashTarget(_ session: NoteSlashSession, needsCaret: Bool) -> Bool {
+        guard validCapturedText(session.capturedText),
+              session.range.location > titleParagraphRange.length,
+              lineRange(at: session.range.location).location <= session.range.location else { return false }
+        return !needsCaret || textView?.selectedRange() == NSRange(location: NSMaxRange(session.range), length: 0)
+    }
+
+    private func refreshSlashAfterEdit() {
+        pendingSlashDate = nil
+        pendingSlashFile = nil
+        guard let session = slashSession, let caret = textView?.selectedRange(), caret.length == 0,
+              caret.location >= session.range.location, caret.location <= textStorage.length else {
+            slashSession = nil
+            return
+        }
+        let range = NSRange(location: session.range.location, length: caret.location - session.range.location)
+        let literal = (textStorage.string as NSString).substring(with: range)
+        guard literal.hasPrefix("/"), !literal.contains(" "), !literal.contains("\n"),
+              lineRange(at: caret.location).location <= session.range.location else { slashSession = nil; return }
+        slashSession = NoteSlashSession(noteID: noteID, range: range, query: String(literal.dropFirst()))
     }
 
     func handleTypedText(_ text: String, wasComposing: Bool) {
@@ -2187,12 +2316,12 @@ extension NoteEditorEngine {
                   !typed.contains(" "), !typed.contains("\n") else { slashSession = nil; return }
             let value = string.substring(with: NSRange(location: session.range.location, length: caret - session.range.location))
             guard value.hasPrefix("/") else { slashSession = nil; return }
-            slashSession = NoteSlashSession(range: NSRange(location: session.range.location, length: (value as NSString).length),
+            slashSession = NoteSlashSession(noteID: noteID, range: NSRange(location: session.range.location, length: (value as NSString).length),
                                             query: String(value.dropFirst()))
         } else if typed == "/", caret > line.location {
             let at = caret - 1
             let boundary = at == line.location || string.character(at: at - 1) == 0x20
-            if boundary { slashSession = NoteSlashSession(range: NSRange(location: at, length: 1), query: "") }
+            if boundary { slashSession = NoteSlashSession(noteID: noteID, range: NSRange(location: at, length: 1), query: "") }
         }
     }
 
@@ -2200,7 +2329,8 @@ extension NoteEditorEngine {
     /// Date and file requests leave the literal command intact for their UI.
     @discardableResult
     func acceptSlashItem(_ kind: NoteSlashItem.Kind) -> Bool {
-        guard let session = slashSession, session.items.contains(where: { $0.kind == kind }) else { return false }
+        guard let session = slashSession, validSlashTarget(session, needsCaret: true),
+              session.items.contains(where: { $0.kind == kind }) else { slashSession = nil; return false }
         slashSession = nil
         switch kind {
         case .date:
@@ -2234,7 +2364,7 @@ extension NoteEditorEngine {
     func commitSlashDate(_ day: NoteDay) -> Bool {
         guard let session = pendingSlashDate else { return false }
         pendingSlashDate = nil
-        guard (textStorage.string as NSString).substring(with: session.range) == "/" + session.query else { return false }
+        guard validSlashTarget(session, needsCaret: false) else { return false }
         let date = NoteDateAttachment(day: day)
         renderer.apply(to: date, today: today)
         let attributed = NoteTextCodec.attachmentString(date, attributes: attributes(forParagraphAt: session.range.location))
@@ -2442,8 +2572,7 @@ extension NoteEditorEngine {
     func commitSlashImage(_ item: StagedNoteAttachment, pixelSize: CGSize?) -> Bool {
         guard let session = pendingSlashFile else { return false }
         pendingSlashFile = nil
-        guard NSMaxRange(session.range) <= textStorage.length,
-              (textStorage.string as NSString).substring(with: session.range) == "/" + session.query else { return false }
+        guard validSlashTarget(session, needsCaret: false) else { return false }
         let line = lineRange(at: session.range.location)
         let atLineStart = session.range.location == line.location
         let image = NoteImageAttachment(attachmentID: item.id, preferredWidthFraction: 1, pixelSize: pixelSize)
