@@ -400,3 +400,24 @@ additive; no token, colour, radius or type style changed.
 - **`AtticTaskRowModel` is `Equatable`** (the subtask counts compared by hand),
   so a list can skip redrawing a row whose model did not change.
 - No token, colour, radius or type style changed.
+
+### Phase 1 follow-up: control audit items 5, 10 and 11 (2026-09-29)
+
+- **New `AtticTaskPicker`** (Move to Task…): the tag picker's pattern for
+  tasks — "Find a task", then `AtticChoiceRow`s with where each task is
+  listed as the detail, one highlight for keys and pointer. Rows are built
+  lazily with a known height (`AtticPickerMetrics.taskWidth` 260,
+  `taskListMaxHeight` 196), so a long list costs a screenful per keystroke.
+- **`AtticSubtaskRow`**: a managed line shows the row's `AtticRowActionsButton`
+  while the pointer or the keyboard is on it, answers ⇧⌘I with its commands
+  as a native menu (`AtticMenuCommand.performSubtaskKey(showActions:)`), and
+  can point a pop-over at itself (`popover`; `AtticQuickLook.popover`). Nothing
+  shows at rest.
+- **`AtticDeletedItemRow`**: selectable (`isSelected` draws `selected` inset
+  4 pt with the control corner rule, `AtticSettingsRowMetrics.selectionInset`;
+  VoiceOver hears "selected"), `onSelect` with the modifiers held, a lazily
+  built right-click menu that is also its VoiceOver actions, and Select /
+  Deselect for VoiceOver.
+- **`AtticActionRow.secondary`** (new `AtticRowAction`): a second small raised
+  button before the first (Recently Deleted's selection row).
+- No token, colour, radius or type style changed.

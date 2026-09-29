@@ -6,13 +6,16 @@ import SwiftUI
 /// everything here for good after a clear confirmation.
 ///
 /// Control audit item 11: entries can be selected (click, ⌘-click,
-/// ⇧-click, ⌘A, ↑ ↓ and ⇧↑ ⇧↓), then restored together (⌘R, one Undo
+/// ⇧-click, ⌘A; ↑ ↓ and ⇧↑ ⇧↓ while the list has the keyboard), then restored together (⌘R, one Undo
 /// step) or deleted permanently (⌘⌫, always after a confirmation that
 /// counts them). A row's right-click menu and its VoiceOver actions offer
 /// the same commands, counted when they act on the selection.
 struct RecentlyDeletedSettingsView: View {
     @StateObject private var model: RecentlyDeletedModel
     @FocusState private var searchFocused: Bool
+    /// The list has the keyboard: ↑ ↓ move the selection (not the
+    /// sidebar's, and not the search field's caret).
+    @FocusState private var listFocused: Bool
     @Environment(\.appearsActive) private var appearsActive
 
     init(library: AtticLibrary?) {
@@ -86,17 +89,31 @@ struct RecentlyDeletedSettingsView: View {
             }
             .accessibilityIdentifier("recently-deleted-no-results")
         }
-        ForEach(sections, id: \.kind) { section in
-            SettingsGroup(title: section.kind.sectionTitle, identifier: "recently-deleted-\(section.kind.rawValue)") {
-                ForEach(Array(section.entries.enumerated()), id: \.element.id) { index, entry in
-                    if index > 0 {
-                        AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(sections, id: \.kind) { section in
+                SettingsGroup(title: section.kind.sectionTitle, identifier: "recently-deleted-\(section.kind.rawValue)") {
+                    ForEach(Array(section.entries.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 {
+                            AtticGroupDivider(leadingInset: AtticSettingsRowMetrics.iconTextInset)
+                        }
+                        row(entry)
+                            .id(entry.id)
                     }
-                    row(entry)
-                        .id(entry.id)
                 }
             }
         }
+        // One keyboard stop for the list (Tab reaches it; a click on a row
+        // gives it the keyboard): ↑ ↓ move the selection, ⇧↑ ⇧↓ grow it.
+        // The selection fill shows where it is, so no ring is drawn.
+        .focusable(!sections.isEmpty)
+        .focused($listFocused)
+        .focusEffectDisabled()
+        .onKeyPress(keys: [.upArrow, .downArrow], phases: .down) { press in
+            model.moveCursor(by: press.key == .upArrow ? -1 : 1, extending: press.modifiers.contains(.shift))
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Deleted items"))
     }
 
     private func row(_ entry: RecentlyDeletedEntry) -> some View {
@@ -109,6 +126,7 @@ struct RecentlyDeletedSettingsView: View {
             isSelected: model.selection.contains(entry.id),
             onSelect: { flags in
                 model.click(entry, command: flags.contains(.command), shift: flags.contains(.shift))
+                listFocused = true
             },
             commands: { commands(for: entry) },
             onToggleSelection: { model.toggleSelection(entry) }
@@ -194,14 +212,6 @@ struct RecentlyDeletedSettingsView: View {
             hidden("Select All", RecentlyDeletedKeys.selectAll, enabled: !searchFocused && listed) { model.selectAll() }
             hidden("Restore Selected", RecentlyDeletedKeys.restore, enabled: selected) { model.restoreSelected() }
             hidden("Delete Permanently", RecentlyDeletedKeys.delete, enabled: !searchFocused && selected) { model.requestDeleteSelected() }
-            hidden("Next", KeyboardShortcut(.downArrow, modifiers: []), enabled: !searchFocused && listed) { model.moveCursor(by: 1) }
-            hidden("Previous", KeyboardShortcut(.upArrow, modifiers: []), enabled: !searchFocused && listed) { model.moveCursor(by: -1) }
-            hidden("Extend Down", KeyboardShortcut(.downArrow, modifiers: .shift), enabled: !searchFocused && listed) {
-                model.moveCursor(by: 1, extending: true)
-            }
-            hidden("Extend Up", KeyboardShortcut(.upArrow, modifiers: .shift), enabled: !searchFocused && listed) {
-                model.moveCursor(by: -1, extending: true)
-            }
         }
     }
 
