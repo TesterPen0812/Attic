@@ -183,6 +183,9 @@ final class NotesPageController: ObservableObject {
     private var cache: [UUID: NoteSession] = [:]
     private var recency: [UUID] = []
     private var proposalStatusCache: [UUID: (revision: UInt64, agent: String?)] = [:]
+    private var verifiedAvailability: [UUID: (revision: UInt64, digest: String, available: Bool)] = [:]
+    private var verifyingAvailability = Set<UUID>()
+    private var resolvedAttachmentRows: [UUID: (revision: UInt64, row: NoteAttachment?)] = [:]
     private let cacheLimit = 8
     private var didStart = false
     private var didRecoverAtLaunch = false
@@ -220,8 +223,11 @@ final class NotesPageController: ObservableObject {
             self?.agentDisposition(for: id) ?? .direct
         }
         store.recoveryReferencedAttachmentIDs = { [weak self] in
-            guard let self, let journal = self.journal else { return [] }
-            var ids = Set<UUID>()
+            guard let self else { return [] }
+            // One live-byte rule for purge: every checkpoint, open draft,
+            // pending payload and both sides of editor history own bytes.
+            var ids = Set(self.cache.values.flatMap { self.liveAttachmentIDs(in: $0) })
+            guard let journal = self.journal else { return ids }
             let entries: [NoteDraftRecoveryEntry]
             do { entries = try journal.recoveryEntries() }
             catch {
@@ -236,6 +242,7 @@ final class NotesPageController: ObservableObject {
                 }
                 ids.formUnion(document.attachmentIDs)
                 ids.formUnion(entry.staged.map(\.id))
+                ids.formUnion(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
             }
             return ids
         }
@@ -254,6 +261,43 @@ final class NotesPageController: ObservableObject {
     private func reportRecoveryRetentionWarning(_ warning: String) {
         if !recoveryWarnings.contains(warning) { recoveryWarnings.append(warning) }
         active?.notice = warning
+    }
+
+    private struct LiveByteInventory {
+        let staged: [StagedNoteAttachment]
+        let references: Set<UUID>
+        let pendingImport: NoteDraftJournalEntry.PendingImport?
+    }
+
+    /// Shared ownership rule for checkpoints, exported recovery, purge and
+    /// the Recently Deleted row lifecycle. A byte is live while a current
+    /// document, pending source, staged draft or Undo/Redo side can reach it.
+    private func liveByteInventory(in session: NoteSession, document: NoteDocument) -> LiveByteInventory {
+        var byID = Dictionary(session.engine.stagedAttachments(for: document).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first })
+        let loaded = session.importBatch?.loaded ?? []
+        for item in loaded { if let staged = item.staged { byID[staged.id] = staged } }
+        var references = Set(document.attachmentIDs)
+        references.formUnion(session.engine.history.referencedAttachmentIDs)
+        references.formUnion(session.engine.staged.keys)
+        references.formUnion(byID.keys)
+        let pending: NoteDraftJournalEntry.PendingImport?
+        if let batch = session.importBatch, let target = session.engine.currentImportTarget {
+            pending = .init(anchor: target.anchor, replacementLength: target.replacementLength,
+                isBoundary: target.isBoundary, acceptedText: batch.acceptedText,
+                items: loaded.map { item in
+                    .init(filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                          byteCount: item.byteCount, stagedID: item.staged?.id,
+                          pixelWidth: item.pixelSize.map { Double($0.width) },
+                          pixelHeight: item.pixelSize.map { Double($0.height) }, failure: item.failure)
+                }, remainingNames: Array(batch.urls.dropFirst(batch.completed)).map(\.lastPathComponent))
+        } else { pending = nil }
+        return LiveByteInventory(staged: byID.values.sorted { $0.id.uuidString < $1.id.uuidString },
+            references: references, pendingImport: pending)
+    }
+
+    private func liveAttachmentIDs(in session: NoteSession) -> Set<UUID> {
+        liveByteInventory(in: session, document: checkpointDocument(for: session)).references
     }
 
     var lastViewedNoteID: UUID? {
@@ -476,7 +520,7 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return }
             if old != .idle && new == .idle {
                 self.completeImportIfPossible(in: session)
-                if NoteSessionPolicy.hasPendingWork(session.state) {
+                if NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
                     _ = self.preserve(session)
                 } else {
                     self.clearRecoveryCopy(noteID: session.noteID)
@@ -488,6 +532,21 @@ final class NotesPageController: ObservableObject {
         engine.onFileBatchRequest = { [weak self, weak session] urls, text, range in
             guard let self, let session, self.active === session else { return }
             self.importFiles(urls, acceptedText: text, at: range)
+        }
+        engine.onRawImageBatchRequest = { [weak self, weak session] data, ext, range in
+            guard let self, let session, self.active === session else { return }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("AtticClipboard-\(UUID().uuidString).\(ext)")
+            do {
+                try data.write(to: url, options: .atomic)
+                self.importFiles([url], at: range, temporaryURLs: [url])
+            } catch {
+                session.notice = String(localized: "The clipboard image could not be staged: \(error.localizedDescription)")
+            }
+        }
+        engine.onImportAdmission = { [weak self, weak session] payload in
+            guard let self, let session else { return String(localized: "The note is no longer open.") }
+            return self.importAdmissionFailure(payload, in: session)
         }
         engine.onTagsChange = { [weak self, weak session] in
             guard let self, let session else { return }
@@ -646,7 +705,7 @@ final class NotesPageController: ObservableObject {
     func preserveAll() -> Bool {
         if let active { captureViewState(active) }
         var ok = true
-        for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) {
+        for session in cache.values where NoteSessionPolicy.hasPendingWork(session.state) || session.isImporting {
             ok = preserve(session) && ok
         }
         return ok
@@ -711,7 +770,8 @@ final class NotesPageController: ObservableObject {
     }
 
     private func journalEntry(for session: NoteSession, document: NoteDocument) throws -> NoteDraftJournalEntry {
-        let staged = journalStaged(for: session, document: document)
+        let inventory = liveByteInventory(in: session, document: document)
+        let staged = inventory.staged
         var entry = NoteDraftJournalEntry(
             noteID: session.noteID,
             isPersisted: session.isPersisted,
@@ -726,25 +786,12 @@ final class NotesPageController: ObservableObject {
             tags: session.engine.tags,
             tagsChanged: session.isPersisted ? session.pendingTags != nil : !session.engine.tags.isEmpty
         )
-        if let batch = session.importBatch, let anchor = session.engine.currentImportAnchor {
-            entry.pendingImport = .init(anchor: anchor, acceptedText: batch.acceptedText,
-                items: (batch.loaded ?? []).map { item in
-                    .init(filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
-                          byteCount: item.byteCount, stagedID: item.staged?.id,
-                          pixelWidth: item.pixelSize.map { Double($0.width) },
-                          pixelHeight: item.pixelSize.map { Double($0.height) }, failure: item.failure)
-                }, remainingNames: Array(batch.urls.dropFirst(batch.completed)).map(\.lastPathComponent))
-        }
+        entry.pendingImport = inventory.pendingImport
         return entry
     }
 
     private func journalStaged(for session: NoteSession, document: NoteDocument) -> [StagedNoteAttachment] {
-        var byID = Dictionary(session.engine.stagedAttachments(for: document).map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first })
-        for item in session.importBatch?.loaded ?? [] {
-            if let staged = item.staged { byID[staged.id] = staged }
-        }
-        return byID.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        liveByteInventory(in: session, document: document).staged
     }
 
     // MARK: Saving
@@ -779,6 +826,7 @@ final class NotesPageController: ObservableObject {
     /// wall-clock waits; production still waits for the coalescing delay.
     func runDueSave(_ session: NoteSession) async {
         session.engine.refreshCompositionActivity()
+        if session.isImporting { _ = checkpoint(session, silent: true); return }
         if NoteSessionPolicy.dueSaveAction(session.state, activity: session.engine.activity,
                 hasMarkedText: session.engine.textView?.hasMarkedText() == true) == .checkpointOnly {
             _ = checkpoint(session, silent: true)
@@ -790,6 +838,7 @@ final class NotesPageController: ObservableObject {
         let staged = session.engine.stagedAttachments(for: document)
         let prepared = await prepareDocument(document)
         guard !Task.isCancelled, generation == session.editGeneration, noteID == session.noteID else { return }
+        if session.isImporting { _ = checkpoint(session, silent: true); return }
         guard let prepared else { _ = preserve(session); return }
         if !save(session, snapshot: document, stagedSnapshot: staged, prepared: prepared) {
             _ = preserve(session)
@@ -801,6 +850,7 @@ final class NotesPageController: ObservableObject {
     @discardableResult
     func save(_ session: NoteSession, snapshot: NoteDocument? = nil,
               stagedSnapshot: [StagedNoteAttachment]? = nil, prepared: PreparedNoteDocument? = nil) -> Bool {
+        guard !session.isImporting else { return checkpoint(session, silent: true) }
         guard canCommit(session) else { return false }
         guard NoteSessionPolicy.hasPendingWork(session.state) else { return true }
         guard !session.isReadOnly else { return true }
@@ -949,7 +999,7 @@ final class NotesPageController: ObservableObject {
         let delay = pauseVersionDelay
         session.pauseTask = Task { @MainActor [weak self, weak session] in
             do { try await Task.sleep(for: delay) } catch { return }
-            guard let self, let session, !Task.isCancelled, session.isPersisted,
+            guard let self, let session, !Task.isCancelled, session.isPersisted, !session.isImporting,
                   !NoteSessionPolicy.hasPendingWork(session.state) else { return }
             self.store.recordVersion(noteID: session.noteID, reason: .pause)
         }
@@ -997,7 +1047,7 @@ final class NotesPageController: ObservableObject {
         guard let session = session ?? active, canSaveRecoveryCopy(session) else { return false }
         session.engine.refreshCompositionActivity()
         do {
-            let snapshot = try recoverySnapshot(of: session)
+            let snapshot = try await recoverySnapshot(of: session)
             guard let destination = recoveryCopyDestination(NoteRecoveryCopy.suggestedName(title: snapshot.title)) else { return false }
             try await Task.detached(priority: .userInitiated) {
                 try NoteRecoveryCopy.write(snapshot, to: destination)
@@ -1014,18 +1064,34 @@ final class NotesPageController: ObservableObject {
         }
     }
 
-    private func recoverySnapshot(of session: NoteSession) throws -> NoteRecoverySnapshot {
+    private func recoverySnapshot(of session: NoteSession) async throws -> NoteRecoverySnapshot {
         // The checkpoint document, as the journal writes it: during a refused
         // Writing Tools session that is the starting note, never the
         // in-place rewrite that got past the text guards. The files come
         // from that same document.
         let document = checkpointDocument(for: session)
-        var attachments = session.engine.stagedAttachments(for: document)
+        let inventory = liveByteInventory(in: session, document: document)
+        let pending = inventory.pendingImport
+        var attachments = inventory.staged
         var unavailable: [UUID] = []
         var seen = Set(attachments.map(\.id))
         for id in document.attachmentIDs where !seen.contains(id) {
             seen.insert(id)
-            if let stored = attachmentBytes(forAttachment: id) { attachments.append(stored) } else { unavailable.append(id) }
+            if let stored = attachmentBytes(forAttachment: id) {
+                attachments.append(stored)
+            } else if let row = attachmentRow(id), let url = await store.materializedURL(for: row, allowRetained: true),
+                      let data = try? await Task.detached(operation: { [byteCount = row.byteCount, digest = row.contentDigest] () throws -> Data in
+                          let data = try Data(contentsOf: url)
+                          guard Int64(data.count) == byteCount,
+                                SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest else {
+                              throw CocoaError(.fileReadCorruptFile)
+                          }
+                          return data
+                      }).value {
+                attachments.append(StagedNoteAttachment(id: id, filename: row.originalFilename,
+                    contentTypeIdentifier: row.contentTypeIdentifier, byteCount: row.byteCount,
+                    digest: row.contentDigest, data: data))
+            } else { unavailable.append(id) }
         }
         let names = Dictionary(attachments.map { ($0.id, $0.filename) }, uniquingKeysWith: { first, _ in first })
         let reason: String = switch session.state {
@@ -1040,7 +1106,7 @@ final class NotesPageController: ObservableObject {
             noteID: session.noteID, title: NoteStore.normalizedTitle(document.title), content: content,
             markdown: NoteMarkdownExport.markdown(document) { names[$0] },
             tags: session.engine.tags, reason: reason, savedAt: now(),
-            attachments: attachments, unavailableAttachmentIDs: unavailable)
+            attachments: attachments, unavailableAttachmentIDs: unavailable, pendingImport: pending)
     }
 
     @MainActor
@@ -1146,7 +1212,8 @@ final class NotesPageController: ObservableObject {
                         contentTypeIdentifier: (UTType(filenameExtension: URL(fileURLWithPath: name).pathExtension) ?? .data).identifier,
                         byteCount: 0, failure: String(localized: "Import interrupted. Retry this file."))
                 }
-                session.engine.beginImageImport(at: NSRange(location: pending.anchor, length: 0))
+                session.engine.restoreImageImport(anchor: pending.anchor,
+                    replacementLength: pending.replacementLength ?? 0, isBoundary: pending.isBoundary ?? false)
                 session.importBatch = NoteImportBatch(id: UUID(),
                     urls: (pending.items.map(\.filename) + pending.remainingNames).map { URL(fileURLWithPath: $0) },
                     acceptedText: pending.acceptedText, completed: items.count, loaded: items)
@@ -1251,6 +1318,44 @@ final class NotesPageController: ObservableObject {
 
     // MARK: Look and images
 
+    /// Counts the proposed document's logical IDs, including retained rows
+    /// and unsaved draft objects. A batch passes its earlier accepted sources.
+    func importAdmissionFailure(_ payload: StagedNoteAttachment, in session: NoteSession,
+                                        earlier: [NoteImportedObject] = []) -> String? {
+        let document = session.engine.document()
+        var ids = Set(document.attachmentIDs)
+        let rows = (try? store.attachmentRows(forNoteID: session.noteID)) ?? []
+        var sizes = Dictionary(rows.map { ($0.id, $0.byteCount) }, uniquingKeysWith: { first, _ in first })
+        for (id, staged) in session.engine.staged { sizes[id] = staged.byteCount }
+        for item in earlier { if let staged = item.staged { ids.insert(staged.id); sizes[staged.id] = staged.byteCount } }
+        ids.insert(payload.id)
+        sizes[payload.id] = payload.byteCount
+        if payload.byteCount <= 0 || payload.byteCount > AttachmentLimits.maxBytesPerAttachment {
+            return String(localized: "This file exceeds the attachment size limit.")
+        }
+        if ids.count > AttachmentLimits.maxAttachmentsPerNote {
+            return AttachmentFileStoreError.tooManyAttachments.localizedDescription
+        }
+        let total = ids.reduce(Int64.zero) { partial, id in
+            let size = sizes[id] ?? AttachmentLimits.maxBytesPerNote
+            return partial > AttachmentLimits.maxBytesPerNote - size
+                ? AttachmentLimits.maxBytesPerNote + 1 : partial + size
+        }
+        return total > AttachmentLimits.maxBytesPerNote
+            ? AttachmentFileStoreError.noteTooLarge.localizedDescription : nil
+    }
+
+    func sourceAdmissionFailure(_ url: URL, in session: NoteSession,
+                                earlier: [NoteImportedObject] = []) -> (Int64?, String?) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey])).flatMap(\.fileSize).map(Int64.init)
+        if scoped { url.stopAccessingSecurityScopedResource() }
+        let probe = StagedNoteAttachment(id: UUID(), filename: url.lastPathComponent,
+            contentTypeIdentifier: (UTType(filenameExtension: url.pathExtension) ?? .data).identifier,
+            byteCount: size ?? 1, digest: "", data: Data())
+        return (size, importAdmissionFailure(probe, in: session, earlier: earlier))
+    }
+
     func update(design: AtticDesignContext) {
         guard design != self.design else { return }
         self.design = design
@@ -1260,36 +1365,44 @@ final class NotesPageController: ObservableObject {
     /// Paste, drop, Insert and slash all use this batch path. Files are read
     /// away from the main actor, then inserted with the accepted text as one
     /// editor-history step. Its anchor belongs to the note, not the caret.
-    func importFiles(_ urls: [URL], acceptedText: String = "", at selection: NSRange? = nil) {
-        guard let session = active, !session.isReadOnly, !urls.isEmpty else { return }
+    func importFiles(_ urls: [URL], acceptedText: String = "", at selection: NSRange? = nil,
+                     temporaryURLs: [URL] = []) {
+        guard let session = active, !session.isReadOnly, !urls.isEmpty else {
+            temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+            return
+        }
         guard NoteSessionPolicy.commandAllowed(session.engine.activity,
                 hasMarkedText: session.engine.textView?.hasMarkedText() == true) else {
+            temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
             session.notice = String(localized: "Finish Writing Tools or composing text before adding files.")
             return
         }
         guard session.importBatch == nil else {
+            temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
             session.notice = String(localized: "Finish the current file import before adding more files.")
             return
         }
         let batchID = UUID()
         session.engine.beginImageImport(at: selection)
         session.importBatch = NoteImportBatch(id: batchID, urls: urls, acceptedText: acceptedText)
+        // A crash before the first loader returns must still recover the
+        // target, accepted text and every unfinished source.
+        if journal != nil { _ = checkpoint(session, silent: true) }
         let loader = imageLoader
         session.importTask = Task { @MainActor [weak self, session] in
+            defer { temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) } }
             guard let self else { return }
             var loaded: [NoteImportedObject] = []
-            let present = self.store.attachments(for: session.noteID)
-            let staged = session.engine.stagedAttachments(for: session.engine.document())
-            var count = present.count + staged.count
-            var bytes = present.reduce(Int64.zero) { $0 + $1.byteCount }
-                + staged.reduce(Int64.zero) { $0 + $1.byteCount }
             for url in urls {
                 guard !Task.isCancelled, session.importBatch?.id == batchID else { return }
                 let type = UTType(filenameExtension: url.pathExtension) ?? .data
                 let item: NoteImportedObject
-                if count >= AttachmentLimits.maxAttachmentsPerNote {
+                // Metadata admission happens before either loader opens the
+                // payload. A missing metadata value is checked by the loader.
+                let (size, admissionFailure) = self.sourceAdmissionFailure(url, in: session, earlier: loaded)
+                if let failure = admissionFailure {
                     item = NoteImportedObject(filename: url.lastPathComponent, contentTypeIdentifier: type.identifier,
-                        byteCount: 0, failure: AttachmentFileStoreError.tooManyAttachments.localizedDescription)
+                        byteCount: size ?? 0, failure: failure)
                 } else if type.conforms(to: .image), let (image, size) = await loader(url) {
                     item = NoteImportedObject(staged: StagedNoteAttachment(id: UUID(), filename: image.filename,
                         contentTypeIdentifier: image.contentTypeIdentifier, byteCount: image.byteCount,
@@ -1297,12 +1410,12 @@ final class NotesPageController: ObservableObject {
                 } else {
                     item = await Self.loadFile(url, type: type.identifier)
                 }
-                if let payload = item.staged, bytes > AttachmentLimits.maxBytesPerNote - payload.byteCount {
+                if let payload = item.staged,
+                   let failure = self.importAdmissionFailure(payload, in: session, earlier: loaded) {
                     loaded.append(NoteImportedObject(filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
-                        byteCount: item.byteCount, failure: AttachmentFileStoreError.noteTooLarge.localizedDescription))
+                        byteCount: item.byteCount, failure: failure))
                 } else {
                     loaded.append(item)
-                    if let payload = item.staged { count += 1; bytes += payload.byteCount }
                 }
                 guard var progress = session.importBatch, progress.id == batchID else { return }
                 progress.completed = loaded.count
@@ -1319,6 +1432,28 @@ final class NotesPageController: ObservableObject {
     }
 
     func importImages(_ urls: [URL]) { importFiles(urls) }
+
+    /// Retry picker entry point. Admission happens from file metadata before
+    /// reading, then again at commit in case the draft changed meanwhile.
+    func retryFailedFile(_ objectID: UUID, with url: URL) async -> Bool {
+        guard let session = active, !session.isReadOnly,
+              case .importFailed = session.engine.objectState(objectID) else { return false }
+        if let failure = sourceAdmissionFailure(url, in: session).1 {
+            session.notice = failure
+            return false
+        }
+        let noteID = session.noteID
+        let type = UTType(filenameExtension: url.pathExtension) ?? .data
+        let item: NoteImportedObject
+        if type.conforms(to: .image), let (image, size) = await imageLoader(url) {
+            item = NoteImportedObject(staged: image, pixelSize: size)
+        } else {
+            item = await Self.loadFile(url, type: type.identifier)
+        }
+        guard active === session, session.noteID == noteID,
+              !session.isPersisted || store.note(withID: noteID) != nil else { return false }
+        return session.engine.replaceFailedFile(objectID, with: item)
+    }
 
     private func completeImportIfPossible(in session: NoteSession) {
         guard let batch = session.importBatch, let loaded = batch.loaded else { return }
@@ -1355,14 +1490,19 @@ final class NotesPageController: ObservableObject {
     }
 
     private func dropImport(in session: NoteSession, batchID: UUID, notice: String) {
-        guard session.importBatch?.id == batchID else { return }
+        guard let batch = session.importBatch, batch.id == batchID else { return }
+        // Retire pending metadata durably before releasing the live batch.
+        // A failed replacement leaves the old checkpoint and the batch live.
+        session.importBatch = nil
+        if journal != nil && !checkpoint(session, silent: true) {
+            session.importBatch = batch
+            session.notice = String(localized: "The batch could not be cancelled because its recovery copy could not be updated.")
+            return
+        }
         session.importTask?.cancel()
         session.importTask = nil
-        session.importBatch = nil
         session.engine.cancelImageImport()
         session.notice = notice
-        if NoteSessionPolicy.hasPendingWork(session.state) { _ = checkpoint(session, silent: true) }
-        else { clearRecoveryCopy(noteID: session.noteID) }
     }
 
     nonisolated private static func loadImageFile(_ url: URL) async -> (StagedNoteAttachment, CGSize?)? {
@@ -1422,7 +1562,7 @@ final class NotesPageController: ObservableObject {
 extension NotesPageController: NoteImageProviding {
     func fileURL(forAttachment id: UUID) async -> URL? {
         guard let row = attachmentRow(id) else { return nil }
-        return await store.materializedURL(for: row)
+        return await store.materializedURL(for: row, allowRetained: true)
     }
 
     func filename(forAttachment id: UUID) -> String? {
@@ -1458,11 +1598,37 @@ extension NotesPageController: NoteImageProviding {
     func hasAttachmentBytes(_ id: UUID) -> Bool {
         if let staged = cache.values.lazy.compactMap({ $0.engine.staged[id] }).first {
             return staged.byteCount == Int64(staged.data.count)
-                && staged.digest == SHA256.hash(data: staged.data).map { String(format: "%02x", $0) }.joined()
         }
-        guard let row = attachmentRow(id), let data = row.payload,
-              Int64(data.count) == row.byteCount else { return false }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() == row.contentDigest
+        guard let row = attachmentRow(id) else { return false }
+        let revision = store.revision
+        if let cached = verifiedAvailability[id], cached.revision == revision,
+           cached.digest == row.contentDigest { return cached.available }
+        if verifyingAvailability.insert(id).inserted {
+            let payload = row.payload
+            let digest = row.contentDigest
+            let size = row.byteCount
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let available: Bool
+                if let payload {
+                    available = await Task.detached(priority: .utility) {
+                        Int64(payload.count) == size && SHA256.hash(data: payload).map {
+                            String(format: "%02x", $0)
+                        }.joined() == digest
+                    }.value
+                } else {
+                    available = await self.store.materializedURL(for: row, allowRetained: true) != nil
+                }
+                self.verifyingAvailability.remove(id)
+                if self.store.revision == revision,
+                   self.attachmentRow(id)?.contentDigest == digest {
+                    self.verifiedAvailability[id] = (revision, digest, available)
+                }
+            }
+        }
+        // Metadata is enough for responsive validation; the background
+        // verifier changes this to missing if the stored bytes are corrupt.
+        return row.payload.map { Int64($0.count) == row.byteCount } ?? true
     }
 
     func locateAttachment(_ id: UUID, at url: URL) async -> Bool {
@@ -1471,7 +1637,18 @@ extension NotesPageController: NoteImageProviding {
     }
 
     private func attachmentRow(_ id: UUID) -> NoteAttachment? {
-        store.attachmentsByNoteID.values.lazy.flatMap { $0 }.first { $0.id == id }
+        if let cached = resolvedAttachmentRows[id], cached.revision == store.revision { return cached.row }
+        let family = store.attachmentFamily(id)
+        let resolved: NoteAttachment?
+        if let first = family.first,
+              family.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == first.contentDigest
+                  && $0.byteCount == first.byteCount && $0.contentTypeIdentifier == first.contentTypeIdentifier }) {
+            resolved = family.first(where: { $0.payload != nil }) ?? first
+        } else {
+            resolved = nil
+        }
+        resolvedAttachmentRows[id] = (store.revision, resolved)
+        return resolved
     }
 }
 

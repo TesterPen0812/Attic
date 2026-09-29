@@ -105,6 +105,21 @@ final class NoteUndoHistory {
     var isChangeInFlight: Bool { !pending.isEmpty }
     var openStep: Op? { open }
 
+    /// Bytes reachable by either side of Undo/Redo remain live until the
+    /// history step is discarded. This is queried for purge, never per key.
+    var referencedAttachmentIDs: Set<UUID> {
+        var ids = Set<UUID>()
+        for op in undoOps + redoOps {
+            for text in [op.current, op.other] {
+                text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+                    if let image = value as? NoteImageAttachment { ids.insert(image.attachmentID) }
+                    if let file = value as? NoteFileAttachment, let id = file.attachmentID { ids.insert(id) }
+                }
+            }
+        }
+        return ids
+    }
+
     func reset() {
         undoOps.removeAll()
         redoOps.removeAll()

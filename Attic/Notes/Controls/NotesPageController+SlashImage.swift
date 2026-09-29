@@ -7,6 +7,11 @@ extension NotesPageController {
         guard let session = active else { return }
         let engine = session.engine
         guard !session.isReadOnly else { engine.cancelSlashFile(); return }
+        if let failure = sourceAdmissionFailure(url, in: session).1 {
+            session.notice = failure
+            engine.cancelSlashFile()
+            return
+        }
         let loader = imageLoader
         Task { @MainActor [session] in
             let type = UTType(filenameExtension: url.pathExtension) ?? .data

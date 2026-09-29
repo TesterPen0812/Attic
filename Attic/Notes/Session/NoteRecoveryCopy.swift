@@ -18,6 +18,9 @@ struct NoteRecoverySnapshot: Sendable, Equatable {
     var attachments: [StagedNoteAttachment]
     /// Images the note shows whose bytes could not be read now.
     var unavailableAttachmentIDs: [UUID]
+    /// The batch had not committed when this copy was made. Completed files
+    /// are in attachments; the remaining names and accepted text are here.
+    var pendingImport: NoteDraftJournalEntry.PendingImport? = nil
 }
 
 /// Save Recovery Copy…: a folder, not a single file, so nothing has to be
@@ -76,6 +79,7 @@ enum NoteRecoveryCopy {
         /// Added in version 2; optional so version-1 folders still decode.
         var files: [Image]? = nil
         var unavailableFileIDs: [UUID]? = nil
+        var pendingImport: NoteDraftJournalEntry.PendingImport? = nil
     }
 
     /// "Groceries recovery copy" for the save panel's name field.
@@ -108,6 +112,7 @@ enum NoteRecoveryCopy {
 
         let document = NoteContentCodec.decode(snapshot.content).document
         let fileIDs = Set(document?.blocks.compactMap { $0.kind == .file ? $0.attachmentID : nil } ?? [])
+            .union(snapshot.pendingImport?.items.compactMap { $0.pixelWidth == nil ? $0.stagedID : nil } ?? [])
         var images: [Manifest.Image] = []
         var files: [Manifest.Image] = []
         if !snapshot.attachments.isEmpty {
@@ -127,7 +132,8 @@ enum NoteRecoveryCopy {
                                 savedAt: snapshot.savedAt, reason: snapshot.reason, tags: snapshot.tags,
                                 noteFile: noteFile, markdownFile: markdownFile, images: images,
                                 unavailableImageIDs: snapshot.unavailableAttachmentIDs.filter { !fileIDs.contains($0) },
-                                files: files, unavailableFileIDs: snapshot.unavailableAttachmentIDs.filter(fileIDs.contains))
+                                files: files, unavailableFileIDs: snapshot.unavailableAttachmentIDs.filter(fileIDs.contains),
+                                pendingImport: snapshot.pendingImport)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -175,6 +181,11 @@ enum NoteRecoveryCopy {
             files are missing here: \(ids)
 
             """
+        }
+        if let pending = manifest.pendingImport {
+            text += "\nPending import: accepted text and its insertion target are recorded in manifest.json. "
+                + "\(pending.remainingNames.count) source(s) had not finished loading. "
+                + "Completed source bytes are in attachments/.\n"
         }
         text += """
 

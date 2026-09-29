@@ -13,8 +13,8 @@ struct NoteDraftJournalEntry: Codable, Equatable {
         let digest: String
     }
 
-    struct PendingImport: Codable, Equatable {
-        struct Item: Codable, Equatable {
+    struct PendingImport: Codable, Equatable, Sendable {
+        struct Item: Codable, Equatable, Sendable {
             let filename: String
             let contentTypeIdentifier: String
             let byteCount: Int64
@@ -24,6 +24,10 @@ struct NoteDraftJournalEntry: Codable, Equatable {
             let failure: String?
         }
         let anchor: Int
+        /// Nonzero for a captured paste replacement. nil in older journals.
+        var replacementLength: Int? = nil
+        /// True for a drop/paste boundary; false for Insert at the caret.
+        var isBoundary: Bool? = nil
         let acceptedText: String
         let items: [Item]
         let remainingNames: [String]
