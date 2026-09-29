@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 
 /// Where the editor gets image bytes that are already stored.
 @MainActor
@@ -1703,8 +1704,6 @@ enum NoteFormatCommand: Hashable {
         case .paragraph(.bullet): "⇧⌘7"
         case .paragraph(.number): "⇧⌘8"
         case .paragraph(.checklist): "⇧⌘9"
-        case .paragraph(.quote): "⌥⌘Q"
-        case .paragraph(.mono): "⌥⌘M"
         case .indent: "⌘]"
         case .outdent: "⌘["
         case .toggleChecklist: "⌘Return"
@@ -2251,7 +2250,7 @@ extension NoteEditorEngine {
     func handleShortcut(_ event: NSEvent) -> Bool {
         guard !isReadOnly, activity == .idle, textView?.hasMarkedText() != true else { return false }
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let key = Self.unshiftedKey(for: event) ?? event.charactersIgnoringModifiers?.lowercased() ?? ""
         var command: NoteFormatCommand?
         switch (flags, key) {
         case ([.command], "b"): command = .mark(.bold)
@@ -2266,8 +2265,6 @@ extension NoteEditorEngine {
         case ([.command, .shift], "7"): command = .paragraph(.bullet)
         case ([.command, .shift], "8"): command = .paragraph(.number)
         case ([.command, .shift], "9"): command = .paragraph(.checklist)
-        case ([.command, .option], "q"): command = .paragraph(.quote)
-        case ([.command, .option], "m"): command = .paragraph(.mono)
         case ([.command], "]"): command = .indent
         case ([.command], "["): command = .outdent
         default: break
@@ -2277,6 +2274,37 @@ extension NoteEditorEngine {
         if flags == [.command, .option], event.keyCode == 125 { command = .moveDown }
         guard let command else { return false }
         return perform(command)
+    }
+
+    /// Translate the physical event through the active keyboard layout with
+    /// no modifiers. Shifted 7/8/9 yield punctuation in NSEvent.characters.
+    private static func unshiftedKey(for event: NSEvent) -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+            return fallbackDigit(for: event.keyCode)
+        }
+        let data = unsafeBitCast(property, to: CFData.self)
+        guard let bytes = CFDataGetBytePtr(data) else { return fallbackDigit(for: event.keyCode) }
+        let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+        var dead: UInt32 = 0
+        var chars = [UniChar](repeating: 0, count: 4)
+        var count = 0
+        let status = UCKeyTranslate(layout, event.keyCode, UInt16(kUCKeyActionDown), 0,
+                                    UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                    &dead, chars.count, &count, &chars)
+        guard status == noErr, count > 0 else { return fallbackDigit(for: event.keyCode) }
+        return String(utf16CodeUnits: chars, count: count).lowercased()
+    }
+
+    private static func fallbackDigit(for keyCode: UInt16) -> String? {
+        // Only used when the OS exposes no layout data (for example in a
+        // headless test host); the normal path translates the active layout.
+        switch keyCode {
+        case 26: "7"
+        case 28: "8"
+        case 25: "9"
+        default: nil
+        }
     }
 }
 
