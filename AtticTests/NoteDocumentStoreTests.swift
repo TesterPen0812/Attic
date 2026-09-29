@@ -139,6 +139,30 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(store.note(withID: id)?.title, "Agent")
     }
 
+    func testQueuedLossyAgentProposalCannotAutoApplyToRichNote() throws {
+        var rich = NoteBlock.text("Bold", style: "heading")
+        rich.level = 2
+        rich.marks = [NoteMark(.bold, offset: 0, length: 4)]
+        let base = NoteDocument(blocks: [.text("Title"), rich])
+        let (id, _) = try create(base)
+        let note = try XCTUnwrap(store.note(withID: id))
+        var lossy = base
+        lossy.blocks[1].text = "Changed"
+        lossy.blocks[1].marks = []
+        guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
+                                                document: lossy, agentName: "Agent", disposition: .direct) else { return XCTFail("direct") }
+        guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
+                                                document: lossy, agentName: "Agent", disposition: .proposal) else { return XCTFail("proposal") }
+        let queued = NotePendingEdit(noteID: id, baseRevisionToken: note.revisionToken,
+                                     proposedContent: try NoteContentCodec.encode(lossy), agentName: "Older Agent",
+                                     createdAt: Date(), baseVersionID: nil)
+        store.modelContext.insert(queued)
+        try store.modelContext.save()
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        XCTAssertTrue(try XCTUnwrap(store.pendingEdits(noteID: id).first).needsReview)
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.blocks, base.blocks)
+    }
+
     func testEveryWriterRefusesAFutureReplicaWithoutMutatingTheFamily() throws {
         let (id, revision) = try create(document("Readable"))
         XCTAssertTrue(store.recordVersion(noteID: id, reason: .pause))
