@@ -218,11 +218,11 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.formatModel.barBelow, false)
 
         let (top, topEngine, topView) = make(topInset: 60)
-        let first = range("Lead with", topView)
+        let first = range("Pricing", topView)
         topView.setSelectedRange(first)
         top.refresh()
         let rect = try XCTUnwrap(topEngine.rect(for: first))
-        XCTAssertTrue(top.formatModel.barBelow, "no room under the header: below")
+        XCTAssertTrue(top.formatModel.barBelow, "no room under the header (the title's line): below")
         XCTAssertGreaterThanOrEqual(top.barFrame.minY, rect.maxY)
         XCTAssertLessThanOrEqual(top.barFrame.maxX, topView.bounds.width, "inside the panel")
         XCTAssertGreaterThanOrEqual(top.barFrame.minX, 0)
@@ -498,5 +498,49 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(day("in 2 days"), 2)
         XCTAssertEqual(day("12"), 12, "a passed day of the month is next month's")
         XCTAssertNil(day("xyzzy"))
+    }
+
+    // MARK: Performance (the engine's 5,000-line stress note)
+
+    /// Keystrokes with the controls installed read no state; a selection's
+    /// snapshot and a select-all are timed for the report.
+    func testControlsAddNoWorkPerKeystrokeOnAStressNote() throws {
+        var blocks: [NoteBlock] = [.text("Stress")]
+        for index in 0..<5_000 {
+            blocks.append(index % 50 == 10 ? .checklist("Item \(index)")
+                          : .text("Line \(index) with some ordinary words to wrap a little in a narrow panel."))
+        }
+        let (controls, _, textView) = make(NoteDocument(blocks: blocks))
+        let middle = range("Line 2501 ", textView).location
+        textView.setSelectedRange(NSRange(location: middle, length: 0))
+        textView.scrollRangeToVisible(textView.selectedRange())
+        textView.displayIfNeeded()
+        spin()
+        let before = controls.snapshotCount
+        var samples: [Double] = []
+        for character in "the quick brown fox jumps over the lazy dog again and again!" {
+            let start = DispatchTime.now().uptimeNanoseconds
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+            textView.displayIfNeeded()
+            spin()
+            samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        }
+        XCTAssertEqual(controls.snapshotCount, before, "typing reads no format state")
+        func ms(_ body: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        textView.setSelectedRange(range("Line 2600 with some ordinary words", textView))
+        let sentence = ms { controls.refresh() }
+        XCTAssertTrue(controls.formatModel.barShown)
+        textView.setSelectedRange(NSRange(location: 0, length: (textView.string as NSString).length))
+        let all = ms { controls.refresh() }
+        let sorted = samples.sorted()
+        let report = String(format: "NOTE-FORMAT-PERF keystroke+runloop median %.2f ms p95 %.2f ms; bar state for a sentence %.2f ms; select-all %.1f ms",
+                            sorted[sorted.count / 2], sorted[Int(Double(sorted.count - 1) * 0.95)], sentence, all)
+        print(report)
+        XCTContext.runActivity(named: report) { _ in }
     }
 }

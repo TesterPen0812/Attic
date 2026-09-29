@@ -26,6 +26,7 @@ enum NoteFormatCaptureScene {
             textView.window?.makeFirstResponder(textView)
             if scene == "hint" {
                 type("Launch sync\n", into: textView)
+                textView.needsDisplay = true
                 return
             }
             writeSample(controls: controls, textView: textView, rich: scene == "structured")
@@ -87,6 +88,7 @@ enum NoteFormatCaptureScene {
         let box = range(of: "Final copy", in: textView)
         if box.location != NSNotFound { controls.engine.toggleCheckbox(atLineOf: box.location) }
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        textView.needsDisplay = true
     }
 
     private static func show(_ scene: String, controls: NoteFormatControls, chrome: NotesPageChrome,

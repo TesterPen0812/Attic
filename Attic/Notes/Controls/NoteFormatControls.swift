@@ -138,11 +138,12 @@ final class NoteFormatControls: NSObject {
         super.init()
         formatModel.router = router
         hintHost.contentInset = 0
-        for host in [hintHost, barHost, slashHost, cardHost, addressHost] {
+        for host in [hintHost, barHost] {
             host.isHidden = true
             textView.addSubview(host)
         }
-        textView.accessoryViews += [barHost, slashHost, cardHost]
+        for host in [slashHost, cardHost, addressHost] { host.isHidden = true }
+        textView.accessoryViews += [barHost]
         rebuildRoots()
         wire()
         Self.active = self
@@ -228,7 +229,7 @@ final class NoteFormatControls: NSObject {
         if engine.pendingSlashDate != nil { engine.cancelSlashDate() }
         textView?.onLayout = previousLayout
         textView?.contextMenuProvider = nil
-        textView?.accessoryViews.removeAll { view in [barHost, slashHost, cardHost].contains { $0 === view } }
+        textView?.accessoryViews.removeAll { $0 === barHost }
         for host in [hintHost, barHost, slashHost, cardHost, addressHost] { host.removeFromSuperview() }
         if Self.active === self { Self.active = nil }
     }
@@ -354,14 +355,40 @@ final class NoteFormatControls: NSObject {
         return ceil(AtticControlSize.capsuleInset * 2 + style + m.barGroupGap * 3 + toggles)
     }
 
-    /// The usable part of the text view's visible rectangle (clear of the
-    /// header and the bottom row).
-    private var usableRect: NSRect {
+    /// The part of the text view's visible rectangle a floating control
+    /// may use: from the header's bottom (the title's top gap included) to
+    /// the bottom row, or, for the lists and cards that float over the
+    /// bottom row, to 8 above the panel's edge.
+    private func usableRect(overBottomRow: Bool = false) -> NSRect {
         guard let textView, let scrollView else { return .zero }
         let visible = textView.visibleRect
         let insets = scrollView.contentInsets
-        return NSRect(x: visible.minX, y: visible.minY + insets.top, width: visible.width,
-                      height: max(0, visible.height - insets.top - insets.bottom))
+        let top = visible.minY + max(0, insets.top - AtticNoteMetrics.titleTopGap)
+        let bottom = overBottomRow ? visible.maxY - 8 : visible.maxY - insets.bottom
+        return NSRect(x: visible.minX, y: top, width: visible.width, height: max(0, bottom - top))
+    }
+
+    /// Below the anchor line, else above it; with room on neither side, the
+    /// roomier one, and the height it can have there.
+    private func floatingPlacement(anchorTop: CGFloat, anchorBottom: CGFloat, height: CGFloat)
+        -> (y: CGFloat, height: CGFloat) {
+        let area = usableRect(overBottomRow: true)
+        let gap = AtticNoteFormatMetrics.cardGap
+        let roomBelow = area.maxY - (anchorBottom + gap)
+        let roomAbove = (anchorTop - gap) - area.minY
+        if height <= roomBelow { return (anchorBottom + gap, height) }
+        if height <= roomAbove { return (anchorTop - gap - height, height) }
+        if roomBelow >= roomAbove { return (anchorBottom + gap, max(0, roomBelow)) }
+        return (area.minY, max(0, roomAbove))
+    }
+
+    /// Lists and cards float over the whole page (above the bottom row), in
+    /// the window's content view, placed from text-view coordinates.
+    private func placeOverlay(_ host: NoteOverlayHostingView, rect: NSRect) {
+        guard let textView, let parent = textView.window?.contentView else { return }
+        if host.superview !== parent { parent.addSubview(host, positioned: .above, relativeTo: nil) }
+        let frame = parent.convert(rect, from: textView).integral
+        if host.frame != frame { host.frame = frame }
     }
 
     /// Above the selection's first line, or under its last when there is no
@@ -371,7 +398,7 @@ final class NoteFormatControls: NSObject {
               let first = engine.rect(for: NSRange(location: selection.location, length: 1)),
               let last = engine.rect(for: NSRange(location: NSMaxRange(selection) - 1, length: 1)) else { return nil }
         let m = AtticNoteFormatMetrics.self
-        let usable = usableRect
+        let usable = usableRect()
         let width = barWidth > 0 ? barWidth : Self.barWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
         var y = first.minY - m.barGap - m.barHeight
         var below = false
@@ -529,19 +556,18 @@ final class NoteFormatControls: NSObject {
               let anchor = engine.rect(for: NSRange(location: session.range.location, length: 1)) else { return }
         let m = AtticNoteFormatMetrics.self
         let room = m.shadowRoom
-        let rows = min(slashModel.items.count, m.slashMaxVisibleRows)
-        let height = CGFloat(rows) * AtticControlSize.smallHeight + AtticPopoverMetrics.padding * 2
-        let size = NSSize(width: m.slashWidth, height: height)
+        let row = AtticControlSize.smallHeight
+        let padding = AtticPopoverMetrics.padding * 2
+        let wanted = CGFloat(min(slashModel.items.count, m.slashMaxVisibleRows)) * row + padding
+        let place = floatingPlacement(anchorTop: anchor.minY, anchorBottom: anchor.maxY, height: wanted)
+        let rows = max(3, min(slashModel.items.count, Int((place.height - padding) / row)))
+        if slashModel.maxVisibleRows != rows { slashModel.maxVisibleRows = rows }
+        let height = CGFloat(min(slashModel.items.count, rows)) * row + padding
+        let y = place.y < anchor.minY ? anchor.minY - m.cardGap - height : place.y
         let textInset = AtticPopoverMetrics.padding + AtticPopoverMetrics.rowPadding + AtticPopoverMetrics.rowIconSlot
             + AtticPopoverMetrics.rowGap
-        var x = anchor.minX - textInset
-        x = max(m.barEdgeMargin, min(x, textView.bounds.width - size.width - m.barEdgeMargin))
-        var y = anchor.maxY + m.cardGap
-        if y + height > usableRect.maxY, anchor.minY - m.cardGap - height >= usableRect.minY {
-            y = anchor.minY - m.cardGap - height
-        }
-        let frame = NSRect(x: x - room, y: y - room, width: size.width + room * 2, height: size.height + room * 2).integral
-        if slashHost.frame != frame { slashHost.frame = frame }
+        let x = max(m.barEdgeMargin, min(anchor.minX - textInset, textView.bounds.width - m.slashWidth - m.barEdgeMargin))
+        placeOverlay(slashHost, rect: NSRect(x: x - room, y: y - room, width: m.slashWidth + room * 2, height: height + room * 2))
     }
 
     // MARK: Cards (date, link)
@@ -553,7 +579,7 @@ final class NoteFormatControls: NSObject {
         cardSelection = selection
         cardAnchor = fromSlash ? engine.pendingSlashDate?.range : NSRange(location: selection.location, length: 0)
         cardModel.openDate(fromSlash: fromSlash, today: Date())
-        presentCard(size: NSSize(width: AtticNoteFormatMetrics.dateCardWidth, height: 360))
+        presentCard()
     }
 
     /// The link card for the engine's link target: its range (a selection,
@@ -564,13 +590,17 @@ final class NoteFormatControls: NSObject {
         cardSelection = range
         cardAnchor = range
         cardModel.openLink(url: url)
-        presentCard(size: NSSize(width: AtticNoteFormatMetrics.linkCardWidth, height: 120))
+        presentCard()
     }
 
     private var cardSize = NSSize.zero
 
-    private func presentCard(size: NSSize) {
-        cardSize = size
+    /// The card's size, measured from its content once as it opens.
+    private func presentCard() {
+        let room = AtticNoteFormatMetrics.shadowRoom
+        let measure = NSHostingView(rootView: NoteFormatCardView(model: cardModel).atticDesign(design))
+        let fitting = measure.fittingSize
+        cardSize = NSSize(width: max(0, fitting.width - room * 2), height: max(0, fitting.height - room * 2))
         placeCard()
         cardHost.isInteractive = true
         cardHost.isHidden = false
@@ -578,22 +608,22 @@ final class NoteFormatControls: NSObject {
     }
 
     private func placeCard() {
-        guard let textView, let anchorRange = cardAnchor else { return }
+        guard let textView, let anchorRange = cardAnchor, engine.textStorage.length > 0 else { return }
         let m = AtticNoteFormatMetrics.self
-        let start = min(anchorRange.location, max(0, engine.textStorage.length - 1))
-        let endIndex = max(start, NSMaxRange(anchorRange) - 1)
-        guard engine.textStorage.length > 0,
-              let first = engine.rect(for: NSRange(location: start, length: 1)),
-              let last = engine.rect(for: NSRange(location: min(endIndex, engine.textStorage.length - 1), length: 1)) else { return }
+        let length = engine.textStorage.length
+        let start = min(anchorRange.location, length - 1)
+        let end = min(max(start, NSMaxRange(anchorRange) - 1), length - 1)
+        guard let first = engine.rect(for: NSRange(location: start, length: 1)) ?? caretRect(),
+              let last = engine.rect(for: NSRange(location: end, length: 1)) ?? caretRect() else { return }
         let room = m.shadowRoom
-        var y = last.maxY + m.cardGap
-        if y + cardSize.height > usableRect.maxY, first.minY - m.cardGap - cardSize.height >= usableRect.minY {
-            y = first.minY - m.cardGap - cardSize.height
-        }
+        let place = floatingPlacement(anchorTop: first.minY, anchorBottom: last.maxY, height: cardSize.height)
+        // A card never shrinks: without room it covers the text rather than the page's edge.
+        let area = usableRect(overBottomRow: true)
+        let y = place.height < cardSize.height ? max(area.minY, area.maxY - cardSize.height) : place.y
         let x = max(m.barEdgeMargin, min(first.minX - AtticPopoverMetrics.padding - AtticPopoverMetrics.rowPadding,
                                          textView.bounds.width - cardSize.width - m.barEdgeMargin))
-        let frame = NSRect(x: x - room, y: y - room, width: cardSize.width + room * 2, height: cardSize.height + room * 2).integral
-        if cardHost.frame != frame { cardHost.frame = frame }
+        placeOverlay(cardHost, rect: NSRect(x: x - room, y: y - room, width: cardSize.width + room * 2,
+                                            height: cardSize.height + room * 2))
     }
 
     /// A click outside the card, or the window losing the keyboard, cancels it.
@@ -691,9 +721,20 @@ final class NoteFormatControls: NSObject {
             ])
             top.append(.separator())
         }
+        // The system's Font submenu would style text outside the note's
+        // format (bold, colours, sizes it cannot store): Format replaces it.
+        for item in menu.items where Self.isFontMenu(item) { menu.removeItem(item) }
         top += nativeItems(router.menuCommands(from: .contextMenu))
         top.append(.separator())
         for (index, item) in top.enumerated() { menu.insertItem(item, at: index) }
+    }
+
+    static func isFontMenu(_ item: NSMenuItem) -> Bool {
+        guard let submenu = item.submenu else { return false }
+        let fontActions: Set<Selector> = [#selector(NSFontManager.orderFrontFontPanel(_:)),
+                                          #selector(NSFontManager.addFontTrait(_:)),
+                                          #selector(NSText.underline(_:))]
+        return submenu.items.contains { $0.action.map(fontActions.contains) ?? false }
     }
 
     private func nativeItems(_ commands: [AtticMenuCommand]) -> [NSMenuItem] {
@@ -750,7 +791,7 @@ final class NoteFormatControls: NSObject {
         let size = addressHost.fittingSize
         let room = AtticNoteFormatMetrics.shadowRoom
         let x = max(0, min(rect.minX - room, textView.bounds.width - size.width))
-        addressHost.frame = NSRect(x: x, y: rect.maxY + 4 - room, width: size.width, height: size.height).integral
+        placeOverlay(addressHost, rect: NSRect(x: x, y: rect.maxY + 4 - room, width: size.width, height: size.height))
         addressHost.isHidden = false
         addressHost.setAccessibilityElement(false)
     }

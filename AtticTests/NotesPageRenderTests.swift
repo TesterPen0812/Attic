@@ -121,7 +121,7 @@ final class NotesPageRenderTests: XCTestCase {
         let rects = try XCTUnwrap(engine.titleLineRects())
         XCTAssertGreaterThan(rects.last.minY, rects.first.minY, "the long title wraps")
         let accessories = textView.accessoryViews
-        XCTAssertEqual(accessories.count, 3, "the tag line, the ⋯ and the tag suggestions")
+        XCTAssertEqual(accessories.count, 4, "the tag line, the ⋯, the tag suggestions and the format bar")
         let tagLine = accessories[0], menu = accessories[1]
         XCTAssertFalse(menu.isHidden, "a saved note shows its ⋯")
         XCTAssertEqual(menu.frame.midY, rects.first.midY, accuracy: 6, "the ⋯ sits on the title's first line")

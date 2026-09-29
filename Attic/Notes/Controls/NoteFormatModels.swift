@@ -143,6 +143,8 @@ final class NoteSlashListModel: ObservableObject {
     @Published private(set) var items: [NoteSlashItem] = []
     @Published var highlighted = 0
     @Published var shown = false
+    /// Rows that fit beside the caret; more scroll.
+    @Published var maxVisibleRows = AtticNoteFormatMetrics.slashMaxVisibleRows
     var onPick: ((NoteSlashItem.Kind) -> Void)?
 
     func show(_ items: [NoteSlashItem]) {

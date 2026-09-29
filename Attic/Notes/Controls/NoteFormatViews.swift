@@ -196,8 +196,9 @@ struct NoteFormatPopoverView: View {
     }
 
     private func row(_ row: Int, groups: [[NoteFormatCommand]]) -> some View {
-        HStack(spacing: AtticNoteFormatMetrics.popoverGroupGap) {
+        HStack(spacing: 0) {
             ForEach(Array(groups.enumerated()), id: \.offset) { groupIndex, group in
+                if groupIndex > 0 { Spacer(minLength: AtticNoteFormatMetrics.popoverGroupGap) }
                 let start = groups.prefix(groupIndex).reduce(0) { $0 + $1.count }
                 AtticFormatGroup {
                     ForEach(Array(group.enumerated()), id: \.offset) { offset, command in
@@ -234,13 +235,19 @@ struct NoteSlashListView: View {
         ZStack(alignment: .topLeading) {
             if model.shown, !model.items.isEmpty {
                 AtticPopover(width: AtticNoteFormatMetrics.slashWidth) {
-                    ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                        AtticPopoverRow(systemName: NoteCommandCatalog.slashSymbol(item.kind), title: item.title,
-                                        detail: NoteCommandCatalog.slashHint(item.kind),
-                                        isHighlighted: index == model.highlighted) {
-                            model.onPick?(item.kind)
+                    if model.items.count > model.maxVisibleRows {
+                        ScrollViewReader { proxy in
+                            ScrollView(.vertical) {
+                                VStack(alignment: .leading, spacing: 0) { rows }
+                            }
+                            .scrollIndicators(.never)
+                            .frame(height: CGFloat(model.maxVisibleRows) * AtticControlSize.smallHeight)
+                            .onChange(of: model.highlighted) { _, index in
+                                proxy.scrollTo(index, anchor: nil)
+                            }
                         }
-                        .accessibilityIdentifier("notes-slash-\(item.kind.rawValue)")
+                    } else {
+                        rows
                     }
                 }
                 .transition(NoteFormatMotion.transition(reduceMotion: design.reduceMotion, from: .top))
@@ -252,6 +259,21 @@ struct NoteSlashListView: View {
         .animation(NoteFormatMotion.animation(reduceMotion: design.reduceMotion), value: model.shown)
         .padding(AtticNoteFormatMetrics.shadowRoom)
         .fixedSize()
+    }
+}
+
+extension NoteSlashListView {
+    @ViewBuilder
+    fileprivate var rows: some View {
+        ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
+            AtticPopoverRow(systemName: NoteCommandCatalog.slashSymbol(item.kind), title: item.title,
+                            detail: NoteCommandCatalog.slashHint(item.kind),
+                            isHighlighted: index == model.highlighted) {
+                model.onPick?(item.kind)
+            }
+            .id(index)
+            .accessibilityIdentifier("notes-slash-\(item.kind.rawValue)")
+        }
     }
 }
 
