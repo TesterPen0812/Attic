@@ -330,8 +330,8 @@ final class TasksRound3Tests: XCTestCase {
         XCTAssertEqual(stops.first { $0.location >= 110.0 / 520 - 0.0001 }?.opacity, 1, "fully there from the first row's rest")
         XCTAssertLessThan(stops.last?.opacity ?? 1, 0.5, "receding under the add bar")
         XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
-        let underTabs = stops.filter { $0.location > 80.0 / 520 && $0.location < 110.0 / 520 }
-        XCTAssertTrue(underTabs.allSatisfy { $0.opacity <= 0.2 }, "scrolled text stays faint under the tabs")
+        let underTabs = stops.filter { $0.location > 80.0 / 520 && $0.location <= 96.0 / 520 + 0.0001 }
+        XCTAssertTrue(underTabs.allSatisfy { $0.opacity == 0 }, "scrolled text is gone under the tabs (round 12 keeps the round-11 rule)")
     }
 
     // MARK: - The quiet open ring (owner fix 1, review 12)

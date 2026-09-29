@@ -2955,6 +2955,12 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
+    /// A row's opacity at `depth` (0 open, 1 fully under) into an edge zone:
+    /// the edge veil's eased ramp scaled so its 65 % maximum is all of it.
+    static func edgeOpacity(atDepth depth: Double) -> Double {
+        1 - AtticEdgeBlur.veil(at: depth) / AtticEdgeBlur.maximumVeil
+    }
+
     /// The fade by position in the viewport: nothing over the header or
     /// under the tabs (so they stay readable over scrolled text), fully
     /// there from the first row's resting place down to the
@@ -2963,24 +2969,32 @@ enum TasksViewport {
         guard height > 0 else { return [(0, 1), (1, 1)] }
         let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
         // The fade starts in the 16 pt the list keeps from the bar and
-        // reaches a faint trace under the controls: without the per-row
-        // blur, text under see-through glass must be quieter than before.
+        // ends at the bar's top: nothing shows under the add bar, the
+        // strip or a selection bar (round 12: the round-11 fade left 22 %
+        // to 6 % of every row there, still readable through glass).
         let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar * 1.75, listTop)
         let barTop = max(height - bottomStack, fadeStart)
         // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
         // readable and clashed with the labels): nothing shows under the
-        // tabs at all, and the rows come back only in the gap under them,
-        // quickly toward their resting place.
+        // tabs at all. Round 12: the rows come back along the edge veil's
+        // own eased ramp (`AtticEdgeBlur.veilStops`, taken to full so it
+        // ends in nothing rather than at its 65 % of a surface veil), from
+        // a little under the tabs to their resting place.
         let gap = max(0, listTop - tabsBottom)
-        let points: [(CGFloat, Double)] = [
-            (0, 0),
-            (tabsBottom + min(2, gap / 4), 0),
-            (tabsBottom + gap * 0.6, 0.18),
-            (listTop, 1),
-            (fadeStart, 1),
-            (barTop, 0.22),
-            (height, 0.06)
-        ]
+        let clear = tabsBottom + gap * 0.25
+        var points: [(CGFloat, Double)] = [(0, 0), (clear, 0)]
+        // Rising ramp, depth 1 at `clear` and 0 at the list's top.
+        for stop in AtticEdgeBlur.veilStops.reversed() where stop.location < 1 {
+            points.append((listTop - (listTop - clear) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
+        }
+        points.append((listTop, 1))
+        points.append((fadeStart, 1))
+        // Falling ramp, depth 0 at `fadeStart` and 1 at the bar's top.
+        for stop in AtticEdgeBlur.veilStops where stop.location > 0 && stop.location < 1 {
+            points.append((fadeStart + (barTop - fadeStart) * CGFloat(stop.location), edgeOpacity(atDepth: stop.location)))
+        }
+        points.append((barTop, 0))
+        points.append((height, 0))
         var result: [(location: CGFloat, opacity: Double)] = []
         var last: CGFloat = -1
         for (y, opacity) in points {

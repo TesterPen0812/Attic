@@ -544,6 +544,51 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertEqual(short.first ?? 0, alone.first ?? -1, accuracy: 1, "a short tag is as wide as it is")
         XCTAssertLessThan(short.first ?? 999, 80, "and not padded to a prefix's width")
     }
+
+    // MARK: - Bug 5: rows are not readable under the tabs or the add bar
+
+    /// The mask's opacity at `y` (the gradient's linear interpolation).
+    private func maskOpacity(_ stops: [(location: CGFloat, opacity: Double)], at y: CGFloat, height: CGFloat) -> Double {
+        let x = y / height
+        guard let first = stops.first, let last = stops.last else { return 1 }
+        if x <= first.location { return first.opacity }
+        if x >= last.location { return last.opacity }
+        for (a, b) in zip(stops, stops.dropFirst()) where x <= b.location {
+            let t = Double((x - a.location) / (b.location - a.location))
+            return a.opacity + (b.opacity - a.opacity) * t
+        }
+        return last.opacity
+    }
+
+    /// Nothing scrolled under the tabs or the bottom stack survives the
+    /// list's mask (round 11 left 18 % under the tabs' gap and 22 % to 6 %
+    /// under the bar, which text still read through glass), for the bottom
+    /// stack as it grows (a strip, a selection bar), and the rows fade
+    /// along the edge veil's ramp, nothing at the resting place.
+    func testNothingIsReadableUnderTheTabsOrTheBottomStack() {
+        for stack in [CGFloat(36), 60, 96, 136] {
+            let height: CGFloat = 520
+            let stops = TasksViewport.maskStops(height: height, tabsTop: 80, listTop: 110, bottomStack: stack)
+            XCTAssertEqual(stops.map(\.location), stops.map(\.location).sorted(), "stops in order")
+            for y in stride(from: CGFloat(0), through: 96, by: 1) {
+                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "under the tabs at \(y), stack \(stack)")
+            }
+            for y in stride(from: height - stack, through: height, by: 1) {
+                XCTAssertEqual(maskOpacity(stops, at: y, height: height), 0, accuracy: 0.001, "under the bar at \(y), stack \(stack)")
+            }
+            XCTAssertEqual(maskOpacity(stops, at: 110, height: height), 1, accuracy: 0.001, "the resting row is whole")
+            XCTAssertEqual(maskOpacity(stops, at: height - stack - 44, height: height), 1, accuracy: 0.001, "and the last rows above the fade")
+            // Eased both ways: never rising under the bar, never falling in the gap.
+            let bottom = stride(from: height - stack - 28, through: height - stack, by: 1).map { maskOpacity(stops, at: $0, height: height) }
+            XCTAssertEqual(bottom, bottom.sorted(by: >), "falls toward the bar")
+            let top = stride(from: CGFloat(96), through: 110, by: 1).map { maskOpacity(stops, at: $0, height: height) }
+            XCTAssertEqual(top, top.sorted(), "rises toward the first row")
+        }
+        // The ramp is the edge veil's, scaled: half the veil, about a half.
+        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0), 1)
+        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 1), 0, accuracy: 1e-9)
+        XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0.55), 1 - 0.30 / AtticEdgeBlur.maximumVeil, accuracy: 1e-9)
+    }
 }
 
 extension Hosted {
