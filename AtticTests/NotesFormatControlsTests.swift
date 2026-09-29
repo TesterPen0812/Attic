@@ -359,9 +359,12 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.slashModel.items.map(\.kind), [.date])
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
         XCTAssertEqual(controls.cardModel.card, .date(fromSlash: true))
+        spin()
+        XCTAssertTrue(controls.cardHasKeyboard, "typing goes to the date field")
         XCTAssertTrue(textView.string.hasSuffix("/da"), "the command stays until a date is chosen")
         controls.cancelCard()
         XCTAssertNil(controls.cardModel.card)
+        XCTAssertTrue(textView.window?.firstResponder === textView, "the keyboard is back in the note")
         XCTAssertTrue(textView.string.hasSuffix("Call Sam /da"), "Esc puts /da back")
 
         type(" /da", textView)
@@ -412,6 +415,8 @@ final class NotesFormatControlsTests: XCTestCase {
         textView.setSelectedRange(target)
         controls.router.run(.mark(.link), from: .shortcut)
         XCTAssertEqual(controls.cardModel.card, .link(hasLink: false))
+        spin()
+        XCTAssertTrue(controls.cardHasKeyboard, "the card's field takes the keyboard from the note")
         controls.cardModel.linkText = "not a link"
         controls.cardModel.submitLink()
         XCTAssertNotNil(controls.cardModel.linkError, "a bad address says so and keeps the card")

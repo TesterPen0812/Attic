@@ -54,20 +54,20 @@ final class NotesFormatUITests: XCTestCase {
     }
 
     func testTheBarAppearsOverASelectionAndBoldsIt() {
-        app.typeText("Pricing\nmost people only")
+        app.typeText("Pricing\nMost people only")
         selectLastWords(2)
         let bold = element("notes-format-bold")
         require(bold, "the bar shows over the selection")
         XCTAssertEqual(bold.value as? String, "off")
         bold.click()
         waitFor((element("notes-format-bold").value as? String) == "on", "Bold is on for the selection")
-        waitFor(noteValue == "Pricing\nmost people only", "the text is unchanged (\(noteValue))")
+        waitFor(noteValue == "Pricing\nMost people only", "the text is unchanged (\(noteValue))")
         app.typeKey(.rightArrow, modifierFlags: [])
         waitFor(!element("notes-format-bar").exists || !element("notes-format-bold").isHittable, "no selection, no bar")
     }
 
     func testControlTabReachesTheBarWithoutLeavingTheText() {
-        app.typeText("Pricing\nmost people only")
+        app.typeText("Pricing\nMost people only")
         selectLastWords(1)
         require(element("notes-format-bar"), "the bar")
         app.typeKey(.tab, modifierFlags: .control)
@@ -78,7 +78,7 @@ final class NotesFormatUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         app.typeKey(.rightArrow, modifierFlags: [])
         app.typeText("!")
-        waitFor(noteValue == "Pricing\nmost people only!", "typing went on in the note (\(noteValue))")
+        waitFor(noteValue == "Pricing\nMost people only!", "typing went on in the note (\(noteValue))")
     }
 
     func testCommandTOpensAaWhichStylesTheCaretParagraph() {
@@ -123,18 +123,18 @@ final class NotesFormatUITests: XCTestCase {
     }
 
     func testShiftCommandKOpensTheLinkCard() {
-        app.typeText("Pricing\nsee the docs")
+        app.typeText("Pricing\nSee the docs")
         selectLastWords(1)
         app.typeKey("k", modifierFlags: [.command, .shift])
         require(element("notes-link-field"), "⇧⌘K opens the link card")
         app.typeText("example.com")
         app.typeKey(.return, modifierFlags: [])
         waitFor(!element("notes-link-card").exists, "Return applies and closes")
-        waitFor(noteValue == "Pricing\nsee the docs", "the text is unchanged (\(noteValue))")
+        waitFor(noteValue == "Pricing\nSee the docs", "the text is unchanged (\(noteValue))")
     }
 
     func testRightClickHasFormatAndInsert() {
-        app.typeText("Pricing\nmost people")
+        app.typeText("Pricing\nMost people")
         noteText.rightClick()
         let format = app.menuItems["Format"]
         require(format, "right-click › Format")
@@ -143,6 +143,6 @@ final class NotesFormatUITests: XCTestCase {
         require(app.menuItems["Bulleted List"], "every Format row")
         app.menuItems["Bulleted List"].click()
         app.typeText("!")
-        waitFor(noteValue.hasSuffix("most people!"), "the list applied and the text kept the keyboard (\(noteValue))")
+        waitFor(noteValue.hasSuffix("Most people!"), "the list applied and the text kept the keyboard (\(noteValue))")
     }
 }

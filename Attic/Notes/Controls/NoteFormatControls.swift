@@ -9,6 +9,8 @@ final class NoteOverlayHostingView: NSHostingView<AnyView> {
     /// The content's inset from the host's edges (the shadow room).
     var contentInset: CGFloat = AtticNoteFormatMetrics.shadowRoom
     var isInteractive = false
+    /// The date and link cards hold a text field that takes the keyboard.
+    var acceptsKeyboard = false
 
     required init(rootView: AnyView) {
         super.init(rootView: rootView)
@@ -18,7 +20,7 @@ final class NoteOverlayHostingView: NSHostingView<AnyView> {
 
     @MainActor @preconcurrency required dynamic init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var acceptsFirstResponder: Bool { false }
+    override var acceptsFirstResponder: Bool { acceptsKeyboard }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard isInteractive, !isHidden else { return nil }
@@ -138,6 +140,7 @@ final class NoteFormatControls: NSObject {
         super.init()
         formatModel.router = router
         hintHost.contentInset = 0
+        cardHost.acceptsKeyboard = true
         hintHost.isHidden = true
         textView.addSubview(hintHost)
         for host in [barHost, slashHost, cardHost, addressHost] { host.isHidden = true }
@@ -151,7 +154,10 @@ final class NoteFormatControls: NSObject {
 
     private func wire() {
         guard let textView, let scrollView else { return }
-        router.onChange = { [weak self] in self?.refreshSnapshot() }
+        router.onChange = { [weak self] in
+            self?.refreshSnapshot()
+            self?.returnKeyboardFromBar()
+        }
         router.requestDate = { [weak self] in self?.openDateCard(fromSlash: false) }
         router.requestFile = { [weak self] in self?.requestFile?(false) }
         formatModel.willRequestLink = { [weak self] in
@@ -291,7 +297,7 @@ final class NoteFormatControls: NSObject {
     func refresh() {
         guard let textView else { return }
         let current = selection
-        let focused = textView.window?.firstResponder === textView
+        let focused = textView.window?.firstResponder === textView || barOwnsKeyboard
         let allowsBar = current.length > 0 && focused && !textView.hasMarkedText() && engine.activity == .idle
             && cardModel.card == nil && dismissedSelection != current && !slashModel.shown && !isFormatPopoverOpen
         if allowsBar || isFormatPopoverOpen {
@@ -324,6 +330,17 @@ final class NoteFormatControls: NSObject {
     }
 
     // MARK: Selection bar
+
+    /// A click in the bar can leave the keyboard with its host; the text keeps it.
+    private var barOwnsKeyboard: Bool {
+        guard let responder = barHost.window?.firstResponder as? NSView else { return false }
+        return responder === barHost || responder.isDescendant(of: barHost)
+    }
+
+    private func returnKeyboardFromBar() {
+        guard barOwnsKeyboard, let textView else { return }
+        textView.window?.makeFirstResponder(textView)
+    }
 
     private func showBar() {
         barWidth = measuredBarWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
@@ -617,6 +634,8 @@ final class NoteFormatControls: NSObject {
         cardHost.isInteractive = true
         cardHost.isHidden = false
         installCardDismissal()
+        // The card's field takes the keyboard (typing goes to it, not the note).
+        DispatchQueue.main.async { [weak self] in self?.focusCardField() }
     }
 
     private func placeCard() {
@@ -636,6 +655,30 @@ final class NoteFormatControls: NSObject {
                                          textView.bounds.width - cardSize.width - m.barEdgeMargin))
         placeOverlay(cardHost, rect: NSRect(x: x - room, y: y - room, width: cardSize.width + room * 2,
                                             height: cardSize.height + room * 2))
+    }
+
+    private func focusCardField() {
+        guard cardModel.card != nil, let window = cardHost.window else { return }
+        cardHost.layoutSubtreeIfNeeded()
+        if let field = Self.firstTextField(in: cardHost) {
+            window.makeFirstResponder(field)
+        } else {
+            window.makeFirstResponder(cardHost)
+        }
+    }
+
+    private static func firstTextField(in view: NSView) -> NSTextField? {
+        for subview in view.subviews {
+            if let field = subview as? NSTextField, field.isEditable { return field }
+            if let found = firstTextField(in: subview) { return found }
+        }
+        return nil
+    }
+
+    /// The card's field has the keyboard.
+    var cardHasKeyboard: Bool {
+        guard let responder = cardHost.window?.firstResponder as? NSView else { return false }
+        return responder === cardHost || responder.isDescendant(of: cardHost)
     }
 
     /// A click outside the card, or the window losing the keyboard, cancels it.
