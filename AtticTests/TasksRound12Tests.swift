@@ -589,6 +589,35 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 1), 0, accuracy: 1e-9)
         XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0.55), 1 - 0.30 / AtticEdgeBlur.maximumVeil, accuracy: 1e-9)
     }
+
+    // MARK: - Hidden Done reads nothing
+
+    /// A Done page kept built but not drawn does not read the log, does not
+    /// watch the store's revision, and catches up when it is drawn.
+    func testAHiddenDonePageReadsNothingUntilItIsDrawn() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        XCTAssertEqual(hosted.model.pagerSwipe.span.warm, 0...2, "Done is built beside the page")
+        XCTAssertTrue(hosted.model.doneLogTasks.isEmpty, "built hidden, it read no log")
+        // The store changes while Done is hidden: still nothing read.
+        let library = AtticLibrary(tasks: hosted.store)
+        var ids: [UUID] = []
+        for index in 0..<5 { ids.append(try XCTUnwrap(hosted.store.create(title: "Old finished \(index)")).id) }
+        XCTAssertTrue(library.updateTasks(ids, status: .done).isApplied)
+        XCTAssertGreaterThan(hosted.store.moveCompletedToDoneLog(before: Calendar.current.startOfDay(for: Date().addingTimeInterval(86_400))), 0)
+        hosted.spin(0.6)
+        XCTAssertTrue(hosted.model.doneLogTasks.isEmpty, "a store change read nothing for the hidden page")
+        // Drawn, it catches up with everything at once.
+        hosted.go(to: .done)
+        XCTAssertTrue(ids.allSatisfy { id in hosted.model.doneLogTasks.contains { $0.id == id } }, "drawn, it read the log as it is now")
+        // And watches again: a change while drawn is read.
+        let more = try XCTUnwrap(hosted.store.create(title: "Finished while watching")).id
+        XCTAssertTrue(library.updateTasks([more], status: .done).isApplied)
+        XCTAssertGreaterThan(hosted.store.moveCompletedToDoneLog(before: Calendar.current.startOfDay(for: Date().addingTimeInterval(86_400))), 0)
+        hosted.spin(0.6)
+        XCTAssertTrue(hosted.model.doneLogTasks.contains { $0.id == more }, "a drawn Done follows the store")
+    }
 }
 
 extension Hosted {

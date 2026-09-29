@@ -12,7 +12,8 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     /// Every change to the model while the page is drawn; nothing while it
     /// is kept built but not drawn (round 11, `TasksCellUpdates`).
     @ObservedObject var updates: TasksCellUpdates
-    @ObservedObject var store: TaskStore
+    /// Observed only while the page is drawn (`TasksDoneRevisionWatcher`).
+    let store: TaskStore
     /// Where the first line rests (under the tabs) and what the bottom
     /// stack needs clear (owner fix 8): the day headings scroll under the
     /// tabs like Now's rows.
@@ -38,9 +39,17 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
     var body: some View {
         let days = model.doneDays()
         list(days)
-        .onAppear { model.loadDoneLogIfNeeded() }
-        .onChange(of: model.doneSearch) { _, _ in model.loadDoneLogIfNeeded() }
-        .onChange(of: store.revision) { _, _ in model.loadDoneLogIfNeeded() }
+        // Round 12: a page kept built but not drawn reads nothing and
+        // watches nothing (its copy of the log is not on screen); drawn
+        // again, it catches up with whatever changed meanwhile.
+        .onAppear { if drawn { model.loadDoneLogIfNeeded() } }
+        .onChange(of: model.doneSearch) { _, _ in if drawn { model.loadDoneLogIfNeeded() } }
+        .onChange(of: drawn) { _, drawn in if drawn { model.loadDoneLogIfNeeded() } }
+        .background {
+            if drawn {
+                TasksDoneRevisionWatcher(store: store) { model.loadDoneLogIfNeeded() }
+            }
+        }
     }
 
     private func list(_ days: [TasksDoneDay]) -> some View {
@@ -69,7 +78,9 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
                         .accessibilityIdentifier("tasks-done-load-failed")
                 } else if model.doneLogHasMore {
                     AtticLoadingRows(count: 2)
-                        .onAppear { model.loadMoreDoneLog() }
+                        // Only a drawn page pages on; one drawn again with
+                        // the sentinel already in view reads the next page.
+                        .task(id: drawn) { if drawn { model.loadMoreDoneLog() } }
                 }
                 if days.isEmpty, model.doneLogFailure == nil {
                     let query = model.doneSearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,5 +115,19 @@ struct TasksDonePage<Cell: View, Mask: View>: View {
         // the log was built (round 10).
         .onAppear { registerList(proxy) }
         }
+    }
+}
+
+/// The store's revision, watched by its own small view so that a Done page
+/// kept built but not drawn does not observe the store at all (round 12).
+private struct TasksDoneRevisionWatcher: View {
+    @ObservedObject var store: TaskStore
+    let reload: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: store.revision) { _, _ in reload() }
+            .accessibilityHidden(true)
     }
 }
