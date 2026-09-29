@@ -22,7 +22,7 @@ struct NoteFormatSnapshot: Equatable {
     static func make(router: NoteCommandRouter, selection: NSRange) -> NoteFormatSnapshot {
         var validations: [NoteFormatCommand: NoteCommandValidation] = [:]
         for command in shownCommands { validations[command] = router.validation(command, selection: selection) }
-        let styles = NoteCommandCatalog.styles.filter { validations[$0]?.state == .on }
+        let styles = (NoteCommandCatalog.styles + NoteCommandCatalog.lists).filter { validations[$0]?.state == .on }
         let paragraph: NoteParagraphStyle? = if case let .paragraph(style)? = styles.first { style } else { nil }
         return NoteFormatSnapshot(paragraph: paragraph, validations: validations,
                                   disabledReason: router.disabledReason(selection: selection))

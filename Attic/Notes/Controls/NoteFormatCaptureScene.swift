@@ -97,8 +97,8 @@ enum NoteFormatCaptureScene {
         case "bar":
             textView.setSelectedRange(range(of: "most people only need the panel", in: textView))
         case "barclick":
-            // A real click path (NSWindow.sendEvent → hit test → the bar's Bold),
-            // then a note of what happened for the check.
+            // A click through the event queue on the bar's Bold (the panel's
+            // hit test, the bar keeping the selection and the keyboard).
             textView.setSelectedRange(range(of: "Student pricing", in: textView))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 guard let window = textView.window else { return }
@@ -108,19 +108,11 @@ enum NoteFormatCaptureScene {
                 let point = NSPoint(x: bar.minX + AtticControlSize.capsuleInset + style + m.barGroupGap + m.barToggleWidth / 2,
                                     y: bar.midY)
                 let location = textView.convert(point, to: nil)
-                let hit = window.contentView?.hitTest(window.contentView!.convert(location, from: nil))
                 for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                     if let event = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
                                                       timestamp: ProcessInfo.processInfo.systemUptime,
                                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                                       clickCount: 1, pressure: 1) { NSApp.postEvent(event, atStart: false) }
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    let marks = controls.engine.document().blocks.last?.marks.map(\.kind.rawValue) ?? []
-                    let report = "hit=\(hit.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
-                        + "responder=\(window.firstResponder.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
-                        + "selection=\(NSStringFromRange(textView.selectedRange())) barShown=\(controls.formatModel.barShown) marks=\(marks)"
-                    NSLog("ATTIC_BARCLICK %@", report)
                 }
             }
         case "aa":

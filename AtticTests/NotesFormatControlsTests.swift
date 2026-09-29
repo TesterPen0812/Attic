@@ -277,6 +277,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(engine.document().blocks[3].style, "bullet")
         controls.refreshSnapshot()
         XCTAssertEqual(controls.formatModel.snapshot.value(.paragraph(.bullet)), .on)
+        XCTAssertEqual(controls.formatModel.snapshot.paragraph, .bullet, "the bar's style control says List")
         controls.formatModel.run(.paragraph(.bullet), from: .selectionBar)
         XCTAssertNil(engine.document().blocks[3].style, "choosing an on list returns it to Body")
         controls.formatModel.run(.paragraph(.heading(2)), from: .formatPopover)
