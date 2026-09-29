@@ -96,22 +96,6 @@ struct NoteTextStyle: Equatable {
         return result
     }
 
-    func markedAttributes(kind: NoteMark.Kind, baseFont: NSFont, url: String? = nil) -> [NSAttributedString.Key: Any] {
-        switch kind {
-        case .bold: return [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)]
-        case .italic: return [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)]
-        case .underline: return [.underlineStyle: NSUnderlineStyle.single.rawValue]
-        case .strikethrough: return [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
-        case .code: return [.font: monoFont, .backgroundColor: codeColor]
-        case .highlight: return [.backgroundColor: highlightColor]
-        case .link:
-            var result: [NSAttributedString.Key: Any] = [.underlineStyle: NSUnderlineStyle.single.rawValue,
-                                                          .foregroundColor: bodyColor]
-            if let url, let value = URL(string: url) { result[.link] = value }
-            return result
-        }
-    }
-
     /// Presentation always comes from the complete semantic mark set. In
     /// particular, code chooses the family before bold/italic add traits.
     func markedAttributes(marks: [NoteMark.Kind: Any], baseFont: NSFont) -> [NSAttributedString.Key: Any] {

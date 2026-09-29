@@ -2368,8 +2368,17 @@ extension NoteEditorEngine {
             if textStorage.attribute(.noteMark(.code), at: max(0, min(start, textStorage.length - 1)), effectiveRange: nil) != nil { continue }
             let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: interior))
             replacement.addAttribute(.noteMark(kind), value: true, range: NSRange(location: 0, length: replacement.length))
-            let font = textStorage.attribute(.font, at: start, effectiveRange: nil) as? NSFont ?? style.bodyFont
-            replacement.addAttributes(style.markedAttributes(kind: kind, baseFont: font), range: NSRange(location: 0, length: replacement.length))
+            let font = attributes(forParagraphAt: start)[.font] as? NSFont ?? style.bodyFont
+            var runs: [([NoteMark.Kind: Any], NSRange)] = []
+            replacement.enumerateAttributes(in: NSRange(location: 0, length: replacement.length)) { values, run, _ in
+                let marks = Dictionary(uniqueKeysWithValues: NoteMark.Kind.allCases.compactMap { mark in
+                    values[.noteMark(mark)].map { (mark, $0) }
+                })
+                runs.append((marks, run))
+            }
+            for (marks, run) in runs {
+                replacement.addAttributes(style.markedAttributes(marks: marks, baseFont: font), range: run)
+            }
             return performEdit(range, with: replacement, name: "Format \(kind.rawValue.capitalized)",
                                selection: NSRange(location: start + replacement.length, length: 0))
         }

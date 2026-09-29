@@ -928,6 +928,14 @@ final class NoteEditorEngineTests: XCTestCase {
         let afterUndo = plainView.typingAttributes[.font] as? NSFont
         XCTAssertTrue(afterUndo?.fontDescriptor.symbolicTraits.contains(.bold) == true)
         XCTAssertFalse(afterUndo?.fontDescriptor.symbolicTraits.contains(.italic) == true)
+        let (inline, inlineView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("")]))
+        inlineView.setSelectedRange(NSRange(location: 2, length: 0))
+        XCTAssertTrue(inline.perform(.mark(.italic)))
+        type("**word**", inlineView)
+        let word = location(of: "word", in: inline)
+        let inlineFont = inline.textStorage.attribute(.font, at: word, effectiveRange: nil) as? NSFont
+        XCTAssertTrue(inlineFont?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+        XCTAssertTrue(inlineFont?.fontDescriptor.symbolicTraits.contains(.italic) == true)
     }
 
     func testRichPasteKeepsLargeBodyAndUnsupportedListKindsLiteral() throws {
