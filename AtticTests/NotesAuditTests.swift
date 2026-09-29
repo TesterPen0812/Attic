@@ -420,6 +420,56 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertTrue(store.notes.isEmpty, "nothing was saved to the library")
     }
 
+    /// Phase 2 audit fix B3: while Writing Tools' session was refused, the
+    /// note in memory can be rewritten in place, past the text-edit guards.
+    /// The recovery copy is a checkpoint, so it must keep the starting note
+    /// (its structure, its objects and its images), never that rewrite.
+    func testARecoveryCopyDuringARefusedWritingToolsRewriteKeepsTheStartingNote() async throws {
+        let image = try pixel()
+        let (controller, session) = try onlyInMemoryNote(image: image)
+        let engine = session.engine
+        _ = engine.makeView()
+        let expected = engine.document()
+        XCTAssertEqual(expected.attachmentIDs, [image.id], "the note starts with its image")
+        let expectedMarkdown = try XCTUnwrap(controller.markdown(noteID: session.noteID))
+        XCTAssertTrue(expectedMarkdown.contains("[image: pixel.png]"))
+
+        // Both the store and the journal refuse, so Writing Tools is refused
+        // and the note is frozen at this snapshot.
+        engine.writingToolsWillBegin()
+        XCTAssertEqual(engine.activity, .writingToolsRefused)
+        // A rewrite that bypasses the guards: the text and the image are gone
+        // from the live text storage.
+        engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: engine.textStorage.length), with: "Rewritten")
+        XCTAssertNotEqual(engine.document(), expected, "the live text was rewritten")
+        XCTAssertEqual(engine.checkpointDocument(), expected)
+
+        let target = try scratchURL("refused recovery copy")
+        controller.recoveryCopyDestination = { _ in target }
+        let saved = await controller.saveRecoveryCopy(of: session)
+        XCTAssertTrue(saved)
+
+        let noteJSON = try Data(contentsOf: target.appendingPathComponent("note.json"))
+        guard case let .editable(decoded) = NoteContentCodec.decode(noteJSON) else { return XCTFail("note.json must decode") }
+        XCTAssertEqual(decoded, expected, "the structure and objects of the starting note")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(NoteRecoveryCopy.Manifest.self,
+                                          from: Data(contentsOf: target.appendingPathComponent("manifest.json")))
+        XCTAssertEqual(manifest.images.map(\.id), [image.id], "the image of that same document")
+        XCTAssertEqual(manifest.unavailableImageIDs, [])
+        let file = try XCTUnwrap(manifest.images.first?.file)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent(file)), image.data, "its original bytes")
+        let markdown = try String(contentsOf: target.appendingPathComponent("note.md"), encoding: .utf8)
+        XCTAssertTrue(markdown.contains("Groceries"))
+        XCTAssertFalse(markdown.contains("Rewritten"))
+
+        // Copy as Markdown reads the same checkpoint, not the transient text.
+        XCTAssertEqual(controller.markdown(noteID: session.noteID), expectedMarkdown)
+        engine.writingToolsDidEnd()
+        XCTAssertEqual(engine.document(), expected, "and the note is restored when Writing Tools ends")
+    }
+
     func testCancellingTheSavePanelWritesNothingAndSaysNothing() async throws {
         let (controller, session) = try onlyInMemoryNote()
         let target = try scratchURL("never")

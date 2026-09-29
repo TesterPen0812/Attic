@@ -971,7 +971,11 @@ final class NotesPageController: ObservableObject {
     }
 
     private func recoverySnapshot(of session: NoteSession) throws -> NoteRecoverySnapshot {
-        let document = session.engine.document()
+        // The checkpoint document, as the journal writes it: during a refused
+        // Writing Tools session that is the starting note, never the
+        // in-place rewrite that got past the text guards. The images come
+        // from that same document.
+        let document = checkpointDocument(for: session)
         var attachments = session.engine.stagedAttachments(for: document)
         var unavailable: [UUID] = []
         var seen = Set(attachments.map(\.id))
@@ -1695,7 +1699,9 @@ extension NotesPageController {
         let document: NoteDocument
         let staged: [UUID: String]
         if let session = cache[noteID] {
-            document = session.engine.document()
+            // What a recovery checkpoint would keep: never the transient text
+            // of a refused Writing Tools rewrite.
+            document = checkpointDocument(for: session)
             staged = session.engine.staged.mapValues(\.filename)
         } else if let stored = store.loadDocument(noteID: noteID)?.content.document {
             document = stored
