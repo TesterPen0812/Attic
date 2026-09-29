@@ -971,7 +971,11 @@ final class NotesPageController: ObservableObject {
     }
 
     private func recoverySnapshot(of session: NoteSession) throws -> NoteRecoverySnapshot {
-        let document = session.engine.document()
+        // The checkpoint document, as the journal writes it: during a refused
+        // Writing Tools session that is the starting note, never the
+        // in-place rewrite that got past the text guards. The images come
+        // from that same document.
+        let document = checkpointDocument(for: session)
         var attachments = session.engine.stagedAttachments(for: document)
         var unavailable: [UUID] = []
         var seen = Set(attachments.map(\.id))
@@ -1587,20 +1591,25 @@ extension NotesPageController {
     /// Pin to Top / Unpin from Top (metadata; a draft is saved first).
     @discardableResult
     func setPinned(_ pinned: Bool, noteID: UUID) -> Bool {
-        let before = store.note(withID: noteID)?.isPinned
-        guard applyPinned(pinned, noteID: noteID) else { return false }
-        // A pin that changed nothing is not a step.
-        if let before, before != pinned {
+        // The store decides between a mutation and a no-op across every
+        // replica of the UUID; history records what it actually did. A pin
+        // that changed nothing is not a step.
+        switch applyPinned(pinned, noteID: noteID) {
+        case .failed:
+            return false
+        case .unchanged:
+            return true
+        case .changed:
             undoRoute.record(pinStep(pinned, noteID: noteID), in: .notesLibrary)
+            return true
         }
-        return true
     }
 
-    private func applyPinned(_ pinned: Bool, noteID: UUID) -> Bool {
+    private func applyPinned(_ pinned: Bool, noteID: UUID) -> NoteStore.PinResult {
         if let session = cache[noteID], !session.isPersisted {
-            guard preserve(session), session.isPersisted else { return false }
+            guard preserve(session), session.isPersisted else { return .failed }
         }
-        return store.setPinned(pinned, noteID: noteID)
+        return store.setPinnedOutcome(pinned, noteID: noteID)
     }
 
     // MARK: Library history (Phase 2 audit, item 15)
@@ -1658,9 +1667,11 @@ extension NotesPageController {
     }
 
     private func pinOutcome(_ pinned: Bool, noteID: UUID) -> UndoOutcome {
-        guard let note = store.note(withID: noteID) else { return .obsolete }
-        if note.isPinned == pinned { return .applied }
-        return applyPinned(pinned, noteID: noteID) ? .applied : .failed
+        guard store.note(withID: noteID) != nil else { return .obsolete }
+        switch applyPinned(pinned, noteID: noteID) {
+        case .changed, .unchanged: return .applied
+        case .failed: return .failed
+        }
     }
 
     /// Duplicate: Undo deletes the copy (to Recently Deleted, with any text
@@ -1688,7 +1699,9 @@ extension NotesPageController {
         let document: NoteDocument
         let staged: [UUID: String]
         if let session = cache[noteID] {
-            document = session.engine.document()
+            // What a recovery checkpoint would keep: never the transient text
+            // of a refused Writing Tools rewrite.
+            document = checkpointDocument(for: session)
             staged = session.engine.staged.mapValues(\.filename)
         } else if let stored = store.loadDocument(noteID: noteID)?.content.document {
             document = stored

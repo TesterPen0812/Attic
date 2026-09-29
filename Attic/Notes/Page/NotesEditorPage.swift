@@ -131,6 +131,10 @@ struct NotesEditorPage: View {
                 library.highlightedID = nil
             } else {
                 searchFocused = false
+                // Back on a note (the one that was open included): a toast
+                // for a delete made in the library does not follow you into
+                // the text. The step itself stays in the library's history.
+                dismissOwnToast()
             }
         }
         .fileImporter(isPresented: Binding(get: { chrome.fileRequest != nil },
@@ -162,6 +166,7 @@ struct NotesEditorPage: View {
             NotesLibraryView(model: library, controller: controller, store: noteStore, layout: layout,
                              bottomClearance: bottomInset, searchFocused: $searchFocused,
                              rowCommands: { id in rowCommands(id) },
+                             libraryCommands: { Self.historyCommands(for: controller) },
                              onOpen: { id in openFromLibrary(id) },
                              onDelete: { id in delete(id) },
                              onBack: { toggleLibrary() })
@@ -375,7 +380,9 @@ struct NotesEditorPage: View {
         guard let toasts, let step = controller.libraryUndoStepID else { return }
         // The toast is one way to Undo; the library's history is the other
         // (⌘Z, the menus), and it outlives the toast.
-        let toast = toasts.show(String(localized: "Note deleted")) { [controller] in
+        // Its button answers the pointer and VoiceOver, never ⌘Z: the key
+        // follows the focused text, then the library (NotesLibraryView).
+        let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
             guard controller.libraryUndoStepID == step else { return }
             controller.undoLibrary()
         }
@@ -462,9 +469,17 @@ struct NotesEditorPage: View {
                 controller.duplicateNote(noteID: id)
             },
             AtticMenuCommand("Delete Note", shortcut: KeyboardShortcut(.delete, modifiers: .command), isDestructive: true,
-                             isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) },
-            // The library's history (pin, duplicate, delete), named for the
-            // step it would reverse; dimmed when there is none.
+                             isDisabled: stored == nil, startsSection: true, identifier: "notes-row-delete") { delete(id) }
+        ] + Self.historyCommands(for: controller)
+    }
+
+    /// The library's history (pin, duplicate, delete) as commands, named for
+    /// the step each would reverse and dimmed when there is none. They are
+    /// the tail of every row's menu and, on their own, the menu of the
+    /// library's background: with no rows (the last note just deleted) there
+    /// is no row menu, and Undo is still reachable here.
+    static func historyCommands(for controller: NotesPageController) -> [AtticMenuCommand] {
+        [
             AtticMenuCommand("\(historyTitle(String(localized: "Undo"), step: controller.libraryUndoName))",
                              shortcut: KeyboardShortcut("z", modifiers: .command),
                              isDisabled: !controller.canUndoLibrary, startsSection: true,
@@ -477,7 +492,7 @@ struct NotesEditorPage: View {
     }
 
     /// "Undo Delete Note", or just "Undo" with nothing to reverse.
-    private func historyTitle(_ verb: String, step: String?) -> String {
+    private static func historyTitle(_ verb: String, step: String?) -> String {
         step.map { "\(verb) \($0)" } ?? verb
     }
 

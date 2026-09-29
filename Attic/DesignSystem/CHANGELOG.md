@@ -5,6 +5,18 @@ Every later change is recorded here: what changed, why, and who asked.
 
 ## Phase 2
 
+### Notes audit fix B2 (redesign/p2-audit-fix)
+
+Requested by the Phase 2 audit (finding B2: the delete toast could take
+⌘Z away from the text). No token, colour, radius or size changed.
+
+- **`AtticUndoToast` gains `answersUndoKey`** (default true, so Tasks is
+  unchanged) and **`PanelToastCenter.show` gains the same parameter**. With
+  false the toast's button no longer carries the ⌘Z shortcut: it answers the
+  pointer and VoiceOver only, and the VoiceOver announcement no longer says
+  "with Command-Z". Notes' "Note deleted" toast passes false: ⌘Z there follows
+  the text under the caret, then the library's history.
+
 ### Notes rebuild, slice 2 (redesign/phase-2)
 
 Requested by the slice 2 brief (the writing view, the bottom row and slot,

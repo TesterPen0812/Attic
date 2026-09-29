@@ -165,18 +165,39 @@ extension NoteStore {
     /// the note keeps its place in the newest-first order and its revision.
     @discardableResult
     func setPinned(_ pinned: Bool, noteID: UUID) -> Bool {
+        switch setPinnedOutcome(pinned, noteID: noteID) {
+        case .changed, .unchanged: return true
+        case .failed: return false
+        }
+    }
+
+    /// What a pin request did to the UUID's whole replica family.
+    enum PinResult: Equatable {
+        /// At least one replica disagreed and every replica now agrees.
+        case changed
+        /// Every replica already had the requested state; nothing was written.
+        case unchanged
+        /// The note is gone or the write was refused or did not save.
+        case failed
+    }
+
+    /// The replica-aware pin: the store, not a presentation representative,
+    /// decides between a mutation and a no-op across every live replica, and
+    /// says which happened so history records the actual result.
+    @discardableResult
+    func setPinnedOutcome(_ pinned: Bool, noteID: UUID) -> PinResult {
         do {
             let replicas = try liveReplicas(of: noteID)
             guard !replicas.isEmpty else { throw NoteDocumentStoreError.noteMissing(noteID) }
-            guard replicas.contains(where: { $0.isPinned != pinned }) else { return true }
+            guard replicas.contains(where: { $0.isPinned != pinned }) else { return .unchanged }
             let timestamp = pinned ? currentDate : nil
             for replica in replicas { replica.pinnedAt = timestamp }
         } catch {
             modelContext.rollback()
             recordError(error.localizedDescription)
-            return false
+            return .failed
         }
-        return commitStagedChanges()
+        return commitStagedChanges() ? .changed : .failed
     }
 
     // MARK: Search

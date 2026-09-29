@@ -8,6 +8,10 @@ import SwiftUI
 struct AtticUndoToast: View {
     let message: String
     var actionTitle: String = String(localized: "Undo")
+    /// Whether the button also answers ⌘Z. Tasks' toast does; Notes' does not
+    /// (⌘Z there belongs to the text under the caret, then the library's
+    /// history), so the button is then pointer- and VoiceOver-only.
+    var answersUndoKey = true
     let onUndo: () -> Void
 
     @State private var probeID = UUID()
@@ -17,7 +21,7 @@ struct AtticUndoToast: View {
         let radius = AtticRadius.control(height: height)
         HStack(spacing: AtticToastMetrics.gap) {
             AtticText(verbatim: message, style: .toast, ink: .body)
-            AtticToastButton(title: actionTitle, outerRadius: radius, action: onUndo)
+            AtticToastButton(title: actionTitle, outerRadius: radius, answersUndoKey: answersUndoKey, action: onUndo)
         }
         .padding(.leading, AtticToastMetrics.leadingPadding)
         .padding(.trailing, AtticControlSize.capsuleInset)

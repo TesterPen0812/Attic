@@ -189,6 +189,53 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertEqual(controller.libraryUndoName, "Unpin Note")
     }
 
+    /// B1: pinning is decided across the whole UUID family. The presentation
+    /// representative agreeing with the request must not hide a replica that
+    /// disagrees, in the initial pin or in Undo and Redo.
+    func testPinHistoryFollowsEveryReplicaNotTheRepresentative() throws {
+        let controller = makeController()
+        let a = try create([.text("Alpha")])
+        XCTAssertTrue(store.setPinned(true, noteID: a))
+        // A second physical row of the same note, unpinned: the presented
+        // representative is the pinned one.
+        let other = NoteItem(id: a, title: "Alpha", body: "Alpha")
+        store.modelContext.insert(other)
+        try store.modelContext.save()
+        func replicas() throws -> [NoteItem] { try store.liveReplicas(of: a) }
+        XCTAssertEqual(try replicas().count, 2)
+        XCTAssertEqual(store.note(withID: a)?.isPinned, true, "the representative is already pinned")
+        XCTAssertEqual(try replicas().filter(\.isPinned).count, 1)
+
+        // Initial pin: the representative already agrees, but a replica does not.
+        XCTAssertTrue(controller.setPinned(true, noteID: a))
+        XCTAssertEqual(try replicas().map(\.isPinned), [true, true], "every replica is pinned")
+        XCTAssertEqual(controller.libraryUndoName, "Pin Note", "the mutation is a history step")
+
+        // Undo with the replicas diverged the other way round.
+        let representative = try XCTUnwrap(store.note(withID: a))
+        let sibling = try XCTUnwrap(try replicas().first { $0 !== representative })
+        representative.pinnedAt = nil
+        try store.modelContext.save()
+        XCTAssertFalse(representative.isPinned)
+        XCTAssertTrue(sibling.isPinned)
+        XCTAssertTrue(controller.undoLibrary())
+        XCTAssertEqual(try replicas().map(\.isPinned), [false, false], "Undo unpins every replica")
+
+        // Redo with the representative agreeing and the sibling not.
+        representative.pinnedAt = Date()
+        try store.modelContext.save()
+        XCTAssertTrue(representative.isPinned)
+        XCTAssertFalse(sibling.isPinned)
+        XCTAssertTrue(controller.redoLibrary())
+        XCTAssertEqual(try replicas().map(\.isPinned), [true, true], "Redo pins every replica")
+
+        // Every replica already agrees: nothing changes and no step is added.
+        XCTAssertTrue(controller.undoLibrary())
+        XCTAssertEqual(try replicas().map(\.isPinned), [false, false])
+        XCTAssertTrue(controller.setPinned(false, noteID: a), "all replicas already unpinned")
+        XCTAssertNil(controller.libraryUndoName, "a no-op is not a step")
+    }
+
     func testUndoOfDeleteReopensTheNoteOnlyWhenItWasOnScreen() throws {
         let controller = makeController()
         let a = try create([.text("Alpha")])
@@ -373,6 +420,56 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertTrue(store.notes.isEmpty, "nothing was saved to the library")
     }
 
+    /// Phase 2 audit fix B3: while Writing Tools' session was refused, the
+    /// note in memory can be rewritten in place, past the text-edit guards.
+    /// The recovery copy is a checkpoint, so it must keep the starting note
+    /// (its structure, its objects and its images), never that rewrite.
+    func testARecoveryCopyDuringARefusedWritingToolsRewriteKeepsTheStartingNote() async throws {
+        let image = try pixel()
+        let (controller, session) = try onlyInMemoryNote(image: image)
+        let engine = session.engine
+        _ = engine.makeView()
+        let expected = engine.document()
+        XCTAssertEqual(expected.attachmentIDs, [image.id], "the note starts with its image")
+        let expectedMarkdown = try XCTUnwrap(controller.markdown(noteID: session.noteID))
+        XCTAssertTrue(expectedMarkdown.contains("[image: pixel.png]"))
+
+        // Both the store and the journal refuse, so Writing Tools is refused
+        // and the note is frozen at this snapshot.
+        engine.writingToolsWillBegin()
+        XCTAssertEqual(engine.activity, .writingToolsRefused)
+        // A rewrite that bypasses the guards: the text and the image are gone
+        // from the live text storage.
+        engine.textStorage.replaceCharacters(in: NSRange(location: 0, length: engine.textStorage.length), with: "Rewritten")
+        XCTAssertNotEqual(engine.document(), expected, "the live text was rewritten")
+        XCTAssertEqual(engine.checkpointDocument(), expected)
+
+        let target = try scratchURL("refused recovery copy")
+        controller.recoveryCopyDestination = { _ in target }
+        let saved = await controller.saveRecoveryCopy(of: session)
+        XCTAssertTrue(saved)
+
+        let noteJSON = try Data(contentsOf: target.appendingPathComponent("note.json"))
+        guard case let .editable(decoded) = NoteContentCodec.decode(noteJSON) else { return XCTFail("note.json must decode") }
+        XCTAssertEqual(decoded, expected, "the structure and objects of the starting note")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(NoteRecoveryCopy.Manifest.self,
+                                          from: Data(contentsOf: target.appendingPathComponent("manifest.json")))
+        XCTAssertEqual(manifest.images.map(\.id), [image.id], "the image of that same document")
+        XCTAssertEqual(manifest.unavailableImageIDs, [])
+        let file = try XCTUnwrap(manifest.images.first?.file)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent(file)), image.data, "its original bytes")
+        let markdown = try String(contentsOf: target.appendingPathComponent("note.md"), encoding: .utf8)
+        XCTAssertTrue(markdown.contains("Groceries"))
+        XCTAssertFalse(markdown.contains("Rewritten"))
+
+        // Copy as Markdown reads the same checkpoint, not the transient text.
+        XCTAssertEqual(controller.markdown(noteID: session.noteID), expectedMarkdown)
+        engine.writingToolsDidEnd()
+        XCTAssertEqual(engine.document(), expected, "and the note is restored when Writing Tools ends")
+    }
+
     func testCancellingTheSavePanelWritesNothingAndSaysNothing() async throws {
         let (controller, session) = try onlyInMemoryNote()
         let target = try scratchURL("never")
@@ -418,6 +515,186 @@ final class NotesAuditTests: XCTestCase {
         XCTAssertTrue(saved)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.path).sorted(),
                        ["README.txt", "manifest.json", "note.json", "note.md"])
+    }
+
+    // MARK: Recovery copy: where it is built and how it is published (Phase 2 audit fix B4)
+
+    /// A file manager that can refuse to make a scratch folder, play a
+    /// scratch folder on another volume, or refuse to publish.
+    private final class FaultyFileManager: FileManager {
+        var refuseReplacementDirectory = false
+        /// A real folder handed out as the "replacement directory", standing
+        /// for another volume's.
+        var replacementDirectory: URL?
+        var refuseSibling = false
+        var refusePublishing = false
+        private(set) var publishAttempts = 0
+
+        override func url(for directory: FileManager.SearchPathDirectory, in domain: FileManager.SearchPathDomainMask,
+                          appropriateFor url: URL?, create shouldCreate: Bool) throws -> URL {
+            if directory == .itemReplacementDirectory {
+                if refuseReplacementDirectory { throw CocoaError(.fileWriteUnknown) }
+                if let replacementDirectory {
+                    let folder = replacementDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+                    try createDirectory(at: folder, withIntermediateDirectories: true)
+                    return folder
+                }
+            }
+            return try super.url(for: directory, in: domain, appropriateFor: url, create: shouldCreate)
+        }
+
+        override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                      attributes: [FileAttributeKey: Any]? = nil) throws {
+            if refuseSibling, url.lastPathComponent.hasPrefix(".AtticRecovery-") { throw CocoaError(.fileWriteNoPermission) }
+            try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+        }
+
+        override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+            publishAttempts += 1
+            if refusePublishing { throw CocoaError(.fileWriteUnknown) }
+            try super.moveItem(at: srcURL, to: dstURL)
+        }
+
+        override func replaceItem(at originalItemURL: URL, withItemAt newItemURL: URL, backupItemName: String?,
+                                  options: FileManager.ItemReplacementOptions = [],
+                                  resultingItemURL resultingURL: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
+            publishAttempts += 1
+            if refusePublishing { throw CocoaError(.fileWriteUnknown) }
+            try super.replaceItem(at: originalItemURL, withItemAt: newItemURL, backupItemName: backupItemName,
+                                  options: options, resultingItemURL: resultingURL)
+        }
+    }
+
+    private func recoverySnapshot(title: String = "T") throws -> NoteRecoverySnapshot {
+        let image = try pixel()
+        return NoteRecoverySnapshot(noteID: UUID(), title: title, content: Data("{}".utf8), markdown: "# \(title)", tags: [],
+                                    reason: "why", savedAt: Date(), attachments: [image], unavailableAttachmentIDs: [])
+    }
+
+    /// A folder standing for another volume's scratch space, and a folder
+    /// to put the destination in, both real.
+    private func makeFolders() throws -> (elsewhere: URL, home: URL) {
+        let root = try scratchURL("volumes")
+        let elsewhere = root.appendingPathComponent("elsewhere", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        return (elsewhere, home)
+    }
+
+    private func existingCopy(at target: URL) throws {
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: target.appendingPathComponent("stale.txt"))
+    }
+
+    private func assertUntouched(_ target: URL, file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.path), ["stale.txt"],
+                       "the folder that was there is exactly as it was", file: file, line: line)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("stale.txt")), Data("old".utf8), file: file, line: line)
+    }
+
+    private func names(in folder: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+    }
+
+    private func temporaryRecoveryFolders() -> Set<String> {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? []
+        return Set(names.filter { $0.hasPrefix("AtticRecovery-") })
+    }
+
+    func testARecoveryCopyThatCannotBeStagedOnTheDestinationVolumeFailsAndPublishesNothing() throws {
+        let (_, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let general = temporaryRecoveryFolders()
+        let files = FaultyFileManager()
+        files.refuseReplacementDirectory = true
+        files.refuseSibling = true
+
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files)) { error in
+            XCTAssertTrue(error is NoteRecoveryCopy.NoStagingError, "\(error)")
+        }
+        XCTAssertEqual(files.publishAttempts, 0, "nothing was published")
+        try assertUntouched(target)
+        XCTAssertEqual(try names(in: home), ["copy"], "nothing left beside it")
+        XCTAssertEqual(temporaryRecoveryFolders(), general, "and never built in the general temporary folder")
+
+        // With no folder there yet, nothing appears.
+        let fresh = home.appendingPathComponent("fresh")
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: fresh, fileManager: files))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fresh.path))
+    }
+
+    func testARecoveryCopyDestinedForAnotherVolumeIsNeverBuiltThereAndIsPublishedFromASibling() throws {
+        let (elsewhere, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let files = FaultyFileManager()
+        // The replacement directory is on another volume; the destination's
+        // own folder is on the destination's volume.
+        files.replacementDirectory = elsewhere
+        let sameVolume: (URL, URL) -> Bool = { first, second in
+            !first.path.hasPrefix(elsewhere.path) && !second.path.hasPrefix(elsewhere.path)
+        }
+
+        try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files, onSameVolume: sameVolume)
+        XCTAssertEqual(try names(in: target), ["README.txt", "attachments", "manifest.json", "note.json", "note.md"],
+                       "the whole folder replaced the old one")
+        XCTAssertEqual(try names(in: elsewhere), [], "the other volume's scratch folder was not used and is gone")
+        XCTAssertEqual(try names(in: home), ["copy"], "the sibling scratch folder is gone too")
+    }
+
+    func testARecoveryCopyWhoseOnlyScratchSpaceIsAnotherVolumeFailsAndKeepsTheDestination() throws {
+        let (elsewhere, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let general = temporaryRecoveryFolders()
+        let files = FaultyFileManager()
+        files.replacementDirectory = elsewhere
+        files.refuseSibling = true
+        let sameVolume: (URL, URL) -> Bool = { first, second in
+            !first.path.hasPrefix(elsewhere.path) && !second.path.hasPrefix(elsewhere.path)
+        }
+
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files,
+                                                        onSameVolume: sameVolume)) { error in
+            XCTAssertTrue(error is NoteRecoveryCopy.NoStagingError, "\(error)")
+        }
+        XCTAssertEqual(files.publishAttempts, 0, "no cross-volume move was ever attempted")
+        try assertUntouched(target)
+        XCTAssertEqual(try names(in: elsewhere), [], "the other volume's folder was cleaned up")
+        XCTAssertEqual(try names(in: home), ["copy"])
+        XCTAssertEqual(temporaryRecoveryFolders(), general)
+
+        // A scratch folder that is not on the volume even when it was the
+        // sibling (a mount point, say) is refused the same way.
+        try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: FaultyFileManager(),
+                                   onSameVolume: { _, _ in true })
+        XCTAssertEqual(try names(in: target), ["README.txt", "attachments", "manifest.json", "note.json", "note.md"])
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: FaultyFileManager(),
+                                                        onSameVolume: { _, _ in false }))
+        XCTAssertEqual(try names(in: target), ["README.txt", "attachments", "manifest.json", "note.json", "note.md"],
+                       "and the copy that was there stays")
+        XCTAssertEqual(try names(in: home), ["copy"])
+    }
+
+    func testAFailedPublicationKeepsTheExistingFolderAndLeavesNoScratchBehind() throws {
+        let (_, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let files = FaultyFileManager()
+        files.refusePublishing = true
+
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files))
+        XCTAssertEqual(files.publishAttempts, 1, "publication was attempted, and refused")
+        try assertUntouched(target)
+        XCTAssertEqual(try names(in: home), ["copy"], "no scratch folder left beside it")
+
+        // A first copy that cannot be published leaves no folder at all.
+        let fresh = home.appendingPathComponent("fresh")
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: fresh, fileManager: files))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fresh.path))
+        XCTAssertEqual(try names(in: home), ["copy"])
     }
 
     func testARecoveryCopyIsOfferedOnlyWhileTheTextIsHeldOnlyHere() throws {
