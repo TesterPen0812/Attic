@@ -1473,7 +1473,6 @@ final class NotesPageController: ObservableObject {
         var replacement = original
         var copied = staged
         var mapping: [UUID: UUID] = [:]
-        let stored = (try? store.attachmentRows(forNoteID: oldID)) ?? []
         for index in replacement.blocks.indices where replacement.blocks[index].kind == .image
             || replacement.blocks[index].kind == .file {
             guard let oldAttachmentID = replacement.blocks[index].attachmentID else {

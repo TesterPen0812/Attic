@@ -324,11 +324,11 @@ final class NoteStore: ObservableObject {
         self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
 #if os(macOS)
         resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self] in
-            await MainActor.run {
-                guard let self else { return nil }
+            guard let owner = self else { return nil }
+            return await MainActor.run {
                 do {
-                    var ids = try self.documentReferencedAttachmentIDs()
-                    ids.formUnion(try self.context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+                    var ids = try owner.documentReferencedAttachmentIDs()
+                    ids.formUnion(try owner.context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
                     return ids
                 } catch { return nil }
             }

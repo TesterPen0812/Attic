@@ -191,6 +191,7 @@ final class NotesPageControllerTests: XCTestCase {
             preparedCommitMilliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - preparedStart) / 1_000_000)
             combinedMilliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - extractionStart) / 1_000_000)
         }
+        await controller.waitForRecoveryWork()
         let sorted = milliseconds.sorted()
         let extractionSorted = extractionMilliseconds.sorted()
         let preparedSorted = preparedCommitMilliseconds.sorted()
