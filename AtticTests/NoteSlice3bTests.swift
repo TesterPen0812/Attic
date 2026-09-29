@@ -1927,7 +1927,7 @@ extension NoteSlice3bTests {
 @MainActor
 extension NoteSlice3bTests {
     func testByteDeletionPrimitiveInvariantEnumeratesEveryCollectorAndOwner() async throws {
-        enum Owner: CaseIterable { case recovery, draft, undo, pendingBatch, version, proposal, recentlyDeleted }
+        enum Owner: CaseIterable { case recovery, draft, undo, pendingBatch, version, versionWithoutCachedIDs, unreadableVersion, proposal, unreadableProposal, recentlyDeleted, unreadableNote }
         enum Collector: CaseIterable { case explicitRemoval, metadataReconciliation, reconciliation, expiredSweep }
         for owner in Owner.allCases {
             for collector in Collector.allCases {
@@ -1943,16 +1943,20 @@ extension NoteSlice3bTests {
                 switch owner {
                 case .draft, .undo, .pendingBatch, .recovery:
                     store.recoveryReferencedAttachmentIDs = { [item.id] }
-                case .version:
+                case .version, .versionWithoutCachedIDs, .unreadableVersion:
                     store.modelContext.insert(NoteVersion(noteID: noteID, createdAt: Date(), reason: .leave,
-                        content: try NoteContentCodec.encode(doc), contentFormat: 1, title: "Owner", body: "",
-                        attachmentIDs: [item.id], sourceRevisionID: nil))
-                case .proposal:
+                        content: owner == .unreadableVersion ? Data("future".utf8) : try NoteContentCodec.encode(doc),
+                        contentFormat: owner == .unreadableVersion ? 20 : 1, title: "Owner", body: "",
+                        attachmentIDs: owner == .version ? [item.id] : [], sourceRevisionID: nil))
+                case .proposal, .unreadableProposal:
                     store.modelContext.insert(NotePendingEdit(noteID: noteID, baseRevisionToken: "base",
-                        proposedContent: try NoteContentCodec.encode(doc), agentName: "agent", createdAt: Date()))
-                case .recentlyDeleted:
+                        proposedContent: owner == .unreadableProposal ? Data("future".utf8) : try NoteContentCodec.encode(doc),
+                        agentName: "agent", createdAt: Date()))
+                case .recentlyDeleted, .unreadableNote:
                     let note = NoteItem(id: noteID, title: "Owner", body: "", createdAt: Date(), updatedAt: Date())
-                    note.contentFormat = 1; note.content = try NoteContentCodec.encode(doc); note.deletedAt = Date()
+                    note.contentFormat = owner == .unreadableNote ? 20 : 1
+                    note.content = owner == .unreadableNote ? Data("future".utf8) : try NoteContentCodec.encode(doc)
+                    note.deletedAt = Date()
                     store.modelContext.insert(note)
                 }
                 try store.modelContext.save()

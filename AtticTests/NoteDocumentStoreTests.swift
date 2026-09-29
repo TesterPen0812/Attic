@@ -498,6 +498,14 @@ final class NoteDocumentStoreTests: XCTestCase {
         store.recoveryReferencedAttachmentIDs = { throw CocoaError(.fileReadCorruptFile) }
         XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0, "an unreadable scan purges nothing")
         store.recoveryReferencedAttachmentIDs = { [] }
+        XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 0,
+            "unknown historical document ownership keeps even an agreeing byte family")
+        XCTAssertEqual(try physicalAttachments(removed.id).count, 1)
+        // Simulate the owner resolving the malformed legacy content. The
+        // original agreeing/divergent-family deletion assertions still apply
+        // once the complete historical inventory is knowable.
+        for version in try physicalVersions(split) { version.content = nil }
+        try store.modelContext.save()
         XCTAssertEqual(store.purgeRemovedAttachments(before: .distantFuture), 1, "only the agreeing file is purged")
         XCTAssertTrue(try physicalAttachments(removed.id).isEmpty)
         XCTAssertEqual(try physicalAttachments(divergent.id).count, 2, "the divergent file family is kept whole")

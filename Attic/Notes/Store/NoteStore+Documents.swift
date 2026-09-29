@@ -1147,9 +1147,9 @@ extension NoteStore {
     // MARK: Retention
 
     /// Every attachment row a note in the new format shows, a kept version
-    /// shows, or a pending agent edit would show. A note whose content this
-    /// build can't read keeps all of its rows. Throws on a failed read, so
-    /// callers keep everything rather than guess.
+    /// shows, or a pending agent edit would show. Unreadable ownership or
+    /// a failed read makes the inventory unknown, so callers retain all
+    /// bytes rather than treating existing rows as a complete inventory.
     func documentReferencedAttachmentIDs(excludingNoteID excluded: UUID? = nil) throws -> Set<UUID> {
         var ids = try recoveryReferencedAttachmentIDs()
         let notes = try modelContext.fetch(FetchDescriptor<NoteItem>(
@@ -1160,21 +1160,32 @@ extension NoteStore {
             if let data = note.content, case let .editable(document) = NoteContentCodec.decode(data) {
                 ids.formUnion(document.attachmentIDs)
             } else {
-                ids.formUnion(try attachmentRows(forNoteID: note.id).map(\.id))
+                // Unknown document bytes may name a materialization even
+                // when its row is absent. No row list proves completeness.
+                throw NoteDocumentStoreError.readOnly
             }
         }
         for version in try modelContext.fetch(FetchDescriptor<NoteVersion>()) {
             if version.noteID == excluded { continue }
             ids.formUnion(version.attachmentIDs)
+            guard version.attachmentIDsRaw.split(separator: " ").allSatisfy({ UUID(uuidString: String($0)) != nil }) else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            if version.contentFormat == 0, version.content == nil { continue }
+            guard version.contentFormat == NoteDocument.currentFormat,
+                  let data = version.content, case let .editable(document) = NoteContentCodec.decode(data) else {
+                throw NoteDocumentStoreError.readOnly
+            }
+            // Both fields can own bytes; a cached raw list is not proof that
+            // the actual historical document names no other attachment.
+            ids.formUnion(document.attachmentIDs)
         }
         for edit in try modelContext.fetch(FetchDescriptor<NotePendingEdit>()) {
             if edit.noteID == excluded { continue }
-            guard let data = edit.proposedContent else { continue }
-            if case let .editable(document) = NoteContentCodec.decode(data) {
-                ids.formUnion(document.attachmentIDs)
-            } else {
-                ids.formUnion(try attachmentRows(forNoteID: edit.noteID).map(\.id))
+            guard let data = edit.proposedContent, case let .editable(document) = NoteContentCodec.decode(data) else {
+                throw NoteDocumentStoreError.readOnly
             }
+            ids.formUnion(document.attachmentIDs)
         }
         return ids
     }
