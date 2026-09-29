@@ -149,10 +149,12 @@ final class NoteDocumentStoreTests: XCTestCase {
         var lossy = base
         lossy.blocks[1].text = "Changed"
         lossy.blocks[1].marks = []
-        guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
+        guard case let .failure(.saveFailed(directReason)) = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
                                                 document: lossy, agentName: "Agent", disposition: .direct) else { return XCTFail("direct") }
-        guard case .failure = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
+        XCTAssertTrue(directReason.contains("paragraph structure"))
+        guard case let .failure(.saveFailed(proposalReason)) = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
                                                 document: lossy, agentName: "Agent", disposition: .proposal) else { return XCTFail("proposal") }
+        XCTAssertTrue(proposalReason.contains("paragraph structure"))
         let queued = NotePendingEdit(noteID: id, baseRevisionToken: note.revisionToken,
                                      proposedContent: try NoteContentCodec.encode(lossy), agentName: "Older Agent",
                                      createdAt: Date(), baseVersionID: nil)
@@ -161,6 +163,10 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
         XCTAssertTrue(try XCTUnwrap(store.pendingEdits(noteID: id).first).needsReview)
         XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.blocks, base.blocks)
+        guard case .success(.applied) = store.agentWrite(noteID: id, baseRevisionToken: note.revisionToken,
+                                                        document: base, agentName: "Agent", disposition: .direct) else {
+            return XCTFail("unchanged rich content must remain writable")
+        }
     }
 
     func testEveryWriterRefusesAFutureReplicaWithoutMutatingTheFamily() throws {
