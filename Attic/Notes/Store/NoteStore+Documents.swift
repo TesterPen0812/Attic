@@ -111,6 +111,41 @@ private struct NotePreservationState: Hashable {
 /// a document and the version that preserves what it replaced commit (or
 /// fail) as one transaction.
 extension NoteStore {
+    /// Recently Deleted acts on a document placement, not only its row.
+    /// saveDocument commits placement, version, derived columns and row
+    /// visibility across the replica family in one transaction.
+    func removeDocumentAttachment(_ id: UUID, noteID: UUID) -> Bool {
+        guard let loaded = loadDocument(noteID: noteID), var document = loaded.content.document,
+              document.attachmentIDs.contains(id) else { return false }
+        document.blocks.removeAll { $0.attachmentID == id && ($0.kind == .image || $0.kind == .file) }
+        switch saveDocument(noteID: noteID, document: document, baseRevisionID: loaded.revisionID) {
+        case .success: return true
+        case let .failure(error): setAttachmentError(error.localizedDescription); return false
+        }
+    }
+
+    func restoreDocumentAttachment(_ row: NoteAttachment) -> Bool {
+        let noteID = row.noteID
+        guard let loaded = loadDocument(noteID: noteID), var document = loaded.content.document else { return false }
+        if !document.attachmentIDs.contains(row.id) {
+            let past = versions(noteID: noteID).compactMap { version -> (NoteDocument, Int)? in
+                guard let data = version.content, let historical = NoteContentCodec.decode(data).document,
+                      let index = historical.blocks.firstIndex(where: { $0.attachmentID == row.id }) else { return nil }
+                return (historical, index)
+            }.first
+            let block = past.map { $0.0.blocks[$0.1] } ?? (row.isImage
+                ? .image(attachmentID: row.id)
+                : .file(attachmentID: row.id, filename: row.originalFilename,
+                        contentTypeIdentifier: row.contentTypeIdentifier, byteCount: row.byteCount))
+            let index = min(max(1, past?.1 ?? document.blocks.count), document.blocks.count)
+            document.blocks.insert(block, at: index)
+        }
+        switch saveDocument(noteID: noteID, document: document, baseRevisionID: loaded.revisionID) {
+        case .success: return true
+        case let .failure(error): setAttachmentError(error.localizedDescription); return false
+        }
+    }
+
     /// Every writer uses this before touching a physical replica. Format 0
     /// has no document bytes; format 1 must be fully understood. A future or
     /// damaged row makes the entire logical note read-only.
@@ -403,7 +438,6 @@ extension NoteStore {
         context: ModelContext,
         timestamp: Date
     ) throws {
-        guard !staged.isEmpty else { return }
         let shown = Set(document.attachmentIDs)
         guard staged.filter({ shown.contains($0.id) }).allSatisfy({
             $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment
@@ -412,12 +446,14 @@ extension NoteStore {
         }) else {
             throw NoteDocumentStoreError.invalidDocument("An image has no complete payload.")
         }
-        let existing = Set((try? attachmentRows(forNoteID: noteID))?.map(\.id) ?? [])
         let rows = try attachmentRows(forNoteID: noteID)
+        let existing = Set(rows.map(\.id))
         let visible = Dictionary(rows.filter { shown.contains($0.id) }.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }).values
         let new = staged.filter { shown.contains($0.id) && !existing.contains($0.id) }
-        guard Set(visible.map(\.id)).count + new.count <= AttachmentLimits.maxAttachmentsPerNote,
+        guard shown.count <= AttachmentLimits.maxAttachmentsPerNote,
+              shown.isSubset(of: existing.union(new.map(\.id))),
+              visible.allSatisfy({ $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment }),
               visible.reduce(Int64.zero, { $0 + $1.byteCount }) + new.reduce(Int64.zero, { $0 + $1.byteCount })
                 <= AttachmentLimits.maxBytesPerNote else {
             throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
@@ -611,6 +647,7 @@ extension NoteStore {
         guard commitStagedChanges() else {
             return .failure(.saveFailed(lastErrorMessage ?? "The version could not be restored."))
         }
+        refreshAfterDocumentSave(insertedAttachments: true)
         return .success(revisionID.uuidString)
     }
 

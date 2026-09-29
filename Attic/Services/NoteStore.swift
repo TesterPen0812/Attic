@@ -897,6 +897,9 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = NoteReplicaMutationError.attachmentOwnersDisagree(attachment.id).localizedDescription
             return false
         }
+        if note(withID: noteID)?.usesDocumentFormat == true {
+            return removeDocumentAttachment(attachment.id, noteID: noteID)
+        }
         let timestamp = now()
         do {
             for note in try storedNotesIfPresent(matching: noteID) { note.updatedAt = timestamp }
@@ -953,6 +956,12 @@ final class NoteStore: ObservableObject {
     /// Brings a removed attachment back to its note, every replica, in one save.
     @discardableResult
     func restoreAttachment(_ attachmentID: UUID) -> Bool {
+        if let row = attachmentFamily(attachmentID).first,
+           note(withID: row.noteID)?.usesDocumentFormat == true {
+            guard attachmentFamily(attachmentID).allSatisfy({ $0.noteID == row.noteID }),
+                  attachmentFamily(attachmentID).contains(where: { $0.deletedAt != nil }) else { return false }
+            return restoreDocumentAttachment(row)
+        }
         do {
             let replicas = try storedAttachments(matching: attachmentID)
             guard replicas.contains(where: { $0.deletedAt != nil }),
@@ -1036,7 +1045,7 @@ final class NoteStore: ObservableObject {
         return references.count
     }
 
-    func materializedURL(for attachment: NoteAttachment) async -> URL? {
+    func materializedURL(for attachment: NoteAttachment, allowRetained: Bool = false) async -> URL? {
         let metadata = AttachmentFileReference(attachment, includePayload: false)
         do {
             let url: URL
@@ -1045,8 +1054,8 @@ final class NoteStore: ObservableObject {
             ) {
                 url = existing
             } else {
-                guard let current = attachmentsByNoteID.values.lazy.flatMap({ $0 }).first(where: {
-                    $0.id == metadata.id && $0.contentDigest == metadata.digest
+                guard let current = attachmentFamily(metadata.id).first(where: {
+                    $0.contentDigest == metadata.digest && $0.payload != nil
                 }) else { return nil }
                 let reference = AttachmentFileReference(current)
                 guard let repaired = try await attachmentFileStore.ensureMaterialized(reference) else {
@@ -1060,13 +1069,12 @@ final class NoteStore: ObservableObject {
             // removed while the filesystem actor was materializing its bytes.
             // Do not hand an orphaned file back to the UI; remove it after the
             // actor finishes so removal and materialization remain serialized.
-            let stillVisible = attachmentsByNoteID.values.contains { attachments in
-                attachments.contains {
-                    $0.id == metadata.id
-                        && $0.contentDigest == metadata.digest
+            let stillStored = allowRetained
+                ? attachmentFamily(metadata.id).contains { $0.contentDigest == metadata.digest }
+                : attachmentsByNoteID.values.contains { rows in
+                    rows.contains { $0.id == metadata.id && $0.contentDigest == metadata.digest }
                 }
-            }
-            guard stillVisible else {
+            guard stillStored else {
                 // The request is refused either way. The file goes only when
                 // no stored row still holds this attachment: one removed into
                 // Recently Deleted, or in a deleted note, may have no bytes in
@@ -1098,6 +1106,12 @@ final class NoteStore: ObservableObject {
         } catch {
             return true
         }
+    }
+
+    /// Byte lookup includes soft-deleted rows. Presentation indexes exclude
+    /// them, but Undo, versions and recovery may still own their bytes.
+    func attachmentFamily(_ id: UUID) -> [NoteAttachment] {
+        (try? storedAttachments(matching: id)) ?? []
     }
 
     func reportAttachmentFailure(_ id: UUID, message: String) {
