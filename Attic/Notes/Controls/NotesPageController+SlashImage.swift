@@ -17,9 +17,7 @@ extension NotesPageController {
             let type = UTType(filenameExtension: url.pathExtension) ?? .data
             let item: NoteImportedObject
             if type.conforms(to: .image), let (image, pixelSize) = await loader(url) {
-                item = NoteImportedObject(staged: StagedNoteAttachment(id: UUID(), filename: image.filename,
-                    contentTypeIdentifier: image.contentTypeIdentifier, byteCount: image.byteCount,
-                    digest: image.digest, data: image.data), pixelSize: pixelSize)
+                item = NoteImportedObject(staged: image.copying(id: UUID()), pixelSize: pixelSize)
             } else {
                 item = await NotesPageController.loadFile(url, type: type.identifier)
             }
