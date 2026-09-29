@@ -220,4 +220,37 @@ final class NoteFormatTests: XCTestCase {
         XCTAssertEqual(NoteMarkdownExport.markdown(document),
                        "# Plan\n\n1. **Read**\n2. [Visit](https://example.com)")
     }
+
+    func testAgentTextRefusesLossyRichEditsButKeepsCheckboxMetadataAndObjects() throws {
+        var heading = NoteBlock.text("Hi 😀", style: "heading")
+        heading.level = 2
+        heading.marks = [NoteMark(.bold, offset: 0, length: 2)]
+        var checked = NoteBlock.checklist("Due \u{FFFC}")
+        checked.indent = 2
+        checked.marks = [NoteMark(.italic, offset: 0, length: 3)]
+        checked.inlines = [NoteInline(id: dateID, kind: .date(NoteDay(year: 2026, month: 10, day: 1)!))]
+        let base = NoteDocument(blocks: [.text("Title"), heading, checked])
+        let body = NoteTextExport.agentBody(base)
+        XCTAssertEqual(try NoteAgentTextParser.document(title: "Title", body: body, base: base), base)
+        let ticked = try NoteAgentTextParser.document(title: "Title", body: body.replacingOccurrences(of: "- [ ]", with: "- [x]"), base: base)
+        var expected = base
+        expected.blocks[2].checked = true
+        XCTAssertEqual(ticked, expected)
+        XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Title", body: body.replacingOccurrences(of: "Hi 😀", with: "Bye 😀"), base: base)) {
+            XCTAssertEqual($0 as? NoteAgentTextError, .lossyFormatting)
+        }
+        XCTAssertThrowsError(try NoteAgentTextParser.document(title: "Title", body: body + "\nNew text", base: base))
+    }
+
+    func testFragmentContextAllowsStyledFirstBlockButSavedDocumentDoesNot() throws {
+        var first = NoteBlock.text("Heading", style: "heading")
+        first.level = 2
+        first.marks = [NoteMark(.bold, offset: 0, length: 7)]
+        let fragment = NoteDocument(blocks: [first, .image(attachmentID: UUID())])
+        let data = try NoteContentCodec.encode(fragment, context: .fragment)
+        guard case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return XCTFail() }
+        XCTAssertEqual(decoded.blocks, fragment.blocks)
+        XCTAssertThrowsError(try NoteContentCodec.encode(fragment))
+        XCTAssertFalse(NoteContentCodec.decode(data).isEditable)
+    }
 }
