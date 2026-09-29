@@ -7,8 +7,8 @@
 # The optimized test host is signed with the hardened runtime, which enforces
 # library validation: an ad-hoc signed test bundle then fails to load ("mapping
 # process and mapped file (non-platform) have different Team IDs", round 10).
-# A Debug host is not hardened, so only this build turns it off, for the test
-# host alone; the app and the previews keep it. Local-only, ad-hoc signed,
+# A Debug host is not hardened, so this build turns it off too, only for what
+# it builds into `.build/dd-opt`; previews and app builds keep it. Local-only, ad-hoc signed,
 # derived data in `.build/dd-opt`, every xcodebuild through the machine lock.
 set -euo pipefail
 readonly root=${0:A:h:h}

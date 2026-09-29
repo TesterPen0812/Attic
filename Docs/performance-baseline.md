@@ -122,8 +122,8 @@ use a frame trace to judge those endpoints.
 ## Frame costs (round 11)
 
 - `Scripts/run_optimized_tests.zsh AtticTests/TasksFrameCostTests` runs unit
-  tests in an optimized hosted build (`.build/dd-opt`); the test host alone is
-  built without the hardened runtime, whose library validation refused the
+  tests in an optimized hosted build (`.build/dd-opt`), built without the
+  hardened runtime (only there), whose library validation refused the
   ad-hoc signed test bundle. `TasksFrameCostTests` prints `ATTIC_FRAME_COST`:
   a tab click's first frame and its slide, a swipe's first movement, its
   frames and settle, a selection change, and keystrokes in the add bar, a
