@@ -1786,7 +1786,9 @@ final class NoteSessionMatrixTests: XCTestCase {
     /// Each row is in Column.allCases order, including both batch variants.
     private let expected: [(Event, String)] = [
         (.edit,                    "AAAAAARAARNNAN"),
-        (.command,                 "AAAAAARRRRNNAN"),
+        // Matrix fixtures contain only a title; Date correctly refuses that
+        // range. Body-targeted command acceptance is covered by engine tests.
+        (.command,                 "RRRRRRRRRRNNRN"),
         (.timerOK,                 "NNSSSJ N JJJNNNN"),
         (.timerStoreFails,         "NNSSSJ N JJJNNNN"),
         (.timerBothFail,           "NNSSSJ N JJJNNNN"),

@@ -103,7 +103,9 @@ struct NoteTextStyle: Equatable {
         var desired = source.fontDescriptor.symbolicTraits
         if marks[.bold] != nil { desired.insert(.bold) }
         if marks[.italic] != nil { desired.insert(.italic) }
-        var font = NSFont(descriptor: source.fontDescriptor.withSymbolicTraits(desired), size: source.pointSize) ?? source
+        var font = marks[.code] == nil && marks[.bold] == nil && marks[.italic] == nil
+            ? baseFont
+            : NSFont(descriptor: source.fontDescriptor.withSymbolicTraits(desired), size: source.pointSize) ?? source
         if desired.contains(.italic), !font.fontDescriptor.symbolicTraits.contains(.italic) {
             let fallback = marks[.code] == nil
                 ? NSFont.systemFont(ofSize: source.pointSize, weight: desired.contains(.bold) ? .bold : .regular)
