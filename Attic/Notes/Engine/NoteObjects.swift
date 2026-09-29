@@ -175,8 +175,9 @@ final class NoteImageAttachment: NoteObjectAttachment {
         var width = min(column, max(1, min(wanted, natural)))
         if let maxDisplayHeight {
             width = min(width, maxDisplayHeight * pixelSize.width / pixelSize.height)
+            return CGSize(width: width, height: width * pixelSize.height / pixelSize.width)
         }
-        return CGSize(width: width, height: width * pixelSize.height / pixelSize.width)
+        return CGSize(width: width.rounded(), height: (width * pixelSize.height / pixelSize.width).rounded())
     }
 
     override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,

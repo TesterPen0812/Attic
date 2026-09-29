@@ -1798,7 +1798,7 @@ final class NoteSessionMatrixTests: XCTestCase {
         (.timerBothFail,           "NNSSSJ N JJJNNNN"),
         (.leaveOK,                 "AAAAAAARRRAAAA"),
         // A visible pending batch needs a checkpoint before it can leave.
-        (.leaveBothFail,           "AARRRRARRRARRA"),
+        (.leaveBothFail,           "AARRRRARRRARRR"),
         (.present,                 "AAAAAAAAAAAAAA"),
         (.agentWrite,              "RPPPPPRPPPD DP R"),
         (.importStart,             "AAAAAARRRRNNRN"),
@@ -1814,7 +1814,7 @@ final class NoteSessionMatrixTests: XCTestCase {
         (.externalDelete,          "NAAAAAAAAAAAAA"),
         (.retry,                   "NNAAARNNNNNNNN"),
         (.keepAsNew,               "NNNNNANNNNNNNN"),
-        (.launchRecovery,          "NNNANANNNNNANA"),
+        (.launchRecovery,          "NNNANANNNNNAAA"),
         (.evict,                   "NNNNNNNNNNANNN"),
         (.deleteNote,              "RAAAARARRRAARR"),
         (.restoreDeleted,          "NAAAANANNNAANN"),
@@ -2220,7 +2220,7 @@ final class NoteSessionMatrixTests: XCTestCase {
                 XCTAssertTrue(session.isImporting, context)
                 XCTAssertEqual(session.state, initialState, context)
                 XCTAssertEqual(committed, 0, context)
-                XCTAssertEqual(checkpoints, 0, context)
+                XCTAssertEqual(checkpoints, 1, context + ": a pending import must be checkpointed before loading")
             }
             if (event == .importComplete || event == .importFail) && decision == "A" {
                 XCTAssertFalse(session.isImporting, context)

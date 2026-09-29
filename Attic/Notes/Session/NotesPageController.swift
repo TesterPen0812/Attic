@@ -1473,9 +1473,16 @@ final class NotesPageController: ObservableObject {
             dropImport(in: session, batchID: batch.id,
                 notice: String(localized: "The note was deleted or is read only, so the files were not added."))
         case .insert:
+            let target = session.engine.currentImportTarget
             session.importBatch = nil
             session.importTask = nil
             guard session.engine.insertImportedObjects(loaded, acceptedText: batch.acceptedText) else {
+                if let target {
+                    session.engine.restoreImageImport(anchor: target.anchor,
+                        replacementLength: target.replacementLength, isBoundary: target.isBoundary)
+                    session.importBatch = batch
+                    _ = checkpoint(session, silent: true)
+                }
                 session.notice = String(localized: "The files could not be added to this note.")
                 return
             }
@@ -1494,7 +1501,9 @@ final class NotesPageController: ObservableObject {
         // Retire pending metadata durably before releasing the live batch.
         // A failed replacement leaves the old checkpoint and the batch live.
         session.importBatch = nil
-        if journal != nil && !checkpoint(session, silent: true) {
+        let retired = journal == nil || (NoteSessionPolicy.hasPendingWork(session.state)
+            ? checkpoint(session, silent: true) : retireRecoveryCopy(noteID: session.noteID))
+        if !retired {
             session.importBatch = batch
             session.notice = String(localized: "The batch could not be cancelled because its recovery copy could not be updated.")
             return

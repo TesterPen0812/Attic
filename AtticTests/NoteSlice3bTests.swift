@@ -48,12 +48,16 @@ private final class OnDemandFailingJournal: NoteDraftJournaling {
     struct Failure: Error {}
     let base: NoteDraftJournal
     var failNextWrite = false
+    var failNextRemove = false
     init(_ base: NoteDraftJournal) { self.base = base }
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
         if failNextWrite { failNextWrite = false; throw Failure() }
         try base.write(entry, staged: staged)
     }
-    func remove(noteID: UUID) throws { try base.remove(noteID: noteID) }
+    func remove(noteID: UUID) throws {
+        if failNextRemove { failNextRemove = false; throw Failure() }
+        try base.remove(noteID: noteID)
+    }
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
 }
 
@@ -464,7 +468,7 @@ final class NoteSlice3bTests: XCTestCase {
         controller.start()
         controller.importFiles([URL(fileURLWithPath: "/tmp/a.png"), URL(fileURLWithPath: "/tmp/b.png")])
         try await waitFor { try journal.entries().first?.0.pendingImport?.items.count == 1 }
-        journal.failNextWrite = true
+        journal.failNextRemove = true
         controller.cancelActiveImport()
         XCTAssertTrue(controller.active?.isImporting == true)
         XCTAssertNotNil(try journal.entries().first?.0.pendingImport)

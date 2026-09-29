@@ -897,7 +897,8 @@ final class NoteStore: ObservableObject {
             lastErrorMessage = NoteReplicaMutationError.attachmentOwnersDisagree(attachment.id).localizedDescription
             return false
         }
-        if note(withID: noteID)?.usesDocumentFormat == true {
+        if note(withID: noteID)?.usesDocumentFormat == true,
+           loadDocument(noteID: noteID)?.content.document?.attachmentIDs.contains(attachment.id) == true {
             return removeDocumentAttachment(attachment.id, noteID: noteID)
         }
         let timestamp = now()
@@ -1056,7 +1057,11 @@ final class NoteStore: ObservableObject {
             } else {
                 guard let current = attachmentFamily(metadata.id).first(where: {
                     $0.contentDigest == metadata.digest && $0.payload != nil
-                }) else { return nil }
+                }) else {
+                    reportAttachmentFailure(metadata.id,
+                        message: "The original file is missing. Locate it to restore this attachment.")
+                    return nil
+                }
                 let reference = AttachmentFileReference(current)
                 guard let repaired = try await attachmentFileStore.ensureMaterialized(reference) else {
                     reportAttachmentFailure(metadata.id, message: "The original file is missing. Locate it to restore this attachment.")
