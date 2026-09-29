@@ -113,9 +113,9 @@ enum NoteFormatCaptureScene {
                     if let event = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
                                                       timestamp: ProcessInfo.processInfo.systemUptime,
                                                       windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                                                      clickCount: 1, pressure: 1) { window.sendEvent(event) }
+                                                      clickCount: 1, pressure: 1) { NSApp.postEvent(event, atStart: false) }
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     let marks = controls.engine.document().blocks.last?.marks.map(\.kind.rawValue) ?? []
                     let report = "hit=\(hit.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
                         + "responder=\(window.firstResponder.map { String(describing: Swift.type(of: $0)) } ?? "nil") "
