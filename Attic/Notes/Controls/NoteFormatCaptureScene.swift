@@ -96,6 +96,34 @@ enum NoteFormatCaptureScene {
         switch scene {
         case "bar":
             textView.setSelectedRange(range(of: "most people only need the panel", in: textView))
+        case "barclick":
+            // A real click path (NSWindow.sendEvent → hit test → the bar's Bold),
+            // then a note of what happened for the check.
+            textView.setSelectedRange(range(of: "most people only need the panel", in: textView))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                guard let window = textView.window else { return }
+                let bar = controls.barFrame
+                let m = AtticNoteFormatMetrics.self
+                let style = bar.width - AtticControlSize.capsuleInset * 2 - m.barGroupGap * 3 - 8 * m.barToggleWidth
+                let point = NSPoint(x: bar.minX + AtticControlSize.capsuleInset + style + m.barGroupGap + m.barToggleWidth / 2,
+                                    y: bar.midY)
+                let location = textView.convert(point, to: nil)
+                let hit = window.contentView?.hitTest(window.contentView!.convert(location, from: nil))
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                                                      timestamp: ProcessInfo.processInfo.systemUptime,
+                                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                      clickCount: 1, pressure: 1) { window.sendEvent(event) }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    let marks = controls.engine.document().blocks.dropFirst().first?.marks.map(\.kind.rawValue) ?? []
+                    let report = "hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil") "
+                        + "responder=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil") "
+                        + "selection=\(NSStringFromRange(textView.selectedRange())) barShown=\(controls.formatModel.barShown) marks=\(marks)"
+                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("barclick.txt")
+                    try? report.write(to: url, atomically: true, encoding: .utf8)
+                }
+            }
         case "aa":
             textView.setSelectedRange(NSRange(location: range(of: "Keep pricing", in: textView).location, length: 0))
             chrome.openFormatPopover(keyboard: false)

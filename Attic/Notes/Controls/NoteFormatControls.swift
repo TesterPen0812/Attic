@@ -636,7 +636,7 @@ final class NoteFormatControls: NSObject {
         cardHost.isHidden = false
         installCardDismissal()
         // The card's field takes the keyboard (typing goes to it, not the note).
-        DispatchQueue.main.async { [weak self] in self?.focusCardField() }
+        DispatchQueue.main.async { [weak self] in self?.focusCardField(attempts: 3) }
     }
 
     private func placeCard() {
@@ -658,14 +658,17 @@ final class NoteFormatControls: NSObject {
                                             height: cardSize.height + room * 2))
     }
 
-    private func focusCardField() {
-        guard cardModel.card != nil, let window = cardHost.window else { return }
+    /// The field may not exist until SwiftUI's next pass: a few turns, then
+    /// the card's host itself (its field's focus follows).
+    private func focusCardField(attempts: Int) {
+        guard cardModel.card != nil, let window = cardHost.window, !cardHasKeyboard else { return }
         cardHost.layoutSubtreeIfNeeded()
-        if let field = Self.firstTextField(in: cardHost) {
-            window.makeFirstResponder(field)
-        } else {
+        if let field = Self.firstTextField(in: cardHost), window.makeFirstResponder(field) { return }
+        guard attempts > 1 else {
             window.makeFirstResponder(cardHost)
+            return
         }
+        DispatchQueue.main.async { [weak self] in self?.focusCardField(attempts: attempts - 1) }
     }
 
     private static func firstTextField(in view: NSView) -> NSTextField? {
@@ -733,7 +736,11 @@ final class NoteFormatControls: NSObject {
         guard engine.validate(.link(url), selection: target.range).enabled else { return false }
         linkTarget = nil
         closeCard(refocus: true, restoring: target.selection)
-        router.commitLink(url, target: target, from: .linkPopover)
+        if router.commitLink(url, target: target, from: .linkPopover), let textView,
+           NSMaxRange(target.selection) <= engine.textStorage.length {
+            // Editing at a caret leaves the caret where it was.
+            textView.setSelectedRange(target.selection)
+        }
         return true
     }
 
