@@ -74,7 +74,11 @@ extension TasksPageModel {
         guard let id = renamingSubtaskID else { return true }
         let title = subtaskRename.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let task = store.task(withID: id), !title.isEmpty, title != task.title else {
+            // Nothing to save (put back to the original, emptied, or its
+            // task is gone): a failure from an earlier try is over too
+            // (round 12, P2-1: it kept the page's unsaved-edit hold).
             renamingSubtaskID = nil
+            subtaskRenameFailed = false
             return true
         }
         guard library.updateTask(id, title: title).isApplied else {
