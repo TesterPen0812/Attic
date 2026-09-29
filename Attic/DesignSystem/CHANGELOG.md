@@ -343,3 +343,17 @@ The look ported, not the code: the design system's surface model now carries Pha
 - **Out of focus on Glass and Frosted** the panel's controls stay native glass (Phase 0's weight);
   the drawn recipe is for Solid (and Reduce Transparency) only.
 - **VoiceOver:** a Later task's state reads "later"; a row being edited exposes its title field.
+
+### Phase 2 slice 3a — Notes format controls (2026-09-29)
+
+- **New components** (`AtticNoteFormatComponents.swift`): `AtticFormatToggle` (a flat 28 pt
+  toggle whose fill says off, on or mixed; the keyboard ring only for the keyboard; VoiceOver value
+  "on/off/mixed"), `AtticFormatValue`, `AtticHighlightGlyph`, `AtticFormatBarSurface` (the selection
+  bar's raised capsule, 36 tall, 4 pt inset, groups 4 apart and never lines), `AtticFormatGroup`,
+  `AtticFormatStyleFace` ("Body ⌄"), `AtticFormatStyleChip` (Aa's style chips, each in a hint of its
+  own style) and `AtticDateCalendar` (the date card's month).
+- **New metrics:** `AtticNoteFormatMetrics` (bar 36 tall with 24 pt toggles so it fits a 320 pt
+  panel, 6 from the selection; Aa 272 wide with 32 pt toggles; the `/` list 232 wide; the date card
+  236; the link card 272; 12 pt shadow room).
+- The `/` list, date card and link card reuse `AtticPopover` and `AtticPopoverRow`; motion is the
+  popover preset's springy variant (fade, 4 pt rise, 0.96 grow), a fade under Reduce Motion.

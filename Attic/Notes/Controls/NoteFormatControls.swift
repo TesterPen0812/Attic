@@ -117,6 +117,9 @@ final class NoteFormatControls: NSObject {
     private var hintEligible = false
     private var hintShown = false
     private var barWidth: CGFloat = 0
+    /// Diagnostic: how many times the state was read (never while typing
+    /// with nothing shown).
+    private(set) var snapshotCount = 0
 
     init(engine: NoteEditorEngine, textView: NoteEditorTextView, scrollView: NSScrollView,
          design: AtticDesignContext, noteID: UUID, isNewDraft: Bool) {
@@ -294,6 +297,7 @@ final class NoteFormatControls: NSObject {
         let allowsBar = current.length > 0 && focused && !textView.hasMarkedText() && engine.activity == .idle
             && cardModel.card == nil && dismissedSelection != current && !slashModel.shown && !isFormatPopoverOpen
         if allowsBar || isFormatPopoverOpen {
+            snapshotCount += 1
             let snapshot = NoteFormatSnapshot.make(router: router, selection: current)
             formatModel.setSnapshot(snapshot)
             if allowsBar, snapshot.hasEnabledCommand {
@@ -308,6 +312,7 @@ final class NoteFormatControls: NSObject {
     }
 
     func refreshSnapshot() {
+        snapshotCount += 1
         formatModel.setSnapshot(NoteFormatSnapshot.make(router: router, selection: selection))
         if formatModel.barShown { placeBar() }
     }
