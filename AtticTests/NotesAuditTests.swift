@@ -517,6 +517,186 @@ final class NotesAuditTests: XCTestCase {
                        ["README.txt", "manifest.json", "note.json", "note.md"])
     }
 
+    // MARK: Recovery copy: where it is built and how it is published (Phase 2 audit fix B4)
+
+    /// A file manager that can refuse to make a scratch folder, play a
+    /// scratch folder on another volume, or refuse to publish.
+    private final class FaultyFileManager: FileManager {
+        var refuseReplacementDirectory = false
+        /// A real folder handed out as the "replacement directory", standing
+        /// for another volume's.
+        var replacementDirectory: URL?
+        var refuseSibling = false
+        var refusePublishing = false
+        private(set) var publishAttempts = 0
+
+        override func url(for directory: FileManager.SearchPathDirectory, in domain: FileManager.SearchPathDomainMask,
+                          appropriateFor url: URL?, create shouldCreate: Bool) throws -> URL {
+            if directory == .itemReplacementDirectory {
+                if refuseReplacementDirectory { throw CocoaError(.fileWriteUnknown) }
+                if let replacementDirectory {
+                    let folder = replacementDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+                    try createDirectory(at: folder, withIntermediateDirectories: true)
+                    return folder
+                }
+            }
+            return try super.url(for: directory, in: domain, appropriateFor: url, create: shouldCreate)
+        }
+
+        override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                      attributes: [FileAttributeKey: Any]? = nil) throws {
+            if refuseSibling, url.lastPathComponent.hasPrefix(".AtticRecovery-") { throw CocoaError(.fileWriteNoPermission) }
+            try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+        }
+
+        override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+            publishAttempts += 1
+            if refusePublishing { throw CocoaError(.fileWriteUnknown) }
+            try super.moveItem(at: srcURL, to: dstURL)
+        }
+
+        override func replaceItem(at originalItemURL: URL, withItemAt newItemURL: URL, backupItemName: String?,
+                                  options: FileManager.ItemReplacementOptions = [],
+                                  resultingItemURL resultingURL: AutoreleasingUnsafeMutablePointer<NSURL?>?) throws {
+            publishAttempts += 1
+            if refusePublishing { throw CocoaError(.fileWriteUnknown) }
+            try super.replaceItem(at: originalItemURL, withItemAt: newItemURL, backupItemName: backupItemName,
+                                  options: options, resultingItemURL: resultingURL)
+        }
+    }
+
+    private func recoverySnapshot(title: String = "T") throws -> NoteRecoverySnapshot {
+        let image = try pixel()
+        return NoteRecoverySnapshot(noteID: UUID(), title: title, content: Data("{}".utf8), markdown: "# \(title)", tags: [],
+                                    reason: "why", savedAt: Date(), attachments: [image], unavailableAttachmentIDs: [])
+    }
+
+    /// A folder standing for another volume's scratch space, and a folder
+    /// to put the destination in, both real.
+    private func makeFolders() throws -> (elsewhere: URL, home: URL) {
+        let root = try scratchURL("volumes")
+        let elsewhere = root.appendingPathComponent("elsewhere", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        return (elsewhere, home)
+    }
+
+    private func existingCopy(at target: URL) throws {
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: target.appendingPathComponent("stale.txt"))
+    }
+
+    private func assertUntouched(_ target: URL, file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.path), ["stale.txt"],
+                       "the folder that was there is exactly as it was", file: file, line: line)
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("stale.txt")), Data("old".utf8), file: file, line: line)
+    }
+
+    private func names(in folder: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+    }
+
+    private func temporaryRecoveryFolders() -> Set<String> {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? []
+        return Set(names.filter { $0.hasPrefix("AtticRecovery-") })
+    }
+
+    func testARecoveryCopyThatCannotBeStagedOnTheDestinationVolumeFailsAndPublishesNothing() throws {
+        let (_, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let general = temporaryRecoveryFolders()
+        let files = FaultyFileManager()
+        files.refuseReplacementDirectory = true
+        files.refuseSibling = true
+
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files)) { error in
+            XCTAssertTrue(error is NoteRecoveryCopy.NoStagingError, "\(error)")
+        }
+        XCTAssertEqual(files.publishAttempts, 0, "nothing was published")
+        try assertUntouched(target)
+        XCTAssertEqual(try names(in: home), ["copy"], "nothing left beside it")
+        XCTAssertEqual(temporaryRecoveryFolders(), general, "and never built in the general temporary folder")
+
+        // With no folder there yet, nothing appears.
+        let fresh = home.appendingPathComponent("fresh")
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: fresh, fileManager: files))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fresh.path))
+    }
+
+    func testARecoveryCopyDestinedForAnotherVolumeIsNeverBuiltThereAndIsPublishedFromASibling() throws {
+        let (elsewhere, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let files = FaultyFileManager()
+        // The replacement directory is on another volume; the destination's
+        // own folder is on the destination's volume.
+        files.replacementDirectory = elsewhere
+        let sameVolume: (URL, URL) -> Bool = { first, second in
+            !first.path.hasPrefix(elsewhere.path) && !second.path.hasPrefix(elsewhere.path)
+        }
+
+        try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files, onSameVolume: sameVolume)
+        XCTAssertEqual(try names(in: target), ["README.txt", "attachments", "manifest.json", "note.json", "note.md"],
+                       "the whole folder replaced the old one")
+        XCTAssertEqual(try names(in: elsewhere), [], "the other volume's scratch folder was not used and is gone")
+        XCTAssertEqual(try names(in: home), ["copy"], "the sibling scratch folder is gone too")
+    }
+
+    func testARecoveryCopyWhoseOnlyScratchSpaceIsAnotherVolumeFailsAndKeepsTheDestination() throws {
+        let (elsewhere, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let general = temporaryRecoveryFolders()
+        let files = FaultyFileManager()
+        files.replacementDirectory = elsewhere
+        files.refuseSibling = true
+        let sameVolume: (URL, URL) -> Bool = { first, second in
+            !first.path.hasPrefix(elsewhere.path) && !second.path.hasPrefix(elsewhere.path)
+        }
+
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files,
+                                                        onSameVolume: sameVolume)) { error in
+            XCTAssertTrue(error is NoteRecoveryCopy.NoStagingError, "\(error)")
+        }
+        XCTAssertEqual(files.publishAttempts, 0, "no cross-volume move was ever attempted")
+        try assertUntouched(target)
+        XCTAssertEqual(try names(in: elsewhere), [], "the other volume's folder was cleaned up")
+        XCTAssertEqual(try names(in: home), ["copy"])
+        XCTAssertEqual(temporaryRecoveryFolders(), general)
+
+        // A scratch folder that is not on the volume even when it was the
+        // sibling (a mount point, say) is refused the same way.
+        try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: FaultyFileManager(),
+                                   onSameVolume: { _, _ in true })
+        XCTAssertEqual(try names(in: target), ["README.txt", "attachments", "manifest.json", "note.json", "note.md"])
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: FaultyFileManager(),
+                                                        onSameVolume: { _, _ in false }))
+        XCTAssertEqual(try names(in: target), ["README.txt", "attachments", "manifest.json", "note.json", "note.md"],
+                       "and the copy that was there stays")
+        XCTAssertEqual(try names(in: home), ["copy"])
+    }
+
+    func testAFailedPublicationKeepsTheExistingFolderAndLeavesNoScratchBehind() throws {
+        let (_, home) = try makeFolders()
+        let target = home.appendingPathComponent("copy")
+        try existingCopy(at: target)
+        let files = FaultyFileManager()
+        files.refusePublishing = true
+
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: target, fileManager: files))
+        XCTAssertEqual(files.publishAttempts, 1, "publication was attempted, and refused")
+        try assertUntouched(target)
+        XCTAssertEqual(try names(in: home), ["copy"], "no scratch folder left beside it")
+
+        // A first copy that cannot be published leaves no folder at all.
+        let fresh = home.appendingPathComponent("fresh")
+        XCTAssertThrowsError(try NoteRecoveryCopy.write(try recoverySnapshot(), to: fresh, fileManager: files))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fresh.path))
+        XCTAssertEqual(try names(in: home), ["copy"])
+    }
+
     func testARecoveryCopyIsOfferedOnlyWhileTheTextIsHeldOnlyHere() throws {
         let controller = makeController()
         controller.start()

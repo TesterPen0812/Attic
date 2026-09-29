@@ -37,9 +37,13 @@ struct NoteRecoverySnapshot: Sendable, Equatable {
 /// be read back by decoding `note.json` and matching `manifest.json`'s image
 /// ids to the files, which is exactly what a later import needs.
 ///
-/// The folder is built in a scratch folder on the destination's volume and
-/// moved into place whole, so a failure leaves nothing half-written, and an existing folder the
-/// person chose to replace is replaced only once the new one is complete.
+/// The folder is built in a scratch folder on the destination's own volume
+/// and moved into place whole, so a failure leaves nothing half-written, and
+/// an existing folder the person chose to replace is replaced only once the
+/// new one is complete. There is no other place to build it: when the
+/// destination's volume offers no scratch folder, the copy fails and
+/// publishes nothing (a folder built elsewhere would be copied across
+/// volumes at the end, and an interruption would leave it half there).
 enum NoteRecoveryCopy {
     static let noteFile = "note.json"
     static let markdownFile = "note.md"
@@ -78,12 +82,23 @@ enum NoteRecoveryCopy {
         return String(localized: "\(base) recovery copy")
     }
 
+    /// Why nothing was written: there was no scratch folder on the
+    /// destination's volume to build the copy in.
+    struct NoStagingError: LocalizedError {
+        var errorDescription: String? {
+            String(localized: "There is no safe place on that disk to build the copy, so nothing was saved. Choose another location.")
+        }
+    }
+
     /// Writes the folder at `destination`. Throws with nothing left behind
     /// (a replaced folder is untouched until the new one is complete).
+    /// `onSameVolume` is the volume check, a parameter so a test can play a
+    /// destination on another volume.
     static func write(_ snapshot: NoteRecoverySnapshot, to destination: URL,
-                      fileManager: FileManager = .default) throws {
+                      fileManager: FileManager = .default,
+                      onSameVolume: (URL, URL) -> Bool = NoteRecoveryCopy.onSameVolume) throws {
         // Built in a scratch folder on the destination's volume, then moved.
-        let scratch = try scratchFolder(for: destination, fileManager: fileManager)
+        let scratch = try scratchFolder(for: destination, fileManager: fileManager, onSameVolume: onSameVolume)
         defer { try? fileManager.removeItem(at: scratch) }
         let staging = scratch.appendingPathComponent(destination.lastPathComponent, isDirectory: true)
         try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
@@ -164,15 +179,37 @@ enum NoteRecoveryCopy {
 
     // MARK: Files
 
-    private static func scratchFolder(for destination: URL, fileManager: FileManager) throws -> URL {
+    /// A scratch folder on the destination's own volume, or a throw.
+    /// First the system's replacement directory for that volume (the one a
+    /// sandboxed app may use), then a hidden sibling of the destination.
+    /// Never the general temporary folder: it can be another volume.
+    private static func scratchFolder(for destination: URL, fileManager: FileManager,
+                                      onSameVolume: (URL, URL) -> Bool) throws -> URL {
         let parent = destination.deletingLastPathComponent()
         if let url = try? fileManager.url(for: .itemReplacementDirectory, in: .userDomainMask,
                                           appropriateFor: parent, create: true) {
-            return url
+            if onSameVolume(url, parent) { return url }
+            try? fileManager.removeItem(at: url)
         }
-        let url = fileManager.temporaryDirectory.appendingPathComponent("AtticRecovery-\(UUID().uuidString)", isDirectory: true)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        let sibling = parent.appendingPathComponent(".AtticRecovery-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: sibling, withIntermediateDirectories: false)
+        } catch {
+            throw NoStagingError()
+        }
+        guard onSameVolume(sibling, parent) else {
+            try? fileManager.removeItem(at: sibling)
+            throw NoStagingError()
+        }
+        return sibling
+    }
+
+    /// Whether two existing locations are on the same volume.
+    static func onSameVolume(_ first: URL, _ second: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [.volumeIdentifierKey]
+        guard let a = try? first.resourceValues(forKeys: keys).volumeIdentifier,
+              let b = try? second.resourceValues(forKeys: keys).volumeIdentifier else { return false }
+        return a.isEqual(b)
     }
 
     /// A file name that is safe in a folder and not already used there
