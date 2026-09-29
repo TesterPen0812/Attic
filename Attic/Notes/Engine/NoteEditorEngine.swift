@@ -12,7 +12,9 @@ protocol NoteImageProviding: AnyObject {
     func imageBytes(forAttachment id: UUID) -> StagedNoteAttachment?
     func attachmentBytes(forAttachment id: UUID) -> StagedNoteAttachment?
     func hasAttachmentBytes(_ id: UUID) -> Bool
+    func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment?
     func locateAttachment(_ id: UUID, at url: URL) async -> Bool
+    func locatePlacement(_ block: NoteBlock, noteID: UUID, at url: URL) async -> Bool
 }
 
 /// One accepted source in an import batch. A failed source has no stored
@@ -48,10 +50,15 @@ extension NoteImageProviding {
     func attachmentBytes(forAttachment id: UUID) -> StagedNoteAttachment? {
         imageBytes(forAttachment: id)
     }
+    func verifiedBytes(forAttachment id: UUID) async -> StagedNoteAttachment? { attachmentBytes(forAttachment: id) }
     func hasAttachmentBytes(_ id: UUID) -> Bool {
         attachmentBytes(forAttachment: id) != nil
     }
     func locateAttachment(_ id: UUID, at url: URL) async -> Bool { false }
+    func locatePlacement(_ block: NoteBlock, noteID: UUID, at url: URL) async -> Bool {
+        guard let id = block.attachmentID else { return false }
+        return await locateAttachment(id, at: url)
+    }
 }
 
 /// One note's text engine: a stock TextKit 2 text system whose storage,

@@ -186,6 +186,80 @@ final class NoteStore: ObservableObject {
     var documentSaveCommitted: ((UUID?, UUID?) -> Void)?
     /// Recovery checkpoints can reference image rows after the note itself
     /// disappears. A failed read must stop purging rather than guess.
+    private var verifiedByteAvailability: [UUID: (UInt64, String, Bool)] = [:]
+    private var verifyingByteAvailability = Set<UUID>()
+
+    /// nil means verification is pending, rather than pretending that payload
+    /// presence proves intact bytes. Agent responses expose that uncertainty.
+    func knownAttachmentAvailability(_ id: UUID) -> Bool? {
+        let family = attachmentFamily(id)
+        guard let first = family.first else { return false }
+        guard family.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == first.contentDigest
+            && $0.byteCount == first.byteCount }) else { return false }
+        if cachedVerifiedAttachmentBytes(id) != nil { return true }
+        if let known = verifiedByteAvailability[id], known.0 == revision, known.1 == first.contentDigest { return known.2 }
+        if verifyingByteAvailability.insert(id).inserted {
+            let generation = revision, digest = first.contentDigest
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let available = await self.verifiedAttachmentBytes(id) != nil
+                self.verifyingByteAvailability.remove(id)
+                if self.revision == generation, self.attachmentFamily(id).first?.contentDigest == digest {
+                    self.verifiedByteAvailability[id] = (generation, digest, available)
+                }
+            }
+        }
+        return nil
+    }
+
+    var verifiedAttachmentPayloads: [UUID: StagedNoteAttachment] = [:]
+
+    /// Cached immutable verification; never hashes in synchronous admission or
+    /// presentation. Physical metadata and bytes must still match the proof.
+    func cachedVerifiedAttachmentBytes(_ id: UUID) -> StagedNoteAttachment? {
+        guard let proof = verifiedAttachmentPayloads[id], proof.payloadIsVerified else { return nil }
+        let family = attachmentFamily(id)
+        guard let first = family.first, family.allSatisfy({ $0.noteID == first.noteID
+            && $0.contentDigest == proof.digest && $0.byteCount == proof.byteCount
+            && $0.contentTypeIdentifier == proof.contentTypeIdentifier
+            && ($0.payload == nil || $0.payload == proof.data) }),
+              family.contains(where: { $0.payload != nil }) else { return nil }
+        return proof
+    }
+
+    func verifiedAttachmentBytes(_ id: UUID) async -> StagedNoteAttachment? {
+        if let cached = cachedVerifiedAttachmentBytes(id) { return cached }
+        let family = attachmentFamily(id)
+        guard let first = family.first,
+              family.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == first.contentDigest
+                  && $0.byteCount == first.byteCount && $0.contentTypeIdentifier == first.contentTypeIdentifier }) else { return nil }
+        let revisionAtRead = revision
+        let digest = first.contentDigest, count = first.byteCount, name = first.originalFilename, type = first.contentTypeIdentifier
+        let payloads = family.compactMap(\.payload)
+        let data: Data?
+        if let payload = payloads.first {
+            data = await Task.detached(priority: .utility) {
+                guard payloads.allSatisfy({ $0 == payload }) else { return Optional<Data>.none }
+                return payload
+            }.value
+        } else if let url = await materializedURL(for: first, allowRetained: true) {
+            data = try? await Task.detached { try Data(contentsOf: url) }.value
+        } else { data = nil }
+        guard let data else { return nil }
+        let proof = await Task.detached(priority: .utility) {
+            StagedNoteAttachment(id: id, filename: name, contentTypeIdentifier: type,
+                byteCount: count, digest: digest, data: data)
+        }.value
+        let currentFamily = attachmentFamily(id)
+        guard proof.payloadIsVerified, revision == revisionAtRead, !currentFamily.isEmpty,
+              currentFamily.allSatisfy({ $0.noteID == first.noteID && $0.contentDigest == digest
+                && $0.byteCount == count && $0.contentTypeIdentifier == type
+                && ($0.payload == nil || $0.payload == proof.data) }) else { return nil }
+        verifiedAttachmentPayloads[id] = proof
+        verifiedByteAvailability[id] = (revision, digest, true)
+        return proof
+    }
+
     var recoveryReferencedAttachmentIDs: () throws -> Set<UUID> = { [] }
     var recoveryProtectedRevisionIDs: () throws -> Set<UUID> = { [] }
 #if os(macOS)
@@ -248,6 +322,18 @@ final class NoteStore: ObservableObject {
         self.now = now
         self.persist = persist
         self.makeFreshContext = makeFreshContext ?? { ModelContext(container) }
+#if os(macOS)
+        resolvedAttachmentFileStore.registerByteOwners(UUID()) { [weak self] in
+            await MainActor.run {
+                guard let self else { return nil }
+                do {
+                    var ids = try self.documentReferencedAttachmentIDs()
+                    ids.formUnion(try self.context.fetch(FetchDescriptor<NoteAttachment>()).map(\.id))
+                    return ids
+                } catch { return nil }
+            }
+        }
+#endif
         refresh()
         observeRemoteChanges()
         observeCloudKitEvents()
@@ -1142,8 +1228,12 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func locateAttachment(_ attachment: NoteAttachment, at sourceURL: URL) async -> Bool {
         let id = attachment.id
+        let expectedSnapshot = NoteAttachmentReplicaSnapshot(attachment)
         let expectedDigest = attachment.contentDigest
         let expectedBytes = attachment.byteCount
+        guard let initial = try? storedAttachments(matching: id),
+              initial.allSatisfy({ NoteAttachmentReplicaSnapshot($0) == NoteAttachmentReplicaSnapshot(attachment) }) else { return false }
+        let snapshots = initial.map(NoteAttachmentReplicaSnapshot.init)
         var imported: [ImportedAttachment] = []
         var transactionContext: ModelContext?
         do {
@@ -1159,7 +1249,8 @@ final class NoteStore: ObservableObject {
             let refreshedContext = try makeFreshContext()
             transactionContext = refreshedContext
             let replicas = try storedAttachments(matching: id, in: refreshedContext)
-            guard replicas.allSatisfy({ $0.contentDigest == expectedDigest && $0.byteCount == expectedBytes }) else {
+            guard replicas.map(NoteAttachmentReplicaSnapshot.init) == snapshots,
+                  replicas.allSatisfy({ NoteAttachmentReplicaSnapshot($0) == expectedSnapshot }) else {
                 throw AttachmentFileStoreError.inaccessible(sourceURL, "The attachment changed while the file was being selected. Retry with its current version.")
             }
             for replica in replicas { replica.payload = original.payload }
@@ -1184,6 +1275,68 @@ final class NoteStore: ObservableObject {
             reportAttachmentFailure(id, message: message)
             return false
         }
+    }
+
+    /// Repairs an exact document placement, including an absent row. The
+    /// selected file is verified off-main; ownership is checked again before
+    /// the same transaction reconstructs the UUID and stores its bytes.
+    func locatePlacement(_ block: NoteBlock, noteID: UUID, at url: URL,
+                         stillCurrent: @MainActor () -> Bool) async -> Bool {
+        guard let id = block.attachmentID,
+              let loaded = loadDocument(noteID: noteID), loaded.content.document?.blocks.contains(block) == true else {
+            setAttachmentError("The owning note or placement changed. Reopen it before locating its original."); return false
+        }
+        guard let initial = try? storedAttachments(matching: id, allowMissing: true) else { return false }
+        let initialSnapshots = initial.map(NoteAttachmentReplicaSnapshot.init)
+        let digest: String
+        let size: Int64
+        let type: String
+        let filename: String
+        if let first = initial.first {
+            guard first.noteID == noteID, initial.allSatisfy({ NoteAttachmentReplicaSnapshot($0) == NoteAttachmentReplicaSnapshot(first) }) else { return false }
+            digest = first.contentDigest; size = first.byteCount
+            type = first.contentTypeIdentifier; filename = first.originalFilename
+        } else {
+            guard case let .string(expected)? = block.extras["contentDigest"],
+                  case let .int(count)? = block.extras["expectedByteCount"], count > 0,
+                  count <= AttachmentLimits.maxBytesPerAttachment,
+                  case let .string(contentType)? = block.extras["expectedContentType"],
+                  case let .string(name)? = block.extras["expectedFilename"] else {
+                setAttachmentError("This older placement has no verified original identity. Use Replace Missing Attachment to choose new contents.")
+                return false
+            }
+            digest = expected; size = Int64(count); type = contentType; filename = name
+        }
+        let item = await NotesPageController.loadFile(url, type: type)
+        guard let bytes = item.staged, bytes.digest == digest, bytes.byteCount == size,
+              stillCurrent(), loadDocument(noteID: noteID) == loaded else {
+            setAttachmentError("Choose the original file; its bytes or owning placement no longer match."); return false
+        }
+        var repairContext: ModelContext?
+        do {
+            let transaction = try makeFreshContext()
+            repairContext = transaction
+            let owners = try storedNotes(matching: noteID, in: transaction)
+            guard owners.allSatisfy({ $0.deletedAt == nil && $0.revisionID == loaded.revisionID
+                && $0.content.flatMap({ NoteContentCodec.decode($0).document }) == loaded.content.document }) else {
+                setAttachmentError("The owning note changed while its original was being located."); return false
+            }
+            let family = try storedAttachments(matching: id, in: transaction, allowMissing: true)
+            guard family.count == initialSnapshots.count,
+                  family.map(NoteAttachmentReplicaSnapshot.init) == initialSnapshots else { return false }
+            if family.isEmpty {
+                transaction.insert(NoteAttachment(id: id, noteID: noteID, originalFilename: filename,
+                    contentTypeIdentifier: type, byteCount: size, sortIndex: 0, contentDigest: digest,
+                    createdAt: currentDate, payload: bytes.data))
+            } else {
+                for row in family { row.payload = bytes.data }
+            }
+            let presentation = try presentationSnapshot(in: transaction)
+            if case let .failed(message) = persistImport(in: transaction, fallbackPresentation: presentation) {
+                setAttachmentError(message); return false
+            }
+            return true
+        } catch { repairContext?.rollback(); setAttachmentError(error.localizedDescription); return false }
     }
 
     /// The user dismissed the notice; the next save clears it anyway.
@@ -1502,7 +1655,8 @@ final class NoteStore: ObservableObject {
 #if os(macOS)
     private func storedAttachments(
         matching id: UUID,
-        in sourceContext: ModelContext? = nil
+        in sourceContext: ModelContext? = nil,
+        allowMissing: Bool = false
     ) throws -> [NoteAttachment] {
         let targetID = id
         let descriptor = FetchDescriptor<NoteAttachment>(
@@ -1511,7 +1665,7 @@ final class NoteStore: ObservableObject {
             }
         )
         let replicas = try (sourceContext ?? context).fetch(descriptor)
-        guard !replicas.isEmpty else {
+        guard allowMissing || !replicas.isEmpty else {
             throw NoteReplicaMutationError.missingReplica(id)
         }
         return replicas

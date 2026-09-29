@@ -2,6 +2,24 @@ import Foundation
 import CryptoKit
 import SwiftData
 
+/// One payload digest entry point, with a thread probe for production-path
+/// regressions. Observers are opt-in and protected independently of actors.
+enum NotePayloadDigest {
+    private final class Probe: @unchecked Sendable {
+        let lock = NSLock()
+        var observer: (@Sendable (Bool, Int) -> Void)?
+    }
+    private static let probe = Probe()
+    static func observe(_ observer: (@Sendable (Bool, Int) -> Void)?) {
+        probe.lock.lock(); probe.observer = observer; probe.lock.unlock()
+    }
+    static func sha256(_ data: Data) -> String {
+        probe.lock.lock(); let observer = probe.observer; probe.lock.unlock()
+        observer?(Thread.isMainThread, data.count)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 /// Destructive decisions use complete physical UUID families, including
 /// divergent replicas. Any protected or unknown member keeps every member.
 enum NotePhysicalFamilyRetention {
@@ -14,6 +32,43 @@ enum NotePhysicalFamilyRetention {
         }
         return true
     }
+    @MainActor
+    static func versionEligible(_ family: [NoteVersion], noteIDs: Set<UUID>,
+                                proposalBases: Set<UUID>, recoveryBases: Set<UUID>) -> Bool {
+        guard let first = family.first else { return false }
+        return mayDelete(family) { row in
+            guard noteIDs.contains(row.noteID), row.noteID == first.noteID, row.reason != nil,
+                  row.reasonRaw == first.reasonRaw, row.createdAt == first.createdAt,
+                  row.content == first.content, row.contentFormat == first.contentFormat,
+                  row.title == first.title, row.body == first.body,
+                  row.attachmentIDsRaw == first.attachmentIDsRaw,
+                  row.sourceRevisionID == first.sourceRevisionID,
+                  (row.contentFormat == 0 && row.content == nil)
+                    || (row.contentFormat == NoteDocument.currentFormat
+                        && row.content.map { NoteContentCodec.decode($0).isEditable } == true),
+                  row.attachmentIDsRaw.split(separator: " ").allSatisfy({ UUID(uuidString: String($0)) != nil })
+            else { return .unknown }
+            if proposalBases.contains(row.id) || row.sourceRevisionID.map(recoveryBases.contains) == true {
+                return .protected
+            }
+            return .eligible
+        }
+    }
+
+    @MainActor
+    static func proposalEligible(_ family: [NotePendingEdit], noteIDs: Set<UUID>) -> Bool {
+        guard let first = family.first else { return false }
+        return mayDelete(family) { row in
+            guard noteIDs.contains(row.noteID), row.noteID == first.noteID,
+                  row.baseRevisionToken == first.baseRevisionToken, row.baseVersionID == first.baseVersionID,
+                  row.proposedContent == first.proposedContent, row.agentName == first.agentName,
+                  row.createdAt == first.createdAt, row.needsReview == first.needsReview,
+                  row.proposedContent.map({ NoteContentCodec.decode($0).isEditable }) == true
+            else { return .unknown }
+            return .eligible
+        }
+    }
+
 }
 
 /// An image imported by the editor but not yet saved. Its bytes stay with
@@ -27,6 +82,27 @@ struct StagedNoteAttachment: Equatable, Sendable {
     let byteCount: Int64
     let digest: String
     let data: Data
+    /// Computed once where bytes enter the engine (production loaders and
+    /// stored-byte verification run off-main). Immutable copies retain proof.
+    private let verifiedDigest: String
+    var payloadIsVerified: Bool { byteCount == Int64(data.count) && digest == verifiedDigest }
+
+    init(id: UUID, filename: String, contentTypeIdentifier: String, byteCount: Int64, digest: String, data: Data) {
+        self.id = id; self.filename = filename; self.contentTypeIdentifier = contentTypeIdentifier
+        self.byteCount = byteCount; self.digest = digest; self.data = data
+        verifiedDigest = data.isEmpty ? "" : NotePayloadDigest.sha256(data)
+    }
+
+    private init(id: UUID, copying original: StagedNoteAttachment) {
+        self.id = id; filename = original.filename; contentTypeIdentifier = original.contentTypeIdentifier
+        byteCount = original.byteCount; digest = original.digest; data = original.data
+        verifiedDigest = original.verifiedDigest
+    }
+    func copying(id: UUID) -> StagedNoteAttachment { .init(id: id, copying: self) }
+    var identityExtras: [String: NoteJSON] {
+        ["contentDigest": .string(digest), "expectedByteCount": .int(byteCount),
+         "expectedContentType": .string(contentTypeIdentifier), "expectedFilename": .string(filename)]
+    }
 }
 
 /// Immutable projection prepared away from the main actor for autosave.
@@ -476,6 +552,7 @@ extension NoteStore {
         struct Plan {
             let new: [StagedNoteAttachment]
             let nextSortIndex: Int64
+            let repairs: [(NoteAttachment, StagedNoteAttachment)]
         }
 
         static func evaluate(_ staged: [StagedNoteAttachment], referencedBy document: NoteDocument,
@@ -485,8 +562,7 @@ extension NoteStore {
         guard staged.filter({ shown.contains($0.id) }).allSatisfy({
             $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment
                 && $0.filename.utf8.count <= AttachmentLimits.maxFilenameUTF8Bytes
-                && (metadataOnlyIDs.contains($0.id) || ($0.byteCount == Int64($0.data.count)
-                    && $0.digest == SHA256.hash(data: $0.data).map { String(format: "%02x", $0) }.joined()))
+                && (metadataOnlyIDs.contains($0.id) || $0.payloadIsVerified)
         }) else {
             throw NoteDocumentStoreError.invalidDocument("An image has no complete payload.")
         }
@@ -496,6 +572,16 @@ extension NoteStore {
         let visible = Dictionary(rows.filter { shown.contains($0.id) }.map { ($0.id, $0) },
             uniquingKeysWith: { first, other in other.byteCount > first.byteCount ? other : first }).values
         let new = staged.filter { shown.contains($0.id) && !existing.contains($0.id) }
+        var repairs: [(NoteAttachment, StagedNoteAttachment)] = []
+        for item in staged where shown.contains(item.id) && existing.contains(item.id) && !metadataOnlyIDs.contains(item.id) {
+            let family = rows.filter { $0.id == item.id }
+            guard family.allSatisfy({ $0.byteCount == item.byteCount && $0.contentDigest == item.digest
+                && $0.contentTypeIdentifier == item.contentTypeIdentifier
+                && ($0.payload == nil || $0.payload == item.data) }) else {
+                throw NoteDocumentStoreError.invalidDocument("Stored attachment bytes disagree with recovery. Recovery is being kept.")
+            }
+            repairs += family.filter { $0.payload == nil }.map { ($0, item) }
+        }
         let baseIDs = Set(base?.attachmentIDs ?? [])
         let addedIDs = shown.subtracting(baseIDs)
         let missing = shown.subtracting(existing).subtracting(new.map(\.id))
@@ -527,7 +613,7 @@ extension NoteStore {
               totalBytes <= AttachmentLimits.maxBytesPerNote || noIncrease else {
             throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
         }
-        return Plan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1)
+        return Plan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1, repairs: repairs)
         }
     }
 
@@ -560,6 +646,8 @@ extension NoteStore {
     /// Inserts validated rows; note, rows and versions still save together.
     private func stageAttachments(_ plan: NoteAttachmentAdmission.Plan, noteID: UUID,
                                   context: ModelContext, timestamp: Date) {
+        for item in plan.new + plan.repairs.map({ $0.1 }) { verifiedAttachmentPayloads[item.id] = item }
+        for (row, item) in plan.repairs { row.payload = item.data }
         var nextIndex = plan.nextSortIndex
         for item in plan.new {
             let row = NoteAttachment(
@@ -672,16 +760,8 @@ extension NoteStore {
         var removed = false
         for version in all {
             let family = copies[version.id] ?? []
-            guard NotePhysicalFamilyRetention.mayDelete(family, decision: { replica in
-                // A divergent replica keeps the family until replicas agree.
-                guard replica.noteID == noteID, replica.reason != nil,
-                      replica.createdAt == version.createdAt, replica.content == version.content,
-                      replica.contentFormat == version.contentFormat,
-                      replica.sourceRevisionID == version.sourceRevisionID else { return .unknown }
-                if protectedIDs.contains(replica.id)
-                    || replica.sourceRevisionID.map(recoveryBases.contains) == true { return .protected }
-                return .eligible
-            }) else {
+            guard NotePhysicalFamilyRetention.versionEligible(family, noteIDs: [noteID],
+                proposalBases: protectedIDs, recoveryBases: recoveryBases) else {
                 keptTimes.formUnion(family.map(\.createdAt))
                 continue
             }
@@ -940,13 +1020,7 @@ extension NoteStore {
             let replicas = preflight.replicas
             let current = preflight.canonical
             guard let editRows = try? pendingEditRows(edit.id),
-                  NotePhysicalFamilyRetention.mayDelete(editRows, decision: { row in
-                      guard row.noteID == noteID,
-                            row.baseRevisionToken == edit.baseRevisionToken,
-                            row.baseVersionID == edit.baseVersionID,
-                            row.proposedContent == edit.proposedContent else { return .unknown }
-                      return .eligible
-                  }) else { continue }
+                  NotePhysicalFamilyRetention.proposalEligible(editRows, noteIDs: [noteID]) else { continue }
             guard current.revisionToken == edit.baseRevisionToken,
                   let data = edit.proposedContent,
                   case let .editable(document) = NoteContentCodec.decode(data),
@@ -1108,20 +1182,22 @@ extension NoteStore {
     /// Stages the removal of purged notes' versions and pending edits.
     func stageRemovalOfHistory(forNoteIDs noteIDs: Set<UUID>) throws {
         let versions = try modelContext.fetch(FetchDescriptor<NoteVersion>())
-        for family in Dictionary(grouping: versions, by: \.id).values
-        where family.contains(where: { noteIDs.contains($0.noteID) }) {
-            guard NotePhysicalFamilyRetention.mayDelete(family, decision: {
-                noteIDs.contains($0.noteID) ? .eligible : .protected
-            }) else { throw NoteDocumentStoreError.invalidDocument("A version family still owns this note.") }
-            family.forEach(modelContext.delete)
-        }
         let proposals = try modelContext.fetch(FetchDescriptor<NotePendingEdit>())
-        for family in Dictionary(grouping: proposals, by: \.id).values
-        where family.contains(where: { noteIDs.contains($0.noteID) }) {
-            guard NotePhysicalFamilyRetention.mayDelete(family, decision: {
-                noteIDs.contains($0.noteID) ? .eligible : .protected
-            }) else { throw NoteDocumentStoreError.invalidDocument("A proposal family still owns this note.") }
-            family.forEach(modelContext.delete)
+        let recoveryBases = try recoveryProtectedRevisionIDs()
+        // Proposals outside the same removal transaction keep their bases.
+        let externalBases = Set(proposals.filter { !noteIDs.contains($0.noteID) }.compactMap(\.baseVersionID))
+        let versionFamilies = Dictionary(grouping: versions, by: \.id).values.filter {
+            $0.contains { noteIDs.contains($0.noteID) }
         }
+        let proposalFamilies = Dictionary(grouping: proposals, by: \.id).values.filter {
+            $0.contains { noteIDs.contains($0.noteID) }
+        }
+        guard versionFamilies.allSatisfy({ NotePhysicalFamilyRetention.versionEligible($0,
+                noteIDs: noteIDs, proposalBases: externalBases, recoveryBases: recoveryBases) }),
+              proposalFamilies.allSatisfy({ NotePhysicalFamilyRetention.proposalEligible($0, noteIDs: noteIDs) }) else {
+            throw NoteDocumentStoreError.invalidDocument("Protected, divergent or unreadable history keeps this deleted note safe.")
+        }
+        versionFamilies.forEach { $0.forEach(modelContext.delete) }
+        proposalFamilies.forEach { $0.forEach(modelContext.delete) }
     }
 }
