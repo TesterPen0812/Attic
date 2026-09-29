@@ -2065,3 +2065,68 @@ extension NoteSlice3bTests {
         XCTAssertEqual(try availability() as? Bool, true, "verified retained bytes count even when payload is absent")
     }
 }
+
+@MainActor
+private final class CancellationBarrierJournal: NoteDraftJournaling {
+    let base: NoteDraftJournal
+    var requiresAsyncIO: Bool { true }
+    private(set) var cancellationStarted = false
+    private var cancellation: CheckedContinuation<Void, Never>?
+    init(directory: URL) { base = NoteDraftJournal(directory: directory) }
+    func readRecoveryEntries() async throws -> [NoteDraftRecoveryEntry] { try await base.readRecoveryEntries() }
+    func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
+    func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
+        try await base.writeDurably(entry, staged: staged, replacing: replacing)
+    }
+    func retireDurably(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) async throws {
+        try await base.retireDurably(noteID: noteID, claim: claim, saved: saved)
+    }
+    func discardOwnedDurably(noteID: UUID, claim: NoteRecoveryClaim) async throws {
+        try await base.discardOwnedDurably(noteID: noteID, claim: claim)
+    }
+    func cancelPendingDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
+        cancellationStarted = true
+        await withCheckedContinuation { cancellation = $0 }
+        return try await base.cancelPendingDurably(entry, staged: staged, replacing: replacing)
+    }
+    func releaseCancellation() { cancellation?.resume(); cancellation = nil }
+}
+
+@MainActor
+extension NoteSlice3bTests {
+    func testCancelledLoaderCannotRecreatePendingRecoveryWhileCancellationIsCommitting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CancelFence-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let journal = CancellationBarrierJournal(directory: root)
+        let loader = FirstSuspendedLoader(try stagedImage())
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let controller = NotesPageController(store: store, journal: journal, saveDelay: .seconds(60),
+            imageLoader: { await loader.load($0) })
+        await controller.startAndWait()
+        let session = try XCTUnwrap(controller.active)
+        session.engine.performEdit(NSRange(location: 0, length: 0), with: NSAttributedString(string: "Keep typed text"), name: "Typing")
+        controller.importFiles([URL(fileURLWithPath: "/tmp/cancel-fence.png")])
+        for _ in 0..<100 where await loader.started == false { try await Task.sleep(for: .milliseconds(2)) }
+        controller.cancelActiveImport()
+        try await waitFor { journal.cancellationStarted }
+        session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: " while cancelling"), name: "Typing")
+        XCTAssertFalse(controller.preserve(session))
+        // The batch must remain owned until cancellation commits. A loader
+        // which ignores Task cancellation can return during that interval.
+        await loader.release()
+        try await Task.sleep(for: .milliseconds(30))
+        journal.releaseCancellation()
+        await controller.waitForImportWork()
+        XCTAssertFalse(session.isImporting)
+        XCTAssertTrue(session.engine.document().attachmentIDs.isEmpty)
+        let checkpoint = try await XCTUnwrapAsync(try await journal.base.entriesDurably().first?.0)
+        XCTAssertNil(checkpoint.pendingImport, "a late cancelled callback must not resurrect pending metadata")
+        XCTAssertTrue(checkpoint.staged.isEmpty, "the cancelled file is not checkpointed after the cancellation boundary")
+        let restarted = NotesPageController(store: store, journal: NoteDraftJournal(directory: root), saveDelay: .seconds(60))
+        await restarted.startAndWait()
+        XCTAssertTrue(restarted.active?.engine.document().attachmentIDs.isEmpty == true,
+            "restart cannot insert a file the owner cancelled")
+        XCTAssertEqual(restarted.active?.engine.document().title, "Keep typed text while cancelling")
+    }
+}

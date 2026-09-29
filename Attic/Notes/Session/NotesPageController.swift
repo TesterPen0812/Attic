@@ -97,6 +97,7 @@ final class NoteSession: ObservableObject, Identifiable {
     fileprivate(set) var scrollOffset: CGFloat = 0
     @Published fileprivate var importBatch: NoteImportBatch?
     fileprivate var importTask: Task<Void, Never>?
+    fileprivate var cancellingImport = false
     fileprivate var refusedWritingToolsSinceSave = false
     fileprivate var saveTask: Task<Void, Never>?
     fileprivate var pauseTask: Task<Void, Never>?
@@ -851,6 +852,9 @@ final class NotesPageController: ObservableObject {
 
     /// An activity can defer a store write without making the status say it failed.
     private func checkpoint(_ session: NoteSession, silent: Bool) -> Bool {
+        // The live batch keeps its byte ownership until cancellation commits,
+        // but no callback may checkpoint it back into recoverable pending work.
+        guard !session.cancellingImport else { return false }
         guard let journal else {
             session.state = .onlyInMemory(String(localized: "There is no recovery copy for this note."))
             return false
@@ -1693,13 +1697,15 @@ final class NotesPageController: ObservableObject {
     }
 
     private func dropImport(in session: NoteSession, batchID: UUID, notice: String) {
-        guard let batch = session.importBatch, batch.id == batchID else { return }
+        guard let batch = session.importBatch, batch.id == batchID, !session.cancellingImport else { return }
         if let journal, journal.requiresAsyncIO {
+            session.cancellingImport = true
             session.importTask?.cancel()
             // Capture the post-cancel checkpoint without releasing live batch
             // ownership while the service is writing it.
             session.importBatch = nil
             let document = checkpointDocument(for: session)
+            let generation = session.editGeneration
             let entry = try? journalEntry(for: session, document: document)
             let bytes = journalStaged(for: session, document: document)
             session.importBatch = batch
@@ -1715,9 +1721,16 @@ final class NotesPageController: ObservableObject {
                     }
                     session.importBatch = nil
                     session.importTask = nil
+                    session.cancellingImport = false
                     session.engine.cancelImageImport()
                     session.notice = notice
-                } catch { session.notice = "The batch could not be cancelled because recovery could not be updated." }
+                    // Keep edits made while cancellation was committing. Their
+                    // checkpoint now has no cancelled batch or pending metadata.
+                    if session.editGeneration != generation { _ = self.checkpoint(session, silent: true) }
+                } catch {
+                    session.cancellingImport = false
+                    session.notice = "The batch could not be cancelled because recovery could not be updated."
+                }
             }
             return
         }
