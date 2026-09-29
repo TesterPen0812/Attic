@@ -143,6 +143,8 @@ final class NoteImageAttachment: NoteObjectAttachment {
     /// Missing: the row or its bytes are gone; a placeholder keeps its place.
     var isMissing = false
     var failureMessage: String?
+    /// Print-only constraint; the stored width fraction is unchanged.
+    var maxDisplayHeight: CGFloat?
 
     init(objectID: UUID = UUID(), attachmentID: UUID, preferredWidth: Double? = nil,
          preferredWidthFraction: Double? = nil,
@@ -170,8 +172,11 @@ final class NoteImageAttachment: NoteObjectAttachment {
         let natural = pixelSize.width / 2
         let wanted = preferredWidthFraction.map { column * CGFloat($0) }
             ?? preferredWidth.map { CGFloat($0) } ?? natural
-        let width = min(column, max(1, min(wanted, natural)))
-        return CGSize(width: width.rounded(), height: (width * pixelSize.height / pixelSize.width).rounded())
+        var width = min(column, max(1, min(wanted, natural)))
+        if let maxDisplayHeight {
+            width = min(width, maxDisplayHeight * pixelSize.width / pixelSize.height)
+        }
+        return CGSize(width: width, height: width * pixelSize.height / pixelSize.width)
     }
 
     override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,

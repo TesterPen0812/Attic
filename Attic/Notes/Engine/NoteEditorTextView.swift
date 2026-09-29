@@ -262,7 +262,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [NoteEditorEngine.fragmentType, .fileURL, .rtf, .html, .string]
+        [NoteEditorEngine.fragmentType, .fileURL, .png, .tiff, .rtf, .html, .string]
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
@@ -277,6 +277,10 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
             engine.onFileBatchRequest?(urls, pboard.string(forType: .string) ?? "", target)
             return engine.onFileBatchRequest != nil
+        }
+        if (type == .png || type == .tiff), let data = pboard.data(forType: type) {
+            engine.onRawImageBatchRequest?(data, type == .png ? "png" : "tiff", target)
+            return engine.onRawImageBatchRequest != nil
         }
         if (type == .rtf || type == .html), let data = pboard.data(forType: type) {
             return engine.pasteRichText(data, type: type, at: target)
@@ -320,7 +324,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
     // MARK: Checkbox clicks
 
     override func mouseDown(with event: NSEvent) {
-        guard let engine, isEditable else { return super.mouseDown(with: event) }
+        guard let engine else { return super.mouseDown(with: event) }
         let point = convert(event.locationInWindow, from: nil)
         if event.clickCount == 2 {
             let index = characterIndexForInsertion(at: point)
@@ -332,6 +336,7 @@ final class NoteEditorTextView: NSTextView, NSAccessibilityCustomRotorItemSearch
                 return
             }
         }
+        guard isEditable else { return super.mouseDown(with: event) }
         if let location = checkboxLocation(at: point) {
             engine.toggleCheckbox(atLineOf: location)
             return

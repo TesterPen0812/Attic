@@ -20,7 +20,7 @@ enum NotePrint {
             guard let width = block.pixelWidth, let height = block.pixelHeight,
                   width > 0, height > 0 else { continue }
             let maxFraction = Double(pageHeight * 0.82 / (columnWidth * CGFloat(height) / CGFloat(width)))
-            printable.blocks[index].widthFraction = min(block.widthFraction ?? 1, max(0.1, maxFraction))
+            printable.blocks[index].widthFraction = min(block.widthFraction ?? 1, maxFraction)
         }
         let style = NoteTextStyle(design: .default)
         let content = NoteTextCodec.attributedString(from: printable, style: style)
@@ -28,6 +28,7 @@ enum NotePrint {
         content.enumerateAttribute(.attachment, in: NSRange(location: 0, length: content.length)) { value, _, _ in
             guard let object = value as? NoteObjectAttachment else { return }
             if let image = object as? NoteImageAttachment {
+                image.maxDisplayHeight = pageHeight * 0.82
                 if let cg = thumbnails[image.attachmentID] {
                     image.renderedImage = NSImage(cgImage: cg, size: CGSize(width: cg.width, height: cg.height))
                 } else {

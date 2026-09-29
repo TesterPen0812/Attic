@@ -116,6 +116,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onRetryImportObject: ((UUID) -> Void)?
     var onLocateObject: ((UUID) -> Void)?
     var onFileBatchRequest: (([URL], String, NSRange) -> Void)?
+    var onRawImageBatchRequest: ((Data, String, NSRange) -> Void)?
+    /// Same admission gate used by paste, drop, slash and Retry.
+    var onImportAdmission: ((StagedNoteAttachment) -> String?)?
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
@@ -178,6 +181,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var pendingImageLoads = Set<ObjectIdentifier>()
     private var importAnchor: Int?
     var currentImportAnchor: Int? { importAnchor }
+    private var importReplacementLength = 0
+    private var importIsBoundary = false
+    var currentImportTarget: (anchor: Int, replacementLength: Int, isBoundary: Bool)? {
+        importAnchor.map { ($0, importReplacementLength, importIsBoundary) }
+    }
     private var importNoteID: UUID?
 
     init(noteID: UUID, document: NoteDocument, readOnly: Bool = false,
@@ -848,11 +856,27 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     }
 
     func beginImageImport(at selection: NSRange? = nil) {
-        importAnchor = selection?.location ?? textView?.selectedRange().location ?? textStorage.length
+        if let selection {
+            importAnchor = min(selection.location, textStorage.length)
+            importReplacementLength = min(selection.length, textStorage.length - importAnchor!)
+            importIsBoundary = selection.length == 0
+        } else {
+            let caret = min(textView?.selectedRange().location ?? textStorage.length, textStorage.length)
+            importAnchor = NSMaxRange(lineRange(at: caret))
+            importReplacementLength = 0
+            importIsBoundary = false
+        }
         importNoteID = noteID
     }
 
-    func cancelImageImport() { importAnchor = nil; importNoteID = nil }
+    func restoreImageImport(anchor: Int, replacementLength: Int, isBoundary: Bool) {
+        importAnchor = min(anchor, textStorage.length)
+        importReplacementLength = min(replacementLength, textStorage.length - importAnchor!)
+        importIsBoundary = isBoundary
+        importNoteID = noteID
+    }
+
+    func cancelImageImport() { importAnchor = nil; importReplacementLength = 0; importNoteID = nil }
 
     /// The complete batch is one document change and one Undo step.
     @discardableResult
@@ -869,11 +893,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
               !items.isEmpty || !acceptedText.isEmpty else { return false }
         importAnchor = nil
         importNoteID = nil
-        let at = NSMaxRange(lineRange(at: min(anchor, textStorage.length)))
+        let at = min(anchor, textStorage.length)
+        let replacement = NSRange(location: at, length: min(importReplacementLength, textStorage.length - at))
+        importReplacementLength = 0
         let insertion = NSMutableAttributedString(string: "")
-        if !acceptedText.isEmpty { insertion.append(NSAttributedString(string: "\n" + acceptedText, attributes: style.bodyAttributes)) }
+        if !acceptedText.isEmpty { insertion.append(NSAttributedString(string: acceptedText, attributes: style.bodyAttributes)) }
         for item in items {
-            insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
+            let priorIsNewline = insertion.length == 0
+                ? at == 0 || (textStorage.string as NSString).character(at: at - 1) == 0x0A
+                : (insertion.string as NSString).character(at: insertion.length - 1) == 0x0A
+            if !priorIsNewline { insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes)) }
             if let stagedItem = item.staged { staged[stagedItem.id] = stagedItem }
             if let stagedItem = item.staged, let pixelSize = item.pixelSize {
                 let image = NoteImageAttachment(attachmentID: stagedItem.id, preferredWidthFraction: 1, pixelSize: pixelSize)
@@ -887,10 +916,11 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 insertion.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
             }
         }
-        if at == textStorage.length {
+        if !items.isEmpty && (NSMaxRange(replacement) == textStorage.length
+            || (textStorage.string as NSString).character(at: NSMaxRange(replacement)) != 0x0A) {
             insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
-        let inserted = performEdit(NSRange(location: at, length: 0), with: insertion,
+        let inserted = performEdit(replacement, with: insertion,
                                    name: String(localized: "Add Files"),
                                    selection: NSRange(location: at + insertion.length, length: 0))
         if !inserted { for item in items { if let id = item.staged?.id { staged[id] = nil } } }
@@ -1289,6 +1319,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if let anchor = importAnchor {
             let oldLength = max(0, editedRange.length - delta)
             let oldEnd = editedRange.location + oldLength
+            let selectionEnd = anchor + importReplacementLength
+            var newEnd = selectionEnd
             if oldLength == 0, editedRange.location <= anchor {
                 importAnchor = max(0, anchor + delta)
             } else if oldEnd <= anchor {
@@ -1296,6 +1328,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             } else if editedRange.location <= anchor {
                 importAnchor = editedRange.location
             }
+            if oldLength == 0, editedRange.location <= selectionEnd {
+                newEnd = selectionEnd + delta
+            } else if oldEnd <= selectionEnd {
+                newEnd = selectionEnd + delta
+            } else if editedRange.location <= selectionEnd {
+                newEnd = editedRange.location + editedRange.length
+            }
+            importReplacementLength = max(0, newEnd - (importAnchor ?? newEnd))
         }
         if let hash = literalHashLocation {
             let oldLength = max(0, editedRange.length - delta)
@@ -1554,6 +1594,7 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
             setAccessibilityLabel(object.accessibilityDescription)
         }
         if object is NoteImageAttachment || object is NoteFileAttachment {
+            let state = engine.objectState(for: object)
             let actions: [(String, NoteObjectCommand)] = [
                 (String(localized: "Quick Look"), .quickLook),
                 (String(localized: "Open"), .open),
@@ -1570,7 +1611,7 @@ final class NoteObjectAccessibilityElement: NSAccessibilityElement {
                 (String(localized: "Delete"), .delete)
             ]
             setAccessibilityCustomActions(actions.compactMap { title, command in
-                guard engine.validate(command, objectID: object.objectID).enabled else { return nil }
+                guard engine.validate(command, object: object, state: state).enabled else { return nil }
                 return NSAccessibilityCustomAction(name: title) { [weak engine, id = object.objectID] in
                     MainActor.assumeIsolated {
                         guard let engine, engine.validate(command, objectID: id).enabled else { return false }
@@ -2839,6 +2880,10 @@ extension NoteEditorEngine {
     @discardableResult
     func commitSlashObject(_ item: NoteImportedObject) -> Bool {
         guard let session = pendingSlashFile else { return false }
+        if let staged = item.staged, let reason = onImportAdmission?(staged) {
+            onNotice?(reason)
+            return false
+        }
         pendingSlashFile = nil
         guard validSlashTarget(session, needsCaret: false) else { return false }
         let line = lineRange(at: session.range.location)

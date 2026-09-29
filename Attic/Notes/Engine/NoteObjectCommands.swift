@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import QuickLookUI
+import UniformTypeIdentifiers
 
 /// One action vocabulary for the card, keyboard, menus and VoiceOver.
 enum NoteImageSizePreset: String, CaseIterable {
@@ -59,6 +60,10 @@ extension NoteEditorEngine {
 
     func objectState(_ id: UUID) -> NoteObjectState? {
         guard let (object, _) = objectPlacement(id) else { return nil }
+        return objectState(for: object)
+    }
+
+    func objectState(for object: NoteObjectAttachment) -> NoteObjectState {
         if let file = object as? NoteFileAttachment, let failure = file.importFailure {
             return .importFailed(failure)
         }
@@ -74,10 +79,14 @@ extension NoteEditorEngine {
 
     func validate(_ command: NoteObjectCommand, objectID: UUID) -> NoteObjectCommandValidation {
         guard let (object, _) = objectPlacement(objectID),
-              object is NoteImageAttachment || object is NoteFileAttachment,
-              let state = objectState(objectID) else {
+              object is NoteImageAttachment || object is NoteFileAttachment else {
             return .init(enabled: false, state: nil)
         }
+        return validate(command, object: object, state: objectState(for: object))
+    }
+
+    func validate(_ command: NoteObjectCommand, object: NoteObjectAttachment,
+                  state: NoteObjectState) -> NoteObjectCommandValidation {
         let bytesExist = state == .ready || state == .previewUnavailable
         let enabled: Bool
         switch command {
@@ -167,10 +176,15 @@ extension NoteEditorEngine {
             return true
         case .copyImage:
             guard let image = object as? NoteImageAttachment,
-                  let item = staged[image.attachmentID] ?? imageProvider?.attachmentBytes(forAttachment: image.attachmentID) else { return false }
+                  let data = await objectBytes(image) else { return false }
             let board = NSPasteboard.general
             board.clearContents()
-            return board.setData(item.data, forType: NSPasteboard.PasteboardType(item.contentTypeIdentifier))
+            let contentType = staged[image.attachmentID]?.contentTypeIdentifier
+                ?? UTType(filenameExtension: (image.filename as NSString).pathExtension)?.identifier ?? UTType.png.identifier
+            let fragment = writeSelection(range, to: board,
+                types: [Self.fragmentType, .rtf, .string, NSPasteboard.PasteboardType(contentType)])
+            let imageData = board.setData(data, forType: NSPasteboard.PasteboardType(contentType))
+            return fragment && imageData
         case .copyFile:
             guard let bytes = await objectBytes(object) else { return false }
             do {
@@ -236,6 +250,10 @@ extension NoteEditorEngine {
     func replaceFailedFile(_ objectID: UUID, with imported: NoteImportedObject) -> Bool {
         guard let (object, range) = objectPlacement(objectID), object is NoteFileAttachment,
               case .importFailed = objectState(objectID) else { return false }
+        if let staged = imported.staged, let reason = onImportAdmission?(staged) {
+            onNotice?(reason)
+            return false
+        }
         let replacement: NoteObjectAttachment
         if let item = imported.staged, let size = imported.pixelSize {
             let image = NoteImageAttachment(objectID: objectID, attachmentID: item.id,
