@@ -482,6 +482,10 @@ private final class RefusingJournal: NoteDraftJournaling {
         if failRemovals { throw Failure() }
         try base.remove(noteID: noteID)
     }
+    func cancelPending(noteID: UUID) throws {
+        if failRemovals { throw Failure() }
+        try base.cancelPending(noteID: noteID)
+    }
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
 }

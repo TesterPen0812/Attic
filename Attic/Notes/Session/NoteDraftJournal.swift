@@ -69,11 +69,32 @@ enum NoteDraftRecoveryEntry {
 private enum NoteDraftJournalError: LocalizedError {
     case incompleteStaging
     case conflictingStaging
+    case unknownOwnership
 
     var errorDescription: String? {
         switch self {
         case .incompleteStaging: "The recovery copy has missing or damaged image bytes."
         case .conflictingStaging: "An earlier recovery copy owns different bytes at this image ID."
+        case .unknownOwnership: "The existing recovery copy is unreadable; its files are being kept."
+        }
+    }
+}
+
+/// The single decision made before every journal mutation or collection.
+/// A damaged state retains *all* staged files because its ownership set is
+/// unknowable, even if the JSON envelope happens to decode.
+private enum NoteRecoveryOwnership {
+    case absent
+    case valid(NoteDraftJournalEntry, [StagedNoteAttachment])
+    case pending(NoteDraftJournalEntry, [StagedNoteAttachment])
+    case damaged(String)
+    case retired
+
+    var retainedIDs: Set<UUID>? {
+        switch self {
+        case .absent, .retired: []
+        case let .valid(entry, _), let .pending(entry, _): Set(entry.staged.map(\.id))
+        case .damaged: nil
         }
     }
 }
@@ -83,6 +104,9 @@ private enum NoteDraftJournalError: LocalizedError {
 protocol NoteDraftJournaling: AnyObject {
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws
     func remove(noteID: UUID) throws
+    func retireIfSaved(noteID: UUID, document: NoteDocument?, tags: [String]) throws
+    func cancelPending(noteID: UUID) throws
+    func retireIfTransferred(noteID: UUID, document: NoteDocument, tags: [String], copiedDigests: Set<String>) throws
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])]
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry]
 }
@@ -90,6 +114,51 @@ protocol NoteDraftJournaling: AnyObject {
 extension NoteDraftJournaling {
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] {
         try entries().map { .valid($0.0, $0.1) }
+    }
+
+    /// Mock journals retain the same proof rule before forwarding to remove.
+    func retireIfSaved(noteID: UUID, document: NoteDocument?, tags: [String]) throws {
+        let entries = try recoveryEntries()
+        guard entries.allSatisfy({ if case .valid = $0 { return true }; return false }) else {
+            throw NoteDraftJournalError.unknownOwnership
+        }
+        guard let candidate = entries.compactMap({ item -> NoteDraftJournalEntry? in
+            if case let .valid(entry, _) = item, entry.noteID == noteID { return entry }
+            return nil
+        }).first else {
+            // A wrapper may be unable to prove removal even when its
+            // enumeration found no row; preserve that failure signal.
+            try remove(noteID: noteID)
+            return
+        }
+        guard let document, candidate.pendingImport == nil,
+              NoteContentCodec.decode(candidate.content).document == document,
+              candidate.changedTags == nil || candidate.changedTags == tags,
+              Set(candidate.staged.map(\.id)).isSubset(of: Set(document.attachmentIDs)) else {
+            throw NoteDraftJournalError.unknownOwnership
+        }
+        try remove(noteID: noteID)
+    }
+
+    func cancelPending(noteID: UUID) throws { try remove(noteID: noteID) }
+
+    func retireIfTransferred(noteID: UUID, document: NoteDocument, tags: [String],
+                             copiedDigests: Set<String>) throws {
+        let entries = try recoveryEntries()
+        guard entries.allSatisfy({ if case .valid = $0 { return true }; return false }) else {
+            throw NoteDraftJournalError.unknownOwnership
+        }
+        guard let candidate = entries.compactMap({ item -> NoteDraftJournalEntry? in
+            if case let .valid(entry, _) = item, entry.noteID == noteID { return entry }
+            return nil
+        }).first else { return }
+        guard candidate.pendingImport == nil,
+              NoteContentCodec.decode(candidate.content).document == document,
+              candidate.changedTags == nil || candidate.changedTags == tags,
+              Set(candidate.staged.map(\.digest)).isSubset(of: copiedDigests) else {
+            throw NoteDraftJournalError.unknownOwnership
+        }
+        try remove(noteID: noteID)
     }
 }
 
@@ -113,7 +182,61 @@ final class NoteDraftJournal: NoteDraftJournaling {
         directory.appendingPathComponent("\(noteID.uuidString).json")
     }
 
+    private func ownership(of file: URL) -> NoteRecoveryOwnership {
+        guard fileManager.fileExists(atPath: file.path) else { return .absent }
+        do {
+            let data = try Data(contentsOf: file)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let entry = try decoder.decode(NoteDraftJournalEntry.self, from: data)
+            guard file.deletingPathExtension().lastPathComponent == entry.noteID.uuidString,
+                  case .editable = NoteContentCodec.decode(entry.content),
+                  Set(entry.staged.map(\.id)).count == entry.staged.count else {
+                return .damaged("Recovery copy \(file.lastPathComponent) has unknown document or file ownership.")
+            }
+            let marker = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["retired"] as? Bool == true
+            if marker {
+                guard entry.staged.isEmpty, entry.pendingImport == nil else {
+                    return .damaged("Retired recovery marker \(file.lastPathComponent) still names files or a pending import.")
+                }
+                return .retired
+            }
+            var staged: [StagedNoteAttachment] = []
+            for meta in entry.staged {
+                let bytes = try Data(contentsOf: stagedDirectory.appendingPathComponent(meta.id.uuidString))
+                let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                guard Int64(bytes.count) == meta.byteCount, digest == meta.digest else {
+                    return .damaged("Recovery copy for \(entry.noteID.uuidString) has a damaged file: \(meta.filename).")
+                }
+                staged.append(StagedNoteAttachment(id: meta.id, filename: meta.filename,
+                    contentTypeIdentifier: meta.contentTypeIdentifier, byteCount: meta.byteCount,
+                    digest: meta.digest, data: bytes))
+            }
+            if let pending = entry.pendingImport {
+                guard Set(pending.items.compactMap(\.stagedID)).isSubset(of: Set(entry.staged.map(\.id))) else {
+                    return .damaged("Recovery copy for \(entry.noteID.uuidString) has unknown pending file ownership.")
+                }
+                return .pending(entry, staged)
+            }
+            return .valid(entry, staged)
+        } catch {
+            return .damaged("Recovery copy \(file.lastPathComponent) is incomplete or unreadable: \(error.localizedDescription)")
+        }
+    }
+
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+        guard case .damaged = ownership(of: url(for: entry.noteID)) else {
+            return try writeKnown(entry, staged: staged)
+        }
+        throw NoteDraftJournalError.unknownOwnership
+    }
+
+    private func writeKnown(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment]) throws {
+        guard case .editable = NoteContentCodec.decode(entry.content),
+              Set(entry.staged.map(\.id)).count == entry.staged.count,
+              Set(entry.pendingImport?.items.compactMap(\.stagedID) ?? []).isSubset(of: Set(entry.staged.map(\.id))) else {
+            throw NoteDraftJournalError.unknownOwnership
+        }
         guard Set(entry.staged.map(\.id)) == Set(staged.map(\.id)), entry.staged.count == staged.count else {
             throw NoteDraftJournalError.incompleteStaging
         }
@@ -143,22 +266,60 @@ final class NoteDraftJournal: NoteDraftJournaling {
 
     func remove(noteID: UUID) throws {
         let file = url(for: noteID)
-        guard fileManager.fileExists(atPath: file.path) else { return }
-        // A malformed checkpoint may be the only owner of staged bytes. A
-        // failed read is not an empty checkpoint and must never unlink it.
-        let staged = try read(file).staged
+        let state = ownership(of: file)
+        switch state {
+        case .absent: return
+        case .damaged, .pending: throw NoteDraftJournalError.unknownOwnership
+        case .retired, .valid: break
+        }
         do {
             try fileManager.removeItem(at: file)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             // Already absent.
         }
-        if !staged.isEmpty { removeUnreferencedStagedFiles() }
+        removeUnreferencedStagedFiles()
     }
 
-    private func read(_ file: URL) throws -> NoteDraftJournalEntry {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(NoteDraftJournalEntry.self, from: Data(contentsOf: file))
+    func retireIfSaved(noteID: UUID, document: NoteDocument?, tags: [String]) throws {
+        switch ownership(of: url(for: noteID)) {
+        case .absent: return
+        case .retired: try remove(noteID: noteID)
+        case let .valid(entry, _):
+            guard let document,
+                  NoteContentCodec.decode(entry.content).document == document,
+                  entry.changedTags == nil || entry.changedTags == tags,
+                  Set(entry.staged.map(\.id)).isSubset(of: Set(document.attachmentIDs)) else {
+                throw NoteDraftJournalError.unknownOwnership
+            }
+            try remove(noteID: noteID)
+        case .pending, .damaged: throw NoteDraftJournalError.unknownOwnership
+        }
+    }
+
+    func cancelPending(noteID: UUID) throws {
+        let file = url(for: noteID)
+        switch ownership(of: file) {
+        case .absent: return
+        case .pending:
+            try fileManager.removeItem(at: file)
+            removeUnreferencedStagedFiles()
+        case .valid, .retired, .damaged: throw NoteDraftJournalError.unknownOwnership
+        }
+    }
+
+    func retireIfTransferred(noteID: UUID, document: NoteDocument, tags: [String],
+                             copiedDigests: Set<String>) throws {
+        switch ownership(of: url(for: noteID)) {
+        case .absent: return
+        case let .valid(entry, _):
+            guard NoteContentCodec.decode(entry.content).document == document,
+                  entry.changedTags == nil || entry.changedTags == tags,
+                  Set(entry.staged.map(\.digest)).isSubset(of: copiedDigests) else {
+                throw NoteDraftJournalError.unknownOwnership
+            }
+            try remove(noteID: noteID)
+        case .pending, .damaged, .retired: throw NoteDraftJournalError.unknownOwnership
+        }
     }
 
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] {
@@ -173,30 +334,13 @@ final class NoteDraftJournal: NoteDraftJournaling {
         let files = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         let results: [NoteDraftRecoveryEntry] = files.compactMap { file in
-            do {
-                let data = try Data(contentsOf: file)
-                // Older builds used a retired marker after a committed save.
-                // It is not a draft and must never be replayed as one.
-                if let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   values["retired"] as? Bool == true {
-                    try? fileManager.removeItem(at: file)
-                    return nil
-                }
-                let entry = try read(file)
-                var staged: [StagedNoteAttachment] = []
-                for meta in entry.staged {
-                    let data = try Data(contentsOf: stagedDirectory.appendingPathComponent(meta.id.uuidString))
-                    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                    guard Int64(data.count) == meta.byteCount, digest == meta.digest else {
-                        return .damaged("Recovery copy for \(entry.noteID.uuidString) has a damaged image: \(meta.filename).")
-                    }
-                    staged.append(StagedNoteAttachment(id: meta.id, filename: meta.filename,
-                                                       contentTypeIdentifier: meta.contentTypeIdentifier,
-                                                       byteCount: meta.byteCount, digest: meta.digest, data: data))
-                }
-                return .valid(entry, staged)
-            } catch {
-                return .damaged("Recovery copy \(file.lastPathComponent) is incomplete or unreadable: \(error.localizedDescription)")
+            switch ownership(of: file) {
+            case let .valid(entry, staged), let .pending(entry, staged): return .valid(entry, staged)
+            case let .damaged(message): return .damaged(message)
+            case .retired:
+                try? fileManager.removeItem(at: file)
+                return nil
+            case .absent: return nil
             }
         }.sorted { lhs, rhs in
             switch (lhs, rhs) {
@@ -221,8 +365,8 @@ final class NoteDraftJournal: NoteDraftJournaling {
         else { return }
         var retained = Set<UUID>()
         for file in journals {
-            guard let entry = try? read(file) else { return }
-            retained.formUnion(entry.staged.map(\.id))
+            guard let owned = ownership(of: file).retainedIDs else { return }
+            retained.formUnion(owned)
         }
         for file in files {
             guard let id = UUID(uuidString: file.lastPathComponent), !retained.contains(id) else { continue }

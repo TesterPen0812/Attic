@@ -1679,6 +1679,10 @@ private final class RemoveFailingJournal: NoteDraftJournaling {
         if failNextRemove { failNextRemove = false; throw Failure() }
         try base.remove(noteID: noteID)
     }
+    func cancelPending(noteID: UUID) throws {
+        if failNextRemove { failNextRemove = false; throw Failure() }
+        try base.cancelPending(noteID: noteID)
+    }
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
 }
 
@@ -1883,6 +1887,7 @@ final class NoteSessionMatrixTests: XCTestCase {
             writeCount += 1
         }
         func remove(noteID: UUID) throws { try base.remove(noteID: noteID) }
+        func cancelPending(noteID: UUID) throws { try base.cancelPending(noteID: noteID) }
         func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
         func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
     }
