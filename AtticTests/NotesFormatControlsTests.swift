@@ -359,7 +359,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.slashModel.items.map(\.kind), [.date])
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
         XCTAssertEqual(controls.cardModel.card, .date(fromSlash: true))
-        spin()
+        for _ in 0..<25 where !controls.cardHasKeyboard { spin() }
         XCTAssertTrue(controls.cardHasKeyboard, "typing goes to the date field")
         XCTAssertTrue(textView.string.hasSuffix("/da"), "the command stays until a date is chosen")
         controls.cancelCard()

@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftData
 import XCTest
 @testable import Attic
@@ -412,8 +413,10 @@ final class NoteDocumentStoreTests: XCTestCase {
     // MARK: Staged images and retention
 
     private func stagedImage() -> StagedNoteAttachment {
-        StagedNoteAttachment(id: UUID(), filename: "shot.png", contentTypeIdentifier: "public.png", byteCount: 4,
-                             digest: String(repeating: "a", count: 64), data: Data([1, 2, 3, 4]))
+        let data = Data([1, 2, 3, 4])
+        return StagedNoteAttachment(id: UUID(), filename: "shot.png", contentTypeIdentifier: "public.png",
+            byteCount: Int64(data.count),
+            digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), data: data)
     }
 
     func testIncompleteImageReservationCannotBecomeAStoredAttachment() throws {

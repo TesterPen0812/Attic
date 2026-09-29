@@ -745,21 +745,26 @@ final class NotesSlice2MigrationTests: XCTestCase {
         XCTAssertEqual(try store.attachmentRows(forNoteID: id).count, 1)
     }
 
-    func testAFileAttachmentKeepsTheNoteInTheOldEditor() throws {
+    func testAFileAttachmentMigratesToAFileBlock() throws {
         let note = NoteItem(id: UUID(), title: "Contract", body: "See file")
         store.modelContext.insert(note)
+        let bytes = Data([1, 2, 3])
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         let row = NoteAttachment(id: UUID(), noteID: note.id, originalFilename: "contract.pdf",
                                  contentTypeIdentifier: "com.adobe.pdf", byteCount: 3, sortIndex: 0,
-                                 contentDigest: "x", payload: Data([1, 2, 3]))
+                                 contentDigest: digest, payload: bytes)
         store.modelContext.insert(row)
         try store.modelContext.save()
         try store.reloadPresentation()
         guard case let .success(snapshot) = store.legacySnapshot(noteID: note.id) else { return XCTFail("snapshot") }
-        guard case .failure(.fileAttachment) = LegacyNoteMigration.plan(snapshot) else { return XCTFail("refused") }
+        guard case .success = LegacyNoteMigration.plan(snapshot) else { return XCTFail("file migration plan") }
+        let migrated = try migrate(note.id)
+        XCTAssertEqual(migrated.blocks.last?.kind, .file)
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
                                              saveDelay: .seconds(60))
         XCTAssertTrue(controller.open(noteID: note.id))
-        XCTAssertEqual(controller.legacyNoteID, note.id, "the old editor keeps a note the gate refused")
+        XCTAssertNil(controller.legacyNoteID)
+        XCTAssertEqual(controller.active?.engine.document().blocks.last?.kind, .file)
         let summary = NoteRowSummary(note: try XCTUnwrap(store.note(withID: note.id)), attachments: store.attachments(for: note.id))
         XCTAssertEqual(summary.files, 1)
     }

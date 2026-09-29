@@ -586,6 +586,41 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTContext.runActivity(named: report) { _ in }
         XCTAssertLessThan(pct(upkeep, 0.5), 5, "per-edit upkeep stays local")
     }
+
+    func testTypingWithFiftyImagesAndFiles() {
+        var blocks: [NoteBlock] = [.text("Objects")]
+        for index in 0..<50 {
+            blocks.append(.text("Paragraph \(index) with ordinary writing."))
+            if index.isMultiple(of: 2) {
+                blocks.append(.image(attachmentID: UUID(), pixelWidth: 1200, pixelHeight: 600))
+            } else {
+                blocks.append(.file(attachmentID: UUID(), filename: "plan-\(index).pdf",
+                    contentTypeIdentifier: "com.adobe.pdf", byteCount: 1024))
+            }
+        }
+        let (engine, textView) = makeEngine(NoteDocument(blocks: blocks), window: true)
+        textView.layoutSubtreeIfNeeded()
+        let location = location(of: "Paragraph 24", in: engine)
+        textView.setSelectedRange(NSRange(location: location, length: 0))
+        textView.scrollRangeToVisible(textView.selectedRange())
+        var milliseconds: [Double] = []
+        for character in "Typing while fifty note objects remain in the document." {
+            let start = DispatchTime.now().uptimeNanoseconds
+            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+            textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+            textView.displayIfNeeded()
+            milliseconds.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        }
+        let sorted = milliseconds.sorted()
+        let median = sorted[sorted.count / 2]
+        let p95 = sorted[Int(Double(sorted.count - 1) * 0.95)]
+        let report = String(format: "NOTE-50-OBJECTS keystroke median %.2f ms p95 %.2f ms max %.2f ms",
+            median, p95, sorted.last ?? 0)
+        print(report)
+        XCTContext.runActivity(named: report) { _ in }
+        XCTAssertEqual(engine.document().blocks.filter { $0.kind == .image }.count, 25)
+        XCTAssertEqual(engine.document().blocks.filter { $0.kind == .file }.count, 25)
+    }
     func testStructureCommandsValidationAndUndo() {
         let original = NoteDocument(blocks: [.text("Title"), .text("Hello world"), .text("Second")])
         let (engine, textView) = makeEngine(original)

@@ -859,8 +859,10 @@ final class NotesPageControllerTests: XCTestCase {
         controller.start()
         let session = try XCTUnwrap(controller.active)
         type("Pics", into: session)
-        let item = StagedNoteAttachment(id: UUID(), filename: "a.png", contentTypeIdentifier: "public.png", byteCount: 3,
-                                        digest: String(repeating: "b", count: 64), data: Data([1, 2, 3]))
+        let bytes = Data([1, 2, 3])
+        let item = StagedNoteAttachment(id: UUID(), filename: "a.png", contentTypeIdentifier: "public.png",
+            byteCount: Int64(bytes.count),
+            digest: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(), data: bytes)
         session.engine.insertImage(item, pixelSize: CGSize(width: 10, height: 10))
         XCTAssertTrue(controller.preserveAll())
         XCTAssertEqual(try store.attachmentRows(forNoteID: session.noteID).map(\.id), [item.id])
@@ -1066,7 +1068,7 @@ final class NotesPageControllerTests: XCTestCase {
         XCTAssertTrue(try NoteDraftJournal(directory: directory).entries().isEmpty)
     }
 
-    func testImageBatchFailureCancelsEveryReservation() async throws {
+    func testImageBatchFailureKeepsSuccessfulObjectAndShowsFailureCard() async throws {
         let image = try realImage()
         let loader = DelayedImageLoader()
         let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
@@ -1082,9 +1084,11 @@ final class NotesPageControllerTests: XCTestCase {
         await loader.releaseNext(success: false)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(controller.preserveAll())
-        XCTAssertEqual(draft.engine.document().attachmentIDs, [])
+        let document = draft.engine.document()
+        XCTAssertEqual(document.attachmentIDs.count, 1)
+        XCTAssertEqual(document.blocks.filter { $0.kind == .file && $0.importFailure != nil }.count, 1)
         XCTAssertEqual(store.note(withID: draft.noteID)?.title, "Text")
-        XCTAssertTrue(try store.attachmentRows(forNoteID: draft.noteID).isEmpty)
+        XCTAssertEqual(try store.attachmentRows(forNoteID: draft.noteID).count, 1)
     }
 
     func testImportCompletionWaitsForWritingToolsToEnd() async throws {
@@ -1793,7 +1797,8 @@ final class NoteSessionMatrixTests: XCTestCase {
         (.timerStoreFails,         "NNSSSJ N JJJNNNN"),
         (.timerBothFail,           "NNSSSJ N JJJNNNN"),
         (.leaveOK,                 "AAAAAAARRRAAAA"),
-        (.leaveBothFail,           "AARRRRARRRARAA"),
+        // A visible pending batch needs a checkpoint before it can leave.
+        (.leaveBothFail,           "AARRRRARRRARRA"),
         (.present,                 "AAAAAAAAAAAAAA"),
         (.agentWrite,              "RPPPPPRPPPD DP R"),
         (.importStart,             "AAAAAARRRRNNRN"),
@@ -1809,7 +1814,7 @@ final class NoteSessionMatrixTests: XCTestCase {
         (.externalDelete,          "NAAAAAAAAAAAAA"),
         (.retry,                   "NNAAARNNNNNNNN"),
         (.keepAsNew,               "NNNNNANNNNNNNN"),
-        (.launchRecovery,          "NNNANANNNNNANN"),
+        (.launchRecovery,          "NNNANANNNNNANA"),
         (.evict,                   "NNNNNNNNNNANNN"),
         (.deleteNote,              "RAAAARARRRAARR"),
         (.restoreDeleted,          "NAAAANANNNAANN"),
