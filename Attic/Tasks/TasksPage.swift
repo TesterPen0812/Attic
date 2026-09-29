@@ -1542,6 +1542,17 @@ struct TasksPage: View {
     /// unless it is already part of the selection (as in Finder); any other
     /// press, or one outside the list, ends the previous binding.
     private func mousePressed(_ event: NSEvent) {
+        // Gated before any selection, focus or drag state changes (round 12,
+        // Astra): a page kept built behind Notes or Canvas, or hidden with
+        // the panel, or a press in another window, takes nothing. The
+        // monitor stays installed while the page is kept, so a right-click
+        // in Notes over a hidden row's position selected that task and
+        // bound a menu to it.
+        guard model.isPageShown, !model.isHidden, let window = pointer.view?.window, window.isVisible,
+              event.window === window else {
+            pointer.endInvocation()
+            return
+        }
         dragSession.newPress()
         // A plain click in the list that no row takes (the space under the
         // rows, a day heading, Done's search) clears the selection and the

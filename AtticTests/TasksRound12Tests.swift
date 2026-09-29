@@ -606,6 +606,131 @@ final class TasksRound12Tests: XCTestCase {
         XCTAssertEqual(TasksViewport.edgeOpacity(atDepth: 0.55), 1 - 0.30 / AtticEdgeBlur.maximumVeil, accuracy: 1e-9)
     }
 
+    // MARK: - Astra P2: a page kept behind another section takes no mouse
+
+    /// The mouse monitor stays installed while Tasks is kept built behind
+    /// Notes or Canvas. Real left and right presses over a hidden row's
+    /// position, and over the empty list, change no selection, anchor or
+    /// first responder and bind no menu; back on Tasks, targeting is normal.
+    func testAPageKeptBehindAnotherSectionTakesNoMouse() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        hosted.spin(1.2)
+        let tab = hosted.model.tab
+        let rows = hosted.pointer.frames.filter { $0.key.tab == tab }.sorted { $0.value.minY < $1.value.minY }
+        XCTAssertGreaterThanOrEqual(rows.count, 3, "the demo list has rows to press")
+        let first = try XCTUnwrap(rows.first?.key), second = try XCTUnwrap(rows.dropFirst().first?.key)
+        let secondFrame = try XCTUnwrap(rows.dropFirst().first?.value)
+        // A plain click selects the first row: the baseline the hidden
+        // presses must leave alone.
+        try hosted.clickRow(first.id, tab: tab)
+        XCTAssertEqual(hosted.model.selection, [first.id])
+        XCTAssertEqual(hosted.model.selectionAnchor, first.id)
+        let responder = hosted.window.firstResponder
+
+        // Tasks is kept, not shown, and another section is drawn over it as
+        // in the panel: the events reach the monitor (the same window) but
+        // no Tasks row beneath, so nothing here opens a real context menu.
+        final class Cover: NSView {
+            override func mouseDown(with event: NSEvent) {}
+            override func rightMouseDown(with event: NSEvent) {}
+            override func otherMouseDown(with event: NSEvent) {}
+        }
+        let content = try XCTUnwrap(hosted.window.contentView)
+        let cover = Cover(frame: content.bounds)
+        cover.autoresizingMask = [.width, .height]
+        content.addSubview(cover, positioned: .above, relativeTo: nil)
+        defer { cover.removeFromSuperview() }
+        hosted.model.isPageShown = false
+        hosted.spin(0.3)
+        let spaceY = try XCTUnwrap(rows.last?.value.maxY) + 24
+        hosted.click(y: spaceY)
+        hosted.rightClick(y: spaceY)
+        hosted.click(y: secondFrame.midY)
+        hosted.click(y: secondFrame.midY, modifiers: .shift)
+        hosted.click(y: secondFrame.midY, modifiers: .control)
+        hosted.rightClick(y: secondFrame.midY)
+        XCTAssertEqual(hosted.model.selection, [first.id], "a hidden page's rows take no press")
+        XCTAssertEqual(hosted.model.selectionAnchor, first.id, "and the anchor stays")
+        XCTAssertTrue(hosted.window.firstResponder === responder, "and focus stays")
+        XCTAssertNil(hosted.pointer.invocation, "no menu is bound to a hidden row")
+
+        // Shown again: the same presses target as before.
+        cover.removeFromSuperview()
+        hosted.model.isPageShown = true
+        hosted.spin(0.3)
+        try hosted.clickRow(second.id, tab: tab)
+        XCTAssertEqual(hosted.model.selection, [second.id], "a click on the page selects its row")
+        XCTAssertEqual(hosted.model.selectionAnchor, second.id)
+        hosted.click(y: spaceY)
+        XCTAssertTrue(hosted.model.selection.isEmpty, "and a click on the empty list clears it")
+        // (A shown page's right-click opens a real context menu that blocks
+        // the run loop, so the binding on a shown row is covered by round 4's
+        // pointer tests; this test's hidden right-clicks are the ones that
+        // must bind nothing.)
+        let third = try XCTUnwrap(rows.dropFirst(2).first?.key)
+        try hosted.clickRow(second.id, tab: tab)
+        try hosted.clickRow(third.id, tab: tab, modifiers: .shift)
+        XCTAssertEqual(hosted.model.selection, [second.id, third.id], "a Shift-click extends from the click before")
+        XCTAssertNil(hosted.pointer.invocation, "a left click binds no menu")
+    }
+
+    /// The page drawn with a long list scrolled to two places (a hosted
+    /// stand-in for the round's UI test, which no runner could make find the
+    /// panel): what is drawn under the tabs and the add bar's band is the
+    /// same picture at both, whatever rows lie beneath.
+    func testNoRowIsDrawnUnderTheTabsOrTheAddBarsBand() throws {
+        let height: CGFloat = 520
+        let hosted = try Hosted(height: height, long: true)
+        defer { hosted.close() }
+        hosted.spin(1.5)
+        let content = try XCTUnwrap(hosted.window.contentView)
+        content.layoutSubtreeIfNeeded()
+        let list = try XCTUnwrap(hosted.lists(in: content).first {
+            $0.frame.height > content.bounds.height / 2 && $0.frame.minX > -1 && $0.frame.minX < content.bounds.width / 2
+        })
+        func capture(scrolledTo y: CGFloat) throws -> NSBitmapImageRep {
+            list.contentView.scroll(to: CGPoint(x: 0, y: y))
+            list.reflectScrolledClipView(list.contentView)
+            hosted.spin(0.5)
+            content.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+            content.cacheDisplay(in: content.bounds, to: rep)
+            return rep
+        }
+        func share(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, from top: CGFloat, to bottom: CGFloat) throws -> Double {
+            XCTAssertEqual(a.pixelsWide, b.pixelsWide)
+            let scale = CGFloat(a.pixelsWide) / content.bounds.width
+            var differing = 0, total = 0
+            for y in Int(top * scale)..<min(Int(bottom * scale), a.pixelsHigh, b.pixelsHigh) {
+                for x in 0..<a.pixelsWide {
+                    guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    total += 1
+                    if max(abs(p.redComponent - q.redComponent), abs(p.greenComponent - q.greenComponent),
+                           abs(p.blueComponent - q.blueComponent)) > 0.03 { differing += 1 }
+                }
+            }
+            return total == 0 ? 1 : Double(differing) / Double(total)
+        }
+        let first = try capture(scrolledTo: 260)
+        let second = try capture(scrolledTo: 1_300)
+        let layout = PanelPageLayout(cornerSize: 52, panelSize: CGSize(width: AtticLayout.panelSize.width, height: height))
+        let tabsTop = layout.headerBottom + AtticLayout.pageTabsTop
+        let tabsBottom = tabsTop + AtticLayout.pageTabsHeight
+        let bottomInset = max(AtticSpacing.panelMargin, layout.chromeInsets.bottom)
+        let barTop = height - bottomInset - AtticControlSize.addBarHeight
+        // The list itself moved, or the bands prove nothing.
+        let moved = try share(first, second, from: tabsBottom + 40, to: barTop - 40)
+        XCTAssertGreaterThan(moved, 0.02, "the long list scrolled between the captures (\(moved))")
+        // The tabs' line, and the gap under it down to where the rows start their
+        // ramp back (a quarter of the way to the resting place).
+        let clear = tabsBottom + (TasksViewport.listTop(tabsTop: tabsTop) - tabsBottom) * 0.25 - 1
+        let top = try share(first, second, from: tabsTop, to: clear)
+        XCTAssertLessThan(top, 0.004, "rows show through the tabs' line (\(top))")
+        let bottom = try share(first, second, from: barTop - 4, to: height)
+        XCTAssertLessThan(bottom, 0.004, "rows show through the add bar's band (\(bottom))")
+    }
+
     // MARK: - Hidden Done reads nothing
 
     /// A Done page kept built but not drawn does not read the log, does not

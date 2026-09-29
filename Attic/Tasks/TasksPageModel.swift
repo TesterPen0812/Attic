@@ -159,7 +159,8 @@ final class TasksPageModel: ObservableObject {
 
     @Published var tab: TasksTab = .now
     @Published private(set) var selection: Set<UUID> = []
-    private var selectionAnchor: UUID?
+    /// The row a Shift-extension grows from (readable for the tests).
+    private(set) var selectionAnchor: UUID?
     /// Rows whose quick look is open (remembered per row for the session).
     @Published private(set) var expanded: Set<UUID> = []
     @Published private(set) var editingTitleID: UUID?

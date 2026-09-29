@@ -305,6 +305,20 @@ final class Hosted {
         spin(0.09)
     }
 
+    /// A real secondary click (press and release) at `y` from the top, through
+    /// the app's queue as `click` posts a primary one.
+    func rightClick(y: CGFloat, x: CGFloat = 110) {
+        let point = CGPoint(x: x, y: height - y)
+        for type in [NSEvent.EventType.rightMouseDown, .rightMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                           timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                           context: nil, eventNumber: 2, clickCount: 1, pressure: type == .rightMouseDown ? 1 : 0)!
+            NSApp.postEvent(event, atStart: false)
+        }
+        Hosted.pumpEvents()
+        spin(0.09)
+    }
+
     /// Where a plain click selects each row: the first point (top down)
     /// that selects it, over the list's height above the add bar.
     func rowPlaces() -> [String: CGFloat] {
