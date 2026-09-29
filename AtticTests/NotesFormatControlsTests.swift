@@ -70,6 +70,13 @@ final class NotesFormatControlsTests: XCTestCase {
 
     private func spin() { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
 
+    /// Runs the loop until `condition` holds (a second at most): SwiftUI
+    /// builds a card's field over a few turns.
+    private func settle(_ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(1)
+        while !condition(), Date() < deadline { spin() }
+    }
+
     private func marks(_ engine: NoteEditorEngine, block: Int) -> [NoteMark.Kind] {
         engine.document().blocks[block].marks.map(\.kind)
     }
@@ -360,7 +367,7 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(controls.slashModel.items.map(\.kind), [.date])
         XCTAssertTrue(controls.handleCommand(#selector(NSResponder.insertNewline(_:))))
         XCTAssertEqual(controls.cardModel.card, .date(fromSlash: true))
-        spin()
+        settle { controls.cardHasKeyboard }
         XCTAssertTrue(controls.cardHasKeyboard, "typing goes to the date field")
         XCTAssertTrue(textView.string.hasSuffix("/da"), "the command stays until a date is chosen")
         controls.cancelCard()
@@ -416,7 +423,7 @@ final class NotesFormatControlsTests: XCTestCase {
         textView.setSelectedRange(target)
         controls.router.run(.mark(.link), from: .shortcut)
         XCTAssertEqual(controls.cardModel.card, .link(hasLink: false))
-        spin()
+        settle { controls.cardHasKeyboard }
         XCTAssertTrue(controls.cardHasKeyboard, "the card's field takes the keyboard from the note")
         controls.cardModel.linkText = "not a link"
         controls.cardModel.submitLink()

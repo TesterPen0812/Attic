@@ -22,6 +22,7 @@ final class NotesFormatUITests: XCTestCase {
         require(button, "the New note button")
         button.click()
         waitFor(noteValue.isEmpty, "a new note starts empty (\(noteValue))")
+        require(noteText, "the new note's text")
         noteText.click()
     }
 
