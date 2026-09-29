@@ -655,8 +655,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let line = lineRange(at: selection.location)
         if let box = checklistBox(inParagraphAt: selection.location) {
             _ = box
-            performEdit(NSRange(location: line.location, length: 1), with: NSAttributedString(), name: String(localized: "Remove Checkbox"),
-                        selection: NSRange(location: max(line.location, selection.location - 1), length: 0))
+            _ = removeChecklistMarker(at: line.location, selection: selection)
             return
         }
         let box = NoteChecklistAttachment(isChecked: false)
@@ -674,6 +673,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                         name: String(localized: "Checklist"),
                         selection: NSRange(location: selection.location + 1, length: selection.length))
         }
+    }
+
+    /// Removing a marker also removes checklist-only indentation. The
+    /// attributed replacement keeps the line's text, marks, and inline IDs.
+    @discardableResult
+    private func removeChecklistMarker(at location: Int, selection: NSRange) -> Bool {
+        guard checklistBox(inParagraphAt: location) != nil else { return false }
+        guard applyStyle(.body, selection: NSRange(location: location, length: 0)) else { return false }
+        let caret = selection.location > location ? selection.location - 1 : selection.location
+        textView?.setSelectedRange(NSRange(location: min(caret, textStorage.length), length: 0))
+        return true
     }
 
     /// Ticks or unticks the checklist line at `location` without moving the
@@ -799,14 +809,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard selection.location > line.location else { return false }
         let text = (textStorage.string as NSString).substring(with: NSRange(location: line.location + 1, length: line.length - 1))
         if text.trimmingCharacters(in: .whitespaces).isEmpty {
-            performEdit(NSRange(location: line.location, length: 1), with: NSAttributedString(),
-                        name: String(localized: "Remove Checkbox"), selection: NSRange(location: line.location, length: 0))
-            return true
+            return removeChecklistMarker(at: line.location, selection: selection)
         }
         let box = NoteChecklistAttachment(isChecked: false)
         renderer.apply(to: box, today: today)
-        let insertion = NSMutableAttributedString(string: "\n", attributes: style.bodyAttributes)
-        insertion.append(NoteTextCodec.attachmentString(box, attributes: style.bodyAttributes))
+        let depth = indentAt(line.location) ?? 0
+        var continuation = style.paragraphAttributes(style: nil, level: nil, indent: depth)
+        if depth > 0 { continuation[.noteBlockIndent] = depth }
+        let insertion = NSMutableAttributedString(string: "\n", attributes: continuation)
+        insertion.append(NoteTextCodec.attachmentString(box, attributes: continuation))
         // Typed through the text view, so it coalesces like any Return.
         userEditDepth += 1
         textView.insertText(insertion, replacementRange: selection)
@@ -837,9 +848,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
         }
         if location == line.location + 1, checklistBox(inParagraphAt: location) != nil {
-            performEdit(NSRange(location: line.location, length: 1), with: NSAttributedString(),
-                        name: String(localized: "Remove Checkbox"), selection: NSRange(location: line.location, length: 0))
-            return true
+            return removeChecklistMarker(at: line.location, selection: selection)
         }
         let string = textStorage.string as NSString
         if isBlockObject(at: location - 1) {
@@ -867,9 +876,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         // the box goes first (the marker-first rule, from the other side).
         if location < string.length, string.character(at: location) == 0x0A,
            checklistBox(inParagraphAt: location + 1) != nil {
-            performEdit(NSRange(location: location + 1, length: 1), with: NSAttributedString(),
-                        name: String(localized: "Remove Checkbox"), selection: NSRange(location: location, length: 0))
-            return true
+            return removeChecklistMarker(at: location + 1, selection: selection)
         }
         if location < string.length, string.character(at: location) == 0x0A, isBlockObject(at: location + 1) {
             textView.setSelectedRange(NSRange(location: location + 1, length: 1))
