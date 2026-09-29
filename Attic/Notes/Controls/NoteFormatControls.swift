@@ -334,9 +334,12 @@ final class NoteFormatControls: NSObject {
         return responder === barHost || responder.isDescendant(of: barHost)
     }
 
+    /// After a command from the bar or the list, the keyboard is the
+    /// note's again (a click there can leave it with the page's hosting view).
     private func returnKeyboardFromBar() {
-        guard barOwnsKeyboard, let textView else { return }
-        textView.window?.makeFirstResponder(textView)
+        guard cardModel.card == nil, let textView, let window = textView.window,
+              window.firstResponder !== textView else { return }
+        window.makeFirstResponder(textView)
     }
 
     private func showBar() {
@@ -587,6 +590,7 @@ final class NoteFormatControls: NSObject {
         onSlashPick?(kind)
         slashModel.hide()
         _ = engine.acceptSlashItem(kind)
+        returnKeyboardFromBar()
     }
 
     private func placeSlashList() {
