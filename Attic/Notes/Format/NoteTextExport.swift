@@ -94,13 +94,14 @@ enum NoteAgentTextError: LocalizedError, Equatable {
         case let .unknownBlock(reference):
             "The block \(reference) is not in this note. Keep unsupported-content lines exactly as returned, or remove them."
         case .lossyFormatting:
-            "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during a text edit. Change only checklist checked states, or edit the note in Attic."
+            "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
         }
     }
 }
 
 /// The agent wire format has no mark offsets or complete paragraph metadata.
-/// A rich document can only round-trip unchanged blocks and checkbox flips.
+/// A rich document can round-trip intact blocks, plain-text edits, and
+/// checkbox flips only when all other block fields are preserved.
 enum NoteAgentTextSafety {
     static func validate(base: NoteDocument, proposed: NoteDocument) throws {
         let rich = base.blocks.contains {
@@ -112,7 +113,16 @@ enum NoteAgentTextSafety {
         for (old, new) in zip(base.blocks, proposed.blocks) {
             var checkedCopy = old
             if old.kind == .checklist { checkedCopy.checked = new.checked }
-            guard checkedCopy == new else { throw NoteAgentTextError.lossyFormatting }
+            if checkedCopy == new { continue }
+            // An ordinary text block can change alongside rich blocks only
+            // when every other field, including object IDs, survives.
+            if old.kind == .text, old.style == nil, old.level == nil,
+               old.indent == nil, old.marks.isEmpty {
+                var textCopy = old
+                textCopy.text = new.text
+                if textCopy == new { continue }
+            }
+            throw NoteAgentTextError.lossyFormatting
         }
     }
 }

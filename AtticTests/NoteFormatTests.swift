@@ -232,6 +232,9 @@ final class NoteFormatTests: XCTestCase {
         let base = NoteDocument(blocks: [.text("Title"), heading, checked])
         let body = NoteTextExport.agentBody(base)
         XCTAssertEqual(try NoteAgentTextParser.document(title: "Title", body: body, base: base), base)
+        var renamed = base
+        renamed.blocks[0].text = "New title"
+        XCTAssertEqual(try NoteAgentTextParser.document(title: "New title", body: body, base: base), renamed)
         let ticked = try NoteAgentTextParser.document(title: "Title", body: body.replacingOccurrences(of: "- [ ]", with: "- [x]"), base: base)
         var expected = base
         expected.blocks[2].checked = true
