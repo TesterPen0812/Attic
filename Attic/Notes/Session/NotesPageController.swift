@@ -548,6 +548,11 @@ final class NotesPageController: ObservableObject {
             guard let self, let session else { return String(localized: "The note is no longer open.") }
             return self.importAdmissionFailure(payload, in: session)
         }
+        engine.onFragmentAdmission = { [weak self, weak session] proposed, copied in
+            guard let self, let session else { return String(localized: "The note is no longer open.") }
+            return self.attachmentAdmissionFailure(proposedIDs: Set(proposed.attachmentIDs),
+                additions: copied, in: session)
+        }
         engine.onTagsChange = { [weak self, weak session] in
             guard let self, let session else { return }
             // A refresh to the stored tags is not an edit.
@@ -1332,26 +1337,54 @@ final class NotesPageController: ObservableObject {
     /// and unsaved draft objects. A batch passes its earlier accepted sources.
     func importAdmissionFailure(_ payload: StagedNoteAttachment, in session: NoteSession,
                                         earlier: [NoteImportedObject] = []) -> String? {
-        let document = session.engine.document()
-        var ids = Set(document.attachmentIDs)
-        let rows = (try? store.attachmentRows(forNoteID: session.noteID)) ?? []
-        var sizes = Dictionary(rows.map { ($0.id, $0.byteCount) }, uniquingKeysWith: { first, _ in first })
-        for (id, staged) in session.engine.staged { sizes[id] = staged.byteCount }
-        for item in earlier { if let staged = item.staged { ids.insert(staged.id); sizes[staged.id] = staged.byteCount } }
+        var ids = session.engine.attachmentIDsAfterRemovingImportTarget()
+        let accepted = earlier.compactMap(\.staged)
+        ids.formUnion(accepted.map(\.id))
         ids.insert(payload.id)
-        sizes[payload.id] = payload.byteCount
-        if payload.byteCount <= 0 || payload.byteCount > AttachmentLimits.maxBytesPerAttachment {
-            return String(localized: "This file exceeds the attachment size limit.")
+        return attachmentAdmissionFailure(proposedIDs: ids, additions: accepted + [payload], in: session)
+    }
+
+    /// Shared count/byte gate for URL imports, slash/Retry and fragments.
+    /// Unknown existing originals do not make prose edits unsaveable, but
+    /// they cannot justify an increase whose total bytes are unknowable.
+    private func attachmentAdmissionFailure(proposedIDs ids: Set<UUID>, additions: [StagedNoteAttachment],
+                                            in session: NoteSession) -> String? {
+        let currentIDs = Set(session.engine.document().attachmentIDs)
+        let addedIDs = ids.subtracting(currentIDs)
+        guard let rows = try? store.attachmentRows(forNoteID: session.noteID) else {
+            return String(localized: "The note’s files could not be checked. Try again.")
         }
-        if ids.count > AttachmentLimits.maxAttachmentsPerNote {
+        var sizes: [UUID: Int64] = [:]
+        for row in rows {
+            if let previous = sizes[row.id], previous != row.byteCount {
+                return String(localized: "Copies of a file disagree. Refresh the note before adding files.")
+            }
+            sizes[row.id] = row.byteCount
+        }
+        for (id, staged) in session.engine.staged { sizes[id] = staged.byteCount }
+        for item in additions {
+            guard item.byteCount > 0, item.byteCount <= AttachmentLimits.maxBytesPerAttachment else {
+                return String(localized: "This file exceeds the attachment size limit.")
+            }
+            sizes[item.id] = item.byteCount
+        }
+        let unknown = ids.filter { sizes[$0] == nil }
+        guard unknown.allSatisfy(currentIDs.contains), unknown.isEmpty || addedIDs.isEmpty else {
+            return String(localized: "An original file is missing. Resolve it before adding another file.")
+        }
+        if ids.count > AttachmentLimits.maxAttachmentsPerNote
+            && !(addedIDs.isEmpty && ids.count <= currentIDs.count) {
             return AttachmentFileStoreError.tooManyAttachments.localizedDescription
         }
         let total = ids.reduce(Int64.zero) { partial, id in
-            let size = sizes[id] ?? AttachmentLimits.maxBytesPerNote
-            return partial > AttachmentLimits.maxBytesPerNote - size
-                ? AttachmentLimits.maxBytesPerNote + 1 : partial + size
+            guard let size = sizes[id] else { return partial }
+            if size <= 0 || (size > AttachmentLimits.maxBytesPerAttachment && addedIDs.contains(id)) {
+                return Int64.max
+            }
+            let (sum, overflow) = partial.addingReportingOverflow(size)
+            return overflow ? Int64.max : sum
         }
-        return total > AttachmentLimits.maxBytesPerNote
+        return total > AttachmentLimits.maxBytesPerNote && !addedIDs.isEmpty
             ? AttachmentFileStoreError.noteTooLarge.localizedDescription : nil
     }
 

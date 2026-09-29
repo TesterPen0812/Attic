@@ -119,6 +119,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var onRawImageBatchRequest: ((Data, String, NSRange) -> Void)?
     /// Same admission gate used by paste, drop, slash and Retry.
     var onImportAdmission: ((StagedNoteAttachment) -> String?)?
+    /// The controller checks the complete proposed document before a private
+    /// fragment can stage bytes or make an Undo entry.
+    var onFragmentAdmission: ((NoteDocument, [StagedNoteAttachment]) -> String?)?
     private var pendingLinkTarget: NoteLinkTarget?
     private var activeSlashSession: NoteSlashSession?
     private var slashDateRequest: NoteSlashSession?
@@ -166,6 +169,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     var writingToolsRefusalReason: String?
     private var writingToolsSnapshot: NSAttributedString?
     private var writingToolsHistory: NoteUndoHistory.Checkpoint?
+    private var writingToolsImportTarget: (anchor: Int, replacementLength: Int, isBoundary: Bool)?
+    private var pendingImportEdit: (range: NSRange, replacementLength: Int)?
     private var writingToolsObjectsBefore = Set<UUID>()
     private var restoringWritingToolsSnapshot = false
     private var writingToolsAvailable = true
@@ -185,6 +190,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     private var importIsBoundary = false
     var currentImportTarget: (anchor: Int, replacementLength: Int, isBoundary: Bool)? {
         importAnchor.map { ($0, importReplacementLength, importIsBoundary) }
+    }
+
+    func attachmentIDsAfterRemovingImportTarget() -> Set<UUID> {
+        guard let anchor = importAnchor, importReplacementLength > 0 else { return Set(document().attachmentIDs) }
+        let at = min(anchor, textStorage.length)
+        let replacement = NSRange(location: at, length: min(importReplacementLength, textStorage.length - at))
+        let remaining = NSMutableAttributedString(attributedString: textStorage)
+        remaining.deleteCharacters(in: replacement)
+        return Set(NoteTextCodec.document(from: remaining, template: template).attachmentIDs)
     }
     private var importNoteID: UUID?
 
@@ -750,14 +764,17 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         defer { engineEditDepth -= 1 }
         if let textView {
             guard textView.shouldChangeText(in: range, replacementString: replacement.string) else { return false }
+            pendingImportEdit = (range, replacement.length)
             textStorage.replaceCharacters(in: range, with: replacement)
             textView.didChangeText()
         } else {
             history.willChange(ranges: [range], strings: [replacement.string])
+            pendingImportEdit = (range, replacement.length)
             textStorage.replaceCharacters(in: range, with: replacement)
             history.didChange()
             onTextChange?()
         }
+        pendingImportEdit = nil
         history.renameLast(name)
         history.breakCoalescing()
         if let selection {
@@ -876,7 +893,12 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         importNoteID = noteID
     }
 
-    func cancelImageImport() { importAnchor = nil; importReplacementLength = 0; importNoteID = nil }
+    func cancelImageImport() {
+        importAnchor = nil
+        importReplacementLength = 0
+        importNoteID = nil
+        writingToolsImportTarget = nil
+    }
 
     /// The complete batch is one document change and one Undo step.
     @discardableResult
@@ -1097,11 +1119,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         let ranges = affectedRanges.map(\.rangeValue)
         guard allowsChange(ranges: ranges) else { return false }
         history.willChange(ranges: ranges, strings: replacementStrings)
+        if ranges.count == 1 {
+            pendingImportEdit = (ranges[0], replacementStrings?.first?.utf16.count ?? 0)
+        }
         return true
     }
 
     func textDidChange(_ notification: Notification) {
         history.didChange()
+        pendingImportEdit = nil
         refreshSlashAfterEdit()
         pendingLinkTarget = nil
         guard !restoringWritingToolsSnapshot else { return }
@@ -1197,6 +1223,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard !isWritingToolsSessionActive else { return }
         writingToolsSnapshot = NSAttributedString(attributedString: textStorage)
         writingToolsHistory = history.checkpoint()
+        writingToolsImportTarget = currentImportTarget
         writingToolsObjectsBefore = Set(objectIDs())
         writingToolsRefusalReason = nil
         beginningWritingTools = true
@@ -1236,6 +1263,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             }
             restoringWritingToolsSnapshot = false
             if let checkpoint = writingToolsHistory { history.rewind(to: checkpoint) }
+            if let target = writingToolsImportTarget {
+                restoreImageImport(anchor: target.anchor, replacementLength: target.replacementLength,
+                    isBoundary: target.isBoundary)
+            }
             if changed || lostObject {
                 writingToolsRecoveries += 1
                 onNotice?(wasBlocked
@@ -1246,6 +1277,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             onTextChange?()
         }
         writingToolsHistory = nil
+        writingToolsImportTarget = nil
         writingToolsBlocked = false
         writingToolsRefusalReason = nil
         setActivity(textView?.hasMarkedText() == true ? .composing : .idle)
@@ -1317,26 +1349,38 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             nearbyStart = next
         }
         if let anchor = importAnchor {
-            let oldLength = max(0, editedRange.length - delta)
-            let oldEnd = editedRange.location + oldLength
-            let selectionEnd = anchor + importReplacementLength
-            var newEnd = selectionEnd
-            if oldLength == 0, editedRange.location <= anchor {
-                importAnchor = max(0, anchor + delta)
-            } else if oldEnd <= anchor {
-                importAnchor = max(0, anchor + delta)
-            } else if editedRange.location <= anchor {
-                importAnchor = editedRange.location
+            // TextKit's processed range also includes neighbouring attributes,
+            // so use the actual pre-edit range when a change was announced.
+            let edit = pendingImportEdit?.range ?? NSRange(location: editedRange.location,
+                length: max(0, editedRange.length - delta))
+            let newEnd = edit.location + (pendingImportEdit?.replacementLength ?? editedRange.length)
+            let oldEnd = NSMaxRange(edit)
+            if importReplacementLength == 0 {
+                // Insertion targets have trailing affinity. A replacement
+                // spanning the boundary moves it after the replacement;
+                // it can never turn into a range that removes new text.
+                if oldEnd <= anchor {
+                    importAnchor = max(0, anchor + delta)
+                } else if edit.location <= anchor {
+                    importAnchor = newEnd
+                }
+            } else {
+                let selectionEnd = anchor + importReplacementLength
+                var selectionNewEnd = selectionEnd
+                if oldEnd <= anchor {
+                    importAnchor = max(0, anchor + delta)
+                } else if edit.location <= anchor {
+                    importAnchor = edit.location
+                }
+                if oldEnd <= selectionEnd {
+                    selectionNewEnd = selectionEnd + delta
+                } else if edit.location <= selectionEnd {
+                    selectionNewEnd = newEnd
+                }
+                importReplacementLength = max(0, selectionNewEnd - (importAnchor ?? selectionNewEnd))
             }
-            if oldLength == 0, editedRange.location <= selectionEnd {
-                newEnd = selectionEnd + delta
-            } else if oldEnd <= selectionEnd {
-                newEnd = selectionEnd + delta
-            } else if editedRange.location <= selectionEnd {
-                newEnd = editedRange.location + editedRange.length
-            }
-            importReplacementLength = max(0, newEnd - (importAnchor ?? newEnd))
         }
+        pendingImportEdit = nil
         if let hash = literalHashLocation {
             let oldLength = max(0, editedRange.length - delta)
             if editedRange.location + oldLength <= hash {
@@ -1422,12 +1466,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     /// is a new object with a new ID. An image from another note is copied
     /// into a new staged attachment for this note (committed with the text
     /// or never).
-    func preparePaste(_ fragment: NoteDocument) -> NoteDocument {
+    func preparePaste(_ fragment: NoteDocument) -> (document: NoteDocument, copied: [StagedNoteAttachment]) {
         let sameNote = fragment.extras["sourceNoteID"]?.stringValue.flatMap(UUID.init(uuidString:)) == noteID
         var present = Set(objectIDs())
         var result = fragment
         result.extras = [:]
         var blocks: [NoteBlock] = []
+        var copied: [StagedNoteAttachment] = []
         for var block in fragment.blocks {
             func fresh(_ id: UUID?) -> UUID {
                 // A drag move within the note removes the originals right
@@ -1459,7 +1504,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     let newID = UUID()
                     copy = StagedNoteAttachment(id: newID, filename: copy.filename, contentTypeIdentifier: copy.contentTypeIdentifier,
                                                 byteCount: copy.byteCount, digest: copy.digest, data: copy.data)
-                    staged[newID] = copy
+                    copied.append(copy)
                     block.attachmentID = newID
                     block.id = fresh(nil)
                 } else {
@@ -1477,14 +1522,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             blocks.append(block)
         }
         result.blocks = blocks
-        return result
+        return (result, copied)
     }
 
     /// Inserts a pasted fragment over the selection as one step.
     func paste(fragmentData data: Data, at selection: NSRange) -> Bool {
-        guard !isReadOnly, case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
-        let before = Set(staged.keys)
-        let fragment = preparePaste(decoded)
+        guard !isReadOnly, rangeIsInStorage(selection),
+              case let .editable(decoded) = NoteContentCodec.decode(data, context: .fragment) else { return false }
+        let prepared = preparePaste(decoded)
+        let fragment = prepared.document
         guard !fragment.blocks.isEmpty else { return false }
         let pasted = NoteTextCodec.attributedString(from: fragment, style: style, firstBlockIsTitle: false)
         let result = NSMutableAttributedString(attributedString: pasted)
@@ -1499,10 +1545,18 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
            string.character(at: NSMaxRange(selection)) != 0x0A {
             result.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
+        let candidateText = NSMutableAttributedString(attributedString: textStorage)
+        candidateText.replaceCharacters(in: selection, with: result)
+        let candidate = NoteTextCodec.document(from: candidateText, template: template)
+        if let failure = onFragmentAdmission?(candidate, prepared.copied) {
+            onNotice?(failure)
+            return false
+        }
+        for item in prepared.copied { staged[item.id] = item }
         guard performEdit(selection, with: result, name: String(localized: "Paste"),
                           selection: NSRange(location: selection.location + result.length, length: 0)) else {
             // Refused: the images copied for it are dropped, so no row appears.
-            for key in staged.keys where !before.contains(key) { staged[key] = nil }
+            for item in prepared.copied { staged[item.id] = nil }
             return false
         }
         return true

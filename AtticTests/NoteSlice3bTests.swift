@@ -89,6 +89,13 @@ final class NoteSlice3bTests: XCTestCase {
             data: data)
     }
 
+    private func stagedSized(_ name: String, bytes: Int) -> StagedNoteAttachment {
+        let data = Data(repeating: 0x42, count: bytes)
+        return StagedNoteAttachment(id: UUID(), filename: name, contentTypeIdentifier: "com.adobe.pdf",
+            byteCount: Int64(bytes), digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            data: data)
+    }
+
     private func stagedImage() throws -> StagedNoteAttachment {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -865,6 +872,48 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertEqual(drop.document().blocks.last?.text, "second")
     }
 
+    func testF2SpanningEditAndWritingToolsRollbackKeepPendingBoundaryNonDestructive() throws {
+        let item = staged()
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks:
+            [.text("Title"), .text("abcdefghi"), .checklist("Keep")]))
+        let body = (engine.textStorage.string as NSString).range(of: "abcdefghi")
+        let boundary = body.location + 4
+        engine.beginImageImport(at: NSRange(location: boundary, length: 0))
+        XCTAssertTrue(engine.performEdit(NSRange(location: body.location + 1, length: 5),
+            with: NSAttributedString(string: "XY"), name: "Replace"))
+        XCTAssertEqual(engine.currentImportTarget?.replacementLength, 0)
+        XCTAssertEqual(engine.currentImportTarget?.anchor, body.location + 3,
+            "trailing affinity puts the boundary after XY")
+        let beforeImport = engine.document()
+        XCTAssertTrue(engine.insertImportedObjects([NoteImportedObject(staged: item, pixelSize: nil)]))
+        let afterImport = engine.document()
+        XCTAssertTrue(afterImport.blocks.filter { $0.kind == .text }.map(\.text).joined().contains("aXYghi"))
+        XCTAssertTrue(engine.history.undo())
+        XCTAssertEqual(engine.document(), beforeImport)
+        XCTAssertTrue(engine.history.redo())
+        XCTAssertEqual(engine.document(), afterImport)
+
+        let protected = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks:
+            [.text("Title"), .text("body"), .checklist("Protected")]))
+        let target = (protected.textStorage.string as NSString).range(of: "body").location + 2
+        protected.beginImageImport(at: NSRange(location: target, length: 0))
+        let original = protected.document()
+        let originalTarget = try XCTUnwrap(protected.currentImportTarget)
+        protected.onWritingToolsWillBegin = { false }
+        protected.writingToolsWillBegin()
+        protected.textStorage.replaceCharacters(in: NSRange(location: 0, length: protected.textStorage.length),
+            with: NSAttributedString(string: "unapproved rewrite"))
+        protected.writingToolsDidEnd()
+        XCTAssertEqual(protected.document(), original)
+        XCTAssertEqual(protected.currentImportTarget?.anchor, originalTarget.anchor)
+        XCTAssertEqual(protected.currentImportTarget?.replacementLength, 0)
+        XCTAssertTrue(protected.insertImportedObjects([NoteImportedObject(staged: staged("next.pdf"), pixelSize: nil)]))
+        XCTAssertTrue(protected.document().blocks.contains { $0.kind == .checklist && $0.text == "Protected" })
+        XCTAssertTrue(protected.document().blocks.filter { $0.kind == .text }.map(\.text).joined().contains("body"))
+        XCTAssertTrue(protected.history.undo())
+        XCTAssertEqual(protected.document(), original)
+    }
+
     func testR8SelectedImageCopyPublishesPasteableFragmentAndRawImagePasteUsesBatch() async throws {
         let image = try stagedImage()
         let block = NoteBlock.image(attachmentID: image.id, pixelWidth: 8, pixelHeight: 8)
@@ -906,6 +955,92 @@ final class NoteSlice3bTests: XCTestCase {
             let expected = type == .png ? 1 : 2
             try await waitFor { session.engine.document().blocks.filter { $0.kind == .image }.count == expected }
         }
+    }
+
+    func testF3PrivateMultiObjectFragmentChecksCountBeforeStorageStagingOrUndo() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let sourceFiles = (0..<2).map { staged("source-\($0).pdf") }
+        let destinationFiles = (0..<AttachmentLimits.maxAttachmentsPerNote).map { staged("dest-\($0).pdf") }
+        func document(_ title: String, _ items: [StagedNoteAttachment]) -> NoteDocument {
+            NoteDocument(blocks: [.text(title)] + items.map {
+                .file(attachmentID: $0.id, filename: $0.filename,
+                    contentTypeIdentifier: $0.contentTypeIdentifier, byteCount: $0.byteCount)
+            })
+        }
+        let sourceID = UUID(), destinationID = UUID()
+        guard case .success = store.createDocumentNote(id: sourceID,
+            document: document("Source", sourceFiles), staged: sourceFiles),
+              case .success = store.createDocumentNote(id: destinationID,
+            document: document("Destination", destinationFiles), staged: destinationFiles) else {
+            return XCTFail("fixtures")
+        }
+        let controller = NotesPageController(store: store, journal: nil)
+        XCTAssertTrue(controller.open(noteID: sourceID))
+        let source = try XCTUnwrap(controller.active)
+        let board = NSPasteboard(name: NSPasteboard.Name("AtticF3-\(UUID().uuidString)"))
+        XCTAssertTrue(source.engine.writeSelection(NSRange(location: 0, length: source.engine.textStorage.length),
+            to: board, types: [NoteEditorEngine.fragmentType]))
+        let fragment = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+        XCTAssertTrue(controller.open(noteID: destinationID))
+        let engine = try XCTUnwrap(controller.active?.engine)
+        let beforeText = NSAttributedString(attributedString: engine.textStorage)
+        let beforeStaged = engine.staged
+        let beforeUndo = engine.history.undoOps.count
+        XCTAssertFalse(engine.paste(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertTrue(engine.textStorage.isEqual(to: beforeText))
+        XCTAssertEqual(engine.staged, beforeStaged)
+        XCTAssertEqual(engine.history.undoOps.count, beforeUndo)
+
+        var objects: [NSRange] = []
+        engine.textStorage.enumerateAttribute(.attachment,
+            in: NSRange(location: 0, length: engine.textStorage.length)) { value, range, _ in
+                if value is NoteFileAttachment { objects.append(range) }
+            }
+        let first = try XCTUnwrap(objects.first), second = objects[1]
+        let replacement = NSRange(location: first.location, length: NSMaxRange(second) - first.location)
+        XCTAssertTrue(engine.paste(fragmentData: fragment, at: replacement),
+            "the selected objects free logical attachment capacity")
+        XCTAssertEqual(Set(engine.document().attachmentIDs).count, AttachmentLimits.maxAttachmentsPerNote)
+        XCTAssertEqual(engine.history.undoOps.count, beforeUndo + 1)
+        XCTAssertTrue(controller.save(try XCTUnwrap(controller.active)))
+        XCTAssertEqual(Set(try XCTUnwrap(store.loadDocument(noteID: destinationID)?.content.document).attachmentIDs).count,
+            AttachmentLimits.maxAttachmentsPerNote)
+    }
+
+    func testF3PrivateFragmentChecksAggregateBytesBeforeStorageOrUndo() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let sourceFiles = (0..<2).map { stagedSized("source-\($0).pdf", bytes: 2 * 1024 * 1024) }
+        let destinationFiles = (0..<7).map { stagedSized("dest-\($0).pdf", bytes: 14 * 1024 * 1024) }
+        func document(_ title: String, _ items: [StagedNoteAttachment]) -> NoteDocument {
+            NoteDocument(blocks: [.text(title)] + items.map {
+                .file(attachmentID: $0.id, filename: $0.filename,
+                    contentTypeIdentifier: $0.contentTypeIdentifier, byteCount: $0.byteCount)
+            })
+        }
+        let sourceID = UUID(), destinationID = UUID()
+        guard case .success = store.createDocumentNote(id: sourceID,
+            document: document("Source", sourceFiles), staged: sourceFiles),
+              case .success = store.createDocumentNote(id: destinationID,
+            document: document("Destination", destinationFiles), staged: destinationFiles) else {
+            return XCTFail("fixtures")
+        }
+        let controller = NotesPageController(store: store, journal: nil)
+        XCTAssertTrue(controller.open(noteID: sourceID))
+        let source = try XCTUnwrap(controller.active)
+        let board = NSPasteboard(name: NSPasteboard.Name("AtticF3Bytes-\(UUID().uuidString)"))
+        XCTAssertTrue(source.engine.writeSelection(NSRange(location: 0, length: source.engine.textStorage.length),
+            to: board, types: [NoteEditorEngine.fragmentType]))
+        let fragment = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+        XCTAssertTrue(controller.open(noteID: destinationID))
+        let engine = try XCTUnwrap(controller.active?.engine)
+        let before = engine.document(), stagedBefore = engine.staged
+        let undoBefore = engine.history.undoOps.count
+        XCTAssertFalse(engine.paste(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertEqual(engine.document(), before)
+        XCTAssertEqual(engine.staged, stagedBefore)
+        XCTAssertEqual(engine.history.undoOps.count, undoBefore)
     }
 
     func testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport() async throws {
