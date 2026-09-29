@@ -85,6 +85,7 @@ enum NoteTextExport {
 enum NoteAgentTextError: LocalizedError, Equatable {
     case unknownImage(String)
     case unknownBlock(String)
+    case lossyFormatting
 
     var errorDescription: String? {
         switch self {
@@ -92,6 +93,26 @@ enum NoteAgentTextError: LocalizedError, Equatable {
             "The image \(reference) is not in this note. Keep image lines exactly as get_note returned them, or remove them."
         case let .unknownBlock(reference):
             "The block \(reference) is not in this note. Keep unsupported-content lines exactly as returned, or remove them."
+        case .lossyFormatting:
+            "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during a text edit. Change only checklist checked states, or edit the note in Attic."
+        }
+    }
+}
+
+/// The agent wire format has no mark offsets or complete paragraph metadata.
+/// A rich document can only round-trip unchanged blocks and checkbox flips.
+enum NoteAgentTextSafety {
+    static func validate(base: NoteDocument, proposed: NoteDocument) throws {
+        let rich = base.blocks.contains {
+            $0.style != nil || $0.level != nil || $0.indent != nil || !$0.marks.isEmpty
+                || $0.kind == .divider
+        }
+        guard rich else { return }
+        guard base.blocks.count == proposed.blocks.count else { throw NoteAgentTextError.lossyFormatting }
+        for (old, new) in zip(base.blocks, proposed.blocks) {
+            var checkedCopy = old
+            if old.kind == .checklist { checkedCopy.checked = new.checked }
+            guard checkedCopy == new else { throw NoteAgentTextError.lossyFormatting }
         }
     }
 }
@@ -150,7 +171,9 @@ enum NoteAgentTextParser {
                 let reusable = baseLines.first(where: {
                     !used.contains($0.0) && $0.1.kind == .checklist && agentText(of: $0.1) == text
                 })
-                var block = try parseTextual(text, kind: .checklist, reusing: reusable?.1)
+                var block = if let reusable { reusable.1 } else {
+                    try parseTextual(text, kind: .checklist, reusing: nil)
+                }
                 block.checked = checked
                 if let reusable { used.insert(reusable.0) }
                 blocks.append(block)
@@ -160,6 +183,7 @@ enum NoteAgentTextParser {
         }
         var document = base
         document.blocks = blocks
+        try NoteAgentTextSafety.validate(base: base, proposed: document)
         return document
     }
 
