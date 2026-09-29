@@ -273,8 +273,14 @@ final class NoteSlice3bTests: XCTestCase {
         let updated = NoteDocument(blocks: [.text("Plan"), .file(attachmentID: invalid.id,
             filename: invalid.filename, contentTypeIdentifier: invalid.contentTypeIdentifier,
             byteCount: invalid.byteCount)])
+        let presented = try XCTUnwrap(store.note(withID: noteID))
+        let originalContent = presented.content
+        let originalVersionCount = store.versions(noteID: noteID).count
         guard case .failure(.invalidDocument) = store.saveDocument(noteID: noteID, document: updated,
             baseRevisionID: revision, staged: [invalid]) else { return XCTFail("must reject") }
+        XCTAssertEqual(presented.content, originalContent, "rejection must not mutate the presented replica")
+        XCTAssertEqual(presented.revisionID, revision)
+        XCTAssertEqual(store.versions(noteID: noteID).count, originalVersionCount)
         XCTAssertEqual(store.loadDocument(noteID: noteID)?.content.document?.blocks, [.text("Plan")])
         XCTAssertTrue(try store.attachmentRows(forNoteID: noteID).isEmpty)
     }

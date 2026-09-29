@@ -293,13 +293,24 @@ extension NoteStore {
             return .failure(.staleRevision(expected: NoteItem.initialRevisionToken,
                                            current: canonical(existing)?.revisionToken ?? NoteItem.initialRevisionToken))
         }
+        let projection: PreparedNoteDocument
+        let attachmentPlan: AttachmentStagePlan
+        do {
+            guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+            projection = try prepared ?? PreparedNoteDocument(document)
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: id)
+        } catch let error as NoteDocumentStoreError {
+            return .failure(error)
+        } catch {
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
         let timestamp = currentDate
         let note = NoteItem(id: id, createdAt: timestamp, updatedAt: timestamp)
         let revisionID: UUID
         do {
-            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: prepared,
+            revisionID = try stage(document, on: [note], timestamp: timestamp, revision: 0, prepared: projection,
                                    tags: tags.map(AtticTag.encode))
-            try stageAttachments(staged, referencedBy: document, noteID: id, context: context, timestamp: timestamp)
+            stageAttachments(attachmentPlan, noteID: id, context: context, timestamp: timestamp)
         } catch let error as NoteDocumentStoreError {
             context.rollback()
             return .failure(error)
@@ -364,6 +375,20 @@ extension NoteStore {
             documentSaveCommitted?(baseRevisionID, presentedRevisionID)
             return .success(presentedRevisionID)
         }
+        // Reject an invalid batch before touching any presented replica or
+        // displaced version. SwiftData rollback need not restore the same
+        // in-memory object graph on every supported macOS version.
+        let projection: PreparedNoteDocument
+        let attachmentPlan: AttachmentStagePlan
+        do {
+            guard document.isWritableByThisBuild else { throw NoteDocumentStoreError.readOnly }
+            projection = try prepared ?? PreparedNoteDocument(document)
+            attachmentPlan = try attachmentStagePlan(staged, referencedBy: document, noteID: noteID)
+        } catch let error as NoteDocumentStoreError {
+            return .failure(error)
+        } catch {
+            return .failure(.encodingFailed(error.localizedDescription))
+        }
         let timestamp = currentDate
         let context = modelContext
         let priorIDs = Set((NoteContentCodec.decode(main.content ?? Data()).document)?.attachmentIDs ?? [])
@@ -372,9 +397,9 @@ extension NoteStore {
                                excludingUnchangedBase: removedIDs.isEmpty ? baseRevisionID : nil)
         do {
             let revisionID = try stage(document, on: replicas, timestamp: timestamp,
-                                       revision: replicas.map(\.revision).max() ?? 0, prepared: prepared,
+                                       revision: replicas.map(\.revision).max() ?? 0, prepared: projection,
                                        tags: encodedTags)
-            try stageAttachments(staged, referencedBy: document, noteID: noteID, context: context, timestamp: timestamp)
+            stageAttachments(attachmentPlan, noteID: noteID, context: context, timestamp: timestamp)
             let visibilityChanged = try stageAttachmentVisibility(referencedBy: document, noteID: noteID,
                 timestamp: timestamp)
             guard commitStagedChanges() else {
@@ -428,16 +453,19 @@ extension NoteStore {
         return revisionID
     }
 
-    /// Inserts rows for the staged images the document shows and that have
-    /// no row yet. Staged images the document no longer shows (an undone
-    /// paste) are simply not inserted.
-    private func stageAttachments(
+    private struct AttachmentStagePlan {
+        let new: [StagedNoteAttachment]
+        let nextSortIndex: Int64
+    }
+
+    /// Validate the proposed document and batch before mutating note rows.
+    /// Staged images the document no longer shows (an undone paste) are
+    /// ignored, as before.
+    private func attachmentStagePlan(
         _ staged: [StagedNoteAttachment],
         referencedBy document: NoteDocument,
-        noteID: UUID,
-        context: ModelContext,
-        timestamp: Date
-    ) throws {
+        noteID: UUID
+    ) throws -> AttachmentStagePlan {
         let shown = Set(document.attachmentIDs)
         guard staged.filter({ shown.contains($0.id) }).allSatisfy({
             $0.byteCount > 0 && $0.byteCount <= AttachmentLimits.maxBytesPerAttachment
@@ -458,9 +486,14 @@ extension NoteStore {
                 <= AttachmentLimits.maxBytesPerNote else {
             throw NoteDocumentStoreError.invalidDocument("This batch exceeds the note's attachment limits.")
         }
-        let highest = (try? attachmentRows(forNoteID: noteID))?.map(\.sortIndex).max() ?? -1
-        var nextIndex = highest &+ 1
-        for item in staged where shown.contains(item.id) && !existing.contains(item.id) {
+        return AttachmentStagePlan(new: new, nextSortIndex: (rows.map(\.sortIndex).max() ?? -1) &+ 1)
+    }
+
+    /// Inserts validated rows; note, rows and versions still save together.
+    private func stageAttachments(_ plan: AttachmentStagePlan, noteID: UUID,
+                                  context: ModelContext, timestamp: Date) {
+        var nextIndex = plan.nextSortIndex
+        for item in plan.new {
             let row = NoteAttachment(
                 id: item.id,
                 noteID: noteID,
