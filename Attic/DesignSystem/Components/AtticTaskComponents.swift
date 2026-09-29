@@ -281,21 +281,35 @@ private struct AtticTaskFocusModifier: ViewModifier {
     }
 }
 
-/// A list's keyboard focus for one of its rows: the list owns one
-/// `FocusState<UUID?>` for all its rows, so ↑ ↓ and a click can move focus
-/// from row to row (Phase 1).
-struct AtticRowFocus {
-    let binding: FocusState<UUID?>.Binding
+/// A row's place in a list's keyboard focus (round 12): the page that draws
+/// it and its task. One task can be drawn by two pages (Now's "Completed
+/// today" and Done both draw a finished task), so the task's id alone is not
+/// one row.
+struct AtticRowFocusID: Hashable {
+    let page: Int
     let id: UUID
+}
+
+/// A list's keyboard focus for one of its rows: the list owns one
+/// `FocusState<AtticRowFocusID?>` for all its rows, so ↑ ↓ and a click can
+/// move focus from row to row (Phase 1).
+struct AtticRowFocus {
+    let binding: FocusState<AtticRowFocusID?>.Binding
+    let id: AtticRowFocusID
     /// Read when the list builds the row, as a value: the row redraws its
     /// ring the moment focus moves (a binding alone let it lag a row
     /// behind, the computer-use review's bug 4).
     let isFocused: Bool
+    /// The row's page is the one that answers the keyboard (round 12): a
+    /// page kept built beside it draws its rows but takes no focus and
+    /// answers no key.
+    let isActive: Bool
 
-    init(binding: FocusState<UUID?>.Binding, id: UUID) {
+    init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isActive: Bool = true) {
         self.binding = binding
         self.id = id
-        isFocused = binding.wrappedValue == id
+        self.isActive = isActive
+        isFocused = isActive && binding.wrappedValue == id
     }
 }
 
@@ -312,11 +326,11 @@ private struct AtticListTaskFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .focusable(enabled)
+            .focusable(enabled && focus.isActive)
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in
-                guard enabled, answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
+                guard enabled, focus.isActive, answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
                     key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
                 ), AtticTaskKeys.offers(command, actions) else { return .ignored }
                 AtticTaskKeys.perform(command, actions)

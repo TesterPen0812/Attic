@@ -164,6 +164,8 @@ final class Hosted {
     let page: TasksPage
     let window: NSPanel
     let height: CGFloat
+    /// The page's live pointer (round 12): its rows' frames.
+    let pointer = TasksPointer()
 
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { true }
@@ -184,7 +186,8 @@ final class Hosted {
         let size = CGSize(width: AtticLayout.panelSize.width, height: height)
         let focus = focus
         page = TasksPage(model: model, store: store, layout: PanelPageLayout(cornerSize: 52, panelSize: size),
-                         addBarFocused: Binding(get: { focus.addBar }, set: { focus.addBar = $0 }))
+                         addBarFocused: Binding(get: { focus.addBar }, set: { focus.addBar = $0 }),
+                         pointer: pointer)
         window = Panel(contentRect: CGRect(origin: CGPoint(x: -4_000, y: -4_000), size: size),
                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

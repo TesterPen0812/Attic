@@ -68,10 +68,12 @@ struct TasksPageHost: View {
             model.isPageShown = current
         }
         .onDisappear { editHold.setSuspended(true) }
-        // Kept built behind another page, it is opened again when it shows.
+        // Kept built behind another page, it shows again where it was left
+        // (its tab, its selection): only a reveal of the panel starts it on
+        // Now (`revealCount`, below).
         .onChange(of: isCurrent) { _, current in
             guard current else { return }
-            model.resetForReveal()
+            model.pageDidReturn()
             chromeInteractionState.bottomControlsHeight = TasksPage.footerZone
             syncDraftLock(model)
         }

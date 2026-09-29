@@ -30,6 +30,15 @@ enum TasksTab: Int, CaseIterable, Hashable, Identifiable {
     }
 }
 
+/// One row as one page draws it (round 12). A finished task is drawn twice
+/// at once, by Now's "Completed today" and by Done, so a task's id alone
+/// is not one row: geometry, focus, editors, pickers and menu targets are
+/// keyed by the page too.
+struct TasksRowID: Hashable {
+    let tab: TasksTab
+    let id: UUID
+}
+
 /// What the page needs from outside itself. The shell (or the preview)
 /// supplies it; tests supply fixed clocks.
 struct TasksPageServices {
@@ -323,12 +332,17 @@ final class TasksPageModel: ObservableObject {
         let today: DueDay
         let doneLog: [UUID]
         let search: String
+        /// Whether this page is the one that answers the user (the tab
+        /// shown, on screen): it gains and loses editors, focus and popovers
+        /// with it (round 12).
+        let owner: Bool
     }
 
     func pageToken(_ tab: TasksTab) -> PageToken {
         PageToken(tab: tab, revision: store.revision, held: held.filter { $0.value.tab == tab }, expanded: expanded,
                   completedExpanded: tab == .now && completedTodayExpanded, today: today,
-                  doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: tab == .done ? doneSearch : "")
+                  doneLog: tab == .done ? doneLogTasks.map(\.id) : [], search: tab == .done ? doneSearch : "",
+                  owner: self.tab == tab && isPageShown)
     }
 
     /// Rows are rebuilt only when something they show changed: SwiftUI asks
@@ -595,6 +609,21 @@ final class TasksPageModel: ObservableObject {
         if tab != target { tab = target }
         if revealTab == nil, !selection.isEmpty { selection = [] }
         if editingTitleID != nil || newSubtaskParentID != nil || renamingSubtaskID != nil { cancelEditing() }
+    }
+
+    /// The page shows again after another page (Notes, Canvas) had the
+    /// panel: it is where it was, on the tab it was left on (round 12, CU
+    /// bug 3: it returned to Now). Only a reveal of the panel starts on Now
+    /// (`resetForReveal`).
+    func pageDidReturn() {
+        isHidden = false
+        defer {
+            showPagerPage(animated: false)
+            warmPager()
+        }
+        // An editor with nothing changed does not wait behind the page; one
+        // holding text keeps it, as a reveal does.
+        if !hasUnsavedEdit, editingTitleID != nil || newSubtaskParentID != nil || renamingSubtaskID != nil { cancelEditing() }
     }
 
     /// A title, new subtask or subtask rename holds text that is not saved:
@@ -868,7 +897,7 @@ final class TasksPageModel: ObservableObject {
     private func reveal(_ id: UUID) {
         pendingReveal = nil
         selectOnly(id)
-        scrollRequest = ScrollRequest(id: id)
+        scrollRequest = ScrollRequest(id: id, tab: tab)
     }
 
     /// Loads the Done log until `id`'s page is in, and says whether it is.
@@ -904,6 +933,10 @@ final class TasksPageModel: ObservableObject {
     /// A row to bring into view (an agent's `show`); each request is new.
     struct ScrollRequest: Equatable {
         let id: UUID
+        /// The page the request is for: a task can be listed by two pages
+        /// (Now's kept "Completed today" and Done), and only the destination's
+        /// list acts on it (round 12).
+        var tab: TasksTab?
         let token = UUID()
     }
 
@@ -918,7 +951,8 @@ final class TasksPageModel: ObservableObject {
     /// the request, or nil when there is none, it was acted on, or the
     /// list does not hold its row.
     func claimScrollRequest(holding ids: some Collection<UUID>, in tab: TasksTab) -> ScrollRequest? {
-        guard let request = scrollRequest, request.token != handledScrollToken, ids.contains(request.id) else { return nil }
+        guard let request = scrollRequest, request.token != handledScrollToken, ids.contains(request.id),
+              request.tab == nil || request.tab == tab else { return nil }
         handledScrollToken = request.token
         // The reveal wins over the list's remembered place.
         scrollOffsets[tab] = nil
@@ -952,15 +986,29 @@ final class TasksPageModel: ObservableObject {
         selectionAnchor = id
     }
 
-    /// ⇧↑ ⇧↓: grow the selection from the anchor to `id`.
-    func extendSelection(to id: UUID, visible: [UUID]) {
-        let anchor = selectionAnchor ?? id
-        selectionAnchor = anchor
-        guard let from = visible.firstIndex(of: anchor), let to = visible.firstIndex(of: id) else { return }
+    /// ⇧↑ ⇧↓: grow the selection from the anchor to `id`. `current` is the
+    /// row the keyboard is on. The anchor holds only while it is a visible
+    /// row of the selection; when it is not (a delete removed it, the
+    /// selection came from a menu, a restore), or the selection is one row,
+    /// it is the keyboard's row, never a row remembered from before
+    /// (round 12, CU bug 2: an old anchor grew a selection of eleven).
+    func extendSelection(to id: UUID, visible: [UUID], from current: UUID? = nil) {
+        var anchor = selectionAnchor
+        if let held = anchor, !(selection.contains(held) && visible.contains(held)) { anchor = nil }
+        if selection.count <= 1 { anchor = selection.first.flatMap { visible.contains($0) ? $0 : nil } ?? current }
+        let start = anchor ?? current ?? id
+        selectionAnchor = start
+        guard let from = visible.firstIndex(of: start), let to = visible.firstIndex(of: id) else { return }
         selection = Set(visible[min(from, to)...max(from, to)])
     }
 
-    func clearSelection() { selection = [] }
+    /// The anchor of the current selection (tests).
+    var selectionAnchorForTesting: UUID? { selectionAnchor }
+
+    func clearSelection() {
+        selection = []
+        selectionAnchor = nil
+    }
 
     /// Duplicate's copies become the selection (round 10).
     func selectCopies(_ ids: [UUID]) {
@@ -993,6 +1041,7 @@ final class TasksPageModel: ObservableObject {
         let live = { (id: UUID) in self.store.task(withID: id) != nil || self.tab == .done }
         let keptSelection = selection.filter(live)
         if keptSelection != selection { selection = keptSelection }
+        if let anchor = selectionAnchor, !live(anchor) { selectionAnchor = nil }
         if let editingTitleID, store.task(withID: editingTitleID) == nil, tab != .done { cancelEditing() }
         if let newSubtaskParentID, store.task(withID: newSubtaskParentID) == nil { self.newSubtaskParentID = nil }
     }
@@ -1208,6 +1257,7 @@ final class TasksPageModel: ObservableObject {
         if archived || tab == .done { reloadDoneLogAfterEdit() }
         if doneDetailID.map(live.contains) == true { doneDetailID = nil }
         selection.subtract(live)
+        if let anchor = selectionAnchor, live.contains(anchor) { selectionAnchor = nil }
         expanded.subtract(live)
         if let title {
             showToast(String(localized: "Deleted “\(title)”"))
@@ -1470,6 +1520,9 @@ final class TasksPageModel: ObservableObject {
         }
         clearFailure(.paste)
         pasteOffer = nil
+        // The bar is empty once the tasks exist, as after a single add (round
+        // 12, CU: the draft stayed behind the batch).
+        addBarState.clearDraft()
         // The same observable success as a single add (round 4): the first
         // new row comes into view; from Done, a toast says where they went;
         // VoiceOver hears how many were added.

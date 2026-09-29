@@ -29,9 +29,9 @@ struct TasksPage: View {
 
     @Environment(\.atticDesign) private var design
     @StateObject private var focusTracker = AtticKeyboardFocusTracker()
-    @FocusState private var focusedRow: UUID?
+    @FocusState private var focusedRow: AtticRowFocusID?
     @State private var drag: TasksDrag?
-    @State private var fileDropRow: UUID?
+    @State private var fileDropRow: TasksRowID?
     /// A row's date or tag list that is open (owner fix 5 C and D).
     @State private var metaPopover: TasksMetaPopover?
     /// The selection bar's Date or Tags picker (round 10).
@@ -45,7 +45,7 @@ struct TasksPage: View {
     @State private var doneReveal: TasksPageModel.ScrollRequest?
     /// Where the pointer is and where the rows are (not observed: it
     /// never redraws anything), so a right-click knows its row.
-    @State private var pointer = TasksPointer()
+    @State private var pointer: TasksPointer
     /// The drag in progress, outside view state (round 4).
     @State private var dragSession = TasksDragSession()
     @State private var rightClickMonitor: Any?
@@ -77,7 +77,32 @@ struct TasksPage: View {
     /// itself does not observe it.
     @State private var bottomStack = TasksBottomStackHeight()
 
+    /// `pointer` is the page's own unless a test hands one in to read the
+    /// rows' frames and place a press (round 12).
+    init(model: TasksPageModel, store: TaskStore, layout: PanelPageLayout, addBarFocused: Binding<Bool>,
+         chrome: TasksPageChrome = TasksPageChrome(), pointer: TasksPointer = TasksPointer()) {
+        self.model = model
+        self.store = store
+        self.layout = layout
+        _addBarFocused = addBarFocused
+        self.chrome = chrome
+        _pointer = State(initialValue: pointer)
+    }
+
     static let space = NamedCoordinateSpace.named("AtticTasksPage")
+
+    /// The row that has the keyboard on the page shown, if any. The focus
+    /// state is qualified by page (round 12: a task Now keeps under
+    /// "Completed today" and its copy on Done are two rows), so a copy
+    /// on another page never answers for it.
+    private var focusedID: UUID? {
+        focusedRow.flatMap { $0.page == model.tab.rawValue ? $0.id : nil }
+    }
+
+    /// Gives the keyboard to `id` on the page shown (nil lets it go).
+    private func setFocus(_ id: UUID?) {
+        focusedRow = id.map { AtticRowFocusID(page: model.tab.rawValue, id: $0) }
+    }
 
     /// The tabs sit 14 below the header, which moves inward with larger
     /// corners, so the gap under the header stays the same.
@@ -113,7 +138,10 @@ struct TasksPage: View {
         .onDrop(of: TaskDropContent.dropTypes, delegate: TasksFileDropDelegate(
             target: { point in fileDropTarget(at: point) },
             canAccept: { content, id in content == .files && store.attachmentOwnerID(for: id) != nil },
-            setTargeted: { id in if fileDropRow != id { fileDropRow = id } },
+            setTargeted: { id in
+                let row = id.map { TasksRowID(tab: model.tab, id: $0) }
+                if fileDropRow != row { fileDropRow = row }
+            },
             perform: { content, providers, id in attachDroppedFiles(content, providers, to: id) }
         ))
         // The bottom stack owns its whole band (round 7, R4): a row scrolled
@@ -171,7 +199,7 @@ struct TasksPage: View {
         #endif
         if findMonitor == nil {
             findMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                findPressed(event) || searchEscapePressed(event) || editorEscapePressed(event)
+                findPressed(event) || searchEscapePressed(event) || editorEscapePressed(event) || pageEscapePressed(event)
                     || undoPressed(event) || taskShortcutPressed(event) ? nil : event
             }
         }
@@ -266,7 +294,11 @@ struct TasksPage: View {
         .onChange(of: model.scrollRequest) { _, request in
             takeScrollRequest(in: model.tab)
             guard let request else { return }
-            DispatchQueue.main.async { focusedRow = request.id }
+            let destination = request.tab ?? model.tab
+            DispatchQueue.main.async {
+                guard model.tab == destination else { return }
+                setFocus(request.id)
+            }
         }
         // A page or tab change ends a drag, closes a row's pickers and ends
         // a menu's binding.
@@ -289,9 +321,10 @@ struct TasksPage: View {
         .onChange(of: drag != nil, initial: true) { _, dragging in swipe.dragActive = dragging }
         .onChange(of: pagerBand, initial: true) { _, band in swipe.band = band }
         // Done's rows come into view as the keyboard reaches them too.
-        .onChange(of: focusedRow) { _, id in
-            guard let id, model.tab == .done, focusTracker.isKeyboardDriving else { return }
-            doneReveal = TasksPageModel.ScrollRequest(id: id)
+        .onChange(of: focusedRow) { _, focus in
+            guard let id = focus?.id, focus?.page == TasksTab.done.rawValue, model.tab == .done,
+                  focusTracker.isKeyboardDriving else { return }
+            doneReveal = TasksPageModel.ScrollRequest(id: id, tab: .done)
         }
 
         // Search (the menu-bar item): the keyboard goes to the Done page's
@@ -331,7 +364,7 @@ struct TasksPage: View {
             for day in model.doneDays() {
                 top += AtticLayout.rowPitch
                 for row in day.rows {
-                    let height = pointer.frames[row.id]?.height ?? AtticLayout.rowPitch
+                    let height = pointer.frames[TasksRowID(tab: .done, id: row.id)]?.height ?? AtticLayout.rowPitch
                     if row.id == id { return (top, height) }
                     top += height
                 }
@@ -470,13 +503,51 @@ struct TasksPage: View {
               !Self.isComposing(window.firstResponder), (window.firstResponder as? NSTextView)?.isFieldEditor == true else { return false }
         if let parent = model.newSubtaskParentID {
             model.cancelEditing()
-            focusedRow = parent
+            setFocus(parent)
             return true
         }
         if model.renamingSubtaskID != nil {
             model.cancelSubtaskRename()
             return true
         }
+        return false
+    }
+
+    /// Esc with no field typing, wherever the keyboard is in the page (a
+    /// menu that just closed, a click on the bar or the space under the
+    /// rows leaves no row focused, and the list's own key handler never
+    /// ran: round 12, CU bug 4, the expanded quick look stayed and the
+    /// panel closed). The same chain as the list's.
+    private func pageEscapePressed(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.keyCode == 53,
+              event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty,
+              model.isPageShown, let window = pointer.view?.window, event.window === window, window.isKeyWindow,
+              !AtticTextInput.hasKeyboard, !AtticTextInput.isPopoverOpen, !Self.isComposing(window.firstResponder),
+              model.editingTitleID == nil, model.newSubtaskParentID == nil, model.renamingSubtaskID == nil,
+              !addBarFocused, !searchFocused, metaPopover == nil else { return false }
+        let visible = visibleIDs()
+        return handleEscape(visible: visible, current: keyboardRow(visible: visible))
+    }
+
+    /// Esc's chain (spec § Keyboard map): a drag in progress stops, a Done
+    /// detail closes, a search ends, then the open quick look closes (the
+    /// keyboard's row, or the only one open) and the keyboard returns to its
+    /// row (review UX 2), then a multi-selection clears. False when nothing
+    /// was left for Esc to do, so it goes on to the panel.
+    private func handleEscape(visible: [UUID], current: UUID?) -> Bool {
+        if drag != nil { cancelDrag(); return true }
+        if model.doneDetailID != nil { model.doneDetailID = nil; return true }
+        // A search left with its query: Esc ends it (the tabs return).
+        if model.tab == .done, !model.doneSearch.isEmpty { endSearch(); return true }
+        let open = current.flatMap { model.expanded.contains($0) ? $0 : nil }
+            ?? (model.expanded.count == 1 ? model.expanded.first.flatMap { visible.contains($0) ? $0 : nil } : nil)
+            ?? model.selection.first { model.expanded.contains($0) && visible.contains($0) }
+        if let open {
+            toggleExpanded(open)
+            setFocus(open)
+            return true
+        }
+        if model.selection.count > 1 { model.clearSelection(); return true }
         return false
     }
 
@@ -509,7 +580,8 @@ struct TasksPage: View {
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
         }) else { return false }
-        guard let current = model.shortcutRow(focusedRow: focusedRow, visible: Set(visibleIDs())) else { return false }
+        let visible = visibleIDs()
+        guard let current = model.shortcutRow(focusedRow: keyboardRow(visible: visible), visible: Set(visible)) else { return false }
         // No right-click's binding decides a key's targets.
         pointer.endInvocation()
         if shortcut == AtticTaskShortcut.actions {
@@ -604,7 +676,7 @@ struct TasksPage: View {
     /// Brings a row into the part of the list nothing covers (keys, a new
     /// task): the page's geometry decides how.
     private func revealRow(_ id: UUID, in tab: TasksTab, proxy: ScrollViewProxy, animation: Animation?) {
-        let reveal = TasksViewport.reveal(frame: pointer.frames[id], height: rowHeight(id, in: tab),
+        let reveal = TasksViewport.reveal(frame: pointer.frames[TasksRowID(tab: tab, id: id)], height: rowHeight(id, in: tab),
                                           viewport: pointer.view?.bounds.height ?? layout.panelSize.height,
                                           listTop: listTop, bottomMargin: bottomMargin, bottomClearance: bottomClearance)
         switch reveal {
@@ -738,8 +810,10 @@ struct TasksPage: View {
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
             .mask { viewportMask }
-            .onChange(of: focusedRow) { _, id in
-                guard let id, rows.contains(where: { $0.id == id }), focusTracker.isKeyboardDriving else { return }
+            .onChange(of: focusedRow) { _, focus in
+                guard let focus, focus.page == tab.rawValue, rows.contains(where: { $0.id == focus.id }),
+                      focusTracker.isKeyboardDriving else { return }
+                let id = focus.id
                 revealRow(id, in: tab, proxy: proxy, animation: travel)
             }
             // An agent's `show`, or a task just added: the row comes into view.
@@ -763,14 +837,14 @@ struct TasksPage: View {
             // did not reach (round 5).
             .onChange(of: rows.map(\.id)) { old, new in
                 if tab == model.tab { PerformanceSignposts.watchFrames("RowsMotion", seconds: 0.35) }
-                guard tab == model.tab, let focused = focusedRow, !new.contains(focused),
+                guard tab == model.tab, let focused = focusedID, !new.contains(focused),
                       let index = old.firstIndex(of: focused), !new.isEmpty else { return }
                 guard focusTracker.isKeyboardDriving else {
                     focusedRow = nil
                     return
                 }
                 let next = new[min(index, new.count - 1)]
-                focusedRow = next
+                setFocus(next)
                 model.selectOnly(next)
             }
         }
@@ -802,7 +876,8 @@ struct TasksPage: View {
                 // Not the circle column (before the row reports its
                 // controls), and never one of the row's controls.
                 point.x > cornerInset + AtticLayout.textX - AtticSpacing.s4
-                    && !dragSession.isOnControl(id, at: point, rowOrigin: pointer.frames[id]?.origin)
+                    && !dragSession.isOnControl(TasksRowID(tab: tab, id: id), at: point,
+                                                rowOrigin: pointer.frames[TasksRowID(tab: tab, id: id)]?.origin)
             },
             heights: { rowHeight($0, in: tab) },
             onBegin: { beginDragSession(in: tab) },
@@ -812,13 +887,15 @@ struct TasksPage: View {
             let isSelected = model.selection.contains(id)
             let run = selectionRun(for: id, in: tab)
             let isExpanded = expanded()
-            let editing = model.editingTitleID == id
+            // Only the page that answers the keyboard opens an editor: the
+            // copy a kept page draws of the same task shows none (round 12).
+            let editing = model.editingTitleID == id && live.isActive
             // The row redraws only when what it shows changed (round 11):
             // every change to the page's model reached every row's cell, and
             // each rebuilt its whole row. An editor or a picker open on the
             // row always redraws it (they show live state).
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
-                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
+                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, isActive: live.isActive, tab: tab,
                                               layout: layout, isLive: editing || live.metaPopover != nil)) {
                 AtticTaskRow(
                     model: row.model,
@@ -840,6 +917,8 @@ struct TasksPage: View {
             }
             .equatable()
         } below: {
+            // Read here, in the cell's own body, as `live.isActive` is.
+            let active = model.tab == tab && model.isPageShown
             // A Done log task's details open under its row (Esc or the
             // menu closes them), raised over the list like a pop-over.
             if model.doneDetailID == id, let detail = model.doneDetail(for: id) {
@@ -876,12 +955,12 @@ struct TasksPage: View {
                     onFocusChange: { subtaskID, focused in
                         if focused { model.focusedSubtaskID = subtaskID } else if model.focusedSubtaskID == subtaskID { model.focusedSubtaskID = nil }
                     },
-                    renaming: model.renamingSubtaskID.map { renaming in
+                    renaming: (active ? model.renamingSubtaskID : nil).map { renaming in
                         (renaming, AtticTitleEditing(text: $model.subtaskRename, commit: { model.commitSubtaskRename() },
                                                      cancel: { model.cancelSubtaskRename() },
                                                      accessibilityLabel: String(localized: "Rename subtask")))
                     },
-                    newSubtask: model.newSubtaskParentID == id
+                    newSubtask: model.newSubtaskParentID == id && active
                         ? AtticTitleEditing(text: $model.newSubtaskTitle, commit: { model.commitNewSubtask() },
                                             cancel: { model.cancelEditing() },
                                             accessibilityLabel: String(localized: "New subtask of \(row.model.title)"))
@@ -899,8 +978,10 @@ struct TasksPage: View {
                 }
             }
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer] frame in pointer.frames[id] = frame }
-        .onDisappear { [pointer] in pointer.frames[id] = nil }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer] frame in
+            pointer.frames[TasksRowID(tab: tab, id: id)] = frame
+        }
+        .onDisappear { [pointer] in pointer.frames[TasksRowID(tab: tab, id: id)] = nil }
         // Files dropped on a row: one drop destination for the page
         // (`fileDropTarget(at:)`), not one per row (round 11: a drop
         // destination on every row made a screenful of rows slower to build).
@@ -921,10 +1002,10 @@ struct TasksPage: View {
             text: $model.editingTitle,
             commit: {
                 let saved = model.commitTitle()
-                if saved { focusedRow = id }
+                if saved { setFocus(id) }
                 return saved
             },
-            cancel: { model.cancelEditing(); focusedRow = id },
+            cancel: { model.cancelEditing(); setFocus(id) },
             tokens: AtticTitleEditing.Tokens(
                 chips: model.titleEdit.tokenChips(parser: model.parser, caret: model.titleEditCaret),
                 dismissChip: { range in
@@ -970,7 +1051,7 @@ struct TasksPage: View {
     /// the menu's "Pick a Date…" and "New Tag…" open it for the menu's
     /// targets (a multi-selection too).
     private func openMeta(_ kind: TasksMetaPopover.Kind, on id: UUID, targets: [UUID]? = nil, newTag: Bool = false) {
-        metaPopover = TasksMetaPopover(id: id, kind: kind, targets: targets ?? [id], newTag: newTag)
+        metaPopover = TasksMetaPopover(id: id, tab: model.tab, kind: kind, targets: targets ?? [id], newTag: newTag)
     }
 
     private func metaBinding(_ kind: TasksMetaPopover.Kind, id: UUID, open: TasksMetaPopover?) -> Binding<Bool> {
@@ -1047,7 +1128,7 @@ struct TasksPage: View {
             return
         }
         model.click(id, modifiers: modifiers, visible: visibleIDs())
-        focusedRow = id
+        setFocus(id)
     }
 
     /// What a row offers, decided once for the keys, the circle, VoiceOver
@@ -1175,7 +1256,7 @@ struct TasksPage: View {
         // Focus moves only once the delete saved (Astra 6); a failure shows
         // under the row the command came from.
         guard let first = ids.first, model.report(model.delete(ids), on: first, retry: { model.delete(ids) }).isApplied else { return }
-        focusedRow = next
+        setFocus(next)
         if let next { model.selectOnly(next) }
     }
 
@@ -1193,8 +1274,11 @@ struct TasksPage: View {
     /// It acts on the menu's targets: the row, or the selection it is part
     /// of. Each command shows its key from `AtticTaskShortcut`.
     func taskCommands(_ rowID: UUID, tab: TasksTab) -> [AtticMenuCommand] {
-        let id = menuRowID(rowID)
-        let targets = menuTargets(rowID)
+        // The row's identity on its page: a task Now keeps under "Completed
+        // today" and its copy on Done are two rows (round 12).
+        let key = TasksRowID(tab: tab, id: rowID)
+        let id = menuRowID(key)
+        let targets = menuTargets(key)
         let single = targets.count == 1
         let listed = targets.compactMap { store.listedTask(withID: $0) }
         let allDone = !listed.isEmpty && listed.allSatisfy { $0.status == .done }
@@ -1208,21 +1292,21 @@ struct TasksPage: View {
             list.append(AtticMenuCommand(verbatim: single ? String(localized: "Restore to Now")
                                                           : String(localized: "Restore \(targets.count) Tasks to Now"),
                                          startsSection: single) {
-                menuCommand(rowID) { model.restoreToNow($0) }
+                menuCommand(key) { model.restoreToNow($0) }
             })
             list.append(AtticMenuCommand(verbatim: String(localized: "Mark as Not Done"), shortcut: AtticTaskShortcut.complete) {
-                menuCommand(rowID) { model.toggleDone($0) }
+                menuCommand(key) { model.toggleDone($0) }
             })
             if single {
                 list.append(AtticMenuCommand(verbatim: detailsMenuTitle(for: id), shortcut: AtticTaskShortcut.openPage) {
                     guard !AtticTextInput.ownsCurrentKey else { return }
-                    toggleDetails(menuRowID(rowID))
+                    toggleDetails(menuRowID(key))
                 })
             }
         } else {
             list.append(AtticMenuCommand(verbatim: allDone ? String(localized: "Mark as Not Done") : String(localized: "Complete"),
                                          shortcut: AtticTaskShortcut.complete, startsSection: single) {
-                menuCommand(rowID) { targets in
+                menuCommand(key) { targets in
                     let outcome = model.toggleDone(targets)
                     completionFeedback(outcome, targets)
                     return outcome
@@ -1230,14 +1314,14 @@ struct TasksPage: View {
             })
             list.append(AtticMenuCommand(verbatim: allWorking ? String(localized: "Stop Working") : String(localized: "Start Working"),
                                          shortcut: AtticTaskShortcut.working) {
-                menuCommand(rowID) { model.toggleWorking($0) }
+                menuCommand(key) { model.toggleWorking($0) }
             })
         }
         if single {
             list.append(AtticMenuCommand(verbatim: String(localized: "Edit Title"), shortcut: AtticTaskShortcut.editTitle,
                                          startsSection: true) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
-                let id = menuRowID(rowID)
+                let id = menuRowID(key)
                 model.selectOnly(id)
                 model.beginEditingTitle(id)
             })
@@ -1245,54 +1329,54 @@ struct TasksPage: View {
         // Date, Tags and Priority (owner fixes 3 and 5 D): on the menu's
         // targets, a multi-selection too; one step each. Done's rows too,
         // without changing completion (round 10).
-        list.append(.submenu(String(localized: "Date"), startsSection: !single, dateCommands(rowID, targets: targets)))
-        list.append(.submenu(String(localized: "Tags"), tagCommands(rowID, targets: targets)))
-        list.append(.submenu(String(localized: "Priority"), priorityCommands(rowID, targets: targets)))
+        list.append(.submenu(String(localized: "Date"), startsSection: !single, dateCommands(key, targets: targets)))
+        list.append(.submenu(String(localized: "Tags"), tagCommands(key, targets: targets)))
+        list.append(.submenu(String(localized: "Priority"), priorityCommands(key, targets: targets)))
         if tab == .backlog {
             list.append(AtticMenuCommand(verbatim: String(localized: "Move to Now"), shortcut: AtticTaskShortcut.later) {
-                menuCommand(rowID) { model.moveToNow($0) }
+                menuCommand(key) { model.moveToNow($0) }
             })
         } else if tab == .now {
             list.append(AtticMenuCommand(verbatim: String(localized: "Move to Later"), shortcut: AtticTaskShortcut.later) {
-                menuCommand(rowID) { model.moveToBacklog($0) }
+                menuCommand(key) { model.moveToBacklog($0) }
             })
         }
         if single, tab != .done {
             if unfinished {
                 list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: true) {
-                    model.beginAddingSubtask(to: menuRowID(rowID))
+                    model.beginAddingSubtask(to: menuRowID(key))
                 })
             }
             list.append(AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage,
                                          startsSection: !unfinished) {
                 guard !AtticTextInput.ownsCurrentKey else { return }
-                model.openPage(menuRowID(rowID))
+                model.openPage(menuRowID(key))
             })
             // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
             if unfinished {
                 list.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
                                              isDisabled: !canMove(id, by: -1), startsSection: true) {
-                    moveRow(menuRowID(rowID), by: -1)
+                    moveRow(menuRowID(key), by: -1)
                 })
                 list.append(AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
                                              isDisabled: !canMove(id, by: 1)) {
-                    moveRow(menuRowID(rowID), by: 1)
+                    moveRow(menuRowID(key), by: 1)
                 })
             }
         }
         list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy, startsSection: true) {
-            model.copy(menuTargets(rowID))
+            model.copy(menuTargets(key))
             pointer.endInvocation()
         })
         list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
-            menuCommand(rowID) { model.duplicate($0) }
+            menuCommand(key) { model.duplicate($0) }
         })
         list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
                                      shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
             // A menu's Delete key equivalent never reaches past a field
             // that is typing (round 5, the owner's blocker).
             guard !AtticTextInput.ownsCurrentKey else { return }
-            deleteAndMoveFocus(menuTargets(rowID))
+            deleteAndMoveFocus(menuTargets(key))
         })
         return list
     }
@@ -1300,22 +1384,22 @@ struct TasksPage: View {
     /// Date ▸: the quick days (one tick for one day: on a Sunday, Tomorrow
     /// and Next Week are the same Monday; only the first is ticked), Pick
     /// a Date…, Remove Date.
-    private func dateCommands(_ rowID: UUID, targets: [UUID]) -> [AtticMenuCommand] {
+    private func dateCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         let choices = model.dateChoices
         let current = model.commonDueDay(targets)
         let ticked = choices.quick.first { $0.day == current }?.id
         var list = choices.quick.map { quick in
             AtticMenuCommand(verbatim: quick.menuTitle, state: quick.id == ticked ? .on : .off,
                              detail: choices.detail(for: quick.day)) {
-                menuCommand(rowID) { model.setDueDay(quick.day, for: $0) }
+                menuCommand(key) { model.setDueDay(quick.day, for: $0) }
             }
         }
         list.append(AtticMenuCommand(verbatim: String(localized: "Pick a Date…"), startsSection: true) {
-            openMeta(.date, on: menuRowID(rowID), targets: menuTargets(rowID))
+            openMeta(.date, on: menuRowID(key), targets: menuTargets(key))
         })
         list.append(AtticMenuCommand(verbatim: String(localized: "Remove Date"), isDisabled: targets.allSatisfy { model.dueDay(of: $0) == nil },
                                      startsSection: true) {
-            menuCommand(rowID) { model.setDueDay(nil, for: $0) }
+            menuCommand(key) { model.setDueDay(nil, for: $0) }
         })
         return list
     }
@@ -1323,25 +1407,25 @@ struct TasksPage: View {
     /// Tags ▸: the targets' tags, then the library's most used (twelve), a
     /// tick when every target has one and a dash when some do (review 17);
     /// All Tags… opens the searchable picker with every tag and creation.
-    private func tagCommands(_ rowID: UUID, targets: [UUID]) -> [AtticMenuCommand] {
+    private func tagCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         var list = model.tagChoices(for: targets).prefix(12).map { tag in
             AtticMenuCommand(verbatim: "#" + tag, state: model.tagState(tag, for: targets)) {
-                menuCommand(rowID) { model.toggleTag(tag, for: $0) }
+                menuCommand(key) { model.toggleTag(tag, for: $0) }
             }
         }
         list.append(AtticMenuCommand(verbatim: String(localized: "All Tags…"), startsSection: true) {
-            openMeta(.tags, on: menuRowID(rowID), targets: menuTargets(rowID), newTag: true)
+            openMeta(.tags, on: menuRowID(key), targets: menuTargets(key), newTag: true)
         })
         return list
     }
 
     /// Priority ▸: No Priority, Medium, High (Low only while every target
     /// has it, round 7 R6), ticked when every target has it.
-    private func priorityCommands(_ rowID: UUID, targets: [UUID]) -> [AtticMenuCommand] {
+    private func priorityCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         let priorities = Set(targets.compactMap { store.listedTask(withID: $0)?.priority })
         return TaskPriority.choices(keeping: priorities).map { priority in
             AtticMenuCommand(verbatim: priority.menuTitle, state: priorities == [priority] ? .on : .off) {
-                menuCommand(rowID) { model.setPriority(priority, for: $0) }
+                menuCommand(key) { model.setPriority(priority, for: $0) }
             }
         }
     }
@@ -1408,11 +1492,14 @@ struct TasksPage: View {
     /// the row.
     private func showActions(for id: UUID, anchor: NSView?, tab: TasksTab) {
         if !model.selection.contains(id) { model.selectOnly(id) }
-        presentMenu(taskCommands(id, tab: tab), at: id, anchor: anchor)
+        // The keyboard follows the row the menu is about, so the keys after
+        // it act from there (round 12, CU bug 2).
+        if focusedID != id, model.selection.count == 1 { setFocus(id) }
+        presentMenu(taskCommands(id, tab: tab), at: TasksRowID(tab: tab, id: id), anchor: anchor)
     }
 
     /// Opens a native menu under `anchor`, or at the row's title line.
-    private func presentMenu(_ commands: [AtticMenuCommand], at id: UUID, anchor: NSView?) {
+    private func presentMenu(_ commands: [AtticMenuCommand], at id: TasksRowID, anchor: NSView?) {
         if let anchor, anchor.window != nil {
             AtticNativeMenu.popUp(commands, in: anchor)
         } else if let view = pointer.view, let frame = pointer.frames[id] {
@@ -1425,27 +1512,29 @@ struct TasksPage: View {
     /// VoiceOver's "Change priority": the Priority choices at the row.
     private func showPriority(for id: UUID) {
         if !model.selection.contains(id) { model.selectOnly(id) }
-        presentMenu(priorityCommands(id, targets: model.targets(for: id)), at: id, anchor: nil)
+        if focusedID != id, model.selection.count == 1 { setFocus(id) }
+        let key = TasksRowID(tab: model.tab, id: id)
+        presentMenu(priorityCommands(key, targets: model.targets(for: id)), at: key, anchor: nil)
     }
 
     /// The row a menu command acts from: always the menu's own row.
-    private func menuRowID(_ row: UUID) -> UUID { row }
+    private func menuRowID(_ row: TasksRowID) -> UUID { row.id }
 
     /// What a menu command acts on: the targets its opening press took on
     /// this row (the row, or the selection it was part of then), or, for a
     /// menu no press opened, the row's targets now (round 5, F2).
-    private func menuTargets(_ row: UUID) -> [UUID] {
-        pointer.binding(for: row)?.targets ?? model.targets(for: row)
+    private func menuTargets(_ row: TasksRowID) -> [UUID] {
+        pointer.binding(for: row)?.targets ?? model.targets(for: row.id)
     }
 
     /// Runs a menu command on its targets; a failure shows under the menu's
     /// row with Retry (round 4: outcomes reach the UI). The command ends
     /// the binding: the next menu is bound by its own opening.
-    private func menuCommand(_ row: UUID, _ command: @escaping ([UUID]) -> CommandOutcome) {
+    private func menuCommand(_ row: TasksRowID, _ command: @escaping ([UUID]) -> CommandOutcome) {
         guard !AtticTextInput.ownsCurrentKey else { return }
         let targets = menuTargets(row)
         pointer.endInvocation()
-        model.report(command(targets), on: row) { command(targets) }
+        model.report(command(targets), on: row.id) { command(targets) }
     }
 
     /// A press, before SwiftUI sees it. A secondary click or Control-click
@@ -1468,20 +1557,33 @@ struct TasksPage: View {
             if !model.selection.isEmpty { model.clearSelection() }
             if focusedRow != nil { focusedRow = nil }
         }
-        if pointer.isPlainPressOutsideRows(event, top: listTop - AtticLayout.pageTabsToList / 2,
+        if pointer.isPlainPressOutsideRows(event, tab: model.tab, top: listTop - AtticLayout.pageTabsToList / 2,
                                            bottomInset: bandTop) {
             if !model.selection.isEmpty { model.clearSelection() }
             if focusedRow != nil { focusedRow = nil }
         }
         // Only the rows' visible part: between the tabs' band and the
         // bottom stack's band (round 7, R4).
-        pointer.press(event, below: listTop - AtticLayout.pageTabsToList / 2, aboveBottom: bandTop) { id in
+        pointer.press(event, tab: model.tab, below: listTop - AtticLayout.pageTabsToList / 2, aboveBottom: bandTop) { id in
             if !model.selection.contains(id) { model.selectOnly(id) }
             return model.targets(for: id)
         }
     }
 
     // MARK: - Keys
+
+    /// The row the keys act from: the row that shows the keyboard, unless a
+    /// programmatic selection (the actions menu, a restore) has since moved
+    /// the selection elsewhere, in which case the selection wins so a key
+    /// never acts from a stale row (round 12, CU bug 2). With no row focused,
+    /// the one selected row.
+    private func keyboardRow(visible: [UUID]) -> UUID? {
+        let live = Set(visible)
+        let selected = model.selection.intersection(live)
+        if let focused = focusedID, live.contains(focused), selected.isEmpty || selected.contains(focused) { return focused }
+        if selected.count == 1 { return selected.first }
+        return nil
+    }
 
     /// The list's keys (spec § Keyboard map, Tasks row): ↑ ↓ move, ⇧↑ ⇧↓
     /// extend, ⌘↑ ⌘↓ reorder, Return edits the title, → and ← open and close
@@ -1522,14 +1624,14 @@ struct TasksPage: View {
         // The focused row, or the one selected row when the keyboard is
         // elsewhere in the page (a click on a row in a panel that was not
         // key yet can leave focus on the page's first control).
-        let current = (focusedRow ?? (model.selection.count == 1 ? model.selection.first : nil))
-            .flatMap { visible.contains($0) ? $0 : nil }
+        let current = keyboardRow(visible: visible)
         switch press.key {
         case .downArrow, .upArrow:
             let step = press.key == .downArrow ? 1 : -1
             guard let current, let index = visible.firstIndex(of: current) else {
-                focusedRow = step > 0 ? visible.first : visible.last
-                if let focusedRow { model.selectOnly(focusedRow) }
+                let first = step > 0 ? visible.first : visible.last
+                setFocus(first)
+                if let first { model.selectOnly(first) }
                 focusTracker.noteKeyboardNavigation()
                 return .handled
             }
@@ -1541,8 +1643,12 @@ struct TasksPage: View {
                 return .handled
             }
             let next = visible[min(max(index + step, 0), visible.count - 1)]
-            focusedRow = next
-            if modifiers == .shift { model.extendSelection(to: next, visible: visible) } else { model.selectOnly(next) }
+            setFocus(next)
+            if modifiers == .shift {
+                model.extendSelection(to: next, visible: visible, from: current)
+            } else {
+                model.selectOnly(next)
+            }
             return .handled
         case .return where modifiers.isEmpty:
             // Done's rows too (round 10).
@@ -1558,21 +1664,7 @@ struct TasksPage: View {
             model.setExpanded(current, false)
             return .handled
         case .escape:
-            if drag != nil { cancelDrag(); return .handled }
-            if model.doneDetailID != nil { model.doneDetailID = nil; return .handled }
-            // A search left with its query: Esc ends it (the tabs return).
-            if model.tab == .done, !model.doneSearch.isEmpty { endSearch(); return .handled }
-            // Esc closes the quick look the keyboard is in (or the one
-            // open) and the keyboard returns to its row (review UX 2).
-            let open = current.flatMap { model.expanded.contains($0) ? $0 : nil }
-                ?? (model.expanded.count == 1 ? model.expanded.first.flatMap { visible.contains($0) ? $0 : nil } : nil)
-            if let open {
-                toggleExpanded(open)
-                focusedRow = open
-                return .handled
-            }
-            if model.selection.count > 1 { model.clearSelection(); return .handled }
-            return .ignored
+            return handleEscape(visible: visible, current: current) ? .handled : .ignored
         default:
             if modifiers == .command, press.characters.lowercased() == "a", let first = visible.first, let last = visible.last {
                 model.selectOnly(first)
@@ -1598,7 +1690,7 @@ struct TasksPage: View {
     /// under it included; round 4), or, before it has been laid out, from
     /// what it shows: 34 pt, 48 with a details line, plus the quick look.
     private func rowHeight(_ id: UUID, in tab: TasksTab) -> CGFloat {
-        if let measured = pointer.frames[id]?.height, measured > 0 { return measured }
+        if let measured = pointer.frames[TasksRowID(tab: tab, id: id)]?.height, measured > 0 { return measured }
         guard let row = model.rows(for: tab).first(where: { $0.id == id }) else { return AtticLayout.rowPitch }
         let pitch = row.model.hasDetails ? AtticLayout.detailRowPitch : AtticLayout.rowPitch
         guard model.expanded.contains(id), row.status != .done else { return pitch }
@@ -1683,7 +1775,7 @@ struct TasksPage: View {
         let travel = design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)
         // The keyboard comes to the moved row, so ⌘Z (and Esc) reach the
         // list right after a drop.
-        focusedRow = finished.id
+        setFocus(finished.id)
         withAnimation(travel) {
             drag = nil
             if finished.targetIndex != finished.startIndex {
@@ -1727,12 +1819,14 @@ struct TasksPage: View {
     private func fileDropTarget(at point: CGPoint) -> UUID? {
         guard model.tab != .done, let height = pointer.view?.bounds.height,
               pagerBand.contains(point, height: height, stackHeight: bottomStack.height) else { return nil }
-        return Self.row(at: point, frames: pointer.frames, among: Set(model.rows(for: model.tab).map(\.id)))
+        return Self.row(at: point, frames: pointer.frames, tab: model.tab, among: Set(model.rows(for: model.tab).map(\.id)))
     }
 
-    /// The row among `ids` whose frame holds `point` (pure, tested).
-    static func row(at point: CGPoint, frames: [UUID: CGRect], among ids: Set<UUID>) -> UUID? {
-        frames.first { ids.contains($0.key) && $0.value.contains(point) }?.key
+    /// The row among `ids` on `tab`'s page whose frame holds `point` (pure,
+    /// tested). Frames are keyed by page and task: a task drawn on two
+    /// pages is two rows, and only the page shown answers (round 12).
+    static func row(at point: CGPoint, frames: [TasksRowID: CGRect], tab: TasksTab, among ids: Set<UUID>) -> UUID? {
+        frames.first { $0.key.tab == tab && ids.contains($0.key.id) && $0.value.contains(point) }?.key.id
     }
 
     private func attachDroppedFiles(_ content: TaskDropContent, _ providers: [NSItemProvider], to id: UUID) {
@@ -2234,7 +2328,7 @@ final class TasksDragSession {
     private(set) var isCancelled = false
     var translation: CGFloat = 0
     var location: CGPoint?
-    var controlFrames: [UUID: [CGRect]] = [:]
+    var controlFrames: [TasksRowID: [CGRect]] = [:]
     var timer: Timer?
 
     func cancel() { isCancelled = true }
@@ -2275,7 +2369,7 @@ final class TasksDragSession {
 
     /// A press at `point` (page space) on row `id`, whose frame in the page
     /// starts at `origin`, landed on one of its controls.
-    func isOnControl(_ id: UUID, at point: CGPoint, rowOrigin origin: CGPoint?) -> Bool {
+    func isOnControl(_ id: TasksRowID, at point: CGPoint, rowOrigin origin: CGPoint?) -> Bool {
         guard let origin, let frames = controlFrames[id] else { return false }
         let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
         return frames.contains { $0.insetBy(dx: -2, dy: -2).contains(local) }
@@ -2306,7 +2400,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     /// built but not drawn (round 11).
     let model: TasksPageModel
     @ObservedObject var updates: TasksCellUpdates
-    var focus: FocusState<UUID?>.Binding
+    var focus: FocusState<AtticRowFocusID?>.Binding
     let id: UUID
     let tab: TasksTab
     let group: [UUID]
@@ -2315,7 +2409,7 @@ struct TasksReorderCell<Row: View, Below: View>: View {
     /// this cell's own body so the row redraws when they change: a lazy
     /// list's cells are not rebuilt when only the page's state changes.
     @Binding var metaPopover: TasksMetaPopover?
-    @Binding var fileDropRow: UUID?
+    @Binding var fileDropRow: TasksRowID?
     let enabled: Bool
     /// The drag's live state: cancellation, pointer, control frames.
     let session: TasksDragSession
@@ -2338,18 +2432,23 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         // Read here, in the cell's own body, so a new target moves the
         // neighbours at once (a list's lazy cells do not re-read the page).
         let offset = drag.map { Self.offset(of: id, in: $0, heights: heights) } ?? 0
+        // Drawn is not active: a page kept built beside the one shown draws
+        // its rows, but the keyboard, the editors and the pickers belong to
+        // the copy on the page the person is on (round 12).
+        let active = model.tab == tab && model.isPageShown
         let live = TasksCellLive(
-            metaPopover: metaPopover?.id == id ? metaPopover : nil,
-            focus: AtticRowFocus(binding: focus, id: id),
-            isDropTarget: fileDropRow == id
+            metaPopover: active && metaPopover?.id == id && metaPopover?.tab == tab ? metaPopover : nil,
+            focus: AtticRowFocus(binding: focus, id: AtticRowFocusID(page: tab.rawValue, id: id), isActive: active),
+            isDropTarget: active && fileDropRow == TasksRowID(tab: tab, id: id),
+            isActive: active
         )
         VStack(alignment: .leading, spacing: 0) {
             // An ordinary gesture on the row: its buttons (the circle, the
             // date, the tags, the checklist) keep their clicks; a press that
             // moves 4 pt drags at once, with no hold.
             row(live)
-                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id] frames in
-                    MainActor.assumeIsolated { session.controlFrames[id] = frames }
+                .onPreferenceChange(AtticRowControlFramesKey.self) { [session, id, tab] frames in
+                    MainActor.assumeIsolated { session.controlFrames[TasksRowID(tab: tab, id: id)] = frames }
                 }
                 .simultaneousGesture(gesture, including: enabled ? .all : .subviews)
             below()
@@ -2484,6 +2583,9 @@ struct TasksCellLive {
     let metaPopover: TasksMetaPopover?
     let focus: AtticRowFocus
     let isDropTarget: Bool
+    /// The row's page is the one shown, on the tab the person is on: it
+    /// alone opens editors and pickers and takes the keyboard (round 12).
+    let isActive: Bool
 }
 
 /// A quiet line over the add bar while a drag or ⌘↑ ⌘↓ meets the edge of
@@ -2503,14 +2605,17 @@ private struct TasksBoundaryHint: View {
 /// The rows' frames in the page and the current menu invocation, kept out
 /// of view state (writing them redraws nothing).
 final class TasksPointer {
-    var frames: [UUID: CGRect] = [:]
+    /// Each row's frame in the page, by its identity on its page: a task
+    /// that two pages list (Now's "Completed today" and Done) is two rows
+    /// with two frames (round 12).
+    var frames: [TasksRowID: CGRect] = [:]
     /// The page's own view: a press is placed in the page from its event.
     weak var view: NSView?
 
     /// One context menu's binding: the row it was opened on and what its
     /// commands act on, taken at the press that opened it.
     struct Invocation: Equatable {
-        let row: UUID
+        let row: TasksRowID
         let targets: [UUID]
         /// The opening press's timestamp: the menu that begins with this
         /// event is the one it binds.
@@ -2521,7 +2626,7 @@ final class TasksPointer {
 
     /// The binding for a menu on `row`: only one opened by a press on that
     /// same row (a menu on another row never inherits it).
-    func binding(for row: UUID) -> Invocation? {
+    func binding(for row: TasksRowID) -> Invocation? {
         invocation?.row == row ? invocation : nil
     }
 
@@ -2557,15 +2662,16 @@ final class TasksPointer {
     /// to that row, with the targets `select` returns (it selects the row
     /// unless it is part of the selection); any other press, or one off the
     /// rows or in another window, ends the previous binding.
-    func press(_ event: NSEvent, below minY: CGFloat, aboveBottom bottomBand: CGFloat = 0, select: (UUID) -> [UUID]) {
+    func press(_ event: NSEvent, tab: TasksTab, below minY: CGFloat, aboveBottom bottomBand: CGFloat = 0,
+               select: (UUID) -> [UUID]) {
         guard MenuPress(type: event.type, modifiers: event.modifierFlags) != .none,
               let point = location(of: event), point.y >= minY,
               point.y <= (view?.bounds.height ?? .greatestFiniteMagnitude) - bottomBand,
-              let id = row(at: point) else {
+              let id = row(at: point, in: tab) else {
             invocation = nil
             return
         }
-        invocation = Invocation(row: id, targets: select(id), pressedAt: event.timestamp)
+        invocation = Invocation(row: TasksRowID(tab: tab, id: id), targets: select(id), pressedAt: event.timestamp)
     }
 
     /// The event's location in the page, or nil when it is another
@@ -2578,18 +2684,20 @@ final class TasksPointer {
 
     /// A plain left click in the list's space (below `top`, above the
     /// bottom stack) that no row holds.
-    func isPlainPressOutsideRows(_ event: NSEvent, top: CGFloat, bottomInset: CGFloat) -> Bool {
+    func isPlainPressOutsideRows(_ event: NSEvent, tab: TasksTab, top: CGFloat, bottomInset: CGFloat) -> Bool {
         guard event.type == .leftMouseDown,
               event.modifierFlags.intersection([.command, .shift, .control, .option]).isEmpty,
               let view, let point = location(of: event), point.y >= top, point.y <= view.bounds.height - bottomInset
         else { return false }
-        return row(at: point) == nil
+        return row(at: point, in: tab) == nil
     }
 
-    /// The row under `point`: the one whose frame holds it (the list's
-    /// visible part; a row's frame is the row and its quick look).
-    func row(at point: CGPoint) -> UUID? {
-        frames.first { $0.value.contains(point) && $0.value.height < 2_000 }?.key
+    /// The row under `point` on page `tab`: the one whose frame holds it
+    /// (the list's visible part; a row's frame is the row and its quick
+    /// look). Only the page the person is on answers: a copy another page
+    /// keeps of the same task, or a page beside it, is never under it.
+    func row(at point: CGPoint, in tab: TasksTab) -> UUID? {
+        frames.first { $0.key.tab == tab && $0.value.contains(point) && $0.value.height < 2_000 }?.key.id
     }
 }
 
@@ -2623,6 +2731,8 @@ struct TasksRowKey: Equatable {
     let isExpanded: Bool
     let isDropTarget: Bool
     let isFocused: Bool
+    /// The row's page answers the keyboard (round 12).
+    let isActive: Bool
     let tab: TasksTab
     let layout: PanelPageLayout
     /// A title editor or a picker is open on the row: it always redraws.
@@ -2631,7 +2741,7 @@ struct TasksRowKey: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
             && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isDropTarget == rhs.isDropTarget
-            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab && lhs.layout == rhs.layout
+            && lhs.isFocused == rhs.isFocused && lhs.isActive == rhs.isActive && lhs.tab == rhs.tab && lhs.layout == rhs.layout
     }
 }
 
@@ -2694,6 +2804,8 @@ private struct TasksFileDropDelegate: DropDelegate {
 struct TasksMetaPopover: Equatable {
     enum Kind { case date, tags }
     let id: UUID
+    /// The page whose copy of the row opened it (a task can be listed by two).
+    let tab: TasksTab
     let kind: Kind
     let targets: [UUID]
     var newTag = false

@@ -194,7 +194,9 @@ struct AtticTokenField: NSViewRepresentable {
             guard let view, let window = view.window else { return }
             let wanted = focusBinding.wrappedValue
             let hasFocus = window.firstResponder === view.textView
-            if wanted, !hasFocus, enabled {
+            // A field of a page that is not drawn (kept built, hidden) never
+            // takes the keyboard (round 12).
+            if wanted, !hasFocus, enabled, !view.isHiddenOrHasHiddenAncestor {
                 window.makeFirstResponder(view.textView)
             } else if !wanted, hasFocus {
                 window.makeFirstResponder(nil)

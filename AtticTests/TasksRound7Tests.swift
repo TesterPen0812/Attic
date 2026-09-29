@@ -161,18 +161,18 @@ final class TasksRound7Tests: XCTestCase {
         pointer.view = view
         let row = UUID()
         // A tall row (its quick look open) that runs under the stack.
-        pointer.frames[row] = CGRect(x: 0, y: 400, width: 320, height: 110)
+        pointer.frames[TasksRowID(tab: .now, id: row)] = CGRect(x: 0, y: 400, width: 320, height: 110)
         let band = TasksBottomBand.height(stack: TasksViewport.reservedStack, bottomInset: 12)
         func rightClick(atY y: CGFloat) -> NSEvent {
             NSEvent.mouseEvent(with: .rightMouseDown, location: view.convert(CGPoint(x: 100, y: y), to: nil), modifierFlags: [],
                                timestamp: 1, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
         }
         var selected: [UUID] = []
-        pointer.press(rightClick(atY: 480), below: 100, aboveBottom: band) { id in selected.append(id); return [id] }
-        XCTAssertNil(pointer.binding(for: row), "under the stack: no menu binding")
+        pointer.press(rightClick(atY: 480), tab: .now, below: 100, aboveBottom: band) { id in selected.append(id); return [id] }
+        XCTAssertNil(pointer.binding(for: TasksRowID(tab: .now, id: row)), "under the stack: no menu binding")
         XCTAssertTrue(selected.isEmpty, "and nothing selected")
-        pointer.press(rightClick(atY: 520 - band - 4), below: 100, aboveBottom: band) { id in selected.append(id); return [id] }
-        XCTAssertNotNil(pointer.binding(for: row), "just above the stack the row is the row")
+        pointer.press(rightClick(atY: 520 - band - 4), tab: .now, below: 100, aboveBottom: band) { id in selected.append(id); return [id] }
+        XCTAssertNotNil(pointer.binding(for: TasksRowID(tab: .now, id: row)), "just above the stack the row is the row")
         XCTAssertEqual(selected, [row])
     }
 }

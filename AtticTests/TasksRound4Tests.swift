@@ -327,7 +327,8 @@ final class TasksRound4Tests: XCTestCase {
         let pointer = TasksPointer()
         pointer.view = page
         let a = UUID(), b = UUID()
-        pointer.frames = [a: CGRect(x: 0, y: 100, width: 300, height: 34), b: CGRect(x: 0, y: 134, width: 300, height: 34)]
+        let rowA = TasksRowID(tab: .now, id: a), rowB = TasksRowID(tab: .now, id: b)
+        pointer.frames = [rowA: CGRect(x: 0, y: 100, width: 300, height: 34), rowB: CGRect(x: 0, y: 134, width: 300, height: 34)]
         func event(_ type: NSEvent.EventType, at y: CGFloat, control: Bool = false, in target: NSWindow? = nil,
                    time: TimeInterval = 0) -> NSEvent {
             let target = target ?? window
@@ -340,34 +341,34 @@ final class TasksRound4Tests: XCTestCase {
         var selected: [UUID] = []
         let select: (UUID) -> [UUID] = { selected.append($0); return [$0] }
 
-        pointer.press(event(.rightMouseDown, at: 110), below: 90, select: select)
-        XCTAssertEqual(pointer.invocation?.row, a, "a right-click binds A")
+        pointer.press(event(.rightMouseDown, at: 110), tab: .now, below: 90, select: select)
+        XCTAssertEqual(pointer.invocation?.row, rowA, "a right-click binds A")
         // Dismissed without a command, then Control-click on B.
-        pointer.press(event(.leftMouseDown, at: 150, control: true), below: 90, select: select)
-        XCTAssertEqual(pointer.invocation?.row, b, "a Control-click binds B, never the stale A")
+        pointer.press(event(.leftMouseDown, at: 150, control: true), tab: .now, below: 90, select: select)
+        XCTAssertEqual(pointer.invocation?.row, rowB, "a Control-click binds B, never the stale A")
         XCTAssertEqual(selected, [a, b])
         // Right-click A again, then a plain click anywhere ends the binding.
-        pointer.press(event(.rightMouseDown, at: 110), below: 90, select: select)
-        XCTAssertEqual(pointer.invocation?.row, a)
-        pointer.press(event(.leftMouseDown, at: 150), below: 90, select: select)
+        pointer.press(event(.rightMouseDown, at: 110), tab: .now, below: 90, select: select)
+        XCTAssertEqual(pointer.invocation?.row, rowA)
+        pointer.press(event(.leftMouseDown, at: 150), tab: .now, below: 90, select: select)
         XCTAssertNil(pointer.invocation, "a plain press ends the last menu's binding")
         // Over the tabs' band, or off the rows: no binding.
-        pointer.press(event(.rightMouseDown, at: 50), below: 90, select: select)
+        pointer.press(event(.rightMouseDown, at: 50), tab: .now, below: 90, select: select)
         XCTAssertNil(pointer.invocation)
         // Another window's press never binds this page's rows.
         let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         other.isReleasedWhenClosed = false
-        pointer.press(event(.rightMouseDown, at: 110, in: other), below: 90, select: select)
+        pointer.press(event(.rightMouseDown, at: 110, in: other), tab: .now, below: 90, select: select)
         XCTAssertNil(pointer.invocation)
         other.close()
 
         // Round 5 (F2): a binding lives for the menu its press opened, and
         // only for a menu on the same row.
         let c = UUID()
-        pointer.press(event(.rightMouseDown, at: 110, time: 10), below: 90) { _ in [a, c] }
+        pointer.press(event(.rightMouseDown, at: 110, time: 10), tab: .now, below: 90) { _ in [a, c] }
         pointer.menuBegan(with: event(.rightMouseDown, at: 110, time: 10))
-        XCTAssertEqual(pointer.binding(for: a)?.targets, [a, c], "A's menu acts on the selection its press took")
-        XCTAssertNil(pointer.binding(for: b), "a menu on B never inherits A's binding")
+        XCTAssertEqual(pointer.binding(for: rowA)?.targets, [a, c], "A's menu acts on the selection its press took")
+        XCTAssertNil(pointer.binding(for: rowB), "a menu on B never inherits A's binding")
         // A's menu is dismissed; the next menu opens without a press (the
         // keyboard, VoiceOver): the binding is gone, the row's own targets
         // (read when its command runs) apply.
@@ -375,16 +376,16 @@ final class TasksRound4Tests: XCTestCase {
                                                  windowNumber: window.windowNumber, context: nil, characters: " ",
                                                  charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
         pointer.menuBegan(with: key)
-        XCTAssertNil(pointer.binding(for: a), "a menu no press opened is not bound")
-        pointer.press(event(.rightMouseDown, at: 110, time: 30), below: 90) { _ in [a] }
+        XCTAssertNil(pointer.binding(for: rowA), "a menu no press opened is not bound")
+        pointer.press(event(.rightMouseDown, at: 110, time: 30), tab: .now, below: 90) { _ in [a] }
         pointer.menuBegan(with: nil)
-        XCTAssertNil(pointer.binding(for: a), "a menu with no current event is not bound either")
+        XCTAssertNil(pointer.binding(for: rowA), "a menu with no current event is not bound either")
         // A command ends the binding (as do hiding and a tab change).
-        pointer.press(event(.rightMouseDown, at: 110, time: 40), below: 90) { _ in [a] }
+        pointer.press(event(.rightMouseDown, at: 110, time: 40), tab: .now, below: 90) { _ in [a] }
         pointer.menuBegan(with: event(.rightMouseDown, at: 110, time: 40))
-        XCTAssertNotNil(pointer.binding(for: a))
+        XCTAssertNotNil(pointer.binding(for: rowA))
         pointer.endInvocation()
-        XCTAssertNil(pointer.binding(for: a))
+        XCTAssertNil(pointer.binding(for: rowA))
         window.close()
     }
 
@@ -523,7 +524,7 @@ final class TasksRound4Tests: XCTestCase {
 
     func testAPressOnARowsControlNeverStartsADrag() {
         let session = TasksDragSession()
-        let row = UUID()
+        let row = TasksRowID(tab: .now, id: UUID())
         // The row's checklist and date, in the row's own space.
         session.controlFrames[row] = [CGRect(x: 56, y: 26, width: 40, height: 16), CGRect(x: 280, y: 8, width: 60, height: 18)]
         let origin = CGPoint(x: 12, y: 200)

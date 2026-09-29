@@ -856,7 +856,17 @@ struct AtticSelectionBar: View {
         let height = AtticControlSize.smallHeight + AtticControlSize.capsuleInset * 2
         let radius = AtticRadius.control(height: height)
         HStack(spacing: AtticSelectionBarMetrics.controlSpacing) {
-            AtticText(verbatim: String(localized: "\(count) selected"), style: .controlLabel, ink: .body)
+            // The count is never cut mid-word ("3 sel…"): it reads "3
+            // selected" when the room allows and "3" when it does not (a
+            // rounder panel corner, a bigger count); VoiceOver has the words.
+            ViewThatFits(in: .horizontal) {
+                AtticText(verbatim: String(localized: "\(count) selected"), style: .controlLabel, ink: .body)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                AtticText(verbatim: String(count), style: .controlLabel, ink: .body)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
                 .padding(.leading, AtticSelectionBarMetrics.countLeading)
                 .padding(.trailing, AtticSelectionBarMetrics.countTrailing)
                 .accessibilityValue(summary ?? "")

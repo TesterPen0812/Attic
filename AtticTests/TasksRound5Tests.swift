@@ -88,7 +88,8 @@ final class TasksRound5Tests: XCTestCase {
 
     func testATitlePressStaysADragAsTheRowMovesPastItsControls() {
         let session = TasksDragSession()
-        let row = UUID()
+        let id = UUID()
+        let row = TasksRowID(tab: .now, id: id)
         // The checklist, in the row's own space (Astra's geometry).
         session.controlFrames[row] = [CGRect(x: 56, y: 26, width: 40, height: 16)]
         var origin = CGPoint(x: 12, y: 200)
@@ -98,27 +99,27 @@ final class TasksRound5Tests: XCTestCase {
             return !session.isOnControl(row, at: point, rowOrigin: origin)
         }
         let press = CGPoint(x: 80, y: 210)   // on the title line, above the checklist
-        XCTAssertTrue(session.allows(row, start: press, decide: decide), "a title press drags")
+        XCTAssertTrue(session.allows(id, start: press, decide: decide), "a title press drags")
         // The row lifts and travels up (and the list scrolls): measured
         // now, the same press point would fall on the checklist.
         origin = CGPoint(x: 12, y: 180)
         XCTAssertTrue(session.isOnControl(row, at: press, rowOrigin: origin), "the geometry that used to stop the drag")
-        for _ in 0..<5 { XCTAssertTrue(session.allows(row, start: press, decide: decide), "updates keep the press's answer") }
-        XCTAssertTrue(session.allows(row, start: press, decide: decide), "and so does the release")
+        for _ in 0..<5 { XCTAssertTrue(session.allows(id, start: press, decide: decide), "updates keep the press's answer") }
+        XCTAssertTrue(session.allows(id, start: press, decide: decide), "and so does the release")
         XCTAssertEqual(decisions, 1, "decided once, at the press")
         session.end()
 
         // The next press is decided afresh: with the row now at y 180,
         // this one is on the checklist.
         XCTAssertEqual(origin, CGPoint(x: 12, y: 180))
-        XCTAssertFalse(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "a press on a control never drags")
+        XCTAssertFalse(session.allows(id, start: CGPoint(x: 80, y: 214), decide: decide), "a press on a control never drags")
         origin = CGPoint(x: 12, y: 230)
-        XCTAssertFalse(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "however the row moves after")
+        XCTAssertFalse(session.allows(id, start: CGPoint(x: 80, y: 214), decide: decide), "however the row moves after")
         XCTAssertEqual(decisions, 2)
         // That press never dragged, so no gesture ended it; the next mouse
         // down at the same point, the row now elsewhere, decides afresh.
         session.newPress()
-        XCTAssertTrue(session.allows(row, start: CGPoint(x: 80, y: 214), decide: decide), "a new press is not the old one")
+        XCTAssertTrue(session.allows(id, start: CGPoint(x: 80, y: 214), decide: decide), "a new press is not the old one")
         XCTAssertEqual(decisions, 3)
         session.end()
     }
@@ -286,13 +287,13 @@ final class TasksRound5Tests: XCTestCase {
         let pointer = TasksPointer()
         pointer.view = page
         let row = UUID()
-        pointer.frames = [row: CGRect(x: 0, y: 100, width: 300, height: 34)]
+        pointer.frames = [TasksRowID(tab: .now, id: row): CGRect(x: 0, y: 100, width: 300, height: 34)]
         func click(at y: CGFloat, _ type: NSEvent.EventType = .leftMouseDown, flags: NSEvent.ModifierFlags = []) -> NSEvent {
             NSEvent.mouseEvent(with: type, location: page.convert(NSPoint(x: 50, y: y), to: nil), modifierFlags: flags,
                                timestamp: 0, windowNumber: window.windowNumber, context: nil,
                                eventNumber: 1, clickCount: 1, pressure: 1)!
         }
-        func outside(_ event: NSEvent) -> Bool { pointer.isPlainPressOutsideRows(event, top: 80, bottomInset: 60) }
+        func outside(_ event: NSEvent) -> Bool { pointer.isPlainPressOutsideRows(event, tab: .now, top: 80, bottomInset: 60) }
         XCTAssertTrue(outside(click(at: 200)), "the space under the rows (or Done's search, a day heading)")
         XCTAssertFalse(outside(click(at: 110)), "a row's own click selects it")
         XCTAssertFalse(outside(click(at: 40)), "the tabs and header are not the list")

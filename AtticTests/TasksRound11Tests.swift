@@ -130,10 +130,11 @@ final class TasksRound11Tests: XCTestCase {
     /// Files over the page land on the row under them, never on another.
     func testAFileDropFindsTheRowUnderIt() {
         let a = UUID(), b = UUID(), c = UUID()
-        let frames = [a: CGRect(x: 0, y: 100, width: 300, height: 34), b: CGRect(x: 0, y: 134, width: 300, height: 34),
-                      c: CGRect(x: 360, y: 100, width: 300, height: 34)]
-        XCTAssertEqual(TasksPage.row(at: CGPoint(x: 50, y: 140), frames: frames, among: [a, b]), b)
-        XCTAssertNil(TasksPage.row(at: CGPoint(x: 400, y: 110), frames: frames, among: [a, b]), "a row of another page")
-        XCTAssertNil(TasksPage.row(at: CGPoint(x: 50, y: 300), frames: frames, among: [a, b]))
+        let frames = [TasksRowID(tab: .now, id: a): CGRect(x: 0, y: 100, width: 300, height: 34),
+                      TasksRowID(tab: .now, id: b): CGRect(x: 0, y: 134, width: 300, height: 34),
+                      TasksRowID(tab: .now, id: c): CGRect(x: 360, y: 100, width: 300, height: 34)]
+        XCTAssertEqual(TasksPage.row(at: CGPoint(x: 50, y: 140), frames: frames, tab: .now, among: [a, b]), b)
+        XCTAssertNil(TasksPage.row(at: CGPoint(x: 400, y: 110), frames: frames, tab: .now, among: [a, b]), "a row of another page")
+        XCTAssertNil(TasksPage.row(at: CGPoint(x: 50, y: 300), frames: frames, tab: .now, among: [a, b]))
     }
 }
