@@ -433,6 +433,9 @@ struct NoteEditorRepresentable: NSViewRepresentable {
         controls.requestFile = { [weak chrome] fromSlash in chrome?.fileRequest = fromSlash ? .slash : .insert }
         context.coordinator.controls = controls
         chrome.controls = controls
+        #if DEBUG
+        NoteFormatCaptureScene.runIfRequested(controls: controls, chrome: chrome, textView: textView)
+        #endif
         let selection = session.selection
         DispatchQueue.main.async {
             let length = engine.textStorage.length
