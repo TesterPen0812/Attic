@@ -75,7 +75,14 @@ final class CornerHoverMonitor {
     private var stateMachine = CornerHoverStateMachine()
     private var samplingState = CornerHoverSamplingState()
     private var scheduledCadence: CornerHoverSamplingCadence?
+    /// The frames of the displays whose corner answers hover (all of them,
+    /// the chosen ones, or none when hover is off): the sampling cadence
+    /// is responsive only near those corners.
     private var cachedScreenFrames: [CGRect] = []
+    /// Every display's frame and identifier, read when displays change.
+    private var cachedScreens: [(frame: CGRect, id: String?)] = []
+    /// The hover rule (Settings › Panel › Corner), read when it changes.
+    private var revealPolicy = CornerRevealPolicy()
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
     private var screenChangeToken: NSObjectProtocol?
@@ -143,13 +150,23 @@ final class CornerHoverMonitor {
                 self?.samplePointer()
             }
         }
-        cornerObservation = settings.$corner
-            .dropFirst()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                samplingState = CornerHoverSamplingState()
-                samplePointer()
-            }
+        // The corner and the hover rule (control audit item 10): a change
+        // re-reads which corners answer and samples once.
+        cornerObservation = Publishers.MergeMany(
+            settings.$corner.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealOnHover.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealModifier.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealDisplays.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$revealDisplayIDs.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        )
+        // @Published sends before the value is stored: read it next turn.
+        .receive(on: RunLoop.main)
+        .sink { [weak self] in
+            guard let self, isRunning else { return }
+            refreshCachedScreenFrames()
+            samplingState = CornerHoverSamplingState()
+            samplePointer()
+        }
         // Locks and the pin are the other inputs to the auto-hide decision.
         // With no timer while visible, a change to either re-samples once on
         // the next turn (coalesced across a burst of publications).
@@ -303,10 +320,13 @@ final class CornerHoverMonitor {
         // When the cursor is pinned against a screen edge, mouseLocation sits exactly on
         // the frame boundary (e.g. y == maxY at the top), which CGRect.contains excludes.
         // Expand the hotspot outward so edge-pinned coordinates still count as inside.
+        // Only a corner that answers hover, with the chosen key held now
+        // (Settings › Panel › Corner; control audit item 10).
         let isInHotspot = activeScreen.map {
-            PanelGeometry.hotspot(in: $0.frame, corner: settings.corner)
-                .insetBy(dx: -1, dy: -1)
-                .contains(location)
+            revealPolicy.reveals(displayID: displayID(of: $0), flags: NSEvent.modifierFlags)
+                && PanelGeometry.hotspot(in: $0.frame, corner: settings.corner)
+                    .insetBy(dx: -1, dy: -1)
+                    .contains(location)
         } ?? false
         // Mouse passthrough and resize cursors belong to the panel
         // controller's own pointer monitors, which run only while the panel
@@ -522,7 +542,25 @@ final class CornerHoverMonitor {
     }
 
     private func refreshCachedScreenFrames() {
-        cachedScreenFrames = NSScreen.screens.map(\.frame)
+        cachedScreens = NSScreen.screens.map { ($0.frame, AtticDisplay.identifier(for: $0)) }
+        revealPolicy = settings.cornerRevealPolicy
+        cachedScreenFrames = cachedScreens.filter { revealPolicy.answers(displayID: $0.id) }.map(\.frame)
+    }
+
+    /// The identifier of the display at `screen`'s frame, from the cache.
+    private func displayID(of screen: NSScreen) -> String? {
+        cachedScreens.first { $0.frame == screen.frame }?.id ?? AtticDisplay.identifier(for: screen)
+    }
+
+    /// Test seams: the frames whose corners answer hover, and the rule.
+    var hoverScreenFramesForTesting: [CGRect] { cachedScreenFrames }
+    var revealPolicyForTesting: CornerRevealPolicy { revealPolicy }
+    /// Test seam: whether a pointer at `location` counts as in the hotspot
+    /// with `flags` held, as a sample decides it.
+    func isInHotspotForTesting(_ location: CGPoint, flags: NSEvent.ModifierFlags) -> Bool {
+        guard let screen = screen(containing: location) else { return false }
+        return revealPolicy.reveals(displayID: displayID(of: screen), flags: flags)
+            && PanelGeometry.hotspot(in: screen.frame, corner: settings.corner).insetBy(dx: -1, dy: -1).contains(location)
     }
 
     private func startPointerActivityMonitoring() {

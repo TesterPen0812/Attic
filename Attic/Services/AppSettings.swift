@@ -111,6 +111,46 @@ final class AppSettings: ObservableObject {
         static let quickCaptureEnabled = "quickCaptureEnabled"
         static let quickCaptureKeyCode = "quickCaptureKeyCode"
         static let quickCaptureModifiers = "quickCaptureModifiers"
+        static let revealOnHover = "revealOnHover"
+        static let revealModifier = "revealModifier"
+        static let revealDisplays = "revealDisplays"
+        static let revealDisplayIDs = "revealDisplayIDs"
+    }
+
+    /// Hovering in the corner reveals the panel (control audit item 10).
+    /// On by default; off, the panel opens only explicitly (the menu bar
+    /// icon, quick capture, New Note).
+    @Published var revealOnHover: Bool {
+        didSet { defaults.set(revealOnHover, forKey: Key.revealOnHover) }
+    }
+
+    /// A key that must be held as the pointer arrives in the corner.
+    @Published var revealModifier: RevealModifier {
+        didSet { defaults.set(revealModifier.rawValue, forKey: Key.revealModifier) }
+    }
+
+    /// Every display's corner, or only the chosen displays'.
+    @Published var revealDisplays: RevealDisplays {
+        didSet { defaults.set(revealDisplays.rawValue, forKey: Key.revealDisplays) }
+    }
+
+    /// The chosen displays (`AtticDisplay.id`), sorted. A display that is
+    /// not connected keeps its place, so it answers again when it returns.
+    @Published var revealDisplayIDs: [String] {
+        didSet {
+            let normalized = Array(Set(revealDisplayIDs.filter { !$0.isEmpty })).sorted()
+            if normalized != revealDisplayIDs {
+                revealDisplayIDs = normalized
+            } else {
+                defaults.set(revealDisplayIDs, forKey: Key.revealDisplayIDs)
+            }
+        }
+    }
+
+    /// The hover rule the corner monitor applies.
+    var cornerRevealPolicy: CornerRevealPolicy {
+        CornerRevealPolicy(revealsOnHover: revealOnHover, modifier: revealModifier, displays: revealDisplays,
+                           selectedDisplayIDs: Set(revealDisplayIDs))
     }
 
     /// The global quick capture shortcut is claimed (round 10: Settings ›
@@ -336,6 +376,10 @@ final class AppSettings: ObservableObject {
         isAgentAccessEnabled = (defaults.object(forKey: Key.isAgentAccessEnabled) as? Bool) ?? false
         hapticsEnabled = (defaults.object(forKey: Key.hapticsEnabled) as? Bool) ?? true
         quickCaptureEnabled = (defaults.object(forKey: Key.quickCaptureEnabled) as? Bool) ?? true
+        revealOnHover = (defaults.object(forKey: Key.revealOnHover) as? Bool) ?? true
+        revealModifier = RevealModifier(rawValue: defaults.string(forKey: Key.revealModifier) ?? "") ?? .none
+        revealDisplays = RevealDisplays(rawValue: defaults.string(forKey: Key.revealDisplays) ?? "") ?? .all
+        revealDisplayIDs = Array(Set((defaults.stringArray(forKey: Key.revealDisplayIDs) ?? []).filter { !$0.isEmpty })).sorted()
         if let code = defaults.object(forKey: Key.quickCaptureKeyCode) as? Int,
            let mask = defaults.object(forKey: Key.quickCaptureModifiers) as? Int, code >= 0, mask >= 0 {
             let stored = GlobalHotKeyCombination(keyCode: UInt32(code), modifiers: UInt32(mask))

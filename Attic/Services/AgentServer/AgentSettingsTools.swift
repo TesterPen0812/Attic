@@ -65,6 +65,22 @@ final class AgentSettingsTools {
                 "type": "string", "enum": ScreenCorner.allCases.map(\.rawValue),
                 "description": "The screen corner that reveals the panel."
             ],
+            "reveal_on_hover": [
+                "type": "boolean",
+                "description": "Whether resting the pointer in the reveal corner opens the panel. Off, the panel opens only from the menu bar icon, quick capture or show."
+            ],
+            "reveal_modifier": [
+                "type": "string", "enum": RevealModifier.allCases.map(\.rawValue),
+                "description": "A key the person must hold as the pointer reaches the corner (none: no key)."
+            ],
+            "reveal_displays": [
+                "type": "string", "enum": RevealDisplays.allCases.map(\.rawValue),
+                "description": "Whether every display's corner answers hover (all) or only the displays in reveal_display_ids (selected)."
+            ],
+            "reveal_display_ids": [
+                "type": "array", "items": ["type": "string"],
+                "description": "The displays whose corner answers hover when reveal_displays is selected, by id (get_settings lists the connected displays)."
+            ],
             "reveal_delay": [
                 "type": "number", "minimum": PanelSettingsRanges.revealDelay.lowerBound, "maximum": PanelSettingsRanges.revealDelay.upperBound,
                 "description": "Seconds the pointer rests in the corner before the panel opens."
@@ -100,7 +116,7 @@ final class AgentSettingsTools {
         [
             "name": "get_settings",
             "title": "Get Attic Settings",
-            "description": "Read Attic's settings: appearance (mode, palette, surface, tint), panel (reveal corner, delays, corner size, width) and behaviour (haptics, animations, quick capture; launch at login and the quick capture shortcut, read only). Agent Access is not included.",
+            "description": "Read Attic's settings: appearance (mode, palette, surface, tint), panel (reveal corner, hover reveal and its key and displays, delays, corner size, width; the connected displays, read only) and behaviour (haptics, animations, quick capture; launch at login and the quick capture shortcut, read only). Agent Access is not included.",
             "annotations": [
                 "readOnlyHint": true,
                 "destructiveHint": false,
@@ -152,6 +168,8 @@ final class AgentSettingsTools {
         if let launchAtLogin { result["launch_at_login"] = launchAtLogin() }
         // Read only: the person records it with the keyboard in Settings.
         result["quick_capture_shortcut"] = settings.quickCaptureShortcut.displayName ?? ""
+        // Read only: what reveal_display_ids can name.
+        result["displays"] = AtticDisplay.connected().map { ["id": $0.id, "name": $0.name] }
         return result
     }
 
@@ -164,6 +182,10 @@ final class AgentSettingsTools {
             "tint": settings.panelTint.rawValue,
             "tint_length": settings.panelTintLength,
             "reveal_corner": settings.corner.rawValue,
+            "reveal_on_hover": settings.revealOnHover,
+            "reveal_modifier": settings.revealModifier.rawValue,
+            "reveal_displays": settings.revealDisplays.rawValue,
+            "reveal_display_ids": settings.revealDisplayIDs,
             "reveal_delay": settings.revealDelay,
             "hide_delay": settings.hideDelay,
             "corner_size": settings.panelCornerSize,
@@ -244,6 +266,14 @@ final class AgentSettingsTools {
         case "haptics": return try flag(arguments, key)!
         case "animations": return try choice(arguments, key, AtticAnimationLevel.self)!
         case "quick_capture": return try flag(arguments, key)!
+        case "reveal_on_hover": return try flag(arguments, key)!
+        case "reveal_modifier": return try choice(arguments, key, RevealModifier.self)!
+        case "reveal_displays": return try choice(arguments, key, RevealDisplays.self)!
+        case "reveal_display_ids":
+            guard let ids = raw as? [String], ids.allSatisfy({ !$0.isEmpty }) else {
+                throw AgentToolError.invalidArguments("reveal_display_ids must be an array of display ids (strings).")
+            }
+            return Array(Set(ids)).sorted()
         default: return try number(arguments, key)!
         }
     }
@@ -266,6 +296,10 @@ final class AgentSettingsTools {
             case "haptics": settings.hapticsEnabled = try typed(value, Bool.self)
             case "animations": settings.animations = try typed(value, AtticAnimationLevel.self)
             case "quick_capture": settings.quickCaptureEnabled = try typed(value, Bool.self)
+            case "reveal_on_hover": settings.revealOnHover = try typed(value, Bool.self)
+            case "reveal_modifier": settings.revealModifier = try typed(value, RevealModifier.self)
+            case "reveal_displays": settings.revealDisplays = try typed(value, RevealDisplays.self)
+            case "reveal_display_ids": settings.revealDisplayIDs = try typed(value, [String].self)
             default: throw AgentToolError.invalidArguments("Unknown setting: \(key).")
             }
         }

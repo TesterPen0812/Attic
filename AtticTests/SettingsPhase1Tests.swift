@@ -370,7 +370,9 @@ final class SettingsPhase1Tests: XCTestCase {
         XCTAssertEqual(Set(result.keys), [
             "appearance", "palette", "surface", "tint", "tint_length", "reveal_corner", "reveal_delay",
             "hide_delay", "corner_size", "panel_width", "haptics", "animations", "launch_at_login",
-            "quick_capture", "quick_capture_shortcut"
+            "quick_capture", "quick_capture_shortcut",
+            // Control audit item 10: the hover rule, and the displays it can name (read only).
+            "reveal_on_hover", "reveal_modifier", "reveal_displays", "reveal_display_ids", "displays"
         ])
         XCTAssertEqual(result["quick_capture"] as? Bool, true)
         XCTAssertEqual(result["quick_capture_shortcut"] as? String, "⌃⌥Space", "reported, read only")
