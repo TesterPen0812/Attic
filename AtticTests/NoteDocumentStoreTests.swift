@@ -361,6 +361,108 @@ final class NoteDocumentStoreTests: XCTestCase {
         XCTAssertTrue(Set(versions(id).map(\.id)).isSuperset(of: [first.id, second.id]))
     }
 
+    func testStepBackRecoveryProtectedNonRepresentativeKeepsWholeVersionFamily() throws {
+        let (id, revision) = try create(document("Current"))
+        let sharedID = UUID()
+        let protectedRevision = UUID()
+        let selected = NoteVersion(id: sharedID, noteID: id,
+            createdAt: Date().addingTimeInterval(-39 * 86_400), reason: .pause,
+            content: nil, contentFormat: 0, title: "newer", body: "",
+            attachmentIDs: [], sourceRevisionID: UUID())
+        let protected = NoteVersion(id: sharedID, noteID: id,
+            createdAt: Date().addingTimeInterval(-40 * 86_400), reason: .pause,
+            content: nil, contentFormat: 0, title: "protected", body: "",
+            attachmentIDs: [], sourceRevisionID: protectedRevision)
+        store.modelContext.insert(selected)
+        store.modelContext.insert(protected)
+        try store.modelContext.save()
+        store.recoveryProtectedRevisionIDs = { Set([protectedRevision]) }
+        store.thinVersions(noteID: id)
+        let physical = try store.modelContext.fetch(FetchDescriptor<NoteVersion>(
+            predicate: #Predicate { $0.id == sharedID }))
+        XCTAssertEqual(Set(physical.map(\.title)), ["newer", "protected"])
+        guard case .success = store.saveDocument(noteID: id, document: document("Edited"),
+            baseRevisionID: revision) else { return XCTFail("retention must not block an ordinary save") }
+    }
+
+    func testStepBackVersionThinningKeepsCrossNotePhysicalFamily() throws {
+        let (id, revision) = try create(document("Current"))
+        let (otherID, _) = try create(document("Other"))
+        let sharedID = UUID()
+        for (noteID, title) in [(id, "target"), (otherID, "other")] {
+            store.modelContext.insert(NoteVersion(id: sharedID, noteID: noteID,
+                createdAt: Date().addingTimeInterval(-40 * 86_400), reason: .pause,
+                content: nil, contentFormat: 0, title: title, body: "",
+                attachmentIDs: [], sourceRevisionID: UUID()))
+        }
+        try store.modelContext.save()
+        store.thinVersions(noteID: id)
+        let physical = try store.modelContext.fetch(FetchDescriptor<NoteVersion>(
+            predicate: #Predicate { $0.id == sharedID }))
+        XCTAssertEqual(Set(physical.map(\.title)), ["target", "other"])
+        guard case .success = store.saveDocument(noteID: id, document: document("Edited"),
+            baseRevisionID: revision) else { return XCTFail("unknown family must not block an ordinary save") }
+    }
+
+    func testStepBackPhysicalFamilyInvariantKeepsProtectedAndUnknownReplicas() throws {
+        let cases: [([NotePhysicalFamilyRetention.Decision], Bool)] = [
+            ([], false), ([.eligible], true), ([.eligible, .eligible], true),
+            ([.eligible, .protected], false), ([.eligible, .unknown], false),
+            ([.unknown, .eligible], false)
+        ]
+        for (family, expected) in cases {
+            XCTAssertEqual(NotePhysicalFamilyRetention.mayDelete(family, decision: { $0 }), expected)
+        }
+        let (id, revision) = try create(document("Current"))
+        guard case .success = store.saveDocument(noteID: id, document: document("Still saveable"),
+            baseRevisionID: revision) else { return XCTFail("unknown retention must not block text save") }
+    }
+
+    func testStepBackDeletedNotePurgeKeepsSharedPhysicalHistoryFamilyAndBytes() throws {
+        let data = Data("retained bytes".utf8)
+        let item = StagedNoteAttachment(id: UUID(), filename: "proof.pdf", contentTypeIdentifier: "com.adobe.pdf",
+            byteCount: Int64(data.count), digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            data: data)
+        let withFile = NoteDocument(blocks: [.text("Delete"), .file(attachmentID: item.id,
+            filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        let (deletedID, _) = try create(withFile, staged: [item])
+        let (otherID, otherRevision) = try create(document("Other"))
+        let familyID = UUID()
+        for noteID in [deletedID, otherID] {
+            store.modelContext.insert(NoteVersion(id: familyID, noteID: noteID,
+                createdAt: Date().addingTimeInterval(-40 * 86_400), reason: .pause,
+                content: nil, contentFormat: 0, title: "shared", body: "", attachmentIDs: [],
+                sourceRevisionID: UUID()))
+        }
+        try store.modelContext.save()
+        XCTAssertTrue(store.delete(try XCTUnwrap(store.note(withID: deletedID))))
+        XCTAssertTrue(store.purgeDeleted(before: .distantFuture).isEmpty,
+            "a version UUID shared with a live note prevents partial history deletion")
+        XCTAssertEqual(try store.attachmentRows(forNoteID: deletedID).first?.payload, data)
+        XCTAssertEqual(try store.replicasIncludingDeleted(of: deletedID).count, 1)
+        guard case .success = store.saveDocument(noteID: otherID, document: document("Other edited"),
+            baseRevisionID: otherRevision) else { return XCTFail("retention must not block the live note save") }
+    }
+
+    func testStepBackDivergentProposalFamilyCannotPartiallyApply() throws {
+        let (id, revision) = try create(document("Base"))
+        let (otherID, _) = try create(document("Other"))
+        let proposalID = UUID()
+        let proposed = try NoteContentCodec.encode(document("Agent change"))
+        for noteID in [id, otherID] {
+            store.modelContext.insert(NotePendingEdit(id: proposalID, noteID: noteID,
+                baseRevisionToken: try XCTUnwrap(store.note(withID: id)).revisionToken,
+                proposedContent: proposed, agentName: "Agent", createdAt: Date()))
+        }
+        try store.modelContext.save()
+        XCTAssertEqual(store.applyPendingEdits(noteID: id), 0)
+        XCTAssertEqual(try store.modelContext.fetch(FetchDescriptor<NotePendingEdit>(
+            predicate: #Predicate { $0.id == proposalID })).count, 2)
+        XCTAssertEqual(store.loadDocument(noteID: id)?.content.document?.title, "Base")
+        guard case .success = store.saveDocument(noteID: id, document: document("Manual"),
+            baseRevisionID: revision) else { return XCTFail("ordinary save remains available") }
+    }
+
     func testRestoreIsTransactional() throws {
         let (id, first) = try create(document("First"))
         store.recordVersion(noteID: id, reason: .pause)

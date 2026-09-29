@@ -563,7 +563,9 @@ final class NoteStore: ObservableObject {
                 guard let first = replicas.first, first.deletedAt.map({ $0 < cutoff }) == true else { continue }
                 if let confirmed, confirmed[id] != first.deletedAt { continue }
                 let snapshot = NoteReplicaSnapshot(first)
-                guard replicas.allSatisfy({ NoteReplicaSnapshot($0) == snapshot }) else { continue }
+                guard NotePhysicalFamilyRetention.mayDelete(replicas, decision: {
+                    NoteReplicaSnapshot($0) == snapshot ? .eligible : .unknown
+                }) else { continue }
                 // The delete must have recorded its attachment family; a note
                 // deleted before that was recorded is kept, not guessed at.
                 guard let recordedFamily = first.deletedAttachmentIDs else { continue }
@@ -591,14 +593,14 @@ final class NoteStore: ObservableObject {
                 // the note for now.
                 guard Set(attachments.map(\.id)) == recordedFamily,
                       let deletedAt = first.deletedAt,
-                      attachments.allSatisfy({ row in
-                          row.createdAt <= deletedAt && row.updatedAt <= deletedAt
-                              && (row.deletedAt.map { $0 <= deletedAt } ?? true)
-                      }),
                       Dictionary(grouping: attachments, by: \.id).values.allSatisfy({ group in
-                          guard group.count > 1 else { return true }
                           let snapshot = NoteAttachmentReplicaSnapshot(group[0])
-                          return group.dropFirst().allSatisfy { NoteAttachmentReplicaSnapshot($0) == snapshot }
+                          return NotePhysicalFamilyRetention.mayDelete(group, decision: { row in
+                              guard row.createdAt <= deletedAt && row.updatedAt <= deletedAt,
+                                    row.deletedAt.map({ $0 <= deletedAt }) ?? true,
+                                    NoteAttachmentReplicaSnapshot(row) == snapshot else { return .unknown }
+                              return .eligible
+                          })
                       }) else { continue }
                 references += attachments.map { AttachmentFileReference($0, includePayload: false) }
                 attachments.forEach(context.delete)
@@ -1026,7 +1028,9 @@ final class NoteStore: ObservableObject {
                 guard let first = replicas.first, (first.deletedAt ?? .distantFuture) < cutoff else { continue }
                 if let confirmed, confirmed[id] != first.deletedAt { continue }
                 let snapshot = NoteAttachmentReplicaSnapshot(first)
-                guard replicas.dropFirst().allSatisfy({ NoteAttachmentReplicaSnapshot($0) == snapshot }) else {
+                guard NotePhysicalFamilyRetention.mayDelete(replicas, decision: {
+                    NoteAttachmentReplicaSnapshot($0) == snapshot ? .eligible : .unknown
+                }) else {
                     continue
                 }
                 // An attachment of a note in Recently Deleted belongs to that
