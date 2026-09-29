@@ -350,13 +350,15 @@ final class TasksRound12Tests: XCTestCase {
         state.loadPageContent()
         let chrome = PanelChromeInteractionState()
         let settings = AppSettings(defaults: defaults)
+        let tasksState = TasksPageState()
         let host = AtticPanelHostingView(
             rootView: AtticPanelView(
                 store: store, noteStore: notes,
                 canvasSession: CanvasSession(store: CanvasStore(container: container)),
                 noteDraft: NoteDraftController(noteStore: notes),
                 chromeInteractionState: chrome, uiState: state, settings: settings,
-                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings)
+                subtaskPanels: SubtaskPanelController(store: store, uiState: state, settings: settings),
+                tasksPageState: tasksState
             ),
             panelCornerRadius: 52, dockedCorner: .topRight, chromeInteractionState: chrome
         )
@@ -404,6 +406,20 @@ final class TasksRound12Tests: XCTestCase {
             state.selectSection(.tasks)
             spin(1.5)
             XCTAssertEqual(shownTab(), 2, "back on Tasks after \(section), Done is still where it was")
+        }
+        // A tab the person chose (the search's own reveal no longer holds
+        // the page on Done): Later, as a tab click selects it.
+        withAnimation(AtticMotionPreset.slide.animation(reduceMotion: false)) {
+            tasksState.model(for: store, toasts: nil).select(tab: .backlog)
+        }
+        spin(1.5)
+        XCTAssertEqual(shownTab(), 1, "on Later")
+        for section in [PanelSection.notes, .canvas] {
+            state.selectSection(section)
+            spin(0.8)
+            state.selectSection(.tasks)
+            spin(1.5)
+            XCTAssertEqual(shownTab(), 1, "back on Tasks after \(section), Later is still where it was")
         }
     }
 

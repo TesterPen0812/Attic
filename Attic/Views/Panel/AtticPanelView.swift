@@ -39,7 +39,8 @@ struct AtticPanelView: View {
         uiState: PanelUIState,
         settings: AppSettings,
         subtaskPanels: SubtaskPanelController,
-        toasts: PanelToastCenter? = nil
+        toasts: PanelToastCenter? = nil,
+        tasksPageState: TasksPageState? = nil
     ) {
         self.store = store
         self.noteStore = noteStore
@@ -50,6 +51,8 @@ struct AtticPanelView: View {
         self.settings = settings
         self.subtaskPanels = subtaskPanels
         self.toasts = toasts ?? PanelToastCenter()
+        // A test hands one in to reach the page's model (round 12).
+        _tasksPageState = StateObject(wrappedValue: tasksPageState ?? TasksPageState())
     }
 
     private var cornerRadius: CGFloat { settings.panelCornerSize }
