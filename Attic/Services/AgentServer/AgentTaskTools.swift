@@ -852,15 +852,19 @@ final class AgentTaskTools {
                     uniquingKeysWith: { first, _ in first })
                 payload["images"] = document.blocks.filter { $0.kind == .image }.map { block -> [String: Any] in
                     let row = block.attachmentID.flatMap { rows[$0] }
+                    let availability: Any = block.attachmentID.flatMap { noteStore?.knownAttachmentAvailability($0) }
+                        .map { $0 as Any } ?? NSNull()
                     return ["placement_id": block.id?.uuidString ?? "", "name": row?.originalFilename ?? "image",
-                            "attachment_id": block.attachmentID?.uuidString ?? "", "bytes_available": row?.payload != nil]
+                            "attachment_id": block.attachmentID?.uuidString ?? "", "bytes_available": availability]
                 }
                 payload["files"] = document.blocks.filter { $0.kind == .file }.map { block -> [String: Any] in
                     let row = block.attachmentID.flatMap { rows[$0] }
+                    let availability: Any = block.attachmentID.flatMap { noteStore?.knownAttachmentAvailability($0) }
+                        .map { $0 as Any } ?? NSNull()
                     return ["placement_id": block.id?.uuidString ?? "", "name": block.filename ?? "file",
                             "content_type": block.contentTypeIdentifier ?? "public.data",
                             "byte_count": block.byteCount ?? 0, "attachment_id": block.attachmentID?.uuidString ?? "",
-                            "bytes_available": row?.payload != nil, "import_failure": block.importFailure ?? ""]
+                            "bytes_available": availability, "import_failure": block.importFailure ?? ""]
                 }
             case .readOnly:
                 payload["read_only"] = true

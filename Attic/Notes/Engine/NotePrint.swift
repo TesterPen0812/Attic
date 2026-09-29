@@ -76,13 +76,14 @@ enum NotePrint {
 
 @MainActor
 extension NoteEditorEngine {
-    func printNote() async -> Bool {
-        let snapshot = document()
+    func preparedPrintView() async -> NSTextView {
+        let snapshot = checkpointDocument()
         var sources: [(UUID, Data)] = []
         for block in snapshot.blocks where block.kind == .image {
             guard let id = block.attachmentID else { continue }
-            if let data = staged[id]?.data ?? imageProvider?.attachmentBytes(forAttachment: id)?.data {
-                sources.append((id, data))
+            if let staged = staged[id] { sources.append((id, staged.data)) }
+            else if let stored = await imageProvider?.verifiedBytes(forAttachment: id) {
+                sources.append((id, stored.data))
             } else if let url = await imageProvider?.fileURL(forAttachment: id),
                       let data = try? await Task.detached(operation: { try Data(contentsOf: url) }).value {
                 sources.append((id, data))
@@ -94,6 +95,11 @@ extension NoteEditorEngine {
             }, uniquingKeysWith: { first, _ in first })
         }.value
         let view = NotePrint.printView(document: snapshot, thumbnails: thumbnails)
+        return view
+    }
+
+    func printNote() async -> Bool {
+        let view = await preparedPrintView()
         return NotePrint.operation(for: view).run()
     }
 }

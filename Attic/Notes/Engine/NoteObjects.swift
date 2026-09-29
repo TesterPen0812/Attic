@@ -350,7 +350,8 @@ final class NoteObjectRenderer {
         case let file as NoteFileAttachment:
             let size = ByteCountFormatter.string(fromByteCount: file.byteCount, countStyle: .file)
             let detail = file.importFailure.map { "Import failed: \($0)" }
-                ?? (file.originalMissing ? String(localized: "Original missing") : size)
+                ?? (file.originalMissing ? String(localized: "Original missing")
+                    : file.previewUnavailable ? String(localized: "Preview unavailable") : size)
             file.renderedImage = fileCard(name: file.filename, detail: detail)
         default:
             break

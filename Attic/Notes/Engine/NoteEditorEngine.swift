@@ -766,6 +766,16 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         guard activity == .idle else {
             return refuse(String(localized: "Finish Writing Tools or composing text before editing this note."))
         }
+        var containsPayloadObject = false
+        replacement.enumerateAttribute(.attachment, in: NSRange(location: 0, length: replacement.length)) { value, _, _ in
+            if value is NoteImageAttachment || value is NoteFileAttachment { containsPayloadObject = true }
+        }
+        if containsPayloadObject, let gate = onFragmentAdmission {
+            let candidateStorage = NSMutableAttributedString(attributedString: textStorage)
+            candidateStorage.replaceCharacters(in: range, with: replacement)
+            let candidate = NoteTextCodec.document(from: candidateStorage, template: template)
+            if let reason = gate(candidate, stagedAttachments(for: candidate)) { return refuse(reason) }
+        }
         history.breakCoalescing()
         engineEditDepth += 1
         defer { engineEditDepth -= 1 }
@@ -863,7 +873,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         staged[item.id] = item
         let selection = textView?.selectedRange() ?? NSRange(location: textStorage.length, length: 0)
         let line = lineRange(at: selection.location)
-        let image = NoteImageAttachment(attachmentID: item.id, preferredWidthFraction: 1, pixelSize: pixelSize)
+        let image = NoteImageAttachment(attachmentID: item.id, preferredWidthFraction: 1, pixelSize: pixelSize, extras: item.identityExtras)
         image.filename = item.filename
         let insertion = NSMutableAttributedString(string: "\n", attributes: style.bodyAttributes)
         insertion.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
@@ -920,11 +930,8 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func insertImportedObjects(_ items: [NoteImportedObject], acceptedText: String = "") -> Bool {
         guard let anchor = importAnchor, importNoteID == noteID,
               !items.isEmpty || !acceptedText.isEmpty else { return false }
-        importAnchor = nil
-        importNoteID = nil
         let at = min(anchor, textStorage.length)
         let replacement = NSRange(location: at, length: min(importReplacementLength, textStorage.length - at))
-        importReplacementLength = 0
         let insertion = NSMutableAttributedString(string: "")
         if !acceptedText.isEmpty { insertion.append(NSAttributedString(string: acceptedText, attributes: style.bodyAttributes)) }
         for item in items {
@@ -932,15 +939,14 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 ? at == 0 || (textStorage.string as NSString).character(at: at - 1) == 0x0A
                 : (insertion.string as NSString).character(at: insertion.length - 1) == 0x0A
             if !priorIsNewline { insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes)) }
-            if let stagedItem = item.staged { staged[stagedItem.id] = stagedItem }
             if let stagedItem = item.staged, let pixelSize = item.pixelSize {
-                let image = NoteImageAttachment(attachmentID: stagedItem.id, preferredWidthFraction: 1, pixelSize: pixelSize)
+                let image = NoteImageAttachment(attachmentID: stagedItem.id, preferredWidthFraction: 1, pixelSize: pixelSize, extras: stagedItem.identityExtras)
                 image.filename = item.filename
                 insertion.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
             } else {
                 let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
                     contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
-                    importFailure: item.failure)
+                    importFailure: item.failure, extras: item.staged?.identityExtras ?? [:])
                 renderer.apply(to: file, today: today)
                 insertion.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
             }
@@ -949,11 +955,36 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
             || (textStorage.string as NSString).character(at: NSMaxRange(replacement)) != 0x0A) {
             insertion.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes))
         }
+        let candidateStorage = NSMutableAttributedString(attributedString: textStorage)
+        candidateStorage.replaceCharacters(in: replacement, with: insertion)
+        let candidate = NoteTextCodec.document(from: candidateStorage, template: template)
+        if let failure = onFragmentAdmission?(candidate, items.compactMap(\.staged)) {
+            onNotice?(failure)
+            return false
+        }
+        // The exact candidate was admitted against the latest draft. Release
+        // the target and stage bytes only after that decision.
+        importAnchor = nil
+        importNoteID = nil
+        importReplacementLength = 0
+        for item in items { if let payload = item.staged { staged[payload.id] = payload } }
         let inserted = performEdit(replacement, with: insertion,
                                    name: String(localized: "Add Files"),
                                    selection: NSRange(location: at + insertion.length, length: 0))
         if !inserted { for item in items { if let id = item.staged?.id { staged[id] = nil } } }
         return inserted
+    }
+
+    func invalidateAttachmentPresentation(_ id: UUID) {
+        textStorage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
+            guard let object = value as? NoteObjectAttachment else { return }
+            if let file = object as? NoteFileAttachment, file.attachmentID == id {
+                file.originalMissing = imageProvider?.hasAttachmentBytes(id) != true
+                renderer.apply(to: file, today: today)
+                layoutManager?.invalidateLayout(for: contentStorage.documentRange)
+                textView?.needsDisplay = true
+            }
+        }
     }
 
     // MARK: Keys with object rules
@@ -1509,8 +1540,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                     block.id = fresh(block.id)
                 } else if var copy = imageProvider?.attachmentBytes(forAttachment: attachmentID) {
                     let newID = UUID()
-                    copy = StagedNoteAttachment(id: newID, filename: copy.filename, contentTypeIdentifier: copy.contentTypeIdentifier,
-                                                byteCount: copy.byteCount, digest: copy.digest, data: copy.data)
+                    copy = copy.copying(id: newID)
                     copied.append(copy)
                     block.attachmentID = newID
                     block.id = fresh(nil)
@@ -2952,13 +2982,13 @@ extension NoteEditorEngine {
         let replacement = NSMutableAttributedString()
         if !atLineStart { replacement.append(NSAttributedString(string: "\n", attributes: style.bodyAttributes)) }
         if let stagedItem = item.staged, let pixelSize = item.pixelSize {
-            let image = NoteImageAttachment(attachmentID: stagedItem.id, preferredWidthFraction: 1, pixelSize: pixelSize)
+            let image = NoteImageAttachment(attachmentID: stagedItem.id, preferredWidthFraction: 1, pixelSize: pixelSize, extras: stagedItem.identityExtras)
             image.filename = item.filename
             replacement.append(NoteTextCodec.attachmentString(image, attributes: style.bodyAttributes))
         } else {
             let file = NoteFileAttachment(attachmentID: item.staged?.id, filename: item.filename,
                 contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
-                importFailure: item.failure)
+                importFailure: item.failure, extras: item.staged?.identityExtras ?? [:])
             renderer.apply(to: file, today: today)
             replacement.append(NoteTextCodec.attachmentString(file, attributes: style.bodyAttributes))
         }

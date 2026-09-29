@@ -3,6 +3,43 @@ import CryptoKit
 import QuickLookUI
 import UniformTypeIdentifiers
 
+/// Status commands do not require an inline object. The UI presents details,
+/// offers a copy, then sends the captured confirmation only after the person
+/// explicitly confirms “Discard Damaged Recovery…”.
+enum NoteStatusCommand {
+    case listDamagedRecovery
+    case damagedRecoveryDetails(UUID)
+    case saveDamagedRecoveryCopy(NoteDamagedRecoveryConfirmation, URL)
+    case discardDamagedRecovery(NoteDamagedRecoveryConfirmation)
+}
+
+enum NoteStatusCommandResult {
+    case damagedList([NoteDamagedRecoveryDetails])
+    case details(NoteDamagedRecoveryDetails)
+    case archived(URL)
+    case unavailable(String)
+}
+
+@MainActor
+extension NotesPageController {
+    func perform(_ command: NoteStatusCommand) async -> NoteStatusCommandResult {
+        guard let journal else { return .unavailable("No recovery journal is available.") }
+        do {
+            switch command {
+            case .listDamagedRecovery: return .damagedList(try await journal.listDamagedDurably())
+            case let .damagedRecoveryDetails(id): return .details(try await journal.damagedDetailsDurably(noteID: id))
+            case let .saveDamagedRecoveryCopy(confirmation, destination):
+                return .archived(try await journal.archiveDamagedDurably(confirmation, to: destination, resolving: false))
+            case let .discardDamagedRecovery(confirmation):
+                let archive = try await journal.archiveDamagedDurably(confirmation, to: nil, resolving: true)
+                await refreshRecoveryWarningsAfterResolution()
+                active?.notice = "Damaged recovery was moved to quarantine. Its original data and files are preserved."
+                return .archived(archive)
+            }
+        } catch { return .unavailable(error.localizedDescription) }
+    }
+}
+
 /// One action vocabulary for the card, keyboard, menus and VoiceOver.
 enum NoteImageSizePreset: String, CaseIterable {
     case small, medium, full
@@ -30,6 +67,8 @@ enum NoteObjectCommand: Equatable {
     case retryPreview
     case locate
     case locateAt(URL)
+    /// Explicit replacement for legacy placements lacking original identity.
+    case replaceMissingAt(URL)
 }
 
 enum NoteObjectState: Equatable {
@@ -109,7 +148,7 @@ extension NoteEditorEngine {
             if case .importFailed = state { enabled = !isReadOnly } else { enabled = false }
         case .retryPreview:
             enabled = state == .previewUnavailable
-        case .locate, .locateAt:
+        case .locate, .locateAt, .replaceMissingAt:
             enabled = state == .originalMissing && !isReadOnly
         }
         return .init(enabled: enabled, state: state)
@@ -120,7 +159,10 @@ extension NoteEditorEngine {
     func markPreviewUnavailable(_ objectID: UUID) {
         guard let (object, _) = objectPlacement(objectID),
               objectState(objectID) == .ready else { return }
-        if let file = object as? NoteFileAttachment { file.previewUnavailable = true }
+        if let file = object as? NoteFileAttachment {
+            file.previewUnavailable = true
+            if let id = file.attachmentID { invalidateAttachmentPresentation(id) }
+        }
         if let image = object as? NoteImageAttachment {
             image.isMissing = true
             image.failureMessage = String(localized: "Preview unavailable")
@@ -161,6 +203,7 @@ extension NoteEditorEngine {
             }
             if let file = object as? NoteFileAttachment {
                 file.previewUnavailable = false
+                if let id = file.attachmentID { invalidateAttachmentPresentation(id) }
                 return true
             }
             return false
@@ -168,12 +211,34 @@ extension NoteEditorEngine {
             onLocateObject?(objectID)
             return onLocateObject != nil
         case let .locateAt(url):
-            guard let id = (object as? NoteImageAttachment)?.attachmentID
-                ?? (object as? NoteFileAttachment)?.attachmentID,
-                await imageProvider?.locateAttachment(id, at: url) == true else { return false }
+            guard let block = checkpointDocument().blocks.first(where: { $0.id == objectID }) else { return false }
+            let owner = noteID
+            guard await imageProvider?.locatePlacement(block, noteID: owner, at: url) == true,
+                  noteID == owner, checkpointDocument().blocks.contains(block),
+                  objectPlacement(objectID)?.0 === object else { return false }
             if let image = object as? NoteImageAttachment { retryImagePreview(image) }
             if let file = object as? NoteFileAttachment { file.originalMissing = false }
             return true
+        case let .replaceMissingAt(url):
+            let owner = noteID
+            let captured = checkpointDocument().blocks.first { $0.id == objectID }
+            let type = (UTType(filenameExtension: url.pathExtension) ?? .data).identifier
+            let imported = await NotesPageController.loadFile(url, type: type)
+            guard let item = imported.staged, noteID == owner,
+                  checkpointDocument().blocks.first(where: { $0.id == objectID }) == captured,
+                  let (_, currentRange) = objectPlacement(objectID) else { return false }
+            let replacement = NoteFileAttachment(objectID: objectID, attachmentID: item.id,
+                filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier,
+                byteCount: item.byteCount, extras: item.identityExtras)
+            let text = NoteTextCodec.attachmentString(replacement, attributes: style.bodyAttributes)
+            let candidate = NSMutableAttributedString(attributedString: textStorage)
+            candidate.replaceCharacters(in: currentRange, with: text)
+            if let failure = onFragmentAdmission?(NoteTextCodec.document(from: candidate,
+                template: checkpointDocument()), [item]) { onNotice?(failure); return false }
+            stageImported(item)
+            let changed = performEdit(currentRange, with: text, name: "Replace Missing Attachment", selection: currentRange)
+            if !changed { unstageImported(item.id) }
+            return changed
         case .copyImage:
             guard let image = object as? NoteImageAttachment,
                   let data = await objectBytes(image) else { return false }
@@ -257,13 +322,13 @@ extension NoteEditorEngine {
         let replacement: NoteObjectAttachment
         if let item = imported.staged, let size = imported.pixelSize {
             let image = NoteImageAttachment(objectID: objectID, attachmentID: item.id,
-                preferredWidthFraction: 1, pixelSize: size)
+                preferredWidthFraction: 1, pixelSize: size, extras: item.identityExtras)
             image.filename = imported.filename
             replacement = image
         } else {
             replacement = NoteFileAttachment(objectID: objectID, attachmentID: imported.staged?.id,
                 filename: imported.filename, contentTypeIdentifier: imported.contentTypeIdentifier,
-                byteCount: imported.byteCount, importFailure: imported.failure)
+                byteCount: imported.byteCount, importFailure: imported.failure, extras: imported.staged?.identityExtras ?? [:])
         }
         if let item = imported.staged { stageImported(item) }
         let result = performEdit(range, with: NoteTextCodec.attachmentString(replacement,
@@ -283,7 +348,7 @@ extension NoteEditorEngine {
         guard let id = (object as? NoteImageAttachment)?.attachmentID
             ?? (object as? NoteFileAttachment)?.attachmentID else { return nil }
         if let staged = staged[id] { return staged.data }
-        if let stored = imageProvider?.attachmentBytes(forAttachment: id) { return stored.data }
+        if let stored = await imageProvider?.verifiedBytes(forAttachment: id) { return stored.data }
         guard let url = await imageProvider?.fileURL(forAttachment: id) else { return nil }
         return try? await Task.detached { try Data(contentsOf: url) }.value
     }

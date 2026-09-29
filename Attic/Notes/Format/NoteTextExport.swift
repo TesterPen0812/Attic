@@ -93,11 +93,11 @@ enum NoteAgentTextError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .unknownImage(reference):
-            "The image \(reference) is not in this note. Keep image lines exactly as get_note returned them, or remove them."
+            "The image \(reference) is not in this note. Keep image lines exactly as get_note returned them."
         case let .unknownFile(reference):
-            "The file \(reference) is not in this note. Keep file lines exactly as get_note returned them, or remove them."
+            "The file \(reference) is not in this note. Keep file lines exactly as get_note returned them."
         case let .unknownBlock(reference):
-            "The block \(reference) is not in this note. Keep unsupported-content lines exactly as returned, or remove them."
+            "The block \(reference) is not in this note. Keep unsupported-content lines exactly as returned."
         case .lossyFormatting:
             "This note contains paragraph structure or inline marks that the agent text format cannot safely preserve during this edit. Keep styled blocks unchanged, change only plain text or checklist checked states, or edit the note in Attic."
         }
