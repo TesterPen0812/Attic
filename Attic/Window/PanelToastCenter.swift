@@ -12,6 +12,8 @@ final class PanelToastCenter: ObservableObject {
         let id = UUID()
         let message: String
         let actionTitle: String
+        /// Whether the toast's button also takes ⌘Z while it shows.
+        let answersUndoKey: Bool
 
         static func == (lhs: Toast, rhs: Toast) -> Bool { lhs.id == rhs.id }
     }
@@ -23,13 +25,20 @@ final class PanelToastCenter: ObservableObject {
     var holdDuration: TimeInterval = AtticMotionPreset.toastHold
 
     /// Shows `message` with its action, replacing any toast on screen.
+    /// `answersUndoKey` is true where ⌘Z means this toast's action (Tasks);
+    /// a page whose ⌘Z follows the focused text first (Notes) passes false,
+    /// and the toast's button answers the pointer and VoiceOver only.
     @discardableResult
-    func show(_ message: String, actionTitle: String = String(localized: "Undo"), action: @escaping () -> Void) -> Toast {
-        let toast = Toast(message: message, actionTitle: actionTitle)
+    func show(_ message: String, actionTitle: String = String(localized: "Undo"), answersUndoKey: Bool = true,
+              action: @escaping () -> Void) -> Toast {
+        let toast = Toast(message: message, actionTitle: actionTitle, answersUndoKey: answersUndoKey)
         self.action = action
         current = toast
         scheduleDismissal(of: toast)
-        AccessibilityNotification.Announcement("\(message). \(actionTitle) with Command-Z.").post()
+        let announcement = answersUndoKey
+            ? "\(message). \(actionTitle) with Command-Z."
+            : "\(message). \(actionTitle) is available."
+        AccessibilityNotification.Announcement(announcement).post()
         return toast
     }
 

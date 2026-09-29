@@ -15,6 +15,9 @@ struct NotesLibraryView: View {
     let bottomClearance: CGFloat
     @Binding var searchFocused: Bool
     let rowCommands: (UUID) -> [AtticMenuCommand]
+    /// The library's own commands (its history), for the page's background:
+    /// the way to Undo with no row to right-click.
+    let libraryCommands: () -> [AtticMenuCommand]
     let onOpen: (UUID) -> Void
     let onDelete: (UUID) -> Void
     let onBack: () -> Void
@@ -131,6 +134,10 @@ struct NotesLibraryView: View {
     /// (the page's hidden buttons) are off then. Every row command comes
     /// from `rowCommands`, the one list the menu shows.
     private func handle(_ event: NSEvent) -> Bool {
+        // The library slides away when a note opens, and this view (and its
+        // monitor) outlives that slide by a moment: a key pressed in the
+        // note is the note's, never the library's.
+        guard controller.isLibraryPresented else { return false }
         let groups = model.groups(store: store, drafts: controller.failedDrafts)
         let selected = controller.librarySelectionID
         let editor = keys.window?.firstResponder as? NSTextView
@@ -283,6 +290,10 @@ struct NotesLibraryView: View {
             .scrollIndicators(.automatic)
             .scrollEdgeEffectHidden(true, for: .all)
             .coordinateSpace(Self.space)
+            // Right-click anywhere the rows are not (all of it, with none):
+            // the library's history, so Undo never depends on a row.
+            .contentShape(Rectangle())
+            .contextMenu { AtticMenuItems(commands: libraryCommands()) }
             .onAppear {
                 if let selected { proxy.scrollTo(selected, anchor: .center) }
             }
