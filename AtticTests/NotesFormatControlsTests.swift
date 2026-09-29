@@ -602,6 +602,15 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(closed, 1)
         XCTAssertFalse(controls.handleKey(escape(in: popover)), "with Aa closed, it isn't the chain's")
         XCTAssertTrue(textView.window?.firstResponder === textView, "the note keeps the keyboard")
+
+        // Aa open but the key still in the note (the pop-over didn't take
+        // it): Esc closes Aa and never reaches the text view's "hide the panel".
+        var panelHides = 0
+        textView.escapeFallback = { panelHides += 1 }
+        controls.isFormatPopoverOpen = true
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertEqual(closed, 2)
+        XCTAssertEqual(panelHides, 0)
     }
 
     func testEscInACardClosesTheCardOnlyAndIsUsedUp() throws {
@@ -619,6 +628,14 @@ final class NotesFormatControlsTests: XCTestCase {
         XCTAssertEqual(engine.document(), before, "nothing changed")
         XCTAssertNil(controls.closeInnermostOnEscape(escape(in: textView.window!)),
                      "the next Esc is the text view's own (the bar, then the panel)")
+
+        // A card whose field never took the keyboard still closes first.
+        textView.setSelectedRange(target)
+        controls.router.run(.mark(.link), from: .shortcut)
+        textView.window?.makeFirstResponder(textView)
+        XCTAssertTrue(controls.isCardOpen)
+        XCTAssertTrue(controls.handleKey(escape(in: textView.window!)))
+        XCTAssertFalse(controls.isCardOpen)
 
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
         type("\n/da", textView)

@@ -499,14 +499,16 @@ final class NoteFormatControls: NSObject {
     func closeInnermostOnEscape(_ event: NSEvent) -> Bool? {
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         guard event.type == .keyDown, flags.isEmpty, let window = textView?.window else { return nil }
-        if isFormatPopoverOpen, let other = event.window, other !== window {
-            // An input method in Aa's field keeps its Esc (Aa has none today).
-            if let editor = other.firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
+        // An input method keeps its Esc wherever the keyboard is.
+        if let editor = (event.window ?? window).firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
+        if isFormatPopoverOpen {
+            // Whichever window has the key: Aa's pop-over, or the panel when
+            // the pop-over didn't take it (the note's text would otherwise
+            // have nothing left to close and hide the panel).
             closeFormatPopover?()
             return true
         }
-        if cardModel.card != nil, event.window === window, cardHasKeyboard {
-            if let editor = window.firstResponder as? NSTextView, editor.hasMarkedText() { return nil }
+        if cardModel.card != nil, event.window === window {
             cancelCard()
             return true
         }
