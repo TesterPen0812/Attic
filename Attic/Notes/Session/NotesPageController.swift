@@ -961,7 +961,7 @@ final class NotesPageController: ObservableObject {
         didSave(session, staged: images)
         if let journal {
             do {
-                try journal.retire(noteID: oldID, claim: oldClaim, saved: nil)
+                try journal.retire(noteID: oldID, claim: oldClaim, saved: { nil })
             } catch {
                 session.notice = String(localized: "Your text was saved, but its old recovery copy is being kept until it can be checked.")
             }
@@ -993,11 +993,12 @@ final class NotesPageController: ObservableObject {
     fileprivate func retireRecoveryCopy(noteID: UUID, session: NoteSession?) -> Bool {
         guard let journal else { return true }
         guard session?.isImporting != true else { return false }
-        let saved = store.loadDocument(noteID: noteID)?.content.document.map {
-            NoteRecoverySavedState(document: $0, tags: store.note(withID: noteID)?.tags ?? [])
-        }
         do {
-            try journal.retire(noteID: noteID, claim: session?.recoveryClaim, saved: saved)
+            try journal.retire(noteID: noteID, claim: session?.recoveryClaim, saved: { [store] in
+                store.loadDocument(noteID: noteID)?.content.document.map {
+                    NoteRecoverySavedState(document: $0, tags: store.note(withID: noteID)?.tags ?? [])
+                }
+            })
             session?.recoveryClaim = nil
             return true
         } catch {
@@ -1173,13 +1174,13 @@ final class NotesPageController: ObservableObject {
                        && replica.content.flatMap { NoteContentCodec.decode($0).document } == document
                        && (entry.changedTags == nil || entry.changedTags == replica.tags)
                }) {
-                try? journal.retire(noteID: entry.noteID, claim: claim, saved: nil)
+                try? journal.retire(noteID: entry.noteID, claim: claim, saved: { nil })
                 continue
             }
             let storedTags = store.note(withID: entry.noteID)?.tags ?? []
             if entry.pendingImport == nil, stored?.content.document == document,
                entry.changedTags == nil || entry.changedTags == storedTags {
-                try? journal.retire(noteID: entry.noteID, claim: claim, saved: nil)
+                try? journal.retire(noteID: entry.noteID, claim: claim, saved: { nil })
                 continue
             }
             let available = Set(staged.map(\.id))
@@ -1522,7 +1523,7 @@ final class NotesPageController: ObservableObject {
                 retired = checkpoint(session, silent: true) || !ownsCheckpoint
             } else if ownsCheckpoint {
                 do {
-                    try journal.retire(noteID: session.noteID, claim: session.recoveryClaim, saved: nil)
+                    try journal.retire(noteID: session.noteID, claim: session.recoveryClaim, saved: { nil })
                     session.recoveryClaim = nil
                     retired = true
                 } catch {

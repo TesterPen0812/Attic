@@ -55,7 +55,7 @@ private final class OnDemandFailingJournal: NoteDraftJournaling {
         if failNextWrite { failNextWrite = false; throw Failure() }
         return try base.write(entry, staged: staged, replacing: claim)
     }
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {
         if failNextRemove { failNextRemove = false; throw Failure() }
         try base.retire(noteID: noteID, claim: claim, saved: saved)
     }
@@ -610,10 +610,10 @@ final class NoteSlice3bTests: XCTestCase {
             assertKept("write")
             XCTAssertThrowsError(try journal.write(replacement, staged: [], replacing: foreignClaim), "\(kind) write with a foreign claim")
             assertKept("write with a foreign claim")
-            XCTAssertThrowsError(try journal.retire(noteID: id, claim: nil, saved: nil), "\(kind) retire")
+            XCTAssertThrowsError(try journal.retire(noteID: id, claim: nil, saved: { nil }), "\(kind) retire")
             assertKept("retire")
             XCTAssertThrowsError(try journal.retire(noteID: id, claim: foreignClaim,
-                saved: .init(document: stored, tags: [])), "\(kind) retire against a different saved note")
+                saved: { .init(document: stored, tags: []) }), "\(kind) retire against a different saved note")
             assertKept("retire against a different saved note")
             let recovered = try journal.recoveryEntries()
             XCTAssertEqual(recovered.count, 1, "\(kind) startup still lists it")
@@ -623,7 +623,7 @@ final class NoteSlice3bTests: XCTestCase {
             let unrelatedClaim = try journal.write(NoteDraftJournalEntry(noteID: unrelatedID, isPersisted: false,
                 baseRevisionID: nil, content: try NoteContentCodec.encode(.blank), selectionLocation: 0,
                 selectionLength: 0, staged: [], savedAt: Date()), staged: [])
-            try journal.retire(noteID: unrelatedID, claim: unrelatedClaim, saved: nil)
+            try journal.retire(noteID: unrelatedID, claim: unrelatedClaim, saved: { nil })
             assertKept("collection")
             // An ordinary save of the stored note still succeeds. Damaged
             // state is never adopted; foreign state is exercised with the
@@ -711,7 +711,7 @@ final class NoteSlice3bTests: XCTestCase {
         try item.data.write(to: payload)
         let journal = NoteDraftJournal(directory: directory)
         XCTAssertThrowsError(try journal.retire(noteID: id, claim: nil,
-            saved: .init(document: NoteDocument(blocks: [.text("Stored")]), tags: [])))
+            saved: { .init(document: NoteDocument(blocks: [.text("Stored")]), tags: []) }))
         let controller = NotesPageController(store: store, journal: journal)
         controller.start()
         XCTAssertTrue(controller.open(noteID: id))

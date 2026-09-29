@@ -340,7 +340,7 @@ final class NotesAuditTests: XCTestCase {
         struct Failure: Error {}
         func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                    replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim { throw Failure() }
-        func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {}
+        func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {}
         func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { [] }
     }
 

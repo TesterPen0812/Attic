@@ -1363,7 +1363,7 @@ final class NotesPageControllerTests: XCTestCase {
                                           staged: [], savedAt: Date())
         let claim = try journal.write(entry, staged: [])
         XCTAssertEqual(store.purgeRemovedAttachments(before: Date()), 0)
-        try journal.retire(noteID: draftID, claim: claim, saved: nil)
+        try journal.retire(noteID: draftID, claim: claim, saved: { nil })
         XCTAssertEqual(store.purgeRemovedAttachments(before: Date()), 1)
 
         let secondImage = try realImage()
@@ -1378,7 +1378,7 @@ final class NotesPageControllerTests: XCTestCase {
                                                 baseRevisionID: nil, content: otherBytes, selectionLocation: 0,
                                                 selectionLength: 0, staged: [], savedAt: Date()), staged: [])
         XCTAssertFalse(store.purgeDeleted(before: .distantFuture).contains(id))
-        try journal.retire(noteID: otherDraftID, claim: otherClaim, saved: nil)
+        try journal.retire(noteID: otherDraftID, claim: otherClaim, saved: { nil })
         XCTAssertTrue(store.purgeDeleted(before: .distantFuture).contains(id))
     }
 
@@ -1663,7 +1663,7 @@ private final class FailingJournal: NoteDraftJournaling {
     struct Failure: Error {}
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim { throw Failure() }
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {}
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {}
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { [] }
 }
 
@@ -1682,7 +1682,7 @@ private final class RemoveFailingJournal: NoteDraftJournaling {
                replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
         try base.write(entry, staged: staged, replacing: claim)
     }
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {
         try base.retire(noteID: noteID, claim: claim, saved: saved)
     }
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }
@@ -1890,7 +1890,7 @@ final class NoteSessionMatrixTests: XCTestCase {
             writeCount += 1
             return result
         }
-        func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+        func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {
             try base.retire(noteID: noteID, claim: claim, saved: saved)
         }
         func recoveryEntries() throws -> [NoteDraftRecoveryEntry] { try base.recoveryEntries() }

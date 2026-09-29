@@ -116,14 +116,14 @@ private enum NoteRecoveryOwnership {
     /// Whether a caller may replace or retire this state. Unknown state is
     /// never released; known work needs the caller's claim, or proof that
     /// the saved note already holds all of it.
-    func mayRelease(claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) -> Bool {
+    func mayRelease(claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) -> Bool {
         switch self {
         case .absent, .retired: return true
         case .damaged: return false
         case let .pending(_, _, current): return claim == current
         case let .valid(entry, _, current):
             if claim == current { return true }
-            guard let saved else { return false }
+            guard let saved = saved() else { return false }
             return NoteContentCodec.decode(entry.content).document == saved.document
                 && (entry.changedTags == nil || entry.changedTags == saved.tags)
                 && Set(entry.staged.map(\.id)).isSubset(of: Set(saved.document.attachmentIDs))
@@ -141,9 +141,10 @@ protocol NoteDraftJournaling: AnyObject {
     /// another owner's checkpoint, keeping both and their bytes.
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim
-    /// Retires a checkpoint the caller owns, or one `saved` proves redundant.
+    /// Retires a checkpoint the caller owns, or one `saved` proves redundant
+    /// (read only when a checkpoint without a matching claim exists).
     /// Damaged or foreign state throws and stays on disk with its bytes.
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws
     /// Every checkpoint, damaged ones included, for startup and retention.
     func recoveryEntries() throws -> [NoteDraftRecoveryEntry]
 }
@@ -232,7 +233,7 @@ final class NoteDraftJournal: NoteDraftJournaling {
 
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {
-        guard ownership(of: url(for: entry.noteID)).mayRelease(claim: claim, saved: nil) else {
+        guard ownership(of: url(for: entry.noteID)).mayRelease(claim: claim, saved: { nil }) else {
             throw NoteDraftJournalError.unknownOwnership
         }
         guard case .editable = NoteContentCodec.decode(entry.content),
@@ -270,7 +271,7 @@ final class NoteDraftJournal: NoteDraftJournaling {
 
     /// If the file cannot be unlinked, an empty retired marker replaces it,
     /// so it can never come back as unsaved work.
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {
         let file = url(for: noteID)
         let state = ownership(of: file)
         if case .absent = state { return }

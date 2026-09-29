@@ -485,7 +485,7 @@ private final class RefusingJournal: NoteDraftJournaling {
         if failWrites { throw Failure() }
         return try base.write(entry, staged: staged, replacing: claim)
     }
-    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: NoteRecoverySavedState?) throws {
+    func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws {
         if failRemovals && failWrites { throw Failure() }
         try base.retire(noteID: noteID, claim: claim, saved: saved)
     }
