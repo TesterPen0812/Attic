@@ -895,7 +895,7 @@ struct TasksPage: View {
             // each rebuilt its whole row. An editor or a picker open on the
             // row always redraws it (they show live state).
             TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
-                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, isActive: live.isActive, tab: tab,
+                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
                                               layout: layout, isLive: editing || live.metaPopover != nil)) {
                 AtticTaskRow(
                     model: row.model,
@@ -2438,7 +2438,8 @@ struct TasksReorderCell<Row: View, Below: View>: View {
         let active = model.tab == tab && model.isPageShown
         let live = TasksCellLive(
             metaPopover: active && metaPopover?.id == id && metaPopover?.tab == tab ? metaPopover : nil,
-            focus: AtticRowFocus(binding: focus, id: AtticRowFocusID(page: tab.rawValue, id: id), isActive: active),
+            focus: AtticRowFocus(binding: focus, id: AtticRowFocusID(page: tab.rawValue, id: id),
+                                 isActive: { [model, tab] in model.tab == tab && model.isPageShown }),
             isDropTarget: active && fileDropRow == TasksRowID(tab: tab, id: id),
             isActive: active
         )
@@ -2731,8 +2732,6 @@ struct TasksRowKey: Equatable {
     let isExpanded: Bool
     let isDropTarget: Bool
     let isFocused: Bool
-    /// The row's page answers the keyboard (round 12).
-    let isActive: Bool
     let tab: TasksTab
     let layout: PanelPageLayout
     /// A title editor or a picker is open on the row: it always redraws.
@@ -2741,7 +2740,7 @@ struct TasksRowKey: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
             && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isDropTarget == rhs.isDropTarget
-            && lhs.isFocused == rhs.isFocused && lhs.isActive == rhs.isActive && lhs.tab == rhs.tab && lhs.layout == rhs.layout
+            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab && lhs.layout == rhs.layout
     }
 }
 

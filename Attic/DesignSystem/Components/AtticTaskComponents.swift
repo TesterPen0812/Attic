@@ -300,16 +300,19 @@ struct AtticRowFocus {
     /// ring the moment focus moves (a binding alone let it lag a row
     /// behind, the computer-use review's bug 4).
     let isFocused: Bool
-    /// The row's page is the one that answers the keyboard (round 12): a
-    /// page kept built beside it draws its rows but takes no focus and
-    /// answers no key.
-    let isActive: Bool
+    /// Whether the row's page is the one that answers the keyboard (round
+    /// 12): a page kept built beside it draws its rows but takes no focus
+    /// and answers no key. A closure, read when a key arrives: a page shown
+    /// by a tab click keeps the rows it built while hidden (the row is not
+    /// redrawn for the change, round 11), so a value read at build time
+    /// would leave them deaf.
+    let isActive: () -> Bool
 
-    init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isActive: Bool = true) {
+    init(binding: FocusState<AtticRowFocusID?>.Binding, id: AtticRowFocusID, isActive: @escaping () -> Bool = { true }) {
         self.binding = binding
         self.id = id
         self.isActive = isActive
-        isFocused = isActive && binding.wrappedValue == id
+        isFocused = isActive() && binding.wrappedValue == id
     }
 }
 
@@ -326,11 +329,11 @@ private struct AtticListTaskFocusModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .focusable(enabled && focus.isActive)
+            .focusable(enabled)
             .focused(focus.binding, equals: focus.id)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in
-                guard enabled, focus.isActive, answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
+                guard enabled, focus.isActive(), answersKeys, !AtticTextInput.hasKeyboard, let command = AtticTaskKeys.command(
                     key: press.key, characters: press.characters, modifiers: press.modifiers, listCommands: listCommands
                 ), AtticTaskKeys.offers(command, actions) else { return .ignored }
                 AtticTaskKeys.perform(command, actions)
