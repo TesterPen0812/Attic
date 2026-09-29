@@ -412,13 +412,12 @@ final class NoteFormatControls: NSObject {
         return (area.minY, max(0, roomAbove))
     }
 
-    /// The page's root view: the panel's hosting view (its hit test and the
-    /// panel's motion include its subviews; the content container above it
-    /// only hit-tests the hosting view), or a plain window's content view.
+    /// The panel's overlay layer (above the page, moving with the panel,
+    /// hit-tested first), or a plain window's content view.
     private var overlayParent: NSView? {
         var view = textView?.superview
         while let candidate = view {
-            if candidate is AtticPanelHostingView { return candidate }
+            if let container = candidate as? AtticPanelContentContainer { return container.overlayLayer }
             view = candidate.superview
         }
         return textView?.window?.contentView

@@ -851,8 +851,18 @@ final class AtticPanelContentContainer: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard allowsContentInteraction,
               bounds.contains(convert(point, from: superview)) else { return nil }
-        return hostingView.hitTest(convert(point, from: superview))
+        // Floating page controls (Notes' format bar, `/` list and cards) sit
+        // above the page in the same motion layer and answer first.
+        let local = convert(point, from: superview)
+        for overlay in motionView.subviews.reversed() where overlay !== hostingView && !overlay.isHidden {
+            if let hit = overlay.hitTest(motionView.convert(local, from: self)) { return hit }
+        }
+        return hostingView.hitTest(local)
     }
+
+    /// Where a page lays controls that float over the whole page (above its
+    /// bottom row): they move with the panel and are hit-tested first.
+    var overlayLayer: NSView { motionView }
 
     var presentationTransform: CATransform3D {
         guard let layer = motionView.layer else { return CATransform3DIdentity }
