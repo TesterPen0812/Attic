@@ -520,7 +520,7 @@ enum AtticNoteFormatMetrics {
     static let popoverGroupGap: CGFloat = 10
     static let styleChipPadding: CGFloat = 5
     /// The `/` list, the date card and the link card, 6 below the line.
-    static let slashWidth: CGFloat = 232
+    static let slashWidth: CGFloat = 256
     static let slashMaxVisibleRows = 9
     static let dateCardWidth: CGFloat = 236
     static let calendarCell: CGFloat = 28

@@ -126,8 +126,9 @@ struct AtticHighlightGlyph: View {
 
 // MARK: - The selection bar
 
-/// The raised capsule the selection bar's controls sit in (the selection
-/// bar's material and 4 pt inset); groups are 4 apart, never lines.
+/// The raised capsule the selection bar's controls sit in: the pop-over
+/// surface (menus, pop-overs and the selection bar are raised over
+/// content), a 4 pt inset, groups 4 apart and never lines.
 struct AtticFormatBarSurface<Content: View>: View {
     @ViewBuilder let content: Content
     @State private var probeID = UUID()
@@ -138,7 +139,10 @@ struct AtticFormatBarSurface<Content: View>: View {
         HStack(spacing: m.barGroupGap) { content }
             .padding(AtticControlSize.capsuleInset)
             .frame(height: m.barHeight)
-            .atticRaisedMaterial(cornerRadius: radius, interactive: false)
+            // Raised over the text like a pop-over (its fill, rims and
+            // shadow): glass over running text would let the words show
+            // through the controls.
+            .background(AtticPopoverBackground(cornerRadius: radius))
             .atticControlProbe("Format bar", id: probeID, expectedSize: nil, radius: radius, expectedRadius: 15)
     }
 }

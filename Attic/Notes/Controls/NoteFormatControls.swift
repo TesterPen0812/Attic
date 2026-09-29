@@ -138,12 +138,9 @@ final class NoteFormatControls: NSObject {
         super.init()
         formatModel.router = router
         hintHost.contentInset = 0
-        for host in [hintHost, barHost] {
-            host.isHidden = true
-            textView.addSubview(host)
-        }
-        for host in [slashHost, cardHost, addressHost] { host.isHidden = true }
-        textView.accessoryViews += [barHost]
+        hintHost.isHidden = true
+        textView.addSubview(hintHost)
+        for host in [barHost, slashHost, cardHost, addressHost] { host.isHidden = true }
         rebuildRoots()
         wire()
         Self.active = self
@@ -229,7 +226,6 @@ final class NoteFormatControls: NSObject {
         if engine.pendingSlashDate != nil { engine.cancelSlashDate() }
         textView?.onLayout = previousLayout
         textView?.contextMenuProvider = nil
-        textView?.accessoryViews.removeAll { $0 === barHost }
         for host in [hintHost, barHost, slashHost, cardHost, addressHost] { host.removeFromSuperview() }
         if Self.active === self { Self.active = nil }
     }
@@ -420,8 +416,7 @@ final class NoteFormatControls: NSObject {
     private func placeBar() {
         guard let placement = barPlacement(selection: selection) else { hideBar(); return }
         let room = AtticNoteFormatMetrics.shadowRoom
-        let frame = placement.frame.insetBy(dx: -room, dy: -room).integral
-        if barHost.frame != frame { barHost.frame = frame }
+        placeOverlay(barHost, rect: placement.frame.insetBy(dx: -room, dy: -room))
         if formatModel.barBelow != placement.below { formatModel.barBelow = placement.below }
     }
 
@@ -479,7 +474,7 @@ final class NoteFormatControls: NSObject {
         switch item {
         case .style:
             guard let textView else { return }
-            let anchor = barHost.frame.insetBy(dx: AtticNoteFormatMetrics.shadowRoom, dy: AtticNoteFormatMetrics.shadowRoom)
+            let anchor = barFrame
             AtticNativeMenu.popUp(formatModel.styleMenu(from: .selectionBar),
                                   below: NSRect(x: anchor.minX, y: anchor.minY, width: 80, height: anchor.height), in: textView)
         case let .command(command):
@@ -846,7 +841,12 @@ final class NoteFormatControls: NSObject {
 
     // MARK: Test access
 
-    var barFrame: NSRect { barHost.frame.insetBy(dx: AtticNoteFormatMetrics.shadowRoom, dy: AtticNoteFormatMetrics.shadowRoom) }
+    /// The bar's capsule in the text view's coordinates.
+    var barFrame: NSRect {
+        let room = AtticNoteFormatMetrics.shadowRoom
+        guard let textView, let parent = barHost.superview else { return .zero }
+        return textView.convert(barHost.frame, from: parent).insetBy(dx: room, dy: room)
+    }
     var isCardOpen: Bool { cardModel.card != nil }
 }
 
