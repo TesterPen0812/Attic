@@ -2231,17 +2231,17 @@ extension NoteEditorEngine {
         if selection.length == 0 {
             return textView?.typingAttributes[.noteMark(kind)] != nil ? .on : .off
         }
-        var marked = 0
-        var plain = 0
+        var marked = false
+        var plain = false
         let string = textStorage.string as NSString
-        for index in selection.location..<NSMaxRange(selection) {
-            let unit = string.character(at: index)
-            guard unit != NoteDocument.objectUnit, unit != 0x0A else { continue }
-            if textStorage.attribute(.noteMark(kind), at: index, effectiveRange: nil) != nil { marked += 1 }
-            else { plain += 1 }
+        let substantive = CharacterSet(charactersIn: "\n\u{FFFC}").inverted
+        textStorage.enumerateAttribute(.noteMark(kind), in: selection) { value, run, stop in
+            guard string.rangeOfCharacter(from: substantive, options: [], range: run).location != NSNotFound else { return }
+            if value == nil { plain = true } else { marked = true }
+            if marked && plain { stop.pointee = true }
         }
-        if marked == 0 { return .off }
-        return plain == 0 ? .on : .mixed
+        if !marked { return .off }
+        return plain ? .mixed : .on
     }
 
     private func applyMark(_ kind: NoteMark.Kind, url: String?, selection: NSRange) -> Bool {

@@ -648,6 +648,22 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertEqual(engine.formattingState(for: NSRange(location: hello.location, length: 0)).marks[.italic], .off)
     }
 
+    func testLargeSelectionFormattingStateTiming() {
+        let blocks = [.text("Title")] + (0..<5_000).map { NoteBlock.text("Line \($0)") }
+        let engine = NoteEditorEngine(noteID: UUID(), document: NoteDocument(blocks: blocks))
+        let selection = NSRange(location: 0, length: engine.textStorage.length)
+        let start = CFAbsoluteTimeGetCurrent()
+        let state = engine.formattingState(for: selection)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        print("formattingState 5,000 lines: \(elapsed)s")
+        XCTContext.runActivity(named: String(format: "formattingState 5,000 lines: %.3f s", elapsed)) { _ in }
+        XCTAssertEqual(state.marks[.bold], .off)
+        XCTAssertLessThan(elapsed, 0.45, "formattingState took \(elapsed)s for 5,000 lines")
+        let firstLine = (engine.textStorage.string as NSString).range(of: "Line 0")
+        XCTAssertTrue(engine.perform(.mark(.bold), selection: firstLine))
+        XCTAssertEqual(engine.formattingState(for: selection).marks[.bold], .mixed)
+    }
+
     func testMarkdownHabitsAndLiteralUndo() {
         let (engine, textView) = makeEngine(NoteDocument(blocks: [.text("T"), .text("Hello")]))
         textView.setSelectedRange(NSRange(location: 2, length: 0))
