@@ -786,6 +786,8 @@ final class NoteEditorEngineTests: XCTestCase {
         XCTAssertTrue(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!), selection: body))
         XCTAssertEqual(engine.document().blocks[0].text, "Title")
         XCTAssertEqual(engine.document().blocks[1].inlines.count, 1)
+        XCTAssertFalse(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!),
+                                      selection: NSRange(location: 0, length: 0)))
         XCTAssertFalse(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!), selection: NSRange(location: 999, length: 0)))
         XCTAssertFalse(engine.perform(.date(NoteDay(year: 2026, month: 10, day: 1)!),
                                       selection: NSRange(location: NSNotFound, length: 1)))
