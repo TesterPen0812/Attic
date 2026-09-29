@@ -338,7 +338,9 @@ enum AtticTextStyle: String, CaseIterable, Sendable {
 /// search, a toast) and the rows that move (added, completed, reordered)
 /// settle with a visible bounce; pages never overshoot (owner item 25), so
 /// the slide stays a firm spring and a swipe's release carries the
-/// fingers' speed instead (`release`). Settings › General › Animations
+/// fingers' speed instead (`release`). Round 11 keeps them alive but
+/// crisp: about a quarter of a second each, no bounce on navigation, a
+/// light one only on small things that appear. Settings › General › Animations
 /// (`AtticAnimationLevel.reduced`) and macOS Reduce Motion both set
 /// `design.reduceMotion`, which swaps every preset for its fallback.
 enum AtticMotionPreset: String, CaseIterable, Sendable {
@@ -366,33 +368,38 @@ enum AtticMotionPreset: String, CaseIterable, Sendable {
     case hover
 
     /// Duration of the spring's main motion, in seconds. Round 9 lengthened
-    /// the springy ones a little so their bounce can be seen.
+    /// the springy ones so their bounce could be seen; round 11 (the owner:
+    /// "everything feels laggy, especially the animations") brings them back
+    /// to the spec's timings (§ Motion: under about 300 ms), so each lands
+    /// in about a quarter of a second.
     var duration: Double {
         switch self {
         case .pageSwitch: 0.18
-        case .slide: 0.32
-        case .complete: 0.26
-        case .doneSlide: 0.34
-        case .expand: 0.30
-        case .popover: 0.26
-        case .toast: 0.32
-        case .settle: 0.30
-        case .failReturn: 0.34
+        case .slide: 0.25
+        case .complete: 0.22
+        case .doneSlide: 0.25
+        case .expand: 0.22
+        case .popover: 0.22
+        case .toast: 0.24
+        case .settle: 0.24
+        case .failReturn: 0.28
         case .hover: 0.10
         }
     }
 
     /// How much the spring bounces (SwiftUI's `bounce`: 0 is critically
-    /// damped, 0.3 is `.bouncy`). Pages bounce only as much as `.snappy`
-    /// (about 2 pt on a 360 pt page); a crossfade and hover never do.
+    /// damped, 0.3 is `.bouncy`). Round 11: navigation never bounces (the
+    /// slide, a card opening, the done row's slide); only small things
+    /// that appear land with a light bounce (the strip, pickers, the
+    /// selection bar, the Done search, the toast), and rows settle with a
+    /// hint of one. A crossfade and hover never do.
     var bounce: Double {
         switch self {
-        case .pageSwitch, .hover: 0
-        case .slide: 0.15
-        case .complete, .popover: 0.3
-        case .toast, .settle: 0.25
-        case .expand, .doneSlide: 0.2
-        case .failReturn: 0.15
+        case .pageSwitch, .hover, .slide, .expand, .doneSlide: 0
+        case .popover, .complete: 0.15
+        case .toast: 0.12
+        case .failReturn: 0.1
+        case .settle: 0.08
         }
     }
 

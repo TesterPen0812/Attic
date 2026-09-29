@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 // MARK: - The pager owns its gesture (round 9, owner items 24 and 25)
@@ -43,7 +44,15 @@ import SwiftUI
 /// when a gesture or a slide starts and ends, never while it moves.
 @MainActor
 final class TasksPagerSpan: ObservableObject {
+    /// The pages drawn: the one shown, and those a move passes.
     @Published var pages: ClosedRange<Int> = 0...0
+    /// The pages kept built but not drawn (round 11): built once the page
+    /// is shown and idle, so a tab click or a swipe never builds a page as
+    /// it starts to move (each build took 50–100 ms on screen, the lag the
+    /// owner felt). Hidden ones are hidden in AppKit (their scroll views),
+    /// so they draw nothing, take no clicks and are not read by VoiceOver.
+    /// Let go when the panel hides or another page of the shell is shown.
+    @Published var warm: ClosedRange<Int>?
 }
 
 /// Where the pager shows its pages: `position` is in pages (0 is Now, 1
@@ -60,21 +69,87 @@ final class TasksPagerMotion: ObservableObject {
     /// What the UI tests read (DEBUG, `ATTIC_UI_TEST_PAGER_TRACE`).
     @Published private(set) var trace = "reach=0.00 lead=-1.00 page=0"
 
-    /// A settle is (probably) still moving: a new swipe then catches the
-    /// page with a short spring instead of jumping from where it is heading.
-    /// The settle in progress (the pager's own spring, see `show`).
-    private var driver: Timer?
+    /// The settle in progress (the pager's own spring, see `show`), stepped
+    /// on the display's refresh (round 11: a 120 Hz timer drifted against
+    /// the display and juddered).
+    private let driver = TasksDisplayClock()
+    /// The page's own view, whose display steps the settle.
+    var clockView: () -> NSView? = { nil }
     private var generation = 0
     /// The pages drawn (the swipe owns it and gives it here).
     weak var span: TasksPagerSpan?
     var count = 3
+
+    // MARK: Pages kept built (round 11)
+
+    /// Whether pages are kept built beside the one shown (tests that
+    /// measure a cold build turn it off).
+    var warms = true
+    private var warmWork: DispatchWorkItem?
+    /// How long after the page is shown (or a move ends) the first page is
+    /// built, and between one and the next.
+    static let warmDelay: TimeInterval = 0.5
+    static let warmStep: TimeInterval = 0.2
+
+    /// Builds the pages beside the one shown, one per idle moment, once
+    /// `isAllowed` (the page shown, the panel visible) holds.
+    func warmUp(after delay: TimeInterval = TasksPagerMotion.warmDelay, isAllowed: @escaping () -> Bool) {
+        guard warms, span != nil else { return }
+        warmWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.warmStep(isAllowed) } }
+        warmWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Lets the kept pages go (the panel hid, or another page is shown).
+    func coolDown() {
+        warmWork?.cancel()
+        warmWork = nil
+        if span?.warm != nil { span?.warm = nil }
+    }
+
+    private func warmStep(_ isAllowed: @escaping () -> Bool) {
+        warmWork = nil
+        guard warms, let span, isAllowed() else { return }
+        // Something moves, or the person is typing or pointing: later.
+        if isSettling || isTracking?() == true || Self.recentInput() {
+            warmUp(after: Self.warmStep, isAllowed: isAllowed)
+            return
+        }
+        let all = 0...max(count - 1, 0)
+        let current = span.warm ?? span.pages
+        guard current != all else { return }
+        // One page more per step, so no single step builds two.
+        let next = current.upperBound < all.upperBound
+            ? current.lowerBound...(current.upperBound + 1)
+            : (current.lowerBound - 1)...current.upperBound
+        PerformanceSignposts.pageWarmed(next)
+        span.warm = next
+        if next != all { warmUp(after: Self.warmStep, isAllowed: isAllowed) }
+    }
+
+    /// The fingers are on a swipe (the swipe tells the motion).
+    var isTracking: (() -> Bool)?
+
+    /// Input in the last quarter of a second (keys, the pointer, scrolling).
+    private static func recentInput() -> Bool {
+        guard let any = CGEventType(rawValue: ~0) else { return false }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any) < 0.25
+    }
 
     /// Draws the pages from `lower` to `upper` (clamped), if they are not
     /// drawn already.
     private func setSpan(_ lower: Int, _ upper: Int) {
         guard let span else { return }
         let range = max(0, min(lower, upper))...min(max(count - 1, 0), max(lower, upper))
-        if span.pages != range { span.pages = range }
+        guard span.pages != range else { return }
+        let built = span.warm ?? span.pages
+        if range.lowerBound < built.lowerBound || range.upperBound > built.upperBound {
+            PerformanceSignposts.beginPageBuild(range)
+        } else if span.warm == nil {
+            PerformanceSignposts.pagesReleased(range)
+        }
+        span.pages = range
     }
 
     /// A swipe from `page` may show either neighbour.
@@ -118,15 +193,15 @@ final class TasksPagerMotion: ObservableObject {
     }()
 
     /// A settle is moving the page.
-    var isSettling: Bool { driver != nil }
+    var isSettling: Bool { driver.isRunning }
 
     /// Where the page is heading (its position once a settle ends).
     private(set) var destination: CGFloat = 0
 
     /// Stops a settle where it is (a new swipe takes the page from there).
     func stop() {
-        driver?.invalidate()
-        driver = nil
+        driver.stop()
+        PerformanceSignposts.pagerSettleEnded(frames: 0, late: 0, interrupted: true)
         generation &+= 1
     }
 
@@ -147,7 +222,7 @@ final class TasksPagerMotion: ObservableObject {
     /// settle still moving stops where it is; the swipe takes the page from
     /// there (`TasksPagerSwipe` starts its travel at the page's place).
     func follow(_ target: CGFloat) {
-        if driver != nil { stop() }
+        if driver.isRunning { stop() }
         generation &+= 1
         reach = max(reach, abs(target - gestureStart))
         position = target
@@ -159,9 +234,9 @@ final class TasksPagerMotion: ObservableObject {
     /// per second toward the page), or with the slide.
     func show(_ page: Int, width: CGFloat, velocity: CGFloat = 0, reduced: Bool, animated: Bool = true) {
         let target = CGFloat(page)
-        if driver != nil, destination == target, animated, !reduced { return }
-        driver?.invalidate()
-        driver = nil
+        if driver.isRunning, destination == target, animated, !reduced { return }
+        if driver.isRunning { PerformanceSignposts.pagerSettleEnded(frames: 0, late: 0, interrupted: true) }
+        driver.stop()
         destination = target
         guard target != position || fadingOut != nil else {
             generation &+= 1
@@ -174,6 +249,9 @@ final class TasksPagerMotion: ObservableObject {
         // Every page the move passes is drawn until it ends.
         // (A sliver under a tenth of a page, a rubber band's, needs none.)
         setSpan(min(Int((position + 0.15).rounded(.down)), page), max(Int((position - 0.15).rounded(.up)), page))
+        // Building a page can reach back here (its lists' changes): a newer
+        // call has then taken the move over, and this one leaves it alone.
+        guard ticket == generation else { return }
         reach = max(reach, abs(target - gestureStart))
         // Changes without an animation are plain assignments: under a
         // `disablesAnimations` transaction SwiftUI moved what it draws but
@@ -212,37 +290,43 @@ final class TasksPagerMotion: ObservableObject {
             }
             return
         }
-        // The slide: the pager's own critically damped spring, stepped by a
-        // timer with plain assignments (SwiftUI's animations moved what it
-        // draws but not the lists' AppKit scroll views: the page shown was
-        // left where the fingers had it, CI runs 2 and 3). It starts at the
-        // fingers' speed, capped so it never passes the page.
+        // The slide: the pager's own critically damped spring, stepped on
+        // the display's refresh with plain assignments (SwiftUI's animations
+        // moved what it draws but not the lists' AppKit scroll views: the
+        // page shown was left where the fingers had it, CI runs 2 and 3).
+        // It starts at the fingers' speed, capped so it never passes the
+        // page. Its clock starts at the first frame after this change is
+        // drawn (round 11): a page built for the move is built before the
+        // move begins, so the build never eats the slide's first frames.
         fadingOut = nil
         fade = 1
         let duration = Self.settleOverride ?? AtticMotionPreset.slide.duration
         let spring = TasksPagerSpring(from: position, to: target, speed: width > 0 ? velocity / width : 0,
                                       duration: duration)
-        let start = ProcessInfo.processInfo.systemUptime
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] timer in
-            MainActor.assumeIsolated {
-                guard let self, self.generation == ticket else {
-                    timer.invalidate()
-                    return
-                }
-                let elapsed = ProcessInfo.processInfo.systemUptime - start
-                if let value = spring.value(at: elapsed) {
-                    self.position = value
-                } else {
-                    timer.invalidate()
-                    self.driver = nil
-                    self.position = target
-                    self.rest(on: page, ticket: ticket)
-                    self.settled()
-                }
+        var start: CFTimeInterval?
+        var last: CFTimeInterval?
+        var frames = 0
+        var late = 0
+        PerformanceSignposts.pagerSettleBegan()
+        driver.start(on: clockView()) { [weak self] now, display, interval in
+            guard let self, self.generation == ticket else { return false }
+            if start == nil {
+                start = now
+                PerformanceSignposts.pagerFirstFrame()
             }
+            if let last, interval > 0 { late += max(0, Int(((now - last) / interval).rounded()) - 1) }
+            last = now
+            frames += 1
+            if let value = spring.value(at: display - (start ?? now)) {
+                self.position = value
+                return true
+            }
+            self.position = target
+            PerformanceSignposts.pagerSettleEnded(frames: frames, late: late, interrupted: false)
+            self.rest(on: page, ticket: ticket)
+            self.settled()
+            return false
         }
-        RunLoop.main.add(timer, forMode: .common)
-        driver = timer
     }
 
     private func settled() {
@@ -292,6 +376,71 @@ struct TasksPagerSpring: Equatable {
     }
 }
 
+/// Steps an animation on the display's refresh (round 11): a display link
+/// from the page's own view, so each step is computed for the frame it is
+/// shown in; a 120 Hz timer only where that view is on no screen (tests
+/// host the page in windows off screen). It runs only while something
+/// moves: `tick` returns false when done, and the link is let go.
+@MainActor
+final class TasksDisplayClock: NSObject {
+    /// One frame: when it began (the last refresh), when it will be shown,
+    /// and the refresh interval. Returns false when the motion is done.
+    typealias Tick = (_ now: CFTimeInterval, _ display: CFTimeInterval, _ interval: CFTimeInterval) -> Bool
+
+    private var tick: Tick?
+    private var link: CADisplayLink?
+    private var timer: Timer?
+    /// Which start the running tick belongs to (a tick may start another).
+    private var runs = 0
+
+    var isRunning: Bool { tick != nil }
+
+    func start(on view: NSView?, _ tick: @escaping Tick) {
+        stop()
+        runs &+= 1
+        self.tick = tick
+        // A display link steps only while its view is on a screen: a
+        // window ordered out (or off every screen) would never end the move.
+        if let view, let window = view.window, window.isVisible, window.screen != nil {
+            let link = view.displayLink(target: self, selector: #selector(frame(_:)))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        } else {
+            let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.timerFired() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        }
+    }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+        timer?.invalidate()
+        timer = nil
+        tick = nil
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        run(now: link.timestamp, display: link.targetTimestamp, interval: link.targetTimestamp - link.timestamp)
+    }
+
+    private func timerFired() {
+        let now = CACurrentMediaTime()
+        run(now: now, display: now + 1.0 / 120, interval: 1.0 / 120)
+    }
+
+    private func run(now: CFTimeInterval, display: CFTimeInterval, interval: CFTimeInterval) {
+        guard let tick else {
+            stop()
+            return
+        }
+        let current = runs
+        if !tick(now, display, interval), runs == current { stop() }
+    }
+}
+
 /// The pager's pages: those in the span (and always the one shown), each
 /// placed by `TasksPagerSlot`; the rest are not built.
 struct TasksPagerPages<Page: View>: View {
@@ -306,7 +455,12 @@ struct TasksPagerPages<Page: View>: View {
     let count: Int
     let shown: Int
     let size: CGSize
-    let page: (Int) -> Page
+    /// A page, and whether it is drawn (the one shown, or one a move
+    /// passes); a page kept built but not drawn hides its list.
+    let page: (Int, Bool) -> Page
+    /// What a page kept built but not drawn shows: it redraws only when
+    /// this changes (round 11).
+    let token: (Int) -> TasksPageModel.PageToken
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -314,9 +468,11 @@ struct TasksPagerPages<Page: View>: View {
             // drawn where the last swipe had it); only its content comes
             // and goes.
             ForEach(0..<count, id: \.self) { index in
+                let drawn = index == shown || span.pages.contains(index)
                 Group {
-                    if index == shown || span.pages.contains(index) {
-                        page(index)
+                    if drawn || span.warm?.contains(index) == true {
+                        TasksKeptPage(frozen: drawn ? nil : token(index)) { page(index, drawn) }
+                            .equatable()
                     } else {
                         Color.clear
                     }
@@ -328,6 +484,19 @@ struct TasksPagerPages<Page: View>: View {
                 .accessibilityHidden(index != shown)
             }
         }
+    }
+}
+
+/// A page of the pager (round 11): drawn, it redraws with the page; kept
+/// built but not drawn, only when what it shows changes (`frozen`).
+struct TasksKeptPage<Content: View>: View, Equatable {
+    let frozen: TasksPageModel.PageToken?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated { lhs.frozen != nil && lhs.frozen == rhs.frozen }
     }
 }
 
@@ -474,6 +643,8 @@ final class TasksPagerSwipe {
     /// The last swipe was the pager's: its momentum is ignored too.
     private(set) var ownsMomentum = false
     private var wheelTravel: CGFloat = 0
+    /// The swipe's frame count (only with frame signposts on).
+    private var frameWatch: AtticFrameWatch?
     private var wheelLast: TimeInterval = -.infinity
     private var wheelBurstUntil: TimeInterval = -.infinity
     init(count: Int) {
@@ -531,6 +702,8 @@ final class TasksPagerSwipe {
         travel = 0
         recent = []
         wheelTravel = 0
+        frameWatch?.stop()
+        frameWatch = nil
         onCancel?()
     }
 
@@ -549,6 +722,8 @@ final class TasksPagerSwipe {
         wheelTravel = 0
         wheelLast = -.infinity
         wheelBurstUntil = -.infinity
+        frameWatch?.stop()
+        frameWatch = nil
         motion.stop()
     }
 
@@ -577,6 +752,8 @@ final class TasksPagerSwipe {
             travel = width > 0 ? (motion.position - CGFloat(shown)) * width : 0
             motion.stop()
             motion.beginGesture()
+            frameWatch?.stop()
+            frameWatch = PerformanceSignposts.watchFrames("SwipeFrames")
             motion.draw(around: shown)
             return move(sample)
         case .horizontal?:
@@ -609,6 +786,8 @@ final class TasksPagerSwipe {
 
     private func end(_ sample: Sample) -> Output {
         defer {
+            frameWatch?.stop()
+            frameWatch = nil
             axis = nil
             origin = nil
             travel = 0
@@ -784,7 +963,19 @@ extension TasksPageModel {
     /// its gesture and settle, and rests on the model's tab at once.
     func suspendPager() {
         pagerSwipe.suspend()
+        pagerSwipe.motion.coolDown()
         showPagerPage(animated: false)
+    }
+
+    /// Builds the pages beside the one shown, once idle (round 11), while
+    /// the page is shown in a visible panel.
+    func warmPager() {
+        let swipe = pagerSwipe
+        swipe.motion.isTracking = { [weak swipe] in swipe?.isTracking == true }
+        swipe.motion.warmUp { [weak self] in
+            guard let self else { return false }
+            return self.isPageShown && !self.isHidden
+        }
     }
 
     func showPagerPage(velocity: CGFloat = 0, animated: Bool = true) {

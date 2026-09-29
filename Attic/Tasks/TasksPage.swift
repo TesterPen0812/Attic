@@ -107,6 +107,15 @@ struct TasksPage: View {
             tabsBand
             tabs
         }
+        // Files dropped on a row attach to its task (the "Add to page"
+        // label shows on the row under them): one destination for the page,
+        // which finds the row from the rows' frames.
+        .onDrop(of: TaskDropContent.dropTypes, delegate: TasksFileDropDelegate(
+            target: { point in fileDropTarget(at: point) },
+            canAccept: { content, id in content == .files && store.attachmentOwnerID(for: id) != nil },
+            setTargeted: { id in if fileDropRow != id { fileDropRow = id } },
+            perform: { content, providers, id in attachDroppedFiles(content, providers, to: id) }
+        ))
         // The bottom stack owns its whole band (round 7, R4): a row scrolled
         // under the strip, the gaps between its buttons, a selection bar or
         // the add bar is never clicked, right-clicked or dragged through it.
@@ -135,6 +144,8 @@ struct TasksPage: View {
         model.resetForReveal()
         // The page opens where the tab is, without a slide.
         model.showPagerPage(animated: false)
+        // The settle steps on this page's display (round 11).
+        swipe.motion.clockView = { [pointer] in pointer.view }
         swipe.onCancel = { [weak model] in
             // After the navigation that cancelled it has chosen its tab.
             DispatchQueue.main.async { model?.showPagerPage() }
@@ -416,6 +427,7 @@ struct TasksPage: View {
         .animation(searchShown ? AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion)
                                : AtticMotionPreset.popover.exit(reduceMotion: design.reduceMotion), value: searchShown)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.tab == .done)
+        .onChange(of: searchShown) { _, _ in PerformanceSignposts.watchFrames("SearchMotion", seconds: 0.35) }
     }
 
     /// The Done search is on the tabs' line while it has the keyboard or a
@@ -614,9 +626,9 @@ struct TasksPage: View {
             let width = proxy.size.width
             ZStack(alignment: .topLeading) {
                 TasksPagerPages(span: swipe.span, model: model, store: store, motion: swipe.motion, count: TasksTab.allCases.count,
-                                shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size) { index in
-                    page(TasksTab.allCases[index])
-                }
+                                shown: TasksTab.allCases.firstIndex(of: model.tab) ?? 0, size: proxy.size,
+                                page: { index, drawn in page(TasksTab.allCases[index], drawn: drawn) },
+                                token: { [model] index in model.pageToken(TasksTab.allCases[index]) })
                 if TasksPagerMotion.tracing {
                     TasksPagerTrace(motion: swipe.motion)
                 }
@@ -628,17 +640,20 @@ struct TasksPage: View {
         .clipped()
     }
 
-    private func page(_ tab: TasksTab) -> some View {
+    /// A page; `drawn` false: kept built but hidden (its list's scroll
+    /// view is hidden in AppKit: it draws nothing and VoiceOver skips it).
+    private func page(_ tab: TasksTab, drawn: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             switch tab {
             case .now, .backlog:
-                listPage(tab)
+                listPage(tab, drawn: drawn)
             case .done:
-                TasksDonePage(model: model, store: store, listTop: listTop, bottomClearance: bottomClearance,
-                              bottomMargin: bottomMargin,
+                TasksDonePage(model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, store: store,
+                              listTop: listTop, bottomClearance: bottomClearance,
+                              bottomMargin: bottomMargin, drawn: drawn,
                               mask: viewportMask, reveal: $doneReveal,
                               revealRow: { id, proxy in revealRow(id, in: .done, proxy: proxy, animation: nil) },
-                              cell: { row in cell(row, tab: .done, group: []) },
+                              cell: { row in cell(row, tab: .done, group: [], drawn: drawn) },
                               proxies: listProxies,
                               registerList: { proxy in
                                   listProxies.lists[.done] = proxy
@@ -658,7 +673,7 @@ struct TasksPage: View {
         .named("AtticTasksList\(tab.rawValue)")
     }
 
-    private func listPage(_ tab: TasksTab) -> some View {
+    private func listPage(_ tab: TasksTab, drawn: Bool) -> some View {
         let rows = model.rows(for: tab)
         let sections = model.sections(for: tab)
         let groups = Dictionary(grouping: rows, by: \.status).mapValues { $0.map(\.id) }
@@ -667,7 +682,7 @@ struct TasksPage: View {
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(sections.open) { row in
-                        cell(row, tab: tab, group: groups[row.status] ?? [])
+                        cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
                             .id(row.id)
                             // A row added or leaving drops into or rises
                             // out of its place (round 9).
@@ -703,7 +718,7 @@ struct TasksPage: View {
                         .padding(.bottom, model.completedTodayExpanded ? AtticSpacing.s4 : 0)
                         if model.completedTodayExpanded {
                             ForEach(sections.done) { row in
-                                cell(row, tab: tab, group: groups[row.status] ?? [])
+                                cell(row, tab: tab, group: groups[row.status] ?? [], drawn: drawn)
                                     .id(row.id)
                             }
                         }
@@ -711,7 +726,7 @@ struct TasksPage: View {
                 }
                 .animation(travel, value: rows.map(\.id))
                 // The list's place is kept while its page is not built.
-                .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies).accessibilityHidden(true))
+                .background(TasksScrollKeeper(model: model, tab: tab, proxies: listProxies, drawn: drawn).accessibilityHidden(true))
                 // The clearance past the add bar's zone is room at the end
                 // of the list, not margin (see `TasksViewport.bottomMargin`).
                 .padding(.bottom, bottomClearance - bottomMargin)
@@ -747,6 +762,7 @@ struct TasksPage: View {
             // completed takes nothing with it: no row is lit that the person
             // did not reach (round 5).
             .onChange(of: rows.map(\.id)) { old, new in
+                if tab == model.tab { PerformanceSignposts.watchFrames("RowsMotion", seconds: 0.35) }
                 guard tab == model.tab, let focused = focusedRow, !new.contains(focused),
                       let index = old.firstIndex(of: focused), !new.isEmpty else { return }
                 guard focusTracker.isKeyboardDriving else {
@@ -769,14 +785,16 @@ struct TasksPage: View {
 
     // MARK: - Row
 
+    /// `drawn` false: the page is kept built but not drawn; the row does no
+    /// work until it is (round 11).
     @ViewBuilder
-    private func cell(_ row: TasksListRow, tab: TasksTab, group: [UUID]) -> some View {
+    private func cell(_ row: TasksListRow, tab: TasksTab, group: [UUID], drawn: Bool = true) -> some View {
         let id = row.id
         // Read when the cell draws (the closures below run in the cell's
         // own body), never captured when the list built it.
         let expanded = { model.expanded.contains(id) && row.status != .done }
         TasksReorderCell(
-            model: model, focus: $focusedRow,
+            model: model, updates: drawn ? model.cellUpdates : TasksCellUpdates.quiet, focus: $focusedRow,
             id: id, tab: tab, group: group, drag: $drag, metaPopover: $metaPopover, fileDropRow: $fileDropRow,
             enabled: tab != .done && model.editingTitleID != id,
             session: dragSession,
@@ -791,23 +809,36 @@ struct TasksPage: View {
             onEnd: finishDrag,
             onPushPastGroup: showBoundaryHint
         ) { live in
-            AtticTaskRow(
-                model: row.model,
-                isSelected: model.selection.contains(id),
-                selectionRun: selectionRun(for: id, in: tab),
-                isExpanded: expanded(),
-                dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
-                actions: actions(for: id, in: tab),
-                onToggleExpanded: { toggleExpanded(id) },
-                onSelect: { rowClicked(id, tab: tab) },
-                focus: live.focus,
-                titleEditing: model.editingTitleID == id ? titleEditing(for: id) : nil,
-                // Every row, done ones too (round 10): a finished task shows
-                // no date or tags, but its pickers open from its row.
-                meta: rowMeta(for: id, open: live.metaPopover),
-                onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) }
-            )
-            .contextMenu { rowMenu(row, tab: tab) }
+            let isSelected = model.selection.contains(id)
+            let run = selectionRun(for: id, in: tab)
+            let isExpanded = expanded()
+            let editing = model.editingTitleID == id
+            // The row redraws only when what it shows changed (round 11):
+            // every change to the page's model reached every row's cell, and
+            // each rebuilt its whole row. An editor or a picker open on the
+            // row always redraws it (they show live state).
+            TasksRowSnapshot(key: TasksRowKey(model: row.model, isSelected: isSelected, selectionRun: run, isExpanded: isExpanded,
+                                              isDropTarget: live.isDropTarget, isFocused: live.focus.isFocused, tab: tab,
+                                              layout: layout, isLive: editing || live.metaPopover != nil)) {
+                AtticTaskRow(
+                    model: row.model,
+                    isSelected: isSelected,
+                    selectionRun: run,
+                    isExpanded: isExpanded,
+                    dropLabel: live.isDropTarget ? String(localized: "Add to page") : nil,
+                    actions: actions(for: id, in: tab),
+                    onToggleExpanded: { toggleExpanded(id) },
+                    onSelect: { rowClicked(id, tab: tab) },
+                    focus: live.focus,
+                    titleEditing: editing ? titleEditing(for: id) : nil,
+                    // Every row, done ones too (round 10): a finished task shows
+                    // no date or tags, but its pickers open from its row.
+                    meta: rowMeta(for: id, open: live.metaPopover),
+                    onActions: { anchor in showActions(for: id, anchor: anchor, tab: tab) }
+                )
+                .contextMenu { rowMenu(row, tab: tab) }
+            }
+            .equatable()
         } below: {
             // A Done log task's details open under its row (Esc or the
             // menu closes them), raised over the list like a pop-over.
@@ -870,16 +901,15 @@ struct TasksPage: View {
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: Self.space) } action: { [pointer] frame in pointer.frames[id] = frame }
         .onDisappear { [pointer] in pointer.frames[id] = nil }
-        .onDrop(of: TaskDropContent.dropTypes, delegate: TaskFileDropDelegate(
-            canAccept: { content in content == .files && tab != .done && store.attachmentOwnerID(for: id) != nil },
-            setTargeted: { targeted in fileDropRow = targeted ? id : (fileDropRow == id ? nil : fileDropRow) },
-            perform: { content, providers in attachDroppedFiles(content, providers, to: id) }
-        ))
+        // Files dropped on a row: one drop destination for the page
+        // (`fileDropTarget(at:)`), not one per row (round 11: a drop
+        // destination on every row made a screenful of rows slower to build).
     }
 
     /// The quick look opens and closes with the expansion motion (review
     /// 21); Reduce Motion shows it at once.
     private func toggleExpanded(_ id: UUID) {
+        PerformanceSignposts.watchFrames("QuickLookMotion", seconds: 0.35)
         withAnimation(design.reduceMotion ? nil : AtticMotionPreset.settle.animation(reduceMotion: false)) {
             model.toggleExpanded(id)
         }
@@ -1154,7 +1184,7 @@ struct TasksPage: View {
     /// The right-click menu: the task's commands (`taskCommands`), the
     /// same list the actions button and ⇧⌘I open.
     private func rowMenu(_ row: TasksListRow, tab: TasksTab) -> some View {
-        AtticMenuItems(commands: taskCommands(row.id, tab: tab))
+        AtticMenuItems { taskCommands(row.id, tab: tab) }
     }
 
     /// Every command a row offers, in one list (round 10: one definition
@@ -1691,6 +1721,20 @@ struct TasksPage: View {
 
     // MARK: - Files
 
+    /// The row a file over `point` (the page's space) would land on: one
+    /// of the page shown, in the lists' band (not under the tabs or the
+    /// bottom stack). Done's rows take no files.
+    private func fileDropTarget(at point: CGPoint) -> UUID? {
+        guard model.tab != .done, let height = pointer.view?.bounds.height,
+              pagerBand.contains(point, height: height, stackHeight: bottomStack.height) else { return nil }
+        return Self.row(at: point, frames: pointer.frames, among: Set(model.rows(for: model.tab).map(\.id)))
+    }
+
+    /// The row among `ids` whose frame holds `point` (pure, tested).
+    static func row(at point: CGPoint, frames: [UUID: CGRect], among ids: Set<UUID>) -> UUID? {
+        frames.first { ids.contains($0.key) && $0.value.contains(point) }?.key
+    }
+
     private func attachDroppedFiles(_ content: TaskDropContent, _ providers: [NSItemProvider], to id: UUID) {
         fileDropRow = nil
         guard content == .files, let owner = store.attachmentOwnerID(for: id) else { return }
@@ -1739,6 +1783,7 @@ struct TasksPage: View {
         .padding(.bottom, bottomInset)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.selection.count > 1)
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: model.pasteOffer)
+        .onChange(of: model.selection.count > 1) { _, _ in PerformanceSignposts.watchFrames("SelectionBarMotion", seconds: 0.35) }
     }
 
     /// The add bar always adds (Direction A): on Done it adds to Now; the
@@ -2065,6 +2110,7 @@ private struct TasksAddBar: View {
             }
         }
         .animation(AtticMotionPreset.popover.animation(reduceMotion: design.reduceMotion), value: stripShown)
+        .onChange(of: stripShown) { _, _ in PerformanceSignposts.watchFrames("StripMotion", seconds: 0.35) }
         .onChange(of: datePresented || tagsPresented || priorityPresented) { _, open in
             pickerOpen = open
             // A closed picker hands the keyboard back to the draft, where
@@ -2253,11 +2299,13 @@ final class TasksDragSession {
 /// the row itself (not its circle, its quick look or a text field), at
 /// once, without a hold, key or not.
 struct TasksReorderCell<Row: View, Below: View>: View {
-    /// Observed here, in the cell: a lazy list does not rebuild a cell when
-    /// only the page's state changes, so the cell redraws itself when the
-    /// selection, editing or keyboard focus move (the focus ring lagging a
-    /// row behind, the computer-use review's bug 4).
-    @ObservedObject var model: TasksPageModel
+    /// The cell redraws itself when the selection, editing or keyboard
+    /// focus move (the focus ring lagging a row behind, the computer-use
+    /// review's bug 4): it observes every change to the model through
+    /// `updates` while its page is drawn, and nothing while its page is kept
+    /// built but not drawn (round 11).
+    let model: TasksPageModel
+    @ObservedObject var updates: TasksCellUpdates
     var focus: FocusState<UUID?>.Binding
     let id: UUID
     let tab: TasksTab
@@ -2564,6 +2612,84 @@ private struct TasksPointerProbe: NSViewRepresentable {
     }
 }
 
+/// What a task row shows (round 11): a row whose key is unchanged is not
+/// rebuilt when the page's model changes elsewhere (a selection moving,
+/// a keystroke in an editor). Its closures read the model when they run,
+/// so skipping a rebuild never leaves one acting on stale state.
+struct TasksRowKey: Equatable {
+    let model: AtticTaskRowModel
+    let isSelected: Bool
+    let selectionRun: AtticSelectionRun
+    let isExpanded: Bool
+    let isDropTarget: Bool
+    let isFocused: Bool
+    let tab: TasksTab
+    let layout: PanelPageLayout
+    /// A title editor or a picker is open on the row: it always redraws.
+    let isLive: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        !lhs.isLive && !rhs.isLive && lhs.model == rhs.model && lhs.isSelected == rhs.isSelected
+            && lhs.selectionRun == rhs.selectionRun && lhs.isExpanded == rhs.isExpanded && lhs.isDropTarget == rhs.isDropTarget
+            && lhs.isFocused == rhs.isFocused && lhs.tab == rhs.tab && lhs.layout == rhs.layout
+    }
+}
+
+/// A task row drawn only when its key changes (see `TasksRowKey`).
+struct TasksRowSnapshot<Content: View>: View, Equatable {
+    let key: TasksRowKey
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated { lhs.key == rhs.key }
+    }
+}
+
+/// Files dropped on the Tasks page (round 11): the row under them takes
+/// them. Files are accepted anywhere on the page, so the drop is followed
+/// as it moves; only a row that can hold files highlights and takes them.
+private struct TasksFileDropDelegate: DropDelegate {
+    let target: (CGPoint) -> UUID?
+    let canAccept: (TaskDropContent, UUID) -> Bool
+    let setTargeted: (UUID?) -> Void
+    let perform: (TaskDropContent, [NSItemProvider], UUID) -> Void
+
+    private func row(for info: DropInfo) -> (content: TaskDropContent, id: UUID)? {
+        let content = TaskDropContent.classify(info)
+        guard content == .files, let id = target(info.location), canAccept(content, id) else { return nil }
+        return (content, id)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        TaskDropContent.classify(info) == .files
+    }
+
+    func dropEntered(info: DropInfo) {
+        setTargeted(row(for: info)?.id)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let found = row(for: info)
+        setTargeted(found?.id)
+        return DropProposal(operation: found == nil ? .forbidden : .copy)
+    }
+
+    func dropExited(info: DropInfo) {
+        setTargeted(nil)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        setTargeted(nil)
+        guard let found = row(for: info) else { return false }
+        let providers = TaskDropContent.providers(for: found.content, in: info)
+        guard !providers.isEmpty else { return false }
+        perform(found.content, providers, found.id)
+        return true
+    }
+}
+
 /// A row's open date or tag list, and the tasks it changes.
 struct TasksMetaPopover: Equatable {
     enum Kind { case date, tags }
@@ -2717,9 +2843,9 @@ enum TasksViewport {
         return .bottom(min(max((visible - room - height) / (visible - height), 0), 1))
     }
 
-    /// The fade by position in the viewport: nothing over the header, a
-    /// faint trace under the tabs (so they stay readable over scrolled
-    /// text), fully there from the first row's resting place down to the
+    /// The fade by position in the viewport: nothing over the header or
+    /// under the tabs (so they stay readable over scrolled text), fully
+    /// there from the first row's resting place down to the
     /// bottom zone, and receding under the bottom stack.
     static func maskStops(height: CGFloat, tabsTop: CGFloat, listTop: CGFloat, bottomStack: CGFloat) -> [(location: CGFloat, opacity: Double)] {
         guard height > 0 else { return [(0, 1), (1, 1)] }
@@ -2729,10 +2855,15 @@ enum TasksViewport {
         // blur, text under see-through glass must be quieter than before.
         let fadeStart = max(height - bottomStack - AtticLayout.contentToAddBar * 1.75, listTop)
         let barTop = max(height - bottomStack, fadeStart)
+        // Round 11 (the owner: rows scrolled under "Now Later Done" stayed
+        // readable and clashed with the labels): nothing shows under the
+        // tabs at all, and the rows come back only in the gap under them,
+        // quickly toward their resting place.
+        let gap = max(0, listTop - tabsBottom)
         let points: [(CGFloat, Double)] = [
             (0, 0),
-            (tabsTop - AtticLayout.pageTabsTop / 2, 0.04),
-            (tabsBottom, 0.14),
+            (tabsBottom + min(2, gap / 4), 0),
+            (tabsBottom + gap * 0.6, 0.18),
             (listTop, 1),
             (fadeStart, 1),
             (barTop, 0.22),

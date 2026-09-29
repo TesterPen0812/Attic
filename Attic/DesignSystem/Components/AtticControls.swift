@@ -1050,9 +1050,21 @@ struct AtticCommandMenu<Label: View>: View {
 /// and its shortcut shown (spec: right-click menus show shortcuts too);
 /// submenus nest. Used by `AtticCommandMenu` and inside `.contextMenu`.
 struct AtticMenuItems: View {
-    let commands: [AtticMenuCommand]
+    private let build: () -> [AtticMenuCommand]
+
+    init(commands: [AtticMenuCommand]) {
+        build = { commands }
+    }
+
+    /// Commands built only when the menu itself is built (round 11): a
+    /// row's `.contextMenu` otherwise worked out every command of every
+    /// row, tags and dates included, each time the list redrew.
+    init(building build: @escaping () -> [AtticMenuCommand]) {
+        self.build = build
+    }
 
     var body: some View {
+        let sections = sections(build())
         ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
             if let header = section.header {
                 Section(header.title) { items(section.items) }
@@ -1068,7 +1080,7 @@ struct AtticMenuItems: View {
         var items: [AtticMenuCommand] = []
     }
 
-    private var sections: [Group] {
+    private func sections(_ commands: [AtticMenuCommand]) -> [Group] {
         var result: [Group] = []
         for command in commands {
             if command.isHeader {

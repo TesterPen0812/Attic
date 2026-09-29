@@ -130,6 +130,9 @@ final class TasksRound10PagerTests: XCTestCase {
     func testAShowIntoAnUnbuiltPageRevealsItsRow() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
+        // Later must not be built yet (round 11 keeps pages built once idle).
+        hosted.model.pagerSwipe.motion.warms = false
+        hosted.model.pagerSwipe.motion.coolDown()
         // A new task goes to the top of its group: the first made ends
         // up last, far down the list.
         var first: UUID?
@@ -154,6 +157,10 @@ final class TasksRound10PagerTests: XCTestCase {
     func testAListKeepsItsPlaceWhenItsPageIsBuiltAgain() throws {
         let hosted = try Hosted(height: 520)
         defer { hosted.close() }
+        // Its page must be let go and built again (round 11 keeps pages
+        // built while the page is shown): none kept here.
+        hosted.model.pagerSwipe.motion.warms = false
+        hosted.model.pagerSwipe.motion.coolDown()
         for index in 1...30 { _ = hosted.store.create(title: "Later errand \(index)", status: .backlog) }
         hosted.go(to: .backlog)
         let list = try XCTUnwrap(onPageList(hosted))
