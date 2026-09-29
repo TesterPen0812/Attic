@@ -192,13 +192,13 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         importAnchor.map { ($0, importReplacementLength, importIsBoundary) }
     }
 
-    func attachmentIDsAfterRemovingImportTarget() -> Set<UUID> {
-        guard let anchor = importAnchor, importReplacementLength > 0 else { return Set(document().attachmentIDs) }
+    func documentAfterRemovingImportTarget() -> NoteDocument {
+        guard let anchor = importAnchor, importReplacementLength > 0 else { return document() }
         let at = min(anchor, textStorage.length)
         let replacement = NSRange(location: at, length: min(importReplacementLength, textStorage.length - at))
         let remaining = NSMutableAttributedString(attributedString: textStorage)
         remaining.deleteCharacters(in: replacement)
-        return Set(NoteTextCodec.document(from: remaining, template: template).attachmentIDs)
+        return NoteTextCodec.document(from: remaining, template: template)
     }
     private var importNoteID: UUID?
 

@@ -58,6 +58,10 @@ private final class OnDemandFailingJournal: NoteDraftJournaling {
         if failNextRemove { failNextRemove = false; throw Failure() }
         try base.remove(noteID: noteID)
     }
+    func cancelPending(noteID: UUID) throws {
+        if failNextRemove { failNextRemove = false; throw Failure() }
+        try base.cancelPending(noteID: noteID)
+    }
     func entries() throws -> [(NoteDraftJournalEntry, [StagedNoteAttachment])] { try base.entries() }
 }
 
@@ -546,6 +550,127 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertFalse(restarted.recoveryWarnings.isEmpty)
         XCTAssertEqual(try Data(contentsOf: checkpoint), Data("{damaged checkpoint".utf8))
         XCTAssertEqual(try Data(contentsOf: payload), unknown)
+    }
+
+    func testStepBackRecoveryOwnershipRejectsEveryMutationAndKeepsUnknownBytes() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
+            return XCTFail("fixture")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticOwnership-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("staged"),
+            withIntermediateDirectories: true)
+        let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
+        let payload = directory.appendingPathComponent("staged/\(UUID().uuidString)")
+        let unique = Data("unique unsaved bytes".utf8)
+        try Data("{damaged".utf8).write(to: checkpoint)
+        try unique.write(to: payload)
+        let journal = NoteDraftJournal(directory: directory)
+        let replacement = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(NoteDocument(blocks: [.text("Stored")])),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date())
+        XCTAssertThrowsError(try journal.write(replacement, staged: []), "replace")
+        XCTAssertThrowsError(try journal.remove(noteID: id), "retire")
+        XCTAssertThrowsError(try journal.retireIfSaved(noteID: id,
+            document: NoteDocument(blocks: [.text("Stored")]), tags: []), "proved retirement")
+        XCTAssertThrowsError(try journal.cancelPending(noteID: id), "pending cancellation")
+        XCTAssertThrowsError(try journal.retireIfTransferred(noteID: id,
+            document: NoteDocument(blocks: [.text("Stored")]), tags: [], copiedDigests: []),
+            "recovery-copy transfer")
+        XCTAssertTrue(try journal.entries().isEmpty, "presentation skips damaged state")
+        XCTAssertEqual(try journal.recoveryEntries().count, 1, "startup reports damaged state")
+        let unrelated = NoteDraftJournalEntry(noteID: UUID(), isPersisted: false, baseRevisionID: nil,
+            content: try NoteContentCodec.encode(.blank), selectionLocation: 0, selectionLength: 0,
+            staged: [], savedAt: Date())
+        try journal.write(unrelated, staged: []) // staged-byte collection must keep unknown ownership
+        XCTAssertThrowsError(try journal.retireIfSaved(noteID: unrelated.noteID,
+            document: NoteDocument(blocks: [.text("different")]), tags: []),
+            "a readable but different draft remains owned")
+        XCTAssertEqual(try Data(contentsOf: payload), unique)
+        let controller = NotesPageController(store: store, journal: journal)
+        controller.start()
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: "\nordinary save"), name: "Typing"))
+        XCTAssertTrue(controller.save(session))
+        XCTAssertEqual(try Data(contentsOf: checkpoint), Data("{damaged".utf8))
+        XCTAssertEqual(try Data(contentsOf: payload), unique)
+    }
+
+    func testStepBackDamagedCheckpointSurvivesImportCheckpoint() async throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
+            return XCTFail("fixture")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticImportOwnership-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("staged"),
+            withIntermediateDirectories: true)
+        let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
+        let payload = directory.appendingPathComponent("staged/\(UUID().uuidString)")
+        let unique = Data("unrecovered file".utf8)
+        try Data("{damaged".utf8).write(to: checkpoint)
+        try unique.write(to: payload)
+        let loader = FirstSuspendedLoader(try stagedImage())
+        let controller = NotesPageController(store: store, journal: NoteDraftJournal(directory: directory),
+            imageLoader: { await loader.load($0) })
+        controller.start()
+        XCTAssertTrue(controller.open(noteID: id))
+        controller.importFiles([URL(fileURLWithPath: "/tmp/stepback.png")])
+        XCTAssertEqual(try Data(contentsOf: checkpoint), Data("{damaged".utf8))
+        XCTAssertEqual(try Data(contentsOf: payload), unique)
+        for _ in 0..<100 {
+            if await loader.started { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let didStart = await loader.started
+        XCTAssertTrue(didStart)
+        await loader.release()
+        try await waitFor { controller.active?.isImporting == false }
+        let restarted = NoteDraftJournal(directory: directory)
+        XCTAssertEqual(try restarted.recoveryEntries().count, 1)
+        XCTAssertEqual(try Data(contentsOf: checkpoint), Data("{damaged".utf8))
+        XCTAssertEqual(try Data(contentsOf: payload), unique)
+    }
+
+    func testStepBackReadableEnvelopeWithUnreadableContentSurvivesOrdinarySave() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let id = UUID(), item = staged()
+        guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Stored")])) else {
+            return XCTFail("fixture")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("AtticUnreadableContent-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("staged"),
+            withIntermediateDirectories: true)
+        let checkpoint = directory.appendingPathComponent("\(id.uuidString).json")
+        let payload = directory.appendingPathComponent("staged/\(item.id.uuidString)")
+        let entry = NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: nil,
+            content: Data("unreadable note content".utf8), selectionLocation: 0, selectionLength: 0,
+            staged: [.init(id: item.id, filename: item.filename,
+                contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount,
+                digest: item.digest)], savedAt: Date())
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let envelope = try encoder.encode(entry)
+        try envelope.write(to: checkpoint)
+        try item.data.write(to: payload)
+        let journal = NoteDraftJournal(directory: directory)
+        XCTAssertThrowsError(try journal.remove(noteID: id))
+        let controller = NotesPageController(store: store, journal: journal)
+        controller.start()
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        XCTAssertTrue(session.engine.performEdit(NSRange(location: session.engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: "\nsaved"), name: "Typing"))
+        XCTAssertTrue(controller.save(session))
+        XCTAssertEqual(try Data(contentsOf: checkpoint), envelope)
+        XCTAssertEqual(try Data(contentsOf: payload), item.data)
+        XCTAssertEqual(try NoteDraftJournal(directory: directory).recoveryEntries().count, 1)
     }
 
     func testR2RecoveryCopyIncludesPendingAcceptedTextBytesAndUnfinishedSource() async throws {
@@ -1041,6 +1166,72 @@ final class NoteSlice3bTests: XCTestCase {
         XCTAssertEqual(engine.document(), before)
         XCTAssertEqual(engine.staged, stagedBefore)
         XCTAssertEqual(engine.history.undoOps.count, undoBefore)
+    }
+
+    func testStepBackSameNoteCopyOfMissingOriginalIsRejectedBeforeUndo() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let item = staged()
+        let id = UUID()
+        let document = NoteDocument(blocks: [.text("Plan"), .file(attachmentID: item.id,
+            filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        guard case .success = store.createDocumentNote(id: id, document: document, staged: [item]) else {
+            return XCTFail("fixture")
+        }
+        for row in try store.attachmentRows(forNoteID: id) { store.modelContext.delete(row) }
+        try store.modelContext.save()
+        store.refresh()
+        let controller = NotesPageController(store: store, journal: nil)
+        XCTAssertTrue(controller.open(noteID: id))
+        let session = try XCTUnwrap(controller.active)
+        let engine = session.engine
+        let board = NSPasteboard(name: NSPasteboard.Name("AtticMissingCopy-\(UUID().uuidString)"))
+        let object = try XCTUnwrap(engine.objectPlacement(try XCTUnwrap(document.blocks[1].id)))
+        XCTAssertTrue(engine.writeSelection(object.1, to: board, types: [NoteEditorEngine.fragmentType]))
+        let fragment = try XCTUnwrap(board.data(forType: NoteEditorEngine.fragmentType))
+        let before = NSAttributedString(attributedString: engine.textStorage)
+        let beforeStaged = engine.staged
+        let undoCount = engine.history.undoOps.count
+        XCTAssertFalse(engine.paste(fragmentData: fragment,
+            at: NSRange(location: engine.textStorage.length, length: 0)))
+        XCTAssertTrue(engine.textStorage.isEqual(to: before))
+        XCTAssertEqual(engine.staged, beforeStaged)
+        XCTAssertEqual(engine.history.undoOps.count, undoCount)
+        XCTAssertTrue(engine.performEdit(NSRange(location: engine.textStorage.length, length: 0),
+            with: NSAttributedString(string: "\nprose"), name: "Typing"))
+        XCTAssertTrue(controller.save(session), "a rejected paste must not make ordinary saves fail")
+    }
+
+    func testStepBackAdmissionMatchesFinalSaveForEveryCandidateKind() throws {
+        let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+        let item = staged()
+        let id = UUID()
+        let original = NoteDocument(blocks: [.text("Plan"), .file(attachmentID: item.id,
+            filename: item.filename, contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
+        guard case .success = store.createDocumentNote(id: id, document: original, staged: [item]) else {
+            return XCTFail("fixture")
+        }
+        for row in try store.attachmentRows(forNoteID: id) { store.modelContext.delete(row) }
+        try store.modelContext.save()
+        store.refresh()
+        var prose = original
+        prose.blocks.append(.text("safe edit"))
+        var duplicateMissing = original
+        duplicateMissing.blocks.append(.file(attachmentID: item.id, filename: item.filename,
+            contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount))
+        var invented = original
+        invented.blocks.append(.file(attachmentID: UUID(), filename: "invented.pdf",
+            contentTypeIdentifier: "com.adobe.pdf", byteCount: 3))
+        for (candidate, admitted) in [(prose, true), (duplicateMissing, false), (invented, false)] {
+            XCTAssertEqual(store.attachmentAdmissionFailure(noteID: id, document: candidate, staged: []) == nil,
+                admitted)
+            let save = store.saveDocument(noteID: id, document: candidate,
+                baseRevisionID: store.loadDocument(noteID: id)?.revisionID, staged: [])
+            if admitted {
+                guard case .success = save else { return XCTFail("admitted candidate must save") }
+            } else {
+                guard case .failure(.invalidDocument) = save else { return XCTFail("rejected candidate must not save") }
+            }
+        }
     }
 
     func testR9AccessibilityValidationStaysResponsiveWithStoredPayloadsAndActiveImport() async throws {

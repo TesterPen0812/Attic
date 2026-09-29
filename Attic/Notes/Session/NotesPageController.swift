@@ -550,8 +550,7 @@ final class NotesPageController: ObservableObject {
         }
         engine.onFragmentAdmission = { [weak self, weak session] proposed, copied in
             guard let self, let session else { return String(localized: "The note is no longer open.") }
-            return self.attachmentAdmissionFailure(proposedIDs: Set(proposed.attachmentIDs),
-                additions: copied, in: session)
+            return self.attachmentAdmissionFailure(proposed: proposed, additions: copied, in: session)
         }
         engine.onTagsChange = { [weak self, weak session] in
             guard let self, let session else { return }
@@ -949,20 +948,26 @@ final class NotesPageController: ObservableObject {
         touch(newID)
         session.baseRevisionID = revisionID
         session.notice = successNotice
-        didSave(session, staged: images, clearOldCheckpoint: oldID)
+        didSave(session, staged: images)
+        if let journal {
+            do {
+                try journal.retireIfTransferred(noteID: oldID, document: document, tags: tags,
+                    copiedDigests: Set(images.map(\.digest)))
+            } catch {
+                session.notice = String(localized: "Your text was saved, but its old recovery copy is being kept until it can be checked.")
+            }
+        }
         remember(newID)
         return true
     }
 
-    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment],
-                         clearOldCheckpoint oldID: UUID? = nil) {
+    private func didSave(_ session: NoteSession, staged: [StagedNoteAttachment]) {
         captureViewState(session)
         session.state = .clean
         session.refusedWritingToolsSinceSave = false
         updateWritingToolsAvailability(for: session)
         session.engine.forgetStaged(Set(staged.map(\.id)))
         clearRecoveryCopy(noteID: session.noteID)
-        if let oldID { clearRecoveryCopy(noteID: oldID) }
         schedulePauseVersion(session)
     }
 
@@ -978,12 +983,14 @@ final class NotesPageController: ObservableObject {
     /// remains on disk with its staged bytes.
     fileprivate func retireRecoveryCopy(noteID: UUID) -> Bool {
         guard let journal else { return true }
+        let stored = store.loadDocument(noteID: noteID)
+        let document = stored?.content.document
+        let tags = store.note(withID: noteID)?.tags ?? []
         do {
-            try journal.remove(noteID: noteID)
+            try journal.retireIfSaved(noteID: noteID, document: document, tags: tags)
             return true
         } catch {
-            guard let stored = store.loadDocument(noteID: noteID),
-                  let document = stored.content.document,
+            guard let stored, let document,
                   let content = try? NoteContentCodec.encode(document),
                   let recovery = try? journal.recoveryEntries(),
                   recovery.allSatisfy({ if case .valid = $0 { return true }; return false }),
@@ -993,12 +1000,12 @@ final class NotesPageController: ObservableObject {
                   }).first,
                   candidate.pendingImport == nil,
                   NoteContentCodec.decode(candidate.content).document == document,
-                  candidate.changedTags == nil || candidate.changedTags == (store.note(withID: noteID)?.tags ?? []),
+                  candidate.changedTags == nil || candidate.changedTags == tags,
                   Set(candidate.staged.map(\.id)).isSubset(of: Set(document.attachmentIDs)) else { return false }
             let saved = NoteDraftJournalEntry(noteID: noteID, isPersisted: true,
                 baseRevisionID: stored.revisionID, content: content,
                 selectionLocation: 0, selectionLength: 0, staged: [], savedAt: now(),
-                tags: store.note(withID: noteID)?.tags ?? [], tagsChanged: false)
+                tags: tags, tagsChanged: false)
             do {
                 try journal.write(saved, staged: [])
                 return true
@@ -1337,55 +1344,27 @@ final class NotesPageController: ObservableObject {
     /// and unsaved draft objects. A batch passes its earlier accepted sources.
     func importAdmissionFailure(_ payload: StagedNoteAttachment, in session: NoteSession,
                                         earlier: [NoteImportedObject] = []) -> String? {
-        var ids = session.engine.attachmentIDsAfterRemovingImportTarget()
         let accepted = earlier.compactMap(\.staged)
-        ids.formUnion(accepted.map(\.id))
-        ids.insert(payload.id)
-        return attachmentAdmissionFailure(proposedIDs: ids, additions: accepted + [payload], in: session)
+        var proposed = session.engine.documentAfterRemovingImportTarget()
+        proposed.blocks += (accepted + [payload]).map { item in
+            .file(attachmentID: item.id, filename: item.filename,
+                  contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)
+        }
+        return attachmentAdmissionFailure(proposed: proposed, additions: accepted + [payload], in: session)
     }
 
-    /// Shared count/byte gate for URL imports, slash/Retry and fragments.
-    /// Unknown existing originals do not make prose edits unsaveable, but
-    /// they cannot justify an increase whose total bytes are unknowable.
-    private func attachmentAdmissionFailure(proposedIDs ids: Set<UUID>, additions: [StagedNoteAttachment],
+    /// The store's complete admission rule is also the pre-edit rule. New
+    /// placements of missing originals cannot pass by reusing an old byte ID.
+    private func attachmentAdmissionFailure(proposed: NoteDocument, additions: [StagedNoteAttachment],
                                             in session: NoteSession) -> String? {
-        let currentIDs = Set(session.engine.document().attachmentIDs)
-        let addedIDs = ids.subtracting(currentIDs)
-        guard let rows = try? store.attachmentRows(forNoteID: session.noteID) else {
-            return String(localized: "The note’s files could not be checked. Try again.")
+        guard !session.isPersisted || store.note(withID: session.noteID) != nil else {
+            return String(localized: "The note is no longer in the library.")
         }
-        var sizes: [UUID: Int64] = [:]
-        for row in rows {
-            if let previous = sizes[row.id], previous != row.byteCount {
-                return String(localized: "Copies of a file disagree. Refresh the note before adding files.")
-            }
-            sizes[row.id] = row.byteCount
-        }
-        for (id, staged) in session.engine.staged { sizes[id] = staged.byteCount }
-        for item in additions {
-            guard item.byteCount > 0, item.byteCount <= AttachmentLimits.maxBytesPerAttachment else {
-                return String(localized: "This file exceeds the attachment size limit.")
-            }
-            sizes[item.id] = item.byteCount
-        }
-        let unknown = ids.filter { sizes[$0] == nil }
-        guard unknown.allSatisfy(currentIDs.contains), unknown.isEmpty || addedIDs.isEmpty else {
-            return String(localized: "An original file is missing. Resolve it before adding another file.")
-        }
-        if ids.count > AttachmentLimits.maxAttachmentsPerNote
-            && !(addedIDs.isEmpty && ids.count <= currentIDs.count) {
-            return AttachmentFileStoreError.tooManyAttachments.localizedDescription
-        }
-        let total = ids.reduce(Int64.zero) { partial, id in
-            guard let size = sizes[id] else { return partial }
-            if size <= 0 || (size > AttachmentLimits.maxBytesPerAttachment && addedIDs.contains(id)) {
-                return Int64.max
-            }
-            let (sum, overflow) = partial.addingReportingOverflow(size)
-            return overflow ? Int64.max : sum
-        }
-        return total > AttachmentLimits.maxBytesPerNote && !addedIDs.isEmpty
-            ? AttachmentFileStoreError.noteTooLarge.localizedDescription : nil
+        let staged = Dictionary((Array(session.engine.staged.values) + additions).map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }).values.map { $0 }
+        let metadataOnly = Set(additions.filter { $0.data.isEmpty && $0.digest.isEmpty }.map(\.id))
+        return store.attachmentAdmissionFailure(noteID: session.noteID, document: proposed,
+            staged: staged, metadataOnlyIDs: metadataOnly)
     }
 
     func sourceAdmissionFailure(_ url: URL, in session: NoteSession,
@@ -1544,8 +1523,19 @@ final class NotesPageController: ObservableObject {
         // Retire pending metadata durably before releasing the live batch.
         // A failed replacement leaves the old checkpoint and the batch live.
         session.importBatch = nil
-        let retired = journal == nil || (NoteSessionPolicy.hasPendingWork(session.state)
-            ? checkpoint(session, silent: true) : retireRecoveryCopy(noteID: session.noteID))
+        let retired: Bool
+        if let journal {
+            if NoteSessionPolicy.hasPendingWork(session.state) {
+                retired = checkpoint(session, silent: true)
+            } else {
+                do {
+                    try journal.cancelPending(noteID: session.noteID)
+                    retired = true
+                } catch {
+                    retired = false
+                }
+            }
+        } else { retired = true }
         if !retired {
             session.importBatch = batch
             session.notice = String(localized: "The batch could not be cancelled because its recovery copy could not be updated.")
