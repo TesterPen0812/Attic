@@ -126,14 +126,12 @@ final class TasksVeilUITests: XCTestCase {
         app?.terminate()
     }
 
-    private func row(_ index: Int) -> XCUIElement {
-        app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "Open task number \(index) with a title,")).firstMatch
-    }
-
     func testNothingShowsThroughTheTabsLineOrTheAddBarsBand() throws {
         let window = app.windows.firstMatch
-        XCTAssertTrue(row(1).waitForExistence(timeout: 10), "the long list is there")
+        // The 500-row list needs a moment to seed and lay out. It is not looked up through the accessibility
+        // tree (a 500-row query is slow); the scroll below proves the list is there by moving the body.
+        XCTAssertTrue(app.buttons["tasks-page-now"].waitForExistence(timeout: 10), "the tabs are there")
+        RunLoop.current.run(until: Date().addingTimeInterval(3.0))
         let tabs = app.buttons["tasks-page-now"].frame
         let addBar = app.descendants(matching: .any).matching(identifier: "AtticTokenField").firstMatch
         XCTAssertTrue(addBar.waitForExistence(timeout: 5))
@@ -148,6 +146,15 @@ final class TasksVeilUITests: XCTestCase {
         window.scroll(byDeltaX: 0, deltaY: -1_300)
         RunLoop.current.run(until: Date().addingTimeInterval(1.0))
         let second = window.screenshot().image
+
+        // The list itself must have moved between the two captures, or the bands prove nothing.
+        let body = (bands[0].1 + 8, bands[1].0 - 8)
+        let moved = try differingShare(first, second, points: body, windowWidth: frame.width)
+        XCTAssertGreaterThan(moved, 0.05, "the long list scrolled between the captures (\(moved))")
+        let firstAttachment = XCTAttachment(image: first)
+        firstAttachment.name = "veil-first"
+        firstAttachment.lifetime = .keepAlways
+        add(firstAttachment)
 
         for (top, bottom) in bands {
             let changed = try differingShare(first, second, points: (top, bottom), windowWidth: frame.width)
