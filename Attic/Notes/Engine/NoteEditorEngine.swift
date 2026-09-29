@@ -155,9 +155,15 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         history.onTagFlip = { [weak self] tag, add, changesTags, range in
             self?.didFlipTag(tag, add: add, changesTags: changesTags, range: range)
         }
-        history.onTagSnapshot = { [weak self] tags in self?.setTags(tags) }
-        history.onParagraphStyleSnapshot = { [weak self] location, paragraphStyle in
-            self?.setPendingParagraphStyle(paragraphStyle, at: location)
+        history.onTagPickerDelta = { [weak self] adds, removes in
+            guard let self else { return }
+            var current = Set(self.tags)
+            current.subtract(removes)
+            current.formUnion(adds)
+            self.setTags(Array(current))
+        }
+        history.onParagraphStyleSnapshot = { [weak self] location, state in
+            self?.setPendingParagraphStyle(state.style, indent: state.indent, at: location)
         }
         history.onTypingMarkSnapshot = { [weak self] kind, enabled in self?.setTypingMark(kind, enabled: enabled) }
         history.canReplay = { [weak self] in self?.activity == .idle }
@@ -185,8 +191,9 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
         if let pending = pendingParagraphStyle, pending.location == textStorage.length,
            let last = result.blocks.indices.last, result.blocks[last].kind == .text,
            result.blocks[last].text.isEmpty {
-            result.blocks[last].style = pending.style.storageName
-            result.blocks[last].level = pending.style.level
+            result.blocks[last].style = pending.state.style.storageName
+            result.blocks[last].level = pending.state.style.level
+            result.blocks[last].indent = pending.state.indent > 0 ? pending.state.indent : nil
             result.refreshRequiredCapabilities()
         }
         let string = textStorage.string as NSString
@@ -396,9 +403,28 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 let paragraph = string.paragraphRange(for: NSRange(location: position, length: 0))
                 let actual = NSIntersectionRange(paragraph, NSRange(location: bodyStart, length: bodyEnd - bodyStart))
                 let metadata = textStorage.attributes(at: position, effectiveRange: nil)
-                let base = style.paragraphAttributes(style: metadata[.noteBlockStyle] as? String,
+                let name = metadata[.noteBlockStyle] as? String
+                let depth = metadata[.noteBlockIndent] as? Int ?? 0
+                var base = style.paragraphAttributes(style: name,
                                                      level: metadata[.noteBlockLevel] as? Int,
                                                      indent: metadata[.noteBlockIndent] as? Int)
+                if let name, ["bullet", "number"].contains(name) {
+                    let marker: NSTextList.MarkerFormat = name == "number" ? .decimal : .disc
+                    var lists: [NSTextList] = []
+                    if paragraph.location > titleEnd {
+                        let before = string.paragraphRange(for: NSRange(location: paragraph.location - 1, length: 0))
+                        let prior = textStorage.attributes(at: before.location, effectiveRange: nil)
+                        if ["bullet", "number"].contains(prior[.noteBlockStyle] as? String ?? "") {
+                            lists = (prior[.paragraphStyle] as? NSParagraphStyle)?.textLists ?? []
+                        }
+                    }
+                    if lists.count > depth + 1 { lists = Array(lists.prefix(depth + 1)) }
+                    while lists.count <= depth { lists.append(NSTextList(markerFormat: marker, options: 0)) }
+                    if lists[depth].markerFormat != marker { lists[depth] = NSTextList(markerFormat: marker, options: 0) }
+                    let paragraphStyle = (base[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                    paragraphStyle.textLists = lists
+                    base[.paragraphStyle] = paragraphStyle
+                }
                 textStorage.addAttributes(base, range: actual)
                 restyleMarks(in: actual, base: base)
                 position = NSMaxRange(paragraph)
@@ -619,7 +645,7 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
     func attributes(forParagraphAt location: Int) -> [NSAttributedString.Key: Any] {
         let paragraph = paragraphRange(at: location)
         if let pending = pendingParagraphStyle, pending.location == paragraph.location {
-            return style.paragraphAttributes(style: pending.style.storageName, level: pending.style.level, indent: nil)
+            return style.paragraphAttributes(style: pending.state.style.storageName, level: pending.state.style.level, indent: pending.state.indent)
         }
         guard paragraph.location > 0, paragraph.location < textStorage.length else { return style.titleAttributes }
         let attributes = textStorage.attributes(at: paragraph.location, effectiveRange: nil)
@@ -813,8 +839,10 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
                 guard performEdit(current, with: insertion, name: "Continue List",
                                   selection: NSRange(location: current.location + 1, length: 0)) else { return false }
                 if finalParagraph {
-                    history.recordParagraphStyleChange(location: current.location + 1, before: .body, after: format)
-                    setPendingParagraphStyle(format, at: current.location + 1)
+                    let depth = indentAt(line.location) ?? 0
+                    history.recordParagraphStyleChange(location: current.location + 1,
+                        before: .init(style: .body, indent: 0), after: .init(style: format, indent: depth))
+                    setPendingParagraphStyle(format, indent: depth, at: current.location + 1)
                 }
                 return true
             }
@@ -1141,9 +1169,29 @@ final class NoteEditorEngine: NSObject, NSTextViewDelegate, NSTextStorageDelegat
            editedRange.length > 0, editedRange.location < textStorage.length {
             let range = NSRange(location: editedRange.location,
                                 length: min(editedRange.length, textStorage.length - editedRange.location))
-            if let name = pending.style.storageName { textStorage.addAttribute(.noteBlockStyle, value: name, range: range) }
-            if let level = pending.style.level { textStorage.addAttribute(.noteBlockLevel, value: level, range: range) }
+            if let name = pending.state.style.storageName { textStorage.addAttribute(.noteBlockStyle, value: name, range: range) }
+            if let level = pending.state.style.level { textStorage.addAttribute(.noteBlockLevel, value: level, range: range) }
+            if pending.state.indent > 0 { textStorage.addAttribute(.noteBlockIndent, value: pending.state.indent, range: range) }
             pendingParagraphStyle = nil
+        }
+        // A selected-range deletion, cut, or replacement can remove the box
+        // without using a marker-first key route. Normalize its surviving
+        // paragraph before history captures the edit.
+        let nearby = paragraphs(around: editedRange)
+        var nearbyStart = nearby.location
+        while nearbyStart < NSMaxRange(nearby), nearbyStart < textStorage.length {
+            let line = lineRange(at: nearbyStart)
+            if line.location > 0, line.length > 0, checklistBox(inParagraphAt: line.location) == nil {
+                let name = textStorage.attribute(.noteBlockStyle, at: line.location, effectiveRange: nil) as? String
+                if !["bullet", "number", "quote"].contains(name ?? ""),
+                   textStorage.attribute(.noteBlockIndent, at: line.location, effectiveRange: nil) != nil {
+                    let extent = (textStorage.string as NSString).paragraphRange(for: NSRange(location: line.location, length: 0))
+                    textStorage.removeAttribute(.noteBlockIndent, range: extent)
+                }
+            }
+            let next = NSMaxRange(line) + 1
+            if next <= nearbyStart { break }
+            nearbyStart = next
         }
         if let anchor = importAnchor {
             let oldLength = max(0, editedRange.length - delta)
@@ -2053,8 +2101,11 @@ extension NoteEditorEngine {
             if range.length == 0 {
                 let before = paragraphStyle(at: line.location) ?? .body
                 guard before != styleValue else { continue }
-                history.recordParagraphStyleChange(location: line.location, before: before, after: styleValue)
-                setPendingParagraphStyle(styleValue, at: line.location)
+                let oldDepth = pendingParagraphStyle?.location == line.location ? pendingParagraphStyle!.state.indent : (indentAt(line.location) ?? 0)
+                let newDepth = [.bullet, .number, .checklist, .quote].contains(styleValue) ? oldDepth : 0
+                history.recordParagraphStyleChange(location: line.location,
+                    before: .init(style: before, indent: oldDepth), after: .init(style: styleValue, indent: newDepth))
+                setPendingParagraphStyle(styleValue, indent: newDepth, at: line.location)
                 continue
             }
             let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
@@ -2074,12 +2125,13 @@ extension NoteEditorEngine {
         return true
     }
 
-    private func setPendingParagraphStyle(_ value: NoteParagraphStyle, at location: Int) {
-        pendingParagraphStyle = value == .body ? nil : (location, value)
+    private func setPendingParagraphStyle(_ value: NoteParagraphStyle, indent: Int = 0, at location: Int) {
+        pendingParagraphStyle = value == .body ? nil : (location, .init(style: value, indent: indent))
         documentCache = nil
-        var typing = style.paragraphAttributes(style: value.storageName, level: value.level, indent: nil)
+        var typing = style.paragraphAttributes(style: value.storageName, level: value.level, indent: indent)
         if let name = value.storageName { typing[.noteBlockStyle] = name }
         if let level = value.level { typing[.noteBlockLevel] = level }
+        if indent > 0 { typing[.noteBlockIndent] = indent }
         textView?.typingAttributes = typing
         onTextChange?()
     }
@@ -2098,6 +2150,13 @@ extension NoteEditorEngine {
             let string = textStorage.string as NSString
             let hasBreak = NSMaxRange(line) < string.length && string.character(at: NSMaxRange(line)) == 0x0A
             let range = NSRange(location: line.location, length: line.length + (hasBreak ? 1 : 0))
+            if range.length == 0 {
+                history.recordParagraphStyleChange(location: line.location,
+                    before: .init(style: paragraphStyle, indent: old), after: .init(style: paragraphStyle, indent: new))
+                setPendingParagraphStyle(paragraphStyle, indent: new, at: line.location)
+                changed = true
+                continue
+            }
             let replacement = NSMutableAttributedString(attributedString: textStorage.attributedSubstring(from: range))
             replacement.removeAttribute(.noteBlockIndent, range: NSRange(location: 0, length: replacement.length))
             if new > 0 { replacement.addAttribute(.noteBlockIndent, value: new, range: NSRange(location: 0, length: replacement.length)) }
@@ -2585,17 +2644,37 @@ extension NoteEditorEngine {
             let previous = lineRange(at: start - 1)
             guard previous.location < start, previous.location < textStorage.length else { break }
             let attrs = textStorage.attributes(at: previous.location, effectiveRange: nil)
-            guard attrs[.noteBlockStyle] as? String == "number",
-                  (attrs[.noteBlockIndent] as? Int ?? 0) == indent else { break }
-            ordinal += 1
+            let previousDepth = attrs[.noteBlockIndent] as? Int ?? 0
+            let previousKind = attrs[.noteBlockStyle] as? String
+            let nested = previousDepth > indent && (["number", "bullet"].contains(previousKind ?? "") || checklistBox(inParagraphAt: previous.location) != nil)
+            guard nested || (previousKind == "number" && previousDepth == indent) else { break }
+            if previousDepth == indent { ordinal += 1 }
             start = previous.location
         }
         return ordinal
     }
 
     func headingRanges() -> [NoteAccessibilityParagraph] {
-        accessibilityParagraphs(in: NSRange(location: 0, length: textStorage.length))
-            .filter { $0.headingLevel != nil && !$0.text.isEmpty }
+        let string = textStorage.string as NSString
+        var result: [NoteAccessibilityParagraph] = []
+        var location = 0
+        while location < string.length {
+            let line = lineRange(at: location)
+            let attrs = textStorage.attributes(at: line.location, effectiveRange: nil)
+            let name = attrs[.noteBlockStyle] as? String
+            let level = line.location == 0 ? 1 : (name == "heading" ? attrs[.noteBlockLevel] as? Int ?? 2 : nil)
+            if let level {
+                let value = string.substring(with: line)
+                if !value.isEmpty {
+                    result.append(NoteAccessibilityParagraph(range: line, text: value, headingLevel: level,
+                                                             style: name, indent: 0, listOrdinal: nil))
+                }
+            }
+            let next = NSMaxRange(line) + 1
+            if next <= location { break }
+            location = next
+        }
+        return result
     }
 }
 
