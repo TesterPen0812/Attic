@@ -216,6 +216,8 @@ final class NotesFormatControlsTests: XCTestCase {
         let selection = try XCTUnwrap(engine.rect(for: target))
         XCTAssertLessThanOrEqual(controls.barFrame.maxY, selection.minY, "above, never over the selection")
         XCTAssertEqual(controls.formatModel.barBelow, false)
+        XCTAssertLessThanOrEqual(controls.barFrame.width, 320 - 2 * AtticNoteFormatMetrics.barEdgeMargin, "fits a 320 pt panel")
+        XCTAssertGreaterThanOrEqual(controls.barFrame.width, NoteFormatControls.barWidth(styleName: "Body"))
 
         let (top, topEngine, topView) = make(topInset: 60)
         let first = range("Pricing", topView)
@@ -502,44 +504,70 @@ final class NotesFormatControlsTests: XCTestCase {
 
     // MARK: Performance (the engine's 5,000-line stress note)
 
-    /// Keystrokes with the controls installed read no state; a selection's
-    /// snapshot and a select-all are timed for the report.
+    /// Keystrokes with the controls installed read no state and cost what
+    /// they cost without them (same run, same note); a selection's snapshot
+    /// and the bar's first and later placements are timed for the report.
     func testControlsAddNoWorkPerKeystrokeOnAStressNote() throws {
         var blocks: [NoteBlock] = [.text("Stress")]
         for index in 0..<5_000 {
             blocks.append(index % 50 == 10 ? .checklist("Item \(index)")
                           : .text("Line \(index) with some ordinary words to wrap a little in a narrow panel."))
         }
-        let (controls, _, textView) = make(NoteDocument(blocks: blocks))
-        let middle = range("Line 2501 ", textView).location
-        textView.setSelectedRange(NSRange(location: middle, length: 0))
-        textView.scrollRangeToVisible(textView.selectedRange())
-        textView.displayIfNeeded()
-        spin()
-        let before = controls.snapshotCount
-        var samples: [Double] = []
-        for character in "the quick brown fox jumps over the lazy dog again and again!" {
-            let start = DispatchTime.now().uptimeNanoseconds
-            textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
-            textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
-            textView.displayIfNeeded()
-            spin()
-            samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
-        }
-        XCTAssertEqual(controls.snapshotCount, before, "typing reads no format state")
         func ms(_ body: () -> Void) -> Double {
             let start = DispatchTime.now().uptimeNanoseconds
             body()
             return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
         }
-        textView.setSelectedRange(range("Line 2600 with some ordinary words", textView))
-        let sentence = ms { controls.refresh() }
-        XCTAssertTrue(controls.formatModel.barShown)
-        textView.setSelectedRange(NSRange(location: 0, length: (textView.string as NSString).length))
-        let all = ms { controls.refresh() }
-        let sorted = samples.sorted()
-        let report = String(format: "NOTE-FORMAT-PERF keystroke+runloop median %.2f ms p95 %.2f ms; bar state for a sentence %.2f ms; select-all %.1f ms",
-                            sorted[sorted.count / 2], sorted[Int(Double(sorted.count - 1) * 0.95)], sentence, all)
+        func typing(_ textView: NoteEditorTextView) -> [Double] {
+            let middle = range("Line 2501 ", textView).location
+            textView.setSelectedRange(NSRange(location: middle, length: 0))
+            textView.scrollRangeToVisible(textView.selectedRange())
+            textView.displayIfNeeded()
+            spin()
+            return "the quick brown fox jumps over the lazy dog again and again!".map { character in
+                ms {
+                    textView.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+                    textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+                    textView.displayIfNeeded()
+                    RunLoop.main.run(until: Date())
+                }
+            }
+        }
+        func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+        func p95(_ values: [Double]) -> Double { let s = values.sorted(); return s[Int(Double(s.count - 1) * 0.95)] }
+
+        // Without, with, without again: the first run warms the caches.
+        func plainRun() -> [Double] {
+            let (plainControls, _, plainView) = make(NoteDocument(blocks: blocks))
+            plainControls.invalidate()
+            return typing(plainView)
+        }
+        _ = plainRun()
+        let (controls, _, textView) = make(NoteDocument(blocks: blocks))
+        let before = controls.snapshotCount
+        let withControls = typing(textView)
+        XCTAssertEqual(controls.snapshotCount, before, "typing reads no format state")
+        controls.invalidate()
+        let without = plainRun()
+
+        let (timed, _, timedView) = make(NoteDocument(blocks: blocks))
+        let sentence = range("Line 2600 with some ordinary words", timedView)
+        timedView.setSelectedRange(sentence)
+        timedView.scrollRangeToVisible(sentence)
+        timedView.displayIfNeeded()
+        let snapshot = ms { _ = NoteFormatSnapshot.make(router: timed.router, selection: sentence) }
+        let first = ms { timed.refresh() }
+        XCTAssertTrue(timed.formatModel.barShown)
+        timedView.setSelectedRange(range("Line 2601 with some", timedView))
+        let later = ms { timed.refresh() }
+        timedView.setSelectedRange(NSRange(location: 0, length: (timedView.string as NSString).length))
+        let everything = timedView.selectedRange()
+        let all = ms { _ = NoteFormatSnapshot.make(router: timed.router, selection: everything) }
+        let markAll = ms { _ = timed.engine.validate(.mark(.bold), selection: everything) }
+        let styleAll = ms { _ = timed.engine.validate(.paragraph(.body), selection: everything) }
+        let report = String(format: "NOTE-FORMAT-PERF keystroke median %.2f ms p95 %.2f ms (without controls %.2f / %.2f); sentence snapshot %.2f ms; bar first show %.1f ms, next %.2f ms; select-all snapshot %.0f ms (one mark %.0f ms, one style %.0f ms)",
+                            median(withControls), p95(withControls), median(without), p95(without), snapshot, first, later, all,
+                            markAll, styleAll)
         print(report)
         XCTContext.runActivity(named: report) { _ in }
     }

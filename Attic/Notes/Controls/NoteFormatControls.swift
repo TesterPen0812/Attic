@@ -233,6 +233,7 @@ final class NoteFormatControls: NSObject {
     func update(design: AtticDesignContext) {
         guard design != self.design else { return }
         self.design = design
+        barWidths = [:]
         rebuildRoots()
         applyLinkLook()
     }
@@ -325,7 +326,7 @@ final class NoteFormatControls: NSObject {
     // MARK: Selection bar
 
     private func showBar() {
-        barWidth = Self.barWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
+        barWidth = measuredBarWidth(styleName: NoteCommandCatalog.styleName(formatModel.snapshot.paragraph))
         placeBar()
         barHost.isInteractive = true
         if barHost.isHidden { barHost.isHidden = false }
@@ -337,6 +338,22 @@ final class NoteFormatControls: NSObject {
         formatModel.barShown = false
         formatModel.barKeyboardIndex = nil
         barHost.isInteractive = false
+    }
+
+    private var barWidths: [String: CGFloat] = [:]
+
+    /// The bar's laid-out width for a style name (measured once per name).
+    private func measuredBarWidth(styleName: String) -> CGFloat {
+        if let width = barWidths[styleName] { return width }
+        let probe = NoteFormatModel()
+        probe.router = router
+        probe.setSnapshot(formatModel.snapshot)
+        probe.barShown = true
+        let host = NSHostingView(rootView: AnyView(NoteFormatBarView(model: probe).atticDesign(design)))
+        let measured = host.fittingSize.width - AtticNoteFormatMetrics.shadowRoom * 2
+        let width = max(measured, Self.barWidth(styleName: styleName))
+        barWidths[styleName] = width
+        return width
     }
 
     /// The bar's width from its metrics: the style control (its label, a
