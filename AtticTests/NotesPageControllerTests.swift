@@ -750,14 +750,14 @@ final class NotesPageControllerTests: XCTestCase {
     }
 
     func testSuccessfulSaveClearsLeftoverRecoveryCopyOnRelaunch() async throws {
-        let controller = makeController()
+        let journal = NoteDraftJournal(directory: directory)
+        let controller = makeController(journal: journal)
         await controller.startAndWait()
         let session = try XCTUnwrap(controller.active)
         type("Saved", into: session)
         await XCTAssertTrueAsync(await controller.preserveAllDurably())
         let id = session.noteID
         let previous = try XCTUnwrap(store.note(withID: id)?.revisionID)
-        let journal = NoteDraftJournal(directory: directory)
         type(" again", into: session)
         let document = session.engine.document()
         try await journal.writeDurably(NoteDraftJournalEntry(noteID: id, isPersisted: true, baseRevisionID: previous,

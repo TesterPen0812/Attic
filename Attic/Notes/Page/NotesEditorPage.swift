@@ -390,7 +390,7 @@ struct NotesEditorPage: View {
             // follows the focused text, then the library (NotesLibraryView).
             let toast = toasts.show(String(localized: "Note deleted"), answersUndoKey: false) { [controller] in
                 guard controller.libraryUndoStepID == step else { return }
-                controller.undoLibrary()
+                Task { @MainActor in _ = await controller.undoLibraryDurably() }
             }
             postedToastID = toast.id
             postedToastStep = step
@@ -490,11 +490,11 @@ struct NotesEditorPage: View {
             AtticMenuCommand("\(historyTitle(String(localized: "Undo"), step: controller.libraryUndoName))",
                              shortcut: KeyboardShortcut("z", modifiers: .command),
                              isDisabled: !controller.canUndoLibrary, startsSection: true,
-                             identifier: NotesLibraryView.undoIdentifier) { controller.undoLibrary() },
+                             identifier: NotesLibraryView.undoIdentifier) { Task { @MainActor in _ = await controller.undoLibraryDurably() } },
             AtticMenuCommand("\(historyTitle(String(localized: "Redo"), step: controller.libraryRedoName))",
                              shortcut: KeyboardShortcut("z", modifiers: [.command, .shift]),
                              isDisabled: !controller.canRedoLibrary,
-                             identifier: NotesLibraryView.redoIdentifier) { controller.redoLibrary() }
+                             identifier: NotesLibraryView.redoIdentifier) { Task { @MainActor in _ = await controller.redoLibraryDurably() } }
         ]
     }
 
@@ -661,7 +661,7 @@ private struct NoteStatusSlot: View {
             return AtticStatusItem(id: "conflict", systemName: "exclamationmark.circle", title: status.label,
                                    explanation: status.explanation, tone: .warning, actions: [
                                        .init(title: String(localized: "Keep as new note"), identifier: "notes-keep-as-new",
-                                             handler: details { _ = controller.keepAsNewNote() }),
+                                             handler: details { Task { @MainActor in _ = await controller.keepAsNewNoteDurably() } }),
                                        .init(title: String(localized: "Review"), identifier: "notes-review-conflict",
                                              handler: details { showingProposal = true })
                                    ])

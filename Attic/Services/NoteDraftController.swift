@@ -428,6 +428,14 @@ final class NoteDraftController: ObservableObject {
         return true
     }
 
+    func prepareToLeaveDurably(_ reason: NotesPageController.LeaveReason) async -> Bool {
+        let handlesLegacy = pages.legacyNoteID != nil
+        if !handlesLegacy, !prepareLegacyToLeave(reason) { return false }
+        guard await pages.prepareToLeaveDurably(reason) else { return false }
+        if !handlesLegacy, reason != .hide && reason != .quit { discardDraft() }
+        return true
+    }
+
     private func prepareLegacyToLeave(_ reason: NotesPageController.LeaveReason) -> Bool {
         if reason != .hide && reason != .quit && isActive && legacyHasActiveComposition() {
             saveErrorMessage = String(localized: "Finish composing text before leaving this note.")

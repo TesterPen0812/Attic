@@ -273,6 +273,10 @@ final class NotesSlice2FixRoundTests: XCTestCase {
         let controller = makeController(journal: journal)
         await XCTAssertTrueAsync(await controller.openDurably(noteID: id))
         let session = try XCTUnwrap(controller.active)
+        // A real checkpoint is required: absent recovery needs no retirement.
+        try await journal.base.writeDurably(NoteDraftJournalEntry(noteID: id, isPersisted: true,
+            baseRevisionID: session.baseRevisionID, content: try NoteContentCodec.encode(session.engine.document()),
+            selectionLocation: 0, selectionLength: 0, staged: [], savedAt: Date()), staged: [])
         journal.failRemovals = true
         journal.failWrites = true
         await XCTAssertFalseAsync(await controller.deleteNoteDurably(noteID: id))
