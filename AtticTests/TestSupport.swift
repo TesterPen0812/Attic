@@ -69,14 +69,25 @@ final class PersistenceGate {
 /// journal's own retired-marker fallback.
 final class UnlinkFailingFileManager: FileManager, @unchecked Sendable {
     struct Failure: Error {}
-    var failCheckpointRemovals = false
-    var failNextCheckpointRemoval = false
+    private let failureLock = NSLock()
+    private var failAll = false
+    private var failNext = false
+    var failCheckpointRemovals: Bool {
+        get { failureLock.withLock { failAll } }
+        set { failureLock.withLock { failAll = newValue } }
+    }
+    var failNextCheckpointRemoval: Bool {
+        get { failureLock.withLock { failNext } }
+        set { failureLock.withLock { failNext = newValue } }
+    }
 
     override func removeItem(at url: URL) throws {
-        if url.pathExtension == "json", failCheckpointRemovals || failNextCheckpointRemoval {
-            failNextCheckpointRemoval = false
-            throw Failure()
+        let refuse = failureLock.withLock {
+            guard url.pathExtension == "json", failAll || failNext else { return false }
+            failNext = false
+            return true
         }
+        if refuse { throw Failure() }
         try super.removeItem(at: url)
     }
 }

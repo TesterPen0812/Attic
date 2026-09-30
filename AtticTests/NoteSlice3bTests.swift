@@ -1555,7 +1555,12 @@ final class NoteSlice3bTests: XCTestCase {
 // MARK: Fix round 4 invariant and reproducer tests
 
 private final class RecoveryArchiveFailingFileManager: FileManager, @unchecked Sendable {
-    var failArchive = false
+    private let failureLock = NSLock()
+    private var archiveFailure = false
+    var failArchive: Bool {
+        get { failureLock.withLock { archiveFailure } }
+        set { failureLock.withLock { archiveFailure = newValue } }
+    }
     override func copyItem(at srcURL: URL, to dstURL: URL) throws {
         if failArchive { throw CocoaError(.fileWriteOutOfSpace) }
         try super.copyItem(at: srcURL, to: dstURL)
@@ -1628,15 +1633,15 @@ extension NoteSlice3bTests {
         let claim = try await journal.writeDurably(entry, staged: [item])
         let unproven = NoteRecoverySavedState(document: document, tags: [])
         await XCTAssertThrowsErrorAsync(try await journal.retireDurably(noteID: id, claim: nil, saved: unproven))
-        await XCTAssertThrowsErrorAsync(try await journal.retireDurably(noteID: id, claim: claim, saved: unproven))
         var replacement = entry; replacement.staged = []
         let replaced = try await journal.writeDurably(replacement, staged: [], replacing: claim)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("staged/\(item.id.uuidString)")), item.data)
         let afterRead = try await journal.entriesDurably()
         XCTAssertEqual(afterRead.first?.1, [item], "replacement and collection retain old byte ownership")
         await XCTAssertThrowsErrorAsync(try await journal.retireDurably(noteID: id, claim: nil, saved: unproven))
-        let verified = NoteRecoverySavedState(document: document, tags: [], attachments: [item.id: item])
-        try await journal.retireDurably(noteID: id, claim: replaced, saved: verified)
+        // Production cannot prove removed bytes: the owner's saved state
+        // supersedes them. Claimless retirement still needs every byte proof.
+        try await journal.retireDurably(noteID: id, claim: replaced, saved: unproven)
         await XCTAssertTrueAsync(try await journal.readRecoveryEntries().isEmpty)
         // Explicit owned cancellation is the separate release operation.
         let cancelled = try await journal.writeDurably(entry, staged: [item])
@@ -1813,7 +1818,7 @@ extension NoteSlice3bTests {
         let raw = Data("{damaged".utf8), unknown = Data("unknown recovery original".utf8)
         try raw.write(to: root.appendingPathComponent("\(id.uuidString).json"))
         try unknown.write(to: root.appendingPathComponent("staged/unknown-name"))
-        let fm = RecoveryArchiveFailingFileManager(), journal = NoteDraftJournal(directory: root, fileManager: fm)
+        let fm = RecoveryArchiveFailingFileManager(), journal = NoteDraftJournal(directory: root, fileManagerFactory: { fm })
         let details = try await journal.damagedDetailsDurably(noteID: id)
         XCTAssertEqual(details.title, "Recovery data is damaged")
         fm.failArchive = true

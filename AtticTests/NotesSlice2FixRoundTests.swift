@@ -479,7 +479,7 @@ private final class RefusingJournal: NoteDraftJournaling {
         get { fileManager.failCheckpointRemovals }
         set { fileManager.failCheckpointRemovals = newValue }
     }
-    init(directory: URL) { base = NoteDraftJournal(directory: directory, fileManager: fileManager) }
+    init(directory: URL) { base = NoteDraftJournal(directory: directory, fileManagerFactory: { [fileManager] in fileManager }) }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         if failWrites { throw Failure() }

@@ -87,8 +87,10 @@ enum NoteDraftRecoveryEntry: Sendable {
 struct NoteDamagedRecoveryConfirmation: Equatable, Sendable {
     let noteID: UUID?
     let checkpointFilename: String
-    fileprivate let checkpointDigest: String
+    fileprivate let checkpointDigest: String?
     fileprivate let stagedDigests: [String: String]
+    let unreadableItems: [String]
+    var canDiscard: Bool { unreadableItems.isEmpty }
 }
 
 struct NoteDamagedRecoveryDetails: Sendable {
@@ -142,7 +144,8 @@ private enum NoteRecoveryOwnership {
             if discarding { return claim == current }
             guard claim == current, let saved = saved(),
                   Set(entry.pendingImport?.items.compactMap(\.stagedID) ?? []).isSubset(of: Set(saved.document.attachmentIDs)) else { return false }
-            return entry.staged.allSatisfy { meta in
+            let owed = Set(saved.document.attachmentIDs).union(entry.pendingImport?.items.compactMap(\.stagedID) ?? [])
+            return entry.staged.filter { owed.contains($0.id) }.allSatisfy { meta in
                 guard let bytes = saved.attachments[meta.id] else { return false }
                 return bytes.payloadIsVerified && bytes.id == meta.id && bytes.byteCount == meta.byteCount && bytes.digest == meta.digest
             }
@@ -151,7 +154,7 @@ private enum NoteRecoveryOwnership {
             guard let saved = saved() else { return false }
             return (claim == current || (NoteContentCodec.decode(entry.content).document == saved.document
                 && (entry.changedTags == nil || entry.changedTags == saved.tags)))
-                && entry.staged.allSatisfy { meta in
+                && entry.staged.filter { claim != current || saved.document.attachmentIDs.contains($0.id) }.allSatisfy { meta in
                     guard let bytes = saved.attachments[meta.id] else { return false }
                     return bytes.payloadIsVerified && bytes.id == meta.id && bytes.byteCount == meta.byteCount && bytes.digest == meta.digest
                 }
@@ -178,7 +181,7 @@ protocol NoteDraftJournaling: AnyObject {
     /// another owner's checkpoint, keeping both and their bytes.
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?) throws -> NoteRecoveryClaim
-    /// Retires a checkpoint only when `saved` proves every staged byte has
+    /// Retires a checkpoint only when `saved` proves every still-owed staged byte has
     /// a durable owner. A claim alone never proves that handoff.
     /// Damaged or foreign state throws and stays on disk with its bytes.
     func retire(noteID: UUID, claim: NoteRecoveryClaim?, saved: () -> NoteRecoverySavedState?) throws
@@ -248,13 +251,14 @@ extension NoteDraftJournaling {
 /// on this serialized actor; the main-actor facade exposes cached inventory.
 private actor NoteDraftJournalIO {
     let directory: URL
-    private let fileManager: FileManager
+    private let fileManagerFactory: @Sendable () -> FileManager
+    private lazy var fileManager = fileManagerFactory()
     private var liveReferences = Set<UUID>()
     func retain(_ ids: Set<UUID>) { liveReferences.formUnion(ids) }
 
-    init(directory: URL, fileManager: FileManager = .default) {
+    init(directory: URL, fileManagerFactory: @escaping @Sendable () -> FileManager) {
         self.directory = directory
-        self.fileManager = fileManager
+        self.fileManagerFactory = fileManagerFactory
     }
 
     private var stagedDirectory: URL { directory.appendingPathComponent("staged", isDirectory: true) }
@@ -414,22 +418,31 @@ private actor NoteDraftJournalIO {
 
     private func damagedDetails(file: URL) throws -> NoteDamagedRecoveryDetails {
         guard case .damaged = ownership(of: file) else { throw NoteDraftJournalError.unknownOwnership }
+        let confirmation = damagedConfirmation(file: file)
+        let explanation = confirmation.canDiscard
+            ? "Save Recovery Copy preserves whatever is readable and the exact damaged data. Discard Damaged Recovery… requires confirmation and moves it to quarantine; nothing is silently deleted."
+            : "Save Recovery Copy preserves readable data. Discard is unavailable until these items can be read: " + confirmation.unreadableItems.joined(separator: ", ") + ". Restore access and try again; the originals remain protected."
         return NoteDamagedRecoveryDetails(title: "Recovery data is damaged",
-            explanation: "Save Recovery Copy preserves whatever is readable and the exact damaged data. Discard Damaged Recovery… requires confirmation and moves it to quarantine; nothing is silently deleted.",
-            confirmation: try damagedConfirmation(file: file))
+            explanation: explanation, confirmation: confirmation)
     }
 
-    private func damagedConfirmation(file: URL) throws -> NoteDamagedRecoveryConfirmation {
-        let checkpoint = try Data(contentsOf: file)
+    private func damagedConfirmation(file: URL) -> NoteDamagedRecoveryConfirmation {
+        let checkpoint = try? Data(contentsOf: file)
+        var unreadable = checkpoint == nil ? [file.lastPathComponent] : []
         var staged: [String: String] = [:]
         if fileManager.fileExists(atPath: stagedDirectory.path) {
-            for stagedFile in try fileManager.contentsOfDirectory(at: stagedDirectory, includingPropertiesForKeys: nil) {
-                // Damaged ownership is unknowable: preserve even unknown filenames.
-                staged[stagedFile.lastPathComponent] = Self.digest(try Data(contentsOf: stagedFile))
-            }
+            do {
+                for stagedFile in try fileManager.contentsOfDirectory(at: stagedDirectory, includingPropertiesForKeys: nil) {
+                    // Unknown ownership includes arbitrary names and unreadable entries.
+                    if let bytes = try? Data(contentsOf: stagedFile) {
+                        staged[stagedFile.lastPathComponent] = Self.digest(bytes)
+                    } else { unreadable.append("staged/" + stagedFile.lastPathComponent) }
+                }
+            } catch { unreadable.append("staged/") }
         }
         return .init(noteID: UUID(uuidString: file.deletingPathExtension().lastPathComponent),
-            checkpointFilename: file.lastPathComponent, checkpointDigest: Self.digest(checkpoint), stagedDigests: staged)
+            checkpointFilename: file.lastPathComponent, checkpointDigest: checkpoint.map(Self.digest),
+            stagedDigests: staged, unreadableItems: unreadable.sorted())
     }
 
     func archiveDamaged(_ confirmation: NoteDamagedRecoveryConfirmation, to destination: URL?, resolving: Bool) throws -> URL {
@@ -437,9 +450,10 @@ private actor NoteDraftJournalIO {
               confirmation.checkpointFilename.hasSuffix(".json") else { throw NoteDraftJournalError.unknownOwnership }
         let checkpoint = directory.appendingPathComponent(confirmation.checkpointFilename)
         guard case .damaged = ownership(of: checkpoint),
-              try damagedConfirmation(file: checkpoint) == confirmation else {
+              damagedConfirmation(file: checkpoint) == confirmation else {
             throw NoteDraftJournalError.unknownOwnership
         }
+        guard !resolving || confirmation.canDiscard else { throw NoteDraftJournalError.incompleteStaging }
         let parent = destination ?? directory.appendingPathComponent("quarantine", isDirectory: true)
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
         let archive = parent.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -447,9 +461,15 @@ private actor NoteDraftJournalIO {
         let stagedArchive = archive.appendingPathComponent("staged", isDirectory: true)
         try fileManager.createDirectory(at: stagedArchive, withIntermediateDirectories: false)
         let archivedCheckpoint = archive.appendingPathComponent(checkpoint.lastPathComponent)
-        try fileManager.copyItem(at: checkpoint, to: archivedCheckpoint)
-        guard Self.digest(try Data(contentsOf: archivedCheckpoint)) == confirmation.checkpointDigest else {
-            throw NoteDraftJournalError.incompleteStaging
+        if let digest = confirmation.checkpointDigest {
+            try fileManager.copyItem(at: checkpoint, to: archivedCheckpoint)
+            guard Self.digest(try Data(contentsOf: archivedCheckpoint)) == digest else {
+                throw NoteDraftJournalError.incompleteStaging
+            }
+        }
+        if !confirmation.unreadableItems.isEmpty {
+            try Data(confirmation.unreadableItems.joined(separator: "\n").utf8)
+                .write(to: archive.appendingPathComponent("unreadable-items.txt"), options: .atomic)
         }
         for (name, digest) in confirmation.stagedDigests {
             let copy = stagedArchive.appendingPathComponent(name)
@@ -466,14 +486,17 @@ private actor NoteDraftJournalIO {
         }
         let manifest = try JSONEncoder().encode(confirmation.stagedDigests)
         try manifest.write(to: archive.appendingPathComponent("ownership.json"), options: .atomic)
-        for file in [archivedCheckpoint, archive.appendingPathComponent("ownership.json")]
-            + confirmation.stagedDigests.keys.map({ stagedArchive.appendingPathComponent($0) }) {
+        let archiveFiles = [archive.appendingPathComponent("ownership.json")]
+            + (confirmation.checkpointDigest == nil ? [] : [archivedCheckpoint])
+            + (confirmation.unreadableItems.isEmpty ? [] : [archive.appendingPathComponent("unreadable-items.txt")])
+            + confirmation.stagedDigests.keys.map({ stagedArchive.appendingPathComponent($0) })
+        for file in archiveFiles {
             let handle = try FileHandle(forWritingTo: file)
             try handle.synchronize(); try handle.close()
         }
         // Recheck the complete inventory after preservation. No active path is
         // released on copy/verification failure or a stale confirmation.
-        guard try damagedConfirmation(file: checkpoint) == confirmation else {
+        guard damagedConfirmation(file: checkpoint) == confirmation else {
             throw NoteDraftJournalError.unknownOwnership
         }
         if resolving {
@@ -544,9 +567,11 @@ final class NoteDraftJournal: NoteDraftJournaling {
     var liveReferencedIDs: () throws -> Set<UUID> = { [] }
     var requiresAsyncIO: Bool { true }
 
-    init(directory: URL, fileManager: FileManager = .default) {
+    /// The factory runs on the I/O actor and normally creates its exclusive
+    /// FileManager. Shared injected managers must synchronize their own state.
+    init(directory: URL, fileManagerFactory: @escaping @Sendable () -> FileManager = { FileManager() }) {
         self.directory = directory
-        io = NoteDraftJournalIO(directory: directory, fileManager: fileManager)
+        io = NoteDraftJournalIO(directory: directory, fileManagerFactory: fileManagerFactory)
     }
 
     func write(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment], replacing: NoteRecoveryClaim?) throws -> NoteRecoveryClaim {

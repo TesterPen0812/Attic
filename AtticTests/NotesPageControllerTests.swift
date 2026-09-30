@@ -1690,7 +1690,7 @@ private final class RemoveFailingJournal: NoteDraftJournaling {
         set { fileManager.failNextCheckpointRemoval = newValue }
     }
 
-    init(directory: URL) { base = NoteDraftJournal(directory: directory, fileManager: fileManager) }
+    init(directory: URL) { base = NoteDraftJournal(directory: directory, fileManagerFactory: { [fileManager] in fileManager }) }
     func writeDurably(_ entry: NoteDraftJournalEntry, staged: [StagedNoteAttachment],
                replacing claim: NoteRecoveryClaim?) async throws -> NoteRecoveryClaim {
         try await base.writeDurably(entry, staged: staged, replacing: claim)
