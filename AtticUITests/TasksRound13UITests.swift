@@ -1,0 +1,54 @@
+import AppKit
+import XCTest
+
+/// Round 13, in the real panel with the demo tasks (`ATTIC_UI_TEST_SEED=demo`):
+/// who owns the keyboard. Return in an open ⇧⌘I menu runs the highlighted
+/// item (a subtask focused by Tab is covered by the hosted tests, which
+/// press a real Tab). CI only: they
+/// need a signed-in window server.
+final class TasksRound13UITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchEnvironment["ATTIC_UI_TESTING"] = "1"
+        app.launchEnvironment["ATTIC_UI_TEST_SEED"] = "demo"
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.buttons["panel-pin-button"].waitForExistence(timeout: 5))
+        XCTAssertTrue(row("Book dentist").waitForExistence(timeout: 5), "the demo tasks are listed")
+    }
+
+    override func tearDownWithError() throws {
+        app?.terminate()
+    }
+
+    private func row(_ title: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title + ",")).firstMatch
+    }
+
+    private func select(_ title: String) {
+        row(title).coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 90, dy: 16)).click()
+    }
+
+    private func waitFor(_ condition: @autoclosure () -> Bool, timeout: TimeInterval = 5, _ message: String,
+                         file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !condition() { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        XCTAssertTrue(condition(), message, file: file, line: line)
+    }
+
+    /// ⇧⌘I, eight ↓ to Add Subtask, Return: the subtask editor opens and the
+    /// parent's title editor does not.
+    func testReturnInTheActionsMenuRunsTheHighlightedItem() throws {
+        select("Book dentist")
+        app.typeKey("i", modifierFlags: [.command, .shift])
+        XCTAssertTrue(app.menuItems["Add Subtask"].waitForExistence(timeout: 3), "the actions menu opens")
+        for _ in 0..<8 { app.typeKey(.downArrow, modifierFlags: []) }
+        app.typeKey(.return, modifierFlags: [])
+        let newSubtask = app.textFields["New subtask of Book dentist"]
+        waitFor(newSubtask.exists, "Add Subtask ran")
+        XCTAssertFalse(app.textFields["Title"].exists, "and the title editor did not open")
+    }
+}

@@ -1164,6 +1164,19 @@ private struct AtticMenuBadge: ViewModifier {
     }
 }
 
+/// A pop-up menu that shows every command's shortcut but answers only the
+/// shortcuts that carry ⌘, ⌃ or ⌥ (round 13). A bare key (Return for Edit
+/// Title, Space for Complete, Delete) is a shortcut of the list behind the
+/// menu, shown for reference: inside the open menu those keys belong to the
+/// menu (↓ highlights, Return activates the highlighted item), never to the
+/// item whose hint they are.
+final class AtticPopUpMenu: NSMenu {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty == false else { return false }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 /// The same commands as an `NSMenu` (round 10): what a row's actions
 /// button, ⇧⌘I and the selection bar open, anchored to a view. Native in
 /// every way (keyboard, type-to-select, VoiceOver), with each command's
@@ -1172,7 +1185,7 @@ private struct AtticMenuBadge: ViewModifier {
 enum AtticNativeMenu {
     /// The menu for `commands`.
     static func make(_ commands: [AtticMenuCommand], title: String = "") -> NSMenu {
-        let menu = NSMenu(title: title)
+        let menu = AtticPopUpMenu(title: title)
         menu.autoenablesItems = false
         var first = true
         for command in commands {
