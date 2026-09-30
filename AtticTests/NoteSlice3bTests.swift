@@ -3018,7 +3018,7 @@ extension NoteSlice3bTests {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Owner")])) else { return XCTFail() }
         await store.waitForAttachmentReconciliation()
         let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
-        let url = try XCTUnwrap(try await files.ensureMaterialized(reference))
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
         let barrier = LocateReadBarrier(), recorder = PayloadThreadRecorder()
         defer { barrier.resume(); store.retentionDecodeObserver = nil }
         store.retentionDecodeObserver = {
@@ -3080,7 +3080,7 @@ extension NoteSlice3bTests {
             guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Initial")])) else { return XCTFail() }
             await store.waitForAttachmentReconciliation()
             let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
-            let url = try XCTUnwrap(try await files.ensureMaterialized(reference))
+            let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
             let document = NoteDocument(blocks: [.text("Pending owner"), .file(attachmentID: item.id, filename: item.filename,
                 contentTypeIdentifier: item.contentTypeIdentifier, byteCount: item.byteCount)])
             func stageOwner() throws {
@@ -3114,7 +3114,7 @@ extension NoteSlice3bTests {
         guard case .success = store.createDocumentNote(id: id, document: NoteDocument(blocks: [.text("Initial")])) else { return XCTFail() }
         await store.waitForAttachmentReconciliation()
         let reference = AttachmentFileReference(id: item.id, digest: item.digest, filename: item.filename, payload: item.data)
-        let url = try XCTUnwrap(try await files.ensureMaterialized(reference))
+        let url = try await XCTUnwrapAsync(try await files.ensureMaterialized(reference))
         let barrier = LocateReadBarrier()
         defer { barrier.resume(); store.retentionContentReadObserver = nil }
         store.retentionContentReadObserver = { _ in barrier.observe(main: Thread.isMainThread, bytes: 12_345) }
