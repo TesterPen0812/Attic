@@ -460,8 +460,9 @@ final class TasksPageUITests: XCTestCase {
 
         priority.click()
         let high = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "High")).firstMatch
-        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers No Priority, Medium and High")
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label == %@", "Low")).firstMatch.exists, "no Low")
+        XCTAssertTrue(high.waitForExistence(timeout: 3), "Priority offers all four")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Low")).firstMatch.exists,
+                      "Low is offered (follow-up part 2)")
         high.click()
         waitFor((priority.value as? String) == "High", "the Priority button shows High")
 
@@ -545,7 +546,8 @@ final class TasksPageUITests: XCTestCase {
         barButton("Set priority of 2 tasks").click()
         let high = app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "High")).firstMatch
         XCTAssertTrue(high.waitForExistence(timeout: 3), "its priority menu opens")
-        XCTAssertFalse(app.menuItems.matching(NSPredicate(format: "title == %@", "Low")).firstMatch.exists, "no Low")
+        XCTAssertTrue(app.menuItems.matching(NSPredicate(format: "title BEGINSWITH %@", "Low")).firstMatch.exists,
+                      "Low is offered to a mixed selection (follow-up part 2)")
         high.click()
         waitFor(label("Call the plumber").contains("high priority") && label("Email beta testers").contains("high priority"),
                 "the bar set both to High")
@@ -587,13 +589,19 @@ final class TasksPageUITests: XCTestCase {
     func testShiftCommandIOpensTheTasksActions() throws {
         select("Email beta testers")
         app.typeKey("i", modifierFlags: [.command, .shift])
-        let moveDown = menuItem("Move Down")
-        XCTAssertTrue(moveDown.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
+        let more = menuItem("More")
+        XCTAssertTrue(more.waitForExistence(timeout: 3), "⇧⌘I opens the task's actions")
         for title in ["Complete", "Start Working", "Edit Title", "Date", "Tags", "Priority", "Move to Later",
-                      "Add Subtask", "Move Up", "Copy", "Duplicate", "Delete"] {
+                      "Add Subtask", "Copy", "Duplicate", "More", "Delete"] {
             XCTAssertTrue(menuItem(title).exists, "the menu offers \(title)")
         }
         XCTAssertLessThan(row("Email beta testers").frame.minY, row("Book dentist").frame.minY, "above Book dentist at first")
+        // The rarer file and reorder commands sit under More (follow-up
+        // part 2, L5).
+        openItem("More").hover()
+        XCTAssertTrue(openItem("Move Down").waitForExistence(timeout: 3), "More holds Move Down")
+        waitFor(openItem("Move Down").frame.width > 0, "More's submenu opens")
+        XCTAssertTrue(openItem("Open Files…").exists && openItem("Move Up").exists, "and Open Files… and Move Up")
         openItem("Move Down").click()
         waitFor(!menuItem("Move Down").exists, "the menu closes")
         waitFor(row("Email beta testers").exists && row("Email beta testers").frame.minY > row("Book dentist").frame.minY,

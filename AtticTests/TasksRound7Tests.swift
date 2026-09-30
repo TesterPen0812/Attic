@@ -136,14 +136,12 @@ final class TasksRound7Tests: XCTestCase {
         XCTAssertEqual(parts.priority, .medium, "finished, it replaces it")
     }
 
-    // MARK: - R6: mixed selections never offer Low
+    // MARK: - R6 (lifted in follow-up part 2): every selection is offered Low
 
-    func testLowIsNeverOfferedToAMixedSelection() {
-        XCTAssertEqual(TaskPriority.choices(keeping: [.low, .high]), [.none, .medium, .high])
-        XCTAssertEqual(TaskPriority.choices(keeping: [.low, .none]), [.none, .medium, .high])
-        XCTAssertEqual(TaskPriority.choices(keeping: [.low]), [.none, .low, .medium, .high], "every target Low: ticked")
-        XCTAssertEqual(TaskPriority.choices(keeping: [.low, .low]), [.none, .low, .medium, .high])
-        XCTAssertEqual(TaskPriority.choices(keeping: []), [.none, .medium, .high])
+    func testLowIsOfferedToEverySelection() {
+        XCTAssertEqual(TaskPriority.choices, [.none, .low, .medium, .high], "Low has its ↓ mark now")
+        XCTAssertEqual(TaskPriority.low.mark, "↓")
+        XCTAssertNil(TaskPriority.low.shorthand, "no typed shorthand for Low")
     }
 
     // MARK: - R4: right-click binding stops at the bottom stack

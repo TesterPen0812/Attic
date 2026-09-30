@@ -98,6 +98,16 @@ enum AtticTaskShortcut {
     static let copy = KeyboardShortcut("c", modifiers: .command)
     static let duplicate = KeyboardShortcut("d", modifiers: .command)
     static let actions = KeyboardShortcut("i", modifiers: [.command, .shift])
+    /// Priority (follow-up part 2): ⌥⌘0 No Priority, ⌥⌘1 Low, ⌥⌘2 Medium,
+    /// ⌥⌘3 High.
+    static let priorityNone = KeyboardShortcut("0", modifiers: [.command, .option])
+    static let priorityLow = KeyboardShortcut("1", modifiers: [.command, .option])
+    static let priorityMedium = KeyboardShortcut("2", modifiers: [.command, .option])
+    static let priorityHigh = KeyboardShortcut("3", modifiers: [.command, .option])
+    static let priorities = [priorityNone, priorityLow, priorityMedium, priorityHigh]
+
+    /// The number row's key codes (ANSI), 0 to 9.
+    private static let digitKeyCodes: [Int: UInt16] = [0: 29, 1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25]
 
     /// Whether a key press is `shortcut` (letters by their character, so
     /// any layout's C is ⌘C).
@@ -110,7 +120,11 @@ enum AtticTaskShortcut {
         case .return: return keyCode == 36 || keyCode == 76
         case .delete: return keyCode == 51
         case .space: return keyCode == 49
-        default: return characters?.lowercased() == String(shortcut.key.character)
+        default:
+            // The digits by their key too: ⌥ changes what a digit types on
+            // some layouts, and the number row's keys are the same keys.
+            if let digit = shortcut.key.character.wholeNumberValue, let code = digitKeyCodes[digit], keyCode == code { return true }
+            return characters?.lowercased() == String(shortcut.key.character)
         }
     }
 }
@@ -1015,8 +1029,9 @@ struct AtticTaskRowModel: Identifiable, Sendable, Equatable {
 }
 
 /// The priority mark after a task's title (Direction A): High "!!" in the
-/// orange mark colour, Medium "!" in the secondary grey, Low and None
-/// nothing. Done rows show none.
+/// orange mark colour, Medium "!" in the secondary grey, Low "↓" in the
+/// same grey (follow-up part 2, option A: Low reads as "lower", never as a
+/// warning), None nothing. Done rows show none.
 struct AtticPriorityMark: View {
     let priority: AtticPriority
     var disabled = false
@@ -1031,7 +1046,11 @@ struct AtticPriorityMark: View {
             AtticText(verbatim: "!", style: .priorityMark, ink: disabled ? .disabledText : .helper)
                 .fixedSize()
                 .accessibilityHidden(true)
-        case .low, .none:
+        case .low:
+            AtticText(verbatim: "↓", style: .priorityMark, ink: disabled ? .disabledText : .helper)
+                .fixedSize()
+                .accessibilityHidden(true)
+        case .none:
             EmptyView()
         }
     }

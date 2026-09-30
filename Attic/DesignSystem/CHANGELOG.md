@@ -9,6 +9,17 @@ Phase 1 (Shell, Tasks and Settings) was built in three streams and integrated
 on `redesign/phase-1`. Every change below is additive: no token, colour, radius
 or type style changed.
 
+### Follow-up part 2: owner decisions (Opus, 2026-09-30)
+
+- **Low priority returns** (option A, `mockups/p1f-06-low-priority.png`):
+  `AtticPriorityMark` draws Low as a grey `↓` in the `priorityMark` style and
+  the helper ink, where `!` and `!!` sit. `TaskPriority.choices` replaces
+  `choices(keeping:)` and offers all four everywhere (round 7's R6 rule is
+  lifted). The strip shows `↓` for Low. `AtticTaskShortcut.priorityNone…High`
+  are ⌥⌘0–3; `AtticTaskShortcut.matches` also reads the number row's key
+  codes, so a layout whose ⌥ changes a digit still matches. Why: the owner
+  could not tell Low from none.
+
 ### Actions-menu Return (GPT-6.1, round 13)
 
 - Bare-key list shortcuts (Return, Space, Shift-Space and Delete) are native

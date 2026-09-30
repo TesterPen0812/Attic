@@ -539,7 +539,7 @@ struct TasksPage: View {
     /// was left for Esc to do, so it goes on to the panel.
     private func handleEscape(visible: [UUID], current: UUID?) -> Bool {
         if drag != nil { cancelDrag(); return true }
-        if model.doneDetailID != nil { model.doneDetailID = nil; return true }
+        if model.tab == .done, model.doneDetailID != nil { model.doneDetailID = nil; return true }
         // A search left with its query: Esc ends it (the tabs return).
         if model.tab == .done, !model.doneSearch.isEmpty { endSearch(); return true }
         let open = current.flatMap { model.expanded.contains($0) ? $0 : nil }
@@ -579,7 +579,7 @@ struct TasksPage: View {
         guard event.type == .keyDown, model.isPageShown, let window = pointer.view?.window, event.window === window,
               window.isKeyWindow, !AtticTextInput.hasKeyboard, model.editingTitleID == nil, model.newSubtaskParentID == nil,
               model.renamingSubtaskID == nil, !addBarFocused, !searchFocused, metaPopover == nil, drag == nil else { return false }
-        let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate]
+        let shortcuts = [AtticTaskShortcut.actions, AtticTaskShortcut.copy, AtticTaskShortcut.duplicate] + AtticTaskShortcut.priorities
         guard let shortcut = shortcuts.first(where: {
             AtticTaskShortcut.matches($0, characters: event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
         }) else { return false }
@@ -925,7 +925,9 @@ struct TasksPage: View {
             let active = model.tab == tab && model.isPageShown
             // A Done log task's details open under its row (Esc or the
             // menu closes them), raised over the list like a pop-over.
-            if model.doneDetailID == id, let detail = model.doneDetail(for: id) {
+            // Only on Done (round 12's identity: Now's "Completed today"
+            // draws the same task, and never opens these).
+            if tab == .done, model.doneDetailID == id, let detail = model.doneDetail(for: id) {
                 TasksDoneDetailView(detail: detail, store: store, restore: {
                     // The details close only once the restore saved; a
                     // failure shows under the row with Retry (round 4).
@@ -1234,26 +1236,22 @@ struct TasksPage: View {
         model.report(command(targets), on: id) { command(targets) }
     }
 
-    /// ⌘Return on a Done page row: a Done log task's details open or close
-    /// in place; a task still in Now's done group opens its files.
+    /// ⌘Return on a Done page row: its details open or close in place, for
+    /// a Done log task and one still in Now's done group alike (follow-up
+    /// part 2, L6: the date, priority and tags a finished task keeps show
+    /// there, with its files).
     private func toggleDetails(_ id: UUID) {
-        if model.doneDetailID == id { model.doneDetailID = nil } else { model.openPage(id) }
-    }
-
-    private func isArchived(_ id: UUID) -> Bool {
-        store.task(withID: id) == nil
+        model.doneDetailID = model.doneDetailID == id ? nil : id
     }
 
     /// VoiceOver's name for `toggleDetails`.
     private func detailsActionName(for id: UUID) -> String {
-        if model.doneDetailID == id { return String(localized: "Close details") }
-        return isArchived(id) ? String(localized: "Show details") : String(localized: "Open files")
+        model.doneDetailID == id ? String(localized: "Close details") : String(localized: "Show details")
     }
 
     /// The right-click menu's name for `toggleDetails`.
     private func detailsMenuTitle(for id: UUID) -> String {
-        if model.doneDetailID == id { return String(localized: "Close Details") }
-        return isArchived(id) ? String(localized: "Show Details") : String(localized: "Open Files…")
+        model.doneDetailID == id ? String(localized: "Close Details") : String(localized: "Show Details")
     }
 
     private func deleteAndMoveFocus(_ ids: [UUID]) {
@@ -1348,36 +1346,41 @@ struct TasksPage: View {
                 menuCommand(key) { model.moveToBacklog($0) }
             })
         }
-        if single, tab != .done {
-            if unfinished {
-                list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: true) {
-                    model.beginAddingSubtask(to: menuRowID(key))
-                })
-            }
-            list.append(AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage,
-                                         startsSection: !unfinished) {
-                guard !AtticTextInput.ownsCurrentKey else { return }
-                model.openPage(menuRowID(key))
+        // The common actions stay at the top; the rarer file and reorder
+        // commands sit together under More (follow-up part 2, L5), with
+        // the same keys: the keys run them from this one list wherever
+        // they sit (`AtticMenuCommand.command(for:in:)` reads submenus).
+        if single, tab != .done, unfinished {
+            list.append(AtticMenuCommand(verbatim: String(localized: "Add Subtask"), startsSection: true) {
+                model.beginAddingSubtask(to: menuRowID(key))
             })
-            // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
-            if unfinished {
-                list.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
-                                             isDisabled: !canMove(id, by: -1), startsSection: true) {
-                    moveRow(menuRowID(key), by: -1)
-                })
-                list.append(AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
-                                             isDisabled: !canMove(id, by: 1)) {
-                    moveRow(menuRowID(key), by: 1)
-                })
-            }
         }
-        list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy, startsSection: true) {
+        list.append(AtticMenuCommand(verbatim: String(localized: "Copy"), shortcut: AtticTaskShortcut.copy,
+                                     startsSection: !(single && tab != .done && unfinished)) {
             model.copy(menuTargets(key))
             pointer.endInvocation()
         })
         list.append(AtticMenuCommand(verbatim: String(localized: "Duplicate"), shortcut: AtticTaskShortcut.duplicate) {
             menuCommand(key) { model.duplicate($0) }
         })
+        if single, tab != .done {
+            var more = [AtticMenuCommand(verbatim: String(localized: "Open Files…"), shortcut: AtticTaskShortcut.openPage) {
+                guard !AtticTextInput.ownsCurrentKey else { return }
+                model.openPage(menuRowID(key))
+            }]
+            // Reorder (round 10): the same rule as ⌘↑ ⌘↓ and a drag.
+            if unfinished {
+                more.append(AtticMenuCommand(verbatim: String(localized: "Move Up"), shortcut: AtticTaskShortcut.moveUp,
+                                             isDisabled: !canMove(id, by: -1), startsSection: true) {
+                    moveRow(menuRowID(key), by: -1)
+                })
+                more.append(AtticMenuCommand(verbatim: String(localized: "Move Down"), shortcut: AtticTaskShortcut.moveDown,
+                                             isDisabled: !canMove(id, by: 1)) {
+                    moveRow(menuRowID(key), by: 1)
+                })
+            }
+            list.append(.submenu(String(localized: "More"), more))
+        }
         list.append(AtticMenuCommand(verbatim: single ? String(localized: "Delete") : String(localized: "Delete \(targets.count) Tasks"),
                                      shortcut: AtticTaskShortcut.delete, isDestructive: true, startsSection: true) {
             // A menu's Delete key equivalent never reaches past a field
@@ -1426,12 +1429,12 @@ struct TasksPage: View {
         return list
     }
 
-    /// Priority ▸: No Priority, Medium, High (Low only while every target
-    /// has it, round 7 R6), ticked when every target has it.
+    /// Priority ▸: No Priority, Low, Medium, High with ⌥⌘0–3 (follow-up
+    /// part 2), ticked when every target has it.
     private func priorityCommands(_ key: TasksRowID, targets: [UUID]) -> [AtticMenuCommand] {
         let priorities = Set(targets.compactMap { store.listedTask(withID: $0)?.priority })
-        return TaskPriority.choices(keeping: priorities).map { priority in
-            AtticMenuCommand(verbatim: priority.menuTitle, state: priorities == [priority] ? .on : .off) {
+        return TaskPriority.choices.map { priority in
+            AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut, state: priorities == [priority] ? .on : .off) {
                 menuCommand(key) { model.setPriority(priority, for: $0) }
             }
         }
@@ -2045,8 +2048,9 @@ struct TasksPage: View {
             .init(systemName: "exclamationmark", label: "Set priority of \(count) tasks", handler: {}, menu: {
                 let priorities = Set(ids.compactMap { store.task(withID: $0)?.priority })
                 // Ticked when every selected task has it, as the tags are.
-                return TaskPriority.choices(keeping: priorities).map { priority in
-                    AtticMenuCommand(verbatim: priority.menuTitle, state: priorities == [priority] ? .on : .off) {
+                return TaskPriority.choices.map { priority in
+                    AtticMenuCommand(verbatim: priority.menuTitle, shortcut: priority.shortcut,
+                                     state: priorities == [priority] ? .on : .off) {
                         run { model.setPriority(priority, for: ids) }
                     }
                 }
@@ -2370,7 +2374,7 @@ enum TasksComposerValues {
         switch priority {
         case .high?: AtticStripValue(text: "!!", ink: .priorityMark, style: .priorityMark, spoken: String(localized: "High"))
         case .medium?: AtticStripValue(text: "!", ink: .helper, style: .priorityMark, spoken: String(localized: "Medium"))
-        case .low?: AtticStripValue(text: String(localized: "Low"), spoken: String(localized: "Low"))
+        case .low?: AtticStripValue(text: "↓", ink: .helper, style: .priorityMark, spoken: String(localized: "Low"))
         case .none?, nil: nil
         }
     }
@@ -2397,7 +2401,7 @@ extension TaskPriority {
     var menuLocalization: String.LocalizationValue {
         switch self {
         case .none: "No Priority"
-        case .low: "Low"
+        case .low: "Low  ↓"
         case .medium: "Medium  !"
         case .high: "High  !!"
         }

@@ -1662,13 +1662,33 @@ final class TasksPageModel: ObservableObject {
     struct DoneDetail: Equatable {
         let title: String
         let finished: String
+        /// What the task still carries (follow-up part 2, L6): its due date,
+        /// priority and tags, which its Done row does not show ("Due Tue 30
+        /// Sep · !! High · #launch"); nil when it has none.
+        var metadata: String? = nil
         let subtasks: [AtticSubtaskModel]
         let files: [TaskImageReference]
 
         static func == (lhs: DoneDetail, rhs: DoneDetail) -> Bool {
-            lhs.title == rhs.title && lhs.finished == rhs.finished && lhs.files == rhs.files
+            lhs.title == rhs.title && lhs.finished == rhs.finished && lhs.metadata == rhs.metadata && lhs.files == rhs.files
                 && lhs.subtasks.map(\.id) == rhs.subtasks.map(\.id)
         }
+    }
+
+    /// A finished task's metadata line for its details (L6): the due date
+    /// in the row's words, the priority with its mark, then its tags.
+    func doneMetadata(for task: TaskItem) -> String? {
+        var parts: [String] = []
+        if let day = task.dueDay {
+            parts.append(String(localized: "Due \(dueText(day))"))
+        }
+        if task.priority != .none, let mark = task.priority.mark {
+            parts.append("\(mark) \(task.priority.detailTitle)")
+        }
+        if !task.tags.isEmpty {
+            parts.append(task.tags.map { "#" + $0 }.joined(separator: " "))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     func doneDetail(for id: UUID) -> DoneDetail? {
@@ -1681,6 +1701,7 @@ final class TasksPageModel: ObservableObject {
         return DoneDetail(
             title: task.title,
             finished: finished,
+            metadata: doneMetadata(for: task),
             subtasks: children.map { AtticSubtaskModel(id: $0.id, title: $0.title, isDone: $0.status == .done) },
             files: task.attachments
         )

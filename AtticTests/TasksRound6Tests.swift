@@ -518,10 +518,10 @@ final class TasksRound6ComposerTests: XCTestCase {
 
     // MARK: Low priority (owner item 19)
 
-    func testLowIsOfferedOnlyWhileATaskHasIt() {
-        XCTAssertEqual(TaskPriority.choices(keeping: []), [.none, .medium, .high])
-        XCTAssertEqual(TaskPriority.choices(keeping: [.high, .medium]), [.none, .medium, .high])
-        XCTAssertEqual(TaskPriority.choices(keeping: [.low]), [.none, .low, .medium, .high], "ticked until changed")
+    /// Follow-up part 2 (option A) lifts round 7's rule: Low has its grey
+    /// ↓ now, so every priority menu offers all four.
+    func testEveryPriorityIsOffered() {
+        XCTAssertEqual(TaskPriority.choices, [.none, .low, .medium, .high])
         XCTAssertEqual(TaskPriority.none.pickerTitle, "No Priority")
     }
 }
