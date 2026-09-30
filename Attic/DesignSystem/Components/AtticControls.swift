@@ -1388,6 +1388,9 @@ struct AtticPopoverRow: View {
     var detail: String?
     /// The list's keyboard selection is on this row.
     var isHighlighted = false
+    /// Keeps the icon column when this row has no icon, so a list of rows
+    /// where only one is ticked stays aligned.
+    var reservesIconSlot = false
     let action: () -> Void
 
     @Environment(\.atticDesign) private var design
@@ -1396,11 +1399,13 @@ struct AtticPopoverRow: View {
     @State private var hovered = false
     @State private var probeID = UUID()
 
-    init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false, action: @escaping () -> Void) {
+    init(systemName: String?, title: String, detail: String? = nil, isHighlighted: Bool = false,
+         reservesIconSlot: Bool = false, action: @escaping () -> Void) {
         self.systemName = systemName
         self.title = title
         self.detail = detail
         self.isHighlighted = isHighlighted
+        self.reservesIconSlot = reservesIconSlot
         self.action = action
     }
 
@@ -1421,6 +1426,8 @@ struct AtticPopoverRow: View {
                 if let systemName {
                     AtticIcon(systemName: systemName, size: m.rowIconSize, ink: state == .disabled ? .disabledIcon : .icon)
                         .frame(width: m.rowIconSlot)
+                } else if reservesIconSlot {
+                    Color.clear.frame(width: m.rowIconSlot, height: 1).accessibilityHidden(true)
                 }
                 AtticText(verbatim: title, style: .menuRow, ink: state == .disabled ? .disabledText : .body, truncates: true)
                 Spacer(minLength: m.trailingMinGap)

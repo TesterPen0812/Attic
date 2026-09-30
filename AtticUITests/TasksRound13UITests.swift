@@ -51,4 +51,27 @@ final class TasksRound13UITests: XCTestCase {
         waitFor(newSubtask.exists, "Add Subtask ran")
         XCTAssertFalse(app.textFields["Title"].exists, "and the title editor did not open")
     }
+
+    /// Settings ▸ General ▸ Animations opens Attic's own pop-over list (an
+    /// opaque surface, not the system menu's blur) and choosing an entry sets
+    /// the row's value; the original choice is put back.
+    func testTheAnimationsPopUpOpensAnOpaqueListAndChooses() throws {
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows["Attic Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "Settings opens")
+        let popUp = settings.descendants(matching: .any).matching(identifier: "setting-animations").firstMatch
+        XCTAssertTrue(popUp.waitForExistence(timeout: 5), "the Animations pop-up is on the General page")
+        let original = (popUp.value as? String) ?? "Full"
+        let other = original == "Reduced" ? "Full" : "Reduced"
+        popUp.click()
+        let choice = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", other)).firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 3), "the list offers \(other)")
+        choice.click()
+        waitFor((popUp.value as? String) == other, "the row shows \(other)")
+        popUp.click()
+        let back = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", original)).firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 3))
+        back.click()
+        waitFor((popUp.value as? String) == original, "and the original choice is back")
+    }
 }

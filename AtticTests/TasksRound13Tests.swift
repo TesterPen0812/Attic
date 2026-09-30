@@ -330,4 +330,41 @@ final class TasksRound13Tests: XCTestCase {
         let typed = textFields(in: content).filter { $0.stringValue == "Pack" }
         XCTAssertFalse(typed.isEmpty, "the typed text replaces the prompt")
     }
+
+    // MARK: - Item 7: the Settings pop-up's list is opaque
+
+    /// A pop-up row's list drawn over a solid black page shows none of it:
+    /// the popover's own surface is what is behind the choices.
+    func testAPopUpRowsChoicesHideWhatLiesBehindThem() throws {
+        struct Scene: View {
+            var body: some View {
+                ZStack {
+                    Color.black
+                    AtticPopUpChoices(label: "Surface", choices: [("solid", "Solid"), ("glass", "Glass"), ("clear", "Clear")],
+                                      selection: "solid") { _ in }
+                }
+                .environment(\.atticDesign, AtticDesignContext(mode: .light))
+            }
+        }
+        let host = NSHostingView(rootView: Scene())
+        host.frame = CGRect(x: 0, y: 0, width: 320, height: 200)
+        host.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        // The list is centred; the right strip of its lower two rows (past
+        // the titles, off the ticked row's fill) is bare surface. The
+        // bitmap is in pixels: the view's points times the backing scale.
+        let scale = CGFloat(rep.pixelsWide) / host.bounds.width
+        let listMinX = (320 - AtticPopoverMetrics.defaultWidth) / 2
+        var dark = 0, total = 0
+        for x in Int((listMinX + AtticPopoverMetrics.defaultWidth - 40) * scale)..<Int((listMinX + AtticPopoverMetrics.defaultWidth - 12) * scale) {
+            for y in Int(92 * scale)..<Int(124 * scale) {
+                let color = try XCTUnwrap(rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                total += 1
+                if color.brightnessComponent < 0.9 { dark += 1 }
+            }
+        }
+        XCTAssertGreaterThan(total, 0)
+        XCTAssertEqual(dark, 0, "the backdrop shows through \(dark) of \(total) sampled pixels")
+    }
 }
