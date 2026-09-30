@@ -499,3 +499,18 @@ final class TasksLookDecisionTests: XCTestCase {
         XCTAssertEqual(AtticFlatSurfaceMetrics.hairline, 1)
     }
 }
+
+/// CI run 1: the UI test's tab sequence (every page from every other).
+@MainActor
+final class TasksTabSequenceTests: XCTestCase {
+    func testEveryTabFromEveryOther() throws {
+        let hosted = try Hosted(height: 520)
+        defer { hosted.close() }
+        for (from, to) in [(TasksTab.now, TasksTab.backlog), (.now, .done), (.backlog, .now), (.backlog, .done), (.done, .now), (.done, .backlog)] {
+            hosted.go(to: from)
+            hosted.go(to: to)
+            XCTAssertEqual(hosted.model.tab, to)
+            XCTAssertEqual(hosted.shownPage(), TasksTab.allCases.firstIndex(of: to), "\(from) → \(to)")
+        }
+    }
+}
