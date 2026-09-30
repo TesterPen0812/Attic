@@ -1598,6 +1598,32 @@ extension NoteSlice3bTests {
             XCTAssertTrue(try store.attachmentRows(forNoteID: id).isEmpty)
         }
     }
+
+    func testMissingImagesUseRecordedSizesAndReserveTheCeilingOnlyWhenUnknown() async throws {
+        for hasRecordedSize in [false, true] {
+            let store = try makeTestNoteStore(attachmentFileStore: makeTestAttachmentFileStore())
+            let images = try (0..<7).map { _ in try stagedImage() }, added = staged(), id = UUID()
+            let blocks = images.map { item in
+                var block = NoteBlock.image(attachmentID: item.id, pixelWidth: 8, pixelHeight: 8)
+                if hasRecordedSize { block.extras = item.identityExtras }
+                return block
+            }
+            guard case .success = store.createDocumentNote(id: id,
+                document: NoteDocument(blocks: [.text("Images")] + blocks), staged: images) else { return XCTFail() }
+            for row in try store.attachmentRows(forNoteID: id) { store.modelContext.delete(row) }
+            XCTAssertTrue(store.commitStagedChanges())
+            let loaded = try XCTUnwrap(store.loadDocument(noteID: id))
+            var candidate = try XCTUnwrap(loaded.content.document)
+            candidate.blocks.append(.file(attachmentID: added.id, filename: added.filename,
+                contentTypeIdentifier: added.contentTypeIdentifier, byteCount: added.byteCount))
+            XCTAssertEqual(store.attachmentAdmissionFailure(noteID: id, document: candidate, staged: [added]) == nil, hasRecordedSize)
+            let result = store.saveDocument(noteID: id, document: candidate, baseRevisionID: loaded.revisionID, staged: [added])
+            switch (result, hasRecordedSize) {
+            case (.success, true), (.failure(.invalidDocument), false): break
+            default: XCTFail("both gates must agree about known and unknown sizes: \(result)")
+            }
+        }
+    }
 }
 
 // MARK: Fix round 4 invariant and reproducer tests
